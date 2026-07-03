@@ -2,7 +2,7 @@
 
 The **connection primitive** at the base of the Phase 1 connect–send–stream round-trip: one secure WebSocket (`wss://`) to the relay, living entirely in the Electron **background process**. It opens the socket, keeps it alive with a heartbeat, caps inbound frame size, carries **raw frames in both directions as opaque bytes**, and closes — for the lifetime of exactly **one** connection.
 
-Introduced in [#21](../codebase/21.md). It is a **semantics-blind byte pipe**: the Noise_IK handshake, the frame codec, and event parsing land *on top* of it later and consume it as opaque bytes. Automatic reconnection with backoff wraps it later (the supervisor, #22). This is the desktop equivalent of the mobile relay connection and the client leg of the pyrycode Go binary's `internal/transport` (WSS client with auto-reconnect backoff — the `internal/relay`/`transport` packages) — this module is that shape's **single-connection half**, minus the reconnect loop and jittered backoff.
+Introduced in [#21](../codebase/21.md). It is a **semantics-blind byte pipe**: the Noise_IK handshake, the frame codec, and event parsing land *on top* of it later and consume it as opaque bytes. Automatic reconnection with backoff wraps it in the [relay supervisor](relay-supervisor.md) (#22), which recreates this connection after transient drops. This is the desktop equivalent of the mobile relay connection and the client leg of the pyrycode Go binary's `internal/transport` (WSS client with auto-reconnect backoff — the `internal/relay`/`transport` packages) — this module is that shape's **single-connection half**, minus the reconnect loop and jittered backoff.
 
 ## What it does
 

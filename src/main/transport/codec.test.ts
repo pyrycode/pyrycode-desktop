@@ -7,8 +7,10 @@ import {
   encodeEnvelope,
   decodeEnvelope,
   makeHelloClientPayload,
-  WireDecodeError
+  WireDecodeError,
+  WireEncodeError
 } from './codec'
+import { MAX_FRAME_BYTES, MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
 import type {
   Envelope,
   InnerFrameV2,
@@ -102,6 +104,37 @@ describe('encodeInnerFrame / decodeInnerFrame', () => {
     expect(() => decodeInnerFrame(bytesOf('{"v":2}'))).toThrow(WireDecodeError)
     expect(() => decodeInnerFrame(bytesOf('{"v":2,"type":"x","data":1}'))).toThrow(WireDecodeError)
   })
+
+  it('rejects a frame whose protocol version is not v2 (no silent rewrite)', () => {
+    expect(() => decodeInnerFrame(bytesOf('{"v":1,"type":"noise_msg","data":"AAAA"}'))).toThrow(
+      WireDecodeError
+    )
+    expect(() => decodeInnerFrame(bytesOf('{"v":3,"type":"noise_msg","data":"AAAA"}'))).toThrow(
+      WireDecodeError
+    )
+    // A frame with no version at all is a mismatch too, not a tolerated default.
+    expect(() => decodeInnerFrame(bytesOf('{"type":"noise_msg","data":"AAAA"}'))).toThrow(
+      WireDecodeError
+    )
+  })
+})
+
+describe('encode rejects over-cap frames / envelopes (v2 size caps)', () => {
+  it('rejects an envelope whose plaintext exceeds MAX_PLAINTEXT_BYTES', () => {
+    const big = 'x'.repeat(MAX_PLAINTEXT_BYTES)
+    expect(() => encodeEnvelope({ id: 1, type: 'message', ts: 't', payload: { text: big } })).toThrow(
+      WireEncodeError
+    )
+  })
+
+  it('accepts an envelope at/under the plaintext cap', () => {
+    expect(() => encodeEnvelope({ id: 1, type: 'ack', ts: 't', payload: {} })).not.toThrow()
+  })
+
+  it('rejects an inner frame whose serialized size exceeds MAX_FRAME_BYTES', () => {
+    const big = 'A'.repeat(MAX_FRAME_BYTES)
+    expect(() => encodeInnerFrame({ v: 2, type: 'noise_msg', data: big })).toThrow(WireEncodeError)
+  })
 })
 
 describe('encodeEnvelope / decodeEnvelope round-trips every payload type (AC #5)', () => {
@@ -193,7 +226,7 @@ describe('encodeEnvelope / decodeEnvelope round-trips every payload type (AC #5)
 })
 
 describe('default injection (AC #3)', () => {
-  it('emits role, protocol_versions, capabilities defaults and frame v:2', () => {
+  it('emits role and protocol_versions defaults, no capabilities by default, and frame v:2', () => {
     const payload = makeHelloClientPayload({
       deviceName: 'desktop-1',
       clientVersion: '0.1.0',
@@ -202,20 +235,32 @@ describe('default injection (AC #3)', () => {
     const json = utf8.decode(encodeEnvelope({ id: 1, type: 'hello', ts: 't', payload }))
     expect(json).toContain('"role":"client"')
     expect(json).toContain('"protocol_versions":["v2"]')
-    expect(json).toContain('"capabilities":["interactive"]')
+    // interactive is withheld until the structured event stream is modeled; default is empty.
+    expect(json).toContain('"capabilities":[]')
+    expect(json).not.toContain('interactive')
     expect(encodeInnerFrame({ v: 2, type: 'noise_init', data: 'AA==' })).toContain('"v":2')
   })
 
-  it('injects last_event_id only when provided', () => {
+  it('advertises only the capabilities the caller passes in', () => {
+    const payload = makeHelloClientPayload({
+      deviceName: 'd',
+      clientVersion: 'v',
+      token: 't',
+      capabilities: ['message']
+    })
+    expect(payload.capabilities).toEqual(['message'])
+  })
+
+  it('injects last_seen_ts only when provided', () => {
     const withLast = makeHelloClientPayload({
       deviceName: 'd',
       clientVersion: 'v',
       token: 't',
-      lastEventId: 42
+      lastSeenTs: '2026-07-01T00:00:00Z'
     })
-    expect(withLast.last_event_id).toBe(42)
+    expect(withLast.last_seen_ts).toBe('2026-07-01T00:00:00Z')
     const withoutLast = makeHelloClientPayload({ deviceName: 'd', clientVersion: 'v', token: 't' })
-    expect('last_event_id' in withoutLast).toBe(false)
+    expect('last_seen_ts' in withoutLast).toBe(false)
   })
 })
 
@@ -227,10 +272,10 @@ describe('absent optionals are omitted, never serialized as null (AC #3)', () =>
     expect(json).not.toContain('null')
   })
 
-  it('omits last_event_id from a hello without one', () => {
+  it('omits last_seen_ts from a hello without one', () => {
     const payload = makeHelloClientPayload({ deviceName: 'd', clientVersion: 'v', token: 't' })
     const json = utf8.decode(encodeEnvelope({ id: 1, type: 'hello', ts: 't', payload }))
-    expect(json).not.toContain('last_event_id')
+    expect(json).not.toContain('last_seen_ts')
     expect(json).not.toContain('null')
   })
 })
@@ -297,7 +342,7 @@ describe('QrPayload round-trip (JSON only; 32-byte key decode deferred to the pa
     // is a pairing concern owned by the QR/pairing ticket, out of scope for this codec.
     const qr: QrPayload = {
       server: 'srv-1',
-      relay: 'wss://relay.example/v2/client',
+      relay: 'wss://relay.example/v1/client',
       token: 'pair-token',
       server_static_pubkey: base64StdEncode(new Uint8Array(32).fill(7))
     }

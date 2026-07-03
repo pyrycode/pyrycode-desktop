@@ -55,7 +55,7 @@ Every style references a token from `theme/tokens.css` — no color/type/spacing
 
 ## Seams (what later tickets bind to)
 
-- **`MessageThread({ messages })`** — #12 swaps the `placeholderMessages` prop for a narrow store selector fed by streamed replies. Keep the array the sole data source so the swap stays one line.
+- **`MessageThread({ messages })`** — #12 swaps the `placeholderMessages` prop for a narrow store selector (`selectMessages`, from the [session store](session-store.md)) fed by streamed replies, adapting wire `MessagePayload` (`role`, `message_id`) to the shell's `Message` view model (`type`, `id`). Keep the array the sole data source so the swap stays one line.
 - **`Composer`** — inert this ticket (uncontrolled `<textarea>`, no `onChange`; button with no `onClick`). #2 wires controlled input state, auto-grow, and a send dispatch, and extracts it to its own file.
 
 ## Edge cases and limitations
@@ -67,6 +67,7 @@ Every style references a token from `theme/tokens.css` — no color/type/spacing
 
 ## Related
 
+- [Session store](session-store.md) — the state the `MessageThread`/status seams bind to (#2)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#1 codebase notes](../codebase/1.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

@@ -2,7 +2,7 @@
 
 The typed **event pipe** from the background process to the renderer window: a sealed `DaemonEvent` union, a single background emit helper, and a receive-only preload subscription on `window.pyry`. It is how the Noise transport (which lives in the background process — see [ADR 0001](../decisions/0001-stack-electron-react-typescript.md)) will hand **already-typed, already-validated** events to the React window without the renderer ever holding a socket, key, or raw frame.
 
-Introduced in [#18](../codebase/18.md). It is the **event-pipe half** of the background↔window bridge; the **command half** (renderer→main) is #17. No transport is wired yet — this ticket builds the emit *seam* that #10 (hello/hello-ack) and #12 (render reply) will call, and #19 will map onto the [session store](session-store.md)'s `SessionAction`.
+Introduced in [#18](../codebase/18.md). It is the **event-pipe half** of the background↔window bridge; the **command half** (renderer→main) is #17. No transport is wired yet — this ticket builds the emit *seam* that #10 (hello/hello-ack) and #12 (render reply) will call. The receive end is now consumed: [#19](../codebase/19.md) maps each `DaemonEvent` onto the [session store](session-store.md)'s `SessionAction` — see the [daemon-event bridge](daemon-event-bridge.md) feature doc.
 
 ## What it does
 
@@ -74,7 +74,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 ### Data flow
 
 ```
- #10/#12 transport (later)          emitDaemonEvent            preload bridge              #19 (later)
+ #10/#12 transport (later)          emitDaemonEvent            preload bridge              #19 (shipped)
  wire Envelope ──validate/parse──►  emitDaemonEvent(win, e) ──► webContents.send ──IPC──► onDaemonEvent(cb)
    hello_ack/message/error          (the ONLY send path)        DAEMON_EVENT_CHANNEL       cb(DaemonEvent)
                                                                  ipcRenderer.on(strip e)   → map → sessionStore.dispatch
@@ -92,7 +92,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 ## Edge cases and limitations
 
 - **No destroyed-window guard.** Once a real `mainWindow` exists (#10/#12), `webContents.send` on a torn-down window throws. #18 has no live emitter to observe this, so per evidence-based-fix no `isDestroyed()` guard is added — the helper stays a pure forwarder that lets the throw propagate to its caller, which owns window lifecycle. Flag when #10 wires the first emitter.
-- **Renderer-side cleanup is the subscriber's job.** `onDaemonEvent` returns the unsubscribe; #18 does not build the `useEffect` teardown that calls it. That is #19/#12's responsibility.
+- **Renderer-side cleanup is the subscriber's job.** `onDaemonEvent` returns the unsubscribe; #18 does not build the `useEffect` teardown that calls it. [#19](../codebase/19.md)'s `useDaemonEventBridge` now owns that teardown (returns the handle as effect cleanup — StrictMode-safe).
 - **No runtime shape validation at the preload.** The producer is our own trusted main process; a `zod`-style validator would add a dependency to defend against a bug, not an attacker (a compromised main process is already game-over). Revisit only if a less-trusted producer ever sends on this channel.
 - **`connected.ack` carries the whole `HelloAckPayload`.** Narrow to `{ server_id, conn_id }` later only if #19/#12 prove the UI needs less — mirrors [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)'s deferral.
 
@@ -104,6 +104,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 
 ## Related
 
+- [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 consumer that maps this union onto `SessionAction` and dispatches into the store
 - [Session store](session-store.md) — the `SessionAction` mapping target #19 dispatches into
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

@@ -1,0 +1,74 @@
+/*
+ * Theme foundation — the single source of theme values for the renderer.
+ * Resolved Material 3 default (dark) scheme, mirrored from the mobile Figma
+ * (node 16-8). Every renderer component style references these custom
+ * properties; no color/type/spacing literal lives in a component stylesheet.
+ *
+ * A light/dark split is out of scope for this ticket (dark only). Some tokens
+ * are foundation for screens that land later (#2 status/app bar, #12 tool
+ * chips / code blocks / session delimiters) and have no consumer yet — they are
+ * ported here so later tickets reference tokens rather than re-deriving values.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Colors — M3 Schemes/* of the default (dark) scheme */
+  --color-surface: #101418;
+  --color-surface-container: #1d2024;
+  --color-surface-container-high: #272a2f;
+  --color-on-surface: #e0e2e8;
+  --color-on-surface-variant: #c2c7cf;
+  --color-primary-container: #134a74;
+  --color-on-primary-container: #cfe4ff;
+  --color-outline: #8c9199;
+  --color-outline-variant: #42474e;
+  --color-tertiary: #ffb59f;
+  --color-success: #2fc038;
+
+  /* Type families — Roboto is not bundled (self-only CSP); fall back to
+     system-ui. The M3 size/line/tracking/weight scale carries the fidelity. */
+  --font-sans: 'Roboto', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Roboto Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* Type scale — M3 Static/* text styles, four tokens each */
+  --text-title-large-size: 22px;
+  --text-title-large-line: 28px;
+  --text-title-large-tracking: 0px;
+  --text-title-large-weight: 400;
+
+  --text-body-large-size: 16px;
+  --text-body-large-line: 24px;
+  --text-body-large-tracking: 0.5px;
+  --text-body-large-weight: 400;
+
+  --text-body-medium-size: 14px;
+  --text-body-medium-line: 20px;
+  --text-body-medium-tracking: 0.25px;
+  --text-body-medium-weight: 400;
+
+  --text-body-small-size: 12px;
+  --text-body-small-line: 16px;
+  --text-body-small-tracking: 0.4px;
+  --text-body-small-weight: 400;
+
+  --text-label-small-size: 11px;
+  --text-label-small-line: 16px;
+  --text-label-small-tracking: 0.5px;
+  --text-label-small-weight: 500;
+
+  /* Spacing — 4px scale, plus named off-grid design values */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-bubble-x: 14px;
+
+  /* Radii */
+  --radius-xs: 6px;
+  --radius-sm: 12px;
+  --radius-md: 20px;
+  --radius-lg: 28px;
+  --radius-full: 9999px;
+}

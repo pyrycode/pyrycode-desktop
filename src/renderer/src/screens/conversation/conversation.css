@@ -1,0 +1,128 @@
+/*
+ * Conversation shell styles. Every value references a theme token from
+ * theme/tokens.css — no color/spacing/type literal lives here. The bare
+ * structural literals (100%, flex ratios, the send button's fixed square,
+ * the bubble content measure) are layout geometry mandated by the spec, not
+ * theme values.
+ */
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* Scrollable thread. min-height: 0 is load-bearing: without it the flex item
+   refuses to shrink and the whole window scrolls instead of this region. */
+.conversation__thread {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+}
+
+.message-row {
+  display: flex;
+}
+
+.message-row--user {
+  justify-content: flex-end;
+}
+
+.message-row--daemon {
+  justify-content: flex-start;
+}
+
+/* max-width (not a fixed width) so bubbles reflow as the window resizes. */
+.bubble {
+  max-width: min(680px, 75%);
+  padding: var(--space-3) var(--space-bubble-x);
+  word-break: break-word;
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* Border-radius order is TL TR BR BL. */
+.bubble--user {
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+  border-radius: var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
+}
+
+.bubble--daemon {
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-xs);
+}
+
+/* Pinned composer — never grows or shrinks. */
+.composer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  background: var(--color-surface);
+}
+
+/* min-width: 0 lets the input shrink below its content width on narrow windows. */
+.composer__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border: none;
+  border-radius: var(--radius-lg);
+  outline: none;
+  resize: none;
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+.composer__input::placeholder {
+  color: var(--color-on-surface-variant);
+}
+
+.composer__input:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.composer__send {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  cursor: pointer;
+}
+
+.composer__send:hover {
+  background: var(--color-surface-container);
+}
+
+.composer__send:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.composer__send-icon {
+  display: block;
+}

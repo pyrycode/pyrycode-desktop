@@ -130,4 +130,4 @@ This module *is* the secret-at-rest boundary — its correctness properties are 
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model this inherits (keys never reach the renderer; mirrors mobile).
 - [#42 codebase notes](../codebase/42.md) — implementation summary, patterns, and lessons.
 - [Relay connection](relay-connection.md) — the sibling main-side primitive whose injected-`onEvent` DI seam this mirrors.
-- Downstream consumers: device static keypair (#43) and paired-server record (#44).
+- Downstream consumers: [device static keypair](device-keypair.md) ([#43](../codebase/43.md)) and [paired-server store](paired-server-store.md) ([#44](../codebase/44.md)).

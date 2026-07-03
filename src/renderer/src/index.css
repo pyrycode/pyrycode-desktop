@@ -1,27 +1,13 @@
-:root {
-  color-scheme: dark;
-  font-family: system-ui, -apple-system, sans-serif;
+@import './theme/tokens.css';
+
+/* Full-height chain so the conversation shell can fill the window and the
+   thread region scrolls independently of the pinned composer. */
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  background: #1a1b1e;
-  color: #e8e8ea;
-}
-
-.app {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 3rem;
-}
-
-.app h1 {
-  margin: 0;
-  font-size: 1.6rem;
-}
-
-.muted {
-  color: #8a8a90;
-  font-size: 0.85rem;
 }

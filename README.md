@@ -1,6 +1,6 @@
 # Pyrycode Desktop
 
-Desktop client for [Pyrycode](https://github.com/pyrycode/pyrycode). Drive a claude session running on your own machine from a desktop window, over an encrypted relay.
+Desktop client for [Pyrycode](https://github.com/pyrycode/pyrycode). Drive a pyry daemon running on another machine from a desktop window, over an encrypted, content-blind relay.
 
 ## Status
 

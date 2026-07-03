@@ -4,7 +4,7 @@ Electron desktop remote head for [Pyrycode](https://github.com/pyrycode/pyrycode
 
 ## Status
 
-Skeleton only. The goal of the first milestone is a full round-trip: pair with the pyry daemon on pyrybox through the content-blind relay, send a message, and watch the structured reply stream back. UI mirrors the mobile app first, then diverges for the wider screen and a real keyboard.
+Skeleton only. The goal of the first milestone is a full round-trip: pair with the pyry daemon on pyrybox through the content-blind relay, send a message, and watch the structured reply stream back. For now the UI is the mobile design stretched to the window size, built against the same mobile Figma file. A desktop-specific layout is deferred until the app is fully functioning.
 
 ## What this is
 

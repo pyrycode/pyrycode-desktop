@@ -13,6 +13,22 @@ export const NOISE_PROTOCOL = 'Noise_IK_25519_ChaChaPoly_BLAKE2s' as const
 export const PROTOCOL_VERSION = 'v2' as const
 export const CAPABILITY_INTERACTIVE = 'interactive' as const
 
+/**
+ * v2 outer WebSocket frame cap, in bytes (256 KiB). A v2 Noise transport message is at most
+ * 65535 bytes; base64-std of that plus the InnerFrameV2 JSON envelope stays well under this,
+ * and the daemon/relay reject a larger frame. Source: pyrycode docs/protocol-mobile.md
+ * § Application-envelope size cap.
+ */
+export const MAX_FRAME_BYTES = 256 * 1024 // 262144
+
+/**
+ * v2 decrypted application-envelope (plaintext) cap, in bytes. Every transport frame fits
+ * inside one Noise transport message (65535 bytes including the 16-byte AEAD tag), so the
+ * decrypted Envelope is capped at 65519 bytes. This supersedes v1's 1 MiB cap. Source:
+ * pyrycode docs/protocol-mobile.md § Application-envelope size cap.
+ */
+export const MAX_PLAINTEXT_BYTES = 65519
+
 /** Inner frame carried inside the Noise-encrypted channel (InnerFrameV2). */
 export interface InnerFrameV2 {
   v: 2
@@ -53,7 +69,12 @@ export interface HelloClientPayload {
   protocol_versions: string[]
   token: string
   capabilities: string[]
-  last_event_id?: number
+  // The last event/message timestamp this client has already seen (RFC3339). The daemon uses
+  // it for backfill-on-reconnect (daemon HelloClientPayload.LastSeenTS, *time.Time,omitempty).
+  // Omitted when nothing has been seen yet — that absence is the "nothing seen" signal, so the
+  // daemon backfills nothing. Replaces the earlier `last_event_id`, which was not a field the
+  // daemon or the mobile client speaks.
+  last_seen_ts?: string
 }
 
 export interface HelloAckPayload {
@@ -90,6 +111,9 @@ export interface ErrorPayload {
   code: string
   message: string
   retryable: boolean
+  // Advisory retry delay in seconds. Meaningful only when `retryable` is true; omitted
+  // otherwise (daemon ErrorPayload.RetryAfterS, *int,omitempty).
+  retry_after_s?: number
 }
 
 /** QR pairing payload: relay address, server id, pairing token, server static key. */

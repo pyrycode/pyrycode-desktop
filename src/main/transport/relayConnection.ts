@@ -32,9 +32,13 @@ const WIRE_PONG_TIMEOUT_MS = 30_000
  * validate or interpret the URL beyond handing it to `ws`.
  */
 export interface RelayConnectionConfig {
-  /** Caller-supplied, e.g. wss://<relay>/v2/client. Used verbatim. */
+  /** Caller-supplied, e.g. wss://<relay>/v1/client. Used verbatim. The deployed relay routes
+   *  only /v1/client (404 on any other path). Reference: pyrycode-mobile
+   *  OkHttpRelayTransport.kt. */
   url: string
-  /** Caller-supplied request headers, verbatim (server-id, device-name, user-agent). Never logged. */
+  /** Caller-supplied request headers, verbatim (server-id, device-name, token, user-agent).
+   *  Never logged. The deployed relay requires the x-pyrycode-token header (400 without it).
+   *  Reference: pyrycode-mobile OkHttpRelayTransport.kt. */
   headers: Record<string, string>
   /** WS-upgrade deadline in ms; a hung upgrade is aborted after this. Default 10_000. */
   connectTimeoutMs?: number

@@ -82,6 +82,16 @@ describe('reduceSession — message append order', () => {
     const s2 = reduceSession(s1, { type: 'messagesReceived', messages: [msg('m1'), msg('m2')] })
     expect(s2.messages.map((m) => m.message_id)).toEqual(['m0', 'm1', 'm2'])
   })
+
+  it('dedups by message_id: a re-delivered message is not appended twice', () => {
+    const s1 = reduceSession(initialSessionState, { type: 'messagesReceived', messages: [msg('m1'), msg('m2')] })
+    // Backfill overlap re-delivers m2 and adds m3; only m3 is new.
+    const s2 = reduceSession(s1, { type: 'messagesReceived', messages: [msg('m2'), msg('m3')] })
+    expect(s2.messages.map((m) => m.message_id)).toEqual(['m1', 'm2', 'm3'])
+    // A pure duplicate keeps the same array reference (no selector churn).
+    const s3 = reduceSession(s2, { type: 'messageReceived', message: msg('m3') })
+    expect(s3.messages).toBe(s2.messages)
+  })
 })
 
 describe('reduceSession — orthogonality', () => {

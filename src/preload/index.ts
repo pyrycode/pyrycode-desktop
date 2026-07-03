@@ -7,8 +7,6 @@ import { COMMAND_CHANNEL, type RendererCommand } from '../shared/ipc/commands'
 // sendCommand. Keys and raw bytes stay in the background process; ipcRenderer itself never
 // crosses the bridge.
 const api = {
-  ping: (): Promise<string> => ipcRenderer.invoke('ping'),
-
   /**
    * Ship a typed command to the background process. Fire-and-forget (no reply); the daemon's
    * response arrives later as typed events over the #18 channel. COMMAND_CHANNEL is fixed
@@ -33,15 +31,12 @@ const api = {
   }
 }
 
-if (process.contextIsolated) {
-  try {
-    contextBridge.exposeInMainWorld('pyry', api)
-  } catch (error) {
-    console.error(error)
-  }
-} else {
-  // @ts-ignore fallback when context isolation is disabled
-  window.pyry = api
+// Context isolation is always on (webPreferences.contextIsolation: true), so the bridge is
+// always exposed through contextBridge; there is no non-isolated fallback to keep.
+try {
+  contextBridge.exposeInMainWorld('pyry', api)
+} catch (error) {
+  console.error(error)
 }
 
 export type PyryApi = typeof api

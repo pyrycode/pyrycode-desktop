@@ -37,8 +37,11 @@ export interface Envelope {
   type: EnvelopeType | string
   ts: string
   payload: unknown
-  in_reply_to?: number | null
-  event_id?: number | null
+  // Optional wire fields: absent means omitted (never emitted as null — mobile's
+  // explicitNulls = false). `number | undefined` is the faithful representation; a `| null`
+  // here would invite a caller to write null, which JSON.stringify would serialize.
+  in_reply_to?: number
+  event_id?: number
 }
 
 export type WireRole = 'user' | 'assistant'
@@ -50,7 +53,7 @@ export interface HelloClientPayload {
   protocol_versions: string[]
   token: string
   capabilities: string[]
-  last_event_id?: number | null
+  last_event_id?: number
 }
 
 export interface HelloAckPayload {

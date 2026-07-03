@@ -61,9 +61,32 @@ function assertNever(action: never): never {
 }
 
 /**
+ * Append messages the store does not already hold, keyed by `message_id` (the wire names a
+ * per-message id precisely so a client can drop duplicates). Reconnect backfill, driven by the
+ * hello `last_seen_ts` cursor, can re-deliver a message already stored; deduping here keeps the
+ * thread from showing it twice. Arrival order is preserved and a duplicate is skipped in place,
+ * never reordered. Returns the same array reference when nothing new is added, so a pure
+ * duplicate does not churn selectors.
+ */
+function appendUnique(
+  existing: readonly MessagePayload[],
+  incoming: readonly MessagePayload[]
+): readonly MessagePayload[] {
+  const seen = new Set(existing.map((m) => m.message_id))
+  const added: MessagePayload[] = []
+  for (const message of incoming) {
+    if (seen.has(message.message_id)) continue
+    seen.add(message.message_id)
+    added.push(message)
+  }
+  return added.length === 0 ? existing : [...existing, ...added]
+}
+
+/**
  * Pure reducer — no mutation, returns fresh state. Status and messages are orthogonal:
  * status actions never touch `messages`, message actions never touch `status`. Each status
  * action sets its target unconditionally; ordering is the caller's (#3's) responsibility.
+ * Message actions dedup by `message_id` so backfill overlap does not double-post.
  */
 export function reduceSession(state: SessionState, action: SessionAction): SessionState {
   switch (action.type) {
@@ -76,9 +99,9 @@ export function reduceSession(state: SessionState, action: SessionAction): Sessi
     case 'failed':
       return { status: { type: 'error', error: action.error }, messages: state.messages }
     case 'messageReceived':
-      return { status: state.status, messages: [...state.messages, action.message] }
+      return { status: state.status, messages: appendUnique(state.messages, [action.message]) }
     case 'messagesReceived':
-      return { status: state.status, messages: [...state.messages, ...action.messages] }
+      return { status: state.status, messages: appendUnique(state.messages, action.messages) }
     default:
       return assertNever(action)
   }

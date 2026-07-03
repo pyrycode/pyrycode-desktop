@@ -20,8 +20,12 @@
 // partial or silently-truncated value — and their error messages name the failure CATEGORY only,
 // never echoing the raw bytes or decoded field values (they carry the device token and message
 // plaintext). This module performs no logging.
-import { PROTOCOL_VERSION, CAPABILITY_INTERACTIVE } from '../../shared/wire/types'
+import { PROTOCOL_VERSION, MAX_FRAME_BYTES, MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
 import type { Envelope, InnerFrameV2, HelloClientPayload } from '../../shared/wire/types'
+
+/** The InnerFrameV2 wire version this codec speaks. A frame carrying any other version is
+ *  rejected, not rewritten (v2 is a hard cutover; no down/up-negotiation on the wire). */
+const INNER_FRAME_VERSION = 2
 
 /** Deterministic, catchable decode-failure signal at the network trust boundary. Its message
  *  names the failure category only — never the raw input or decoded values (secret-safety). */
@@ -29,6 +33,16 @@ export class WireDecodeError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'WireDecodeError'
+  }
+}
+
+/** Deterministic encode-failure signal (an over-cap outbound frame/envelope). Like
+ *  WireDecodeError its message names the failure category only — never the raw values, which
+ *  carry the device token and message plaintext. */
+export class WireEncodeError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'WireEncodeError'
   }
 }
 
@@ -59,20 +73,28 @@ export function base64StdDecode(data: string): Uint8Array {
 }
 
 /** Serialize an InnerFrameV2 to WS text (a string). `v:2` is a literal type, so it is always
- *  emitted. `data` carries base64-std of the Noise bytes — those bytes are #7's, not this codec's. */
+ *  emitted. `data` carries base64-std of the Noise bytes — those bytes are #7's, not this codec's.
+ *  Rejects an over-cap outer frame (MAX_FRAME_BYTES, the relay's per-message limit) so the
+ *  desktop never emits a frame the relay would drop. */
 export function encodeInnerFrame(frame: InnerFrameV2): string {
-  return JSON.stringify(frame)
+  const text = JSON.stringify(frame)
+  if (Buffer.byteLength(text, 'utf8') > MAX_FRAME_BYTES) {
+    throw new WireEncodeError('frame exceeds max size')
+  }
+  return text
 }
 
 /**
  * Parse inbound frame bytes (as delivered by `ws`) into an InnerFrameV2. Requires string `type`
- * and `data`; tolerates any `v` (do not hard-reject a future version) and any extra server-added
- * keys (forward-compat). Throws WireDecodeError on malformed UTF-8/JSON or a missing/mistyped
- * required field.
+ * and `data`, and REJECTS a frame whose `v` is not the expected version (v2 is a hard cutover;
+ * a version mismatch is rejected, not silently rewritten). Tolerates any extra server-added keys
+ * (forward-compat). Throws WireDecodeError on malformed UTF-8/JSON, a wrong version, or a
+ * missing/mistyped required field.
  */
 export function decodeInnerFrame(bytes: Uint8Array): InnerFrameV2 {
   const obj = parseJsonObject(bytes)
-  const { type, data } = obj
+  const { v, type, data } = obj
+  if (v !== INNER_FRAME_VERSION) throw new WireDecodeError('unsupported protocol version')
   if (typeof type !== 'string') throw new WireDecodeError('missing required field: type')
   if (typeof data !== 'string') throw new WireDecodeError('missing required field: data')
   return { v: 2, type, data }
@@ -83,10 +105,16 @@ export function decodeInnerFrame(bytes: Uint8Array): InnerFrameV2 {
  * early-data). The Envelope is NOT itself base64-encoded; base64-std wraps the Noise bytes that
  * ride in InnerFrameV2.data. Envelope has no defaulted fields, so callers build it directly and
  * omit absent optionals; JSON.stringify drops `undefined` keys and never emits `null` (the
- * tightened types forbid `null` optionals). Cannot fail on well-typed input.
+ * tightened types forbid `null` optionals). Rejects an over-cap envelope (MAX_PLAINTEXT_BYTES,
+ * the v2 decrypted-envelope limit) so the desktop never hands the Noise layer a plaintext the
+ * daemon would reject.
  */
 export function encodeEnvelope(envelope: Envelope): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify(envelope))
+  const bytes = new TextEncoder().encode(JSON.stringify(envelope))
+  if (bytes.length > MAX_PLAINTEXT_BYTES) {
+    throw new WireEncodeError('envelope exceeds max plaintext size')
+  }
+  return bytes
 }
 
 /**
@@ -111,17 +139,27 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
 
 /**
  * The one default-injecting constructor. TS interfaces carry no runtime defaults, so the
- * non-literal defaults `protocol_versions` (["v2"]) and `capabilities` (["interactive"]) must be
- * injected here (mobile's `encodeDefaults = true`). `role: 'client'` is a literal type and needs
- * no injection. `last_event_id` is emitted only when provided (omitted, never null, otherwise).
- * HelloClientPayload is the ONLY encode-side payload with non-literal defaults — hence one
+ * non-literal default `protocol_versions` (["v2"]) must be injected here (mobile's
+ * `encodeDefaults = true`). `role: 'client'` is a literal type and needs no injection.
+ * `last_seen_ts` is emitted only when provided (omitted, never null, otherwise), matching the
+ * daemon's `omitempty`: absence is the "nothing seen yet" signal that suppresses backfill.
+ *
+ * `capabilities` is a caller-provided argument, NOT a hardcoded `["interactive"]`. The desktop
+ * event pipeline models only the coarse `message` type; the structured interactive stream
+ * (turn_state, deltas, tool use/result, turn_end) is not modeled here, so advertising
+ * `interactive` would make the daemon fan out envelopes this client cannot render — it would
+ * show nothing. Interactive is therefore withheld (the default is no capabilities) until those
+ * structured events are modeled; a caller that has modeled them passes them in explicitly.
+ *
+ * HelloClientPayload is the ONLY encode-side payload with a non-literal default — hence one
  * constructor, not a per-payload wrapper.
  */
 export function makeHelloClientPayload(input: {
   deviceName: string
   clientVersion: string
   token: string
-  lastEventId?: number
+  capabilities?: readonly string[]
+  lastSeenTs?: string
 }): HelloClientPayload {
   const payload: HelloClientPayload = {
     role: 'client',
@@ -129,9 +167,9 @@ export function makeHelloClientPayload(input: {
     client_version: input.clientVersion,
     protocol_versions: [PROTOCOL_VERSION],
     token: input.token,
-    capabilities: [CAPABILITY_INTERACTIVE]
+    capabilities: input.capabilities ? [...input.capabilities] : []
   }
-  if (input.lastEventId !== undefined) payload.last_event_id = input.lastEventId
+  if (input.lastSeenTs !== undefined) payload.last_seen_ts = input.lastSeenTs
   return payload
 }
 

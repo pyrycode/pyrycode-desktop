@@ -1,0 +1,15 @@
+{
+  "_provenance": {
+    "source": "RFC 7693 (The BLAKE2 Cryptographic Hash and MAC), Appendix B — BLAKE2s-256 example",
+    "reference": "https://www.rfc-editor.org/rfc/rfc7693#appendix-B",
+    "kind": "published known-answer test for the BLAKE2s primitive",
+    "note": "This fixture pins the BLAKE2s primitive by its published RFC known-answer. The byte-for-byte CROSS-IMPLEMENTATION Noise_IK_25519_ChaChaPoly_BLAKE2s handshake vector (which alone distinguishes BLAKE2s from SHA-256 by value at the Noise layer) is DEFERRED to #30, where the Go flynn/noise responder emits reference bytes the JS initiator must match — a stronger proof than a static file. No published Noise-IK vector for this suite was obtainable credential-free in this sandbox: the noise-c.wasm npm package excludes its tests/ directory, and web fetch is unavailable. A self-generated 'vector' was deliberately NOT fabricated, as it would prove nothing about hash correctness."
+  },
+  "hash": "BLAKE2s-256",
+  "cases": [
+    {
+      "input_utf8": "abc",
+      "digest_hex": "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982"
+    }
+  ]
+}

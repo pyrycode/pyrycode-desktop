@@ -16,6 +16,7 @@ One-line summaries of the evergreen docs. The documentation phase appends here.
 - [Daemon-event channel](features/daemon-event-channel.md) — the typed background→window event pipe: a sealed `DaemonEvent` union in `src/shared/ipc/`, the single `emitDaemonEvent` send path, and a receive-only `onDaemonEvent` subscription on `window.pyry` (#18).
 - [Command channel](features/command-channel.md) — the mirror-image window→background command pipe: a sealed `RendererCommand` union + pure `sendMessageCommand` + `isRendererCommand` boundary guard in `src/shared/ipc/`, a typed `sendCommand` on `window.pyry`, and an `onCommand` receiver seam that validates each command at the untrusted renderer→main boundary (#17).
 - [Daemon-event bridge (renderer)](features/daemon-event-bridge.md) — the renderer translation half: pure `translateDaemonEvent` maps each `DaemonEvent` to a `SessionAction`, and the `useDaemonEventBridge` hook pipes `onDaemonEvent → translate → dispatch` into the app-singleton store, unsubscribing cleanly on teardown (#19).
+- [Relay connection](features/relay-connection.md) — the background-process connection primitive: `createRelayConnection` opens one `wss://` socket with caller-supplied headers, a 30s/30s heartbeat, a 1 MiB frame cap, carrying raw frames both ways as opaque bytes and funnelling every failure into one terminal `closed` event; semantics-blind, log-free, no reconnect (that's #22). Adds `ws`, the project's first network dependency (#21).
 
 ## Architecture
 

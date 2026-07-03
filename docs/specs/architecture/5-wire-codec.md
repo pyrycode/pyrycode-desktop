@@ -1,8 +1,30 @@
 # Spec — Wire codec (encode and decode) (#5)
 
 **Size:** S (confirmed; PO offered S→XS but the strict-base64 boundary + the per-payload
-fixture matrix keep it a genuine S). One new production file plus a ~5-line tighten of
+fixture matrix keep it a genuine S). One production file plus a ~5-line tighten of
 `types.ts`. No consumer wiring, no UI.
+
+## Rework note (rev 2 — 2026-07-03)
+
+Code review FAILed rev 1 → `needs-rework:architect` on one blocking, spec-level decision, plus
+one NIT. Both are folded into this revision; the design is otherwise unchanged and the rev-1
+implementation is fully reusable (relocate, don't rewrite — see **Migration**).
+
+- **[BLOCKING — placement]** Rev 1 placed the codec at `src/shared/wire/codec.ts`. That tree is
+  imported by the renderer via the `@shared` alias, so a `security-sensitive` module that handles
+  device tokens + message plaintext + Node `Buffer` sat in renderer-reachable space, protected only
+  by a *convention* ("don't add a barrel"). CLAUDE.md ("the wire codec belong under `src/main/`"),
+  ADR 0002 (types→`shared`, codec→`transport`), and #21's ratified codebase notes all name
+  `src/main/transport/` as the codec's home. **This revision moves the codec there**, converting
+  renderer isolation from *conventional* to *structural* (the renderer physically cannot import
+  `src/main/**`). Zero consumers today (verified — no importers, no barrel) makes the move trivial.
+- **[NIT — base64 parity]** `base64StdDecode` accepted non-canonical final-quantum encodings that
+  Go's `base64.StdEncoding` rejects (e.g. `"YR=="`). No truncation/security impact — the primary
+  fail-closed property already held — but it drifts from the Go/mobile reference. **This revision
+  tightens the canonicality check** (see Error handling → Strict base64).
+
+The `types.ts` tighten (drop `| null` from the three optionals) landed in rev 1 and is **already on
+the branch** — it stays in `src/shared/wire/types.ts` (types belong in `shared`); do not redo it.
 
 ## Design source
 
@@ -11,13 +33,25 @@ section and the work is not UI-visible, so no visual-fidelity check applies.
 
 ## Files to read first
 
-- `src/shared/wire/types.ts:16-98` — the exact shapes the codec (de)serializes: `InnerFrameV2`
+- `src/shared/wire/codec.ts` — **the rev-1 implementation to RELOCATE** (currently misplaced under
+  `src/shared/wire/`). Green-tested, faithful to this spec. You `git mv` it to
+  `src/main/transport/codec.ts` and fix two import lines (see **Migration**). Read it to confirm it
+  matches this spec before moving — do not rewrite.
+- `src/shared/wire/codec.test.ts` — **the rev-1 test suite to RELOCATE** (33 tests, all AC covered).
+  Moves alongside the codec to `src/main/transport/codec.test.ts`; its `./codec` import is unchanged
+  (same dir), its `./types` import becomes the relative `../../shared/wire/types`.
+- `src/shared/wire/types.ts:16-101` — the exact shapes the codec (de)serializes: `InnerFrameV2`
   (`v`/`type`/`data`), `Envelope` (opaque `payload: unknown`, optional `in_reply_to`/`event_id`),
-  and every payload interface. **Note the `| null` on the three optionals (lines 40, 41, 53) — you
-  will tighten these.** The interfaces already use snake_case **wire** field names, so
-  `JSON.stringify` emits wire-correct JSON with no name mapping (unlike Kotlin's `@SerialName`).
+  and every payload interface. The three optionals are **already tightened** (`in_reply_to?: number`
+  etc., no `| null`) — rev 1 landed this; it stays here. The interfaces already use snake_case
+  **wire** field names, so `JSON.stringify` emits wire-correct JSON with no name mapping (unlike
+  Kotlin's `@SerialName`). **This file stays in `src/shared/wire/` and stays `Buffer`-free** — the
+  renderer imports it; the codec (which needs `Buffer`) does not belong beside it.
 - `src/shared/wire/types.test.ts:1-16` — the vitest idiom (`describe`/`it`/`expect`) and the
   colocated `*.test.ts` convention your test file follows.
+- `src/main/transport/relayConnection.ts:1-20` — the **destination directory's** existing file;
+  confirm the import style there. `src/main/**` cannot use the `@shared/*` alias — import shared
+  wire types by **relative path** (`../../shared/wire/types`).
 - `src/main/transport/relayConnection.ts:41-42` — `maxFrameBytes` (default 1 MiB). This is the
   **upstream size cap** the codec relies on; the codec is never called on unbounded input.
 - `src/main/transport/relayConnection.ts:53-72` — the consumer seam. Inbound frames arrive as
@@ -73,11 +107,49 @@ primitives the transport composes, standing in for where Noise sits.
 
 ## Design
 
-New file: **`src/shared/wire/codec.ts`**. Pure, synchronous, side-effect-free functions plus one
-error class. Imported by `src/main` consumers only (#7, the relay wiring). **It must NOT be
-re-exported through any barrel the renderer imports** — it uses Node `Buffer` and handles secret
-material (tokens) and message plaintext, both of which must stay out of the renderer. `types.ts`
-(which the renderer *does* import) stays `Buffer`-free — keep the split.
+File: **`src/main/transport/codec.ts`** (relocated from `src/shared/wire/codec.ts` — see
+**Migration**). Pure, synchronous, side-effect-free functions plus one error class. Imported by
+`src/main` consumers only (#7, the relay wiring).
+
+**Why `src/main/transport/`, structurally (not `src/shared/wire/` with a convention).** The codec
+uses Node `Buffer` and serializes secret material (device tokens in hello/QR payloads) and message
+plaintext. `src/shared/**` is imported by the renderer via the `@shared` alias, so a codec living
+there is renderer-reachable and kept out only by the *rule* "don't add a barrel" — a stochastic
+guardrail for a security-sensitive module. Placing it under `src/main/transport/` makes the
+isolation **structural**: the renderer bundle physically cannot import `src/main/**`. This is the
+documented home (CLAUDE.md, ADR 0002, #21's codebase notes) and it joins the relay supervisor and
+the future Noise session (#7) that consume it. The "no renderer barrel" note is retained below as a
+secondary belt, but the placement is the load-bearing control.
+
+**Imports.** `src/main/**` cannot use the `@shared/*` path alias — import the shared wire **types**
+by relative path: `import { PROTOCOL_VERSION, CAPABILITY_INTERACTIVE } from '../../shared/wire/types'`
+and `import type { Envelope, InnerFrameV2, HelloClientPayload } from '../../shared/wire/types'`.
+`types.ts` (which the renderer *does* import) stays in `src/shared/wire/` and stays `Buffer`-free —
+keep the types-vs-codec split. As a secondary belt, `codec.ts` must not be re-exported through any
+barrel the renderer imports (there is none today — verified).
+
+### Migration (rev 2 — relocate the rev-1 implementation, do not rewrite)
+
+The rev-1 codec + tests are correct and green (33 tests, all AC). This rework is a **move**, not a
+re-implement. Test-first still applies via the relocated suite (it stays RED-free after the move):
+
+1. `git mv src/shared/wire/codec.ts src/main/transport/codec.ts`
+2. `git mv src/shared/wire/codec.test.ts src/main/transport/codec.test.ts`
+3. In `src/main/transport/codec.ts`: change both `from './types'` imports to
+   `from '../../shared/wire/types'`. Update the module header comment's `./types` references to the
+   new relative path (cosmetic, keep the MAIN-PROCESS-ONLY / secret-safety comment).
+4. In `src/main/transport/codec.test.ts`: `from './codec'` is unchanged (same dir);
+   `from './types'` → `from '../../shared/wire/types'`.
+5. Add the **canonical final quantum** hardening + test (Error handling / Testing strategy).
+6. Leave `src/shared/wire/types.ts` and `types.test.ts` in place — types stay in `shared`.
+7. Verify no consumer references the old path (none exist today) and no `@shared` alias crept in:
+   `grep -rn "shared/wire/codec\|@shared/wire/codec" src/` returns nothing.
+
+**Verification gate (all must pass):** `npm test` (the 33 tests + the new canonical-base64 case),
+`npm run typecheck` (node + web configs), `npm run build`. Additionally, grep the built
+`out/renderer` bundle to confirm `codec.ts` is **absent** from the renderer bundle — the structural
+isolation this rework exists to establish (rev 1's developer already ran this check; it must still
+hold, now for free because the file is physically outside `src/shared`).
 
 ### Exported surface (contract sketches — not implementations)
 
@@ -137,16 +209,18 @@ needs no constructor: callers build it directly and omit absent optionals.
 ### Omit-absent-optionals, without `null` (AC #3)
 
 `JSON.stringify` omits keys whose value is `undefined`, but **serializes `null`**. So the only safe
-representation of an absent optional is `undefined`/omitted, never `null`. The current
-`in_reply_to?: number | null` (and `event_id`, `last_event_id`) invite a caller to write `null`,
-which would serialize as `null` and break the contract.
+representation of an absent optional is `undefined`/omitted, never `null`. A `| null` on
+`in_reply_to`/`event_id`/`last_event_id` would invite a caller to write `null`, which serializes as
+`null` and breaks the contract.
 
-**Tighten `types.ts`:** drop `| null` from those three fields → `in_reply_to?: number`,
-`event_id?: number`, `last_event_id?: number`. This makes "absent" the only representation and lets
-`JSON.stringify`'s natural `undefined`-omission satisfy AC #3 with no runtime scrub. This does **not**
-drift the wire contract — mobile's `explicitNulls = false` means these are *never emitted as null on
-the wire* either; `number | undefined` is the faithful wire representation of mobile's `Long? = null`.
-Zero edit fan-out: these fields have no consumers today (verified — only `types.ts` references them).
+**Already applied (rev 1):** `types.ts` dropped `| null` from those three fields →
+`in_reply_to?: number`, `event_id?: number`, `last_event_id?: number`. This makes "absent" the only
+representation and lets `JSON.stringify`'s natural `undefined`-omission satisfy AC #3 with no runtime
+scrub. It does **not** drift the wire contract — mobile's `explicitNulls = false` means these are
+*never emitted as null on the wire* either; `number | undefined` is the faithful wire representation
+of mobile's `Long? = null`. Zero edit fan-out: no consumers (only `types.ts` references them). This
+change stays in `src/shared/wire/types.ts` (it is a type change, not codec code) — leave it in place
+when you relocate the codec.
 
 ### Wire field contract (inline from the mobile models — build fixtures from this)
 
@@ -192,6 +266,20 @@ The **decode** functions are the untrusted→trusted boundary. They must **fail 
   padding not a well-formed trailing `={0,2}`, or url-safe `-`/`_`) by throwing `WireDecodeError`;
   only then `Buffer.from(validated, 'base64')`. The invariant asserted by tests: strict-reject, no
   truncation.
+- **Canonical final quantum (rev 2 — closes the code-review NIT; reference-parity, not security).**
+  The rev-1 alphabet/length/padding check still accepts *non-canonical final-quantum* encodings that
+  Go's `base64.StdEncoding` rejects — inputs where the last significant character carries non-zero
+  bits in positions the padding says are unused (e.g. `"YR=="`, which Node leniently decodes to the
+  same byte as `"YQ=="`). No truncation and no security impact (the fail-closed property already
+  holds), but it drifts from the Go/mobile reference alphabet. **Tighten `base64StdDecode` to reject
+  non-canonical encodings.** Recommended implementation (self-evidently correct, subsumes the regex):
+  after a lenient decode, **re-encode and require byte-for-byte equality with the input** —
+  `base64StdEncode(decoded) === data`, else throw `WireDecodeError('malformed base64')`. Node's
+  encoder always emits canonical output, so any non-canonical or garbage-bearing input fails the
+  comparison (`"YR=="` → re-encodes to `"YQ=="` ≠ input → reject; `"YQ==garbage"` → `"YQ=="` ≠ input
+  → reject, still no truncation). The empty string round-trips to itself and stays valid. The
+  invariant asserted by tests: decode accepts a value **iff** it is the canonical encoding of its
+  own bytes.
 - **Malformed JSON.** Catch **all** throws from `JSON.parse` — `SyntaxError` *and* `RangeError`
   (deep nesting / stack) — and rethrow as `WireDecodeError`.
 - **Malformed UTF-8.** Decode bytes with `new TextDecoder('utf-8', { fatal: true })` so invalid
@@ -213,10 +301,11 @@ optionals; literal types force defaults). They do not throw.
 
 ## Testing strategy
 
-`src/shared/wire/codec.test.ts`, vitest, following `types.test.ts`'s idiom and the
-`Uint8Array`/`Buffer` handling in `relayConnection.test.ts`. Build per-payload JSON **fixtures**
-from the **Wire field contract** table (AC #5). Write these as bullet-scenario tests (inputs +
-expected behavior), not as pre-written bodies:
+`src/main/transport/codec.test.ts` (relocated with the codec), vitest, following `types.test.ts`'s
+idiom and the `Uint8Array`/`Buffer` handling in `relayConnection.test.ts`. The rev-1 suite (33
+tests, all AC) already exists — it moves alongside the codec; add only the canonical-base64
+scenario below. Build per-payload JSON **fixtures** from the **Wire field contract** table (AC #5).
+Write these as bullet-scenario tests (inputs + expected behavior), not as pre-written bodies:
 
 - **Frame round-trip:** `encodeInnerFrame(frame)` → a string containing `"v":2`, `"type"`, `"data"`;
   feed its UTF-8 bytes to `decodeInnerFrame` → deep-equals the original.
@@ -233,6 +322,11 @@ expected behavior), not as pre-written bodies:
 - **Strict base64 (AC #4):** `base64StdDecode` throws `WireDecodeError` on non-alphabet chars,
   wrong length, malformed padding, and url-safe `-`/`_`; include `"YQ==garbage"` to prove Node's
   lenient truncation is defeated (throws, does not decode `"YQ=="`).
+- **Canonical final quantum (rev 2):** `base64StdDecode` throws on a non-canonical final quantum that
+  Node would leniently accept. Two-char quantum: assert `"YR=="` (non-zero unused low bits) throws,
+  while the canonical `"YQ=="` decodes to the single byte `0x61`. Three-char quantum: assert `"YWJ="`
+  (non-canonical) throws, while the canonical `"YWI="` decodes to the two bytes `0x61 0x62`. Also
+  assert the empty string decodes to zero bytes (still valid).
 - **base64 alphabet:** `base64StdEncode` of bytes that produce `+`/`/` (e.g. `0xFB 0xFF`) uses
   `+`/`/` and `=` padding (not `-`/`_`), length a multiple of 4; round-trips through
   `base64StdDecode`.
@@ -279,10 +373,14 @@ must not break the node or web build (no consumers today).
   `console.log` a hello payload; noted for #7.)
 - **[File / storage]** N/A — the codec performs no filesystem or storage I/O of any kind.
 - **[Inter-process / Electron]** No MUST FIX — the codec adds no IPC channel, no `contextBridge`
-  API, no `BrowserWindow`. MUST (Design): `codec.ts` stays a main-only file, **not** re-exported
-  through any renderer-imported barrel, keeping wire-decode, secret handling, and `Buffer` out of
-  the renderer bundle. `types.ts` (renderer-imported) stays `Buffer`-free. This upholds
-  "transport/parsing lives in main, never the renderer."
+  API, no `BrowserWindow`. **Strengthened in rev 2:** `codec.ts` now lives under
+  `src/main/transport/`, so wire-decode, secret handling, and `Buffer` are **structurally**
+  excluded from the renderer bundle — the renderer physically cannot import `src/main/**`, rather
+  than relying on the rev-1 convention "don't add a barrel." `types.ts` (renderer-imported) stays in
+  `src/shared/wire/` and `Buffer`-free. The "no renderer barrel" note is retained as a secondary
+  belt. This upholds "transport/parsing lives in main, never the renderer" by placement, the
+  strongest available control. The build-time grep of `out/renderer` (Migration → Verification gate)
+  is the deterministic check that the isolation holds.
 - **[Cryptographic primitives]** N/A with justification — the codec is crypto-free. No RNG, no
   hashing, no key handling, no MAC/token comparison. base64 and JSON are not cryptographic. The
   Noise handshake and AEAD are #7's, from a vetted Noise library — the codec must not be extended to
@@ -305,5 +403,12 @@ must not break the node or web build (no consumers today).
   no merge sink — SHOULD FIX reviver noted, not gated (Open questions). Token theft from disk: N/A
   (no storage).
 
+**Rev 2 re-review (2026-07-03):** verdict remains **PASS**, strengthened. The relocation to
+`src/main/transport/` converts the renderer-isolation control from conventional to structural (see
+[Inter-process / Electron]); no finding is weakened, no new attack surface is introduced (the codec
+is byte-for-byte the rev-1 module in a new directory). The base64 canonical-quantum tightening
+narrows decode tolerance toward the Go/mobile reference — strictly fail-*closed*-er, never more
+permissive. All other findings hold unchanged.
+
 **Reviewer:** architect (self-review per `architect/security-review.md`)
-**Date:** 2026-07-03
+**Date:** 2026-07-03 (rev 1); 2026-07-03 (rev 2 — relocation + base64 parity)

@@ -13,6 +13,7 @@ One-line summaries of the evergreen docs. The documentation phase appends here.
 
 - [Conversation shell](features/conversation-shell.md) — the renderer's first screen: a scrollable message thread above a bottom-pinned composer, mirrored from the mobile Conversation Thread design (static, inert; #1).
 - [Session store](features/session-store.md) — the renderer's single source of truth for the active session's connection status + conversation messages, mutated through a sealed action union; the state seam #3 dispatches into and #12 reads (#2).
+- [Daemon-event channel](features/daemon-event-channel.md) — the typed background→window event pipe: a sealed `DaemonEvent` union in `src/shared/ipc/`, the single `emitDaemonEvent` send path, and a receive-only `onDaemonEvent` subscription on `window.pyry` (#18).
 
 ## Architecture
 

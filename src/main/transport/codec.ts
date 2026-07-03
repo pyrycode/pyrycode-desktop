@@ -1,4 +1,4 @@
-// The wire codec: turns the shared wire types (./types) into — and back from — the daemon's
+// The wire codec: turns the shared wire types (../../shared/wire/types) into — and back from — the daemon's
 // on-the-wire bytes, byte-identical to what pyrycode-mobile sends. It is the serialization
 // foundation for the connect–send–stream round-trip; #7 (the Noise session) encrypts the bytes
 // this module produces and base64-wraps the resulting Noise bytes into an InnerFrameV2.data.
@@ -12,16 +12,16 @@
 // MAIN-PROCESS ONLY. This file uses Node `Buffer` and handles secret material (device tokens in
 // hello/QR payloads) and message plaintext, all of which must stay out of the renderer. It is
 // imported by src/main consumers (#7, the relay wiring) by relative path and MUST NOT be
-// re-exported through any barrel the renderer imports. `./types` (which the renderer does import)
-// stays Buffer-free — keep the split.
+// re-exported through any barrel the renderer imports. `../../shared/wire/types` (which the
+// renderer does import) stays Buffer-free — keep the split.
 //
 // The decode* functions sit on the untrusted→trusted network boundary: they parse bytes a
 // malicious relay peer could shape. They FAIL CLOSED — throw WireDecodeError, never return a
 // partial or silently-truncated value — and their error messages name the failure CATEGORY only,
 // never echoing the raw bytes or decoded field values (they carry the device token and message
 // plaintext). This module performs no logging.
-import { PROTOCOL_VERSION, CAPABILITY_INTERACTIVE } from './types'
-import type { Envelope, InnerFrameV2, HelloClientPayload } from './types'
+import { PROTOCOL_VERSION, CAPABILITY_INTERACTIVE } from '../../shared/wire/types'
+import type { Envelope, InnerFrameV2, HelloClientPayload } from '../../shared/wire/types'
 
 /** Deterministic, catchable decode-failure signal at the network trust boundary. Its message
  *  names the failure category only — never the raw input or decoded values (secret-safety). */
@@ -32,10 +32,6 @@ export class WireDecodeError extends Error {
   }
 }
 
-// Canonical standard-alphabet base64: A–Za–z0–9+/ with a well-formed trailing pad of {0,2} '='.
-// Anchored, so any url-safe -/_ , stray '=', or non-alphabet char fails the whole match.
-const STD_BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
-
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true })
 
 /** base64-std encode (A–Za–z0–9+/, padded) — Go base64.StdEncoding. Total on any input. */
@@ -44,17 +40,22 @@ export function base64StdEncode(bytes: Uint8Array): string {
 }
 
 /**
- * STRICT base64-std decode. Node's `Buffer.from(s, 'base64')` is lenient — it strips
- * non-alphabet chars and truncates (e.g. `'YQ==garbage'` → only `'YQ=='`, no error), which would
- * let a malformed frame decode to a silently-truncated value. So validate the canonical shape
- * (alphabet, length multiple of 4, trailing padding only) BEFORE delegating; reject everything
- * else with WireDecodeError. Mirrors Go's `base64.StdEncoding` / mobile's `Base64.getDecoder()`.
+ * STRICT base64-std decode. Node's `Buffer.from(s, 'base64')` is lenient — it strips non-alphabet
+ * chars, accepts url-safe `-`/`_`, and tolerates non-canonical final quanta (e.g. `'YQ==garbage'`
+ * → only `'YQ=='`; `'YR=='` → the same byte as `'YQ=='`, no error). That would let a malformed
+ * frame decode to a silently-truncated or off-contract value. Go's `base64.StdEncoding` and
+ * mobile's `Base64.getDecoder()` are strict. Replicate that by the canonical-form test: lenient-
+ * decode, then require the input to be the exact base64-std re-encoding of those bytes. Node's
+ * encoder emits only canonical output, so any garbage-bearing, url-safe, wrong-length, or
+ * non-canonical-quantum input fails the equality and throws WireDecodeError — no truncation. The
+ * empty string re-encodes to itself and stays valid.
  */
 export function base64StdDecode(data: string): Uint8Array {
-  if (data.length % 4 !== 0 || !STD_BASE64.test(data)) {
+  const decoded = new Uint8Array(Buffer.from(data, 'base64'))
+  if (base64StdEncode(decoded) !== data) {
     throw new WireDecodeError('malformed base64')
   }
-  return new Uint8Array(Buffer.from(data, 'base64'))
+  return decoded
 }
 
 /** Serialize an InnerFrameV2 to WS text (a string). `v:2` is a literal type, so it is always

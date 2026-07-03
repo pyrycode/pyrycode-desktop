@@ -19,7 +19,7 @@ import type {
   BackfillSincePayload,
   ErrorPayload,
   QrPayload
-} from './types'
+} from '../../shared/wire/types'
 
 // Fixtures are byte-derived from the mobile Kotlin wire models (MobileWireModels.kt /
 // MessagePayload.kt): snake_case field names, base64-std alphabet, defaults always emitted,
@@ -63,6 +63,23 @@ describe('base64StdEncode / base64StdDecode', () => {
 
   it('rejects malformed padding (= not in trailing position)', () => {
     expect(() => base64StdDecode('a=bc')).toThrow(WireDecodeError)
+  })
+
+  it('rejects a non-canonical two-char final quantum (Node would leniently accept)', () => {
+    // "YR==" carries non-zero bits in the positions padding says are unused; Go's
+    // base64.StdEncoding rejects it. Node decodes it to the same byte as canonical "YQ==".
+    expect(() => base64StdDecode('YR==')).toThrow(WireDecodeError)
+    expect(base64StdDecode('YQ==')).toEqual(new Uint8Array([0x61]))
+  })
+
+  it('rejects a non-canonical three-char final quantum (Node would leniently accept)', () => {
+    // "YWJ=" is non-canonical; canonical "YWI=" decodes to the two bytes 0x61 0x62.
+    expect(() => base64StdDecode('YWJ=')).toThrow(WireDecodeError)
+    expect(base64StdDecode('YWI=')).toEqual(new Uint8Array([0x61, 0x62]))
+  })
+
+  it('decodes the empty string to zero bytes', () => {
+    expect(base64StdDecode('')).toEqual(new Uint8Array([]))
   })
 })
 

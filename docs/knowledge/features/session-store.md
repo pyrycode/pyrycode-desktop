@@ -2,7 +2,7 @@
 
 The renderer's single source of truth for the active session: its connection status and its conversation message list, in one Zustand store, mutated only through a sealed action union. It is the state foundation the connect-send-stream milestone binds onto — the [conversation shell](conversation-shell.md) renders it, the typed channel dispatches into it.
 
-Introduced in [#2](../codebase/2.md). Lives at `src/renderer/src/store/sessionStore.ts`. Pure renderer state — no IPC, no preload bridge, no transport, no import from `src/main/`. Nothing binds it yet: #3 (the typed background↔window channel) dispatches into it, #12 binds its selectors into the UI. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why it is shaped this way.
+Introduced in [#2](../codebase/2.md). Lives at `src/renderer/src/store/sessionStore.ts`. Pure renderer state — no IPC, no preload bridge, no transport, no import from `src/main/`. The write side is now bound: the [daemon-event bridge](daemon-event-bridge.md) ([#19](../codebase/19.md) — "#3" in this store's older doc comments, pre-renumber) translates each `DaemonEvent` to a `SessionAction` and dispatches it here; #12 binds its selectors into the UI (read side, still pending). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why it is shaped this way.
 
 ## What it does
 
@@ -91,6 +91,7 @@ Narrow-slice selection means a status change does not re-render the thread and a
 ## Related
 
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
+- [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store
 - [Conversation shell](conversation-shell.md) — the surface #12 binds these selectors into
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) · [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md)
 - [#2 codebase notes](../codebase/2.md) · Spec: `docs/specs/architecture/2-connection-and-conversation-state-store.md`

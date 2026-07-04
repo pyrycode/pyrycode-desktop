@@ -1,0 +1,163 @@
+/*
+ * Pairing dialog styles, from the mobile "Paste pairing code" dialog (Figma node
+ * 19-54) stretched to the desktop window. Every color/type/spacing value resolves
+ * to a theme token from theme/tokens.css — the only literals are bare structural
+ * geometry (100%, the card's max-width, the paste field's fixed min-height, the
+ * ~55% placeholder opacity, and the M3 0.38 disabled opacity), none of which is a
+ * theme value. The reviewing/confirming fingerprint block is desktop-specific
+ * (not drawn in the Figma node) and reuses the same card tokens.
+ */
+
+/* The dialog card. Placement/centering in the app shell is a later navigation
+   slice (mounting is out of scope); max-width + margin keep it dialog-shaped and
+   horizontally centered wherever it lands, rather than stretching edge-to-edge. */
+.pairing {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 420px;
+  margin: var(--space-6) auto;
+  padding: var(--space-6);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+}
+
+.pairing__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-headline-small-size);
+  line-height: var(--text-headline-small-line);
+  letter-spacing: var(--text-headline-small-tracking);
+  font-weight: var(--text-headline-small-weight);
+}
+
+.pairing__instruction {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The inline `pyry pair --print` command accent (and the `pyry pair` caption
+   accent in the review phase). */
+.pairing__accent {
+  font-family: var(--font-mono);
+  color: var(--color-tertiary);
+}
+
+/* min-height (not a fixed height) so the field grows with a pasted multi-line
+   payload; the design's 4px radius maps to --radius-xs (6px), a 2px difference
+   that is imperceptible and keeps the value tokenized. */
+.pairing__paste {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  color: var(--color-on-surface);
+  border: 1px solid var(--color-outline);
+  border-radius: var(--radius-xs);
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+}
+
+.pairing__paste::placeholder {
+  color: var(--color-on-surface-variant);
+  opacity: 0.55;
+}
+
+.pairing__paste:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.pairing__paste:disabled {
+  opacity: 0.55;
+}
+
+/* No dedicated error token exists in tokens.css; --color-tertiary (#ffb59f) is
+   the M3 dark error-adjacent warm color and the palette's only attention color,
+   so it stands in for the inline validation message. The error state is not
+   drawn in the Figma node, so there is no visual reference to diverge from. */
+.pairing__error {
+  margin: 0;
+  color: var(--color-tertiary);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* Prominent monospace fingerprint block: 8 verbatim byte-pairs, spaced for
+   scannability. Grouping is spatial only — the characters/case/order are never
+   altered, so the operator can compare it byte-for-byte against pyrybox. */
+.pairing__fingerprint {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-surface-container);
+  border-radius: var(--radius-sm);
+  color: var(--color-on-surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+}
+
+.pairing__fingerprint-group {
+  white-space: nowrap;
+}
+
+.pairing__success {
+  margin: 0;
+  text-align: center;
+  color: var(--color-success);
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+  letter-spacing: var(--text-title-large-tracking);
+  font-weight: var(--text-title-large-weight);
+}
+
+/* Right-aligned pill text buttons; the design's 10px vertical padding maps to
+   --space-2 (8px), a 2px difference kept tokenized. */
+.pairing__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.pairing__button {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+  cursor: pointer;
+}
+
+.pairing__button:hover:not(:disabled) {
+  background: var(--color-surface-container);
+}
+
+.pairing__button:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.pairing__button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}

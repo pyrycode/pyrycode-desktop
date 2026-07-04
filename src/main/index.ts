@@ -12,6 +12,7 @@ import { registerPairingHandler } from './pairingHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
+import { onCommand } from './receiveCommand'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
@@ -135,6 +136,22 @@ app.whenReady().then(() => {
   // after a network round-trip). `.once`, not `.on`, so a dev HMR reload does not re-fire it.
   mainWindow.webContents.once('did-finish-load', () => connection.start())
   app.on('will-quit', () => connection.stop())
+
+  // The single onCommand registration for the app lifetime (#17 deferred this wiring). The command
+  // is already validated by isRendererCommand at the boundary; route its payload to the send entry
+  // point. A switch on `type` (single member today) keeps it grow-ready. Registered once via
+  // ipcMain.on (additive) — this sole site is what makes "registering twice does not double-
+  // dispatch" true. Inert until a driver exists, so a command arriving before the connect is a safe
+  // no-op; no need to gate on did-finish-load. `will-quit` removes the exact listener, symmetric
+  // with unregisterPairing.
+  const unregisterCommands = onCommand(ipcMain, (command) => {
+    switch (command.type) {
+      case 'sendMessage':
+        connection.send(command.payload)
+        return
+    }
+  })
+  app.on('will-quit', () => unregisterCommands())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

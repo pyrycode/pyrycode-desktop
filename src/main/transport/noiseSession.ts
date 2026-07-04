@@ -1,60 +1,62 @@
-// #29 Noise spike (1/2): a THROWAWAY IK-initiator harness proving a chosen JS Noise library
-// drives `Noise_IK_25519_ChaChaPoly_BLAKE2s` with early-data. This is not the production Noise
-// session module (#7); #30 is the first consumer, and it swaps the JS<->JS loopback for the
-// real relay transport with NO change to this initiator.
+// The production Noise session for the Electron MAIN process: a PURE CRYPTO UNIT that performs the
+// `Noise_IK_25519_ChaChaPoly_BLAKE2s` handshake (the injected `hello` rides as early-data on IK
+// message 1; `hello_ack` is recovered from message 2), then encrypts/decrypts transport frames so
+// the relay socket (a sibling wiring ticket) can carry a confidential, authenticated channel to
+// the daemon. The suite is load-bearing — a mismatch fails the handshake silently (ADR 0002) — so
+// NOISE_PROTOCOL is reused verbatim, never retyped.
 //
-// Selected library: `noise-c.wasm` — an Emscripten/WASM build of rweather/noise-c, the
-// reference C implementation. It implements BLAKE2s specifically (the load-bearing constraint;
-// most pure-JS Noise libraries ship BLAKE2b and would fail the suite silently), the suite is
-// chosen by the exact protocol-name string, and the cryptography is vetted (no hand-rolling).
-// It runs in the Electron MAIN process (Node/WASM), never the renderer — the transport-out-of-
-// the-window rule. See the PR findings note (folded into docs/knowledge/codebase/29.md).
+// Keys are INJECTED as config (raw 32-byte X25519 static private + remote static public); this
+// module sources no key from storage and constructs no envelope — both are separate concerns.
+// The crypto is `noise-c.wasm` (a vetted Emscripten build of rweather/noise-c, the reference C
+// implementation; no hand-rolled crypto), loaded once via the shared ./noiseLib loader.
 //
-// This module MIRRORS relayConnection.ts's contract: raw Uint8Array frames go out through a
-// `sendFrame` sink, inbound frames arrive via `onFrame`, lifecycle/errors leave as typed
-// events through `onEvent`. In #30 the mapping is trivial: relay {type:'connected'} -> start(),
-// relay {type:'message',frame} -> onFrame(frame), harness sendFrame = relay.send.
+// It MIRRORS relayConnection.ts's contract: raw Uint8Array frames go out through a `sendFrame`
+// sink, inbound frames arrive via `onFrame`, and lifecycle/errors leave as typed events through
+// `onEvent`. It runs in the main process only, never the renderer (transport-out-of-the-window).
 //
-// LOG-FREE by construction (copied from relayConnection.ts): no console.*, and NO key, token,
-// or frame/plaintext bytes in any diagnostic. A caught wasm-library error is CLASSIFIED into a
-// static reason, never forwarded or logged — a library error string can echo transcript bytes.
-import createNoise, { type NoiseCipherState, type NoiseLib } from 'noise-c.wasm'
+// LOG-FREE by construction: no console.*, and NO key, token, or frame/plaintext bytes in any
+// diagnostic. A caught wasm-library error is CLASSIFIED into a static reason, never forwarded or
+// logged — a library error string can echo transcript bytes.
+import { type NoiseCipherState } from 'noise-c.wasm'
 import { NOISE_PROTOCOL } from '../../shared/wire/types'
+import { loadNoiseLib } from './noiseLib'
 
 // Empty associated-data for every transport frame — the v2 suite's mandate (the daemon's
 // CipherState has no AD parameter; see pyrycode #433 `internal/noise`). Shared, never mutated.
 const EMPTY_AD = new Uint8Array(0)
 
-/** Config for one throwaway IK initiator. Keys are raw 32-byte X25519; nothing is persisted. */
-export interface NoiseInitiatorConfig {
-  /** Client static X25519 private key (32B). IK transmits the client static inside message 1. */
+/** Config for one Noise session. Keys are raw 32-byte X25519, injected; nothing is persisted. */
+export interface NoiseSessionConfig {
+  /** Client static X25519 private key (32B), injected. IK transmits the client static in msg 1. */
   staticPrivateKey: Uint8Array
-  /** Daemon static X25519 public key (32B). The IK initiator knows it up front (QR in prod). */
+  /** Daemon static X25519 public key (32B), injected. The IK initiator knows it up front (QR). */
   remoteStaticPublicKey: Uint8Array
   /** Handshake prologue; zero-length matches the daemon. Kept explicit and configurable. */
   prologue: Uint8Array
-  /** Early-data for message 1 — a hello-shaped body carrying the device token. */
+  /** Early-data for message 1 — an opaque hello body (the sibling ticket builds it). */
   hello: Uint8Array
-  /** Outbound raw-frame sink. In #30 this is relay.send. Must not throw back into the harness. */
+  /** Outbound raw-frame sink (e.g. relay.send). Must not throw back into the session. */
   sendFrame: (frame: Uint8Array) => void
   /** Typed event sink. Must not throw (mirrors relayConnection's onEvent discipline). */
-  onEvent: (event: NoiseInitiatorEvent) => void
+  onEvent: (event: NoiseSessionEvent) => void
+  /** Forwarded to loadNoiseLib as its load deadline; omit for the loader default. */
+  loadTimeoutMs?: number
 }
 
 /** Closed set of static error reasons — never carries key/token/frame bytes. */
-export type NoiseInitiatorErrorReason =
+export type NoiseSessionErrorReason =
   | 'handshake-read-failed' // message 2 failed MAC / malformed / wrong-suite peer
   | 'transport-decrypt-failed' // a post-handshake frame failed to open
   | 'unexpected-frame' // a frame arrived in the wrong state
 
-/** One event from the initiator. Sealed discriminated union on `type`. */
-export type NoiseInitiatorEvent =
+/** One event from the session. Sealed discriminated union on `type`. */
+export type NoiseSessionEvent =
   | { type: 'handshake-complete'; helloAck: Uint8Array } // peer early-data recovered from msg 2
   | { type: 'message'; plaintext: Uint8Array } // decrypted post-handshake frame
-  | { type: 'error'; reason: NoiseInitiatorErrorReason } // static reason only — never bytes
+  | { type: 'error'; reason: NoiseSessionErrorReason } // static reason only — never bytes
 
-/** Handle for one throwaway IK initiator. */
-export interface NoiseInitiator {
+/** Handle for one Noise session. */
+export interface NoiseSession {
   /** Write message 1 (carrying the hello) to sendFrame. Call exactly once; inert after close. */
   start(): void
   /** Feed one inbound frame: drive the message-2 read, then post-handshake transport decrypt. */
@@ -65,34 +67,16 @@ export interface NoiseInitiator {
   close(): void
 }
 
-// A single memoized wasm instance at module scope: the initiator and (in the test) the responder
-// share one instance, closer to #7's single-instance model and avoiding a double wasm init. The
-// shared lib is process-lived; close() frees per-handshake / per-cipher-state objects, not this.
-let libPromise: Promise<NoiseLib> | null = null
-
-/** Load (once) and memoize the noise-c wasm library. Rejects if the wasm cannot initialize. */
-export function loadNoiseLib(): Promise<NoiseLib> {
-  if (libPromise === null) {
-    libPromise = new Promise<NoiseLib>((resolve, reject) => {
-      try {
-        createNoise((lib) => resolve(lib))
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error('noise-c.wasm failed to load'))
-      }
-    })
-  }
-  return libPromise
-}
-
-type InitiatorState = 'idle' | 'awaiting-handshake-reply' | 'transport' | 'closed'
+type SessionState = 'idle' | 'awaiting-handshake-reply' | 'transport' | 'closed'
 
 /**
- * Construct and Initialize an IK initiator, returning the handle WITHOUT sending. Sending is a
- * separate start() — deliberately not on the factory: the JS<->JS loopback in #30's drop-in is
- * synchronous, so a send inside the async factory would race the peer's wiring.
+ * Construct and Initialize the session, returning the handle WITHOUT sending. Sending is a
+ * separate start() — deliberately not on the factory: a synchronous peer would otherwise race the
+ * async factory's wiring. Rejects with NoiseLoadError if the shared wasm load fails or times out
+ * (AC4) — the only surface where no handle exists yet, so a rejection is the correct async shape.
  */
-export async function createNoiseInitiator(config: NoiseInitiatorConfig): Promise<NoiseInitiator> {
-  const lib = await loadNoiseLib()
+export async function createNoiseSession(config: NoiseSessionConfig): Promise<NoiseSession> {
+  const lib = await loadNoiseLib({ timeoutMs: config.loadTimeoutMs })
   // `hs` is nulled the moment it is consumed or auto-freed by the library on a thrown error, so
   // no entry point ever calls into a freed wasm handshake object.
   let hs: ReturnType<typeof lib.HandshakeState> | null = lib.HandshakeState(
@@ -110,7 +94,7 @@ export async function createNoiseInitiator(config: NoiseInitiatorConfig): Promis
 
   let sendCipher: NoiseCipherState | null = null
   let recvCipher: NoiseCipherState | null = null
-  let state: InitiatorState = 'idle'
+  let state: SessionState = 'idle'
 
   // Free every wasm object we still own. On a handshake read/write error the library already
   // freed `hs` (and we nulled it); on a transport decrypt error the cipher states survive. Each
@@ -128,7 +112,7 @@ export async function createNoiseInitiator(config: NoiseInitiatorConfig): Promis
     recvCipher = null
   }
 
-  function fail(reason: NoiseInitiatorErrorReason): void {
+  function fail(reason: NoiseSessionErrorReason): void {
     config.onEvent({ type: 'error', reason })
   }
 

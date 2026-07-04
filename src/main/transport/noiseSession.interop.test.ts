@@ -3,7 +3,7 @@
 // not production code, not wired into src/main/index.ts. The vitest run is the only execution path.
 //
 // It swaps #29's JS<->JS inline responder for a genuine `flynn/noise` (v1.1.0) responder — the
-// daemon's actual library — spoken over a stdio line protocol. `createNoiseInitiator` from #29 is
+// daemon's actual library — spoken over a stdio line protocol. `createNoiseSession` from #29 is
 // consumed UNCHANGED (a drop-in), matching the way #30 later drops the real relay transport on.
 //
 // What it proves:
@@ -25,12 +25,12 @@ import { fileURLToPath } from 'node:url'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { loadNoiseLib } from './noiseLib'
 import {
-  createNoiseInitiator,
-  loadNoiseLib,
-  type NoiseInitiator,
-  type NoiseInitiatorEvent
-} from './noiseSpike'
+  createNoiseSession,
+  type NoiseSession,
+  type NoiseSessionEvent
+} from './noiseSession'
 import { createRelayConnection, type RelayEvent } from './relayConnection'
 import {
   base64StdEncode,
@@ -237,8 +237,8 @@ async function connectInterop(opts: {
   wrongStatic?: boolean
   tamperMsg2?: boolean
 }): Promise<{
-  initiator: NoiseInitiator
-  events: NoiseInitiatorEvent[]
+  initiator: NoiseSession
+  events: NoiseSessionEvent[]
   responderErrs: string[]
   waiter: ReturnType<typeof makeWaiter>
   hello: Uint8Array
@@ -253,11 +253,11 @@ async function connectInterop(opts: {
   const remoteStaticPublicKey = opts.wrongStatic ? lib.CreateKeyPair(curve)[1] : responderPub
 
   const hello = enc(HELLO)
-  const events: NoiseInitiatorEvent[] = []
+  const events: NoiseSessionEvent[] = []
   const responderErrs: string[] = []
   const waiter = makeWaiter()
 
-  const initiator = await createNoiseInitiator({
+  const initiator = await createNoiseSession({
     staticPrivateKey: devicePriv,
     remoteStaticPublicKey,
     prologue: EMPTY,
@@ -385,7 +385,7 @@ function readLiveEnv(): LiveConfig | null {
 const live = readLiveEnv()
 
 /** Drive the live path once. `corruptStatic` flips the server static to force a 4426 close. */
-async function runLive(cfg: LiveConfig, corruptStatic: boolean): Promise<{ events: NoiseInitiatorEvent[]; closeCode: number | null }> {
+async function runLive(cfg: LiveConfig, corruptStatic: boolean): Promise<{ events: NoiseSessionEvent[]; closeCode: number | null }> {
   const lib = await loadNoiseLib()
   const [devicePriv] = lib.CreateKeyPair(lib.constants.NOISE_DH_CURVE25519)
   const serverStatic = corruptStatic ? flipByte(base64StdDecode(cfg.serverStaticPub)) : base64StdDecode(cfg.serverStaticPub)
@@ -398,11 +398,11 @@ async function runLive(cfg: LiveConfig, corruptStatic: boolean): Promise<{ event
     payload: makeHelloClientPayload({ deviceName: cfg.deviceName, clientVersion: '0', token: cfg.token })
   })
 
-  const events: NoiseInitiatorEvent[] = []
+  const events: NoiseSessionEvent[] = []
   const waiter = makeWaiter()
   let closeCode: number | null = null
   let firstOut = true
-  let initiator!: NoiseInitiator
+  let initiator!: NoiseSession
 
   const relay = createRelayConnection({
     url: cfg.url,
@@ -428,7 +428,7 @@ async function runLive(cfg: LiveConfig, corruptStatic: boolean): Promise<{ event
   })
   cleanups.push(() => relay.close())
 
-  initiator = await createNoiseInitiator({
+  initiator = await createNoiseSession({
     staticPrivateKey: devicePriv,
     remoteStaticPublicKey: serverStatic,
     prologue: EMPTY,

@@ -4,12 +4,12 @@ import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { NOISE_PROTOCOL } from '../../shared/wire/types'
 import type { HelloClientPayload, HelloAckPayload } from '../../shared/wire/types'
+import { loadNoiseLib } from './noiseLib'
 import {
-  createNoiseInitiator,
-  loadNoiseLib,
-  type NoiseInitiator,
-  type NoiseInitiatorEvent
-} from './noiseSpike'
+  createNoiseSession,
+  type NoiseSession,
+  type NoiseSessionEvent
+} from './noiseSession'
 
 // The #29 Noise spike is proven two ways, both deterministic and credential-free (no socket,
 // no daemon, no key on disk):
@@ -128,7 +128,7 @@ function collector<E>(): { events: E[]; onEvent: (e: E) => void } {
   return { events, onEvent: (e) => events.push(e) }
 }
 
-const initErrors = (events: NoiseInitiatorEvent[]): string[] =>
+const initErrors = (events: NoiseSessionEvent[]): string[] =>
   events.filter((e) => e.type === 'error').map((e) => (e as { reason: string }).reason)
 
 // Warm the memoized wasm load ONCE before any spy is installed: the Emscripten glue prints a
@@ -223,9 +223,9 @@ describe('mode 1 — Noise_IK_25519_ChaChaPoly_BLAKE2s hash conformance (library
 
 describe('mode 2 — JS<->JS IK round-trip with early-data + post-handshake AEAD', () => {
   async function pair(): Promise<{
-    initiator: NoiseInitiator
+    initiator: NoiseSession
     responder: NoiseResponder
-    init: ReturnType<typeof collector<NoiseInitiatorEvent>>
+    init: ReturnType<typeof collector<NoiseSessionEvent>>
     resp: ReturnType<typeof collector<NoiseResponderEvent>>
     hello: Uint8Array
     helloAck: Uint8Array
@@ -236,10 +236,10 @@ describe('mode 2 — JS<->JS IK round-trip with early-data + post-handshake AEAD
     const [respPriv, respPub] = lib.CreateKeyPair(curve)
     const hello = enc(HELLO)
     const helloAck = enc(HELLO_ACK)
-    const init = collector<NoiseInitiatorEvent>()
+    const init = collector<NoiseSessionEvent>()
     const resp = collector<NoiseResponderEvent>()
     let responder: NoiseResponder
-    const initiator = await createNoiseInitiator({
+    const initiator = await createNoiseSession({
       staticPrivateKey: initPriv,
       remoteStaticPublicKey: respPub,
       prologue: new Uint8Array(0),
@@ -294,15 +294,15 @@ describe('mode 2 — JS<->JS IK round-trip with early-data + post-handshake AEAD
 
 describe('harness contract, lifecycle, and error classification', () => {
   async function loneInitiator(sendFrame: (f: Uint8Array) => void): Promise<{
-    initiator: NoiseInitiator
-    init: ReturnType<typeof collector<NoiseInitiatorEvent>>
+    initiator: NoiseSession
+    init: ReturnType<typeof collector<NoiseSessionEvent>>
   }> {
     const lib = await loadNoiseLib()
     const curve = lib.constants.NOISE_DH_CURVE25519
     const [initPriv] = lib.CreateKeyPair(curve)
     const [, respPub] = lib.CreateKeyPair(curve)
-    const init = collector<NoiseInitiatorEvent>()
-    const initiator = await createNoiseInitiator({
+    const init = collector<NoiseSessionEvent>()
+    const initiator = await createNoiseSession({
       staticPrivateKey: initPriv,
       remoteStaticPublicKey: respPub,
       prologue: new Uint8Array(0),
@@ -337,9 +337,9 @@ describe('harness contract, lifecycle, and error classification', () => {
     const curve = lib.constants.NOISE_DH_CURVE25519
     const [initPriv] = lib.CreateKeyPair(curve)
     const [respPriv, respPub] = lib.CreateKeyPair(curve)
-    const init = collector<NoiseInitiatorEvent>()
+    const init = collector<NoiseSessionEvent>()
     let responder: NoiseResponder
-    const initiator = await createNoiseInitiator({
+    const initiator = await createNoiseSession({
       staticPrivateKey: initPriv,
       remoteStaticPublicKey: respPub,
       prologue: new Uint8Array(0),
@@ -393,7 +393,7 @@ describe('security — log-free by construction', () => {
     )
     try {
       let responder: NoiseResponder
-      const initiator = await createNoiseInitiator({
+      const initiator = await createNoiseSession({
         staticPrivateKey: initPriv,
         remoteStaticPublicKey: respPub,
         prologue: new Uint8Array(0),

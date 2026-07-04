@@ -33,10 +33,13 @@ export interface DaemonConnectionDeps {
 export interface DaemonConnection {
   start(): void   // idempotent; emits `connecting`, then sources inputs + constructs the driver
   stop(): void    // idempotent teardown: stop the driver; suppress the resulting terminal
+  send(payload: SendMessagePayload): void  // #65: encrypt a send_message onto the live session
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
 ```
+
+**`send(payload)` was added in [#65](../codebase/65.md)** — the outbound send entry point. It builds a `send_message` envelope (via `buildSendMessage`, id counter continuing from 2 after the hello's id 1) and hands the bytes to `driver.sendMessage`. It is an **idempotent no-op** when not connected (no driver, pre-handshake, or post-terminal) and **never throws out of the module** (a single `driver === null` guard plus a full-body `try/catch`; parity mobile #490). See the [outbound send path](outbound-send-path.md) feature doc for the full contract — the id-counter model, the "why a single guard suffices" case analysis, and the composition-root `onCommand` registration that drives it.
 
 ## How it works
 
@@ -119,6 +122,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 ## Related
 
 - [#62 codebase notes](../codebase/62.md) — implementation summary, patterns, lessons.
+- [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the `send(payload)` entry point added to this factory, the `buildSendMessage` envelope builder it drives, and the composition-root `onCommand` registration that routes a `sendMessage` command to it.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello` builds the injected `session.hello`; `parseHelloAck` narrows the `handshake-complete{helloAck}` bytes into the `HelloAckPayload` this emits.
 - [Device static keypair](device-keypair.md) / [#43](../codebase/43.md) — `ensure()` sources the static private key.

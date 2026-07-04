@@ -1,6 +1,13 @@
-import { app, BrowserWindow, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
+import { createSecureStore } from './secureStore'
+import { electronSecretEncryption } from './electronSecretEncryption'
+import { fileSecretPersistence } from './fileSecretPersistence'
+import { createPairedServerStore } from './pairedServerStore'
+import { createPairingConfirmation } from './pairingConfirmation'
+import { parsePairingPayload } from './pairingPayload'
+import { registerPairingHandler } from './pairingHandler'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
@@ -82,6 +89,26 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
     callback(false)
   )
+
+  // Composition root for the pairing IPC channel (#54): construct the real secret chain —
+  // safeStorage-backed encryption + file persistence → secure store → paired-server store →
+  // fingerprint/confirm service — and register the single invoke handler behind it. The token and
+  // server_static_pubkey stay in this background process; only the fingerprint or a value-free
+  // reason ever crosses back to the renderer (ADR 0002). `will-quit` removes the handler.
+  const secureStore = createSecureStore({
+    encryption: electronSecretEncryption(),
+    persistence: fileSecretPersistence(join(app.getPath('userData'), 'secrets'))
+  })
+  const pairedServerStore = createPairedServerStore({ secureStore })
+  const confirmation = createPairingConfirmation({ store: pairedServerStore })
+  // ipcMain.handle allows one handler per channel — this is the sole registration site, held for
+  // the app lifetime.
+  const unregisterPairing = registerPairingHandler(ipcMain, {
+    parse: parsePairingPayload,
+    confirmation
+  })
+  app.on('will-quit', () => unregisterPairing())
+
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

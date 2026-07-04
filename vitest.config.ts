@@ -14,6 +14,11 @@ export default defineConfig({
     }
   },
   test: {
-    environment: 'node'
+    environment: 'node',
+    // Scope the unit run to src/ so vitest never walks e2e/ (Playwright specs).
+    // vitest `include` REPLACES the default glob (not additive); every existing
+    // *.test.ts(x) lives under src/, so none is dropped. This is one half of the
+    // two-way separation from e2e; the other is testDir: './e2e' in playwright.config.ts.
+    include: ['src/**/*.{test,spec}.{ts,tsx}']
   }
 })

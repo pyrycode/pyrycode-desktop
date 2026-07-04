@@ -23,6 +23,7 @@ import type {
 } from './transport/noiseRelayDriver'
 import { buildClientHello, parseHelloAck } from './transport/helloExchange'
 import { buildSendMessage } from './transport/sendMessageEnvelope'
+import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import { base64StdDecode } from './transport/codec'
 import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeypairStore } from './deviceKeypair'
@@ -135,10 +136,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitDaemonEvent(sink, { type: 'connected', ack })
         return
       }
-      case 'message':
-        // No-op / TODO(#12): the streamed daemon-message decode + route is out of scope here;
-        // this ticket wires only the handshake-status path.
+      case 'message': {
+        // Decode the decrypted app-envelope at the transport boundary, then map its narrowed result
+        // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
+        let inbound: InboundDaemonMessage | null
+        try {
+          inbound = parseInboundMessage(event.plaintext)
+        } catch {
+          // Fail-closed (AC4): oversized / malformed / unparseable / mistyped payload. Drop the
+          // frame — no event, no throw. The caught WireDecodeError is DROPPED (classify-don't-
+          // forward: its message could echo message plaintext; it never reaches a log or an event).
+          return
+        }
+        if (inbound === null) return // AC5: a well-formed envelope of another type is ignored.
+        if (inbound.kind === 'message') {
+          emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message })
+        } else {
+          emitDaemonEvent(sink, { type: 'messagesReceived', messages: inbound.messages })
+        }
         return
+      }
       case 'terminal':
         // A clean local stop() drives terminal{1000,'stopped'}; suppress it (the window is
         // tearing down on quit). Every other fatal close is an authoritative drop the user sees.

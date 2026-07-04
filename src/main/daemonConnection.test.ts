@@ -142,6 +142,25 @@ function build(
 /** Flush the microtask chain the async bootstrap runs on (fakes resolve immediately). */
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
+/** Reach the connected window: start, resolve the bootstrap, complete the handshake. */
+async function reachConnected(): Promise<ReturnType<typeof build>> {
+  const ctx = build()
+  ctx.connection.start()
+  await tick()
+  ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+  return ctx
+}
+
+/** A `message` envelope's plaintext bytes, wrapping an arbitrary (possibly malformed) payload. */
+function messagePlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'message', ts: FIXED_TS, payload })
+}
+
+/** A `message_chunk` envelope's plaintext bytes, wrapping an arbitrary payload. */
+function chunkPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'message_chunk', ts: FIXED_TS, payload })
+}
+
 describe('createDaemonConnection', () => {
   it('emits connecting synchronously, then constructs the driver with the sourced config', async () => {
     const { connection, sink, drivers } = build()
@@ -310,15 +329,103 @@ describe('createDaemonConnection', () => {
     expect(JSON.stringify(events)).not.toContain('noise-handshake-secret-detail')
   })
 
-  it('treats an inbound message as a no-op (streamed decode is #12)', async () => {
-    const { connection, sink, drivers } = build()
-    connection.start()
-    await tick()
+  it('decodes an inbound message frame into a single messageReceived event', async () => {
+    const { sink, drivers } = await reachConnected()
+    const before = emitted(sink).length
+    const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi there' }
+
+    drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message }])
+  })
+
+  it('decodes an inbound message_chunk frame into one ordered messagesReceived event', async () => {
+    const { sink, drivers } = await reachConnected()
+    const before = emitted(sink).length
+    const a = { conversation_id: 'c1', message_id: 'm1', role: 'user', text: 'one' }
+    const b = { conversation_id: 'c1', message_id: 'm2', role: 'assistant', text: 'two' }
+
+    drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a, b] }) })
+
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messagesReceived', messages: [a, b] }])
+  })
+
+  it('ignores a well-formed inbound frame of another envelope type (ack)', async () => {
+    const { sink, drivers } = await reachConnected()
     const before = sink.webContents.send.mock.calls.length
 
-    drivers[0].emit({ type: 'message', plaintext: new Uint8Array([1, 2, 3]) })
+    drivers[0].emit({
+      type: 'message',
+      plaintext: encodeEnvelope({ id: 3, type: 'ack', ts: FIXED_TS, payload: {} })
+    })
 
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('drops a malformed inbound frame without emitting, and emit() does not throw', async () => {
+    const { sink, drivers } = await reachConnected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({ type: 'message', plaintext: new TextEncoder().encode('{not json') })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('drops an inbound message with a missing field or unknown role, without emitting or throwing', async () => {
+    const { sink, drivers } = await reachConnected()
+    const before = sink.webContents.send.mock.calls.length
+
+    // Missing `text`, then an unknown `role`.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: messagePlaintext({ conversation_id: 'c1', message_id: 'm1', role: 'assistant' })
+    })
+    drivers[0].emit({
+      type: 'message',
+      plaintext: messagePlaintext({ conversation_id: 'c1', message_id: 'm1', role: 'system', text: 't' })
+    })
+
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('drops an oversized inbound frame without emitting or throwing', async () => {
+    const { sink, drivers } = await reachConnected()
+    const before = sink.webContents.send.mock.calls.length
+
+    // Built with a raw encoder (encodeEnvelope caps on encode) so the bytes ARE a valid message
+    // envelope — the size guard, not JSON validity, is what drops it.
+    const oversized = new TextEncoder().encode(
+      JSON.stringify({
+        id: 3,
+        type: 'message',
+        ts: FIXED_TS,
+        payload: {
+          conversation_id: 'c1',
+          message_id: 'm1',
+          role: 'user',
+          text: 'x'.repeat(MAX_PLAINTEXT_BYTES)
+        }
+      })
+    )
+    expect(oversized.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+
+    expect(() => drivers[0].emit({ type: 'message', plaintext: oversized })).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('emits in arrival order and does not dedupe two frames with the same message_id', async () => {
+    const { sink, drivers } = await reachConnected()
+    const before = emitted(sink).length
+    const message = { conversation_id: 'c1', message_id: 'dup', role: 'assistant', text: 'again' }
+
+    drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+    drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'messageReceived', message },
+      { type: 'messageReceived', message }
+    ])
   })
 
   it('suppresses the terminal a clean stop() produces', async () => {
@@ -356,12 +463,31 @@ describe('createDaemonConnection', () => {
   it('never logs, and no emitted event carries the token, keys, or hello bytes', async () => {
     const methods = ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const
     const spies = methods.map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    const MALFORMED_SECRET = 'malformed-frame-secret-plaintext'
     try {
       // Happy path.
       const ok = build()
       ok.connection.start()
       await tick()
       ok.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+      // A benign inbound message: its text legitimately flows into a messageReceived event (the
+      // intended data path, not a leak) — driven here only to prove the message path is log-free.
+      ok.drivers[0].emit({
+        type: 'message',
+        plaintext: messagePlaintext({
+          conversation_id: 'c1',
+          message_id: 'm1',
+          role: 'assistant',
+          text: 'benign reply'
+        })
+      })
+      // A malformed inbound message whose (unparseable) bytes embed a secret: it is dropped, so the
+      // secret must never reach an emitted event or a log.
+      ok.drivers[0].emit({
+        type: 'message',
+        plaintext: new TextEncoder().encode(`{"payload":{"text":"${MALFORMED_SECRET}"} not json`)
+      })
 
       // A failure path (bad key).
       const bad = build({
@@ -376,6 +502,7 @@ describe('createDaemonConnection', () => {
       expect(serialized).not.toContain(TOKEN)
       expect(serialized).not.toContain(RECORD.server_static_pubkey)
       expect(serialized).not.toContain(base64StdEncode(PAIR.privateKey))
+      expect(serialized).not.toContain(MALFORMED_SECRET)
     } finally {
       for (const spy of spies) spy.mockRestore()
     }

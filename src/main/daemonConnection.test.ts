@@ -15,6 +15,7 @@ import type {
   RelaySessionEvent
 } from './transport/noiseRelayDriver'
 import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from './transport/codec'
+import { MAX_PLAINTEXT_BYTES, type SendMessagePayload } from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
 // only — the two stores (`ensure()` / `load()`), a fake driver factory (captures the config it is
@@ -52,12 +53,14 @@ function validHelloAck(): Uint8Array {
 interface FakeDriver {
   config: NoiseRelayDriverConfig
   stopped: boolean
+  /** Every plaintext handed to the driver's sendMessage, in order. */
+  sent: Uint8Array[]
   handle: NoiseRelayDriver
   /** Drive a RelaySessionEvent back into the consumer's onEvent handler. */
   emit(event: RelaySessionEvent): void
 }
 
-function makeDriverFactory(): {
+function makeDriverFactory(options: { throwOnSend?: boolean } = {}): {
   createDriver: (config: NoiseRelayDriverConfig) => NoiseRelayDriver
   drivers: FakeDriver[]
 } {
@@ -68,9 +71,16 @@ function makeDriverFactory(): {
       const fake: FakeDriver = {
         config,
         stopped: false,
+        sent: [],
         emit: (event) => config.onEvent(event),
         handle: {
-          sendMessage() {},
+          // Record what the connection forwards. The driver's own inertness (pre-handshake /
+          // post-terminal) is NOT modelled here — that contract is proven by
+          // noiseRelayDriver.test.ts:304-358; this layer only tests what it hands the driver.
+          sendMessage(plaintext) {
+            if (options.throwOnSend) throw new Error('driver send boom')
+            fake.sent.push(plaintext)
+          },
           stop() {
             fake.stopped = true
           }
@@ -108,6 +118,7 @@ function build(
   overrides: {
     load?: () => Promise<PairedServerRecord | null>
     ensure?: () => Promise<DeviceKeyPair>
+    throwOnSend?: boolean
   } = {}
 ): {
   connection: DaemonConnection
@@ -116,7 +127,7 @@ function build(
 } {
   const sink = fakeSink()
   const stores = makeStores(overrides)
-  const factory = makeDriverFactory()
+  const factory = makeDriverFactory({ throwOnSend: overrides.throwOnSend })
   const deps: DaemonConnectionDeps = {
     ...stores,
     sink,
@@ -365,6 +376,106 @@ describe('createDaemonConnection', () => {
       expect(serialized).not.toContain(TOKEN)
       expect(serialized).not.toContain(RECORD.server_static_pubkey)
       expect(serialized).not.toContain(base64StdEncode(PAIR.privateKey))
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+  })
+})
+
+describe('createDaemonConnection — send (outbound send_message)', () => {
+  const PAYLOAD: SendMessagePayload = {
+    conversation_id: 'c1',
+    message_id: 'm1',
+    text: 'hello daemon'
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.send(PAYLOAD)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards exactly one send_message envelope with id 2 and the fixed ts', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send(PAYLOAD)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('send_message')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual(PAYLOAD)
+  })
+
+  it('advances the envelope id monotonically across sends (hello consumed id 1)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send(PAYLOAD)
+    connection.send(PAYLOAD)
+
+    expect(drivers[0].sent).toHaveLength(2)
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('drops an over-cap payload without throwing or forwarding, and does not consume an id', async () => {
+    const { connection, drivers } = await connected()
+
+    const overCap: SendMessagePayload = {
+      conversation_id: 'c1',
+      message_id: 'm1',
+      text: 'x'.repeat(MAX_PLAINTEXT_BYTES + 1)
+    }
+    expect(() => connection.send(overCap)).not.toThrow()
+    expect(drivers[0].sent).toHaveLength(0)
+
+    // The failed build did not consume the id: the next successful send still uses id 2.
+    connection.send(PAYLOAD)
+    expect(drivers[0].sent).toHaveLength(1)
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.send(PAYLOAD)).not.toThrow()
+  })
+
+  it('never logs and emits nothing to the sink on send — the message text never reaches an event', async () => {
+    const methods = ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const
+    const spies = methods.map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    const SECRET_TEXT = 'super-secret-message-plaintext'
+    try {
+      const { connection, sink } = await connected()
+      const eventsBefore = sink.webContents.send.mock.calls.length
+
+      connection.send({ conversation_id: 'c1', message_id: 'm1', text: SECRET_TEXT })
+      // The over-cap send's caught WireEncodeError message could echo the plaintext — it must be
+      // dropped, never logged.
+      connection.send({
+        conversation_id: 'c1',
+        message_id: 'm2',
+        text: 'y'.repeat(MAX_PLAINTEXT_BYTES + 1)
+      })
+
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+      // send emits no DaemonEvent, so no event carries the plaintext back to the renderer.
+      expect(sink.webContents.send.mock.calls.length).toBe(eventsBefore)
+      expect(JSON.stringify(emitted(sink))).not.toContain(SECRET_TEXT)
     } finally {
       for (const spy of spies) spy.mockRestore()
     }

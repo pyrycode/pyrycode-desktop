@@ -22,11 +22,12 @@ import type {
   RelaySessionEvent
 } from './transport/noiseRelayDriver'
 import { buildClientHello, parseHelloAck } from './transport/helloExchange'
+import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { base64StdDecode } from './transport/codec'
 import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeypairStore } from './deviceKeypair'
 import type { PairedServerStore } from './pairedServerStore'
-import { MAX_FRAME_BYTES, type HelloAckPayload } from '../shared/wire/types'
+import { MAX_FRAME_BYTES, type HelloAckPayload, type SendMessagePayload } from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
 const SERVER_KEY_LENGTH = 32
@@ -59,6 +60,12 @@ export interface DaemonConnection {
   start(): void
   /** Idempotent teardown: stop the driver and suppress the resulting terminal. */
   stop(): void
+  /**
+   * Encrypt a `send_message` envelope onto the live session. Idempotent no-op when not connected
+   * (no driver yet, pre-handshake, or post-terminal). NEVER throws out of the module (parity #490):
+   * a command arriving while disconnected is dropped, never propagated as a crash.
+   */
+  send(payload: SendMessagePayload): void
 }
 
 /**
@@ -101,6 +108,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let started = false
   let stopped = false
   let driver: NoiseRelayDriver | null = null
+  // The `hello` consumed envelope id 1 in bootstrap (:153); app envelopes continue from 2. A
+  // module-local, single-writer counter — `send` has no `await`, so it runs to completion with no
+  // check-then-act race. It advances only on a successful build, so a dropped over-cap send does
+  // not consume an id (harmless either way: the daemon uses `id` for in_reply_to correlation, not
+  // sequencing).
+  let nextEnvelopeId = 2
 
   function emitFailed(code: string, message = messageFor(code)): void {
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
@@ -191,6 +204,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function send(payload: SendMessagePayload): void {
+    // No driver yet: before start(), mid-bootstrap (await not resolved), or bootstrap-failed. The
+    // driver's own sendMessage is inert pre-handshake / post-terminal (noiseRelayDriver.ts:229),
+    // so this single guard plus that inertness covers every "not connected" state — no `connected`
+    // flag needed (a flag would only change whether an id is consumed, which is harmless).
+    if (driver === null) return
+    try {
+      const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): covers an over-cap plaintext (WireEncodeError)
+      // and any driver/wasm throw. The caught object is DROPPED — its message could echo the
+      // message plaintext; no log, no event (classify-don't-forward, inherited #62).
+    }
+  }
+
   return {
     start(): void {
       if (started || stopped) return
@@ -207,6 +237,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Idempotent driver teardown. If the bootstrap has not yet constructed the driver, the
       // `stopped` guard above (step 7) prevents it from ever being constructed.
       driver?.stop()
-    }
+    },
+    send
   }
 }

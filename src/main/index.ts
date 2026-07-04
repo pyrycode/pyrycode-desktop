@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
+import { hostname } from 'os'
 import { createSecureStore } from './secureStore'
 import { electronSecretEncryption } from './electronSecretEncryption'
 import { fileSecretPersistence } from './fileSecretPersistence'
@@ -8,12 +9,15 @@ import { createPairedServerStore } from './pairedServerStore'
 import { createPairingConfirmation } from './pairingConfirmation'
 import { parsePairingPayload } from './pairingPayload'
 import { registerPairingHandler } from './pairingHandler'
+import { createDeviceKeypairStore } from './deviceKeypair'
+import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
+import { createDaemonConnection } from './daemonConnection'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
 // renderer receives already-typed events over IPC and never sees raw bytes or keys.
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
@@ -66,6 +70,8 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(indexHtmlPath)
   }
+
+  return mainWindow
 }
 
 /** True when `url` targets the app's own loaded document. In dev the dev-server origin is
@@ -109,7 +115,27 @@ app.whenReady().then(() => {
   })
   app.on('will-quit', () => unregisterPairing())
 
-  createWindow()
+  // The transport consumer (#62): reuse the paired-server store, add a device-keypair store over
+  // the same secret chain, and drive the Noise relay driver — emitting typed daemon events to the
+  // window. Keys, the token, and raw frames stay in this process; only the typed event crosses.
+  const deviceKeypairStore = createDeviceKeypairStore({
+    secureStore,
+    generator: noiseKeyPairGenerator()
+  })
+  const mainWindow = createWindow()
+  const connection = createDaemonConnection({
+    deviceKeypair: deviceKeypairStore,
+    pairedServer: pairedServerStore,
+    sink: mainWindow,
+    deviceName: hostname(),
+    clientVersion: app.getVersion()
+  })
+  // Defer the connect until the renderer document + scripts have loaded, so its daemon-event
+  // subscription (#19) is in place before the load-bearing `connected` event (which arrives only
+  // after a network round-trip). `.once`, not `.on`, so a dev HMR reload does not re-fire it.
+  mainWindow.webContents.once('did-finish-load', () => connection.start())
+  app.on('will-quit', () => connection.stop())
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

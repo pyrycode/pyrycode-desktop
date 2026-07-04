@@ -23,7 +23,7 @@ Two production files in `src/main/`, following the #42 split of a pure core over
 | File | Role |
 |---|---|
 | `src/main/deviceKeypair.ts` | The **pure core**: the 3 public interfaces, `MalformedDeviceKeypairError`, `DEVICE_STATIC_KEY_NAME`, `createDeviceKeypairStore(deps)`, and the internal 64-byte encode/decode. **Zero** `electron`/`fs`/`noise-c.wasm` imports (only the **type** of `SecureStore`) — trivially unit-testable. |
-| `src/main/noiseKeyPairGenerator.ts` | The real `KeyPairGenerator` over `noise-c.wasm` `CreateKeyPair(NOISE_DH_CURVE25519)`. The **only** module here that loads the wasm; memoizes its own module-scope init. Not unit-tested (effectful edge). |
+| `src/main/noiseKeyPairGenerator.ts` | The real `KeyPairGenerator` over `noise-c.wasm` `CreateKeyPair(NOISE_DH_CURVE25519)`. Loads the wasm through the shared hardened `transport/noiseLib` loader — the one process-lived instance the [Noise session](noise-session.md) also uses ([#7](../codebase/7.md) consolidated the two duplicate loaders; a load failure now rejects with `NoiseLoadError` instead of hanging). Not unit-tested (effectful edge). |
 
 ### Public surface
 

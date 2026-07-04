@@ -135,4 +135,4 @@ The gate owns two desktop threats; the architect security review verdict is **PA
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — the ported wire types, including the `QrPayload` this gate reuses.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model (token/keys never reach the renderer; mirror mobile) and why this lives in `src/main`.
 - [#52 codebase notes](../codebase/52.md) — implementation summary, patterns, and lessons.
-- Downstream consumer: the fingerprint-confirm-and-persist step (#53), which surfaces a reason to the operator and persists the validated record.
+- [Pairing-confirmation gate](pairing-confirmation.md) / [#53](../codebase/53.md) — the downstream consumer: it takes this gate's validated `QrPayload`, derives the `server_static_pubkey` fingerprint, and persists the record only after an explicit confirm. It is the first place the pubkey's base64/32-byte shape is checked (this gate leaves it opaque).

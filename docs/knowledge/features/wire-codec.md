@@ -29,7 +29,8 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope
 
 // The one default-injecting constructor (see Defaults).
 export function makeHelloClientPayload(input: {
-  deviceName: string; clientVersion: string; token: string; lastEventId?: number
+  deviceName: string; clientVersion: string; token: string
+  capabilities?: readonly string[]; lastSeenTs?: string
 }): HelloClientPayload
 
 // Deterministic, catchable decode-failure signal at the trust boundary.
@@ -50,11 +51,11 @@ Taken directly from mobile's `NoiseSessionPump` + `OkHttpRelayTransport`:
 Mobile relies on Kotlin runtime defaults (`encodeDefaults = true`). TS interfaces carry no runtime defaults, so "always emit defaults" (AC #3) is split by how each field is enforced:
 
 - **Literal-typed fields enforce themselves.** `InnerFrameV2.v: 2` and `HelloClientPayload.role: 'client'` are literal types — you cannot construct the object without them, so `JSON.stringify` always emits them. **No runtime injector.**
-- **Non-literal defaults need one constructor.** `makeHelloClientPayload` is the **single** function that injects `protocol_versions: ['v2']` and `capabilities: ['interactive']` (reusing `PROTOCOL_VERSION` / `CAPABILITY_INTERACTIVE` from `types.ts`), and omits `last_event_id` when absent. `HelloClientPayload` is the **only** encode-side payload with non-literal defaults — hence one constructor, not the per-payload-wrapper anti-pattern the ticket warned against. `Envelope` has no defaulted fields, so callers build it directly.
+- **Non-literal defaults need one constructor.** `makeHelloClientPayload` is the **single** function that injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`). `capabilities` is a **caller argument** defaulting to `[]` — **not** a hardcoded `['interactive']`: the desktop event pipeline models only the coarse `message` types, so advertising `interactive` would make the daemon fan out envelopes this client cannot render (the caller passes them in once the structured stream is modeled — see [hello exchange](hello-exchange.md), the consumer of this constructor). `last_seen_ts` is emitted only when provided (never `null`). `HelloClientPayload` is the **only** encode-side payload with non-literal defaults — hence one constructor, not the per-payload-wrapper anti-pattern the ticket warned against. `Envelope` has no defaulted fields, so callers build it directly.
 
 ### Omit-absent-optionals, without `null` (AC #3)
 
-`JSON.stringify` drops `undefined` keys but **serializes `null`**. So the only safe representation of an absent optional is `undefined`/omitted. This ticket dropped `| null` from `Envelope.in_reply_to` / `Envelope.event_id` / `HelloClientPayload.last_event_id` in `src/shared/wire/types.ts` → `number | undefined`. That makes "absent" the only representation and lets `JSON.stringify`'s natural omission satisfy AC #3 with **no runtime scrub**. It does not drift the wire contract — mobile's `explicitNulls = false` never emits these as `null` either; `number | undefined` is the faithful representation of mobile's `Long? = null`. Zero edit fan-out (no consumers of those fields today).
+`JSON.stringify` drops `undefined` keys but **serializes `null`**. So the only safe representation of an absent optional is `undefined`/omitted. This ticket dropped `| null` from `Envelope.in_reply_to` / `Envelope.event_id` / `HelloClientPayload.last_event_id` (later renamed `last_seen_ts: string` in #27) in `src/shared/wire/types.ts` → `number | undefined`. That makes "absent" the only representation and lets `JSON.stringify`'s natural omission satisfy AC #3 with **no runtime scrub**. It does not drift the wire contract — mobile's `explicitNulls = false` never emits these as `null` either; `number | undefined` is the faithful representation of mobile's `Long? = null`. Zero edit fan-out (no consumers of those fields today).
 
 ### Data flow
 

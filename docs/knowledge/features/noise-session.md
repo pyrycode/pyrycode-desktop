@@ -13,7 +13,7 @@ Gives the background process **one factory** — `createNoiseSession(config): Pr
 - **`sendMessage(plaintext)`** AEAD-seals one post-handshake plaintext to `sendFrame`.
 - **`close()`** frees the wasm handshake + cipher state and leaves every entry point inert.
 
-It is a **pure crypto unit**: keys are **injected** (raw 32-byte X25519 static private + remote static public), it sources nothing from storage and constructs no envelope. The `hello`/`helloAck` are **opaque bytes** — building them (device-token envelope) is [#10](../codebase)'s job; sourcing the keypair is [#43](../codebase/43.md)'s. The suite `NOISE_PROTOCOL` is reused **verbatim** from `src/shared/wire/types.ts` — a mismatch fails the handshake **silently** ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md)), so it is never retyped.
+It is a **pure crypto unit**: keys are **injected** (raw 32-byte X25519 static private + remote static public), it sources nothing from storage and constructs no envelope. The `hello`/`helloAck` are **opaque bytes** — building them (device-token envelope) is the [hello exchange](hello-exchange.md) layer's job ([#10](../codebase/10.md)); sourcing the keypair is [#43](../codebase/43.md)'s. The suite `NOISE_PROTOCOL` is reused **verbatim** from `src/shared/wire/types.ts` — a mismatch fails the handshake **silently** ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md)), so it is never retyped.
 
 ## How it works
 
@@ -128,7 +128,7 @@ Ticket carries `security-sensitive`; the architect's security review verdict is 
 - **Not wired to the relay yet.** The session factory has **no production caller** — `sendFrame`/`onFrame` are injected, and the relay-socket wiring (session ↔ [`createRelayConnection`](relay-connection.md) ↔ #5 codec) is a sibling split ticket. Only the tests and the keygen fold-in touch it, so the rename cascaded to zero production consumers.
 - **wasm bundling for the packaged app is unproven.** Both spikes load the wasm only under Node/vitest; electron-vite **bundling** of the base64-embedded wasm asset for the packaged app is an open question flagged forward from #29/#30, **out of scope** here.
 - **No re-key, no close-during-handshake robustness** — deferred to [#33](../codebase). The session handles one handshake + a transport phase, then `close()`.
-- **`hello`/`helloAck` envelope semantics are opaque** — construction/parsing is [#10](../codebase).
+- **`hello`/`helloAck` envelope semantics are opaque** — construction/parsing is the [hello exchange](hello-exchange.md) layer ([#10](../codebase/10.md)).
 - **A throwing `sendFrame`/`onEvent` is a caller bug, not defended** — trusted internal sinks, per the relay-connection discipline.
 - **Wrong peer-static surfaces at the *responder*, not the initiator.** With a wrong `remoteStaticPublicKey`, the encrypted static in msg 1 MAC-fails on the daemon side; the initiator simply never receives msg 2 (no `handshake-complete`) rather than emitting `handshake-read-failed` (a #30 finding — a live key mismatch shows up as a `4426` close, not a local error).
 

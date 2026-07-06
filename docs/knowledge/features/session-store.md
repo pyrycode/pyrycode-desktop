@@ -2,7 +2,7 @@
 
 The renderer's single source of truth for the active session: its connection status and its conversation message list, in one Zustand store, mutated only through a sealed action union. It is the state foundation the connect-send-stream milestone binds onto — the [conversation shell](conversation-shell.md) renders it, the typed channel dispatches into it.
 
-Introduced in [#2](../codebase/2.md). Lives at `src/renderer/src/store/sessionStore.ts`. Pure renderer state — no IPC, no preload bridge, no transport, no import from `src/main/`. The write side is now bound: the [daemon-event bridge](daemon-event-bridge.md) ([#19](../codebase/19.md) — "#3" in this store's older doc comments, pre-renumber) translates each `DaemonEvent` to a `SessionAction` and dispatches it here; #12 binds its selectors into the UI (read side, still pending). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why it is shaped this way.
+Introduced in [#2](../codebase/2.md). Lives at `src/renderer/src/store/sessionStore.ts`. Pure renderer state — no IPC, no preload bridge, no transport, no import from `src/main/`. Both sides are now bound: the [daemon-event bridge](daemon-event-bridge.md) ([#19](../codebase/19.md) — "#3" in this store's older doc comments, pre-renumber) translates each `DaemonEvent` to a `SessionAction` and dispatches it here (write side); the [conversation shell](conversation-shell.md) reads `selectMessages` into the thread ([#69](../codebase/69.md) — "#12" in older comments, pre-renumber), rendering streamed replies as they land. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why it is shaped this way.
 
 ## What it does
 
@@ -77,8 +77,8 @@ Narrow-slice selection means a status change does not re-render the thread and a
 ## Configuration and usage
 
 - **Import surface for #3** (dispatch): `import { sessionStore, type SessionAction } from '@renderer/store/sessionStore'`, then `sessionStore.getState().dispatch(action)` per received envelope.
-- **Import surface for #12** (read): `import { useSessionStore, selectMessages, selectStatus } from '@renderer/store/sessionStore'`.
-- **The #12 adapter seam:** the store holds wire `MessagePayload` (`role: 'user'|'assistant'`, `message_id`, `text`); the shell's `Message` view model uses `type: 'user'|'daemon'`, `id`, `text`. #12 adapts `role: 'assistant'` → `'daemon'` and `message_id` → `id` at the component boundary (or updates `conversation.css` to key off `assistant`). See [conversation-shell](conversation-shell.md).
+- **Import surface for the read side** (realized in [#69](../codebase/69.md)): `import { useSessionStore, selectMessages, selectStatus } from '@renderer/store/sessionStore'`.
+- **The adapter seam (realized in [#69](../codebase/69.md)):** the store holds wire `MessagePayload` (`role: 'user'|'assistant'`, `message_id`, `text`); the shell's `Message` view model uses `type: 'user'|'daemon'`, `id`, `text`. `ConversationScreen` maps each payload through `toMessageViewModel` (`role: 'assistant'` → `'daemon'`, `message_id` → `id`, `conversation_id` dropped) at the store-read boundary — keeping the store's wire types drift-free per ADR 0004. See [conversation-shell](conversation-shell.md).
 
 ## Edge cases and limitations
 
@@ -92,6 +92,6 @@ Narrow-slice selection means a status change does not re-render the thread and a
 
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store
-- [Conversation shell](conversation-shell.md) — the surface #12 binds these selectors into
+- [Conversation shell](conversation-shell.md) — the surface that reads `selectMessages` into the thread (bound in [#69](../codebase/69.md))
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) · [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md)
 - [#2 codebase notes](../codebase/2.md) · Spec: `docs/specs/architecture/2-connection-and-conversation-state-store.md`

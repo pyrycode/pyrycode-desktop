@@ -1,26 +1,32 @@
 import './conversation.css'
-import { placeholderMessages, type Message } from './placeholderMessages'
+import { toMessageViewModel, type Message } from './messageViewModel'
+import { useSessionStore, selectMessages } from '../../store/sessionStore'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
-// to the window. Static this ticket — no store, no network, no input state.
+// to the window. The thread now reads the live session store (#69); the composer
+// stays inert (controlled input + send dispatch are #66).
 //
-// MessageThread and Composer are in-file for now: they are tiny and static. #12
-// extracts MessageThread when it binds a store selector; #2 extracts Composer
-// when it gains controlled input + a send dispatch. The load-bearing seams are
-// the props/types below, not the file boundaries.
+// ConversationScreen is the store-bound container (smoke-tested for "renders without
+// throwing"); MessageThread is the pure, props-in/markup-out view that the tests
+// server-render with arbitrary Message[] — the same container/view split PairingScreen
+// uses. Composer stays in-file. The load-bearing seam is the MessageThread prop.
 export function ConversationScreen(): JSX.Element {
+  // Read the messages slice and adapt each wire MessagePayload to the shell view model
+  // at this boundary (ADR 0004). Selecting only the messages slice keeps connection-status
+  // changes from re-rendering the thread.
+  const messages = useSessionStore(selectMessages).map(toMessageViewModel)
   return (
     <div className="conversation">
-      <MessageThread messages={placeholderMessages} />
+      <MessageThread messages={messages} />
       <Composer />
     </div>
   )
 }
 
-function MessageThread({ messages }: { messages: Message[] }): JSX.Element {
-  // Seam for #12: swap this prop for a narrow store selector. An empty array
-  // renders a valid (empty) scroll region — no crash, no placeholder fallback.
+export function MessageThread({ messages }: { messages: Message[] }): JSX.Element {
+  // Renders the adapted messages in arrival order. An empty array renders a valid
+  // (empty) scroll region — no crash, no placeholder fallback.
   return (
     <div className="conversation__thread">
       {messages.map((message) => (

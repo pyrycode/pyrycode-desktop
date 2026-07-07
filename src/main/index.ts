@@ -15,6 +15,8 @@ import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
+import { createDiagnosticLog } from './diagnosticLog'
+import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { onCommand } from './receiveCommand'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
@@ -142,12 +144,21 @@ app.whenReady().then(() => {
     generator: noiseKeyPairGenerator()
   })
   const mainWindow = createWindow()
+  // The one content-free diagnostic logger (#126). Effectful sink chosen ONCE, here, false-first on
+  // app.isPackaged: a packaged build rotates records under userData/logs; dev writes JSON lines to
+  // stdout. Constructed at the root and injected so #127 (relay leg) and #128 (daemon leg) consume
+  // the SAME instance — one seq counter, one file — without depending on each other. The module is
+  // Electron-free; the app.isPackaged / getPath selection is the only Electron touch.
+  const diagnosticLog = createDiagnosticLog({
+    sink: app.isPackaged ? fileRotatingSink(join(app.getPath('userData'), 'logs')) : stdoutSink()
+  })
   const connection = createDaemonConnection({
     deviceKeypair: deviceKeypairStore,
     pairedServer: pairedServerStore,
     sink: mainWindow,
     deviceName: hostname(),
-    clientVersion: app.getVersion()
+    clientVersion: app.getVersion(),
+    diagnosticLog
   })
 
   // The pairing invoke handler (#54), registered now that `connection` exists so a successful

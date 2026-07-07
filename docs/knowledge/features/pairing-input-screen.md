@@ -15,7 +15,7 @@ Gives a fresh-install user a terminal-free way to pair the app with their daemon
 
 A typed validation error (malformed payload, disallowed relay, malformed key, expired pending, or persist failure) is surfaced **inline** and nothing is stored. The screen never receives or renders the `token` or `server_static_pubkey` — only the fingerprint (a hash) and a value-free error category cross the bridge.
 
-**Out of scope:** where the screen mounts. App-level navigation/gating is a separate slice; this ticket builds the screen as a self-contained, testable unit exposing optional `onPaired` / `onCancel` seams.
+**Where the screen mounts:** #55 built this screen as a self-contained, testable unit exposing optional `onPaired` / `onCancel` seams, deferring app-level navigation. The [app shell](app-shell.md) wired those seams in [#80](../codebase/80.md): `App` shows this screen on any non-`paired` launch outcome and advances to the [conversation screen](conversation-shell.md) when `onPaired` fires. `onCancel` is deliberately left unwired — when unpaired this screen is the app root, so cancel stays put.
 
 ## How it works
 
@@ -118,12 +118,13 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 
 - **Empty / whitespace-only paste** — Pair is `disabled` (deterministic guard against an empty submit).
 - **A failed confirm** cannot retry with Confirm — the main pending record is already consumed, so the screen returns to `editing` for a fresh submit (paste preserved).
-- **`paired` is a placeholder success marker** ("Paired ✓") until the mounting slice decides whether it lingers or the screen unmounts via `onPaired`.
+- **`paired` renders a success marker** ("Paired ✓"), but the [app shell](app-shell.md) unmounts this screen the moment `onPaired` fires ([#80](../codebase/80.md)) — `confirm-succeeded` both flips the reducer to `paired` and calls `onPaired`, and `App`'s `setRoute('conversation')` swaps the screen out — so the marker is effectively superseded by navigation rather than lingering.
 - **Container interaction is not click-simulated** — no DOM harness. The interaction is proven on the pure `runSubmit`/`runConfirm`/`pairingReducer` seams; only the thin container glue is untested (the precedented gap, mirroring `useDaemonEventBridge`).
-- **Dark scheme only**; the card is dialog-shaped (`max-width` + centered margin) but its placement in the app shell is the future navigation slice's job.
+- **Dark scheme only**; the card is dialog-shaped (`max-width` + centered margin). Its placement is now decided by the [app shell](app-shell.md) ([#80](../codebase/80.md)): when unpaired it is the full-window app root, not a dialog over another screen.
 
 ## Related
 
+- [App shell](app-shell.md) / [#80](../codebase/80.md) — the router that mounts this screen when unpaired and consumes its `onPaired` seam to advance to the conversation screen.
 - [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — the typed request/response channel + preload methods this screen drives; the held-state model behind `confirm-failed → editing`.
 - [Pairing-confirmation](pairing-confirmation.md) / [#53](../codebase/53.md) — where the 23-char fingerprint is derived; the human-verify step this screen presents.
 - [Pairing-payload gate](pairing-payload-gate.md) / [#52](../codebase/52.md) — the parse + relay-allowlist stage behind the submit path.

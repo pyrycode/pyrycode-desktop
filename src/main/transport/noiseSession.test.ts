@@ -382,6 +382,137 @@ describe('harness contract, lifecycle, and error classification', () => {
   })
 })
 
+describe('close-during-handshake safety invariant (mobile #497 parity)', () => {
+  // Mobile #497 synchronized handshake-phase crypto against a socket close racing on ANOTHER
+  // THREAD (Kotlin coroutines). Desktop's session is single-threaded with synchronous wasm crypto
+  // and has NO `await` inside any entry point, so that interleaving is structurally impossible
+  // here — porting mobile's mutex would defend a non-race (pipeline: Evidence-Based Fix Selection).
+  //
+  // COVERAGE BOUNDARY — read before trusting green. These tests use close-THEN-call ordering:
+  // close() runs to completion, then a fresh entry point is invoked. They CANNOT reproduce a true
+  // mid-flight interleaving (onFrame yields at an `await` → close() frees → onFrame resumes into
+  // freed state), because the current synchronous code has no yield point to interleave at. What
+  // they pin is the POST-CLOSE SHORT-CIRCUIT GUARDS in each entry point (`state === 'closed'` /
+  // `hs === null` / `*Cipher === null`): the mechanism that keeps a future async refactor from
+  // re-entering freed noise-c.wasm state. Green here is NOT a proof that a hypothetical async entry
+  // point is race-free; it is a tripwire — drop or weaken a guard and a post-close
+  // onFrame/sendMessage would reach null.ReadMessage / null.DecryptWithAd / null.Encrypt and throw,
+  // failing the not.toThrow assertions below.
+
+  // Local fixtures mirror loneInitiator/pair above. Each describe block owns its setup — the file's
+  // idiom (the transport-decrypt test likewise inlines the pair wiring); this keeps the block a
+  // purely additive regression fixture, leaving the existing helpers untouched (don't-touch-adjacent).
+  async function loneInitiator(sendFrame: (f: Uint8Array) => void): Promise<{
+    initiator: NoiseSession
+    init: ReturnType<typeof collector<NoiseSessionEvent>>
+  }> {
+    const lib = await loadNoiseLib()
+    const curve = lib.constants.NOISE_DH_CURVE25519
+    const [initPriv] = lib.CreateKeyPair(curve)
+    const [, respPub] = lib.CreateKeyPair(curve)
+    const init = collector<NoiseSessionEvent>()
+    const initiator = await createNoiseSession({
+      staticPrivateKey: initPriv,
+      remoteStaticPublicKey: respPub,
+      prologue: new Uint8Array(0),
+      hello: enc(HELLO),
+      sendFrame,
+      onEvent: init.onEvent
+    })
+    handles.push(initiator)
+    return { initiator, init }
+  }
+
+  async function pair(): Promise<{
+    initiator: NoiseSession
+    init: ReturnType<typeof collector<NoiseSessionEvent>>
+    resp: ReturnType<typeof collector<NoiseResponderEvent>>
+  }> {
+    const lib = await loadNoiseLib()
+    const curve = lib.constants.NOISE_DH_CURVE25519
+    const [initPriv] = lib.CreateKeyPair(curve)
+    const [respPriv, respPub] = lib.CreateKeyPair(curve)
+    const init = collector<NoiseSessionEvent>()
+    const resp = collector<NoiseResponderEvent>()
+    let responder: NoiseResponder
+    const initiator = await createNoiseSession({
+      staticPrivateKey: initPriv,
+      remoteStaticPublicKey: respPub,
+      prologue: new Uint8Array(0),
+      hello: enc(HELLO),
+      sendFrame: (f) => responder.onFrame(f),
+      onEvent: init.onEvent
+    })
+    responder = await createNoiseResponder({
+      staticPrivateKey: respPriv,
+      prologue: new Uint8Array(0),
+      helloAck: enc(HELLO_ACK),
+      sendFrame: (f) => initiator.onFrame(f),
+      onEvent: resp.onEvent
+    })
+    handles.push(initiator, responder)
+    return { initiator, init, resp }
+  }
+
+  it('close() before start() (idle → closed) leaves the session inert — no frame, no event', async () => {
+    const sent: Uint8Array[] = []
+    const { initiator, init } = await loneInitiator((f) => sent.push(f))
+    initiator.close()
+    // Absent the close, start() would WriteMessage msg 1 and push exactly one frame. Post-close it
+    // returns at the `state !== 'idle' || hs === null` guard (state is 'closed', hs is null).
+    expect(() => initiator.start()).not.toThrow()
+    expect(sent).toHaveLength(0)
+    expect(init.events).toHaveLength(0)
+  })
+
+  it('close() while awaiting the handshake reply leaves onFrame inert — no read, no throw, no event', async () => {
+    const sent: Uint8Array[] = []
+    const { initiator, init } = await loneInitiator((f) => sent.push(f))
+    initiator.start()
+    expect(sent).toHaveLength(1) // msg 1 sent; session is now awaiting-handshake-reply
+    const eventsAfterStart = init.events.length
+    initiator.close()
+    // A garbage message 2 after teardown. Absent the close, hs.ReadMessage would fail MAC and emit
+    // `handshake-read-failed`; post-close it must hit the `state === 'closed'` guard and drop it.
+    expect(() => initiator.onFrame(new Uint8Array(64).fill(0x5a))).not.toThrow()
+    expect(sent).toHaveLength(1) // no new frame
+    expect(init.events.length).toBe(eventsAfterStart)
+    expect(initErrors(init.events)).not.toContain('handshake-read-failed')
+  })
+
+  it('close() after handshake-complete (transport → closed) leaves sendMessage and onFrame inert', async () => {
+    const { initiator, init, resp } = await pair()
+    initiator.start() // drives the full IK handshake to completion synchronously
+    expect(init.events.some((e) => e.type === 'handshake-complete')).toBe(true)
+    const initCount = init.events.length
+    const respMessages = (): number => resp.events.filter((e) => e.type === 'message').length
+    const respMessagesBefore = respMessages()
+    initiator.close()
+
+    // onFrame in transport would DecryptWithAd garbage → transport-decrypt-failed; post-close it
+    // returns at the `state === 'closed'` guard without touching the freed recvCipher.
+    expect(() => initiator.onFrame(new Uint8Array(48).fill(0x17))).not.toThrow()
+    expect(init.events.length).toBe(initCount)
+    expect(initErrors(init.events)).not.toContain('transport-decrypt-failed')
+
+    // sendMessage would seal a frame the responder decrypts into a `message`; post-close it emits
+    // nothing (returns at the `state !== 'transport' || sendCipher === null` guard).
+    expect(() => initiator.sendMessage(new Uint8Array([1, 2, 3]))).not.toThrow()
+    expect(respMessages()).toBe(respMessagesBefore)
+  })
+
+  it('close() is idempotent — a double-close neither throws nor double-frees', async () => {
+    const { initiator } = await loneInitiator(() => {})
+    initiator.start()
+    // The second close returns at the `state === 'closed'` guard before reaching freeAll(); freeAll
+    // itself guards each obj?.free() in try/catch, so a double-free is structurally impossible.
+    expect(() => {
+      initiator.close()
+      initiator.close()
+    }).not.toThrow()
+  })
+})
+
 describe('security — log-free by construction', () => {
   it('emits no console output while driving a full handshake and transport exchange', async () => {
     const lib = await loadNoiseLib()

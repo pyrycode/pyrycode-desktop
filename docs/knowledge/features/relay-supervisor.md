@@ -21,17 +21,19 @@ One file, five exported symbols: `src/main/transport/relaySupervisor.ts`, siblin
 
 ```ts
 export const DEFAULT_FATAL_CLOSE_CODES: ReadonlySet<number>  // = new Set([4401, 4421, 4426])
+export const NO_PAIRED_RECORD_CLOSE_CODE = 4000  // #83: synthetic, client-side, NEVER sent on the wire
 
 export type RelaySupervisorEvent =
   | { type: 'connected' }                              // a fresh underlying connection is live —
                                                        //   re-emitted on EVERY (re)connect
   | { type: 'message'; frame: Uint8Array }             // one OPAQUE inbound frame, byte-for-byte
-  | { type: 'terminal'; code: number; reason: string } // supervision ended, once: fatal code OR stop()
+  | { type: 'terminal'; code: number; reason: string } // supervision ended, once: fatal code OR stop() OR no-record (#83)
 
 export interface RelaySupervisorConfig {
-  connection: Omit<RelayConnectionConfig, 'onEvent'>   // #21 params minus onEvent (the supervisor owns onEvent)
+  connection: Omit<RelayConnectionConfig, 'onEvent'>   // #21 params minus onEvent; the FIRST dial + no-provider fallback
   onEvent: (event: RelaySupervisorEvent) => void       // the background-process consumer sink
   fatalCloseCodes?: ReadonlySet<number>                // default DEFAULT_FATAL_CLOSE_CODES
+  resolveConnection?: () => Promise<Omit<RelayConnectionConfig, 'onEvent'> | null>  // #83: re-source per AUTOMATIC re-dial
   createConnection?: (config: RelayConnectionConfig) => RelayConnection  // default createRelayConnection
 }
 
@@ -48,18 +50,21 @@ export function createRelaySupervisor(
 
 - **`RelaySupervisorEvent` is a distinct type, not a re-used `RelayEvent`, and its terminal member is named `terminal`, not `closed`.** The semantic shift is the whole point of this layer and exactly the bug class it guards against: mistaking a transient drop for terminal death (false death) or a fatal close for a retryable one (reconnect storm). `connected` re-fires per reconnect (the consumer **re-handshakes** — v2 has no session resume), `message` forwards opaque bytes, `terminal` fires **once** at the end. A transient drop emits **nothing**.
 - **`connection: Omit<RelayConnectionConfig, 'onEvent'>` + supervisor-owned `onEvent`.** The supervisor must route each connection's events through classification, so it owns the sink and takes only the connection *params* (url/headers/timeouts) from the caller. It calls `createConnection(connConfig)` with **one** argument — never passing #21's test-only `timing` in production, keeping the wire-spec heartbeat locked.
+- **`resolveConnection?` + `NO_PAIRED_RECORD_CLOSE_CODE` ([#83](../codebase/83.md)).** An optional per-dial connection **provider**. When set, every *automatic* re-dial re-sources the connection through it instead of reusing the construction-time `connection` snapshot, so a re-pair mid-session dials the fresh relay/server/token; the **first** dial always uses `connection` (no reason to reload microseconds after the consumer already loaded it). A resolved `null` means no stored record → supervision ends with the synthetic `NO_PAIRED_RECORD_CLOSE_CODE = 4000` (a **client-side** sentinel in the WebSocket private-use range, **never sent on the wire**), so the consumer surfaces a non-connected event instead of spinning re-dials at a phantom server. Absent → the snapshot is reused on every dial (unchanged pre-#83 behaviour). It is a **store-agnostic async function, never the store** — the supervisor stays IPC-free; the [driver](noise-relay-driver.md) supplies it as a wrapper over `daemonConnection`'s `loadDialConfig`.
 - **`send` delegates and throws `RelayNotConnectedError` (re-used from #21), no buffering.** When no connection is live (before first connect, during a backoff gap, after terminal) it throws; the consumer waits for the next `connected`. v2 re-handshakes and re-sends from the layer above, so buffering-across-reconnect is deferred.
 - **`stop()` emits a terminal `{1000, 'stopped'}` once.** A uniform "supervision is over" invariant whether the end is a fatal code or a clean stop, distinguishable by `code` (`1000` vs `44xx`). Mirrors #21's `close()`-emits-`closed` shape.
 - **Test-only `timing` second parameter.** The wire-spec cadence/scheduler/jitter overrides ride a second parameter (the #21 belt-and-suspenders precedent), so a production caller passing one argument cannot reach the non-tunable cadence through the typed public config.
 
 ### Reconnect state machine
 
-Module-private state: `attempt` (0-based index of the **next** backoff step), `stopped`, `terminalEmitted` (once-guard), `current: RelayConnection | null`, `backoffTimer`, `stabilityTimer`. At most **one** supervisor-owned timer exists at any instant — `stabilityTimer` only while connected, `backoffTimer` only in a backoff gap; they are **mutually exclusive in time**. (The underlying connection owns its own connect/heartbeat timers while CONNECTING.)
+Module-private state: `attempt` (0-based index of the **next** backoff step), `stopped`, `terminalEmitted` (once-guard), `current: RelayConnection | null`, `backoffTimer`, `stabilityTimer`, and — since [#83](../codebase/83.md) — `firstDial` (a single-writer gate, flipped false once, that keeps the first dial on the construction-time `connection`). At most **one** supervisor-owned timer exists at any instant — `stabilityTimer` only while connected, `backoffTimer` only in a backoff gap; they are **mutually exclusive in time**. (The underlying connection owns its own connect/heartbeat timers while CONNECTING.)
+
+**`dial()` is `async` since #83** — but only the provider-driven automatic re-dial actually `await`s (`resolveConnection()`); the first dial and the whole no-provider path stay synchronous (no `await` reached), so the construction-time `void dial()` still creates the connection before returning. The one added race — a `stop()` racing an in-flight reload during the (connection-less) backoff gap — is fenced by the single post-`await` `stopped` re-check: `stop()`'s `emitTerminal` sets `stopped` and clears timers, so the check aborts the dial. No new timers, listeners, or sockets.
 
 | Trigger | Action |
 |---|---|
-| create | dial immediately — **no initial backoff**, the first attempt is instant. |
-| dial | `backoffTimer = null`; if `stopped` return; else `current = createConnection({ ...connection, onEvent: onConnEvent })`. |
+| create | dial immediately — **no initial backoff**, the first attempt is instant (the first dial takes the synchronous `connection` path, so `current` exists before the constructor returns; the promise is `void`ed). |
+| dial | `backoffTimer = null`; if `stopped` return. **First dial or no provider** → `conn = config.connection`; flip `firstDial = false` (synchronous, no `await` reached — preserves "dials immediately" + every existing re-dial test). **Automatic re-dial with a provider** ([#83](../codebase/83.md)) → `const resolved = await resolveConnection()`; then **re-check `stopped`** (a `stop()` raced the reload during the connection-less backoff gap — abort); if `resolved === null` → `emitTerminal(NO_PAIRED_RECORD_CLOSE_CODE, 'no-paired-record')`, return; else `conn = resolved`. Finally `current = createConnection({ ...conn, onEvent: onConnEvent })`. |
 | conn `connected` | forward `{ type: 'connected' }`; arm `stabilityTimer = setTimer(onStable, stableUptimeMs)`. |
 | conn `message` | forward `{ type: 'message', frame }` — **same `Uint8Array` reference, no copy**. |
 | conn `closed{code,reason}` | clear `stabilityTimer`; `current = null`. If `fatalCloseCodes.has(code)` → `emitTerminal(code, reason)`. Else → `backoffTimer = setTimer(dial, jitteredDelay(attempt))`; then `attempt++`. |
@@ -121,6 +126,7 @@ The fatal-vs-retryable close-code classification (AC #3) is a **reconnect-storm 
 
 - [Relay connection](relay-connection.md) (#21) — the single-shot primitive this supervises.
 - [#22 codebase notes](../codebase/22.md) — implementation summary, patterns, and lessons.
+- [#83 codebase notes](../codebase/83.md) / [Noise relay driver](noise-relay-driver.md) / [Daemon connection](daemon-connection.md) — reload-per-dial: the optional `resolveConnection` provider + async `dial()` + `NO_PAIRED_RECORD_CLOSE_CODE` added here so the automatic re-dial re-sources the paired-server record; the driver wraps `daemonConnection`'s `loadDialConfig` into it.
 - [#21 codebase notes](../codebase/21.md) — the four patterns this module re-uses verbatim (factory + injected `onEvent`, test-only `timing`, terminal-emitted-once + single teardown, log-free by construction).
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — remote head over the relay; transport out of the window.
 - Go mirror: `pyrycode` `docs/knowledge/features/transport-package.md` (`internal/transport` — WSS client with auto-reconnect backoff), and its `#247` (backoff) / `#301` (reconnect-storm / `FatalCloseCodes`) codebase notes.

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   createRelaySupervisor,
   DEFAULT_FATAL_CLOSE_CODES,
+  NO_PAIRED_RECORD_CLOSE_CODE,
   type RelaySupervisorEvent
 } from './relaySupervisor'
 import {
@@ -125,7 +126,11 @@ const messages = (events: RelaySupervisorEvent[]) =>
 // backoff sequence (1000/2000/4000/8000/16000/30000) and the 60000 stability threshold are
 // crisp to assert.
 function setup(
-  opts: { fatalCloseCodes?: ReadonlySet<number>; random?: () => number } = {}
+  opts: {
+    fatalCloseCodes?: ReadonlySet<number>
+    random?: () => number
+    resolveConnection?: () => Promise<Omit<RelayConnectionConfig, 'onEvent'> | null>
+  } = {}
 ): {
   factory: ReturnType<typeof fakeConnectionFactory>
   scheduler: ReturnType<typeof fakeScheduler>
@@ -140,6 +145,7 @@ function setup(
       connection: { url: 'ws://relay.test', headers: {} },
       onEvent: sink.onEvent,
       fatalCloseCodes: opts.fatalCloseCodes,
+      resolveConnection: opts.resolveConnection,
       createConnection: factory.createConnection
     },
     {
@@ -156,6 +162,10 @@ function setup(
 }
 
 const dropClosed = (reason = 'drop'): RelayEvent => ({ type: 'closed', code: 1006, reason })
+
+// Flush the microtask queue: the async re-dial awaits resolveConnection(), so a macrotask turn
+// drains its .then continuation deterministically (the supervisor owns no wall-clock timers here).
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('createRelaySupervisor', () => {
   it('dials immediately on creation, with no timer firing first (immediate first dial)', () => {
@@ -377,5 +387,78 @@ describe('createRelaySupervisor', () => {
     // during a backoff gap after a drop — no live connection
     factory.connections[0].emit(dropClosed())
     expect(() => supervisor.send('x')).toThrow(RelayNotConnectedError)
+  })
+})
+
+// #83 — the optional per-dial connection provider. The first dial keeps using config.connection
+// (built synchronously on construction); every AUTOMATIC re-dial re-sources the connection through
+// resolveConnection so a re-pair mid-session dials the fresh relay/server/token, and a null (no
+// record) fails closed with the synthetic close code instead of spinning on a phantom.
+describe('createRelaySupervisor — reload-per-dial provider (#83)', () => {
+  const connB = (): Omit<RelayConnectionConfig, 'onEvent'> => ({
+    url: 'ws://relay-b.test',
+    headers: { 'X-Pyrycode-Server': 'srv-B' }
+  })
+
+  it('uses config.connection (not the provider) for the immediate first dial', () => {
+    const { factory } = setup({ resolveConnection: () => Promise.resolve(connB()) })
+    // Built synchronously on construction, before any timer or await, from config.connection.
+    expect(factory.connections).toHaveLength(1)
+    expect(factory.connections[0].config.url).toBe('ws://relay.test')
+  })
+
+  it('re-sources the connection via resolveConnection on an automatic re-dial (AC1/AC2)', async () => {
+    const { factory, scheduler } = setup({ resolveConnection: () => Promise.resolve(connB()) })
+    // A transient drop schedules a backoff timer; firing it runs the async re-dial.
+    factory.connections[0].emit(dropClosed())
+    scheduler.fireNext()
+    await tick()
+
+    expect(factory.connections).toHaveLength(2)
+    expect(factory.connections[1].config.url).toBe('ws://relay-b.test')
+    expect(factory.connections[1].config.headers['X-Pyrycode-Server']).toBe('srv-B')
+  })
+
+  it('fails closed with the synthetic close code when resolveConnection returns null on re-dial (AC3)', async () => {
+    const { factory, scheduler, sink } = setup({ resolveConnection: () => Promise.resolve(null) })
+    factory.connections[0].emit({ type: 'connected' })
+    factory.connections[0].emit(dropClosed())
+    scheduler.fireNext()
+    await tick()
+
+    expect(terminals(sink.events)).toEqual([
+      { type: 'terminal', code: NO_PAIRED_RECORD_CLOSE_CODE, reason: 'no-paired-record' }
+    ])
+    expect(factory.connections).toHaveLength(1) // no phantom re-dial
+    expect(scheduler.pending()).toHaveLength(0) // no dangling timers
+  })
+
+  it('does not dial when stop() races an in-flight reload (AC4)', async () => {
+    let resolveDeferred: (v: Omit<RelayConnectionConfig, 'onEvent'> | null) => void = () => {}
+    const deferred = new Promise<Omit<RelayConnectionConfig, 'onEvent'> | null>((res) => {
+      resolveDeferred = res
+    })
+    const { factory, sink, scheduler, supervisor } = setup({ resolveConnection: () => deferred })
+    factory.connections[0].emit({ type: 'connected' })
+    factory.connections[0].emit(dropClosed())
+    scheduler.fireNext() // the async re-dial is now awaiting the deferred reload
+
+    supervisor.stop()
+    resolveDeferred(connB()) // reload finishes AFTER stop — the post-await fence must abort the dial
+    await tick()
+
+    expect(factory.connections).toHaveLength(1) // no new connection dialled after stop
+    expect(terminals(sink.events)).toEqual([{ type: 'terminal', code: 1000, reason: 'stopped' }])
+    expect(scheduler.pending()).toHaveLength(0)
+  })
+
+  it('still re-dials synchronously from config.connection when no provider is set (unchanged)', () => {
+    // The whole existing suite exercises this, but pin it explicitly: no provider → the sync path
+    // on every dial, including re-dials (no await, no tick needed).
+    const { factory, scheduler } = setup()
+    factory.connections[0].emit(dropClosed())
+    scheduler.fireNext()
+    expect(factory.connections).toHaveLength(2)
+    expect(factory.connections[1].config.url).toBe('ws://relay.test')
   })
 })

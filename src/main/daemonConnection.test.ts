@@ -623,6 +623,82 @@ describe('createDaemonConnection — reconnect (connect-on-pair, #82)', () => {
   })
 })
 
+describe('createDaemonConnection — reload-per-dial provider (#83)', () => {
+  it('threads loadDialConfig into the driver as a function', async () => {
+    const { connection, drivers } = build()
+    connection.start()
+    await tick()
+
+    expect(typeof drivers[0].config.loadDialConfig).toBe('function')
+  })
+
+  it('the threaded provider re-sources the record on each call (AC1/AC2)', async () => {
+    const SERVER_KEY_B = new Uint8Array(32).fill(0x44)
+    const RECORD_A = { ...RECORD, server: 'srv-A', relay: 'wss://relay-a.example/v1/client' }
+    const RECORD_B: PairedServerRecord = {
+      server: 'srv-B',
+      relay: 'wss://relay-b.example/v1/client',
+      token: 'tok-B',
+      server_static_pubkey: base64StdEncode(SERVER_KEY_B)
+    }
+    const records = [RECORD_A, RECORD_B]
+    let call = 0
+    const { connection, drivers } = build({
+      load: () => Promise.resolve(records[Math.min(call++, records.length - 1)])
+    })
+
+    connection.start()
+    await tick()
+    // First dial consumed A.
+    expect(drivers[0].config.connection.url).toBe(RECORD_A.relay)
+
+    // Invoking the provider — as the supervisor would before an automatic re-dial — re-sources B:
+    // both the connection headers AND the Noise session material come from the fresh record.
+    const dc = await drivers[0].config.loadDialConfig?.()
+    expect(dc?.connection.url).toBe(RECORD_B.relay)
+    expect(dc?.connection.headers['X-Pyrycode-Server']).toBe(RECORD_B.server)
+    expect(dc?.connection.headers['X-Pyrycode-Token']).toBe(RECORD_B.token)
+    expect([...(dc?.session.remoteStaticPublicKey ?? [])]).toEqual([...SERVER_KEY_B])
+  })
+
+  it('the threaded provider resolves null when a later load finds no record (AC3)', async () => {
+    const records: (PairedServerRecord | null)[] = [RECORD, null]
+    let call = 0
+    const { connection, drivers } = build({
+      load: () => Promise.resolve(records[Math.min(call++, records.length - 1)])
+    })
+
+    connection.start()
+    await tick()
+    expect(drivers).toHaveLength(1)
+
+    const dc = await drivers[0].config.loadDialConfig?.()
+    expect(dc).toBeNull()
+  })
+
+  it('handles the token and server key with no logging and no secret in any event, across a reload (AC4)', async () => {
+    const methods = ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const
+    const spies = methods.map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    try {
+      const { connection, sink, drivers } = build()
+      connection.start()
+      await tick()
+
+      // Exercise the reload path (which handles the token + server key) the supervisor would drive.
+      const dc = await drivers[0].config.loadDialConfig?.()
+      expect(dc).not.toBeNull()
+
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+      const serialized = JSON.stringify(emitted(sink))
+      expect(serialized).not.toContain(TOKEN)
+      expect(serialized).not.toContain(RECORD.server_static_pubkey)
+      expect(serialized).not.toContain(base64StdEncode(PAIR.privateKey))
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+  })
+})
+
 describe('createDaemonConnection — send (outbound send_message)', () => {
   const PAYLOAD: SendMessagePayload = {
     conversation_id: 'c1',

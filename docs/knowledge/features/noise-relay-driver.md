@@ -15,6 +15,8 @@ Gives the background process **one factory** — `createNoiseRelayDriver(config)
 
 Keys and the `hello` early-data are **injected from above** (sourced later by [#42](secure-store.md)/[#43](device-keypair.md)/#10) — this ticket wires the plumbing, not the key sourcing, so it is self-contained and unit-testable with injected fake keys/`hello`.
 
+Since [#83](../codebase/83.md), an optional **`loadDialConfig` provider** lets every *automatic* reconnect re-source both the connection headers and the session material from storage (a re-pair mid-session takes effect on the next reconnect). When it is absent, `connection`/`session` are reused on every reconnect exactly as before. See § Reload-per-dial.
+
 ## How it works
 
 One new file, `src/main/transport/noiseRelayDriver.ts` (main-process only — it imports `codec.ts`, which uses Node `Buffer`, so it is never re-exported through a renderer barrel).
@@ -27,7 +29,7 @@ export type RelaySessionErrorReason =
   | NoiseSessionErrorReason        // 'handshake-read-failed' | 'transport-decrypt-failed' | 'unexpected-frame'
   | 'inbound-frame-decode-failed'  // decodeInnerFrame / base64StdDecode threw at the relay boundary (fail-closed)
   | 'outbound-frame-encode-failed' // encodeInnerFrame over-cap, or supervisor.send threw (not connected)
-  | 'session-load-failed'          // createNoiseSession rejected (NoiseLoadError / wasm load timeout)
+  | 'session-load-failed'          // createNoiseSession rejected (NoiseLoadError / wasm timeout); also the #83 defensive null-material guard
 
 /** The single typed sink to the background-process consumer above. Sealed union on `type`. */
 export type RelaySessionEvent =
@@ -36,17 +38,30 @@ export type RelaySessionEvent =
   | { type: 'terminal'; code: number; reason: string }   // forwarded from the supervisor (incl. 4426/4421/4401)
   | { type: 'error'; reason: RelaySessionErrorReason }    // session errors + adapter-boundary errors
 
+/** Noise key material + hello early-data for one dial's session, sourced from the paired-server record. */
+export interface SessionMaterial {          // was the inline type of NoiseRelayDriverConfig.session (#83 rename)
+  staticPrivateKey: Uint8Array
+  remoteStaticPublicKey: Uint8Array
+  prologue: Uint8Array
+  hello: Uint8Array
+  loadTimeoutMs?: number
+}
+
+/** One dial's fully-derived config: the connection half (headers) + the session half (key/hello). */
+export interface DialConfig {
+  connection: Omit<RelayConnectionConfig, 'onEvent'>
+  session: SessionMaterial
+}
+
+/** Load the current paired-server record → derive one dial's config (#83). `null` = no record (fail closed). */
+export type DialConfigProvider = () => Promise<DialConfig | null>
+
 export interface NoiseRelayDriverConfig {
-  connection: Omit<RelayConnectionConfig, 'onEvent'>  // relay params; the driver owns the supervisor's onEvent
-  session: {                                          // injected from above (#42/#43/#10) — never sourced here
-    staticPrivateKey: Uint8Array
-    remoteStaticPublicKey: Uint8Array
-    prologue: Uint8Array
-    hello: Uint8Array
-    loadTimeoutMs?: number
-  }
+  connection: Omit<RelayConnectionConfig, 'onEvent'>  // relay params for the FIRST dial; driver owns the supervisor's onEvent
+  session: SessionMaterial                            // FIRST dial's key material, injected from above (#42/#43/#10)
   onEvent: (event: RelaySessionEvent) => void         // the single typed sink; must not throw
   fatalCloseCodes?: ReadonlySet<number>               // passthrough; default DEFAULT_FATAL_CLOSE_CODES
+  loadDialConfig?: DialConfigProvider                 // #83: set → every AUTOMATIC reconnect re-sources both halves
   createSupervisor?: (config: RelaySupervisorConfig) => RelaySupervisor       // DI seam; real factory by default
   createSession?: (config: NoiseSessionConfig) => Promise<NoiseSession>       // DI seam; real factory by default
 }
@@ -74,6 +89,15 @@ Supervisor events are **synchronous**, but `createNoiseSession` is **async**. A 
 
 Guarantees: **exactly one live session**, ever. A stale in-flight `createSession` that resolves after a superseding `connected`/`terminal`/`stop` sees `gen !== generation`, closes itself **before** `start()` (so it never sends a spurious `noise_init`), and no-ops — it never installs, never `start()`s, never sends. The `sendFrame` gen-guard is a deterministic second layer: belt (don't start a superseded session), suspenders (drop its writes if it somehow does). Both `.then` **and** `.catch` are fenced, so a stale rejection cannot surface a spurious `session-load-failed`.
 
+### Reload-per-dial (`resolveConnection`, [#83](../codebase/83.md))
+
+When `config.loadDialConfig` is set, the driver re-sources the record on every *automatic* supervisor reconnect. Two module-locals plus one wrapper carry it, with **one `load()` per re-dial feeding both halves** so the connection headers and the session key can never split across a mid-dial re-pair:
+
+- **`let firstConnect = true`** — gates the *first* connect onto the construction-time `config.session` (no reason to reload the record microseconds after the consumer already loaded it for this dial).
+- **`let pendingSession: SessionMaterial | null = null`** — the session material the latest reload stashed; single-writer per dial (`resolveConnection` writes during a re-dial, `onConnected` reads after it connects; supervisor dials never overlap).
+- **`resolveConnection`** (built only when `loadDialConfig` is set; else `undefined`, passed to `createSupervisor` alongside `connection`) is the **single per-dial `load()`**: `const dc = await loadDialConfig(); pendingSession = dc?.session ?? null; return dc?.connection ?? null`. The supervisor gets the fresh `connection`; `onConnected` gets `pendingSession` — from the *same* record snapshot. It **MUST catch a thrown `loadDialConfig` and return `null`** (drop the caught object — a `decodeServerKey`/keychain/`MalformedPairedServerRecordError` message could echo the key/token; null `pendingSession` so a stale prior session is never reused). This catch is **load-bearing**: without it the throw escapes as an unhandled rejection at the supervisor's `await` (AC3 violation). A malformed record on reconnect therefore fails closed *identically* to the no-record case.
+- **`onConnected`** selects `material = config.loadDialConfig && !firstConnect ? pendingSession : config.session` then flips `firstConnect = false`. A `material === null` (structurally unreachable — the supervisor fail-closes on a null `resolveConnection` *before* it emits `connected`) is defended: emit `{ type: 'error', reason: 'session-load-failed' }` rather than dereference null. Otherwise the existing `createSession(...)` runs with `material`.
+
 ### Data flow
 
 ```
@@ -100,6 +124,7 @@ Every `catch` maps to a **static reason** and **drops** the caught error object 
 | Malformed inbound frame (`decodeInnerFrame`/`base64StdDecode` throw) | `error{'inbound-frame-decode-failed'}`, frame dropped | No |
 | Outbound over-cap (`encodeInnerFrame` > `MAX_FRAME_BYTES`) or `supervisor.send` throws (not connected) | `error{'outbound-frame-encode-failed'}` (caught, **not** thrown back into the session) | No |
 | `createNoiseSession` rejects (`NoiseLoadError` / wasm timeout) | `error{'session-load-failed'}` (gen-guarded) | No — supervisor still live |
+| Reload on reconnect throws or finds no record (`loadDialConfig` throws / `load()` → `null`, #83) | `resolveConnection` catches → returns `null` → supervisor `terminal{NO_PAIRED_RECORD_CLOSE_CODE}` (drops the caught object; nulls `pendingSession`) | **Yes** — fail closed via the supervisor, no unhandled rejection |
 | Handshake read / transport decrypt / unexpected frame | `error{reason}` forwarded verbatim from the session | No — session decides |
 | Fatal close `4426`/`4421`/`4401`, or clean `stop()` | `terminal{code, reason}` | **Yes** — single, close session |
 
@@ -124,7 +149,8 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 ## Related
 
 - [#50 codebase notes](../codebase/50.md) — implementation summary, patterns, lessons.
-- [Relay supervisor](relay-supervisor.md) / [#22](../codebase/22.md) — the self-healing byte-pipe the driver constructs and drives; explicitly names this driver as its "future Noise-handshake layer" consumer, and owns the reconnect loop / backoff / fatal-code classification the driver does **not**.
+- [Relay supervisor](relay-supervisor.md) / [#22](../codebase/22.md) — the self-healing byte-pipe the driver constructs and drives; explicitly names this driver as its "future Noise-handshake layer" consumer, and owns the reconnect loop / backoff / fatal-code classification the driver does **not**. Its `resolveConnection` provider ([#83](../codebase/83.md)) is the driver's wrapper over `loadDialConfig`.
+- [#83 codebase notes](../codebase/83.md) / [Daemon connection](daemon-connection.md) — reload-per-dial: the `SessionMaterial`/`DialConfig`/`DialConfigProvider` types, the `resolveConnection` wrapper, and `onConnected`'s reloaded-material selection added here; the `loadDialConfig` provider is constructed in `daemonConnection`.
 - [Noise session](noise-session.md) / [#7](../codebase/7.md) — the per-connection handshake+AEAD unit the driver creates fresh on every connect; its `sendFrame`-out / `onEvent`-in contract is what makes the driver a thin adapter.
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — the `encode/decodeInnerFrame` + `base64Std*` framing composed between the supervisor's opaque bytes and the session's Noise bytes; `MAX_FRAME_BYTES` is the outbound over-cap trigger.
 - [#30 codebase notes](../codebase/30.md) — the Go↔JS interop spike whose `runLive` harness proved this exact adapter shape (`noise_init`/`noise_msg` tagging, base64-std framing) against the single-shot #21 connection; #50 productionizes it over the #22 supervisor.

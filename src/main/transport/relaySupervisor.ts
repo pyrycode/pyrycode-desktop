@@ -40,6 +40,15 @@ const WIRE_JITTER_RATIO = 0.2
 export const DEFAULT_FATAL_CLOSE_CODES: ReadonlySet<number> = new Set([4401, 4421, 4426])
 
 /**
+ * Synthetic terminal close code for the fail-closed reload path (#83): an automatic re-dial whose
+ * `resolveConnection` returns null (no stored paired-server record) ends supervision with this code.
+ * It is a CLIENT-SIDE sentinel — chosen in the WebSocket private-use range and NEVER sent on the
+ * wire — carried on the `terminal` event so the consumer surfaces a non-connected daemon event
+ * instead of spinning re-dials at a phantom server (AC3).
+ */
+export const NO_PAIRED_RECORD_CLOSE_CODE = 4000
+
+/**
  * A supervised lifecycle event. Sealed discriminated union on `type`. Distinct from #21's
  * RelayEvent: here a transient `closed` drop is ABSORBED (re-dialled) and never surfaced, so the
  * only terminal member is `terminal` — a fatal close code (AC #3) or a clean stop (AC #4).
@@ -61,6 +70,16 @@ export interface RelaySupervisorConfig {
   onEvent: (event: RelaySupervisorEvent) => void
   /** WS close codes that halt supervision as terminal. Default DEFAULT_FATAL_CLOSE_CODES. */
   fatalCloseCodes?: ReadonlySet<number>
+  /**
+   * Optional per-dial connection provider (#83). When set, every AUTOMATIC re-dial re-sources the
+   * connection through it instead of reusing the construction-time `connection` snapshot, so a
+   * re-pair mid-session dials the fresh relay/server/token. The FIRST dial always uses `connection`
+   * (no reason to reload microseconds after the consumer already loaded it). A resolved `null` means
+   * no stored record → fail closed with NO_PAIRED_RECORD_CLOSE_CODE. A store-agnostic async function,
+   * never the store itself — the transport stays IPC-free. Absent → the construction-time snapshot is
+   * reused on every dial (unchanged pre-#83 behaviour).
+   */
+  resolveConnection?: () => Promise<Omit<RelayConnectionConfig, 'onEvent'> | null>
   /** Injected connection factory. Default createRelayConnection. Tests pass a fake. */
   createConnection?: (config: RelayConnectionConfig) => RelayConnection
 }
@@ -119,6 +138,9 @@ export function createRelaySupervisor(
   let current: RelayConnection | null = null
   let backoffTimer: ReturnType<typeof setTimeout> | null = null
   let stabilityTimer: ReturnType<typeof setTimeout> | null = null
+  // The first dial uses the construction-time `connection` (see resolveConnection's doc). Flipped
+  // false once the first dial has picked its connection; single-writer, never reset.
+  let firstDial = true
 
   function clearBackoffTimer(): void {
     if (backoffTimer !== null) {
@@ -190,10 +212,30 @@ export function createRelaySupervisor(
     }
   }
 
-  function dial(): void {
+  // Dial one connection. The first dial (and every dial when no provider is set) uses the
+  // construction-time `connection` synchronously — no `await` is reached, preserving the "dials
+  // immediately on creation" invariant and every existing re-dial test. An AUTOMATIC re-dial with a
+  // provider re-sources the connection: it awaits resolveConnection(), fails closed on a null record
+  // (NO_PAIRED_RECORD_CLOSE_CODE), and re-checks `stopped` after the await so a stop() that raced the
+  // reload during the (connection-less) backoff gap aborts the dial.
+  async function dial(): Promise<void> {
     backoffTimer = null
     if (stopped) return
-    current = createConnection({ ...config.connection, onEvent: onConnEvent })
+    const resolveConnection = config.resolveConnection
+    let conn: Omit<RelayConnectionConfig, 'onEvent'>
+    if (firstDial || resolveConnection === undefined) {
+      conn = config.connection
+      firstDial = false
+    } else {
+      const resolved = await resolveConnection()
+      if (stopped) return
+      if (resolved === null) {
+        emitTerminal(NO_PAIRED_RECORD_CLOSE_CODE, 'no-paired-record')
+        return
+      }
+      conn = resolved
+    }
+    current = createConnection({ ...conn, onEvent: onConnEvent })
   }
 
   function send(frame: string | Uint8Array): void {
@@ -208,8 +250,10 @@ export function createRelaySupervisor(
     emitTerminal(1000, 'stopped')
   }
 
-  // First attempt is instant — no initial backoff.
-  dial()
+  // First attempt is instant — no initial backoff. The first dial takes the synchronous path (it
+  // uses config.connection), so the connection is created before this returns; void the promise it
+  // nominally yields.
+  void dial()
 
   return { send, stop }
 }

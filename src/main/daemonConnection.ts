@@ -28,6 +28,7 @@ import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import { base64StdDecode } from './transport/codec'
 import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
+import type { DiagnosticLog } from './diagnosticLog'
 import type { DeviceKeypairStore } from './deviceKeypair'
 import type { PairedServerStore } from './pairedServerStore'
 import { MAX_FRAME_BYTES, type HelloAckPayload, type SendMessagePayload } from '../shared/wire/types'
@@ -55,6 +56,12 @@ export interface DaemonConnectionDeps {
   now?: () => string
   /** DI seam — defaults to the real createNoiseRelayDriver. Tests inject a fake. */
   createDriver?: (config: NoiseRelayDriverConfig) => NoiseRelayDriver
+  /**
+   * The one content-free diagnostic logger (#126), constructed at the composition root and shared by
+   * every transport consumer. Optional injection seam only: #126 threads the dependency here; the
+   * daemon-leg call sites (this module) are #128 and the relay-leg threading is #127. Unused in #126.
+   */
+  diagnosticLog?: DiagnosticLog
 }
 
 /**

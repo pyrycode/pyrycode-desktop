@@ -798,3 +798,72 @@ describe('createDaemonConnection — send (outbound send_message)', () => {
     }
   })
 })
+
+describe('createDaemonConnection — requestDebugBundle (outbound debug-bundle request)', () => {
+  const PAYLOAD: SendMessagePayload = {
+    conversation_id: 'c1',
+    message_id: 'm1',
+    text: 'hello daemon'
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.requestDebugBundle()).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards exactly one bare request_debug_bundle envelope with id 2 and the fixed ts', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.requestDebugBundle()
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('request_debug_bundle')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+  })
+
+  it('carries no payload and no session-selecting field (AC3)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.requestDebugBundle()
+
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    // Bare control frame: an empty payload, no conversation_id / message_id selector.
+    expect(envelope.payload).toEqual({})
+    const record = envelope.payload as Record<string, unknown>
+    expect(record).not.toHaveProperty('conversation_id')
+    expect(record).not.toHaveProperty('message_id')
+  })
+
+  it('shares the single monotonic id counter with send (a send then a request yield ids 2 then 3)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send(PAYLOAD)
+    connection.requestDebugBundle()
+
+    expect(drivers[0].sent).toHaveLength(2)
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.requestDebugBundle()).not.toThrow()
+  })
+})

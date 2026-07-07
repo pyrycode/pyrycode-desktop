@@ -44,6 +44,7 @@ export type EnvelopeType =
   | 'message_chunk'
   | 'backfill_since'
   | 'send_message'
+  | 'request_debug_bundle'
   | 'ack'
   | 'error'
 

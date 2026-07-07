@@ -268,6 +268,46 @@ describe('createNoiseRelayDriver', () => {
     expect(sink.events).toContainEqual({ type: 'message', plaintext })
   })
 
+  it('re-arms noise_init for the rekey msg1 driven by the session emit-then-send (AC1)', async () => {
+    const factory = resolvedSessionFactory()
+    const { driver, sink, supervisor } = setup({ createSession: factory.createSession })
+
+    supervisor().emit({ type: 'connected' })
+    await tick()
+    const session = factory.sessions[0]
+
+    // Baseline: the connection's first frame (msg 1) is noise_init.
+    expect(decodeSent(supervisor().sent[0]).type).toBe('noise_init')
+
+    // Handshake completes; a post-handshake app message is noise_msg.
+    session.config.onEvent({ type: 'handshake-complete', helloAck: new Uint8Array([1]) })
+    driver.sendMessage(new Uint8Array([0x41]))
+    expect(decodeSent(supervisor().sent[1]).type).toBe('noise_msg')
+
+    // Drive the rekey exactly as the real session does within one onFrame turn: emit the
+    // rekey-requested trigger, THEN hand the fresh handshake msg1 to sendFrame.
+    const FAKE_REKEY_MSG1 = new Uint8Array([0x55, 0x56, 0x57])
+    const beforeTrigger = sink.events.length
+    session.config.onEvent({ type: 'rekey-requested' })
+    // The trigger is not propagated to the sink (RelaySessionEvent has no such member).
+    expect(sink.events).toHaveLength(beforeTrigger)
+    session.config.sendFrame(FAKE_REKEY_MSG1)
+
+    // The rekey msg1 goes out tagged noise_init — so the real daemon routes it to its rekey
+    // responder rather than transport-decrypting the raw handshake bytes (WS 4421).
+    expect(supervisor().sent).toHaveLength(3)
+    expect(decodeSent(supervisor().sent[2])).toEqual({
+      v: 2,
+      type: 'noise_init',
+      data: base64StdEncode(FAKE_REKEY_MSG1)
+    })
+
+    // The latch is one-shot: a following app message is noise_msg again.
+    driver.sendMessage(new Uint8Array([0x42]))
+    expect(supervisor().sent).toHaveLength(4)
+    expect(decodeSent(supervisor().sent[3]).type).toBe('noise_msg')
+  })
+
   it('re-handshakes on reconnect with no leaked state (AC4)', async () => {
     const factory = resolvedSessionFactory()
     const { sink, supervisor } = setup({ createSession: factory.createSession })

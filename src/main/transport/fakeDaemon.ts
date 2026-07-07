@@ -11,6 +11,14 @@
 // the production `codec` framing (encodeEnvelope / encodeInnerFrame / base64Std*) — NOT a
 // hand-rolled shortcut — so a lax fake can't pass while diverging from the real daemon (AC3).
 //
+// It also gains a rekey-INITIATOR capability (#112, mirroring pyrycode #450/#453/#454): initiateRekey()
+// seals a `rekey_request` control envelope under the current send cipher and enters
+// `awaiting-rekey-init`; the client's fresh `noise_init` (msg1) is then answered as a fresh RESPONDER
+// handshake (EMPTY early-data both ways, no `rekey_ack`) whose Split ciphers atomically replace the
+// old ones, after which a resume frame under the NEW send cipher gives the client a deterministic
+// swap signal (there is no wire ack). The crypto is faithful; every outbound frame stays tagged
+// `noise_msg` (the client reads by session state, never the inbound `type` — see sendNoise).
+//
 // Split() send/recv role-mapping (AC4, load-bearing): `noise-c.wasm` returns the two transport
 // ciphers already role-adjusted as `[send, recv]` for BOTH roles (noise-c.wasm.d.ts:47-51,
 // confirmed against the 0.4.0 wrapper's `[send, receive]` doc + the noise-c C API), so the
@@ -51,6 +59,30 @@ const EMPTY_AD = new Uint8Array(0)
 const HELLO_ACK_ID = 1
 const HELLO_ACK_TS = '2026-01-01T00:00:00Z'
 
+// Fixed, deterministic framing for the sealed `rekey_request` control envelope the daemon streams
+// to trigger an in-session rekey (mirrors HELLO_ACK_ID/TS). The client's #108 recognizer peeks only
+// `.type`; `id`/`ts`/`payload` values are not inspected, so fixed values keep the fake wall-clock-free.
+const REKEY_REQUEST_ID = 2
+const REKEY_REQUEST_TS = '2026-01-01T00:00:00Z'
+
+// The default post-rekey "resume" frame: a fixed `message` envelope the daemon seals under the NEW
+// send cipher immediately after its swap. There is no `rekey_ack`, so this frame — decrypting under
+// the client's fresh recv cipher — is the deterministic client-side signal that the client finished
+// swapping to the new keys. Exported so a test can assert the exact bytes; overridable per run via
+// FakeDaemonOptions.rekeyResumeMessage. Built via the production codec with the file's deterministic
+// id/ts convention (a module-load-time pure call — no wall clock, no randomness).
+export const DEFAULT_REKEY_RESUME_MESSAGE: Uint8Array = encodeEnvelope({
+  id: 3,
+  type: 'message',
+  ts: '2026-01-01T00:00:00Z',
+  payload: {
+    conversation_id: 'rekey',
+    message_id: 'rekey-resume-1',
+    role: 'assistant',
+    text: 'resumed under new keys'
+  }
+})
+
 /** Config for one fake daemon. Test-only; nothing is persisted, no real credential is read. */
 export interface FakeDaemonOptions {
   /** Base forwarder URL, no trailing path (from startFakeRelayForwarder().url). The daemon dials
@@ -64,6 +96,9 @@ export interface FakeDaemonOptions {
   helloAck?: Partial<HelloAckPayload>
   /** Forwarded to loadNoiseLib as its load deadline; omit for the loader default. */
   loadTimeoutMs?: number
+  /** Plaintext the daemon seals under the NEW send cipher right after a rekey swap (initiateRekey).
+   *  Default: DEFAULT_REKEY_RESUME_MESSAGE — a canned `message` envelope. */
+  rekeyResumeMessage?: Uint8Array
 }
 
 /** Closed set of static reasons — NEVER carries key/token/frame/plaintext bytes. */
@@ -85,11 +120,14 @@ export interface FakeDaemon {
    *  hit a daemon-side failure (ok:false + static reason). Never rejects. close() before completion
    *  resolves it { ok:false, reason:'closed' }. Cached: repeated calls share one promise. */
   whenSettled(): Promise<FakeDaemonOutcome>
+  /** As the daemon: seal a `rekey_request` under the current send cipher, stream it, and enter
+   *  `awaiting-rekey-init` to answer the client's fresh `noise_init`. No-op unless in `transport`. */
+  initiateRekey(): void
   /** Tear down the WS leg + free the wasm handshake/cipher state. Idempotent. */
   close(): Promise<void>
 }
 
-type DaemonState = 'awaiting-msg1' | 'transport' | 'closed'
+type DaemonState = 'awaiting-msg1' | 'transport' | 'awaiting-rekey-init' | 'closed'
 
 /**
  * Stand up the fake daemon: load the shared wasm, generate a responder static keypair, dial the
@@ -122,6 +160,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
   let closePromise: Promise<void> | null = null
 
   const buildReply = options.buildReply ?? ((plaintext: Uint8Array) => plaintext)
+  const rekeyResumeMessage = options.rekeyResumeMessage ?? DEFAULT_REKEY_RESUME_MESSAGE
   const helloAck: HelloAckPayload = {
     protocol_version: 'v2',
     server_id: 'fake-daemon',
@@ -190,6 +229,62 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
     }
   }
 
+  // As the daemon (pyrycode #450/#453/#454): AEAD-seal a `rekey_request` control envelope under the
+  // CURRENT send cipher, stream it, and enter `awaiting-rekey-init` to answer the client's fresh
+  // msg1. Set state BEFORE sendNoise (re-entrancy discipline, mirroring the session): over a real WS
+  // this is not synchronously re-entrant, but the ordering stays faithful to the responder. No-op
+  // unless a completed session is in `transport` (a `whenSettled` ok:true is not required — the
+  // daemon may rekey before its single reply, but the tests rekey after the baseline round-trip).
+  function initiateRekey(): void {
+    if (state !== 'transport' || sendCipher === null) return
+    const trigger = encodeEnvelope({
+      id: REKEY_REQUEST_ID,
+      type: 'rekey_request',
+      ts: REKEY_REQUEST_TS,
+      payload: { reason: 'scheduled' }
+    })
+    const sealed = sendCipher.EncryptWithAd(EMPTY_AD, trigger)
+    state = 'awaiting-rekey-init'
+    sendNoise(sealed)
+  }
+
+  // The client's fresh `noise_init` (rekey msg1). Run a fresh handshake as RESPONDER reusing the SAME
+  // static — byte-identical to the initial responder init — with EMPTY early-data both ways (no hello
+  // recovered, no hello_ack sent), atomically swap our own transport ciphers, then stream msg2 and a
+  // resume frame under the NEW send cipher. The atomic swap mirrors handleMsg1 / noiseSession's
+  // discipline: install BOTH new ciphers before freeing either old one, nothing fallible between.
+  function handleRekeyInit(raw: Uint8Array): void {
+    if (sendCipher === null || recvCipher === null) return
+    try {
+      const fresh = lib.HandshakeState(NOISE_PROTOCOL, lib.constants.NOISE_ROLE_RESPONDER)
+      fresh.Initialize(null, staticPriv, null, null)
+      fresh.ReadMessage(raw, true) // client's fresh msg1; discard the early-data (empty on a rekey)
+      const reply = fresh.WriteMessage(EMPTY_AD) // msg2 with empty early-data — no hello_ack on a rekey
+      // noise-c returns [send, recv] role-adjusted for the responder — no swap (see the module note).
+      const pair = fresh.Split() // consumes + frees the fresh handshake
+      const prevSend = sendCipher
+      const prevRecv = recvCipher
+      sendCipher = pair[0]
+      recvCipher = pair[1]
+      for (const obj of [prevSend, prevRecv]) {
+        try {
+          obj?.free()
+        } catch {
+          /* already freed / teardown */
+        }
+      }
+      state = 'transport'
+      sendNoise(reply)
+      // The post-swap resume frame under the NEW send cipher — the client's deterministic swap signal.
+      sendNoise(sendCipher.EncryptWithAd(EMPTY_AD, rekeyResumeMessage))
+    } catch {
+      // Malformed / wrong-suite client msg1: the library auto-freed the fresh handshake and NO cipher
+      // was reassigned (both still hold the old keys). Classify + tear down, mirroring handleMsg1.
+      settle({ ok: false, reason: 'handshake-read-failed' })
+      void close()
+    }
+  }
+
   function handleTransport(raw: Uint8Array): void {
     if (recvCipher === null || sendCipher === null) return
     let plaintext: Uint8Array
@@ -219,6 +314,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       return
     }
     if (state === 'awaiting-msg1') handleMsg1(raw)
+    else if (state === 'awaiting-rekey-init') handleRekeyInit(raw)
     else handleTransport(raw)
   }
 
@@ -260,6 +356,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
   return {
     staticPublicKey: staticPub,
     whenSettled: () => settledPromise,
+    initiateRekey,
     close
   }
 }

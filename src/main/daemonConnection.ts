@@ -251,7 +251,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           'User-Agent': `pyrycode-desktop/${clientVersion}`,
           'X-Pyrycode-Device-Name': deviceName
         },
-        maxFrameBytes: MAX_FRAME_BYTES
+        maxFrameBytes: MAX_FRAME_BYTES,
+        // Route the one process-singleton content-free logger (#126) the last leg into
+        // relayConnection (#127). This is the SINGLE per-dial construction site — used for both the
+        // first dial and every #83 reload — and it closes over the constant `deps.diagnosticLog`,
+        // so each rebuilt blob references the same logger with no re-attach logic. Optional field:
+        // assigns cleanly whether or not the composition root wired a logger.
+        diagnosticLog: deps.diagnosticLog
       },
       session: {
         staticPrivateKey: pair.privateKey,

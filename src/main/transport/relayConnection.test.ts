@@ -9,6 +9,7 @@ import {
   RelayNotConnectedError,
   type RelayEvent
 } from './relayConnection'
+import type { DiagnosticEvent, DiagnosticLog } from '../diagnosticLog'
 
 // These tests stand up a real in-process `ws` server (the "content-blind test forwarder"
 // the Go mirror used with httptest) rather than mocking `ws`. Cadences are driven through
@@ -98,6 +99,41 @@ async function startBlackHole(): Promise<{ url: string; close: () => Promise<voi
         server.close(() => resolve())
       })
   }
+}
+
+// A bare HTTP server that answers the WS upgrade with a raw non-101 status (e.g. 404 for a
+// client that dialed without /v1/client), then closes — so the client sees a real unexpected
+// HTTP response and fires 'unexpected-response'. Modeled on startBlackHole.
+async function startRejectingRelay(
+  status: number
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200)
+    res.end()
+  })
+  const sockets: Duplex[] = []
+  server.on('upgrade', (_req, socket) => {
+    sockets.push(socket)
+    socket.write(`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+    socket.end()
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  const port = (server.address() as AddressInfo).port
+  return {
+    url: `ws://127.0.0.1:${port}`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const s of sockets) s.destroy()
+        server.close(() => resolve())
+      })
+  }
+}
+
+// A fake DiagnosticLog that captures the content-free field envelopes each call site passes,
+// so a test asserts over exactly what would be serialized — never a stamped/serialized line.
+function captureLog(): { records: DiagnosticEvent[]; log: DiagnosticLog } {
+  const records: DiagnosticEvent[] = []
+  return { records, log: { event: (fields) => records.push(fields) } }
 }
 
 // Records every event and lets a test await the first event matching a predicate.
@@ -336,5 +372,154 @@ describe('createRelayConnection', () => {
     await sink.waitFor((e) => e.type === 'closed', 500)
     expect(sink.events.filter((e) => e.type === 'closed')).toHaveLength(1)
     expect(sink.events.some((e) => e.type === 'connected')).toBe(false)
+  })
+})
+
+describe('createRelayConnection — content-free diagnostic logging (#127)', () => {
+  it('logs the unexpected HTTP upgrade status and terminates without hanging (AC1)', async () => {
+    const relay = await startRejectingRelay(404)
+    cleanups.push(() => relay.close())
+    const sink = makeSink()
+    const captured = captureLog()
+    const handle = createRelayConnection({
+      url: `${relay.url}/v1/client`,
+      headers: {},
+      // Large connect deadline: a log-only handler would hang until this fires (the ws trap),
+      // so a prompt terminal proves the handler drives termination itself, not the timeout.
+      connectTimeoutMs: 5000,
+      diagnosticLog: captured.log,
+      onEvent: sink.onEvent
+    })
+    cleanups.push(() => handle.close())
+
+    const closed = await sink.waitFor((e) => e.type === 'closed', 500)
+    expect(closed).toMatchObject({ type: 'closed', code: 1006, reason: 'connect-error' })
+    expect(sink.events.some((e) => e.type === 'connected')).toBe(false)
+
+    const records = captured.records.filter((r) => r.event === 'relay-unexpected-response')
+    expect(records).toEqual([
+      { event: 'relay-unexpected-response', status: 404, host: '127.0.0.1', path: '/v1/client' }
+    ])
+  })
+
+  it('logs relay-open with safe coordinates on connect (AC2)', async () => {
+    const relay = await startRelay()
+    cleanups.push(() => relay.close())
+    const sink = makeSink()
+    const captured = captureLog()
+    const handle = createRelayConnection({
+      url: `${relay.url}/v1/client`,
+      headers: {},
+      diagnosticLog: captured.log,
+      onEvent: sink.onEvent
+    })
+    cleanups.push(() => handle.close())
+
+    await sink.waitFor((e) => e.type === 'connected')
+
+    expect(captured.records.filter((r) => r.event === 'relay-open')).toEqual([
+      { event: 'relay-open', host: '127.0.0.1', path: '/v1/client' }
+    ])
+  })
+
+  it('logs relay-closed with the numeric code and static classification on a module close (AC2)', async () => {
+    const relay = await startRelay({ autoPong: false }) // never pongs → pong-timeout
+    cleanups.push(() => relay.close())
+    const sink = makeSink()
+    const captured = captureLog()
+    const handle = createRelayConnection(
+      {
+        url: `${relay.url}/v1/client`,
+        headers: {},
+        diagnosticLog: captured.log,
+        onEvent: sink.onEvent
+      },
+      { idlePingIntervalMs: 40, pongTimeoutMs: 60 }
+    )
+    cleanups.push(() => handle.close())
+
+    await sink.waitFor((e) => e.type === 'closed', 500)
+
+    expect(captured.records.filter((r) => r.event === 'relay-closed')).toEqual([
+      {
+        event: 'relay-closed',
+        status: 1006,
+        code: 'pong-timeout',
+        host: '127.0.0.1',
+        path: '/v1/client'
+      }
+    ])
+  })
+
+  it('logs relay-closed with a numeric code and no classification on a peer close (AC2)', async () => {
+    const relay = await startRelay({
+      onConnect: (socket) => setTimeout(() => socket.terminate(), 20)
+    })
+    cleanups.push(() => relay.close())
+    const sink = makeSink()
+    const captured = captureLog()
+    const handle = createRelayConnection({
+      url: `${relay.url}/v1/client`,
+      headers: {},
+      diagnosticLog: captured.log,
+      onEvent: sink.onEvent
+    })
+    cleanups.push(() => handle.close())
+
+    await sink.waitFor((e) => e.type === 'connected')
+    await sink.waitFor((e) => e.type === 'closed', 500)
+
+    const closed = captured.records.filter((r) => r.event === 'relay-closed')
+    expect(closed).toHaveLength(1)
+    expect(typeof closed[0].status).toBe('number')
+    // A peer/library close leaves `pending` null → the static classification is undefined (present
+    // but dropped by JSON.stringify), never the attacker-controlled wire close `reason`.
+    expect(closed[0].code).toBeUndefined()
+  })
+
+  it('never logs the token, the URL query, or a header value (AC3)', async () => {
+    const relay = await startRelay({
+      onConnect: (socket) => setTimeout(() => socket.terminate(), 20)
+    })
+    cleanups.push(() => relay.close())
+    const sink = makeSink()
+    const captured = captureLog()
+    const handle = createRelayConnection({
+      url: `${relay.url}/v1/client?token=SUPERSECRET`,
+      headers: { 'x-pyrycode-token': 'SUPERSECRET' },
+      diagnosticLog: captured.log,
+      onEvent: sink.onEvent
+    })
+    cleanups.push(() => handle.close())
+
+    await sink.waitFor((e) => e.type === 'connected')
+    await sink.waitFor((e) => e.type === 'closed', 500)
+
+    expect(captured.records.length).toBeGreaterThanOrEqual(2) // relay-open + relay-closed
+    for (const value of captured.records.flatMap((r) => Object.values(r))) {
+      expect(String(value)).not.toContain('SUPERSECRET')
+    }
+    for (const record of captured.records) {
+      expect(record.host).toBe('127.0.0.1')
+      expect(record.path).toBe('/v1/client')
+    }
+  })
+
+  it('does not log and does not throw when no diagnosticLog is injected (backward-compat)', async () => {
+    const relay = await startRelay({
+      onConnect: (socket) => setTimeout(() => socket.terminate(), 20)
+    })
+    cleanups.push(() => relay.close())
+    const sink = makeSink()
+    const handle = createRelayConnection({
+      url: `${relay.url}/v1/client`,
+      headers: {},
+      onEvent: sink.onEvent
+    })
+    cleanups.push(() => handle.close())
+
+    await sink.waitFor((e) => e.type === 'connected')
+    const closed = await sink.waitFor((e) => e.type === 'closed', 500)
+    expect(closed).toMatchObject({ type: 'closed' })
   })
 })

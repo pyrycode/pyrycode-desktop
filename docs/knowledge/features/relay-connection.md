@@ -22,6 +22,7 @@ export interface RelayConnectionConfig {
   headers: Record<string, string>    // caller-supplied verbatim (server-id, device-name, user-agent) — never logged
   connectTimeoutMs?: number          // WS-upgrade deadline; default 10_000. Caller-tunable.
   maxFrameBytes?: number             // inbound WS cap; default 1 << 20 (1 MiB, the relay's cap).
+  diagnosticLog?: DiagnosticLog      // the injected content-free logger (#126/#127); absent → no logging
   onEvent: (event: RelayEvent) => void  // the background-process consumer sink (DI at composition root)
 }
 
@@ -58,6 +59,7 @@ One connection walks `connecting → connected → closed`, or `connecting → c
 | `'message'` | normalize to one `Uint8Array` (`toFrame`); emit `{ type: 'message', frame }`. Oversized frames never reach here — `ws` drops + closes them at `maxPayload`. |
 | `'pong'` | clear the outstanding pong-deadline (the connection is alive). |
 | `'error'` | classify into a **short static reason** — `max-frame-exceeded` (1009) / `connect-error` (1006) — never copy `err.message` into the event; never re-throw. |
+| `'unexpected-response'` | a non-101 upgrade (e.g. the relay's 404 for a dial missing `/v1/client`): log `relay-unexpected-response{status,host,path}`, then set `pending = {1006,'connect-error'}` + `ws.terminate()` — the same terminal the pre-open `error` branch sets, since `ws` emits this event *instead of* `error` and stops auto-destroying once the listener is present (#127). |
 | `'close'` | terminal: forward the `pending` module-authored `{code, reason}` if set, else the peer's `code`/`reason.toString()`. |
 | idle-ping tick | if OPEN, `ws.ping()` and arm the pong-deadline (once). |
 | pong-deadline fires | dead peer: set `pending = {1006, 'pong-timeout'}`, `ws.terminate()`. |
@@ -116,7 +118,7 @@ Nothing in this flow reaches IPC, the preload, or the renderer. Both directions 
 
 The ticket carries the `security-sensitive` label; the architect's security review verdict is **PASS**.
 
-- **Log-free by construction.** The module emits **no** logs at all. The caller-supplied headers carry device/server identity and frame bytes carry payload — a stray `console.log` would leak either to main-process stdout. All diagnostics travel as `RelayEvent` data. This is the deterministic belt-and-suspenders alternative to a "don't log the headers" rule. Restated obligation for the consumer (#22): do **not** log `frame` contents or `config.headers`.
+- **Content-free-log by construction ([#127](../codebase/127.md), ADR 0007).** Originally *log-free* by construction (the module emitted **no** logs at all — the caller-supplied headers carry device/server identity and frame bytes carry payload, so a stray `console.log` would leak either to main-process stdout). #127 replaced the blanket ban with a narrower, structurally-safe channel: the module now emits three content-free records through the injected [`DiagnosticLog`](diagnostic-log.md) (`diagnosticLog?` on the config, absent in tests → still silent) — `relay-open{host,path}`, `relay-unexpected-response{status,host,path}`, and `relay-closed{status,code?,host,path}` — carrying only the event name, a numeric status / WS close code, a **module-static** classification (`connect-timeout`/`pong-timeout`/`connect-error`/…), and safe `hostname`+`pathname` coordinates. It **never** logs a header value, a frame byte, the URL query (`href`/`search`), or the attacker-controlled wire close `reason`. Lifecycle and inbound frames still travel as `RelayEvent` data too; the log is an additional diagnostics channel, not a replacement. The `DiagnosticEvent` allowlist has no secret-shaped field ([ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md)); the residual (a `string` coordinate could hold a secret) is closed by a code-review checklist confirming each site passes `new URL(config.url).hostname`/`.pathname`, never `config.url`/`config.headers`.
 - **No secret data in event fields.** `closed.reason` is a short **static, module-authored** string for self-initiated closes or the peer's WS reason for remote closes — the raw `err.message` (which can embed the URL on a TLS/hostname mismatch) is **never** copied verbatim into the event.
 - **Memory + liveness envelope is bounded.** `maxPayload` (1 MiB) drops + closes an oversized frame from a hostile relay without unbounded buffering; the owned connect timeout bounds a hung upgrade; the 30 s/30 s heartbeat tears down a dead connection within 60 s.
 - **TLS inherits `ws`'s secure defaults** — `rejectUnauthorized` stays `true`, hostname verified against the `wss://` host. **No TLS pinning** — deliberate: the future Noise_IK layer provides end-to-end authentication and detects relay impersonation, so pinning here would add rotation pain for no marginal security ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md)). Tests use `ws://` loopback only; the module is scheme-blind by design and production callers always pass `wss://`.
@@ -127,6 +129,7 @@ The ticket carries the `security-sensitive` label; the architect's security revi
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) — *why* this layer is a blind byte pipe: authentication is end-to-end via Noise_IK on top of this socket, so it needs no auth and no TLS pinning.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) — the background-process transport home.
 - [Daemon-event channel](daemon-event-channel.md) (#18) — the typed background→window pipe that sits *downstream* of the handshake+codec layers this socket feeds.
-- [#21 codebase notes](../codebase/21.md) · Spec: `docs/specs/architecture/21-single-shot-relay-connection.md`
+- [Content-free diagnostic log](diagnostic-log.md) (#126) / [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md) — the injected logger this module's three lifecycle sites (#127) feed, and the allowlist-not-scrubber contract they honour.
+- [#21 codebase notes](../codebase/21.md) · Spec: `docs/specs/architecture/21-single-shot-relay-connection.md` · [#127 codebase notes](../codebase/127.md) — the content-free-logging wiring (Spec: `docs/specs/architecture/127-relay-lifecycle-logging.md`).
 - [#35 codebase notes](../codebase/35.md) — the regression fixture pinning the teardown "never re-enters `onEvent`" guarantee (mobile #496 parity, test-only).
 - Go mirror (in the `pyrycode` repo, via QMD `pyrycode-docs`): `knowledge/features/transport-package.md` (`internal/transport` — WSS client with auto-reconnect backoff) and `knowledge/features/relay-package.md` — the full-lifecycle shape this ticket takes the single-connection half of.

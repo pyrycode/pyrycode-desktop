@@ -63,14 +63,35 @@
   border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-xs);
 }
 
-/* Pinned composer — never grows or shrinks. */
+/* Pinned composer — never grows or shrinks. A vertical stack so the status hint (#31) can sit
+   above the input/button row without disturbing that row's flex layout. */
 .composer {
   flex: 0 0 auto;
   display: flex;
-  align-items: flex-end;
-  gap: var(--space-2);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
   padding: var(--space-2) var(--space-3) var(--space-3);
   background: var(--color-surface);
+}
+
+/* The input + send-button row — carries the composer's former horizontal layout. */
+.composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+/* Muted caption naming why the send control is unavailable while not connected (#31). Left padding
+   aligns it with the input's text start. */
+.composer__hint {
+  margin: 0;
+  padding: 0 var(--space-4);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
 }
 
 /* min-width: 0 lets the input shrink below its content width on narrow windows. */
@@ -115,12 +136,19 @@
   cursor: pointer;
 }
 
-.composer__send:hover {
+.composer__send:hover:not(:disabled) {
   background: var(--color-surface-container);
 }
 
 .composer__send:focus-visible {
   outline: 1px solid var(--color-outline);
+}
+
+/* Not connected (#31): reduced-emphasis send control — muted content color (the M3
+   disabled-content convention, not a raw opacity literal) and no pointer affordance. */
+.composer__send:disabled {
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
 }
 
 .composer__send-icon {

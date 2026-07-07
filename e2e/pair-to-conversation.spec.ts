@@ -95,16 +95,12 @@ function encodePairingPayload(qr: QrPayload): string {
   return Buffer.from(JSON.stringify(qr), 'utf-8').toString('base64url')
 }
 
-// BLOCKED ON #101 — committed `test.fixme` (does not run) until that production bug is fixed.
-// This scenario is complete and correct, but it cannot pass yet: driving the built app's pairing UI
-// in the REAL Electron runtime surfaced a pre-existing bug OUTSIDE this ticket's diff. The submit →
-// fingerprint step calls `createHash('blake2s256')` (src/main/pairingConfirmation.ts:84), and Electron
-// ships BoringSSL, which has NO BLAKE2 — so the `pyry:pairing` invoke throws "Digest method not
-// supported", the renderer's un-caught `runSubmit` wedges in the `submitting` phase, and the
-// fingerprint card is never reached. Unit tests pass because vitest runs under full-OpenSSL Node.
-// Fixing it requires editing production code, so per scope discipline it is a separate ticket (#101);
-// flip `test.fixme` back to `test` (and drop the title's "(blocked on #101)") once #101 lands.
-test.fixme('pair through the window against the fake target and reach the conversation screen (blocked on #101)', async ({
+// The submit → fingerprint step derives a BLAKE2s-256 fingerprint (src/main/pairingConfirmation.ts).
+// Electron ships BoringSSL, which has NO BLAKE2 family, so driving this in the REAL Electron runtime
+// was blocked on #101 (which moved that digest off node:crypto's `createHash('blake2s256')` — a
+// "Digest method not supported" throw under BoringSSL — onto @noble/hashes BLAKE2s). #101 has landed
+// on this branch, so the pairing UI reaches the fingerprint card and this scenario runs.
+test('pair through the window against the fake target and reach the conversation screen', async ({
   forwarder,
   daemon,
   page

@@ -11,12 +11,15 @@
 // leave through an injected `onEvent` sink the background-process consumer owns; nothing here
 // touches IPC, the preload bridge, or the renderer.
 //
-// It is LOG-FREE by construction. The caller-supplied headers carry device/server identity,
-// and frame bytes carry payload — a stray console.log would leak either to main-process
-// stdout. All diagnostics travel as RelayEvent data; the consumer decides whether to log and
-// must not log frame contents or the headers.
+// It is CONTENT-FREE-LOG by construction (ADR 0007). The caller-supplied headers carry
+// device/server identity and frame bytes carry payload — a stray console.log would leak either to
+// main-process stdout. Lifecycle and inbound frames still travel as RelayEvent data; the added
+// diagnostics go through the injected content-free DiagnosticLog (#126) and never carry a header
+// value, a frame byte, or a URL query (href/search) — only the event name, a status / close code,
+// a module-static classification, and the safe hostname + pathname coordinates.
 import { WebSocket } from 'ws'
 import type { RawData } from 'ws'
+import type { DiagnosticLog } from '../diagnosticLog'
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000
 const DEFAULT_MAX_FRAME_BYTES = 1 << 20 // 1 MiB — the relay's per-message cap (message.too_long).
@@ -46,6 +49,14 @@ export interface RelayConnectionConfig {
   maxFrameBytes?: number
   /** The background-process consumer sink. Injected at the composition root (#22). */
   onEvent: (event: RelayEvent) => void
+  /**
+   * The injected content-free diagnostic logger (#126), threaded down inside the `connection`
+   * config from the composition root. When present, the connection logs its lifecycle boundaries
+   * (open, an unexpected upgrade status, the terminal close) as content-free records — never a
+   * header value, a frame byte, or a URL query. Absent (tests, or a root that wired none) → the
+   * module simply does not log; behaviour is otherwise identical.
+   */
+  diagnosticLog?: DiagnosticLog
 }
 
 /**
@@ -111,6 +122,11 @@ export function createRelayConnection(
 
   const ws = new WebSocket(config.url, { headers: config.headers, maxPayload: maxFrameBytes })
 
+  // Safe diagnostic coordinates — the HOSTNAME and PATHNAME only, reused at every log site. Never
+  // href/search: a dev-seam url can carry the token in a `?token=` query. `new URL` cannot throw
+  // here — `new WebSocket` above already parsed and validated the same url string.
+  const { hostname: host, pathname: path } = new URL(config.url)
+
   // Own the connect deadline rather than ws's `handshakeTimeout`: a single owned timer yields
   // a deterministic 'connect-timeout' reason (terminate() during CONNECTING emits 'close'
   // 1006) without string-matching ws's internal error text, and avoids two abort paths racing
@@ -159,6 +175,7 @@ export function createRelayConnection(
     opened = true
     clearConnectTimer()
     config.onEvent({ type: 'connected' })
+    config.diagnosticLog?.event({ event: 'relay-open', host, path })
     // Ping unconditionally every idle interval (matching the Go mirror's pingLoop): this
     // guarantees <= idle interval between keepalives, the invariant the relay's symmetric side
     // expects. Arm a single pong-deadline; a 'pong' clears it, its expiry tears the connection.
@@ -183,6 +200,24 @@ export function createRelayConnection(
     clearPongDeadline()
   })
 
+  // A non-101 upgrade response (e.g. the relay's 404 for a dial missing /v1/client). With this
+  // listener present, `ws` emits 'unexpected-response' INSTEAD OF 'error' and no longer
+  // auto-destroys the socket, so the handler must both capture the status for the log AND drive
+  // today's terminal — the exact idiom of the connect-timeout path (:133-137). A log-only handler
+  // would let the dial hang until the connect deadline, flipping the terminal from 'connect-error'
+  // to 'connect-timeout'. Only response.statusCode is read — never a response header or body.
+  ws.on('unexpected-response', (_request, response) => {
+    if (closed) return
+    config.diagnosticLog?.event({
+      event: 'relay-unexpected-response',
+      status: response.statusCode,
+      host,
+      path
+    })
+    pending = { code: 1006, reason: 'connect-error' }
+    ws.terminate()
+  })
+
   ws.on('error', (err: Error) => {
     // Never re-throw out of the handler. Do not copy err.message into the event — a ws TLS or
     // hostname error can embed the URL. Classify into a short static reason instead. A pending
@@ -201,6 +236,17 @@ export function createRelayConnection(
 
   ws.on('close', (code: number, reason: Buffer) => {
     const terminal = pending ?? { code, reason: reason.toString() }
+    // Log before teardown, while `pending` provenance is in scope. `status` is the numeric WS
+    // close code (always safe). `code` is the module-static classification, present ONLY on a
+    // module-initiated close (pending !== null) and omitted (undefined → JSON.stringify drops it)
+    // on a peer/library close — the wire `reason.toString()` (attacker-controlled) is NEVER logged.
+    config.diagnosticLog?.event({
+      event: 'relay-closed',
+      status: terminal.code,
+      code: pending?.reason,
+      host,
+      path
+    })
     teardownAndEmitClosed(terminal.code, terminal.reason)
   })
 

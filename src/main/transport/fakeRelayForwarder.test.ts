@@ -15,14 +15,39 @@ function toBytes(data: RawData): Uint8Array {
   return data
 }
 
-// Dial a raw ws client and resolve once it is OPEN. A persistent (not once) 'error' handler
-// keeps a late error after open from crashing the process; reject on an already-resolved
-// promise is a harmless no-op.
-function connect(url: string): Promise<WebSocket> {
+// A transient pre-open dial reset — the connection is reset before the WebSocket upgrade
+// completes. Under full-suite CPU contention a raw dial to the already-listening forwarder can
+// hit one ("socket hang up" / ECONNRESET), which an immediate re-dial clears (#104). ECONNREFUSED
+// is the loopback accept-backlog-overflow variant of the same transient; it also covers the
+// post-close "fresh dial refused" case, which simply exhausts the attempts and rejects.
+function isTransientDialError(err: Error): boolean {
+  const code = (err as NodeJS.ErrnoException).code
+  return code === 'ECONNRESET' || code === 'ECONNREFUSED' || /socket hang up/i.test(err.message)
+}
+
+// Dial a raw ws client and resolve once it is OPEN. A pre-open transient reset is re-dialled up to
+// `attemptsLeft` times against the already-listening server — deterministic convergence on a
+// recoverable reset, NOT a blind whole-test retry (no assertion re-runs, so a real logic bug is
+// never masked; a genuinely-down target still fails fast once attempts are exhausted). On open the
+// pre-open reject handler is swapped for a benign swallow so a later reset never crashes the
+// process (mirrors fakeDaemon.ts's dial lifecycle).
+function connect(url: string, attemptsLeft = 5): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url)
-    ws.on('error', reject)
-    ws.once('open', () => resolve(ws))
+    const onDialError = (err: Error): void => {
+      ws.terminate() // drop the half-open socket before re-dialling so none leaks
+      if (attemptsLeft > 1 && isTransientDialError(err)) {
+        setTimeout(() => resolve(connect(url, attemptsLeft - 1)), 20)
+        return
+      }
+      reject(err)
+    }
+    ws.once('error', onDialError)
+    ws.once('open', () => {
+      ws.off('error', onDialError)
+      ws.on('error', () => {})
+      resolve(ws)
+    })
   })
 }
 

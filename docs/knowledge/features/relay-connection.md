@@ -50,7 +50,7 @@ export function createRelayConnection(
 
 ### Internal state machine
 
-One connection walks `connecting → connected → closed`, or `connecting → closed` (never established). A single module-private `closed` guard makes the terminal emit fire **exactly once** and forbids a `connected` emit after `closed`. The single teardown routine (`teardownAndEmitClosed`) clears every timer, `removeAllListeners()` on the socket so no late `ws` event can re-enter `onEvent`, and emits `closed` once.
+One connection walks `connecting → connected → closed`, or `connecting → closed` (never established). A single module-private `closed` guard makes the terminal emit fire **exactly once** and forbids a `connected` emit after `closed`. The single teardown routine (`teardownAndEmitClosed`) clears every timer, `removeAllListeners()` on the socket so no late `ws` event can re-enter `onEvent`, and emits `closed` once. This "a torn-down connection never fires again" guarantee is load-bearing for the [supervisor](relay-supervisor.md) (its shared `onConnEvent` has no per-connection fence) and is pinned by a named regression fixture ([#35](../codebase/35.md), mobile #496 parity) — the two redundant guards (`removeAllListeners()` and the per-handler `closed` short-circuit) are each pinned by the assertion that targets it specifically.
 
 | `ws` event / timer | Action |
 |---|---|
@@ -128,4 +128,5 @@ The ticket carries the `security-sensitive` label; the architect's security revi
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) — the background-process transport home.
 - [Daemon-event channel](daemon-event-channel.md) (#18) — the typed background→window pipe that sits *downstream* of the handshake+codec layers this socket feeds.
 - [#21 codebase notes](../codebase/21.md) · Spec: `docs/specs/architecture/21-single-shot-relay-connection.md`
+- [#35 codebase notes](../codebase/35.md) — the regression fixture pinning the teardown "never re-enters `onEvent`" guarantee (mobile #496 parity, test-only).
 - Go mirror (in the `pyrycode` repo, via QMD `pyrycode-docs`): `knowledge/features/transport-package.md` (`internal/transport` — WSS client with auto-reconnect backoff) and `knowledge/features/relay-package.md` — the full-lifecycle shape this ticket takes the single-connection half of.

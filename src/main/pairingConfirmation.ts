@@ -19,7 +19,14 @@
 // filesystem, or the secure store directly — it calls the injected store's `save`. It is LOG-FREE
 // by construction: no console.* anywhere; the record and key are opaque locals, never a reason and
 // never a returned field.
-import { createHash } from 'node:crypto'
+// BLAKE2s-256 comes from @noble/hashes, NOT node:crypto. Electron ships BoringSSL, which has no
+// BLAKE2 family, so `createHash('blake2s256')` throws `Error: Digest method not supported` in the
+// built app (vitest passes only because it runs under full-OpenSSL Node). @noble/hashes is a vetted,
+// audited, pure-JS implementation: it computes the identical bytes under Node AND Electron and stays
+// synchronous, so `deriveFingerprint`/`prepare` remain sync. The `/blake2` subpath is the
+// non-deprecated home of `blake2s` in the installed v1.8.0 (`/blake2s` is JSDoc-deprecated); both
+// export the same function — the parity vectors gate byte-identity to the daemon (#101).
+import { blake2s } from '@noble/hashes/blake2'
 import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
 
 /**
@@ -30,6 +37,7 @@ import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
 export type FingerprintRejectReason =
   | 'pubkey-not-base64' // server_static_pubkey is not canonical standard (padded) base64
   | 'pubkey-wrong-length' // decoded key is not exactly 32 bytes (X25519 public-key width)
+  | 'fingerprint-unavailable' // the digest primitive itself failed — distinct from a malformed key
 
 /**
  * Result of preparing a validated record for confirmation. On success carries the display
@@ -62,6 +70,13 @@ const PUBKEY_BYTES = 32
  */
 const FINGERPRINT_BYTES = 8
 
+/**
+ * Full BLAKE2s-256 digest width, in bytes — the `dkLen` requested from @noble/hashes before the
+ * 8-byte truncation above. This is the daemon's hash (`Noise_IK_..._BLAKE2s`); named so it does not
+ * read as coincidental with PUBKEY_BYTES (both 32) at the call site.
+ */
+const DIGEST_BYTES = 32
+
 /** Internal derivation result — either the display fingerprint or a value-free reject reason. */
 type DerivedFingerprint = { ok: true; fingerprint: string } | { ok: false; reason: FingerprintRejectReason }
 
@@ -81,7 +96,17 @@ function deriveFingerprint(pubkey: string): DerivedFingerprint {
   if (keyBytes.length !== PUBKEY_BYTES) {
     return { ok: false, reason: 'pubkey-wrong-length' }
   }
-  const digest = createHash('blake2s256').update(keyBytes).digest()
+  // Only the digest is newly guarded. @noble/hashes on a validated 32-byte input is deterministic
+  // pure computation, so this catch is effectively unreachable — but AC4 requires the digest step to
+  // RETURN a typed reason rather than throw (a throw here would escape ipcMain.handle and wedge the
+  // pairing screen in `submitting` forever). Return the static value-free reason only: never the
+  // caught error's message (it could echo internals), no console.* — the module stays log-free.
+  let digest: Uint8Array
+  try {
+    digest = blake2s(keyBytes, { dkLen: DIGEST_BYTES })
+  } catch {
+    return { ok: false, reason: 'fingerprint-unavailable' }
+  }
   const fingerprint = Array.from(digest.subarray(0, FINGERPRINT_BYTES))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join(':')

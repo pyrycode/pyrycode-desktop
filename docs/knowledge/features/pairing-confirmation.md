@@ -21,7 +21,7 @@ The load-bearing shape: there is **exactly one `store.save` call site** in the w
 
 | File | Role |
 |---|---|
-| `src/main/pairingConfirmation.ts` | The whole gate: `createPairingConfirmation`, the `PairingConfirmation` interface, `PreparedPairing` / `FingerprintRejectReason` types, and the module-private `deriveFingerprint` helper. Imports **only** `node:crypto`'s `createHash` and the **types** `PairedServerRecord` / `PairedServerStore` (relative path). No `electron`/`fs`/socket/IPC import. ~131 LOC. |
+| `src/main/pairingConfirmation.ts` | The whole gate: `createPairingConfirmation`, the `PairingConfirmation` interface, `PreparedPairing` / `FingerprintRejectReason` types, and the module-private `deriveFingerprint` helper. Imports **only** `blake2s` from `@noble/hashes/blake2` (the BLAKE2s digest — **not** `node:crypto`, which lacks BLAKE2 under Electron's BoringSSL; see [#101](../codebase/101.md)) and the **types** `PairedServerRecord` / `PairedServerStore` (relative path). No `electron`/`fs`/socket/IPC import. ~156 LOC. |
 
 ### Public surface
 
@@ -30,8 +30,9 @@ import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
 
 /** Why fingerprint derivation rejected a record. Value-free category strings, safe to surface. */
 export type FingerprintRejectReason =
-  | 'pubkey-not-base64'    // server_static_pubkey is not canonical standard (padded) base64
-  | 'pubkey-wrong-length'  // decoded key is not exactly 32 bytes (X25519 public-key width)
+  | 'pubkey-not-base64'      // server_static_pubkey is not canonical standard (padded) base64
+  | 'pubkey-wrong-length'    // decoded key is not exactly 32 bytes (X25519 public-key width)
+  | 'fingerprint-unavailable' // the digest primitive itself threw — distinct from a malformed key (#101)
 
 /** Result of preparing a validated record for confirmation. On success carries the display
  *  fingerprint plus the ONE persist handle; on failure only a value-free reason (no confirm). */
@@ -74,10 +75,10 @@ Input: `server_static_pubkey`, a **standard (padded) base64** string of a raw 32
 |---|---|---|
 | 1 | Decode as **canonical** standard base64. Node's `Buffer.from(s, 'base64')` is **lenient** (silently drops out-of-alphabet chars, tolerates missing padding), so it is guarded by a **re-encode-and-compare**: `keyBytes.toString('base64') !== pubkey` rejects. Only input that round-trips through a canonical standard-base64 encode is accepted. | `pubkey-not-base64` |
 | 2 | Decoded length is exactly `32` (`PUBKEY_BYTES`). | `pubkey-wrong-length` |
-| 3 | `createHash('blake2s256').update(keyBytes).digest()` → take the **first 8 bytes** (`FINGERPRINT_BYTES`) → format as colon-separated lowercase hex. | — (success) |
+| 3 | `blake2s(keyBytes, { dkLen: DIGEST_BYTES })` (BLAKE2s-256 → 32-byte `Uint8Array`), wrapped in a `try/catch` — a throw returns the reason at right; on success take the **first 8 bytes** (`FINGERPRINT_BYTES`) → format as colon-separated lowercase hex. | `fingerprint-unavailable` (throw) / — (success) |
 
 - **The form is fixed by cross-repo parity with the daemon:** `BLAKE2s-256(pubkey)` truncated to the first **8 bytes**, colon-separated lowercase hex — e.g. `aa:bb:cc:dd:ee:ff:11:22`, matching `/^[0-9a-f]{2}(:[0-9a-f]{2}){7}$/`, **exactly 23 chars**. It must be byte-identical to the daemon's `internal/pair.Fingerprint` and mobile's, so the operator can compare the desktop screen against what `pyry pair` printed on pyrybox and what the phone shows. **Pinned vector:** `Fingerprint(32 zero bytes) === "32:0b:5e:a9:9e:65:3b:c2"` (independently recomputed in code review).
-- **BLAKE2s-256 via Node's built-in `crypto`** (`createHash('blake2s256')`) — OpenSSL-backed, vetted, **no new dependency**, and verified byte-identical to the daemon's `golang.org/x/crypto/blake2s.Sum256`. No hand-rolled crypto. (The wasm Noise lib exposes no standalone hash, so `node:crypto` is the right primitive.)
+- **BLAKE2s-256 via `@noble/hashes`** (`blake2s(keyBytes, { dkLen: 32 })`, imported from the non-deprecated `@noble/hashes/blake2` subpath) — a vetted, audited, **pure-JS** implementation, verified byte-identical to the daemon's `golang.org/x/crypto/blake2s.Sum256`. No hand-rolled crypto. **Why not `node:crypto`:** `createHash('blake2s256')` throws `Error: Digest method not supported` under **Electron's BoringSSL**, which has no BLAKE2 family — it worked only under vitest's full-OpenSSL Node, so pairing was completely broken in the built app until [#101](../codebase/101.md). A pure-JS digest has no native crypto backend to diverge, so it computes identical bytes under Node **and** Electron and stays **synchronous** (keeping `prepare` sync). The wasm Noise lib exposes no standalone hash (only handshake-transcript hashing), and WebCrypto has no BLAKE2, so a small pure-JS dependency is the unavoidable primitive.
 - **The 8-byte / 64-bit truncation is load-bearing and exact.** Do not narrow it (a 32-bit fingerprint is brute-forceable) and do not widen it (the operator compares against the daemon's/phone's 8-byte form; a mismatched width defeats the visual check). It is a named constant with the rationale documented in-code.
 - Rejections are value-free category strings built through a `reject(reason)` helper (mirroring `pairingPayload.ts`); the caught base64/decode error object is never echoed.
 
@@ -102,6 +103,7 @@ The architect security-review verdict is **PASS**; the code review (security-sen
 
 - **Malformed key — not canonical base64** (`"!!!"`, URL-safe alphabet, missing padding, dropped chars, non-zero trailing bits) — `{ ok: false, reason: 'pubkey-not-base64' }`; no confirm handle, `save` never called.
 - **Malformed key — wrong length** (decodes to 31 or 33 bytes, not 32) — `{ ok: false, reason: 'pubkey-wrong-length' }`; no confirm handle.
+- **Digest primitive throws** — the `try/catch` around `blake2s(...)` returns `{ ok: false, reason: 'fingerprint-unavailable' }`; no confirm handle, no fingerprint shown, `save` never called. This is a **structural AC**, not an observed path: with pure-JS `@noble/hashes` on an already-validated 32-byte input the digest is deterministic pure computation and cannot fail — the catch exists so a throw (were one ever possible) returns a typed reason through `prepare` instead of escaping `ipcMain.handle` and wedging the pairing screen forever in `submitting` (the exact `node:crypto`/BoringSSL failure [#101](../codebase/101.md) fixed). The handler collapses it to the value-free `invalid-key` like the other reject reasons — see [#101](../codebase/101.md)'s reason-mapping decision (no distinct shared `PairingErrorReason` is added for an unobservable path).
 - **Keychain unavailable at persist** — `store.save` throws `EncryptionUnavailableError`, which propagates out of `confirm()`; nothing persisted (the store is fail-closed). Surfacing "can't store — keychain unavailable" is #54's job.
 - **Any other `store.save` throw** (decrypt/write) — propagates verbatim out of `confirm()`; the service adds no catch.
 - **Double confirm** — two identical `save` calls; last-writer-wins over one blob → one logical record (idempotent).
@@ -118,4 +120,5 @@ The architect security-review verdict is **PASS**; the code review (security-sen
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — the fail-closed secret-at-rest posture the injected store inherits, which `confirm` upholds by catching nothing.
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — the ported wire types, including the `QrPayload` that `PairedServerRecord` aliases.
 - [#53 codebase notes](../codebase/53.md) — implementation summary, patterns, and lessons.
+- [#101 codebase notes](../codebase/101.md) — the BoringSSL digest fix: swapped `node:crypto` `createHash('blake2s256')` (throws under Electron) for pure-JS `@noble/hashes` `blake2s`, added the `fingerprint-unavailable` reject reason, and a `check:electron-digest` runtime gate. Restores pairing in the built app.
 - Downstream consumer: the pairing IPC channel (#54), which surfaces the `fingerprint` to the renderer and calls `confirm()` on the operator's click.

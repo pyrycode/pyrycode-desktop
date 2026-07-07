@@ -1,0 +1,108 @@
+# Composer send (optimistic echo)
+
+The **renderer half of the send flow**: the user types a message in the conversation composer, submits it, and sees it appear in the thread **immediately** — before the daemon confirms it. Typing drives controlled input state; a submit mints a `message_id`, emits a `sendMessage` command over the existing bridge, and appends the just-sent message to the [session store](session-store.md) optimistically. This is the counterpart to the [outbound send path](outbound-send-path.md), which turns that command into an encrypted `send_message` envelope on the relay ([#65](../codebase/65.md)).
+
+Introduced in [#66](../codebase/66.md). Entirely `src/renderer/` — no keys, sockets, Noise handshake, or preload internals; the composer only calls the typed `window.pyry.sendCommand` bridge and dispatches into the store.
+
+## What it does
+
+Wires the previously-inert composer (an uncontrolled `<textarea>`, a click-less send button in the [conversation shell](conversation-shell.md)) into a working send:
+
+- The input is **controlled** — typing updates the composer's own ephemeral state; the input clears after a successful submit; whitespace-only input does nothing.
+- **Submit** (the send button or Enter) mints a `message_id` via `crypto.randomUUID()`, assembles a `SendMessagePayload` for the active conversation, and emits `window.pyry.sendCommand(sendMessageCommand(payload))`.
+- The just-sent message is appended to the store **optimistically** as a wire `MessagePayload { role: 'user' }`, carrying the **same `message_id`** sent on the wire — so the store's existing `message_id` dedupe drops the daemon's later echo instead of double-posting.
+- A failure of the send bridge does not crash the window; the echo still posts.
+
+The optimistic echo only becomes *visible* because [#69](../codebase/69.md) bound the thread to the store. #66 owns the store append (verifiable at the store level); #69 owns the render (`role: 'user'` → a `user` bubble). The two share the store as their seam.
+
+## How it works
+
+Two production changes plus a controlled container.
+
+### 1. The pure submit helper — `composerSend.ts`
+
+Framework-free and React-free, co-located with the screen and mirroring `pairingState.ts` / `messageViewModel.ts`: the effects are **injected**, so the helper is a pure, deterministic function tested with plain spies (no React, no store, no Electron).
+
+```ts
+// src/renderer/src/screens/conversation/composerSend.ts — RENDERER ONLY
+export const MILESTONE_CONVERSATION_ID = 'default'
+
+export interface ComposerSendDeps {
+  sendCommand: (command: RendererCommand) => void
+  dispatch: (action: SessionAction) => void
+  newMessageId: () => string
+}
+
+export function submitMessage(text: string, deps: ComposerSendDeps): boolean
+```
+
+`submitMessage` contract:
+
+1. Trim `text`. If empty (whitespace-only) → return `false`, **no effects**.
+2. Mint `message_id` via `deps.newMessageId()` **once**; reuse it for both the wire payload and the store echo.
+3. Build `SendMessagePayload { conversation_id: MILESTONE_CONVERSATION_ID, message_id, text: trimmed }` (**no `role`** — that field is `MessagePayload`-only).
+4. **Guarded send (AC4):** `try { deps.sendCommand(sendMessageCommand(payload)) } catch { console.error(...) }` — a bridge failure is swallowed, never propagated.
+5. Dispatch `{ type: 'messageSent', message: { conversation_id, message_id, role: 'user', text: trimmed } }` — the optimistic echo, a wire `MessagePayload` carrying the **same `message_id`** as step 3.
+6. Return `true` (the container clears the input on `true`).
+
+The echo (step 5) and the clear happen **regardless** of the send outcome in step 4 — "optimistic" means show-immediately, and this milestone has no send-failure UI surface.
+
+`MILESTONE_CONVERSATION_ID = 'default'` is the single active conversation for this milestone — the one place a future conversation-selection ticket replaces. There is no pre-existing conversation id in the renderer (`HelloAckPayload` carries `server_id`/`conn_id`, not a conversation), so a stable constant is the correct source; the daemon treats `conversation_id` as opaque and echoes back whatever it is sent.
+
+### 2. The store action — `messageSent`
+
+A small additive arm on the sealed `SessionAction` union in the [session store](session-store.md):
+
+```ts
+| { type: 'messageSent'; message: MessagePayload }   // a local optimistic echo
+```
+
+```ts
+case 'messageSent':
+  return { status: state.status, messages: appendUnique(state.messages, [action.message]) }
+```
+
+A **distinct name** from `messageReceived` documents intent (a local echo, not a daemon delivery) even though the reducer body is identical — the append routes through the same `appendUnique` (dedupe by `message_id`, added in #27), so the daemon's later echo of the same id drops. `messageSent` is dispatched **only** by the composer; the [daemon-event bridge](daemon-event-bridge.md) produces a subset of `SessionAction` from wire events and needs no change.
+
+### 3. The controlled composer — `ConversationScreen.tsx`
+
+`Composer` becomes a thin controlled container (stays in-file; the logic lives in `composerSend.ts`):
+
+- `const [text, setText] = useState('')` — ephemeral single-value screen-local state (ADR 0006), never the store.
+- `const dispatch = useSessionStore((s) => s.dispatch)` — `dispatch` identity is stable, so selecting it adds no re-render churn.
+- The `<textarea>` gains `value={text}`, `onChange`, and `onKeyDown`; the send `<button>` gains `onClick={handleSubmit}`. Existing `className`/`placeholder`/`aria-label="Send"`/SVG untouched.
+- `handleSubmit` builds `deps` **inside the handler body** (so `window.pyry` is dereferenced only at interaction time, never during render — this keeps the server-rendered container smoke test crash-free), calls `submitMessage(text, { sendCommand: window.pyry.sendCommand, dispatch, newMessageId: () => crypto.randomUUID() })`, and `setText('')` when it returns `true`.
+- `onKeyDown`: **Enter** (no Shift) → `preventDefault()` + `handleSubmit()`; **Shift+Enter** → default (newline).
+
+## Data flow
+
+```
+type in textarea ─▶ setText (local useState)
+click Send / Enter ─▶ handleSubmit
+                        └─▶ submitMessage(text, deps)
+                              ├─ trim; empty? ─▶ return false (no effects)
+                              ├─ id = newMessageId()          (crypto.randomUUID)
+                              ├─ sendCommand(sendMessageCommand(SendMessagePayload))  [guarded]  ──▶ main/#65 ──▶ relay ──▶ daemon
+                              ├─ dispatch(messageSent: MessagePayload{ role:'user', same id })     ──▶ sessionStore ──▶ thread (#69)
+                              └─ return true ─▶ setText('')
+                                                        │
+daemon later echoes same message_id ──▶ messageReceived ──▶ appendUnique drops the duplicate
+```
+
+## Edge cases and limitations
+
+- **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
+- **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone.
+- **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
+- **DOM interaction is untested.** Only the pure `submitMessage` is unit-tested (spies + a stub id). Enter-vs-Shift+Enter, `onChange`, and clear-on-success have no test, because the render harness is `renderToStaticMarkup` (node env), not jsdom — the same deferral [#69](../codebase/69.md) carries.
+- **Single active conversation.** All sends use `MILESTONE_CONVERSATION_ID`; there is no conversation-selection surface. `auto-grow` on the textarea is unbuilt (cosmetic, no AC).
+
+## Related
+
+- [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the **main/transport half** this drives: the `sendMessage` command becomes an encrypted `send_message` envelope on the live Noise relay session. Together #65 + #66 are the two halves of sending a message.
+- [Session store](session-store.md) / [#2](../codebase/2.md) — hosts the `messageSent` action and the `appendUnique` dedupe (added #27) this relies on; #66 closes its "No optimistic send" limitation.
+- [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the screen whose inert `Composer` this wires.
+- [Command channel](command-channel.md) / [#17](../codebase/17.md) — the `sendCommand` bridge + pure `sendMessageCommand` constructor (which deliberately does **not** mint the id — the composer does).
+- [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the pure-logic / thin-container split (`pairingState.ts`) `composerSend.ts` mirrors.
+- [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) · [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
+- [#66 codebase notes](../codebase/66.md) — implementation summary, patterns, lessons.

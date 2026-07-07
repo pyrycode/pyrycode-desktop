@@ -43,6 +43,11 @@ export type SessionAction =
   | { type: 'failed'; error: ConnectionError }
   | { type: 'messageReceived'; message: MessagePayload }
   | { type: 'messagesReceived'; messages: readonly MessagePayload[] }
+  // A locally-composed message shown optimistically before the daemon confirms it (#66).
+  // Distinct name from `messageReceived` to document intent — a local echo, not a daemon
+  // delivery — though the reducer body is identical: append through the same `message_id`
+  // dedupe so the daemon's later echo of the same id drops instead of double-posting.
+  | { type: 'messageSent'; message: MessagePayload }
 
 /** The whole session state. Single source of truth. */
 export interface SessionState {
@@ -102,6 +107,8 @@ export function reduceSession(state: SessionState, action: SessionAction): Sessi
       return { status: state.status, messages: appendUnique(state.messages, [action.message]) }
     case 'messagesReceived':
       return { status: state.status, messages: appendUnique(state.messages, action.messages) }
+    case 'messageSent':
+      return { status: state.status, messages: appendUnique(state.messages, [action.message]) }
     default:
       return assertNever(action)
   }

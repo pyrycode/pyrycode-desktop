@@ -1,6 +1,8 @@
+import { useState, type KeyboardEvent } from 'react'
 import './conversation.css'
 import { toMessageViewModel, type Message } from './messageViewModel'
 import { useSessionStore, selectMessages } from '../../store/sessionStore'
+import { submitMessage } from './composerSend'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -47,12 +49,42 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 }
 
 function Composer(): JSX.Element {
-  // INERT this ticket: uncontrolled textarea (no onChange), inert send button
-  // (no onClick). #2 wires controlled input state, auto-grow, and a send action.
+  // Thin controlled container over composerSend.submitMessage (the pairing container/pure-logic
+  // split). Input text is ephemeral single-value screen-local state → useState, never the store
+  // (ADR 0006). `dispatch` identity is stable, so selecting it adds no re-render churn.
+  const [text, setText] = useState('')
+  const dispatch = useSessionStore((s) => s.dispatch)
+
+  const handleSubmit = (): void => {
+    // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
+    // server-rendered container smoke test never touches the bridge.
+    const sent = submitMessage(text, {
+      sendCommand: window.pyry.sendCommand,
+      dispatch,
+      newMessageId: () => crypto.randomUUID()
+    })
+    if (sent) setText('')
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Enter sends; Shift+Enter inserts a newline.
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      handleSubmit()
+    }
+  }
+
   return (
     <div className="composer">
-      <textarea className="composer__input" placeholder="Message…" rows={1} />
-      <button type="button" className="composer__send" aria-label="Send">
+      <textarea
+        className="composer__input"
+        placeholder="Message…"
+        rows={1}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+      <button type="button" className="composer__send" aria-label="Send" onClick={handleSubmit}>
         <svg
           className="composer__send-icon"
           viewBox="0 0 24 24"

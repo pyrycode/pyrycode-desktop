@@ -2,7 +2,7 @@
 
 `src/main/transport/fakeDaemon.ts` is a reusable, **test-only**, in-process Noise_IK **responder** — a "fake daemon" that speaks the responder side of the wire protocol so automated tests can drive the **real client initiator** through a genuine `Noise_IK_25519_ChaChaPoly_BLAKE2s` handshake and one sealed transport round-trip in CI, with **no Go toolchain and no network**.
 
-It is the **content-aware peer** the content-blind [fake relay forwarder](fake-relay-forwarder.md) (#90) splices frames to: the daemon dials the forwarder's `…/v1/server` leg, the real client under test dials `…/v1/client`. Together they are the transport-level round-trip harness. The daemon is the **responder half** of that harness; the consuming round-trip test that drives both — [#89](../codebase/89.md) — has **landed**. Introduced in [#91](../codebase/91.md).
+It is the **content-aware peer** the content-blind [fake relay forwarder](fake-relay-forwarder.md) (#90) splices frames to: the daemon dials the forwarder's `…/v1/server` leg, the real client under test dials `…/v1/client`. Together they are the transport-level round-trip harness. The daemon is the **responder half** of that harness; the consuming round-trip test that drives both — [#89](../codebase/89.md) — has **landed**. Introduced in [#91](../codebase/91.md). Since [#112](../codebase/112.md) it also gains a **rekey-INITIATOR capability** — it can seal a `rekey_request`, answer the client's fresh `noise_init` as a fresh responder handshake, and atomically swap its own ciphers — so an assembled real client session can be driven through a daemon-initiated rekey end-to-end (see § Rekey-initiator capability).
 
 Where `noiseSession.ts` is **initiator-only**, this is its responder mirror. The one prior responder is the Go `flynn/noise` peer behind `noiseSession.interop.test.ts` — it needs the Go toolchain, is driven over stdio, and `describe.skipIf(!goAvailable)` skips whenever `go` is absent, so it cannot back an **unconditional** `npm test` round-trip. The fake daemon fills exactly that gap, in-process.
 
@@ -26,13 +26,20 @@ export interface FakeDaemonOptions {
   buildReply?: (inboundPlaintext: Uint8Array) => Uint8Array  // default: echo the inbound plaintext verbatim
   helloAck?: Partial<HelloAckPayload>                     // defaults: v2 / 'fake-daemon' / 'conn-1' / []
   loadTimeoutMs?: number                                  // forwarded to loadNoiseLib as its load deadline
+  rekeyResumeMessage?: Uint8Array                         // plaintext sealed under the NEW keys after a rekey swap (#112);
+                                                          //   default: DEFAULT_REKEY_RESUME_MESSAGE (a canned `message` envelope)
 }
 
 export interface FakeDaemon {
   staticPublicKey: Uint8Array          // responder static X25519 pubkey (32B) — the client pins it as remoteStaticPublicKey
   whenSettled(): Promise<FakeDaemonOutcome>   // resolves once (cached); never rejects
+  initiateRekey(): void                // as the daemon: seal a rekey_request + answer the client's fresh noise_init (#112); no-op unless in `transport`
   close(): Promise<void>               // tear down leg + free wasm state; idempotent
 }
+
+// A fixed `message` envelope the daemon seals under the NEW send cipher right after a rekey swap —
+// the client's deterministic swap signal (there is no rekey_ack). Pure module-load constant (#112).
+export const DEFAULT_REKEY_RESUME_MESSAGE: Uint8Array
 
 export type FakeDaemonOutcome = { ok: true } | { ok: false; reason: FakeDaemonErrorReason }
 
@@ -49,7 +56,7 @@ export type FakeDaemonErrorReason =
 
 ## How it works — the responder state machine
 
-Three states, driven entirely by the leg's `message` events: `awaiting-msg1` → `transport` → `closed` (terminal). Keys and wasm never leave the module (main-process only; there is no renderer on this side).
+Four states, driven entirely by the leg's `message` events: `awaiting-msg1` → `transport` → `closed` (terminal), plus `awaiting-rekey-init` (a rekey may loop `transport → awaiting-rekey-init → transport`, entered only via `initiateRekey`, see § Rekey-initiator capability). Keys and wasm never leave the module (main-process only; there is no renderer on this side).
 
 **On every inbound leg `message`** (relay frames arrive as WS **text** frames — the client sends `encodeInnerFrame(...)`, a JSON string):
 
@@ -75,12 +82,22 @@ Three states, driven entirely by the leg's `message` events: `awaiting-msg1` →
 - **Inbound:** the client writes `InnerFrameV2` as WS **text** frames (`encodeInnerFrame` → string → `ws.send(string)`). The forwarder preserves the opcode. The daemon receives text, normalises to bytes, `decodeInnerFrame`.
 - **Outbound:** the daemon sends `leg.send(encodeInnerFrame({ v:2, type:'noise_msg', data: base64StdEncode(raw) }))` — a string → text opcode, mirroring the client. `noise_msg` for **both** msg2 and transport replies is faithful and safe: the client does **not** branch on the inbound `type` (`noiseRelayDriver.onMessage`), so the reply `type` tag is not load-bearing.
 
+## Rekey-initiator capability ([#112](../codebase/112.md))
+
+Beyond the single-round-trip responder, the daemon can **initiate** an in-session rekey — the responder-side twin of the mechanism [#111](noise-session.md#rekey-re-handshake--atomic-cipher-swap-111) built in the real client session, framed through the codec over the WS leg. The crypto is **faithful** (a lax fake can pass while diverging from the real daemon); the outbound `type` tag stays uniform `noise_msg` for every rekey frame too (the client reads by session state, never the inbound tag — § Framing fidelity).
+
+- **`initiateRekey()`** (no-op unless `state === 'transport'` with a live send cipher): build a `rekey_request` control envelope via `encodeEnvelope` (fixed `REKEY_REQUEST_ID`/`REKEY_REQUEST_TS` — the client's #108 recognizer peeks only `.type`, so fixed values keep the fake wall-clock-free), AEAD-seal it under the **current** send cipher, set `state = 'awaiting-rekey-init'` **before** `sendNoise` (re-entrancy discipline mirroring the session), then send.
+- **`handleRekeyInit(raw)`** (the `awaiting-rekey-init` branch) answers the client's fresh `noise_init` (`msg1`) as a fresh handshake **as RESPONDER**, mirroring `handleMsg1` but with **empty early-data both ways** (no `hello` recovered, no `hello_ack` sent — the token is not re-transmitted on a rekey): a fresh `HandshakeState(RESPONDER)` reusing the **SAME** static via a byte-identical `Initialize(null, staticPriv, null, null)`; `ReadMessage(raw, true)` (discard the empty early-data); `WriteMessage(EMPTY_AD)` → `msg2`; `Split()` → `[send, recv]` **no swap** (the same load-bearing mapping as the initial handshake — § The `Split()` send/recv mapping); the **atomic swap** installs both new ciphers before freeing either old one, nothing fallible between the two assignments (identical discipline to `handleMsg1` / `noiseSession.ts`). Then it streams `msg2` and — under the **new** send cipher — a **resume frame** (§ below). On any throw: classify `handshake-read-failed`, drop the caught object, tear down (mirrors `handleMsg1`; no new `FakeDaemonErrorReason` member).
+
+**The post-swap resume frame is the client's deterministic swap signal.** There is **no `rekey_ack`**, and #111's client emits no event on a successful swap (implicit ack), so a test driving the real client has **no client-side signal** that the swap to the new keys finished. The daemon sealing one frame under the new keys immediately after its swap — `rekeyResumeMessage`, default `DEFAULT_REKEY_RESUME_MESSAGE` — gives an ordered, deterministic receipt: the forwarder splices in order, so it arrives **after** the `msg2` the client swapped on, decrypts under the client's fresh recv cipher, and surfaces as a client `message`. That receipt proves the client's recv cipher rotated. It is crypto-faithful (any daemon→client frame under the new keys is identical crypto to the daemon streaming the next turn); *who* sends the first post-rekey frame is a harness choreography detail, not a protocol divergence. `handleTransport` is unchanged — a subsequent client send after the swap already decrypts under the new (rotated) ciphers, so the K1 round-trip goes through `buildReply` as usual.
+
 ## Error handling
 
 | Failure mode | Behaviour |
 |---|---|
 | Malformed `InnerFrameV2` / bad base64 at the leg boundary | Fail-closed: settle `{ ok:false, 'frame-decode-failed' }`, drop the caught object (no bytes), close. |
 | msg1 MAC-fails (wrong hash suite, wrong responder static) | `hs` auto-freed by the library; null it, settle `{ ok:false, 'handshake-read-failed' }`, close. |
+| Rekey `msg1` (fresh `noise_init`) fails to read | Library auto-freed the fresh handshake, no cipher was reassigned (old keys intact); settle `{ ok:false, 'handshake-read-failed' }`, close — mirrors msg1 (#112). |
 | Inbound transport frame fails to open | settle `{ ok:false, 'transport-decrypt-failed' }`; cipher survives (non-terminal, session stays open). |
 | wasm load fails / times out | `startFakeDaemon` **rejects** with `NoiseLoadError` (no handle exists yet). |
 | Leg drops mid-handshake / `close()` before completion | Pending `whenSettled` resolves `{ ok:false, 'closed' }`; teardown proceeds; idempotent. |
@@ -102,7 +119,8 @@ Three states, driven entirely by the leg's `message` events: `awaiting-msg1` →
 - [Noise session](noise-session.md) / [#7](../codebase/7.md) — the initiator this daemon mirrors as a responder; the structural template (`HandshakeState`/`Initialize`/`WriteMessage`/`ReadMessage`/`Split`, `freeAll` teardown, the log-free error discipline).
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello`/`parseHelloAck`; the daemon builds `hello_ack` as the inverse of `parseHelloAck` and the consuming test builds the client `hello` via `buildClientHello`.
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — `encode/decodeEnvelope`, `encode/decodeInnerFrame`, `base64Std*`; the production framing the daemon uses instead of a hand-rolled shortcut (AC3).
-- [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — confirms the client's outbound `noise_init`→`noise_msg` tag sequence and that the client does **not** branch on the inbound `type` (so the reply tag is not load-bearing).
+- [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — confirms the client's outbound `noise_init`→`noise_msg` tag sequence and that the client does **not** branch on the inbound `type` (so the reply tag is not load-bearing); its [#112](../codebase/112.md) `rekeyInitPending` latch re-arms `noise_init` for the fresh rekey `msg1` this daemon reads in `awaiting-rekey-init`.
+- [Noise session](noise-session.md) / [#111](../codebase/111.md) — the real client session's rekey re-handshake + atomic swap this daemon's rekey-initiator capability ([#112](../codebase/112.md)) is the responder-side twin of; the assembled-stack e2e ([`daemonConnection.roundtrip.test.ts`](daemon-connection.md), #89) drives them together through a daemon-initiated rekey.
 - [#91 codebase notes](../codebase/91.md) · Spec: `docs/specs/architecture/91-fake-daemon-noise-responder-roundtrip.md` · PR [#95](https://github.com/pyrycode/pyrycode-desktop/pull/95). Split from [#88](https://github.com/pyrycode/pyrycode-desktop/issues/88); blocked-by #90.
 - Consumer: [#89](../codebase/89.md) — the round-trip test that drives this daemon, overriding `buildReply` to return `message`/`message_chunk` envelopes (the richer reply this doc forecast). **Landed.**
 - Cross-project prior art: pyrycode `fakerelay-harness.md` + the fake-phone peer (`internal/e2e`, #295 tree) — the same forwarder → fake-peer → consuming-test phasing; the desktop daemon deliberately drops the Go surface and ports only the structuring rationale.

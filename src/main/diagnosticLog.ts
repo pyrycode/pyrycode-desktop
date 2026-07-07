@@ -39,6 +39,10 @@ export interface DiagnosticEvent {
   host?: string
   /** A safe path component ('/v1/client') only, never the query string. */
   path?: string
+  /** A one-way digest of an opaque frame/payload — never the bytes. A fixed-width, content-free
+   *  correlation handle: an identical frame recurring, or a frame changing / truncating between
+   *  send and receive, shows up as a repeated / differing / shifting hash. Hex BLAKE2s-256. */
+  hash?: string
 }
 
 /**

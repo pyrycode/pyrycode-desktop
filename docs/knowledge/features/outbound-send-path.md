@@ -2,7 +2,7 @@
 
 The **main / transport half of the send flow**: a validated `sendMessage` command that reaches the background process becomes an encrypted `send_message` envelope on the live Noise relay session, so a message the user composes actually reaches the pyry daemon. This is the connective tissue between three pieces that already existed but were wired by no one — the [command channel](command-channel.md)'s `onCommand` seam ([#17](../codebase/17.md)), the [daemon connection](daemon-connection.md)'s live authenticated transport ([#62](../codebase/62.md)), and the [Noise relay driver](noise-relay-driver.md)'s `sendMessage(plaintext)` ([#50](../codebase/50.md)).
 
-Introduced in [#65](../codebase/65.md). Entirely `src/main/` — no renderer surface. The renderer half (composer submit + optimistic echo) is [#66](https://github.com/pyrycode/pyrycode-desktop/issues/66), which drives this seam from the other end.
+Introduced in [#65](../codebase/65.md). Entirely `src/main/` — no renderer surface. The renderer half (composer submit + optimistic echo) landed in [#66](../codebase/66.md) — see [Composer send](composer-send.md) — which drives this seam from the other end.
 
 ## The three pieces
 
@@ -132,6 +132,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 ## Related
 
 - [#65 codebase notes](../codebase/65.md) — implementation summary, patterns, lessons.
+- [Composer send](composer-send.md) / [#66](../codebase/66.md) — the renderer half that emits the `sendMessage` command this path receives; together the two halves of sending a message.
 - [Daemon connection](daemon-connection.md) / [#62](../codebase/62.md) — hosts the `send` entry point alongside `start`/`stop`; owns the `driver` local, the `now` clock seam, and the classify-don't-forward discipline this inherits.
 - [Command channel](command-channel.md) / [#17](../codebase/17.md) — the `onCommand` seam + `isRendererCommand` boundary guard this registers against; #65 closes its deferred single-registration item.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello`, the pure builder `buildSendMessage` mirrors; both wrap a payload in an `Envelope` and `encodeEnvelope` to UTF-8 bytes.

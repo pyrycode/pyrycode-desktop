@@ -118,6 +118,18 @@ function decodeServerKey(encoded: string): Uint8Array {
   return key
 }
 
+/**
+ * Build the relay CLIENT-leg dial URL from the paired relay base. The deployed relay routes clients
+ * only on `/v1/client` and returns 404 on any other path, including the bare base. `pyry pair` emits
+ * the bare base in the payload (no path), so the client MUST append `/v1/client` itself — the same as
+ * the mobile client (OkHttpRelayTransport: `trimEnd('/') + "/v1/client"`). Idempotent: a record that
+ * already carries the `/v1/client` suffix is returned unchanged, so a full dial URL still works.
+ */
+export function relayClientDialUrl(relay: string): string {
+  const trimmed = relay.replace(/\/+$/, '')
+  return trimmed.endsWith('/v1/client') ? trimmed : `${trimmed}/v1/client`
+}
+
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection {
   const { deviceKeypair, pairedServer, sink, deviceName, clientVersion } = deps
   const now = deps.now ?? ((): string => new Date().toISOString())
@@ -219,7 +231,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     })
     return {
       connection: {
-        url: record.relay,
+        url: relayClientDialUrl(record.relay),
+        // The relay routes clients only on /v1/client (404 otherwise); pyry pair emits the bare
+        // relay base, so the client-leg path is appended here — matching the mobile client.
         // Mirrors the live-validated mobile contract (OkHttpRelayTransport.kt) field-for-field.
         // The relay requires a non-empty X-Pyrycode-Token but ignores its value under v2 — the
         // Noise static-key handshake is the real gate. Do not deviate to a placeholder without a

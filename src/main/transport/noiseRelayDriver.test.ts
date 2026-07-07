@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   createNoiseRelayDriver,
   MAX_PENDING_FRAMES,
-  type RelaySessionEvent
+  type RelaySessionEvent,
+  type SessionMaterial,
+  type DialConfigProvider
 } from './noiseRelayDriver'
 import {
   DEFAULT_FATAL_CLOSE_CODES,
@@ -166,16 +168,25 @@ function makeSink(): { events: RelaySessionEvent[]; onEvent: (event: RelaySessio
 const errorsOf = (events: RelaySessionEvent[]) => events.filter((e) => e.type === 'error')
 const terminalsOf = (events: RelaySessionEvent[]) => events.filter((e) => e.type === 'terminal')
 
-const SESSION_MATERIAL = {
+const SESSION_MATERIAL: SessionMaterial = {
   staticPrivateKey: new Uint8Array(32).fill(0xaa),
   remoteStaticPublicKey: new Uint8Array(32).fill(0xbb),
   prologue: new Uint8Array(0),
   hello: new TextEncoder().encode('hello-early-data')
 }
 
+// A distinct record's session material — what a re-pair mid-session would reload (#83).
+const SESSION_B: SessionMaterial = {
+  staticPrivateKey: new Uint8Array(32).fill(0xcc),
+  remoteStaticPublicKey: new Uint8Array(32).fill(0xdd),
+  prologue: new Uint8Array(0),
+  hello: new TextEncoder().encode('hello-early-data-B')
+}
+
 function setup(opts: {
   createSession: (config: NoiseSessionConfig) => Promise<NoiseSession>
   fatalCloseCodes?: ReadonlySet<number>
+  loadDialConfig?: DialConfigProvider
 }): {
   driver: ReturnType<typeof createNoiseRelayDriver>
   sink: ReturnType<typeof makeSink>
@@ -188,6 +199,7 @@ function setup(opts: {
     session: SESSION_MATERIAL,
     onEvent: sink.onEvent,
     fatalCloseCodes: opts.fatalCloseCodes,
+    loadDialConfig: opts.loadDialConfig,
     createSupervisor: supFactory.createSupervisor,
     createSession: opts.createSession
   })
@@ -445,6 +457,83 @@ describe('createNoiseRelayDriver', () => {
     // the default. Constructing with no override leaves the config's field undefined by design.
     expect(supervisor().config.fatalCloseCodes).toBeUndefined()
     expect(DEFAULT_FATAL_CLOSE_CODES.has(4426)).toBe(true)
+  })
+
+  // #83 — reload the session material on an automatic reconnect. The driver's resolveConnection
+  // wrapper is the single per-dial load(); it feeds the supervisor's connection AND stashes the
+  // session for the next onConnected, so headers and key come from the same fresh record snapshot.
+  it('reloads the session material on reconnect when loadDialConfig is set (AC2)', async () => {
+    const factory = resolvedSessionFactory()
+    const loadDialConfig: DialConfigProvider = () =>
+      Promise.resolve({ connection: { url: 'ws://relay-b.test', headers: {} }, session: SESSION_B })
+    const { supervisor } = setup({ createSession: factory.createSession, loadDialConfig })
+
+    // First connect uses the construction-time config.session (the firstConnect gate).
+    supervisor().emit({ type: 'connected' })
+    await tick()
+    expect(factory.sessions[0].config.remoteStaticPublicKey).toBe(SESSION_MATERIAL.remoteStaticPublicKey)
+
+    // Simulate the supervisor's pre-re-dial reload, then the resulting reconnect.
+    await supervisor().config.resolveConnection?.()
+    supervisor().emit({ type: 'connected' })
+    await tick()
+
+    expect(factory.sessions).toHaveLength(2)
+    expect(factory.sessions[1].config.remoteStaticPublicKey).toBe(SESSION_B.remoteStaticPublicKey)
+    expect(factory.sessions[1].config.hello).toBe(SESSION_B.hello)
+  })
+
+  it('uses config.session on the first connect even when loadDialConfig is present (firstConnect gate)', async () => {
+    const factory = resolvedSessionFactory()
+    const loadDialConfig: DialConfigProvider = () =>
+      Promise.resolve({ connection: { url: 'ws://relay-b.test', headers: {} }, session: SESSION_B })
+    const { supervisor } = setup({ createSession: factory.createSession, loadDialConfig })
+
+    supervisor().emit({ type: 'connected' })
+    await tick()
+
+    expect(factory.sessions[0].config.remoteStaticPublicKey).toBe(SESSION_MATERIAL.remoteStaticPublicKey)
+    expect(factory.sessions[0].config.hello).toBe(SESSION_MATERIAL.hello)
+  })
+
+  it('fails closed (resolves null, never rejects) when loadDialConfig throws on reload (AC3)', async () => {
+    const factory = resolvedSessionFactory()
+    const loadDialConfig: DialConfigProvider = () =>
+      Promise.reject(new Error('malformed record — MUST NOT reach the supervisor await'))
+    const { supervisor } = setup({ createSession: factory.createSession, loadDialConfig })
+
+    await expect(supervisor().config.resolveConnection?.()).resolves.toBeNull()
+  })
+
+  it('emits session-load-failed if a reconnect fires with no reloaded material (defensive)', async () => {
+    // resolveConnection returns null (no record) → pendingSession left null. A connected that then
+    // (structurally unreachably — the supervisor fail-closes first) fires must not deref null.
+    const factory = resolvedSessionFactory()
+    const loadDialConfig: DialConfigProvider = () => Promise.resolve(null)
+    const { sink, supervisor } = setup({ createSession: factory.createSession, loadDialConfig })
+
+    supervisor().emit({ type: 'connected' }) // first connect flips the firstConnect gate
+    await tick()
+    await supervisor().config.resolveConnection?.() // null → pendingSession = null
+    supervisor().emit({ type: 'connected' })
+    await tick()
+
+    expect(errorsOf(sink.events)).toContainEqual({ type: 'error', reason: 'session-load-failed' })
+  })
+
+  it('uses config.session on every connect and sets no resolveConnection when loadDialConfig is absent', async () => {
+    const factory = resolvedSessionFactory()
+    const { supervisor } = setup({ createSession: factory.createSession })
+
+    supervisor().emit({ type: 'connected' })
+    await tick()
+    supervisor().emit({ type: 'connected' })
+    await tick()
+
+    expect(factory.sessions[0].config.remoteStaticPublicKey).toBe(SESSION_MATERIAL.remoteStaticPublicKey)
+    expect(factory.sessions[1].config.remoteStaticPublicKey).toBe(SESSION_MATERIAL.remoteStaticPublicKey)
+    // No provider → the supervisor gets no resolveConnection (its sync fallback path).
+    expect(supervisor().config.resolveConnection).toBeUndefined()
   })
 
   it('is log-free by construction across connect → handshake → transport → error', async () => {

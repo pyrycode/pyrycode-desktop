@@ -58,22 +58,46 @@ export type RelaySessionEvent =
   | { type: 'terminal'; code: number; reason: string } // forwarded from the supervisor (incl. 4426/4421/4401)
   | { type: 'error'; reason: RelaySessionErrorReason } // session errors + adapter-boundary errors
 
+/** Noise key material + hello early-data for one dial's session, sourced from the paired-server record. */
+export interface SessionMaterial {
+  staticPrivateKey: Uint8Array
+  remoteStaticPublicKey: Uint8Array
+  prologue: Uint8Array
+  hello: Uint8Array
+  loadTimeoutMs?: number
+}
+
+/** One dial's fully-derived config: the connection half (headers) + the session half (key/hello). */
+export interface DialConfig {
+  connection: Omit<RelayConnectionConfig, 'onEvent'>
+  session: SessionMaterial
+}
+
+/**
+ * Load the current paired-server record → derive one dial's config (#83). `null` = no stored record
+ * (fail closed). A store-agnostic async function constructed by the connection consumer above (it
+ * owns the paired-server store); the transport receives only this function, never the store — no
+ * keys, sockets, or IPC leak into it.
+ */
+export type DialConfigProvider = () => Promise<DialConfig | null>
+
 /** Caller-supplied configuration for the driven session. */
 export interface NoiseRelayDriverConfig {
   /** Relay params, minus onEvent — the driver owns the supervisor's onEvent to route classification. */
   connection: Omit<RelayConnectionConfig, 'onEvent'>
-  /** Noise key material + hello early-data, injected from above (sourced later by #42/#43/#10). */
-  session: {
-    staticPrivateKey: Uint8Array
-    remoteStaticPublicKey: Uint8Array
-    prologue: Uint8Array
-    hello: Uint8Array
-    loadTimeoutMs?: number
-  }
+  /** Noise key material + hello early-data for the FIRST dial, injected from above (#42/#43/#10). */
+  session: SessionMaterial
   /** The single typed sink. A trusted internal sink; must not throw (mirrors #7/#22 onEvent discipline). */
   onEvent: (event: RelaySessionEvent) => void
   /** WS close codes the supervisor treats as terminal. Passthrough; default DEFAULT_FATAL_CLOSE_CODES. */
   fatalCloseCodes?: ReadonlySet<number>
+  /**
+   * Optional per-dial config provider (#83). When set, every AUTOMATIC supervisor reconnect
+   * re-sources BOTH halves from storage: one load() feeds the supervisor's connection (via the
+   * wrapper below) and the driver's next session material. Absent → `connection`/`session` are reused
+   * on every reconnect (unchanged pre-#83 behaviour). The FIRST connect always uses `session`.
+   */
+  loadDialConfig?: DialConfigProvider
   /** DI seams — default to the real factories. Tests inject fakes. */
   createSupervisor?: (config: RelaySupervisorConfig) => RelaySupervisor
   createSession?: (config: NoiseSessionConfig) => Promise<NoiseSession>
@@ -108,6 +132,14 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
   // Raw Noise frames that arrived during the async-create gap, replayed in order once the session
   // resolves. Bounded at MAX_PENDING_FRAMES (excess dropped fail-safe).
   let pending: Uint8Array[] = []
+  // #83 reload-per-dial state. `firstConnect` gates the first connect onto config.session (no reason
+  // to reload the record microseconds after the consumer already loaded it). `pendingSession` is the
+  // session material the LATEST resolveConnection reload stashed, consumed by the next onConnected.
+  // Single-writer per dial (resolveConnection writes during a re-dial; onConnected reads after it
+  // connects; supervisor dials never overlap), so the value read is always the one this dial
+  // resolved.
+  let firstConnect = true
+  let pendingSession: SessionMaterial | null = null
 
   function emit(event: RelaySessionEvent): void {
     config.onEvent(event)
@@ -124,6 +156,22 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
   function onConnected(): void {
     const gen = ++generation
     teardownConnection()
+
+    // Pick this dial's session material (#83): on an automatic reconnect (a provider is set and this
+    // is past the first connect) it's the freshly-reloaded `pendingSession` the supervisor's
+    // resolveConnection stashed from the SAME load() that fed the reconnect's connection — so headers
+    // and key never split across a re-pair. On the first connect, or with no provider, it's the
+    // construction-time config.session, exactly as before.
+    const material = config.loadDialConfig && !firstConnect ? pendingSession : config.session
+    firstConnect = false
+
+    // Defensive type-narrowing: the supervisor fail-closes on a null resolveConnection BEFORE it
+    // emits `connected`, so a null here is structurally unreachable on the reload path. Surface an
+    // error rather than dereference null.
+    if (material === null) {
+      emit({ type: 'error', reason: 'session-load-failed' })
+      return
+    }
 
     // The session's very first sendFrame is always handshake message 1, so this per-connection
     // flag resets noise_init↔noise_msg with no shared mutable state across reconnects.
@@ -152,11 +200,11 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
     }
 
     void createSession({
-      staticPrivateKey: config.session.staticPrivateKey,
-      remoteStaticPublicKey: config.session.remoteStaticPublicKey,
-      prologue: config.session.prologue,
-      hello: config.session.hello,
-      loadTimeoutMs: config.session.loadTimeoutMs,
+      staticPrivateKey: material.staticPrivateKey,
+      remoteStaticPublicKey: material.remoteStaticPublicKey,
+      prologue: material.prologue,
+      hello: material.hello,
+      loadTimeoutMs: material.loadTimeoutMs,
       sendFrame,
       onEvent: route
     })
@@ -220,8 +268,31 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
     }
   }
 
+  // The supervisor's per-dial connection provider (#83), present only when loadDialConfig is set.
+  // ONE load() feeds both halves of a re-dial: the supervisor gets `connection`, and onConnected
+  // reads the stashed `pendingSession` — so a re-pair mid-dial can't split the headers from the key.
+  // It MUST catch a thrown loadDialConfig and return null (fail closed identically to the no-record
+  // case): a decodeServerKey / keychain / MalformedPairedServerRecordError throw could echo the
+  // key/token, so the caught object is DROPPED, and null pendingSession so a stale prior session is
+  // never reused. Without this catch the throw would escape as an unhandled rejection at the
+  // supervisor's `await` (violating AC3's "never a throw out of the transport").
+  const loadDialConfig = config.loadDialConfig
+  const resolveConnection = loadDialConfig
+    ? async (): Promise<Omit<RelayConnectionConfig, 'onEvent'> | null> => {
+        try {
+          const dc = await loadDialConfig()
+          pendingSession = dc?.session ?? null
+          return dc?.connection ?? null
+        } catch {
+          pendingSession = null
+          return null
+        }
+      }
+    : undefined
+
   const supervisor = createSupervisor({
     connection: config.connection,
+    resolveConnection,
     onEvent: onSupervisorEvent,
     fatalCloseCodes: config.fatalCloseCodes
   })

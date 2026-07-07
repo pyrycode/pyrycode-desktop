@@ -17,6 +17,7 @@
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
 import { createNoiseRelayDriver } from './transport/noiseRelayDriver'
 import type {
+  DialConfig,
   NoiseRelayDriver,
   NoiseRelayDriverConfig,
   RelaySessionEvent
@@ -188,26 +189,62 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  // Load the current paired-server record and derive ONE dial's config (connection headers + Noise
+  // session material). `null` = no stored record (fail closed). This is the per-dial provider (#83):
+  // it is passed to the driver so every AUTOMATIC supervisor reconnect re-sources the record through
+  // it (re-reading a re-pair immediately, since pairedServer.load() has no cache), and bootstrap
+  // itself calls it for the first/explicit dial. It stays entirely in the background process — no
+  // record field crosses to the renderer. A thrown decodeServerKey / ensure() /
+  // MalformedPairedServerRecordError propagates to the caller (bootstrap's catch, or the driver's
+  // resolveConnection which fails closed).
+  async function loadDialConfig(): Promise<DialConfig | null> {
+    const record = await pairedServer.load()
+    if (record === null) return null
+    const pair = await deviceKeypair.ensure()
+    const remoteStaticPublicKey = decodeServerKey(record.server_static_pubkey)
+    const hello = buildClientHello({
+      id: 1,
+      ts: now(),
+      deviceName,
+      clientVersion,
+      token: record.token
+    })
+    return {
+      connection: {
+        url: record.relay,
+        // Mirrors the live-validated mobile contract (OkHttpRelayTransport.kt) field-for-field.
+        // The relay requires a non-empty X-Pyrycode-Token but ignores its value under v2 — the
+        // Noise static-key handshake is the real gate. Do not deviate to a placeholder without a
+        // matching mobile/relay change (CLAUDE.md no-drift).
+        headers: {
+          'X-Pyrycode-Server': record.server,
+          'X-Pyrycode-Token': record.token,
+          'User-Agent': `pyrycode-desktop/${clientVersion}`,
+          'X-Pyrycode-Device-Name': deviceName
+        },
+        maxFrameBytes: MAX_FRAME_BYTES
+      },
+      session: {
+        staticPrivateKey: pair.privateKey,
+        remoteStaticPublicKey,
+        prologue: new Uint8Array(0),
+        hello
+      }
+    }
+  }
+
   async function bootstrap(gen: number): Promise<void> {
     try {
-      const record = await pairedServer.load()
+      const dc = await loadDialConfig()
       // A reconnect superseded this in-flight bootstrap while it awaited: abandon it silently — do
       // not emit not-paired/connect-failed or build a stale driver. The successor's dial owns the
-      // sink now.
+      // sink now. Gen check FIRST, before the not-paired branch, so a superseded bootstrap never
+      // emits not-paired.
       if (gen !== generation) return
-      if (record === null) {
+      if (dc === null) {
         emitFailed('not-paired')
         return
       }
-      const pair = await deviceKeypair.ensure()
-      const remoteStaticPublicKey = decodeServerKey(record.server_static_pubkey)
-      const hello = buildClientHello({
-        id: 1,
-        ts: now(),
-        deviceName,
-        clientVersion,
-        token: record.token
-      })
       // stop() (permanent teardown) or a superseding reconnect (a newer gen) may have raced the
       // bootstrap while it awaited. JS yields only at `await`, so checking here — immediately before
       // the synchronous createDriver — closes both races: the driver is never constructed after a
@@ -215,26 +252,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // NOT bump `generation`.
       if (stopped || gen !== generation) return
       driver = createDriver({
-        connection: {
-          url: record.relay,
-          // Mirrors the live-validated mobile contract (OkHttpRelayTransport.kt) field-for-field.
-          // The relay requires a non-empty X-Pyrycode-Token but ignores its value under v2 — the
-          // Noise static-key handshake is the real gate. Do not deviate to a placeholder without a
-          // matching mobile/relay change (CLAUDE.md no-drift).
-          headers: {
-            'X-Pyrycode-Server': record.server,
-            'X-Pyrycode-Token': record.token,
-            'User-Agent': `pyrycode-desktop/${clientVersion}`,
-            'X-Pyrycode-Device-Name': deviceName
-          },
-          maxFrameBytes: MAX_FRAME_BYTES
-        },
-        session: {
-          staticPrivateKey: pair.privateKey,
-          remoteStaticPublicKey,
-          prologue: new Uint8Array(0),
-          hello
-        },
+        connection: dc.connection,
+        session: dc.session,
+        // Thread the provider so the driver's automatic supervisor reconnects re-source the record
+        // from storage (#83) — for both the connection headers and the Noise session material —
+        // instead of reusing this first dial's snapshot.
+        loadDialConfig,
         // Fence the driver's events on this dial's generation: a driver superseded by a later dial
         // (including the terminal it emits when dial() stops it) must not reach onDriverEvent, which
         // would surface a spurious `failed` between the new `connecting` and `connected`.

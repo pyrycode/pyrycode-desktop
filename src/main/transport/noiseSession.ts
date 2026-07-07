@@ -6,7 +6,11 @@
 // NOISE_PROTOCOL is reused verbatim, never retyped.
 //
 // Keys are INJECTED as config (raw 32-byte X25519 static private + remote static public); this
-// module sources no key from storage and constructs no envelope — both are separate concerns.
+// module sources no key from storage and constructs no envelope — both are separate concerns. In
+// `transport` state it does PEEK the decrypted envelope's `type` (via decodeEnvelope) to recognize
+// the daemon's in-session `rekey_request` control frame (#108) and surface it as a distinct typed
+// trigger — a type-peek only: it still constructs no envelope and interprets no payload, and
+// app-message decoding stays downstream in parseInboundMessage.
 // The crypto is `noise-c.wasm` (a vetted Emscripten build of rweather/noise-c, the reference C
 // implementation; no hand-rolled crypto), loaded once via the shared ./noiseLib loader.
 //
@@ -19,6 +23,7 @@
 // logged — a library error string can echo transcript bytes.
 import { type NoiseCipherState } from 'noise-c.wasm'
 import { NOISE_PROTOCOL } from '../../shared/wire/types'
+import { decodeEnvelope } from './codec'
 import { loadNoiseLib } from './noiseLib'
 
 // Empty associated-data for every transport frame — the v2 suite's mandate (the daemon's
@@ -53,6 +58,7 @@ export type NoiseSessionErrorReason =
 export type NoiseSessionEvent =
   | { type: 'handshake-complete'; helloAck: Uint8Array } // peer early-data recovered from msg 2
   | { type: 'message'; plaintext: Uint8Array } // decrypted post-handshake frame
+  | { type: 'rekey-requested' } // daemon rekey_request control frame recognized; bare signal, #109 acts on it
   | { type: 'error'; reason: NoiseSessionErrorReason } // static reason only — never bytes
 
 /** Handle for one Noise session. */
@@ -68,6 +74,27 @@ export interface NoiseSession {
 }
 
 type SessionState = 'idle' | 'awaiting-handshake-reply' | 'transport' | 'closed'
+
+// The v2 control-envelope type the daemon seals to trigger an in-session re-key. Mirrors the
+// daemon's `protocol.TypeRekeyRequest` (pyrycode #454); wire source: protocol-mobile.md § Re-key.
+// Deliberately module-private and deliberately NOT a member of the shared `EnvelopeType` union:
+// like the daemon's `TypeRekeyRequest` (kept out of its app-dispatch `v1TypeSet`), it is a control
+// type, not an app-dispatch type — `parseInboundMessage` never switches on it.
+const REKEY_REQUEST_TYPE = 'rekey_request'
+
+// True iff `plaintext` decodes as an Envelope whose type is the rekey trigger. TOTAL by
+// construction: it reuses the vetted, fail-closed decodeEnvelope and swallows its WireDecodeError
+// to `false`, so ANY decode/peek failure (malformed UTF-8/JSON, non-object, missing/mistyped
+// field) yields `false` and the caller falls through to the unchanged message path — a peek
+// failure is never a rejection. Reads only `.type`; the control payload (`{reason}`) is discarded,
+// never interpreted. Structural only: carries no key/token/frame/plaintext bytes out.
+function isRekeyRequest(plaintext: Uint8Array): boolean {
+  try {
+    return decodeEnvelope(plaintext).type === REKEY_REQUEST_TYPE
+  } catch {
+    return false
+  }
+}
 
 /**
  * Construct and Initialize the session, returning the handle WITHOUT sending. Sending is a
@@ -141,6 +168,15 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
         plaintext = recvCipher.DecryptWithAd(EMPTY_AD, frame)
       } catch {
         fail('transport-decrypt-failed') // cipher survives; non-terminal
+        return
+      }
+      // Recognition (#108): a decrypted `rekey_request` control envelope is the daemon's in-session
+      // rekey trigger — surface a bare signal and divert. Everything else (a well-formed app
+      // message, an unmodeled control type, non-Envelope bytes, or a peek that throws) falls through
+      // UNCHANGED, carrying the identical plaintext. Additive: parseInboundMessage stays the sole
+      // app-message decode gate; recognition only diverts a positively-matched control frame.
+      if (isRekeyRequest(plaintext)) {
+        config.onEvent({ type: 'rekey-requested' })
         return
       }
       config.onEvent({ type: 'message', plaintext })

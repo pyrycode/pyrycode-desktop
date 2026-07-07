@@ -196,6 +196,11 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
     // through) once past the generation guard.
     const route = (event: NoiseSessionEvent): void => {
       if (gen !== generation) return
+      // #108 is recognition-only: the rekey trigger is a transport-control signal the driver does
+      // NOT propagate to the RelaySessionEvent sink yet (it is deliberately absent from that union),
+      // so drop it here — #109 owns wiring the re-handshake action. This also restores the
+      // NoiseSessionEvent ⊆ RelaySessionEvent subset TypeScript needs for the emit below to narrow.
+      if (event.type === 'rekey-requested') return
       emit(event)
     }
 

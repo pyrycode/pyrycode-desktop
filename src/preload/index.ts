@@ -6,6 +6,7 @@ import {
   type PairingSubmitResponse,
   type PairingConfirmResponse
 } from '../shared/ipc/pairing'
+import { PAIRING_STATUS_CHANNEL, type PairingStatus } from '../shared/ipc/pairingStatus'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -41,6 +42,16 @@ const api = {
    */
   confirmPairing: (): Promise<PairingConfirmResponse> =>
     ipcRenderer.invoke(PAIRING_CHANNEL, { type: 'confirm' }),
+
+  /**
+   * Ask the background process, at launch, whether a stored pairing exists — so the renderer can
+   * choose a screen (#80) before first paint, without racing the connect sequence. Resolves to the
+   * value-free three-outcome enum (paired / not-paired / error). Request/response
+   * (ipcRenderer.invoke) called with NO second argument — no data leaves the renderer; only the
+   * enum comes back, never the token / server key / relay. PAIRING_STATUS_CHANNEL is fixed here so
+   * the renderer cannot address arbitrary channels, and ipcRenderer never crosses the bridge.
+   */
+  pairingStatus: (): Promise<PairingStatus> => ipcRenderer.invoke(PAIRING_STATUS_CHANNEL),
 
   /**
    * Subscribe to typed daemon events from the background process; returns an unsubscribe

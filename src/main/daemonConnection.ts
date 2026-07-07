@@ -24,6 +24,7 @@ import type {
 } from './transport/noiseRelayDriver'
 import { buildClientHello, parseHelloAck } from './transport/helloExchange'
 import { buildSendMessage } from './transport/sendMessageEnvelope'
+import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import { base64StdDecode } from './transport/codec'
 import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
@@ -79,6 +80,13 @@ export interface DaemonConnection {
    * a command arriving while disconnected is dropped, never propagated as a crash.
    */
   send(payload: SendMessagePayload): void
+  /**
+   * Encrypt a bare `request_debug_bundle` control envelope onto the live session — asks the daemon
+   * to begin streaming the current debug bundle back. Carries no payload and no session-selecting
+   * field (the bundle is daemon-global). Idempotent no-op when not connected, exactly like `send`.
+   * NEVER throws out of the module (parity #490).
+   */
+  requestDebugBundle(): void
 }
 
 /**
@@ -294,6 +302,24 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function requestDebugBundle(): void {
+    // Structural twin of send: the same single `driver === null` guard covers every "not connected"
+    // state (before start(), mid-bootstrap, bootstrap-failed; the driver's own sendMessage is inert
+    // post-terminal). This is AC4 — silent no-op, never a throw.
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send — no second counter — so ids stay unique
+      // across interleaved send/requestDebugBundle calls (the daemon correlates replies by id).
+      const bytes = buildRequestDebugBundle({ id: nextEnvelopeId, ts: now() })
+      nextEnvelopeId += 1
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but
+      // driver.sendMessage can throw. The caught object is DROPPED — no log, no event, exactly like
+      // send.
+    }
+  }
+
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
     const gen = ++generation
@@ -335,6 +361,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // `stopped` guard above (step 7) prevents it from ever being constructed.
       driver?.stop()
     },
-    send
+    send,
+    requestDebugBundle
   }
 }

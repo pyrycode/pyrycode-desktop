@@ -1,8 +1,8 @@
 import { useState, type KeyboardEvent } from 'react'
 import './conversation.css'
 import { toMessageViewModel, type Message } from './messageViewModel'
-import { useSessionStore, selectMessages } from '../../store/sessionStore'
-import { submitMessage } from './composerSend'
+import { useSessionStore, selectMessages, selectStatus } from '../../store/sessionStore'
+import { submitMessage, composerAvailability } from './composerSend'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -54,8 +54,17 @@ function Composer(): JSX.Element {
   // (ADR 0006). `dispatch` identity is stable, so selecting it adds no re-render churn.
   const [text, setText] = useState('')
   const dispatch = useSessionStore((s) => s.dispatch)
+  // #31: gate the send control on the live connection status. Selecting `status` re-renders the
+  // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
+  // The thread selects only `selectMessages`, so status changes don't re-render it.
+  const status = useSessionStore(selectStatus)
+  const { canSend, hint } = composerAvailability(status)
 
   const handleSubmit = (): void => {
+    // AC1: the authoritative gate. Return before touching submitMessage so no sendCommand and no
+    // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
+    // as the button. The input is not cleared; nothing was sent.
+    if (!canSend) return
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge.
     const sent = submitMessage(text, {
@@ -76,26 +85,43 @@ function Composer(): JSX.Element {
 
   return (
     <div className="composer">
-      <textarea
-        className="composer__input"
-        placeholder="Message…"
-        rows={1}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-      />
-      <button type="button" className="composer__send" aria-label="Send" onClick={handleSubmit}>
-        <svg
-          className="composer__send-icon"
-          viewBox="0 0 24 24"
-          width="22"
-          height="22"
-          fill="currentColor"
-          aria-hidden="true"
+      {/* role="status" makes this a polite live region: a screen reader announces the change
+          without stealing focus (AC2/AC3). On connect, `hint` is null, the caption unmounts. */}
+      {hint && (
+        <p className="composer__hint" role="status">
+          {hint}
+        </p>
+      )}
+      <div className="composer__row">
+        {/* The textarea stays enabled while not connected — the user may draft; only the send
+            control is gated (AC1). */}
+        <textarea
+          className="composer__input"
+          placeholder="Message…"
+          rows={1}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+        <button
+          type="button"
+          className="composer__send"
+          aria-label="Send"
+          onClick={handleSubmit}
+          disabled={!canSend}
         >
-          <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8z" />
-        </svg>
-      </button>
+          <svg
+            className="composer__send-icon"
+            viewBox="0 0 24 24"
+            width="22"
+            height="22"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8z" />
+          </svg>
+        </button>
+      </div>
     </div>
   )
 }

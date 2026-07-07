@@ -67,4 +67,21 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).toContain('<textarea')
     expect(markup).toContain('aria-label="Send"')
   })
+
+  // #31: while not connected the send control is disabled and the composer shows an inline
+  // "why" hint. The initial store state is `disconnected`, and zustand v5's useStore reads
+  // getInitialState() under server rendering (never setState), so this container smoke test always
+  // sees the disconnected branch. The connected/enabled branch is therefore NOT smoke-testable here
+  // — it is covered by the composerAvailability(connected) pure test in composerSend.test.ts.
+  it('disables the send control while the session is not connected', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    const sendButtonTag = markup.match(/<button[^>]*aria-label="Send"[^>]*>/)?.[0] ?? ''
+    expect(sendButtonTag).toContain('disabled')
+  })
+
+  it('renders an inline status hint (a polite live region) while not connected', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('class="composer__hint"')
+    expect(markup).toContain('role="status"')
+  })
 })

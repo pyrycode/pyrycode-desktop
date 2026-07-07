@@ -4,7 +4,7 @@
 // The React container (ConversationScreen's Composer) is thin glue over this.
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { SendMessagePayload } from '@shared/wire/types'
-import type { SessionAction } from '../../store/sessionStore'
+import type { ConnectionStatus, SessionAction } from '../../store/sessionStore'
 
 /**
  * The single active conversation for this milestone. There is no conversation-selection surface
@@ -65,4 +65,44 @@ export function submitMessage(text: string, deps: ComposerSendDeps): boolean {
   })
 
   return true
+}
+
+/**
+ * Whether the composer may send, and — when it may not — a short caption naming why (#31). Both
+ * facts derive from the single `ConnectionStatus` read, so there is one source of truth.
+ */
+export interface ComposerAvailability {
+  canSend: boolean // true only when the session is connected
+  hint: string | null // short "why unavailable" caption; null iff canSend
+}
+
+/** Compile-time exhaustiveness guard: a new ConnectionStatus arm without a case is a type error. */
+function assertNever(status: never): never {
+  throw new Error(`Unhandled connection status: ${JSON.stringify(status)}`)
+}
+
+/**
+ * Total mapping over ConnectionStatus's four arms. Pure — no store, no React, no I/O — so the
+ * send/no-send decision (AC1) and the "why" copy (AC2) are unit-testable without a DOM, the same
+ * reason submitMessage is pure. This is a UX affordance, not a safety net: the deterministic
+ * no-throw safety on a disconnected send already lives in #65's daemonConnection.send() and #66's
+ * guarded sendCommand — this only governs what the composer shows.
+ *
+ * The `error` hint is a short generic label; it deliberately does NOT surface
+ * `status.error.message`. That ConnectionError.message is the connection banner's surface, out of
+ * scope for #31 — leaking it here would duplicate the banner's job.
+ */
+export function composerAvailability(status: ConnectionStatus): ComposerAvailability {
+  switch (status.type) {
+    case 'connected':
+      return { canSend: true, hint: null }
+    case 'connecting':
+      return { canSend: false, hint: 'Connecting…' }
+    case 'disconnected':
+      return { canSend: false, hint: 'Not connected' }
+    case 'error':
+      return { canSend: false, hint: 'Connection error' }
+    default:
+      return assertNever(status)
+  }
 }

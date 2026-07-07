@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { submitMessage, MILESTONE_CONVERSATION_ID } from './composerSend'
+import { submitMessage, composerAvailability, MILESTONE_CONVERSATION_ID } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { SessionAction } from '../../store/sessionStore'
+import type { HelloAckPayload } from '@shared/wire/types'
 
 // submitMessage is a pure, React-free function (the pairingState precedent): its three effects
 // are injected, so it is exercised here with plain spies and a deterministic id stub — no store,
@@ -106,5 +107,58 @@ describe('submitMessage', () => {
     // The optimistic echo is appended regardless of send outcome.
     expect(dispatch).toHaveBeenCalledTimes(1)
     errorSpy.mockRestore()
+  })
+})
+
+// composerAvailability is the pure gate (#31): a total mapping over ConnectionStatus's four arms
+// governing whether the composer's send control accepts input, and — when it doesn't — a short
+// caption saying why. React-free, so the send/no-send decision (AC1) and the "why" copy (AC2) are
+// unit-testable without a DOM, the same reason submitMessage is pure.
+describe('composerAvailability', () => {
+  const ack: HelloAckPayload = {
+    protocol_version: '1',
+    server_id: 's',
+    conn_id: 'c',
+    capabilities: []
+  }
+
+  it('connected → can send, no hint', () => {
+    expect(composerAvailability({ type: 'connected', ack })).toEqual({ canSend: true, hint: null })
+  })
+
+  it('connecting → cannot send, with a non-empty hint', () => {
+    const { canSend, hint } = composerAvailability({ type: 'connecting' })
+    expect(canSend).toBe(false)
+    expect(hint).toBeTruthy()
+  })
+
+  it('disconnected → cannot send, with a non-empty hint', () => {
+    const { canSend, hint } = composerAvailability({ type: 'disconnected' })
+    expect(canSend).toBe(false)
+    expect(hint).toBeTruthy()
+  })
+
+  it('error → cannot send, with a hint that does NOT leak ConnectionError.message', () => {
+    const { canSend, hint } = composerAvailability({
+      type: 'error',
+      error: { code: 'transport', message: 'BANNER-ONLY-TEXT', retryable: true }
+    })
+    expect(canSend).toBe(false)
+    expect(hint).toBeTruthy()
+    // ConnectionError.message is the connection banner's surface, explicitly out of scope for #31.
+    // The composer hint is a short generic label and must not surface the banner's text.
+    expect(hint).not.toContain('BANNER-ONLY-TEXT')
+  })
+
+  it('the three not-connected arms yield distinct hints tied to their status (AC2)', () => {
+    const hints = [
+      composerAvailability({ type: 'connecting' }).hint,
+      composerAvailability({ type: 'disconnected' }).hint,
+      composerAvailability({
+        type: 'error',
+        error: { code: 'transport', message: 'x', retryable: false }
+      }).hint
+    ]
+    expect(new Set(hints).size).toBe(3)
   })
 })

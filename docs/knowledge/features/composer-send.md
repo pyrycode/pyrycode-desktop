@@ -74,11 +74,43 @@ A **distinct name** from `messageReceived` documents intent (a local echo, not a
 - `handleSubmit` builds `deps` **inside the handler body** (so `window.pyry` is dereferenced only at interaction time, never during render — this keeps the server-rendered container smoke test crash-free), calls `submitMessage(text, { sendCommand: window.pyry.sendCommand, dispatch, newMessageId: () => crypto.randomUUID() })`, and `setText('')` when it returns `true`.
 - `onKeyDown`: **Enter** (no Shift) → `preventDefault()` + `handleSubmit()`; **Shift+Enter** → default (newline).
 
+### 4. Connection-status gate — `composerAvailability` ([#31](../codebase/31.md))
+
+The send control is gated on the live connection status: while the session is not `connected`, sending is disabled and a lightweight inline caption says *why*, instead of silently swallowing a keystroke that goes nowhere. This is a **UX affordance, not a safety net** — the deterministic no-throw safety on a disconnected send already lives in [#65](../codebase/65.md)'s `daemonConnection.send()` and #66's guarded `sendCommand`; no second guard is added.
+
+The decision lives in `composerSend.ts` as a pure, React-free predicate — a *total* mapping over the store's `ConnectionStatus` (from [session store](session-store.md)):
+
+```ts
+export interface ComposerAvailability {
+  canSend: boolean      // true only when status.type === 'connected'
+  hint: string | null   // short "why unavailable" caption; null iff canSend
+}
+export function composerAvailability(status: ConnectionStatus): ComposerAvailability
+```
+
+| `status.type` | `canSend` | `hint` |
+|---|---|---|
+| `connected` | `true` | `null` |
+| `connecting` | `false` | `'Connecting…'` |
+| `disconnected` | `false` | `'Not connected'` |
+| `error` | `false` | `'Connection error'` |
+
+Both facts derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error. The `error` hint is a short generic label and deliberately does **not** surface `status.error.message` — that `ConnectionError.message` ("for the banner") is a distinct surface, out of scope.
+
+In the container, `Composer` selects `status`, derives `{ canSend, hint }`, and:
+
+- **Guards `handleSubmit`** with `if (!canSend) return` at the top — the authoritative gate, blocking the **Enter** path (`handleKeyDown → handleSubmit`) as well as the button. `submitMessage` is never reached while not connected, so no `sendCommand` and no optimistic `dispatch` fire; the input is **not** cleared.
+- **Natively disables** the send `<button>` with `disabled={!canSend}` (a disabled button fires no `onClick` — the visible affordance, platform-blocked in addition to the handler guard).
+- **Renders the hint** above the input/button row as `<p className="composer__hint" role="status">` — a polite live region, so a screen reader announces the status change without stealing focus. On connect, `hint` is `null`, the `<p>` unmounts, and the button re-enables with no reload.
+
+The `<textarea>` stays **enabled** while not connected — the user may draft while `connecting`; only the send control is gated. Selecting `status` re-renders `Composer` when it changes, so the re-enable is reactive; the thread (which selects only `selectMessages`) doesn't re-render on status change.
+
 ## Data flow
 
 ```
 type in textarea ─▶ setText (local useState)
 click Send / Enter ─▶ handleSubmit
+                        ├─ !canSend (status ≠ connected)? ─▶ return, no effects (#31 gate)
                         └─▶ submitMessage(text, deps)
                               ├─ trim; empty? ─▶ return false (no effects)
                               ├─ id = newMessageId()          (crypto.randomUUID)
@@ -91,6 +123,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 
 ## Edge cases and limitations
 
+- **Not connected** ([#31](../codebase/31.md)) — while `selectStatus` is not `connected`, the send button is `disabled`, the `handleSubmit` early-return inerts the Enter path, and a `role="status"` caption names why (`Connecting…` / `Not connected` / `Connection error`). No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. The `error` hint never surfaces `ConnectionError.message` (banner's surface, out of scope).
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone.
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
@@ -106,3 +139,4 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the pure-logic / thin-container split (`pairingState.ts`) `composerSend.ts` mirrors.
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) · [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#66 codebase notes](../codebase/66.md) — implementation summary, patterns, lessons.
+- [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control and inline "why" hint.

@@ -13,7 +13,7 @@ Gives the background process **one factory** — `createNoiseSession(config): Pr
 - **`sendMessage(plaintext)`** AEAD-seals one post-handshake plaintext to `sendFrame`.
 - **`close()`** frees the wasm handshake + cipher state and leaves every entry point inert.
 
-It is a **pure crypto unit**: keys are **injected** (raw 32-byte X25519 static private + remote static public), it sources nothing from storage and constructs no envelope. The `hello`/`helloAck` are **opaque bytes** — building them (device-token envelope) is the [hello exchange](hello-exchange.md) layer's job ([#10](../codebase/10.md)); sourcing the keypair is [#43](../codebase/43.md)'s. The suite `NOISE_PROTOCOL` is reused **verbatim** from `src/shared/wire/types.ts` — a mismatch fails the handshake **silently** ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md)), so it is never retyped.
+It is a **pure crypto unit**: keys are **injected** (raw 32-byte X25519 static private + remote static public), it sources nothing from storage and constructs no envelope. Since [#108](../codebase/108.md) it does one narrow **type-peek** in `transport` state — it decodes the already-decrypted plaintext just far enough to read the envelope `type` and recognize the daemon's `rekey_request` control frame (see [Rekey-request recognition](#rekey-request-recognition-108)) — but it still **constructs** no envelope and **interprets** no payload; app-message decoding stays downstream in [`parseInboundMessage`](inbound-message-decode.md). The `hello`/`helloAck` are **opaque bytes** — building them (device-token envelope) is the [hello exchange](hello-exchange.md) layer's job ([#10](../codebase/10.md)); sourcing the keypair is [#43](../codebase/43.md)'s. The suite `NOISE_PROTOCOL` is reused **verbatim** from `src/shared/wire/types.ts` — a mismatch fails the handshake **silently** ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md)), so it is never retyped.
 
 ## How it works
 
@@ -47,6 +47,7 @@ export type NoiseSessionErrorReason =
 export type NoiseSessionEvent =
   | { type: 'handshake-complete'; helloAck: Uint8Array }  // peer early-data recovered from msg 2
   | { type: 'message'; plaintext: Uint8Array }            // decrypted post-handshake frame
+  | { type: 'rekey-requested' }                           // daemon rekey_request recognized (#108); bare signal, no bytes
   | { type: 'error'; reason: NoiseSessionErrorReason }    // static reason only — never bytes
 
 export interface NoiseSession {
@@ -85,11 +86,30 @@ One session walks `idle → awaiting-handshake-reply → transport`, or short-ci
 |---|---|---|---|
 | `idle` | write msg 1 (`hello`) → `awaiting-handshake-reply` | `unexpected-frame` (a frame before start) | inert |
 | `awaiting-handshake-reply` | inert | read msg 2 → recover `helloAck` → `Split()` → `transport` + emit `handshake-complete`; a throw → `handshake-read-failed`, close | inert |
-| `transport` | inert | AEAD-decrypt → emit `message`; a throw → `transport-decrypt-failed` (cipher survives; non-terminal) | AEAD-seal → `sendFrame` |
+| `transport` | inert | AEAD-decrypt → recognize (#108): a `rekey_request` control envelope → emit `rekey-requested` and divert; **everything else** → emit `message` (identical bytes); a decrypt throw → `transport-decrypt-failed` (cipher survives; non-terminal) | AEAD-seal → `sendFrame` |
 | `closed` | inert | inert | inert |
 
 - **`Split()` no-swap.** `noise-c` returns `[send, recv]` **already role-adjusted for both roles** — the JS side does no `(cs1, cs2)` swap; only a raw `flynn/noise` peer needs it, which the daemon already performs (proven byte-for-byte in [#30](../codebase/30.md)). Crossing the two would sail through the handshake and only detonate on the first sealed frame — so the round-trip, not "no error thrown", is the structural pin.
 - **Empty prologue.** A zero-length `prologue` is passed as `null` to `Initialize` (noise-c treats zero-length as "no prologue set"), matching the daemon's empty-prologue handshake exactly.
+
+### Rekey-request recognition (#108)
+
+In v2 the **daemon is the rekey initiator**: on a ~1-hour per-session timer it AEAD-seals a `{type:"rekey_request"}` control envelope and sends it as a transport frame to nudge the client to re-handshake ([#108](../codebase/108.md), daemon twin pyrycode #454). In `transport` state the session now recognizes that trigger, between the successful decrypt and the `message` emit:
+
+```ts
+function isRekeyRequest(plaintext: Uint8Array): boolean {
+  try { return decodeEnvelope(plaintext).type === REKEY_REQUEST_TYPE } catch { return false }
+}
+// in onFrame's transport branch, after plaintext = recvCipher.DecryptWithAd(∅, frame):
+if (isRekeyRequest(plaintext)) { onEvent({ type: 'rekey-requested' }); return }
+onEvent({ type: 'message', plaintext })  // unchanged
+```
+
+- **Purely additive — it diverts, it never re-decodes an app message.** Only a positively-classified `rekey_request` is pulled out (as a bare `rekey-requested` signal); everything else — a well-formed app message, an unmodeled control type, non-`Envelope` bytes, or a peek that throws — falls through to the **unchanged** `message` path carrying the **identical** decrypted bytes. [`parseInboundMessage`](inbound-message-decode.md) stays the **sole** app-message decode/narrow authority; recognition is not a second decode gate for app messages.
+- **Fail-closed and total.** `isRekeyRequest` reuses the vetted, fail-closed [`decodeEnvelope`](wire-codec.md) and swallows its `WireDecodeError` to `false`, so **any** decode/peek failure reproduces today's behavior — a peek failure is never a rejection, never terminates the session, and never mutates cipher state. It reads only `.type`; the control payload (`{reason}`) is discarded, never interpreted.
+- **`REKEY_REQUEST_TYPE = 'rekey_request'` is module-private and deliberately NOT in the shared `EnvelopeType` union** (`types.ts` stays untouched — no wire-type drift). `Envelope.type` is `EnvelopeType | string`, so the comparison type-checks without it. This mirrors the daemon's own asymmetry: pyrycode #454 added `TypeRekeyRequest` as a constant but kept it out of its app-dispatch `v1TypeSet` — a control type, not an app-dispatch type.
+- **Cipher state is safe on both paths.** `DecryptWithAd` advances the receive nonce **before** the recognizer runs, and the recognizer holds no cipher reference — so corruption from recognition is structurally impossible.
+- **Recognition only — no action.** The session emits the bare trigger and stops there; the re-handshake + atomic cipher swap that consumes it is the blocked follow-on [#109](https://github.com/pyrycode/pyrycode-desktop/issues/109). The [noise relay driver](noise-relay-driver.md) currently **drops** the trigger (a build-integrity guard), so it does not yet reach any consumer.
 
 ### Data flow
 
@@ -127,7 +147,7 @@ Ticket carries `security-sensitive`; the architect's security review verdict is 
 
 - **Not wired to the relay yet.** The session factory has **no production caller** — `sendFrame`/`onFrame` are injected, and the relay-socket wiring (session ↔ [`createRelayConnection`](relay-connection.md) ↔ #5 codec) is a sibling split ticket. Only the tests and the keygen fold-in touch it, so the rename cascaded to zero production consumers.
 - **wasm bundling for the packaged app is unproven.** Both spikes load the wasm only under Node/vitest; electron-vite **bundling** of the base64-embedded wasm asset for the packaged app is an open question flagged forward from #29/#30, **out of scope** here.
-- **No re-key** — the in-session rekey responder is unbuilt on desktop, deferred to [#76](https://github.com/pyrycode/pyrycode-desktop/issues/76). The session handles one handshake + a transport phase, then `close()`. The close-during-handshake safety invariant is now pinned by [#33](../codebase/33.md) (test-only, no production change — the guards above already enforce it).
+- **Re-key: recognition landed, action not yet.** The daemon's in-session `rekey_request` trigger is now **recognized** ([#108](../codebase/108.md), split from [#76](https://github.com/pyrycode/pyrycode-desktop/issues/76)) and surfaced as the bare `rekey-requested` event — but the session still performs exactly **one** handshake. The **re-handshake + atomic cipher swap** that acts on the trigger is the blocked follow-on [#109](https://github.com/pyrycode/pyrycode-desktop/issues/109); until it lands the session handles one handshake + a transport phase, then `close()`, and the driver drops the trigger. The close-during-handshake safety invariant is pinned by [#33](../codebase/33.md) (test-only, no production change — the guards above already enforce it).
 - **`hello`/`helloAck` envelope semantics are opaque** — construction/parsing is the [hello exchange](hello-exchange.md) layer ([#10](../codebase/10.md)).
 - **A throwing `sendFrame`/`onEvent` is a caller bug, not defended** — trusted internal sinks, per the relay-connection discipline.
 - **Wrong peer-static surfaces at the *responder*, not the initiator.** With a wrong `remoteStaticPublicKey`, the encrypted static in msg 1 MAC-fails on the daemon side; the initiator simply never receives msg 2 (no `handshake-complete`) rather than emitting `handshake-read-failed` (a #30 finding — a live key mismatch shows up as a `4426` close, not a local error).
@@ -135,6 +155,8 @@ Ticket carries `security-sensitive`; the architect's security review verdict is 
 ## Related
 
 - [#7 codebase notes](../codebase/7.md) — implementation summary, patterns, lessons.
+- [#108 codebase notes](../codebase/108.md) — the `rekey_request` recognition seam added to `transport` state (the type-peek, the module-private constant, the driver build-integrity edit); daemon twin pyrycode #454.
+- [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — the downstream `parseInboundMessage` whose `default → null` branch silently dropped `rekey_request` before #108; stays the sole app-message decode authority.
 - [#29 codebase notes](../codebase/29.md) — the library-selection spike that chose `noise-c.wasm`, established the harness contract, and flagged the async-load NIT this ticket closes.
 - [#30 codebase notes](../codebase/30.md) — the Go↔JS interop spike (verdict **RECOMMEND**); the byte-accurate interop invariants and the `Split()` asymmetry this session inherits.
 - [Device static keypair](device-keypair.md) / [#43](../codebase/43.md) — the injected identity `s`, whose generator now shares this ticket's `noiseLib` loader.

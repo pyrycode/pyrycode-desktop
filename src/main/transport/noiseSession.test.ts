@@ -292,6 +292,116 @@ describe('mode 2 — JS<->JS IK round-trip with early-data + post-handshake AEAD
   })
 })
 
+describe('rekey_request recognition — daemon in-session rekey trigger (#108)', () => {
+  // Mirrors the mode-2 pair() fixture (the file's per-block-owns-its-setup idiom): the production
+  // session under test wired to the test-only responder, each with its own event collector. The
+  // responder AEAD-seals a real frame via sendMessage; assertions read the initiator's
+  // NoiseSessionEvent collector (AC5) — recognition is proven at the session's own onEvent.
+  async function pair(): Promise<{
+    initiator: NoiseSession
+    responder: NoiseResponder
+    init: ReturnType<typeof collector<NoiseSessionEvent>>
+    resp: ReturnType<typeof collector<NoiseResponderEvent>>
+  }> {
+    const lib = await loadNoiseLib()
+    const curve = lib.constants.NOISE_DH_CURVE25519
+    const [initPriv] = lib.CreateKeyPair(curve)
+    const [respPriv, respPub] = lib.CreateKeyPair(curve)
+    const init = collector<NoiseSessionEvent>()
+    const resp = collector<NoiseResponderEvent>()
+    let responder: NoiseResponder
+    const initiator = await createNoiseSession({
+      staticPrivateKey: initPriv,
+      remoteStaticPublicKey: respPub,
+      prologue: new Uint8Array(0),
+      hello: enc(HELLO),
+      sendFrame: (f) => responder.onFrame(f),
+      onEvent: init.onEvent
+    })
+    responder = await createNoiseResponder({
+      staticPrivateKey: respPriv,
+      prologue: new Uint8Array(0),
+      helloAck: enc(HELLO_ACK),
+      sendFrame: (f) => initiator.onFrame(f),
+      onEvent: resp.onEvent
+    })
+    handles.push(initiator, responder)
+    return { initiator, responder, init, resp }
+  }
+
+  const plaintexts = (events: NoiseSessionEvent[]): Uint8Array[] =>
+    events
+      .filter((e) => e.type === 'message')
+      .map((e) => (e as { plaintext: Uint8Array }).plaintext)
+
+  it('recognizes a sealed rekey_request control envelope as the trigger, not a message (AC1)', async () => {
+    const { initiator, responder, init } = await pair()
+    initiator.start()
+    expect(init.events.some((e) => e.type === 'handshake-complete')).toBe(true)
+
+    // A full control Envelope, exactly the daemon's shape (protocol-mobile.md § Re-key).
+    responder.sendMessage(
+      enc({ id: 42, type: 'rekey_request', ts: '2026-07-07T12:00:00Z', payload: { reason: 'scheduled' } })
+    )
+
+    expect(init.events.filter((e) => e.type === 'rekey-requested')).toHaveLength(1)
+    expect(init.events.some((e) => e.type === 'message')).toBe(false)
+    expect(initErrors(init.events)).toHaveLength(0)
+  })
+
+  it('leaves an ordinary app-message frame surfacing as message with identical plaintext (AC2)', async () => {
+    const { initiator, responder, init } = await pair()
+    initiator.start()
+
+    const sealed = enc({
+      id: 7,
+      type: 'message',
+      ts: '2026-07-07T12:00:00Z',
+      payload: { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi' }
+    })
+    responder.sendMessage(sealed)
+
+    const got = plaintexts(init.events)
+    expect(got).toHaveLength(1)
+    expect(bytes(got[0])).toEqual(bytes(sealed)) // recognition never transforms/re-narrows the plaintext
+    expect(init.events.some((e) => e.type === 'rekey-requested')).toBe(false)
+  })
+
+  it('falls through unmodeled-control + non-Envelope plaintext to message without corruption or crash (AC3)', async () => {
+    const { initiator, responder, init } = await pair()
+    initiator.start()
+
+    // (a) a well-formed Envelope whose type is a control type this module does not model.
+    const control = enc({ id: 1, type: 'some_unknown_control', ts: '2026-07-07T12:00:00Z', payload: {} })
+    expect(() => responder.sendMessage(control)).not.toThrow()
+
+    // (b) bytes that do not decode as an Envelope at all (malformed JSON) — the recognizer's own
+    // decode failure must reproduce today's behavior, not a new rejection.
+    const garbage = new TextEncoder().encode('not-json{{')
+    expect(() => responder.sendMessage(garbage)).not.toThrow()
+
+    const got = plaintexts(init.events)
+    expect(got).toHaveLength(2)
+    expect(bytes(got[0])).toEqual(bytes(control))
+    expect(bytes(got[1])).toEqual(bytes(garbage))
+    expect(init.events.some((e) => e.type === 'rekey-requested')).toBe(false)
+    expect(initErrors(init.events)).toHaveLength(0)
+
+    // Strengthening (no cipher corruption): after two fall-throughs the recv cipher advanced
+    // correctly, so a following ordinary app message still surfaces intact.
+    const after = enc({
+      id: 2,
+      type: 'message',
+      ts: '2026-07-07T12:00:01Z',
+      payload: { conversation_id: 'c1', message_id: 'm2', role: 'assistant', text: 'ok' }
+    })
+    responder.sendMessage(after)
+    const all = plaintexts(init.events)
+    expect(all).toHaveLength(3)
+    expect(bytes(all[2])).toEqual(bytes(after))
+  })
+})
+
 describe('harness contract, lifecycle, and error classification', () => {
   async function loneInitiator(sendFrame: (f: Uint8Array) => void): Promise<{
     initiator: NoiseSession

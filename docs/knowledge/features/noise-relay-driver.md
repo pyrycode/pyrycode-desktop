@@ -145,6 +145,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **`sendMessage` before handshake-complete is a silent no-op** — the driver is inert with no session, and the session is itself inert before transport state (matches the session contract). Frames sent during a reconnect gap are not queued; v2 re-handshakes and the layer above re-sends.
 - **A throwing sink `onEvent` is a caller bug, not defended** — a trusted internal sink, per the #7/#22 `onEvent` discipline.
 - **`MAX_PENDING_FRAMES` is set to `8`** — the architect's proposed value. The happy path never buffers, so the exact cap only bounds an anomalous/hostile pre-session flood.
+- **The session's `rekey-requested` trigger is dropped here (build-integrity guard, [#108](../codebase/108.md)).** Recognition of the daemon's `rekey_request` control frame added a bare `rekey-requested` variant to [`NoiseSessionEvent`](noise-session.md#rekey-request-recognition-108), which broke the `NoiseSessionEvent ⊆ RelaySessionEvent` subset `route` relies on; a two-line `if (event.type === 'rekey-requested') return` **before** `emit` restores it. The trigger is deliberately **not** added to `RelaySessionEvent` — for recognition-only #108 the driver drops it; the re-handshake action and any upward propagation are the blocked follow-on [#109](https://github.com/pyrycode/pyrycode-desktop/issues/109).
 
 ## Related
 

@@ -54,6 +54,29 @@ export type PairingRejectReason =
  */
 export const RELAY_ALLOWLIST: ReadonlySet<string> = new Set(['pyrycode-relay.pyryco.de'])
 
+/**
+ * The relay's scheme + host decision, factored out as an injectable seam (#97). It owns EXACTLY the
+ * two checks that a test/dev affordance may relax — scheme and host — and nothing else: on failure it
+ * returns one of those two reject reasons; the `relay-not-url` and `relay-has-credentials` checks stay
+ * in `parsePairingPayload` and wrap the policy call, so they apply on every path. The reject arm is
+ * type-constrained to the two scheme/host reasons, so a policy cannot invent a new reason or leak a
+ * field value. Default = `productionRelayPolicy` (below); the dev relaxation lives in `relayPolicy.ts`.
+ */
+export type RelayPolicy = (
+  relay: URL
+) => { ok: true } | { ok: false; reason: 'relay-scheme-not-wss' | 'relay-host-not-allowed' }
+
+/**
+ * The default policy — byte-identical to the inline scheme→host checks this module has always run:
+ * scheme must be exactly `wss:`, then the host must be in `RELAY_ALLOWLIST`. Scheme-first, so a
+ * non-`wss:` relay reports `relay-scheme-not-wss` regardless of host, exactly as before.
+ */
+export const productionRelayPolicy: RelayPolicy = (relay) => {
+  if (relay.protocol !== 'wss:') return { ok: false, reason: 'relay-scheme-not-wss' }
+  if (!RELAY_ALLOWLIST.has(relay.hostname)) return { ok: false, reason: 'relay-host-not-allowed' }
+  return { ok: true }
+}
+
 /** The four QrPayload field names, re-picked explicitly on success to drop any stray JSON keys. */
 const FIELDS = ['server', 'relay', 'token', 'server_static_pubkey'] as const
 
@@ -69,8 +92,16 @@ const BASE64URL_ALPHABET = /^[A-Za-z0-9_-]+$/
  * Parse + validate an untrusted pasted pairing payload. Pure, synchronous, total, throw-free: every
  * failure is an `ok: false` arm with a value-free reason, every success a fully-validated QrPayload.
  * The pipeline is linear — the first failing stage returns and nothing downstream runs.
+ *
+ * The relay's scheme + host decision is delegated to the injected `relayPolicy`, defaulting to
+ * `productionRelayPolicy` (#97). The default keeps every existing caller and test byte-identical; the
+ * composition root swaps in the dev affordance only when unpackaged AND opted in. The URL-parse and
+ * embedded-credentials checks are NOT part of the policy — they run here, on both paths.
  */
-export function parsePairingPayload(pasted: string): ParsePairingResult {
+export function parsePairingPayload(
+  pasted: string,
+  relayPolicy: RelayPolicy = productionRelayPolicy
+): ParsePairingResult {
   // 1. Normalize + strict base64url alphabet. A pasted string commonly carries surrounding whitespace
   //    or a trailing newline; none of it is in the base64url alphabet, so trimming can never drop
   //    payload bytes. Then require a non-empty, strictly-in-alphabet string.
@@ -115,15 +146,15 @@ export function parsePairingPayload(pasted: string): ParsePairingResult {
   } catch {
     return reject('relay-not-url')
   }
-  if (relayUrl.protocol !== 'wss:') {
-    return reject('relay-scheme-not-wss')
+  // Scheme + host verdict via the injected policy (default = production `wss:` + allowlist). The
+  // production policy is scheme-first then exact-host, identical to the inline checks it replaced;
+  // URL.hostname is lowercased and userinfo-stripped, so a look-alike host like
+  // `pyrycode-relay.pyryco.de.evil.example` correctly misses — regardless of any `user@` prefix.
+  const verdict = relayPolicy(relayUrl)
+  if (!verdict.ok) {
+    return reject(verdict.reason)
   }
-  // Exact host match first. URL.hostname is lowercased and userinfo-stripped, so a look-alike host
-  // like `pyrycode-relay.pyryco.de.evil.example` correctly misses — regardless of any `user@` prefix.
-  if (!RELAY_ALLOWLIST.has(relayUrl.hostname)) {
-    return reject('relay-host-not-allowed')
-  }
-  // On the now-allowlisted host, reject embedded userinfo — a pasted `wss://user:pass@host/` is
+  // On the now-accepted host, reject embedded userinfo — a pasted `wss://user:pass@host/` is
   // anomalous, and `ws` would forward it as a Basic-auth header. This closes the last path by which a
   // credential could reach the socket on a trusted host; nothing here is ever handed to `ws`.
   if (relayUrl.username !== '' || relayUrl.password !== '') {

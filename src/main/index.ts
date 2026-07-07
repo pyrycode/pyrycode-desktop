@@ -8,6 +8,7 @@ import { fileSecretPersistence } from './fileSecretPersistence'
 import { createPairedServerStore } from './pairedServerStore'
 import { createPairingConfirmation } from './pairingConfirmation'
 import { parsePairingPayload } from './pairingPayload'
+import { selectRelayPolicy } from './relayPolicy'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
@@ -144,8 +145,15 @@ app.whenReady().then(() => {
   // sink), so it satisfies onPaired's must-not-throw contract. Registering here is safe: the whole
   // whenReady callback runs to completion in one tick, while an operator-driven pairing invoke
   // (paste + click) arrives many ticks later, after first paint — well after this handler is up.
+  // The relay policy the pairing gate runs (#97). Effectful choice made ONCE, here, false-first on
+  // app.isPackaged: a packaged build never consults the env flag and dials `wss:` + allowlist only,
+  // byte-identical to today. Only when unpackaged AND PYRY_ALLOW_LOOPBACK_RELAY=1 is a loopback `ws://`
+  // relay accepted — the test/dev seam #93 drives at the in-process fake relay. `process.env`
+  // structurally satisfies the `Record<string, string | undefined>` param (no cast). Mirrors the
+  // `app.isPackaged ? … : process.env[…]` renderer-URL idiom above.
+  const relayPolicy = selectRelayPolicy({ isPackaged: app.isPackaged, env: process.env })
   const unregisterPairing = registerPairingHandler(ipcMain, {
-    parse: parsePairingPayload,
+    parse: (pasted) => parsePairingPayload(pasted, relayPolicy),
     confirmation,
     onPaired: () => connection.reconnect()
   })

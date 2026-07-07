@@ -19,7 +19,7 @@ Rejection is an **expected, routine outcome** (the operator can paste anything),
 
 | File | Role |
 |---|---|
-| `src/main/pairingPayload.ts` | The whole gate: `parsePairingPayload`, the `ParsePairingResult` / `PairingRejectReason` types, and the `RELAY_ALLOWLIST` constant. Imports **only the type** of `QrPayload` (relative path — the `@shared` alias is not wired for `src/main`). No `electron`/`fs`/socket import. ~148 LOC. |
+| `src/main/pairingPayload.ts` | The whole gate: `parsePairingPayload`, the `ParsePairingResult` / `PairingRejectReason` types, the `RELAY_ALLOWLIST` constant, and (since #97) the injected `RelayPolicy` seam + `productionRelayPolicy` default. Imports **only the type** of `QrPayload` (relative path — the `@shared` alias is not wired for `src/main`). No `electron`/`fs`/socket import. ~179 LOC. |
 
 ### Public surface
 
@@ -46,11 +46,25 @@ export type PairingRejectReason =
 /** The single source of truth for allowed relay hosts (AC4). Never payload-derived. */
 export const RELAY_ALLOWLIST: ReadonlySet<string>
 
-/** Parse + validate an untrusted pasted pairing payload. Pure, total, throw-free. */
-export function parsePairingPayload(pasted: string): ParsePairingResult
+/** The relay's scheme + host decision, factored out as an injectable seam (#97). Owns EXACTLY the
+ *  two checks a test/dev affordance may relax; its reject arm is type-constrained to those two
+ *  reasons, so a policy can neither invent a new reason nor leak a field value. */
+export type RelayPolicy = (relay: URL) =>
+  | { ok: true }
+  | { ok: false; reason: 'relay-scheme-not-wss' | 'relay-host-not-allowed' }
+
+/** The default — byte-identical to the inline scheme→host checks this gate has always run. */
+export const productionRelayPolicy: RelayPolicy
+
+/** Parse + validate an untrusted pasted pairing payload. Pure, total, throw-free. The relay's
+ *  scheme + host decision is delegated to the injected policy (default = production strictness). */
+export function parsePairingPayload(
+  pasted: string,
+  relayPolicy?: RelayPolicy
+): ParsePairingResult
 ```
 
-`QrPayload` is **imported, not re-declared** — a wire-contract change flows through as a type change, never a silent divergence (CLAUDE.md "don't drift the wire types"; the same guard [`PairedServerRecord = QrPayload`](paired-server-store.md) uses).
+The optional `relayPolicy` param defaults to `productionRelayPolicy`, so every existing caller and test that calls `parsePairingPayload(pasted)` is **byte-identical**; the composition root swaps in the dev affordance only when unpackaged AND opted in (see [loopback relay dev affordance](loopback-relay-affordance.md), #97). `QrPayload` is **imported, not re-declared** — a wire-contract change flows through as a type change, never a silent divergence (CLAUDE.md "don't drift the wire types"; the same guard [`PairedServerRecord = QrPayload`](paired-server-store.md) uses).
 
 ### Wire encoding (the mobile/daemon contract)
 
@@ -71,10 +85,11 @@ The pasted string is **exactly what the daemon's `pair.Encode` emits** — there
 | 3 | `typeof === 'object' && !== null && !Array.isArray` | `not-object` |
 | 4 | each of the four fields is a **non-empty** string | `malformed-field` |
 | 5a | `new URL(relay)` in a try/catch | `relay-not-url` |
-| 5b | `url.protocol === 'wss:'` | `relay-scheme-not-wss` |
-| 5c | `RELAY_ALLOWLIST.has(url.hostname)` | `relay-host-not-allowed` |
+| 5b+c | `relayPolicy(url)` verdict — scheme + host, delegated to the injected policy | `relay-scheme-not-wss` / `relay-host-not-allowed` |
 | 5d | `url.username === '' && url.password === ''` | `relay-has-credentials` |
 | 6 | success — **pick exactly the four fields**, dropping stray keys | — |
+
+Since #97, stages 5b/5c are one `const verdict = relayPolicy(relayUrl)` call — the scheme + host decision is the **only** thing the injected policy owns. The default `productionRelayPolicy` runs scheme-first then exact-host, identical to the inline checks it replaced. Stages 5a (`relay-not-url`) and 5d (`relay-has-credentials`) are **not** part of the policy — they wrap it and apply on **every** path, so a dev-path loopback relay with embedded userinfo is still rejected. See [loopback relay dev affordance](loopback-relay-affordance.md).
 
 Two of these stages restore a strictness the JS platform would otherwise lose or hand us for free:
 
@@ -94,6 +109,8 @@ export const RELAY_ALLOWLIST: ReadonlySet<string> = new Set(['pyrycode-relay.pyr
 ### Relay-check ordering (scheme → host → credentials)
 
 The shipped order is **scheme, then host allowlist, then embedded credentials** — the credentials check runs *last*, on an already-allowlisted host. This is a deliberate, security-equivalent resolution of a contradiction in the spec's stage table (which listed credentials before host); see [§ Lessons learned in the ticket note](../codebase/52.md#lessons-learned). Either order rejects `wss://user:pass@allowed-host/` and hands nothing to `ws`; running host-first makes the `relay-has-credentials` branch mean exactly what its name says — "userinfo present **on the otherwise-trusted host**."
+
+Since #97 the scheme + host pair is delegated to the injected `RelayPolicy` (default = the `productionRelayPolicy` scheme→host order above); the credentials check still runs **after** the policy, on the now-*accepted* host — so the "credentials-last-on-a-trusted-host" semantics hold on the dev path too, where a loopback `ws://` host is accepted but `ws://user:pass@127.0.0.1/` is still `relay-has-credentials`.
 
 ## Deliberately not validated here
 
@@ -121,7 +138,7 @@ The gate owns two desktop threats; the architect security review verdict is **PA
 - **Truncated JSON / valid object + trailing garbage** — `not-json`.
 - **JSON `null` / number / string / array** — `not-object`.
 - **Missing / non-string / empty field** (any of the four) — `malformed-field`; never a partial or defaulted record.
-- **Relay `ws:` / `https:` / `pyry:`** — `relay-scheme-not-wss`. Insecure-scheme opt-in (the binary side's test-only `PYRY_ALLOW_INSECURE_RELAY`) is deliberately **not** mirrored — production-strict.
+- **Relay `ws:` / `https:` / `pyry:`** — `relay-scheme-not-wss` under the production policy. A **loopback-only** `ws:` relaxation exists as a test/dev affordance ([#97](loopback-relay-affordance.md)), gated on `!app.isPackaged` AND `PYRY_ALLOW_LOOPBACK_RELAY=1` AND host exactly `127.0.0.1`; a packaged build is byte-identical to today. This is narrower than the binary side's arbitrary-host `PYRY_ALLOW_INSECURE_RELAY` — the production policy stays strict and is the fail-closed default.
 - **Relay embedded credentials** (`wss://user:pass@allowed-host/`) — `relay-has-credentials`, even on the allowlisted host, so no userinfo ever reaches `ws` as a Basic-auth header.
 - **Stray keys** — dropped; the success `payload` carries exactly the four fields.
 - **Port not constrained** — the check matches `URL.hostname` per the AC's "host" and does not constrain the port (the relay serves 443; a payload with the allowed host but a dead port simply fails to connect downstream). A future non-default-port deployment matches `URL.host` or widens the entry — a one-line change.
@@ -131,6 +148,7 @@ The gate owns two desktop threats; the architect security review verdict is **PA
 ## Related
 
 - [Paired-server store](paired-server-store.md) / [#44](../codebase/44.md) — the downstream consumer; #53 takes this gate's validated `QrPayload` and calls `store.save(record)`. The store defers relay-URL / token validity to *this* gate.
+- [Loopback relay dev affordance](loopback-relay-affordance.md) / [#97](../codebase/97.md) — injects the `RelayPolicy` seam this gate now delegates scheme+host to; relaxes the policy to a loopback `ws://127.0.0.1` relay on the test/dev path only, inert in packaged builds.
 - [Relay connection](relay-connection.md) / [#21](../codebase/21.md) — takes the relay URL **verbatim**; this gate is the only place it is checked first.
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — the ported wire types, including the `QrPayload` this gate reuses.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model (token/keys never reach the renderer; mirror mobile) and why this lives in `src/main`.

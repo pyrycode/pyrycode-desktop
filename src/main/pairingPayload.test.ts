@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { QrPayload } from '../shared/wire/types'
-import { parsePairingPayload, RELAY_ALLOWLIST, type ParsePairingResult } from './pairingPayload'
+import {
+  parsePairingPayload,
+  RELAY_ALLOWLIST,
+  type ParsePairingResult,
+  type RelayPolicy
+} from './pairingPayload'
 
 // Pure function — no fake, no keychain, no filesystem, no network (mirrors pairedServerStore.test.ts's
 // AC5 posture, minus the injected seam this module doesn't have). The paste is untrusted text, so the
@@ -145,6 +150,47 @@ describe('parsePairingPayload', () => {
     expect(RELAY_ALLOWLIST.size).toBe(1)
   })
 
+  // --- The injected relay policy (the #97 seam) ---
+  // The scheme+host decision becomes a RelayPolicy injected into the 2nd param, defaulting to
+  // production strictness. These cases prove the seam without importing the dev policy: the
+  // URL-parse and credentials checks stay in parsePairingPayload and apply under ANY policy.
+
+  it('defaults to the production policy — a loopback ws:// relay is rejected with no 2nd arg (#97 AC4a)', () => {
+    const res = parsePairingPayload(encode({ ...VALID, relay: 'ws://127.0.0.1:5555/v1/client' }))
+    expect(res).toEqual({ ok: false, reason: 'relay-scheme-not-wss' })
+  })
+
+  it('honors an injected accepting policy — a loopback ws:// relay parses into the four fields', () => {
+    const relay = 'ws://127.0.0.1:5555/v1/client'
+    const acceptAll: RelayPolicy = () => ({ ok: true })
+    expect(parsePairingPayload(encode({ ...VALID, relay }), acceptAll)).toEqual({
+      ok: true,
+      payload: { ...VALID, relay }
+    })
+  })
+
+  it('honors an injected rejecting policy — surfaces the policy-chosen scheme/host reason', () => {
+    const rejectHost: RelayPolicy = () => ({ ok: false, reason: 'relay-host-not-allowed' })
+    expect(
+      parsePairingPayload(encode({ ...VALID, relay: 'wss://pyrycode-relay.pyryco.de/' }), rejectHost)
+    ).toEqual({ ok: false, reason: 'relay-host-not-allowed' })
+  })
+
+  it('applies the URL-parse check before any policy — a non-URL relay is rejected under accept-all', () => {
+    const acceptAll: RelayPolicy = () => ({ ok: true })
+    expect(parsePairingPayload(encode({ ...VALID, relay: 'not a url' }), acceptAll)).toEqual({
+      ok: false,
+      reason: 'relay-not-url'
+    })
+  })
+
+  it('applies the credentials check after an accepting policy — embedded userinfo still rejected (#97 AC2)', () => {
+    const acceptLoopback: RelayPolicy = () => ({ ok: true })
+    expect(
+      parsePairingPayload(encode({ ...VALID, relay: 'ws://u:p@127.0.0.1:5555/' }), acceptLoopback)
+    ).toEqual({ ok: false, reason: 'relay-has-credentials' })
+  })
+
   it('is log-free across the happy path and every reject branch (AC5)', () => {
     const spies = (['log', 'info', 'warn', 'error', 'debug', 'trace'] as const).map((m) =>
       vi.spyOn(console, m).mockImplementation(() => {})
@@ -162,6 +208,8 @@ describe('parsePairingPayload', () => {
         encode({ ...VALID, relay: 'wss://evil.example/' }) // relay-host-not-allowed
       ]
       for (const input of inputs) parsePairingPayload(input)
+      // ...and the injected-policy path is equally log-free (the #97 seam).
+      parsePairingPayload(encode({ ...VALID, relay: 'ws://127.0.0.1:5555/' }), () => ({ ok: true }))
       for (const spy of spies) expect(spy).not.toHaveBeenCalled()
     } finally {
       for (const spy of spies) spy.mockRestore()

@@ -182,6 +182,19 @@ describe('createDaemonConnection', () => {
     expect(config.session.prologue.length).toBe(0)
   })
 
+  it('appends the /v1/client client-leg path to a bare relay base (the real pyry pair payload)', async () => {
+    // pyry pair emits the bare relay base with no path; the relay 404s on anything but /v1/client.
+    // The dial URL must carry the client-leg path, matching the mobile client.
+    const { connection, drivers } = build({
+      load: () => Promise.resolve({ ...RECORD, relay: 'wss://relay.example' })
+    })
+
+    connection.start()
+    await tick()
+
+    expect(drivers[0].config.connection.url).toBe('wss://relay.example/v1/client')
+  })
+
   it('maps handshake-complete to a connected event carrying the parsed HelloAckPayload', async () => {
     const { connection, sink, drivers } = build()
     connection.start()

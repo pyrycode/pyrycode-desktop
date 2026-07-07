@@ -11,6 +11,11 @@
 // the daemon's in-session `rekey_request` control frame (#108) and surface it as a distinct typed
 // trigger — a type-peek only: it still constructs no envelope and interprets no payload, and
 // app-message decoding stays downstream in parseInboundMessage.
+// On that recognized `rekey_request` (#111) the session also ACTS: it runs a FRESH in-session IK
+// handshake as initiator — same injected static keys and NOISE_PROTOCOL suite, EMPTY early-data
+// both ways (no hello re-sent, no hello_ack) — and on the daemon's reply atomically swaps its
+// cipher states for the freshly derived pair, so a long-lived session outlives the daemon's rekey
+// interval. A failed or wrong-state rekey leaves the pre-rekey ciphers intact and the session usable.
 // The crypto is `noise-c.wasm` (a vetted Emscripten build of rweather/noise-c, the reference C
 // implementation; no hand-rolled crypto), loaded once via the shared ./noiseLib loader.
 //
@@ -73,7 +78,12 @@ export interface NoiseSession {
   close(): void
 }
 
-type SessionState = 'idle' | 'awaiting-handshake-reply' | 'transport' | 'closed'
+type SessionState =
+  | 'idle'
+  | 'awaiting-handshake-reply'
+  | 'transport'
+  | 'awaiting-rekey-reply' // #111: fresh IK handshake in flight; OLD ciphers held live until the swap
+  | 'closed'
 
 // The v2 control-envelope type the daemon seals to trigger an in-session re-key. Mirrors the
 // daemon's `protocol.TypeRekeyRequest` (pyrycode #454); wire source: protocol-mobile.md § Re-key.
@@ -159,6 +169,41 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
     config.sendFrame(msg1)
   }
 
+  // #111: the daemon's rekey action. On a recognized `rekey_request` (transport-branch recognition),
+  // run a FRESH in-session IK handshake as INITIATOR — the same injected static keys and
+  // NOISE_PROTOCOL suite as the initial handshake, but EMPTY early-data (no hello is re-sent). This
+  // parks the session in `awaiting-rekey-reply` holding the OLD ciphers live; the daemon's reply
+  // drives the atomic swap in onFrame. The pinned remoteStaticPublicKey IS the client-side peer
+  // continuity guarantee — a mid-session peer swap can't complete this handshake (→ read failure,
+  // old ciphers intact); there is no phantom client-side static compare (the client supplies `rs`).
+  function beginRekey(): void {
+    // Belt (deterministic): only ever reached from the transport branch, so this is defensive.
+    if (state !== 'transport' || sendCipher === null || recvCipher === null) return
+    let fresh: ReturnType<typeof lib.HandshakeState>
+    let msg1: Uint8Array
+    try {
+      fresh = lib.HandshakeState(NOISE_PROTOCOL, lib.constants.NOISE_ROLE_INITIATOR)
+      // Byte-identical to the initial Initialize: same keys, same empty-prologue handling.
+      fresh.Initialize(
+        config.prologue.length > 0 ? config.prologue : null,
+        config.staticPrivateKey,
+        config.remoteStaticPublicKey,
+        null
+      )
+      msg1 = fresh.WriteMessage(EMPTY_AD) // empty early-data — NOT config.hello (spec § Re-key)
+    } catch {
+      // Practically unreachable for a well-formed empty-early-data write; the library auto-freed the
+      // fresh handshake on throw. The OLD ciphers are untouched — stay in `transport`, usable.
+      fail('handshake-read-failed')
+      return
+    }
+    // Ordering is load-bearing: set hs + state BEFORE sendFrame, because a synchronous re-entrant
+    // sendFrame can drive the daemon's reply straight back into onFrame (mirrors start()).
+    hs = fresh
+    state = 'awaiting-rekey-reply'
+    config.sendFrame(msg1)
+  }
+
   function onFrame(frame: Uint8Array): void {
     if (state === 'closed') return // inert after teardown — never touch freed wasm
     if (state === 'transport') {
@@ -176,11 +221,44 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
       // UNCHANGED, carrying the identical plaintext. Additive: parseInboundMessage stays the sole
       // app-message decode gate; recognition only diverts a positively-matched control frame.
       if (isRekeyRequest(plaintext)) {
-        config.onEvent({ type: 'rekey-requested' })
+        config.onEvent({ type: 'rekey-requested' }) // #108 observable signal, retained
+        beginRekey() // #111 action: run the fresh IK handshake + arm the atomic swap
         return
       }
       config.onEvent({ type: 'message', plaintext })
       return
+    }
+    if (state === 'awaiting-rekey-reply') {
+      if (hs === null) return // defensive: this state always holds the fresh handshake
+      let pair: [NoiseCipherState, NoiseCipherState]
+      try {
+        hs.ReadMessage(frame, true) // daemon reply; discard early-data (no hello_ack on a rekey)
+        pair = hs.Split() // consumes + frees hs; returns [send, recv] role-adjusted, no pair swap
+      } catch {
+        // Malformed / wrong-suite reply, or a mid-session peer swap the pinned static can't complete.
+        // The library auto-freed hs and NO cipher was reassigned — both still hold the OLD keys.
+        hs = null
+        state = 'transport' // usable — NOT closed (the load-bearing difference from the initial handshake)
+        fail('handshake-read-failed')
+        return
+      }
+      // Atomic swap (AC2/AC4): install BOTH new ciphers before freeing either old one. ReadMessage
+      // and Split are the only fallible ops and already ran; nothing between the two assignments can
+      // throw or await, so the session is never left with one new cipher and one old.
+      const prevSend = sendCipher
+      const prevRecv = recvCipher
+      sendCipher = pair[0]
+      recvCipher = pair[1]
+      for (const obj of [prevSend, prevRecv]) {
+        try {
+          obj?.free()
+        } catch {
+          /* already freed / teardown */
+        }
+      }
+      hs = null
+      state = 'transport'
+      return // swap complete; emit no event — the implicit ack is the resumed round-trip (no rekey_ack)
     }
     if (state === 'idle' || hs === null) {
       fail('unexpected-frame') // a frame before start()

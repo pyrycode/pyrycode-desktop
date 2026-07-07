@@ -199,6 +199,51 @@ describe('registerPairingHandler', () => {
     })
   })
 
+  it('fires onPaired once after a successful confirm, never on submit (connect-on-pair #82)', async () => {
+    const target = fakeTarget()
+    const confirm = vi.fn(async () => {})
+    const parse = vi.fn(parseOk)
+    const prepare = vi.fn((): PreparedPairing => ({ ok: true, fingerprint: 'aa', confirm }))
+    const onPaired = vi.fn()
+    registerPairingHandler(target, { parse, confirmation: confirmationOf(prepare), onPaired })
+    const listener = listenerOf(target)
+
+    await listener({}, { type: 'submit', paste: 'good' })
+    expect(onPaired).not.toHaveBeenCalled() // submit alone does not trigger a connect
+
+    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true })
+    expect(onPaired).toHaveBeenCalledTimes(1)
+    expect(onPaired).toHaveBeenCalledWith() // a bare signal — no record field crosses (AC5)
+  })
+
+  it('does NOT fire onPaired when the persist fails (AC4)', async () => {
+    const target = fakeTarget()
+    const confirm = vi.fn(async () => {
+      throw new Error('secret encryption is not available')
+    })
+    const parse = vi.fn(parseOk)
+    const prepare = vi.fn((): PreparedPairing => ({ ok: true, fingerprint: 'aa', confirm }))
+    const onPaired = vi.fn()
+    registerPairingHandler(target, { parse, confirmation: confirmationOf(prepare), onPaired })
+    const listener = listenerOf(target)
+
+    await listener({}, { type: 'submit', paste: 'good' })
+    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: false, reason: 'persist-failed' })
+    expect(onPaired).not.toHaveBeenCalled()
+  })
+
+  it('works without onPaired: a full submit→confirm resolves and does not throw', async () => {
+    const target = fakeTarget()
+    const confirm = vi.fn(async () => {})
+    const parse = vi.fn(parseOk)
+    const prepare = vi.fn((): PreparedPairing => ({ ok: true, fingerprint: 'aa', confirm }))
+    registerPairingHandler(target, { parse, confirmation: confirmationOf(prepare) })
+    const listener = listenerOf(target)
+
+    await listener({}, { type: 'submit', paste: 'good' })
+    await expect(listener({}, { type: 'confirm' })).resolves.toEqual({ ok: true })
+  })
+
   it('never returns the token or server key in any response (AC4)', async () => {
     const target = fakeTarget()
     const confirm = vi.fn(async () => {})

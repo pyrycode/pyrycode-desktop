@@ -509,6 +509,120 @@ describe('createDaemonConnection', () => {
   })
 })
 
+describe('createDaemonConnection — reconnect (connect-on-pair, #82)', () => {
+  it('replaces the driver and emits a fresh connecting', async () => {
+    const ctx = await reachConnected()
+    expect(emitted(ctx.sink).some((e) => e.type === 'connected')).toBe(true)
+
+    ctx.connection.reconnect()
+    await tick()
+
+    expect(ctx.drivers[0].stopped).toBe(true)
+    expect(ctx.drivers).toHaveLength(2)
+    expect(emitted(ctx.sink).filter((e) => e.type === 'connecting')).toHaveLength(2)
+  })
+
+  it('fences the superseded driver terminal, so no spurious failed is emitted', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.reconnect()
+    await tick()
+    const before = emitted(ctx.sink).length
+
+    // The old driver's stop() emits terminal{1000,'stopped'} after the reconnect superseded it.
+    ctx.drivers[0].emit({ type: 'terminal', code: 1000, reason: 'stopped' })
+
+    const after = emitted(ctx.sink)
+    expect(after).toHaveLength(before) // the generation wrapper dropped it
+    expect(after.some((e) => e.type === 'failed')).toBe(false)
+  })
+
+  it('sources the paired-server record fresh at dial time (AC3)', async () => {
+    const RECORD_A = { ...RECORD, server: 'srv-A', relay: 'wss://relay-a.example/v1/client' }
+    const RECORD_B = { ...RECORD, server: 'srv-B', relay: 'wss://relay-b.example/v1/client' }
+    const records = [RECORD_A, RECORD_B]
+    let call = 0
+    const { connection, drivers } = build({
+      load: () => Promise.resolve(records[Math.min(call++, records.length - 1)])
+    })
+
+    connection.start()
+    await tick()
+    expect(drivers[0].config.connection.url).toBe(RECORD_A.relay)
+    expect(drivers[0].config.connection.headers['X-Pyrycode-Server']).toBe(RECORD_A.server)
+
+    connection.reconnect()
+    await tick()
+    expect(drivers[1].config.connection.url).toBe(RECORD_B.relay)
+    expect(drivers[1].config.connection.headers['X-Pyrycode-Server']).toBe(RECORD_B.server)
+  })
+
+  it('connects after a not-paired boot (primary scenario)', async () => {
+    const records: (PairedServerRecord | null)[] = [null, RECORD]
+    let call = 0
+    const { connection, sink, drivers } = build({
+      load: () => Promise.resolve(records[Math.min(call++, records.length - 1)])
+    })
+
+    connection.start()
+    await tick()
+    expect(drivers).toHaveLength(0)
+    expect((emitted(sink).at(-1) as { error: { code: string } }).error.code).toBe('not-paired')
+
+    connection.reconnect()
+    await tick()
+    expect(drivers).toHaveLength(1)
+
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(emitted(sink).some((e) => e.type === 'connected')).toBe(true)
+  })
+
+  it('is a no-op after stop() (app quitting)', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.stop()
+    const beforeEvents = emitted(ctx.sink).length
+    const beforeDrivers = ctx.drivers.length
+
+    ctx.connection.reconnect()
+    await tick()
+
+    expect(ctx.drivers).toHaveLength(beforeDrivers)
+    expect(emitted(ctx.sink).length).toBe(beforeEvents)
+  })
+
+  it('restarts the fresh session envelope numbering at 2', async () => {
+    const ctx = await reachConnected()
+    ctx.connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'first' })
+    expect(decodeEnvelope(ctx.drivers[0].sent[0]).id).toBe(2)
+
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    ctx.connection.send({ conversation_id: 'c1', message_id: 'm2', text: 'second' })
+    expect(ctx.drivers[1].sent).toHaveLength(1)
+    expect(decodeEnvelope(ctx.drivers[1].sent[0]).id).toBe(2)
+  })
+
+  it('never logs, and no event carries the token or keys, across a reconnect', async () => {
+    const methods = ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const
+    const spies = methods.map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    try {
+      const ctx = await reachConnected()
+      ctx.connection.reconnect()
+      await tick()
+      ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+      const serialized = JSON.stringify(emitted(ctx.sink))
+      expect(serialized).not.toContain(TOKEN)
+      expect(serialized).not.toContain(RECORD.server_static_pubkey)
+      expect(serialized).not.toContain(base64StdEncode(PAIR.privateKey))
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+  })
+})
+
 describe('createDaemonConnection — send (outbound send_message)', () => {
   const PAYLOAD: SendMessagePayload = {
     conversation_id: 'c1',

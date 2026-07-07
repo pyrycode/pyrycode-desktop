@@ -100,22 +100,16 @@ app.whenReady().then(() => {
 
   // Composition root for the pairing IPC channel (#54): construct the real secret chain —
   // safeStorage-backed encryption + file persistence → secure store → paired-server store →
-  // fingerprint/confirm service — and register the single invoke handler behind it. The token and
-  // server_static_pubkey stay in this background process; only the fingerprint or a value-free
-  // reason ever crosses back to the renderer (ADR 0002). `will-quit` removes the handler.
+  // fingerprint/confirm service. The invoke handler behind it is registered further down, after the
+  // daemon connection exists, so a successful confirm can trigger the connect-on-pair dial (#82).
+  // The token and server_static_pubkey stay in this background process; only the fingerprint or a
+  // value-free reason ever crosses back to the renderer (ADR 0002).
   const secureStore = createSecureStore({
     encryption: electronSecretEncryption(),
     persistence: fileSecretPersistence(join(app.getPath('userData'), 'secrets'))
   })
   const pairedServerStore = createPairedServerStore({ secureStore })
   const confirmation = createPairingConfirmation({ store: pairedServerStore })
-  // ipcMain.handle allows one handler per channel — this is the sole registration site, held for
-  // the app lifetime.
-  const unregisterPairing = registerPairingHandler(ipcMain, {
-    parse: parsePairingPayload,
-    confirmation
-  })
-  app.on('will-quit', () => unregisterPairing())
 
   // The launch-time pairing-status query (#79): reuse the same pairedServerStore — do not construct
   // a second store — so the renderer can learn before first paint whether a pairing exists (#80),
@@ -141,6 +135,22 @@ app.whenReady().then(() => {
     deviceName: hostname(),
     clientVersion: app.getVersion()
   })
+
+  // The pairing invoke handler (#54), registered now that `connection` exists so a successful
+  // confirm can dial the just-persisted pairing with no manual step (#82). ipcMain.handle allows
+  // one handler per channel — this is the sole registration site, held for the app lifetime.
+  // `onPaired` fires only after a confirm persists the record; `reconnect()` is synchronous, void,
+  // and non-throwing (it bumps a fence, stops any live driver, and emits into the must-not-throw
+  // sink), so it satisfies onPaired's must-not-throw contract. Registering here is safe: the whole
+  // whenReady callback runs to completion in one tick, while an operator-driven pairing invoke
+  // (paste + click) arrives many ticks later, after first paint — well after this handler is up.
+  const unregisterPairing = registerPairingHandler(ipcMain, {
+    parse: parsePairingPayload,
+    confirmation,
+    onPaired: () => connection.reconnect()
+  })
+  app.on('will-quit', () => unregisterPairing())
+
   // Defer the connect until the renderer document + scripts have loaded, so its daemon-event
   // subscription (#19) is in place before the load-bearing `connected` event (which arrives only
   // after a network round-trip). `.once`, not `.on`, so a dev HMR reload does not re-fire it.

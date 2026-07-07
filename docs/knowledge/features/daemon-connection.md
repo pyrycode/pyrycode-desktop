@@ -38,12 +38,15 @@ export interface DaemonConnection {
   stop(): void       // idempotent teardown: stop the driver; suppress the resulting terminal
   reconnect(): void  // #82: tear down any driver + dial fresh, re-sourcing the record; no-op once stopped
   send(payload: SendMessagePayload): void  // #65: encrypt a send_message onto the live session
+  requestDebugBundle(): void  // #115: encrypt a bare request_debug_bundle control frame onto the live session
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
 ```
 
 **`send(payload)` was added in [#65](../codebase/65.md)** — the outbound send entry point. It builds a `send_message` envelope (via `buildSendMessage`, id counter continuing from 2 after the hello's id 1) and hands the bytes to `driver.sendMessage`. It is an **idempotent no-op** when not connected (no driver, pre-handshake, or post-terminal) and **never throws out of the module** (a single `driver === null` guard plus a full-body `try/catch`; parity mobile #490). See the [outbound send path](outbound-send-path.md) feature doc for the full contract — the id-counter model, the "why a single guard suffices" case analysis, and the composition-root `onCommand` registration that drives it.
+
+**`requestDebugBundle()` was added in [#115](../codebase/115.md)** — a **structural twin of `send`** for the debug-bundle download's outbound "ask". It builds a **bare `request_debug_bundle` control envelope** (no payload struct, no `conversation_id`, no session selector — the bundle is daemon-global) via `buildRequestDebugBundle` and hands the bytes to `driver.sendMessage`. It **shares the same `nextEnvelopeId` counter** as `send` (no second counter — ids stay monotonic across interleaved calls), is an idempotent no-op when not connected, and never throws (parity #490). There is **no `index.ts` change** — the renderer command that would call it is the sibling ticket (#118). See the [debug-bundle request](debug-bundle-request.md) feature doc for the full contract, including why "no payload" is a present-but-empty `payload: {}` rather than an omission.
 
 ## Connect-on-pair (`reconnect()`, [#82](../codebase/82.md))
 
@@ -176,6 +179,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - [#82 codebase notes](../codebase/82.md) / [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — connect-on-pair: the `reconnect()` re-arm + generation fence added here, fired by the pairing handler's `onPaired` trigger a confirm-success wires to `connection.reconnect()`.
 - [#83 codebase notes](../codebase/83.md) — reload-per-dial: the `loadDialConfig` provider constructed here and threaded to the driver so the supervisor's *automatic* reconnect re-sources the record too (see § Reload-per-dial).
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the `send(payload)` entry point added to this factory, the `buildSendMessage` envelope builder it drives, and the composition-root `onCommand` registration that routes a `sendMessage` command to it.
+- [Debug-bundle request](debug-bundle-request.md) / [#115](../codebase/115.md) — the `requestDebugBundle()` method added to this factory (a structural twin of `send` sharing the same `nextEnvelopeId` counter), and the bare `request_debug_bundle` control-frame builder it drives.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello` builds the injected `session.hello`; `parseHelloAck` narrows the `handshake-complete{helloAck}` bytes into the `HelloAckPayload` this emits.

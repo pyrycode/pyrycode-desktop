@@ -2,7 +2,7 @@
 
 The **outbound "ask" half of the client debug-bundle download**: the background process encrypts a bare `request_debug_bundle` control envelope onto the live Noise session, so the pyry daemon begins streaming the current session's debug bundle back. This is the client sibling of the daemon's assemble/stream/serve path (pyrycode #811/#812/#813, all merged).
 
-Introduced in [#115](../codebase/115.md). Entirely `src/main/` — the request is built and encrypted in the background process; keys and bytes never reach the renderer. **Outbound only:** receiving/reassembling the streamed `.tar.gz` response (#116), saving it to disk (#117), and the renderer command that would trigger the request (#118) are the sibling slices of the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split and are **not** part of this feature yet — this doc grows as they land.
+Introduced in [#115](../codebase/115.md). Entirely `src/main/` — the request is built and encrypted in the background process; keys and bytes never reach the renderer. **Outbound only:** receiving/reassembling the streamed `.tar.gz` response (#116) and the renderer command that would trigger the request (#118) are sibling slices of the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split and are **not** part of this feature yet. Saving the reassembled bytes to disk is the [save-debug-bundle](save-debug-bundle.md) persistence leaf ([#117](../codebase/117.md), landed).
 
 ## A bare control frame — no payload, no selector
 

@@ -12,7 +12,8 @@ Introduced in [#62](../codebase/62.md). This is **composition, not new crypto** 
 
 Gives the composition root **one factory** — `createDaemonConnection(deps): DaemonConnection` — with an idempotent `start()` / `stop()`:
 
-- **`start()`** emits `connecting` **synchronously** (before any `await`), then kicks off an async bootstrap that sources the paired-server record, the device static key, and the server key, builds the `hello`, and constructs the driver (which dials on construction). A single explicit connect — auto-connect-on-pairing + per-dial record reload is the later mobile-parity refinement [#34](https://github.com/pyrycode/pyrycode-desktop/issues/34).
+- **`start()`** emits `connecting` **synchronously** (before any `await`), then kicks off an async bootstrap that sources the paired-server record, the device static key, and the server key, builds the `hello`, and constructs the driver (which dials on construction). The boot-time connect, fired once on `did-finish-load`.
+- **`reconnect()`** ([#82](../codebase/82.md)) re-arms the once-only lifecycle: it tears down any live driver and dials fresh, re-sourcing the paired-server record at dial time — the **connect-on-pair** trigger, so a pairing made mid-session dials with no restart. See § Connect-on-pair below.
 - **On the driver's `handshake-complete{helloAck}`**, it parses the ack via `parseHelloAck` and emits a typed `connected{ack: HelloAckPayload}` on the daemon-event channel — the load-bearing "live, authenticated link" signal.
 - **On the driver's `message{plaintext}`**, it decodes the app-envelope via [`parseInboundMessage`](inbound-message-decode.md) and emits `messageReceived{message}` (a `message` envelope) or `messagesReceived{messages}` (a `message_chunk` batch) — the streamed assistant replies. Malformed/oversized/mistyped bytes are dropped without an event; an unmodeled envelope type is ignored. **Added in [#68](../codebase/68.md).**
 - **Every non-clean outcome** — no paired record, a malformed record, a bad/wrong-length server key, a rejected keychain read, a malformed `hello_ack`, a driver `error`, or a fatal `terminal` — surfaces as a `failed{error}` event with a **static category code**, never a crash or an unhandled rejection.
@@ -32,8 +33,9 @@ export interface DaemonConnectionDeps {
 }
 
 export interface DaemonConnection {
-  start(): void   // idempotent; emits `connecting`, then sources inputs + constructs the driver
-  stop(): void    // idempotent teardown: stop the driver; suppress the resulting terminal
+  start(): void      // idempotent; emits `connecting`, then sources inputs + constructs the driver
+  stop(): void       // idempotent teardown: stop the driver; suppress the resulting terminal
+  reconnect(): void  // #82: tear down any driver + dial fresh, re-sourcing the record; no-op once stopped
   send(payload: SendMessagePayload): void  // #65: encrypt a send_message onto the live session
 }
 
@@ -41,6 +43,45 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 ```
 
 **`send(payload)` was added in [#65](../codebase/65.md)** — the outbound send entry point. It builds a `send_message` envelope (via `buildSendMessage`, id counter continuing from 2 after the hello's id 1) and hands the bytes to `driver.sendMessage`. It is an **idempotent no-op** when not connected (no driver, pre-handshake, or post-terminal) and **never throws out of the module** (a single `driver === null` guard plus a full-body `try/catch`; parity mobile #490). See the [outbound send path](outbound-send-path.md) feature doc for the full contract — the id-counter model, the "why a single guard suffices" case analysis, and the composition-root `onCommand` registration that drives it.
+
+## Connect-on-pair (`reconnect()`, [#82](../codebase/82.md))
+
+`reconnect()` was added so a pairing made **during a running session** dials with no manual step (mirrors mobile #489). Before it, `start()` was once-only (`if (started || stopped) return`); a client that paired mid-session persisted the record but never connected until the next launch. The [pairing handler](pairing-ipc-channel.md) fires its `onPaired` callback after a confirm persists, and the composition root wires `onPaired: () => connection.reconnect()`.
+
+**`start()` and `reconnect()` both funnel through a private `dial()`** — the single fresh-connect path. `dial()`:
+
+1. `++generation` — bump the connection fence (see below), superseding any prior dial.
+2. `driver?.stop()` then `driver = null` — tear down any live driver before dialing the next, so two sockets never stack and only the fresh server is dialed (**AC3**). The old driver's stop-terminal carries the *old* gen, so the per-dial `onEvent` wrapper drops it — no spurious `failed`. Null before the first dial (or after a not-paired boot), where this is a no-op.
+3. `nextEnvelopeId = 2` — fresh session, fresh app-envelope numbering (each dial rebuilds `hello` at id 1). Correctness-neutral (the daemon correlates by `id`, not sequence) but keeps a re-dialed session self-consistent.
+4. `emitDaemonEvent(sink, { type: 'connecting' })` — synchronous, before any `await` (**AC2**).
+5. `void bootstrap(gen)` — fire-and-forget; `bootstrap` catches everything and never rejects.
+
+`start()` keeps its `if (started || stopped) return` guard, sets `started = true`, then calls `dial()` — **behaviour-preserving** on first start (driver is null, `nextEnvelopeId` already 2). `reconnect()` is `if (stopped) return`, sets `started = true` (idempotent — keeps a later `did-finish-load` start a no-op in the unreachable race), then `dial()`. **`reconnect()` re-sources the record fresh** because `bootstrap` runs `await pairedServer.load()` when the connect *begins*, not at construction — so the just-persisted pairing's relay/server/token/key are the ones dialed (**AC3**), with **no record-reload plumbing** added here.
+
+### The generation fence
+
+`reconnect()` copies the [Noise relay driver](noise-relay-driver.md)'s own `generation`-counter idiom (`noiseRelayDriver.ts:100-118`) **one layer up**. A module-local `let generation = 0`, bumped in `dial()`, plus a per-dial wrapper around the `onEvent` passed to `createDriver` — a closure capturing the dial's `gen` that early-returns when `gen !== generation`, else forwards to the unchanged `onDriverEvent`. `bootstrap(gen)` threads the same `gen` and fences at each suspension point:
+
+- after `await pairedServer.load()`: `if (gen !== generation) return` — a reconnect superseded this in-flight bootstrap; do not emit or build a stale driver.
+- before `createDriver`: `if (stopped || gen !== generation) return` — covers app-quit (**`stopped`**, which `generation` does NOT subsume) **and** supersession. `stopped` is checked explicitly because `stop()` does not bump `generation`.
+- `catch`: `if (gen === generation) emitFailed('connect-failed')` — a superseded bootstrap's throw is silent (its `failed` would clobber the successor's `connecting`).
+
+**`stopped` and `generation` are two orthogonal fences.** `stopped` fences **permanent** teardown (`stop()` on app quit); `generation` fences **reconnect supersession**. `stop()` is unchanged and deliberately does not bump `generation`, so the app-quit terminal is still suppressed by `onDriverEvent`'s `if (stopped) return` (the wrapper passes it through — gen unchanged on stop). One fence resolves all three reconnect races: (1) the old driver's stop-terminal after a reconnect → wrapper drops it (old gen); (2) a reconnect superseding an in-flight `bootstrap` mid-`await` → guards abort the stale bootstrap; (3) rapid double reconnect → each `++generation` supersedes; last dial wins.
+
+### Data flow (connect-on-pair)
+
+```
+renderer confirm invoke ─▶ pairingHandler.listener
+                             await confirm()  ─▶ store.save(snapshot)   (record persisted)
+                             onPaired()       ─▶ connection.reconnect()
+                                                   dial(): ++gen, driver?.stop() (old terminal fenced),
+                                                           emit {connecting}, bootstrap(gen)
+                                                   bootstrap: load() (fresh record) ─▶ createDriver
+                                                   handshake ─▶ {connected} | {failed}
+                             return { ok: true }   (independent reply channel — carries no secret)
+```
+
+The confirm reply (fingerprint/ok channel) and the daemon `connecting`/`connected` events are independent — the renderer already renders the latter (the [daemon-event bridge](daemon-event-bridge.md), [#19](../codebase/19.md)), so **no renderer change** (AC2). A failed persist takes the handler's `catch` → `persist-failed` reply, `onPaired` is never reached, no dial (**AC4**). `onPaired` carries no arguments, so no record field crosses (**AC5** by construction).
 
 ## How it works
 
@@ -99,8 +140,9 @@ Small, additive changes inside the existing `app.whenReady().then(...)`:
 
 - **No store.** Three locals: `started`, `stopped`, `driver`. The single source of session state is the renderer's [session store](session-store.md) ([#2](../codebase/2.md)); this module only *emits* into it via IPC.
 - **The `start()`/`stop()` race** is closed by checking `stopped` **immediately before** the synchronous `createDriver` call (step 7). JS yields only at `await`, so `stop()` can only interleave at an await point: if it ran during an earlier `await`, `stopped` is `true` at step 7 → the driver is never constructed; if it runs after step 8, `driver` is set → it is torn down. No orphaned driver.
-- **`stopped` does double duty** — it is both the race guard *and* the "suppress the clean-stop terminal" flag, so no separate `stopping` boolean is needed.
-- **Transient reconnects are invisible here.** The supervisor absorbs transient drops and re-dials without surfacing `terminal`; on reconnect the driver runs a fresh handshake and fires another `handshake-complete` → this re-emits `connected`. During the gap the UI stays on its last status.
+- **`stopped` does double duty** — it is both the start/stop race guard *and* the "suppress the clean-stop terminal" flag, so no separate `stopping` boolean is needed.
+- **`generation` is a second, orthogonal fence for `reconnect()`** ([#82](../codebase/82.md)) — it supersedes an in-flight dial when a fresh one begins, dropping the old driver's stop-terminal and aborting a stale `bootstrap`. `stop()` deliberately does not bump it (permanent teardown stays `stopped`'s job), so the pre-`createDriver` guard checks both. Full model in § Connect-on-pair.
+- **Transient reconnects are invisible here.** The supervisor absorbs transient drops and re-dials the *same* driver without surfacing `terminal`; on reconnect the driver runs a fresh handshake and fires another `handshake-complete` → this re-emits `connected`. During the gap the UI stays on its last status. (This is distinct from `reconnect()`, which **replaces** the driver entirely — see § Connect-on-pair.)
 
 ## Security properties
 
@@ -114,7 +156,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 
 ## Edge cases and limitations
 
-- **Single explicit connect.** One connect at composition time; auto-connect-on-pairing and per-dial record reload are [#34](https://github.com/pyrycode/pyrycode-desktop/issues/34).
+- **Two explicit connects: boot + connect-on-pair.** The boot-time connect fires once on `did-finish-load`; `reconnect()` ([#82](../codebase/82.md)) re-arms on a fresh mid-session pairing (see § Connect-on-pair). Reloading the record on every *automatic* supervisor reconnect (transient drops) is still deferred — that's [#83](https://github.com/pyrycode/pyrycode-desktop/issues/83), blocked-by #82.
 - **The inbound `message` arm decodes and emits ([#68](../codebase/68.md)).** `message{plaintext}` is narrowed by [`parseInboundMessage`](inbound-message-decode.md) into `messageReceived` / `messagesReceived`, failing closed on hostile bytes. The renderer *render* of those events (thread render-binding) is [#69](https://github.com/pyrycode/pyrycode-desktop/issues/69); this module only produces them.
 - **A missed early `connecting` is benign.** The store's initial state is already `disconnected`, so if the synchronous `connecting` marginally precedes the renderer's bridge subscription, only a brief "Connecting…" flash is skipped; the load-bearing `connected` arrives after a network round-trip and is safe. Full status-sync-on-mount is [#34](https://github.com/pyrycode/pyrycode-desktop/issues/34)/[#35](https://github.com/pyrycode/pyrycode-desktop/issues/35).
 - **macOS re-activation.** `app.on('activate')` re-creates a window without re-wiring the connection (the sink still points at the destroyed `webContents`). Single-window is the milestone assumption; multi-window / re-activation lifecycle is deferred (pre-existing in `createWindow`'s `activate` handler, not introduced here).
@@ -123,6 +165,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 ## Related
 
 - [#62 codebase notes](../codebase/62.md) — implementation summary, patterns, lessons.
+- [#82 codebase notes](../codebase/82.md) / [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — connect-on-pair: the `reconnect()` re-arm + generation fence added here, fired by the pairing handler's `onPaired` trigger a confirm-success wires to `connection.reconnect()`.
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the `send(payload)` entry point added to this factory, the `buildSendMessage` envelope builder it drives, and the composition-root `onCommand` registration that routes a `sendMessage` command to it.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.

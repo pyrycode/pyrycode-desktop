@@ -48,9 +48,16 @@ export function registerPairingHandler(
   deps: {
     parse: (pasted: string) => ParsePairingResult
     confirmation: PairingConfirmation
+    /**
+     * Called once after a confirm persists the record — the connect-on-pair trigger (#82). A
+     * trusted in-process callback that MUST NOT throw (mirrors the onEvent/sink discipline elsewhere
+     * in main). Never called on a failed persist (AC4) or on submit. Carries no arguments — a bare
+     * signal, so no record/token/key field crosses to its caller (AC5).
+     */
+    onPaired?: () => void
   }
 ): () => void {
-  const { parse, confirmation } = deps
+  const { parse, confirmation, onPaired } = deps
 
   // At most one prepared pairing (AC4): the opaque confirm closure of the most-recently-fingerprinted
   // record, or null. Only the closure is held — the fingerprint was already returned, and the
@@ -90,6 +97,10 @@ export function registerPairingHandler(
     pendingConfirm = null
     try {
       await confirm()
+      // The record persisted: fire the connect-on-pair trigger (#82) before replying. Guarded — a
+      // handler registered without it (every existing caller) is unaffected. A failed persist takes
+      // the catch below instead, so this never fires on failure (AC4).
+      onPaired?.()
       return { ok: true }
     } catch {
       // confirm()'s only throw source is store.save (e.g. EncryptionUnavailableError), whose message

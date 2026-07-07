@@ -70,9 +70,15 @@ export interface PairingHandleTarget {
 
 export function registerPairingHandler(
   target: PairingHandleTarget,
-  deps: { parse: (pasted: string) => ParsePairingResult; confirmation: PairingConfirmation }
+  deps: {
+    parse: (pasted: string) => ParsePairingResult
+    confirmation: PairingConfirmation
+    onPaired?: () => void  // #82: connect-on-pair trigger, fired only after a confirm persists
+  }
 ): () => void
 ```
+
+**`onPaired` (optional, added [#82](../codebase/82.md))** is a trusted in-process callback fired **once, inside the existing `try`, after `await confirm()` resolves, before `return { ok: true }`** — the [connect-on-pair](daemon-connection.md#connect-on-pair-reconnect-82) trigger. It MUST NOT throw (mirrors the `onEvent`/sink discipline in `main`) and carries **no arguments** — a bare signal, so no record/token/key field crosses to its caller (AC5). A failed persist takes the `catch` instead, so `onPaired` never fires on failure (AC4 is structural); it never fires on submit. The call is guarded (`onPaired?.()`), so every existing caller that omits it is unaffected.
 
 Imports the shared contract + guard by relative path, and the **types** `ParsePairingResult` / `PairingConfirmation` from the upstream main modules. The `IpcMainInvokeEvent` first arg (`.sender`/`.senderFrame`/`.ports`) is **stripped** — never forwarded into a composed call — exactly as `receiveCommand` strips its event. `target.handle`/`removeHandler` accept Electron's `ipcMain` structurally; the sole registration returns an unregister handle that calls `removeHandler(PAIRING_CHANNEL)`.
 
@@ -91,7 +97,7 @@ confirmPairing: (): Promise<PairingConfirmResponse> =>
 
 ### 4. Composition root (`src/main/index.ts`)
 
-The first IPC wiring in `index.ts`. Inside `app.whenReady().then(...)` (needs `app.getPath('userData')` and a ready `ipcMain`):
+The first IPC wiring in `index.ts`. Inside `app.whenReady().then(...)` (needs `app.getPath('userData')` and a ready `ipcMain`), the secret chain is constructed first; the **handler registration itself was moved below `createDaemonConnection` in [#82](../codebase/82.md)** so its `onPaired` can reach the connection:
 
 ```ts
 const secureStore = createSecureStore({
@@ -100,11 +106,18 @@ const secureStore = createSecureStore({
 })
 const pairedServerStore = createPairedServerStore({ secureStore })
 const confirmation = createPairingConfirmation({ store: pairedServerStore })
-const unregisterPairing = registerPairingHandler(ipcMain, { parse: parsePairingPayload, confirmation })
+// … registerPairingStatusHandler (#79) + createWindow + createDaemonConnection here …
+const unregisterPairing = registerPairingHandler(ipcMain, {
+  parse: parsePairingPayload,
+  confirmation,
+  onPaired: () => connection.reconnect()   // #82: dial the just-persisted pairing, no restart
+})
 app.on('will-quit', () => unregisterPairing())
 ```
 
 This is the deferred wiring the [secure-store](secure-store.md) → [paired-server-store](paired-server-store.md) → [pairing-confirmation](pairing-confirmation.md) chain handed forward. `ipcMain.handle` allows **one handler per channel** (a second throws) — this is the sole registration site, held for the app lifetime; `will-quit` removes it.
+
+- **Registration order ([#82](../codebase/82.md)).** The [pairing-status handler](pairing-status-signal.md) (#79) stays **before** `createWindow` (the renderer queries it before first paint, #80). Only the `submit`/`confirm` handler moved **after** `createDaemonConnection`, so `onPaired: () => connection.reconnect()` can wire a confirm-success into the [connect-on-pair](daemon-connection.md#connect-on-pair-reconnect-82) dial. **Safe** because the whole `whenReady` callback runs to completion in one synchronous tick while `createWindow()` merely *starts* the async document load; an operator-driven pairing invoke (paste + click) arrives many ticks later, after first paint — well after the handler is up. `reconnect()` is synchronous, `void`, and non-throwing, so it satisfies `onPaired`'s must-not-throw contract and cannot corrupt the confirm response.
 
 ### Held state — at most one prepared pairing
 
@@ -144,7 +157,7 @@ The guard is the single untrusted→trusted checkpoint; only the fingerprint or 
 
 - **Import from `src/main` / `src/preload`** by **relative** path (`../shared/ipc/pairing`) — these sides have no `@shared` alias. The renderer (#55) may use `@shared/ipc/pairing`.
 - **Producer (#55):** the pairing screen calls `window.pyry.submitPairingPaste(paste)`, displays the returned fingerprint, and on operator confirm calls `window.pyry.confirmPairing()`. It never sees the token or key; response types narrow per operation.
-- **Consumer (composition root):** `src/main/index.ts` constructs the real secure-store chain and calls `registerPairingHandler(ipcMain, …)` **once**, tearing down on `will-quit`.
+- **Consumer (composition root):** `src/main/index.ts` constructs the real secure-store chain and calls `registerPairingHandler(ipcMain, …)` **once** (after `createDaemonConnection`, passing `onPaired: () => connection.reconnect()` — [#82](../codebase/82.md)), tearing down on `will-quit`.
 
 ## Edge cases and limitations
 
@@ -171,5 +184,6 @@ The guard is the single untrusted→trusted checkpoint; only the fingerprint or 
 - [Pairing-payload gate](pairing-payload-gate.md) / [#52](../codebase/52.md) — `parsePairingPayload`, the submit path's stage 1 (the untrusted-paste gate)
 - [Pairing-confirmation](pairing-confirmation.md) / [#53](../codebase/53.md) — `prepare`/`confirm`, the fingerprint derivation and single persist site this handler holds between submit and confirm
 - [Secure store](secure-store.md) / [Paired-server store](paired-server-store.md) — the composition-root chain this slice first constructs over the real safeStorage + file edges
+- [Daemon connection](daemon-connection.md) / [#82](../codebase/82.md) — the `onPaired` consumer: a confirm-success fires `connection.reconnect()`, dialing the just-persisted pairing with no restart (connect-on-pair)
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — token/keys never reach the renderer; the reply direction of this channel upholds it
 - [#54 codebase notes](../codebase/54.md) · Spec: `docs/specs/architecture/54-typed-pairing-ipc-channel.md`

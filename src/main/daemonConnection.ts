@@ -55,12 +55,23 @@ export interface DaemonConnectionDeps {
   createDriver?: (config: NoiseRelayDriverConfig) => NoiseRelayDriver
 }
 
-/** Handle for the single explicit connect this ticket wires (auto-reconnect is #34). */
+/**
+ * Handle for the explicit connect/re-arm this module wires. #34 split into this ticket's explicit
+ * re-arm (reconnect — the connect-on-pair trigger, #82) and #83's supervisor auto-reconnect
+ * record-reload.
+ */
 export interface DaemonConnection {
   /** Idempotent. Emits `connecting`, then sources the inputs and constructs the driver. */
   start(): void
   /** Idempotent teardown: stop the driver and suppress the resulting terminal. */
   stop(): void
+  /**
+   * Tear down any current connection and dial fresh, re-sourcing the paired-server record at dial
+   * time. The connect-on-pair trigger (#82): a fresh pairing dials with no manual step. Emits a
+   * fresh `connecting`. No-op once stop()ped. Distinct from the supervisor's in-session transient
+   * auto-reconnect (#83) — this replaces the driver entirely.
+   */
+  reconnect(): void
   /**
    * Encrypt a `send_message` envelope onto the live session. Idempotent no-op when not connected
    * (no driver yet, pre-handshake, or post-terminal). NEVER throws out of the module (parity #490):
@@ -109,6 +120,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let started = false
   let stopped = false
   let driver: NoiseRelayDriver | null = null
+  // Monotonic connection fence, mirroring the driver's own generation idiom
+  // (noiseRelayDriver.ts:100-118) one layer up. `dial()` bumps it before tearing down the old
+  // driver, so a superseded driver's events — including the terminal{1000,'stopped'} that stopping
+  // it synchronously emits — are dropped by the per-dial onEvent wrapper. `stopped` (permanent
+  // teardown) is deliberately NOT subsumed by this counter: stop() does not bump it, so the
+  // pre-createDriver guard checks both.
+  let generation = 0
   // The `hello` consumed envelope id 1 in bootstrap (:153); app envelopes continue from 2. A
   // module-local, single-writer counter — `send` has no `await`, so it runs to completion with no
   // check-then-act race. It advances only on a successful build, so a dropped over-cap send does
@@ -170,9 +188,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
-  async function bootstrap(): Promise<void> {
+  async function bootstrap(gen: number): Promise<void> {
     try {
       const record = await pairedServer.load()
+      // A reconnect superseded this in-flight bootstrap while it awaited: abandon it silently — do
+      // not emit not-paired/connect-failed or build a stale driver. The successor's dial owns the
+      // sink now.
+      if (gen !== generation) return
       if (record === null) {
         emitFailed('not-paired')
         return
@@ -186,10 +208,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         clientVersion,
         token: record.token
       })
-      // stop() may have raced the bootstrap while it awaited. JS yields only at `await`, so
-      // checking here — immediately before the synchronous createDriver — closes the race: the
-      // driver is never constructed after a stop().
-      if (stopped) return
+      // stop() (permanent teardown) or a superseding reconnect (a newer gen) may have raced the
+      // bootstrap while it awaited. JS yields only at `await`, so checking here — immediately before
+      // the synchronous createDriver — closes both races: the driver is never constructed after a
+      // stop() or once a newer dial has taken over. `stopped` is checked explicitly because it does
+      // NOT bump `generation`.
+      if (stopped || gen !== generation) return
       driver = createDriver({
         connection: {
           url: record.relay,
@@ -211,13 +235,22 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           prologue: new Uint8Array(0),
           hello
         },
-        onEvent: onDriverEvent
+        // Fence the driver's events on this dial's generation: a driver superseded by a later dial
+        // (including the terminal it emits when dial() stops it) must not reach onDriverEvent, which
+        // would surface a spurious `failed` between the new `connecting` and `connected`.
+        // onDriverEvent itself is unchanged — it still checks `stopped` for the app-quit terminal.
+        onEvent: (event) => {
+          if (gen !== generation) return
+          onDriverEvent(event)
+        }
       })
     } catch {
       // Single catch-all for the whole bootstrap: rejected load()/ensure(),
       // MalformedPairedServerRecordError, bad base64 / wrong-length key, or a driver-construction
       // throw. The caught object is DROPPED (classify-don't-forward); only the static code crosses.
-      emitFailed('connect-failed')
+      // A superseded bootstrap's throw is silent — its `failed` would clobber the successor's fresh
+      // `connecting`; only the current-gen dial surfaces a failure.
+      if (gen === generation) emitFailed('connect-failed')
     }
   }
 
@@ -238,15 +271,39 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  // The single fresh-connect path both start() and reconnect() funnel through.
+  function dial(): void {
+    const gen = ++generation
+    // Tear down a live driver before dialing the next, so two sockets never stack and only the
+    // fresh server is dialed (AC3). Its stop-terminal carries the OLD gen, so the onEvent wrapper
+    // drops it — no spurious `failed`. Null before the first dial / after a not-paired boot, where
+    // this is a no-op.
+    driver?.stop()
+    driver = null
+    // Fresh session, fresh app-envelope numbering — each dial rebuilds `hello` at id 1, so app
+    // envelopes restart at 2. Correctness-neutral (the daemon correlates by id, not sequence; see
+    // the nextEnvelopeId comment above) but keeps a re-dialed session self-consistent.
+    nextEnvelopeId = 2
+    // Emitted synchronously, before any await, so status leaves "connecting" the moment the connect
+    // begins (AC2). On the first start() the driver is null so the stop above is a no-op — no
+    // behavior change from the original once-only start.
+    emitDaemonEvent(sink, { type: 'connecting' })
+    // Fire-and-forget: bootstrap catches everything internally and never rejects.
+    void bootstrap(gen)
+  }
+
   return {
     start(): void {
       if (started || stopped) return
       started = true
-      // Emitted synchronously, before any await, so status leaves "connecting" the moment the
-      // connect begins (AC3).
-      emitDaemonEvent(sink, { type: 'connecting' })
-      // Fire-and-forget: bootstrap catches everything internally and never rejects.
-      void bootstrap()
+      dial()
+    },
+    reconnect(): void {
+      if (stopped) return
+      // Idempotent with a later did-finish-load start() in the unreachable race — keeps that start
+      // a no-op once a reconnect has already dialed.
+      started = true
+      dial()
     },
     stop(): void {
       if (stopped) return

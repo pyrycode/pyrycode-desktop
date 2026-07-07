@@ -14,7 +14,7 @@ The app bar, status row, tool-call chips, code blocks, session delimiters, and t
 
 ### Structure
 
-`App.tsx` renders `<ConversationScreen />`. The screen is a flex column:
+`App.tsx` mounts `<ConversationScreen />` on the `conversation` route ([#80](../codebase/80.md) — see [App shell](app-shell.md); before #80, `App` rendered it directly). The screen is a flex column:
 
 ```
 ConversationScreen            .conversation        (flex column, full height)
@@ -71,6 +71,7 @@ Every style references a token from `theme/tokens.css` — no color/type/spacing
 
 ## Related
 
+- [App shell](app-shell.md) — the router that mounts this screen on the `paired`/`conversation` route (#80)
 - [Session store](session-store.md) — the live state the thread now renders; the `MessageThread`/status seams bind to it (#2, bound in #69)
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66); the send half of this screen
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen

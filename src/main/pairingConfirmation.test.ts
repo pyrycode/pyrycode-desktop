@@ -1,7 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
+import { blake2s } from '@noble/hashes/blake2'
 import { EncryptionUnavailableError } from './secureStore'
 import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
 import { createPairingConfirmation } from './pairingConfirmation'
+
+// The BLAKE2s digest primitive is partially mocked: by default it calls through to the real
+// @noble/hashes blake2s, so the parity/determinism vectors below exercise the genuine hash. A test
+// that needs to drive deriveFingerprint's fingerprint-unavailable path (#101 AC3/AC4) forces ONE
+// throw via mockImplementationOnce — no runtime actually lacking BLAKE2s is needed to prove the
+// digest step returns a typed reason instead of throwing.
+vi.mock('@noble/hashes/blake2', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@noble/hashes/blake2')>()
+  return { ...actual, blake2s: vi.fn(actual.blake2s) }
+})
 
 // The one injected edge — PairedServerStore — is faked in-file: no keychain, no filesystem (the
 // ticket's AC5). A `save` spy backed by an array is enough; `load` is unused here but the interface
@@ -66,6 +77,39 @@ describe('createPairingConfirmation', () => {
     if (!prepared.ok) throw new Error('expected ok')
     // Pinned literal (NOT recomputed here) — byte-identical to the daemon's internal/pair.Fingerprint.
     expect(prepared.fingerprint).toBe('32:0b:5e:a9:9e:65:3b:c2')
+  })
+
+  it('matches a second pinned vector for the 0..31 byte-sequence key (AC1)', () => {
+    const { store } = fakeStore()
+    const confirmation = createPairingConfirmation({ store })
+
+    // RECORD's key is b64(seq(32)) = bytes 0..31 — a non-zero known key. Pinned literal is a genuine
+    // BLAKE2s-256(0x00..0x1f)[:8], a second byte-identity canary for the digest swap (#101).
+    const prepared = confirmation.prepare(RECORD)
+
+    if (!prepared.ok) throw new Error('expected ok')
+    expect(prepared.fingerprint).toBe('05:82:56:07:d7:fd:f2:d8')
+  })
+
+  it('returns fingerprint-unavailable — no throw, no confirm, no save — when the digest fails (#101 AC4)', () => {
+    // Force ONE digest throw (mirrors a BLAKE2s primitive being unreachable at runtime). The
+    // fingerprint step must ABSORB it into a typed reject reason, not throw out of prepare — else the
+    // ipcMain.handle invoke rejects and the pairing screen wedges forever in `submitting`.
+    vi.mocked(blake2s).mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
+    const { store, saves } = fakeStore()
+    const confirmation = createPairingConfirmation({ store })
+
+    const prepared = confirmation.prepare(RECORD)
+
+    expect(prepared.ok).toBe(false)
+    if (prepared.ok) throw new Error('expected reject')
+    expect(prepared.reason).toBe('fingerprint-unavailable')
+    // A digest failure builds NO confirm closure — structurally unpersistable, like a malformed key.
+    expect('confirm' in prepared).toBe(false)
+    expect(saves).toHaveLength(0)
+    expect(store.save).not.toHaveBeenCalled()
   })
 
   it('formats the fingerprint as 8 colon-separated lowercase-hex bytes', () => {
@@ -198,6 +242,11 @@ describe('createPairingConfirmation', () => {
       const rejecting = createPairingConfirmation({ store: rejectingStore(new Error('boom')).store })
       const bad = rejecting.prepare(RECORD)
       if (bad.ok) await bad.confirm().catch(() => {})
+      // Digest failure — the catch that maps to fingerprint-unavailable must stay log-free (#101 AC5).
+      vi.mocked(blake2s).mockImplementationOnce(() => {
+        throw new Error('boom')
+      })
+      confirmation.prepare(RECORD)
 
       for (const spy of spies) expect(spy).not.toHaveBeenCalled()
     } finally {

@@ -12,9 +12,11 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run --passWithNoTests",
+    "check:electron-digest": "ELECTRON_RUN_AS_NODE=1 electron scripts/electron-digest-check.mjs",
     "e2e": "npm run build && playwright test"
   },
   "dependencies": {
+    "@noble/hashes": "^1.8.0",
     "noise-c.wasm": "^0.4.0",
     "ws": "^8.21.0",
     "zustand": "^5.0.2"

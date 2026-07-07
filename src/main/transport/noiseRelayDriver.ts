@@ -173,17 +173,24 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
       return
     }
 
-    // The session's very first sendFrame is always handshake message 1, so this per-connection
-    // flag resets noise_init↔noise_msg with no shared mutable state across reconnects.
+    // Two per-connection latches decide which outbound frames are Noise handshake inits (tagged
+    // noise_init so the daemon routes them to a handshake path, not transport-decrypt). `firstFrame`
+    // is the connection's very first sendFrame — handshake message 1. `rekeyInitPending` is the
+    // fresh msg1 of an in-session rekey (#112): the session emits `rekey-requested` (arming the
+    // latch in `route`) then synchronously hands its rekey msg1 to `sendFrame` within the same
+    // onFrame turn, so this latch is armed exactly when that one frame arrives. Both reset per
+    // connection with no shared mutable state across reconnects; both are one-shot.
     let firstFrame = true
+    let rekeyInitPending = false
 
     // Outbound: the session's raw Noise bytes → base64-std → InnerFrameV2 → supervisor.send. The
     // session's sendFrame contract forbids throwing back into it, so codec/send throws are caught
     // here and classified. A stale session's writes are dropped by the generation guard.
     const sendFrame = (raw: Uint8Array): void => {
       if (gen !== generation) return
-      const type = firstFrame ? 'noise_init' : 'noise_msg'
+      const type = firstFrame || rekeyInitPending ? 'noise_init' : 'noise_msg'
       firstFrame = false
+      rekeyInitPending = false
       try {
         supervisor.send(encodeInnerFrame({ v: 2, type, data: base64StdEncode(raw) }))
       } catch {
@@ -196,11 +203,17 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
     // through) once past the generation guard.
     const route = (event: NoiseSessionEvent): void => {
       if (gen !== generation) return
-      // #108 is recognition-only: the rekey trigger is a transport-control signal the driver does
-      // NOT propagate to the RelaySessionEvent sink yet (it is deliberately absent from that union),
-      // so drop it here — #109 owns wiring the re-handshake action. This also restores the
+      // The rekey trigger (#108) is still NOT propagated to the RelaySessionEvent sink (it is
+      // deliberately absent from that union) — dropping it here also restores the
       // NoiseSessionEvent ⊆ RelaySessionEvent subset TypeScript needs for the emit below to narrow.
-      if (event.type === 'rekey-requested') return
+      // But #112 gives it a side effect: arm the init-framing latch so the session's next outbound
+      // frame — its fresh rekey msg1, handed to `sendFrame` synchronously right after this emit —
+      // is tagged noise_init and routed to the daemon's rekey responder instead of being
+      // transport-decrypted (which fails AEAD → WS 4421).
+      if (event.type === 'rekey-requested') {
+        rekeyInitPending = true
+        return
+      }
       emit(event)
     }
 

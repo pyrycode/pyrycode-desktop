@@ -13,7 +13,12 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { startFakeRelayForwarder } from './fakeRelayForwarder'
-import { startFakeDaemon, type FakeDaemon, type FakeDaemonOptions } from './fakeDaemon'
+import {
+  startFakeDaemon,
+  DEFAULT_REKEY_RESUME_MESSAGE,
+  type FakeDaemon,
+  type FakeDaemonOptions
+} from './fakeDaemon'
 import { createNoiseSession, type NoiseSession, type NoiseSessionEvent } from './noiseSession'
 import { createRelayConnection, type RelayEvent } from './relayConnection'
 import { loadNoiseLib } from './noiseLib'
@@ -235,6 +240,82 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     initiator.sendMessage(encodeEnvelope({ id: 4, type: 'send_message', ts: '2026-01-01T00:00:04Z', payload: { conversation_id: 'c1', message_id: 'm4', text: 'ping-2' } }))
     await waiter.wait(() => events.filter((e) => e.type === 'message').length >= 2)
     expect(events.filter((e) => e.type === 'message').length).toBe(2)
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+  })
+
+  it('initiates a rekey: the real client swaps and resumes messaging under the new keys (AC2, AC3)', async () => {
+    const { forwarderUrl, whenReady, daemon } = await standUp()
+    const { initiator, events, waiter } = await driveClient({
+      forwarderUrl,
+      remoteStaticPublicKey: daemon.staticPublicKey,
+      hello: buildTestHello()
+    })
+    await whenReady()
+
+    // Initial handshake + one K0 round-trip — the pre-rekey baseline (default buildReply echoes).
+    await waiter.wait(() => events.some((e) => e.type === 'handshake-complete'))
+    const probe0 = encodeEnvelope({
+      id: 2,
+      type: 'send_message',
+      ts: '2026-01-01T00:00:01Z',
+      payload: { conversation_id: 'c1', message_id: 'm1', text: 'k0 probe' }
+    })
+    initiator.sendMessage(probe0)
+    await waiter.wait(() => events.filter((e) => e.type === 'message').length >= 1)
+
+    // The daemon initiates the rekey. The REAL client recognizes the trigger, runs its fresh
+    // handshake as INITIATOR, and swaps its ciphers.
+    daemon.initiateRekey()
+
+    // The daemon's post-swap resume frame decrypts under the client's NEW recv cipher and surfaces
+    // as a message — the deterministic client-side signal that the client swapped to the new keys.
+    await waiter.wait(() => events.filter((e) => e.type === 'message').length >= 2)
+    const resume = events.filter((e) => e.type === 'message')[1]
+    expect(bytes((resume as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(DEFAULT_REKEY_RESUME_MESSAGE))
+    // Exactly one recognition of the trigger on the client.
+    expect(events.filter((e) => e.type === 'rekey-requested')).toHaveLength(1)
+
+    // A K1 round-trip: the client's send opens under the daemon's new recv cipher and the reply
+    // comes back under K1 — proving the client's send cipher is the new key too.
+    const probe1 = encodeEnvelope({
+      id: 3,
+      type: 'send_message',
+      ts: '2026-01-01T00:00:02Z',
+      payload: { conversation_id: 'c1', message_id: 'm2', text: 'k1 probe' }
+    })
+    initiator.sendMessage(probe1)
+    await waiter.wait(() => events.filter((e) => e.type === 'message').length >= 3)
+    const reply1 = events.filter((e) => e.type === 'message')[2]
+    expect(bytes((reply1 as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(probe1))
+
+    // No client error — in particular no transport-decrypt-failed (the crossed-Split oracle for a
+    // wrong rekey cipher mapping) — and the daemon settled ok on the initial round-trip.
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+    expect(await daemon.whenSettled()).toEqual({ ok: true })
+  })
+
+  it('honours a custom rekeyResumeMessage streamed under the new keys (AC2)', async () => {
+    const resume = encodeEnvelope({
+      id: 42,
+      type: 'message',
+      ts: '2026-01-01T00:00:06Z',
+      payload: { conversation_id: 'c1', message_id: 'resume-x', role: 'assistant', text: 'custom resume' }
+    })
+    const { forwarderUrl, whenReady, daemon } = await standUp({ rekeyResumeMessage: resume })
+    const { initiator, events, waiter } = await driveClient({
+      forwarderUrl,
+      remoteStaticPublicKey: daemon.staticPublicKey,
+      hello: buildTestHello()
+    })
+    await whenReady()
+    await waiter.wait(() => events.some((e) => e.type === 'handshake-complete'))
+    initiator.sendMessage(encodeEnvelope({ id: 2, type: 'send_message', ts: '2026-01-01T00:00:01Z', payload: { conversation_id: 'c1', message_id: 'm1', text: 'k0' } }))
+    await waiter.wait(() => events.filter((e) => e.type === 'message').length >= 1)
+
+    daemon.initiateRekey()
+    await waiter.wait(() => events.filter((e) => e.type === 'message').length >= 2)
+    const streamed = events.filter((e) => e.type === 'message')[1]
+    expect(bytes((streamed as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(resume))
     expect(events.some((e) => e.type === 'error')).toBe(false)
   })
 

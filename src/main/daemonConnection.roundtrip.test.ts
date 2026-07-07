@@ -157,10 +157,18 @@ interface RoundTripContext {
  * before the client dials `/v1/client`, so the client's msg1 is never dropped. The record's `relay`
  * is the forwarder's client leg verbatim — the real driver dials it directly (no scheme seam).
  */
-async function standUpRoundTrip(buildReply: () => Uint8Array): Promise<RoundTripContext> {
+async function standUpRoundTrip(
+  buildReply: () => Uint8Array,
+  daemonOpts?: { rekeyResumeMessage?: Uint8Array }
+): Promise<RoundTripContext> {
   const forwarder = await startFakeRelayForwarder()
   cleanups.push(() => forwarder.close())
-  const daemon = await startFakeDaemon({ url: forwarder.url, buildReply, helloAck: HELLO_ACK_OVERRIDES })
+  const daemon = await startFakeDaemon({
+    url: forwarder.url,
+    buildReply,
+    helloAck: HELLO_ACK_OVERRIDES,
+    ...daemonOpts
+  })
   cleanups.push(() => daemon.close())
 
   const record: PairedServerRecord = {
@@ -269,6 +277,64 @@ describe('createDaemonConnection round-trip (in-process fake target)', () => {
       expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
     },
     15_000
+  )
+
+  it(
+    'survives a daemon-initiated rekey and resumes messaging under the new keys',
+    async () => {
+      // Distinct known payloads: the daemon's reply-builder output (both round-trip legs) and the
+      // post-swap resume frame — so each `messageReceived` in order pins which cipher generation
+      // and which channel it rode.
+      const reply: MessagePayload = {
+        conversation_id: 'c1',
+        message_id: 'reply-1',
+        role: 'assistant',
+        text: 'pong'
+      }
+      const resumePayload: MessagePayload = {
+        conversation_id: 'c1',
+        message_id: 'resume-1',
+        role: 'assistant',
+        text: 'resumed under new keys'
+      }
+      const buildReply = (): Uint8Array =>
+        encodeEnvelope({ id: 99, type: 'message', ts: FIXED_TS, payload: reply })
+      const rekeyResumeMessage = encodeEnvelope({ id: 77, type: 'message', ts: FIXED_TS, payload: resumePayload })
+
+      const { connection, daemon, events, waiter } = await standUpRoundTrip(buildReply, { rekeyResumeMessage })
+
+      // Handshake completed (K0).
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+
+      const received = (): MessagePayload[] =>
+        events
+          .filter((e): e is Extract<DaemonEvent, { type: 'messageReceived' }> => e.type === 'messageReceived')
+          .map((e) => e.message)
+
+      // Baseline K0 round-trip — the pre-rekey channel works.
+      connection.send({ conversation_id: 'c1', message_id: 'out-0', text: 'ping k0' })
+      await waiter.wait(() => received().length >= 1, MESSAGE_TIMEOUT_MS)
+      expect(received()[0], `expected 1 messageReceived; observed ${types(events)}`).toEqual(reply)
+
+      // The daemon initiates the rekey: seal rekey_request (K0) → the real client recognizes it →
+      // the driver frames the fresh msg1 as noise_init (Part 1) → the daemon reads it and swaps →
+      // msg2 + resume frame stream back → the client swaps. The resume frame decrypting under the
+      // client's NEW recv cipher IS the "resumed under the new keys" signal.
+      daemon.initiateRekey()
+      await waiter.wait(() => received().length >= 2, MESSAGE_TIMEOUT_MS)
+      expect(received()[1], `expected the resume frame; observed ${types(events)}`).toEqual(resumePayload)
+
+      // A full bidirectional round-trip under K1: the client's send opens under the daemon's new
+      // recv cipher (the implicit ack) and the reply comes back under K1.
+      connection.send({ conversation_id: 'c1', message_id: 'out-1', text: 'ping k1' })
+      await waiter.wait(() => received().length >= 3, MESSAGE_TIMEOUT_MS)
+      expect(received()[2], `expected the K1 reply; observed ${types(events)}`).toEqual(reply)
+
+      // No failure across the whole sequence; the daemon settled ok on the baseline round-trip.
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+      expect(await daemon.whenSettled()).toEqual({ ok: true })
+    },
+    20_000
   )
 })
 

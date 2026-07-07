@@ -94,6 +94,24 @@ describe('reduceSession — message append order', () => {
   })
 })
 
+describe('reduceSession — optimistic send (messageSent)', () => {
+  it('appends the optimistically-sent message and leaves status untouched', () => {
+    const connected = reduceSession(initialSessionState, { type: 'connected', ack })
+    const next = reduceSession(connected, { type: 'messageSent', message: msg('m1', 'user') })
+    expect(next.messages.map((m) => m.message_id)).toEqual(['m1'])
+    expect(next.status).toBe(connected.status)
+  })
+
+  it('dedupes the daemon echo of an optimistically-sent message by message_id (the AC3 invariant)', () => {
+    const sent = reduceSession(initialSessionState, { type: 'messageSent', message: msg('m1', 'user') })
+    // The daemon later echoes the same message_id back as a received message.
+    const echoed = reduceSession(sent, { type: 'messageReceived', message: msg('m1', 'user') })
+    expect(echoed.messages.map((m) => m.message_id)).toEqual(['m1'])
+    // A pure duplicate keeps the same array reference (no selector churn).
+    expect(echoed.messages).toBe(sent.messages)
+  })
+})
+
 describe('reduceSession — orthogonality', () => {
   it('a message action leaves status untouched', () => {
     const connecting = reduceSession(initialSessionState, { type: 'connecting' })

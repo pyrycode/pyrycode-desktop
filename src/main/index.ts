@@ -4,6 +4,7 @@ import { pathToFileURL } from 'url'
 import { hostname } from 'os'
 import { createSecureStore } from './secureStore'
 import { electronSecretEncryption } from './electronSecretEncryption'
+import { selectSecretEncryption } from './secretBackend'
 import { fileSecretPersistence } from './fileSecretPersistence'
 import { createPairedServerStore } from './pairedServerStore'
 import { createPairingConfirmation } from './pairingConfirmation'
@@ -105,8 +106,20 @@ app.whenReady().then(() => {
   // daemon connection exists, so a successful confirm can trigger the connect-on-pair dial (#82).
   // The token and server_static_pubkey stay in this background process; only the fingerprint or a
   // value-free reason ever crosses back to the renderer (ADR 0002).
+  // The secret-encryption backend the store uses (#99). Effectful choice made ONCE, here, false-first
+  // on app.isPackaged: a packaged build never consults the env flag and always gets the real, fail-
+  // closed OS-keychain backend, byte-identical to today. Only when unpackaged AND
+  // PYRY_TEST_SECRET_BACKEND=1 is a keychain-free backend selected — the headless test/dev seam #93
+  // drives so secureStore.set stops failing closed with no keychain. `electronSecretEncryption` is
+  // passed UNCALLED (a `() => SecretEncryption` factory), so it is constructed only when selected —
+  // the keychain-free dev path never loads it. `process.env` structurally satisfies the
+  // `Record<string, string | undefined>` param (no cast). Mirrors the #97 selectRelayPolicy call below.
   const secureStore = createSecureStore({
-    encryption: electronSecretEncryption(),
+    encryption: selectSecretEncryption({
+      isPackaged: app.isPackaged,
+      env: process.env,
+      real: electronSecretEncryption
+    }),
     persistence: fileSecretPersistence(join(app.getPath('userData'), 'secrets'))
   })
   const pairedServerStore = createPairedServerStore({ secureStore })

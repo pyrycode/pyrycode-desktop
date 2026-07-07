@@ -79,6 +79,8 @@ Bridges the byte-level seam to `safeStorage`'s string API via **base64** (load-b
 
 Not unit-tested (it needs the Electron runtime + a real keychain — the reason the store injects fakes); it is thin, type-checked glue verified by `npm run build` + manual/integration.
 
+**Which `SecretEncryption` the composition root injects is now a deterministic choice**, not a hardcoded `electronSecretEncryption()` call. `src/main/index.ts` passes the (uncalled) `electronSecretEncryption` factory through `selectSecretEncryption({ isPackaged, env, real })` ([#99](../codebase/99.md)), which returns the real backend on every path **except** a non-packaged, opt-in dev path (`PYRY_TEST_SECRET_BACKEND=1`), where it substitutes a keychain-free backend so `set` stops failing closed in a headless keychain-less run. This is an additive selection at the seam — `secureStore.ts` itself, its fail-closed logic, and `electronSecretEncryption.ts` are **untouched**; a packaged build is byte-identical to today (the env flag is never read). See the [secret-backend dev affordance](secret-backend-affordance.md).
+
 ### Persistence adapter (`fileSecretPersistence(dir)`)
 
 One ciphertext file per secret under `dir`, `node:fs/promises` + `node:path` only:
@@ -130,4 +132,5 @@ This module *is* the secret-at-rest boundary — its correctness properties are 
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model this inherits (keys never reach the renderer; mirrors mobile).
 - [#42 codebase notes](../codebase/42.md) — implementation summary, patterns, and lessons.
 - [Relay connection](relay-connection.md) — the sibling main-side primitive whose injected-`onEvent` DI seam this mirrors.
+- [Secret-backend dev affordance](secret-backend-affordance.md) ([#99](../codebase/99.md)) — the deterministic, dev-only selection that swaps the injected `encryption` seam to a keychain-free backend so `set` stops failing closed in a headless run; inert in a packaged build.
 - Downstream consumers: [device static keypair](device-keypair.md) ([#43](../codebase/43.md)) and [paired-server store](paired-server-store.md) ([#44](../codebase/44.md)).

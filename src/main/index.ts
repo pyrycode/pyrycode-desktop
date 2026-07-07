@@ -9,6 +9,7 @@ import { createPairedServerStore } from './pairedServerStore'
 import { createPairingConfirmation } from './pairingConfirmation'
 import { parsePairingPayload } from './pairingPayload'
 import { registerPairingHandler } from './pairingHandler'
+import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
@@ -115,6 +116,15 @@ app.whenReady().then(() => {
     confirmation
   })
   app.on('will-quit', () => unregisterPairing())
+
+  // The launch-time pairing-status query (#79): reuse the same pairedServerStore — do not construct
+  // a second store — so the renderer can learn before first paint whether a pairing exists (#80),
+  // without inferring it from a late, error-shaped connection event. Registered synchronously here,
+  // before createWindow() and the renderer document load, so the handler is present when the
+  // renderer's first invoke arrives. Only the value-free enum crosses back — never a record field.
+  // `will-quit` removes the handler, symmetric with unregisterPairing.
+  const unregisterPairingStatus = registerPairingStatusHandler(ipcMain, { store: pairedServerStore })
+  app.on('will-quit', () => unregisterPairingStatus())
 
   // The transport consumer (#62): reuse the paired-server store, add a device-keypair store over
   // the same secret chain, and drive the Noise relay driver — emitting typed daemon events to the

@@ -14,6 +14,7 @@ import type {
   NoiseRelayDriverConfig,
   RelaySessionEvent
 } from './transport/noiseRelayDriver'
+import type { DiagnosticEvent, DiagnosticLog } from './diagnosticLog'
 import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from './transport/codec'
 import { MAX_PLAINTEXT_BYTES, type SendMessagePayload } from '../shared/wire/types'
 
@@ -101,6 +102,20 @@ function emitted(sink: ReturnType<typeof fakeSink>): DaemonEvent[] {
   return sink.webContents.send.mock.calls.map((call) => call[1] as DaemonEvent)
 }
 
+// --- diagnostic-log capture ----------------------------------------------------------------
+/** A fake DiagnosticLog that records every content-free envelope its call sites emit (#128). */
+function captureLog(): { log: DiagnosticLog; records: DiagnosticEvent[] } {
+  const records: DiagnosticEvent[] = []
+  return {
+    records,
+    log: {
+      event(fields: DiagnosticEvent): void {
+        records.push(fields)
+      }
+    }
+  }
+}
+
 // --- deps builder --------------------------------------------------------------------------
 function makeStores(overrides: {
   load?: () => Promise<PairedServerRecord | null>
@@ -119,6 +134,7 @@ function build(
     load?: () => Promise<PairedServerRecord | null>
     ensure?: () => Promise<DeviceKeyPair>
     throwOnSend?: boolean
+    diagnosticLog?: DiagnosticLog
   } = {}
 ): {
   connection: DaemonConnection
@@ -134,7 +150,8 @@ function build(
     deviceName: 'my-desktop',
     clientVersion: '0.1.0',
     now: () => FIXED_TS,
-    createDriver: factory.createDriver
+    createDriver: factory.createDriver,
+    diagnosticLog: overrides.diagnosticLog
   }
   return { connection: createDaemonConnection(deps), sink, drivers: factory.drivers }
 }
@@ -878,5 +895,146 @@ describe('createDaemonConnection — requestDebugBundle (outbound debug-bundle r
     drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
     expect(() => connection.requestDebugBundle()).not.toThrow()
+  })
+})
+
+describe('createDaemonConnection — diagnostic logging (#128)', () => {
+  it('logs a coordinate-free daemon-dial anchor synchronously with connecting (AC1)', () => {
+    const cap = captureLog()
+    const { connection } = build({ diagnosticLog: cap.log })
+
+    connection.start()
+
+    // Emitted before any await, alongside the `connecting` DaemonEvent; carries only `event`
+    // (no host/path/status/code — those coordinates are #127's relay leg, and unloaded here).
+    expect(cap.records).toEqual([{ event: 'daemon-dial' }])
+  })
+
+  it('anchors the not-paired window as daemon-dial then daemon-failed(not-paired) (AC1)', async () => {
+    // The daemon-side window exists even when #127 (relay leg) is silent: no socket opens.
+    const cap = captureLog()
+    const { connection } = build({ load: () => Promise.resolve(null), diagnosticLog: cap.log })
+
+    connection.start()
+    await tick()
+
+    expect(cap.records).toEqual([
+      { event: 'daemon-dial' },
+      { event: 'daemon-failed', code: 'not-paired' }
+    ])
+  })
+
+  it('logs daemon-connected on the handshake-complete success path, never the ack bytes (AC2)', async () => {
+    const cap = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: cap.log })
+    connection.start()
+    await tick()
+
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(cap.records.filter((r) => r.event === 'daemon-connected')).toEqual([
+      { event: 'daemon-connected' }
+    ])
+    // The event-name-only record never carries the hello-ack contents.
+    expect(JSON.stringify(cap.records)).not.toContain('conn-1')
+  })
+
+  it('logs daemon-failed(malformed-hello-ack) with the static code only, never connected (AC3)', async () => {
+    const cap = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: cap.log })
+    connection.start()
+    await tick()
+
+    const wrongType = encodeEnvelope({ id: 2, type: 'hello', ts: FIXED_TS, payload: {} })
+    drivers[0].emit({ type: 'handshake-complete', helloAck: wrongType })
+
+    expect(cap.records).toContainEqual({ event: 'daemon-failed', code: 'malformed-hello-ack' })
+    expect(cap.records.some((r) => r.event === 'daemon-connected')).toBe(false)
+  })
+
+  it('logs daemon-failed(connect-failed) for a bootstrap throw (AC3)', async () => {
+    const cap = captureLog()
+    const { connection } = build({
+      load: () => Promise.reject(new MalformedPairedServerRecordError()),
+      diagnosticLog: cap.log
+    })
+    connection.start()
+    await tick()
+
+    expect(cap.records).toContainEqual({ event: 'daemon-failed', code: 'connect-failed' })
+  })
+
+  it("logs the driver's static error reason as daemon-failed(session-load-failed) (AC3)", async () => {
+    const cap = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: cap.log })
+    connection.start()
+    await tick()
+
+    drivers[0].emit({ type: 'error', reason: 'session-load-failed' })
+
+    expect(cap.records).toContainEqual({ event: 'daemon-failed', code: 'session-load-failed' })
+  })
+
+  it('logs daemon-failed(connection-closed) but never the numeric close code, peer reason, or banner (AC3)', async () => {
+    const cap = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: cap.log })
+    connection.start()
+    await tick()
+
+    drivers[0].emit({ type: 'terminal', code: 4426, reason: 'noise-handshake-secret-detail' })
+
+    const failed = cap.records.filter((r) => r.event === 'daemon-failed')
+    // Static classification only — no `status` (that is #127's relay-closed numeric close code).
+    expect(failed).toEqual([{ event: 'daemon-failed', code: 'connection-closed' }])
+    expect(failed[0]).not.toHaveProperty('status')
+    const serialized = JSON.stringify(cap.records)
+    expect(serialized).not.toContain('4426') // the numeric WS close code (#127's, not the daemon leg's)
+    expect(serialized).not.toContain('noise-handshake-secret-detail') // the peer reason string
+    expect(serialized).not.toContain('The connection to pyrybox was closed') // the banner text
+  })
+
+  it('does not perturb the emitted DaemonEvent sequence, with or without a logger (AC4)', async () => {
+    const withLog = build({ diagnosticLog: captureLog().log })
+    withLog.connection.start()
+    await tick()
+    withLog.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    const withoutLog = build()
+    withoutLog.connection.start()
+    await tick()
+    withoutLog.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(emitted(withLog.sink)).toEqual(emitted(withoutLog.sink))
+  })
+
+  it('a clean stop() suppresses both the failed event and the daemon-failed record (AC4)', async () => {
+    const cap = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: cap.log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    connection.stop()
+    drivers[0].emit({ type: 'terminal', code: 1000, reason: 'stopped' })
+
+    expect(emitted(sink).some((e) => e.type === 'failed')).toBe(false)
+    expect(cap.records.some((r) => r.event === 'daemon-failed')).toBe(false)
+  })
+
+  it('logs exactly one daemon-dial per dial and no stray daemon-failed from a superseded dial (AC4)', async () => {
+    const cap = captureLog()
+    const { connection, drivers } = build({ diagnosticLog: cap.log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    connection.reconnect()
+    await tick()
+
+    // The superseded driver's stop-terminal is gen-fenced, so it logs no daemon-failed.
+    drivers[0].emit({ type: 'terminal', code: 1000, reason: 'stopped' })
+
+    expect(cap.records.filter((r) => r.event === 'daemon-dial')).toHaveLength(2)
+    expect(cap.records.some((r) => r.event === 'daemon-failed')).toBe(false)
   })
 })

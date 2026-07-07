@@ -11,9 +11,13 @@
 // transitively imports codec.ts (Node Buffer) and holds the token/keys, none of which may reach
 // the renderer bundle (CLAUDE.md "Keep the transport out of the window"; ADR 0002).
 //
-// LOG-FREE by construction (inherited #5/#7/#22/#50): no console.*, and every caught error is
-// CLASSIFIED into a static category code and the caught object DROPPED — a codec/keychain error
-// message can echo the token or transcript bytes, so it never reaches the sink or a log. Every
+// CONTENT-FREE-LOG by construction (inherited #5/#7/#22/#50, extended to the daemon leg by #128):
+// no console.*, and every caught error is CLASSIFIED into a static category code and the caught
+// object DROPPED — a codec/keychain error message can echo the token or transcript bytes, so it
+// never reaches the sink or a log. The module now shadows its lifecycle onto the injected #126
+// DiagnosticLog (daemon-dial / daemon-connected / daemon-failed), but still logs only the static
+// classification code and the event name — never the caught error object, the human-readable banner
+// (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
 import { createNoiseRelayDriver } from './transport/noiseRelayDriver'
 import type {
@@ -164,6 +168,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   function emitFailed(code: string, message = messageFor(code)): void {
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
+    // The single failure choke point (all five classifications) shadows onto the log — the static
+    // `code` only, never the `message` param (which interpolates the numeric close code, #127's leg).
+    deps.diagnosticLog?.event({ event: 'daemon-failed', code })
   }
 
   // The single choke point: RelaySessionEvent → DaemonEvent. Nothing else emits.
@@ -180,6 +187,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         emitDaemonEvent(sink, { type: 'connected', ack })
+        // The load-bearing "Noise handshake finished" signal — event name only, never the ack bytes.
+        // Distinct from #127's relay-open (the WS socket opening, which precedes the handshake).
+        deps.diagnosticLog?.event({ event: 'daemon-connected' })
         return
       }
       case 'message': {
@@ -364,6 +374,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // begins (AC2). On the first start() the driver is null so the stop above is a no-op — no
     // behavior change from the original once-only start.
     emitDaemonEvent(sink, { type: 'connecting' })
+    // The daemon-side dial anchor (AC1) — coordinate-free (host/path are #127's, and the paired
+    // record is not loaded at this seam). Logged before bootstrap runs, so the not-paired case still
+    // anchors the window even though the relay socket never opens and #127 logs nothing.
+    deps.diagnosticLog?.event({ event: 'daemon-dial' })
     // Fire-and-forget: bootstrap catches everything internally and never rejects.
     void bootstrap(gen)
   }

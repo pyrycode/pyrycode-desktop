@@ -14,13 +14,16 @@ function assertNever(event: never): never {
 }
 
 /**
- * Map one typed daemon event to the session-store action it produces. Total by
- * construction: a new DaemonEvent variant with no case fails to compile (assertNever).
- * Every arm is pass-through except `failed`, which copies the wire ErrorPayload's fields
- * into a fresh store-owned ConnectionError — an explicit copy, not a spread, so the store
- * shape stays immune to ErrorPayload gaining an unrelated field later.
+ * Map one typed daemon event to the session-store action it produces, or `null` when the event
+ * drives no session-store state. Total by construction: a new DaemonEvent variant with no case
+ * fails to compile (assertNever). The session-lifecycle arms are pass-through except `failed`,
+ * which copies the wire ErrorPayload's fields into a fresh store-owned ConnectionError — an
+ * explicit copy, not a spread, so the store shape stays immune to ErrorPayload gaining an
+ * unrelated field later. The three debug-bundle arms (#168) return `null`: they are consumed by
+ * the download UI (#72), not the session store, so they dispatch nothing. The `assertNever`
+ * guard stays load-bearing — a future variant is still a compile error.
  */
-export function translateDaemonEvent(event: DaemonEvent): SessionAction {
+export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
   switch (event.type) {
     case 'connecting':
       return { type: 'connecting' }
@@ -41,6 +44,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction {
       return { type: 'messageReceived', message: event.message }
     case 'messagesReceived':
       return { type: 'messagesReceived', messages: event.messages }
+    case 'debugBundleProgress':
+    case 'debugBundleSaved':
+    case 'debugBundleFailed':
+      // No session-store action: the download UI (#72) consumes these, not the session store.
+      return null
     default:
       return assertNever(event)
   }
@@ -56,9 +64,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction {
  */
 export function useDaemonEventBridge(): void {
   useEffect(() => {
-    const off = window.pyry.onDaemonEvent((event) =>
-      sessionStore.getState().dispatch(translateDaemonEvent(event))
-    )
+    const off = window.pyry.onDaemonEvent((event) => {
+      const action = translateDaemonEvent(event)
+      // Debug-bundle events translate to `null` (no session-store action) — skip the dispatch.
+      if (action) sessionStore.getState().dispatch(action)
+    })
     return off
   }, [])
 }

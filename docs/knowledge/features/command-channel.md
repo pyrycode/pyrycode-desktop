@@ -4,6 +4,8 @@ The typed **command pipe** from the renderer window to the background process: a
 
 Introduced in [#17](../codebase/17.md). It is the **command half** (renderer→main) of the background↔window bridge; the mirror-image **event half** (background→renderer) is the [daemon-event channel](daemon-event-channel.md) (#18). No transport is wired yet — this ticket builds the outbound *seam* that #11 (composer submit → send-message envelope) and the transport (#4/#7) will consume. The command union is shaped so later transport commands (connect, disconnect) extend it **additively** without reshaping the bridge.
 
+The union grew its second member in [#168](../codebase/168.md): a **bare** `requestDebugBundle` command (no payload — the debug bundle is daemon-global, nothing to parameterise). It rides this same `sendCommand`/`onCommand` seam unchanged — no new channel, no new preload method — and is the first proof the "extend additively" design above actually holds under a payload-free member.
+
 ## What it does
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge. `ipcRenderer` itself never crosses to the window.
@@ -31,7 +33,9 @@ Imports the wire payload by **relative** path within `shared` (`../wire/types`).
 ```ts
 export const COMMAND_CHANNEL = 'pyry:command' as const
 
-export type RendererCommand = { type: 'sendMessage'; payload: SendMessagePayload }
+export type RendererCommand =
+  | { type: 'sendMessage'; payload: SendMessagePayload }
+  | { type: 'requestDebugBundle' }
 
 export function sendMessageCommand(fields: SendMessagePayload): RendererCommand {
   return { type: 'sendMessage', payload: fields }
@@ -42,13 +46,16 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
   switch (value.type) {
     case 'sendMessage':
       return 'payload' in value && isSendMessagePayload(value.payload)
+    case 'requestDebugBundle':
+      return true
     default:
       return false
   }
 }
 ```
 
-- **`RendererCommand` is a sealed discriminated union on `type`** whose first (and, per #17, only) member is `sendMessage`, reusing the wire `SendMessagePayload` (`conversation_id`, `message_id`, `text` — `src/shared/wire/types.ts`) **verbatim** — no field is remapped between layers. Mirror the discipline the event half used, where each member reuses a wire payload type as-is. Extend additively (connect/disconnect) when their transport tickets land — **and add a matching case to `isRendererCommand` in lockstep**, or the new member is silently dropped at the boundary.
+- **`RendererCommand` is a sealed discriminated union on `type`** with two members today: `sendMessage`, reusing the wire `SendMessagePayload` (`conversation_id`, `message_id`, `text` — `src/shared/wire/types.ts`) **verbatim** — no field is remapped between layers; and the bare `requestDebugBundle` (#168), which carries **no payload** because the debug bundle is daemon-global — there is nothing to parameterise. Neither member exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing one reuses only wire types, the bare one carries nothing. Extend additively (connect/disconnect) when their transport tickets land — **and add a matching case to `isRendererCommand` in lockstep**, or the new member is silently dropped at the boundary.
+- **A payload-free member's guard case is a bare `return true`.** `requestDebugBundle` has no payload to validate, so a well-formed `type` alone is complete acceptance — the same structural-minimum posture as `sendMessage` accepting extra harmless fields.
 - **`sendMessageCommand` is the pure, tested constructor** — a one-line wrap of already-assembled fields. It deliberately does **not** mint the `message_id`: randomness would break purity, so #11's composer generates it (`crypto.randomUUID()` — main-safe, security-appropriate) and passes the assembled `SendMessagePayload` in. The `RendererCommand` return type is the compile-time guarantee AC4 requires — a member with an unmodelled `type` cannot type-check.
 - **`isRendererCommand` is the boundary validator.** Minimum structural checks: `value` is a non-null object with a known `type`; for `sendMessage`, `value.payload` is a non-null object whose `conversation_id`, `message_id`, and `text` are all strings. It **accepts** commands carrying extra/unknown fields (structural minimum — do not reject on excess) and **rejects** everything else. Pure; never throws. It is co-located with the union so the two evolve in lockstep — the `switch (value.type)` shape makes a missing case visible.
 
@@ -140,5 +147,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Daemon-event channel](daemon-event-channel.md) — the mirror-image event half (background→renderer) this reverses; read for the shared conventions and the trust-boundary contrast
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the renderer-side pure-choke-point + exhaustiveness pattern `isRendererCommand` mirrors on the inbound boundary
 - [Session store](session-store.md) — where the daemon's later reply lands, closing the loop this channel opens
+- [Debug-bundle request (outbound)](debug-bundle-request.md) / [#168](../codebase/168.md) — the bare `requestDebugBundle` member this channel's union gained, and the sibling [daemon-event channel](daemon-event-channel.md) members that report its result
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
-- [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md`
+- [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

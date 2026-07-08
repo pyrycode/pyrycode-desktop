@@ -27,7 +27,10 @@ describe('sendMessageCommand', () => {
 
     // Discriminant comes from the module, not a bare literal a rename could silently pass.
     expect(command).toEqual({ type: 'sendMessage', payload: fields })
-    expect(command.payload).toBe(fields) // verbatim pass-through, no field remap
+    // Narrow off the discriminant now the union also holds the bare requestDebugBundle member.
+    if (command.type === 'sendMessage') {
+      expect(command.payload).toBe(fields) // verbatim pass-through, no field remap
+    }
   })
 })
 
@@ -81,5 +84,19 @@ describe('isRendererCommand', () => {
     expect(
       isRendererCommand({ type: t, payload: { conversation_id: 1, message_id: 'm1', text: 'hi' } })
     ).toBe(false)
+  })
+
+  it('accepts the bare requestDebugBundle command (no payload — bundle is daemon-global)', () => {
+    // The debug-bundle request carries nothing to parameterise, so its guard case is a bare
+    // `return true`. A structurally-extra field is harmless (structural minimum), like sendMessage.
+    expect(isRendererCommand({ type: 'requestDebugBundle' })).toBe(true)
+    expect(isRendererCommand({ type: 'requestDebugBundle', extra: 'ignored' })).toBe(true)
+  })
+
+  it('types the bare requestDebugBundle member as part of the union', () => {
+    // Compile-time proof the bare member is in RendererCommand, hence reachable through the
+    // existing generic sendCommand bridge — no new preload method or IPC channel exists to test.
+    const command: RendererCommand = { type: 'requestDebugBundle' }
+    expect(isRendererCommand(command)).toBe(true)
   })
 })

@@ -16,6 +16,7 @@ import type {
 } from './transport/noiseRelayDriver'
 import type { DiagnosticEvent, DiagnosticLog } from './diagnosticLog'
 import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from './transport/codec'
+import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import { MAX_PLAINTEXT_BYTES, type SendMessagePayload } from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
@@ -176,6 +177,53 @@ function messagePlaintext(payload: unknown): Uint8Array {
 /** A `message_chunk` envelope's plaintext bytes, wrapping an arbitrary payload. */
 function chunkPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'message_chunk', ts: FIXED_TS, payload })
+}
+
+/** A `debug_bundle_chunk` plaintext carrying raw bytes as base64-std `data` (#116). */
+function bundleChunkPlaintext(seq: number, data: Uint8Array): Uint8Array {
+  return encodeEnvelope({
+    id: 3,
+    type: 'debug_bundle_chunk',
+    ts: FIXED_TS,
+    payload: { seq, data: base64StdEncode(data) }
+  })
+}
+
+/** A `debug_bundle_done` plaintext (#116). */
+function bundleDonePlaintext(total: number): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'debug_bundle_done', ts: FIXED_TS, payload: { total } })
+}
+
+/** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
+function errorPlaintext(): Uint8Array {
+  return encodeEnvelope({
+    id: 3,
+    type: 'error',
+    ts: FIXED_TS,
+    payload: { code: 'server.binary_offline', message: 'secret error detail', retryable: true }
+  })
+}
+
+/** A spy BundleConsumer recording the single terminal (complete XOR fail) + progress ticks (#116). */
+function makeBundleConsumer(): {
+  consumer: BundleConsumer
+  completed: Uint8Array[]
+  failed: BundleFailReason[]
+  progress: number[]
+} {
+  const completed: Uint8Array[] = []
+  const failed: BundleFailReason[] = []
+  const progress: number[] = []
+  return {
+    completed,
+    failed,
+    progress,
+    consumer: {
+      complete: (bytes) => completed.push(bytes),
+      fail: (reason) => failed.push(reason),
+      progress: (n) => progress.push(n)
+    }
+  }
 }
 
 describe('createDaemonConnection', () => {
@@ -845,17 +893,20 @@ describe('createDaemonConnection — requestDebugBundle (outbound debug-bundle r
     return ctx
   }
 
-  it('is a no-op before start(): no driver, nothing forwarded, no throw', () => {
+  it('before start() fails the consumer not-connected: no driver, nothing forwarded, no throw', () => {
     const { connection, drivers } = build()
+    const { consumer, failed, completed } = makeBundleConsumer()
 
-    expect(() => connection.requestDebugBundle()).not.toThrow()
+    expect(() => connection.requestDebugBundle(consumer)).not.toThrow()
     expect(drivers).toHaveLength(0)
+    expect(failed).toEqual(['not-connected'])
+    expect(completed).toEqual([])
   })
 
   it('after handshake-complete, forwards exactly one bare request_debug_bundle envelope with id 2 and the fixed ts', async () => {
     const { connection, drivers } = await connected()
 
-    connection.requestDebugBundle()
+    connection.requestDebugBundle(makeBundleConsumer().consumer)
 
     expect(drivers[0].sent).toHaveLength(1)
     const envelope = decodeEnvelope(drivers[0].sent[0])
@@ -867,7 +918,7 @@ describe('createDaemonConnection — requestDebugBundle (outbound debug-bundle r
   it('carries no payload and no session-selecting field (AC3)', async () => {
     const { connection, drivers } = await connected()
 
-    connection.requestDebugBundle()
+    connection.requestDebugBundle(makeBundleConsumer().consumer)
 
     const envelope = decodeEnvelope(drivers[0].sent[0])
     // Bare control frame: an empty payload, no conversation_id / message_id selector.
@@ -881,7 +932,7 @@ describe('createDaemonConnection — requestDebugBundle (outbound debug-bundle r
     const { connection, drivers } = await connected()
 
     connection.send(PAYLOAD)
-    connection.requestDebugBundle()
+    connection.requestDebugBundle(makeBundleConsumer().consumer)
 
     expect(drivers[0].sent).toHaveLength(2)
     expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
@@ -894,7 +945,132 @@ describe('createDaemonConnection — requestDebugBundle (outbound debug-bundle r
     await tick()
     drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
-    expect(() => connection.requestDebugBundle()).not.toThrow()
+    expect(() => connection.requestDebugBundle(makeBundleConsumer().consumer)).not.toThrow()
+  })
+})
+
+describe('createDaemonConnection — debug-bundle reassembly routing (#116)', () => {
+  /** Reach the connected window. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  const CHUNK_A = new Uint8Array([1, 2, 3, 4])
+  const CHUNK_B = new Uint8Array([5, 6])
+
+  it('reassembles ordered bundle-chunk frames + done into consumer.complete with the served bytes', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, completed, failed, progress } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(1, CHUNK_B) })
+    drivers[0].emit({ type: 'message', plaintext: bundleDonePlaintext(2) })
+
+    expect(failed).toEqual([])
+    expect(completed).toHaveLength(1)
+    expect([...completed[0]]).toEqual([1, 2, 3, 4, 5, 6])
+    expect(progress).toEqual([1, 2])
+  })
+
+  it('routes an interleaved message / message_chunk to the existing path, unaffected (additive)', async () => {
+    const { connection, sink, drivers } = await connected()
+    const { consumer, completed } = makeBundleConsumer()
+    const before = emitted(sink).length
+    const msg = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi' }
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    // A normal message arriving mid-stream still routes to messageReceived, invisible to the bundle.
+    drivers[0].emit({ type: 'message', plaintext: messagePlaintext(msg) })
+    drivers[0].emit({ type: 'message', plaintext: bundleDonePlaintext(1) })
+
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'messageReceived', message: msg }])
+    expect([...completed[0]]).toEqual([1, 2, 3, 4])
+  })
+
+  it('fails the consumer seq-mismatch on a reordered chunk, completing nothing', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, completed, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(2, CHUNK_B) }) // gap
+
+    expect(failed).toEqual(['seq-mismatch'])
+    expect(completed).toEqual([])
+  })
+
+  it('fails the consumer total-mismatch on a truncated done', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, completed, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    drivers[0].emit({ type: 'message', plaintext: bundleDonePlaintext(3) }) // only 1 received
+
+    expect(failed).toEqual(['total-mismatch'])
+    expect(completed).toEqual([])
+  })
+
+  it('fails the consumer daemon-error on a single error reply with an active request', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, completed, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(failed).toEqual(['daemon-error'])
+    expect(completed).toEqual([])
+  })
+
+  it('drops an error reply with no active request: no consumer call, no crash', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    // No requestDebugBundle armed — the error frame routes to the (null) reassembler as a no-op.
+    expect(() =>
+      drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('fails the consumer connection-lost when a terminal interrupts the stream', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, completed, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    drivers[0].emit({ type: 'terminal', code: 4426, reason: 'dropped' })
+
+    expect(failed).toEqual(['connection-lost'])
+    expect(completed).toEqual([])
+  })
+
+  it('fails the consumer connection-lost when a driver error interrupts the stream', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    drivers[0].emit({ type: 'error', reason: 'session-load-failed' })
+
+    expect(failed).toEqual(['connection-lost'])
+  })
+
+  it('completes an empty bundle (done{0}, no chunks) with a zero-length archive', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, completed, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleDonePlaintext(0) })
+
+    expect(failed).toEqual([])
+    expect(completed[0]).toHaveLength(0)
   })
 })
 

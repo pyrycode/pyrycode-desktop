@@ -89,8 +89,14 @@ export interface FakeDaemonOptions {
    *  `${url}/v1/server`. */
   url: string
   /** Reply builder: given the decrypted inbound plaintext, return the reply plaintext to seal and
-   *  stream back. Default: echo the inbound plaintext verbatim. */
+   *  stream back. Default: echo the inbound plaintext verbatim. Ignored when buildReplyFrames is set. */
   buildReply?: (inboundPlaintext: Uint8Array) => Uint8Array
+  /** Streaming-serve reply builder (#116, test infra): given the decrypted inbound plaintext,
+   *  return an ORDERED list of plaintext envelopes — the fake seals each as its own `noise_msg` and
+   *  streams them in order (the debug-bundle `[chunk0, …, done]` or `[error]` shape). Takes
+   *  precedence over buildReply when set. The one-frame `initiateRekey` streaming path is the
+   *  precedent; this generalizes it to N frames per inbound. */
+  buildReplyFrames?: (inboundPlaintext: Uint8Array) => Uint8Array[]
   /** hello_ack payload overrides. Defaults: protocol_version 'v2', server_id 'fake-daemon',
    *  conn_id 'conn-1', capabilities []. */
   helloAck?: Partial<HelloAckPayload>
@@ -160,6 +166,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
   let closePromise: Promise<void> | null = null
 
   const buildReply = options.buildReply ?? ((plaintext: Uint8Array) => plaintext)
+  const buildReplyFrames = options.buildReplyFrames
   const rekeyResumeMessage = options.rekeyResumeMessage ?? DEFAULT_REKEY_RESUME_MESSAGE
   const helloAck: HelloAckPayload = {
     protocol_version: 'v2',
@@ -287,6 +294,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
 
   function handleTransport(raw: Uint8Array): void {
     if (recvCipher === null || sendCipher === null) return
+    const send = sendCipher
     let plaintext: Uint8Array
     try {
       plaintext = recvCipher.DecryptWithAd(EMPTY_AD, raw)
@@ -296,7 +304,12 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       settle({ ok: false, reason: 'transport-decrypt-failed' })
       return
     }
-    sendNoise(sendCipher.EncryptWithAd(EMPTY_AD, buildReply(plaintext)))
+    // buildReplyFrames streams an ordered list of plaintext envelopes (one sealed `noise_msg` each,
+    // in order); otherwise the single buildReply. Both seal under the current send cipher (#116).
+    const frames = buildReplyFrames ? buildReplyFrames(plaintext) : [buildReply(plaintext)]
+    for (const frame of frames) {
+      sendNoise(send.EncryptWithAd(EMPTY_AD, frame))
+    }
     settle({ ok: true }) // first reply settles ok; cached thereafter, session stays open (AC2)
   }
 

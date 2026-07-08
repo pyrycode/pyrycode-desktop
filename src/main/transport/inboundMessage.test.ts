@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { parseInboundMessage } from './inboundMessage'
-import { encodeEnvelope, WireDecodeError } from './codec'
+import { encodeEnvelope, base64StdEncode, WireDecodeError } from './codec'
 import { createDiagnosticLog, type DiagnosticLog } from '../diagnosticLog'
 import { MAX_PLAINTEXT_BYTES, type MessagePayload } from '../../shared/wire/types'
 
@@ -33,6 +33,16 @@ function encodeChunk(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 6, type: 'message_chunk', ts: FIXED_TS, payload })
 }
 
+/** A `debug_bundle_chunk` envelope's plaintext bytes, wrapping an arbitrary payload (#116). */
+function encodeBundleChunk(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 7, type: 'debug_bundle_chunk', ts: FIXED_TS, payload })
+}
+
+/** A `debug_bundle_done` envelope's plaintext bytes, wrapping an arbitrary payload (#116). */
+function encodeBundleDone(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 8, type: 'debug_bundle_done', ts: FIXED_TS, payload })
+}
+
 describe('parseInboundMessage — happy', () => {
   it('narrows a valid message envelope into a message result', () => {
     expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
@@ -60,11 +70,90 @@ describe('parseInboundMessage — happy', () => {
 })
 
 describe('parseInboundMessage — ignored envelope types (AC5)', () => {
-  it('returns null for envelope types other than message / message_chunk, without throwing', () => {
-    for (const type of ['ack', 'error', 'hello_ack', 'something-else']) {
+  it('returns null for envelope types other than the modeled set, without throwing', () => {
+    // `error` is now modeled (→ daemon-error) so it is no longer in this ignored set (#116).
+    for (const type of ['ack', 'hello_ack', 'something-else']) {
       const bytes = encodeEnvelope({ id: 1, type, ts: FIXED_TS, payload: {} })
       expect(parseInboundMessage(bytes)).toBeNull()
     }
+  })
+})
+
+describe('parseInboundMessage — debug-bundle recognition (#116, additive)', () => {
+  it('narrows a debug_bundle_chunk into { kind, seq, data } with base64-decoded bytes', () => {
+    const raw = new Uint8Array([1, 2, 3, 250])
+    const result = parseInboundMessage(encodeBundleChunk({ seq: 0, data: base64StdEncode(raw) }))
+    expect(result).toEqual({ kind: 'bundle-chunk', seq: 0, data: raw })
+  })
+
+  it('preserves a non-zero seq and decodes an empty-data chunk to zero bytes', () => {
+    const result = parseInboundMessage(encodeBundleChunk({ seq: 5, data: '' }))
+    expect(result).toEqual({ kind: 'bundle-chunk', seq: 5, data: new Uint8Array(0) })
+  })
+
+  it('narrows a debug_bundle_done into { kind, total }', () => {
+    expect(parseInboundMessage(encodeBundleDone({ total: 3 }))).toEqual({
+      kind: 'bundle-done',
+      total: 3
+    })
+  })
+
+  it('narrows a daemon error into a content-free { kind: daemon-error }', () => {
+    // The ErrorPayload fields are present on the wire but must NOT be surfaced.
+    const bytes = encodeEnvelope({
+      id: 1,
+      type: 'error',
+      ts: FIXED_TS,
+      payload: { code: 'server.binary_offline', message: 'secret daemon detail', retryable: true }
+    })
+    expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error' })
+  })
+
+  it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeChunk({ messages: [MSG_A] }))).toEqual({
+      kind: 'chunk',
+      messages: [MSG_A]
+    })
+  })
+})
+
+describe('parseInboundMessage — debug-bundle fail-closed (#116, AC3/AC4)', () => {
+  it('throws on non-canonical / malformed base64 chunk data', () => {
+    const bad = ['not valid base64 !!!', 'YQ==garbage', 'YR==']
+    for (const data of bad) {
+      expect(() => parseInboundMessage(encodeBundleChunk({ seq: 0, data }))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on a missing or non-string chunk data', () => {
+    const bad: unknown[] = [{ seq: 0 }, { seq: 0, data: 5 }, { seq: 0, data: null }]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeBundleChunk(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on a missing or non-number chunk seq', () => {
+    const bad: unknown[] = [{ data: '' }, { seq: '0', data: '' }, { seq: null, data: '' }]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeBundleChunk(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a debug_bundle_chunk payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeBundleChunk('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeBundleChunk(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws on a missing or non-number done total', () => {
+    const bad: unknown[] = [{}, { total: '3' }, { total: null }]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeBundleDone(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a debug_bundle_done payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeBundleDone('nope'))).toThrow(WireDecodeError)
   })
 })
 
@@ -205,6 +294,62 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(record.code).toBe('message_chunk')
     expect(record.count).toBe(0)
     expect(record.hash).toMatch(HEX64)
+  })
+
+  it('logs a debug_bundle_chunk content-free, never seq or data (#116)', () => {
+    const { log, lines } = captureLog()
+    const raw = new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2, 1, 0])
+    const plaintext = encodeBundleChunk({ seq: 42, data: base64StdEncode(raw) })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('debug_bundle_chunk')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no chunk seq, no data. `seq`/`ts` here are the logger's own
+    // record stamps (diagnosticLog.ts), NOT the bundle chunk's seq (which was 42, not 0).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(record.seq).toBe(0) // the log sequence counter, not the chunk's seq:42
+    expect(lines[0]).not.toContain(base64StdEncode(raw))
+  })
+
+  it('logs a debug_bundle_done content-free, never total (#116)', () => {
+    const { log, lines } = captureLog()
+    const plaintext = encodeBundleDone({ total: 7 })
+
+    parseInboundMessage(plaintext, log)
+
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('debug_bundle_done')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no `total`.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+  })
+
+  it('logs a modeled error as inbound-decoded(error), never the ErrorPayload text (#116)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_ERR = 'secret-daemon-error-detail'
+    const plaintext = encodeEnvelope({
+      id: 1,
+      type: 'error',
+      ts: FIXED_TS,
+      payload: { code: 'server.binary_offline', message: SECRET_ERR, retryable: true }
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    // Now modeled: it moves from inbound-unmodeled to inbound-decoded(error).
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('error')
+    expect(record.hash).toMatch(HEX64)
+    expect(lines[0]).not.toContain(SECRET_ERR)
   })
 
   it('logs an unmodeled envelope by type instead of silently dropping it (AC2)', () => {

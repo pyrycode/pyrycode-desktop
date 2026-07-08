@@ -30,6 +30,11 @@ import { buildClientHello, parseHelloAck } from './transport/helloExchange'
 import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
+import {
+  createBundleReassembler,
+  type BundleConsumer,
+  type BundleReassembler
+} from './transport/bundleReassembler'
 import { base64StdDecode } from './transport/codec'
 import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
 import type { DiagnosticLog } from './diagnosticLog'
@@ -93,11 +98,14 @@ export interface DaemonConnection {
   send(payload: SendMessagePayload): void
   /**
    * Encrypt a bare `request_debug_bundle` control envelope onto the live session — asks the daemon
-   * to begin streaming the current debug bundle back. Carries no payload and no session-selecting
-   * field (the bundle is daemon-global). Idempotent no-op when not connected, exactly like `send`.
-   * NEVER throws out of the module (parity #490).
+   * to begin streaming the current debug bundle back — and ARM a reassembler for the streamed reply
+   * (#116). The daemon answers with ordered `debug_bundle_chunk`* frames + one `debug_bundle_done`,
+   * or a single `error` in lieu of the stream; the reassembler delivers the finished archive
+   * (`consumer.complete(bytes)`) or a clean failure (`consumer.fail(reason)`) — exactly one terminal.
+   * When not connected the consumer is failed `not-connected` (never a silent no-op), so #118's
+   * command never hangs. NEVER throws out of the module (parity #490).
    */
-  requestDebugBundle(): void
+  requestDebugBundle(consumer: BundleConsumer): void
 }
 
 /**
@@ -165,6 +173,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // not consume an id (harmless either way: the daemon uses `id` for in_reply_to correlation, not
   // sequencing).
   let nextEnvelopeId = 2
+  // The single per-connection debug-bundle reassembly slot (#116). The desktop has at most ONE
+  // bundle request in flight (daemon-global bundle, one UI action), so a lone slot keyed by
+  // liveness — replaced on each requestDebugBundle — is the whole state model: no in_reply_to map.
+  // `null` before/between requests; a settled reassembler stays referenced but inert (its own
+  // `settled` flag absorbs stray late frames) until the next request replaces it.
+  let reassembler: BundleReassembler | null = null
 
   function emitFailed(code: string, message = messageFor(code)): void {
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
@@ -205,14 +219,33 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         if (inbound === null) return // AC5: a well-formed envelope of another type is ignored.
-        if (inbound.kind === 'message') {
-          emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message })
-        } else {
-          emitDaemonEvent(sink, { type: 'messagesReceived', messages: inbound.messages })
+        // Route on the narrowed kind. The message / message_chunk paths are unchanged; the three
+        // debug-bundle kinds (#116) feed the armed reassembler (a no-op when none is in flight —
+        // optional chaining, or the settled reassembler's own inert guard — preserving the prior
+        // drop behaviour and keeping an unrelated `error` harmless when no bundle is streaming).
+        switch (inbound.kind) {
+          case 'message':
+            emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message })
+            return
+          case 'chunk':
+            emitDaemonEvent(sink, { type: 'messagesReceived', messages: inbound.messages })
+            return
+          case 'bundle-chunk':
+            reassembler?.chunk(inbound.seq, inbound.data)
+            return
+          case 'bundle-done':
+            reassembler?.done(inbound.total)
+            return
+          case 'daemon-error':
+            reassembler?.fail('daemon-error')
+            return
         }
         return
       }
       case 'terminal':
+        // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
+        // Deterministic code, safe unconditionally: fail on a settled/absent reassembler is inert.
+        reassembler?.fail('connection-lost')
         // A clean local stop() drives terminal{1000,'stopped'}; suppress it (the window is
         // tearing down on quit). Every other fatal close is an authoritative drop the user sees.
         // The supervisor's `reason` string is deliberately NOT forwarded (conservative).
@@ -220,6 +253,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitFailed('connection-closed', `The connection to pyrybox was closed (code ${event.code}).`)
         return
       case 'error':
+        // Same teardown net for a connection-level driver error mid-stream.
+        reassembler?.fail('connection-lost')
         // The driver's reason is a static enum string — safe to surface as the category code.
         emitFailed(event.reason)
         return
@@ -343,11 +378,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
-  function requestDebugBundle(): void {
-    // Structural twin of send: the same single `driver === null` guard covers every "not connected"
-    // state (before start(), mid-bootstrap, bootstrap-failed; the driver's own sendMessage is inert
-    // post-terminal). This is AC4 — silent no-op, never a throw.
-    if (driver === null) return
+  function requestDebugBundle(consumer: BundleConsumer): void {
+    // Not connected (before start(), mid-bootstrap, bootstrap-failed): fail the consumer terminally
+    // so #118's command never hangs — the wire behaviour is still "send nothing," but the caller is
+    // notified. Replaces the old silent no-op (send's twin stays a silent no-op; a bundle request
+    // owns a consumer that must always receive a terminal).
+    if (driver === null) {
+      consumer.fail('not-connected')
+      return
+    }
+    // Arm the reassembler BEFORE building/sending the request frame, so the reply cannot race ahead
+    // of an armed slot. Replacing the slot releases any prior request's accumulated bytes.
+    reassembler = createBundleReassembler(consumer)
     try {
       // Shares the one monotonic nextEnvelopeId with send — no second counter — so ids stay unique
       // across interleaved send/requestDebugBundle calls (the daemon correlates replies by id).
@@ -356,8 +398,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       driver.sendMessage(bytes)
     } catch {
       // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but
-      // driver.sendMessage can throw. The caught object is DROPPED — no log, no event, exactly like
-      // send.
+      // driver.sendMessage can throw. The caught object is DROPPED. A build/send throw after arming
+      // leaves the reassembler pending; the connection-teardown net resolves the consumer when the
+      // socket drops.
     }
   }
 

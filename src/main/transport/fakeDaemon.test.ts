@@ -243,6 +243,33 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     expect(events.some((e) => e.type === 'error')).toBe(false)
   })
 
+  it('streams every buildReplyFrames envelope as its own sealed frame, in order (#116)', async () => {
+    // Three distinct plaintext envelopes — the client must receive exactly three `message` events,
+    // byte-equal and in order (the debug-bundle [chunk0, chunk1, done] streaming shape).
+    const frames = [
+      encodeEnvelope({ id: 1, type: 'debug_bundle_chunk', ts: '2026-01-01T00:00:07Z', payload: { seq: 0, data: base64StdEncode(new Uint8Array([1, 2, 3])) } }),
+      encodeEnvelope({ id: 2, type: 'debug_bundle_chunk', ts: '2026-01-01T00:00:08Z', payload: { seq: 1, data: base64StdEncode(new Uint8Array([4, 5])) } }),
+      encodeEnvelope({ id: 3, type: 'debug_bundle_done', ts: '2026-01-01T00:00:09Z', payload: { total: 2 } })
+    ]
+    const { forwarderUrl, whenReady, daemon } = await standUp({ buildReplyFrames: () => frames })
+    const { initiator, events, waiter } = await driveClient({
+      forwarderUrl,
+      remoteStaticPublicKey: daemon.staticPublicKey,
+      hello: buildTestHello()
+    })
+    await whenReady()
+    await waiter.wait(() => events.some((e) => e.type === 'handshake-complete'))
+
+    initiator.sendMessage(encodeEnvelope({ id: 4, type: 'send_message', ts: '2026-01-01T00:00:10Z', payload: { conversation_id: 'c1', message_id: 'm', text: 'req' } }))
+    await waiter.wait(() => events.filter((e) => e.type === 'message').length >= 3)
+
+    const received = events.filter((e) => e.type === 'message') as { plaintext: Uint8Array }[]
+    expect(received).toHaveLength(3)
+    expect(received.map((e) => bytes(e.plaintext))).toEqual(frames.map(bytes))
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+    expect(await daemon.whenSettled()).toEqual({ ok: true })
+  })
+
   it('initiates a rekey: the real client swaps and resumes messaging under the new keys (AC2, AC3)', async () => {
     const { forwarderUrl, whenReady, daemon } = await standUp()
     const { initiator, events, waiter } = await driveClient({

@@ -23,7 +23,7 @@
 // logged here (a malformed/oversized frame leaves no record — the pre-decryption raw-byte case is
 // sibling #133). Absent a logger the module is silent; behaviour is otherwise identical.
 import { blake2s } from '@noble/hashes/blake2'
-import { decodeEnvelope, WireDecodeError } from './codec'
+import { decodeEnvelope, base64StdDecode, WireDecodeError } from './codec'
 import { MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
 import type { MessagePayload, MessageChunkPayload } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
@@ -53,10 +53,17 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * Which modeled app-message the envelope carried. NOT a wire type and NOT a DaemonEvent — the
  * transport layer stays IPC-free. An internal transport result the consumer (#62) maps onto the
  * daemon-event channel.
+ *
+ * The three debug-bundle kinds (#116) are recognised additively: the `message` / `message_chunk`
+ * path is unchanged, and `daemon-error` is deliberately CONTENT-FREE — the daemon's ErrorPayload
+ * text is never narrowed or surfaced, only "a terminal error arrived."
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
   | { kind: 'chunk'; messages: MessagePayload[] }
+  | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
+  | { kind: 'bundle-done'; total: number }
+  | { kind: 'daemon-error' }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -69,6 +76,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requireString(payload: Record<string, unknown>, field: string): string {
   const value = payload[field]
   if (typeof value !== 'string') {
+    throw new WireDecodeError(`missing required field: ${field}`)
+  }
+  return value
+}
+
+/** Narrow one required number field off the payload, or fail closed with a category-only message.
+ *  The sibling of requireString for the bundle payloads' numeric `seq` / `total` (#116). JSON.parse
+ *  never yields NaN/Infinity, so a plain `typeof === 'number'` check suffices. */
+function requireNumber(payload: Record<string, unknown>, field: string): number {
+  const value = payload[field]
+  if (typeof value !== 'number') {
     throw new WireDecodeError(`missing required field: ${field}`)
   }
   return value
@@ -114,10 +132,34 @@ function parseMessageChunkPayload(payload: unknown): MessageChunkPayload {
 }
 
 /**
+ * Narrow a debug_bundle_chunk payload (#116): `seq` a number, `data` standard base64 that
+ * base64StdDecode (STRICT — throws WireDecodeError on non-canonical / truncated input) turns into
+ * raw bytes. The base64 decode happens HERE, at the untrusted boundary, so the reassembler stays
+ * byte-pure. Fail-closed: any structural mismatch throws, never a partial value.
+ */
+function parseDebugBundleChunkPayload(payload: unknown): { seq: number; data: Uint8Array } {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed debug_bundle_chunk payload')
+  }
+  const seq = requireNumber(payload, 'seq')
+  const data = base64StdDecode(requireString(payload, 'data'))
+  return { seq, data }
+}
+
+/** Narrow a debug_bundle_done payload (#116): `total` a number. Fail-closed. */
+function parseDebugBundleDonePayload(payload: unknown): { total: number } {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed debug_bundle_done payload')
+  }
+  return { total: requireNumber(payload, 'total') }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
- * `message` / `message_chunk` envelope, `null` for a well-formed envelope of any OTHER type
- * (ignored, AC5), or throws WireDecodeError — the single failure type, so the consumer's one catch
- * covers oversized / malformed / unparseable / mistyped alike (fail-closed, AC4).
+ * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
+ * `debug_bundle_done` / `error` → `daemon-error`, #116), `null` for a well-formed envelope of any
+ * OTHER type (ignored, AC5), or throws WireDecodeError — the single failure type, so the consumer's
+ * one catch covers oversized / malformed / unparseable / mistyped alike (fail-closed, AC4).
  */
 export function parseInboundMessage(
   plaintext: Uint8Array,
@@ -156,6 +198,42 @@ export function parseInboundMessage(
       })
       return { kind: 'chunk', messages }
     }
+    case 'debug_bundle_chunk': {
+      // Narrow + base64-decode BEFORE logging so a malformed chunk (bad base64, non-number seq)
+      // throws first and leaves no record. `seq` / `data` are never logged — only the frame's
+      // byte length + one-way hash.
+      const { seq, data } = parseDebugBundleChunkPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'debug_bundle_chunk',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'bundle-chunk', seq, data }
+    }
+    case 'debug_bundle_done': {
+      const { total } = parseDebugBundleDonePayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'debug_bundle_done',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'bundle-done', total }
+    }
+    case 'error':
+      // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.
+      // CONTENT-FREE — no ErrorPayload field is narrowed or surfaced; the reassembler only needs
+      // "a terminal error arrived." It moves from inbound-unmodeled to inbound-decoded(error) now
+      // that it is recognised — a content-free, more-accurate log that applies to ALL `error`
+      // frames, bundle-related or not (intentional; see the #116 spec).
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'error',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'daemon-error' }
     default:
       // A well-formed `ack` / `error` / etc. is not an error — it is simply not modeled here. Log it
       // content-free (capped type + size + hash) so an unforeseen kind still leaves a footprint (#130

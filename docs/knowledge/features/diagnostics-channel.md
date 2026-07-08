@@ -1,8 +1,8 @@
 # Renderer→main diagnostics channel
 
-The one-way, **content-free diagnostic pipe** from the React window to the background process: the renderer ships an allowlisted record, and the main process re-validates it at the untrusted boundary and forwards only the safe fields to the [#126 content-free logger](diagnostic-log.md). It is the missing seam that lets **renderer-side** surfaces — the state store ([#134](https://github.com/pyrycode/pyrycode-desktop/issues/134), later the render layer) — land in the same one-click debug bundle as the transport logs, **without ever giving the renderer a path to emit a secret**.
+The one-way, **content-free diagnostic pipe** from the React window to the background process: the renderer ships an allowlisted record, and the main process re-validates it at the untrusted boundary and forwards only the safe fields to the [#126 content-free logger](diagnostic-log.md). It is the seam that lets **renderer-side** surfaces — the [session store](session-store.md) ([#134](../codebase/134.md)), later the render layer — land in the same one-click debug bundle as the transport logs, **without ever giving the renderer a path to emit a secret**.
 
-Introduced in [#131](../codebase/131.md). It is the renderer→main slice of **Bucket 1** of the Diagnostics design (split from [#125](https://github.com/pyrycode/pyrycode-desktop/issues/125)): the logger ([#126](diagnostic-log.md)) lives in the main process, but Bucket 1's "state-store transitions and interface errors" happen in the sandboxed renderer, which cannot call it directly. This channel ships the pipe + its tests + a test emitter only; **no consumer is wired here** — the first (store-transition logging) is [#134](https://github.com/pyrycode/pyrycode-desktop/issues/134).
+Introduced in [#131](../codebase/131.md). It is the renderer→main slice of **Bucket 1** of the Diagnostics design (split from [#125](https://github.com/pyrycode/pyrycode-desktop/issues/125)): the logger ([#126](diagnostic-log.md)) lives in the main process, but Bucket 1's "state-store transitions and interface errors" happen in the sandboxed renderer, which cannot call it directly. This channel shipped the pipe + its tests + a test emitter only, inert until its first consumer; [#134](../codebase/134.md) then wired the session store's `dispatch` choke point as that first real producer (state-store transitions). The render-layer consumer (interface errors) remains deferred.
 
 ## What it does
 
@@ -100,7 +100,7 @@ Reuses the **same** `diagnosticLog` instance already injected into `createDaemon
 ### Data flow (one-way)
 
 ```
- renderer (#134 later)     diagnostics.ts          preload bridge              receiveDiagnostic          #126 logger
+ renderer (#134)           diagnostics.ts          preload bridge              receiveDiagnostic          #126 logger
  store transition ───────► RendererDiagnosticEvent ─► window.pyry.sendDiagnostic ─► onDiagnostic listener ─► diagnosticLog.event
    (allowlisted record)    (compile-time allowlist)   ipcRenderer.send ──IPC──►  strip event,             (SAME instance,
                                                        DIAGNOSTIC_CHANNEL          projectDiagnosticEvent ✓  one seq, one file)
@@ -113,9 +113,8 @@ Reuses the **same** `diagnosticLog` instance already injected into `createDaemon
 
 - **Single registration is the composition root's contract.** `onDiagnostic` returns an unsubscribe (exact-listener `removeListener`); registering it **once** and tearing it down is the caller's job. Registering twice would double-log every record.
 - **A malformed record is dropped, never fatal.** Missing/empty/non-string `event`, a null/non-object value → `null` → a fixed-string warn, nothing logged. A wrong-typed optional field is omitted while the valid `event` still projects.
-- **The channel is inert on merge.** No production emitter exists until [#134](https://github.com/pyrycode/pyrycode-desktop/issues/134); a test emitter drives it in the unit tests.
 - **The allowlist must grow with #126's in lockstep — pinned, not hoped.** If a later consumer needs a new safe field that the renderer *can* produce, add it to **both** [#126's `DiagnosticEvent`](diagnostic-log.md) **and** `RendererDiagnosticEvent`; the compile-time type-pin turns a one-sided drift into a `typecheck` failure. A field that is structurally main-only (like [#133](../codebase/133.md)'s branded `safeBytes?`) instead goes on the pin's `Omit` list — see § *The one way it diverges from the command channel* above.
-- **String cap is 128.** Sized for the current fields (64-hex hash is the longest). A later consumer needing a longer legitimate field should raise the cap deliberately, not remove it.
+- **String cap is 128.** Sized for the current fields (64-hex hash is the longest). [#134](../codebase/134.md) fit within it (`code` is a `SessionAction['type']` string, well under the cap); a later consumer needing a longer legitimate field should raise the cap deliberately, not remove it.
 
 ## Security posture
 
@@ -131,7 +130,8 @@ Reuses the **same** `diagnosticLog` instance already injected into `createDaemon
 ## Related
 
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger this channel feeds; the `DiagnosticEvent` allowlist `RendererDiagnosticEvent` mirrors and the `event()` spread that forces the project-not-forward-raw deviation. The renderer boundary is a **new** producer for the same single instance the transport legs ([#127](../codebase/127.md)/[#128](../codebase/128.md)) and the [decode boundary](inbound-message-decode.md) ([#130](../codebase/130.md)) write to.
+- [Session store](session-store.md) / [#134 codebase notes](../codebase/134.md) — the first real consumer: an optional `dispatch`-level observer that emits one content-free `store-transition` record per action.
 - [Command channel](command-channel.md) / [#17](../codebase/17.md) — the one-way, boundary-validated renderer→main pattern this copies end-to-end; read for the shared conventions and the trust-boundary contrast. The **one** divergence (project-not-guard) is documented above.
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md) — allowlist the envelope, enforced by the type, never a runtime scrubber. This channel extends that fail-closed enforcement to the **untrusted renderer boundary** via `projectDiagnosticEvent`.
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) — keys/bytes never reach the renderer; the invariant that makes "the renderer cannot forward a secret it never receives" true.
-- [#131 codebase notes](../codebase/131.md) · Spec: `docs/specs/architecture/131-renderer-main-diagnostics-channel.md` · Parent: [#125](https://github.com/pyrycode/pyrycode-desktop/issues/125) (Bucket-1 diagnostics split into #130/#131/#132/#133/#134). First consumer: [#134](https://github.com/pyrycode/pyrycode-desktop/issues/134) (state-store transition logging).
+- [#131 codebase notes](../codebase/131.md) · Spec: `docs/specs/architecture/131-renderer-main-diagnostics-channel.md` · Parent: [#125](https://github.com/pyrycode/pyrycode-desktop/issues/125) (Bucket-1 diagnostics split into #130/#131/#132/#133/#134). First consumer: [#134](../codebase/134.md) (state-store transition logging, shipped).

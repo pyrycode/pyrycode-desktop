@@ -16,13 +16,14 @@ function fakeSecureStore(): {
   secureStore: SecureStore
   store: Map<string, Uint8Array>
   writes: Uint8Array[]
-  control: { setError: Error | null; getError: Error | null }
+  control: { setError: Error | null; getError: Error | null; deleteError: Error | null }
 } {
   const store = new Map<string, Uint8Array>()
   const writes: Uint8Array[] = []
-  const control: { setError: Error | null; getError: Error | null } = {
+  const control: { setError: Error | null; getError: Error | null; deleteError: Error | null } = {
     setError: null,
-    getError: null
+    getError: null,
+    deleteError: null
   }
   return {
     store,
@@ -39,6 +40,7 @@ function fakeSecureStore(): {
         return store.get(name) ?? null
       },
       async delete(name) {
+        if (control.deleteError) throw control.deleteError
         store.delete(name)
       }
     }
@@ -164,16 +166,82 @@ describe('createPairedServerStore', () => {
     expect(store.has(PAIRED_SERVER_NAME)).toBe(false)
   })
 
+  it('erases the record so a later load reports not-paired (AC2)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const paired = createPairedServerStore({ secureStore })
+
+    await paired.save(RECORD)
+    await paired.clear()
+
+    expect(await paired.load()).toBeNull()
+    expect(store.size).toBe(0)
+  })
+
+  it('is idempotent: clearing a never-paired store resolves and stays not-paired (AC3)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const paired = createPairedServerStore({ secureStore })
+
+    await expect(paired.clear()).resolves.toBeUndefined()
+    expect(await paired.load()).toBeNull()
+    expect(store.size).toBe(0)
+  })
+
+  it('erases ONLY the paired-server record, preserving the device static keypair (AC1, AC4)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    seed(store, PAIRED_SERVER_NAME, JSON.stringify(RECORD))
+    // The device static keypair lives under its own name in the same secret chain (deviceKeypair.ts
+    // DEVICE_STATIC_KEY_NAME). Erasing the pairing must not rotate the device identity (AC4).
+    seed(store, 'pyrycode.device_static', 'device-static-keypair-bytes')
+    const paired = createPairedServerStore({ secureStore })
+
+    await paired.clear()
+
+    expect(store.has(PAIRED_SERVER_NAME)).toBe(false)
+    expect(store.has('pyrycode.device_static')).toBe(true)
+  })
+
+  it('clears the injected store name, not a hardcoded literal (the deferred per-server-id seam)', async () => {
+    const { secureStore, store } = fakeSecureStore()
+    const paired = createPairedServerStore({
+      secureStore,
+      name: 'pyrycode.paired_server.server-xyz'
+    })
+    seed(store, 'pyrycode.paired_server.server-xyz', JSON.stringify(RECORD))
+    seed(store, PAIRED_SERVER_NAME, JSON.stringify(RECORD))
+
+    await paired.clear()
+
+    expect(store.has('pyrycode.paired_server.server-xyz')).toBe(false)
+    expect(store.has(PAIRED_SERVER_NAME)).toBe(true)
+  })
+
+  it('fails closed: a delete failure propagates rather than reporting success', async () => {
+    const { secureStore, store, control } = fakeSecureStore()
+    seed(store, PAIRED_SERVER_NAME, JSON.stringify(RECORD))
+    control.deleteError = new Error('persistence unavailable')
+    const paired = createPairedServerStore({ secureStore })
+
+    await expect(paired.clear()).rejects.toThrow('persistence unavailable')
+  })
+
   it('is log-free across save, load, and every error path (AC4)', async () => {
     const spies = (['log', 'info', 'warn', 'error', 'debug', 'trace'] as const).map((m) =>
       vi.spyOn(console, m).mockImplementation(() => {})
     )
     try {
-      // save + load happy path.
+      // save + load + clear happy path.
       const ok = fakeSecureStore()
       const okStore = createPairedServerStore({ secureStore: ok.secureStore })
       await okStore.save(RECORD)
       await okStore.load()
+      await okStore.clear()
+
+      // Delete-failure error path.
+      const noDelete = fakeSecureStore()
+      noDelete.control.deleteError = new Error('persistence unavailable')
+      await createPairedServerStore({ secureStore: noDelete.secureStore })
+        .clear()
+        .catch(() => {})
 
       // Keychain-unavailable error path.
       const noEnc = fakeSecureStore()

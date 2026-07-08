@@ -62,6 +62,7 @@ export interface NoiseRelayDriverConfig {
   onEvent: (event: RelaySessionEvent) => void         // the single typed sink; must not throw
   fatalCloseCodes?: ReadonlySet<number>               // passthrough; default DEFAULT_FATAL_CLOSE_CODES
   loadDialConfig?: DialConfigProvider                 // #83: set → every AUTOMATIC reconnect re-sources both halves
+  diagnosticLog?: DiagnosticLog                       // #133: logs the framing catch + forwarded into every session built
   createSupervisor?: (config: RelaySupervisorConfig) => RelaySupervisor       // DI seam; real factory by default
   createSession?: (config: NoiseSessionConfig) => Promise<NoiseSession>       // DI seam; real factory by default
 }
@@ -98,6 +99,15 @@ When `config.loadDialConfig` is set, the driver re-sources the record on every *
 - **`resolveConnection`** (built only when `loadDialConfig` is set; else `undefined`, passed to `createSupervisor` alongside `connection`) is the **single per-dial `load()`**: `const dc = await loadDialConfig(); pendingSession = dc?.session ?? null; return dc?.connection ?? null`. The supervisor gets the fresh `connection`; `onConnected` gets `pendingSession` — from the *same* record snapshot. It **MUST catch a thrown `loadDialConfig` and return `null`** (drop the caught object — a `decodeServerKey`/keychain/`MalformedPairedServerRecordError` message could echo the key/token; null `pendingSession` so a stale prior session is never reused). This catch is **load-bearing**: without it the throw escapes as an unhandled rejection at the supervisor's `await` (AC3 violation). A malformed record on reconnect therefore fails closed *identically* to the no-record case.
 - **`onConnected`** selects `material = config.loadDialConfig && !firstConnect ? pendingSession : config.session` then flips `firstConnect = false`. A `material === null` (structurally unreachable — the supervisor fail-closes on a null `resolveConnection` *before* it emits `connected`) is defended: emit `{ type: 'error', reason: 'session-load-failed' }` rather than dereference null. Otherwise the existing `createSession(...)` runs with `material`.
 
+### Pre-decryption framing-failure byte logging + forwarding into the session (#133)
+
+The driver is the **DI convergence point** for pre-decryption byte logging: it owns the `onMessage` framing catch *and* builds the `NoiseSessionConfig` for every session it creates, so a single `config.diagnosticLog?: DiagnosticLog` field serves both:
+
+- **The framing catch itself** — before `emit({ type: 'error', reason: 'inbound-frame-decode-failed' })`, the driver logs `{ event: 'relay-frame-decode-failed', code: 'inbound-frame-decode-failed', bytes: frame.length, safeBytes: encodeSafeBytes(frame) }`. The caught `WireDecodeError` object is still dropped (its `.message` could echo more than the bounded prefix); only the static code and the capped raw `frame` — the still-encrypted, base64-wrapped `InnerFrameV2` — are logged. The `emit` and the frame-drop are otherwise unchanged.
+- **Forwarding into the session** — `onConnected`'s `createSession({...})` build passes `diagnosticLog: config.diagnosticLog`, the driver's **own constant**, not anything carried on `SessionMaterial`. This is deliberate: it means a #83 per-dial reload never has to thread the logger through `DialConfig`, since the logger is process-wide, not per-dial.
+
+Absent an injected `diagnosticLog`, both paths are no-ops (optional-chaining), byte-identical to pre-#133 behaviour. See [Content-free diagnostic log](diagnostic-log.md) / [#133 codebase notes](../codebase/133.md) for the shared `safeBytes` field and its sole minter `encodeSafeBytes`.
+
 ### Data flow
 
 ```
@@ -125,7 +135,7 @@ Every `catch` maps to a **static reason** and **drops** the caught error object 
 
 | Failure | Surfaced as | Terminal? |
 |---|---|---|
-| Malformed inbound frame (`decodeInnerFrame`/`base64StdDecode` throw) | `error{'inbound-frame-decode-failed'}`, frame dropped | No |
+| Malformed inbound frame (`decodeInnerFrame`/`base64StdDecode` throw) | `error{'inbound-frame-decode-failed'}`, frame dropped; capped raw frame logged through the optional `diagnosticLog` (#133) | No |
 | Outbound over-cap (`encodeInnerFrame` > `MAX_FRAME_BYTES`) or `supervisor.send` throws (not connected) | `error{'outbound-frame-encode-failed'}` (caught, **not** thrown back into the session) | No |
 | `createNoiseSession` rejects (`NoiseLoadError` / wasm timeout) | `error{'session-load-failed'}` (gen-guarded) | No — supervisor still live |
 | Reload on reconnect throws or finds no record (`loadDialConfig` throws / `load()` → `null`, #83) | `resolveConnection` catches → returns `null` → supervisor `terminal{NO_PAIRED_RECORD_CLOSE_CODE}` (drops the caught object; nulls `pendingSession`) | **Yes** — fail closed via the supervisor, no unhandled rejection |
@@ -139,7 +149,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **Fresh-handshake-per-connect is a security invariant, not just correctness.** A new ephemeral and no carried cipher state per `connected` is precisely what prevents `(key, nonce)` reuse across connections. The generation model enforces it: old session `close()`d on every `connected`, `firstFrame`/cipher/pending state never carried, and the `sendFrame` gen-guard drops any stale session's writes. The re-handshake test is therefore both the AC4 check and the nonce-freshness guard.
 - **One fail-closed untrusted→trusted boundary.** The supervisor `message{frame}` handler decodes through the #5 codec's fail-closed `decodeInnerFrame`→`base64StdDecode` (both throw, never return partial/truncated); the downstream `session.onFrame(raw)` bytes are then AEAD-verified by Noise — a hostile on-path relay cannot forge past the session, and a spoofed inner `type` cannot misroute (the label is never branched on).
 - **Bounded pending buffer closes a memory-exhaustion vector.** The async-create gap between a synchronous `connected` and the async `createNoiseSession` would otherwise let a hostile relay flood inbound frames into an unbounded queue. `pending` is capped at `MAX_PENDING_FRAMES = 8` (the legitimate daemon sends nothing before it receives message 1, so any deep pre-session queue is anomalous); excess is dropped fail-safe.
-- **Log-free by construction; static reasons only.** No `console.*`; sink `error` payloads carry only enum reason strings — never keys, tokens, plaintext, frames, or headers. Pinned by a six-method `console`-spy assertion across connect → handshake → transport → error.
+- **Content-free logging by construction; static reasons only (was log-free; #133 added the one exception).** No `console.*`; sink `error` payloads carry only enum reason strings — never keys, tokens, plaintext, frames, or headers. Pinned by a six-method `console`-spy assertion across connect → handshake → transport → error. The one exception: the `onMessage` framing catch now logs the capped raw pre-decryption inbound frame through an optional injected [`DiagnosticLog`](diagnostic-log.md) (§ *Pre-decryption framing-failure byte logging*, [#133](../codebase/133.md)) — safe because a frame that fails to decode is still base64-wrapped ciphertext, never plaintext.
 - **No renderer/IPC surface.** Main-process only; no `BrowserWindow`, `contextBridge`, `ipcMain`, preload, or navigation surface. The static private key and the `hello` (which carries the device token as Noise early-data) are injected `Uint8Array`s held in main-process memory only, passed straight to `createNoiseSession`, never persisted, never logged.
 
 ## Edge cases and limitations
@@ -155,6 +165,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 
 - [#50 codebase notes](../codebase/50.md) — implementation summary, patterns, lessons.
 - [#112 codebase notes](../codebase/112.md) — the `rekeyInitPending` latch that re-arms `noise_init` for the fresh rekey `msg1` (§ Rekey `noise_init` re-arm) + the assembled-stack e2e that drives this driver through a daemon-initiated rekey.
+- [Content-free diagnostic log](diagnostic-log.md) / [#133 codebase notes](../codebase/133.md) — the optional injected `diagnosticLog` this driver uses at the `onMessage` framing catch and forwards into every [Noise session](noise-session.md) it builds (§ *Pre-decryption framing-failure byte logging*), carrying the capped raw ciphertext via the branded `safeBytes` field.
 - [Relay supervisor](relay-supervisor.md) / [#22](../codebase/22.md) — the self-healing byte-pipe the driver constructs and drives; explicitly names this driver as its "future Noise-handshake layer" consumer, and owns the reconnect loop / backoff / fatal-code classification the driver does **not**. Its `resolveConnection` provider ([#83](../codebase/83.md)) is the driver's wrapper over `loadDialConfig`.
 - [#83 codebase notes](../codebase/83.md) / [Daemon connection](daemon-connection.md) — reload-per-dial: the `SessionMaterial`/`DialConfig`/`DialConfigProvider` types, the `resolveConnection` wrapper, and `onConnected`'s reloaded-material selection added here; the `loadDialConfig` provider is constructed in `daemonConnection`.
 - [Noise session](noise-session.md) / [#7](../codebase/7.md) — the per-connection handshake+AEAD unit the driver creates fresh on every connect; its `sendFrame`-out / `onEvent`-in contract is what makes the driver a thin adapter.

@@ -58,13 +58,26 @@ Invariants it holds:
 ### Store, singleton, hook, selectors
 
 ```ts
-createSessionStore(init = initialSessionState)  // vanilla createStore — one isolated instance per test (DI seam)
-sessionStore                                     // app-wide singleton — the "one source of truth"
-useSessionStore(selector)                        // React binding: useStore(sessionStore, selector)
-selectStatus(s) / selectMessages(s)              // the only read surface
+createSessionStore(init = initialSessionState, observe?)  // vanilla createStore — one isolated instance per test (DI seam)
+sessionStore                                                // app-wide singleton — the "one source of truth"
+useSessionStore(selector)                                   // React binding: useStore(sessionStore, selector)
+selectStatus(s) / selectMessages(s)                          // the only read surface
 ```
 
 `dispatch` is wired as `set((s) => reduceSession(s, action))` — Zustand shallow-merges the returned `{ status, messages }`, preserving the `dispatch` field (its reference stays stable across updates). The vanilla `createSessionStore` factory is the DI seam AC5 asks for: tests build an isolated store, or call `reduceSession` directly, with no global state and no React.
+
+### Diagnostics observer ([#134](../codebase/134.md))
+
+`createSessionStore` takes an optional trailing `observe?: TransitionObserver` (`(action, state) => void`), invoked synchronously inside `dispatch` right after `set` — `get()` at that point already reflects the reduced state, since Zustand's `set` is synchronous. `dispatch` becomes:
+
+```ts
+dispatch: (action) => {
+  set((s) => reduceSession(s, action))
+  observe?.(action, get())
+}
+```
+
+The app singleton wires it to `logSessionTransition` from the co-located `sessionDiagnostics.ts` (not inlined here, so this file keeps its documented purity — "no IPC, no preload bridge, no transport"); every isolated test store built via bare `createSessionStore()` stays observer-free. `observe` is a passive read of the post-reduce state — it never mutates state, alters accepted actions, or changes the unidirectional flow. Appended *after* `init` (not prepended), so every existing arg-less caller stayed source-compatible — zero edit fan-out. See [Renderer→main diagnostics channel](diagnostics-channel.md) for what the observer sends and why `dispatch`, not `.subscribe`, is the only seam that catches every transition (including a same-state dedup and the composer's local `messageSent` echo).
 
 ### Data flow
 
@@ -96,5 +109,6 @@ Narrow-slice selection means a status change does not re-render the thread and a
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store
 - [Conversation shell](conversation-shell.md) — the surface that reads `selectMessages` into the thread (bound in [#69](../codebase/69.md))
 - [Composer send](composer-send.md) — dispatches the `messageSent` optimistic-echo action into this store ([#66](../codebase/66.md))
+- [Renderer→main diagnostics channel](diagnostics-channel.md) / [#134 codebase notes](../codebase/134.md) — the optional `observe` seam that logs every transition as a content-free record
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) · [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md)
 - [#2 codebase notes](../codebase/2.md) · Spec: `docs/specs/architecture/2-connection-and-conversation-state-store.md`

@@ -8,6 +8,7 @@ import {
   type PairingConfirmResponse
 } from '../shared/ipc/pairing'
 import { PAIRING_STATUS_CHANNEL, type PairingStatus } from '../shared/ipc/pairingStatus'
+import { UNPAIR_CHANNEL, type UnpairResult } from '../shared/ipc/unpair'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -66,6 +67,16 @@ const api = {
    * the renderer cannot address arbitrary channels, and ipcRenderer never crosses the bridge.
    */
   pairingStatus: (): Promise<PairingStatus> => ipcRenderer.invoke(PAIRING_STATUS_CHANNEL),
+
+  /**
+   * Ask the background process to erase the stored pairing, returning the app to a clean, not-paired
+   * state (#173). Request/response (ipcRenderer.invoke) called with NO second argument — no data
+   * leaves the renderer; only the value-free ok/error enum comes back, never the token / server key /
+   * relay / keychain path. UNPAIR_CHANNEL is fixed here so the renderer cannot address arbitrary
+   * channels, and ipcRenderer never crosses the bridge. No caller is wired yet — the visible unpair
+   * action is #166/#167.
+   */
+  unpair: (): Promise<UnpairResult> => ipcRenderer.invoke(UNPAIR_CHANNEL),
 
   /**
    * Subscribe to typed daemon events from the background process; returns an unsubscribe

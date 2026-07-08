@@ -2,16 +2,17 @@
 
 The desktop client's **persisted pairing record**: the `{server, relay, token, server_static_pubkey}` tuple that pairing yields (the QR/paste payload), serialized to one opaque JSON blob and stored through the [secure store](secure-store.md). Persisting it lets the client **reconnect to the same daemon and drive the `Noise_IK` handshake on every launch without re-pairing** — on connect the transport reads `server_static_pubkey` as the responder's static key and `token` for the relay/hello auth. This module neither validates nor uses either field cryptographically; it stores what it is given and returns it verbatim. It is the desktop equivalent of mobile's paired-server record (per-server-id on mobile; single-pyrybox here for milestone 1 — `protocol-mobile.md` § Pairing flow).
 
-Introduced in [#44](../codebase/44.md). It lives **entirely** in `src/main` — the `token` (a bearer credential) and `server_static_pubkey` never reach the renderer, the preload bridge, or IPC ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md "Keep the transport out of the window"). It is the **second consumer** of the [secure store](secure-store.md) primitive ([#42](../codebase/42.md)), a near-twin of the [device static keypair](device-keypair.md) ([#43](../codebase/43.md)) — the same consume-the-primitive shape for a variable-length JSON record instead of a fixed 64-byte key blob.
+Introduced in [#44](../codebase/44.md); gained the symmetric erase — `clear()`, un-pairing the client back to not-paired — in [#172](../codebase/172.md). It lives **entirely** in `src/main` — the `token` (a bearer credential) and `server_static_pubkey` never reach the renderer, the preload bridge, or IPC ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md "Keep the transport out of the window"). It is the **second consumer** of the [secure store](secure-store.md) primitive ([#42](../codebase/42.md)), a near-twin of the [device static keypair](device-keypair.md) ([#43](../codebase/43.md)) — the same consume-the-primitive shape for a variable-length JSON record instead of a fixed 64-byte key blob.
 
 ## What it does
 
-Gives the background process **one factory** — `createPairedServerStore({ secureStore })` — that returns a `{ save, load }` handle over the pairing record:
+Gives the background process **one factory** — `createPairedServerStore({ secureStore })` — that returns a `{ save, load, clear }` handle over the pairing record:
 
 - **`save(record)`** serializes the four fields to JSON bytes and persists them through the secure store. A second `save` **overwrites** (re-pair). Fail-closed: when the keychain is unavailable it throws `EncryptionUnavailableError` before any write.
 - **`load()`** retrieves the record with the **absent-vs-undecryptable-vs-malformed** semantics that are the whole reason the module exists.
+- **`clear()`** erases the persisted record ([#172](../codebase/172.md)) — the symmetric un-pair primitive, so a later `load()` reports not-paired again. Idempotent (a no-op when nothing is stored) and fail-closed (a delete failure propagates rather than being reported as success).
 
-Those two methods carry two correctness properties:
+Those three methods carry two correctness properties:
 
 1. **The token and server key never cross a boundary** — never returned to the renderer, never logged, never written outside the secure store.
 2. **A tampered/corrupt record is never silently mistaken for never-paired** — `load` fails loud rather than returning `null` on a broken blob, so tampering is never hidden and a re-pair is never silently forced.
@@ -41,6 +42,16 @@ export interface PairedServerStore {
   load(): Promise<PairedServerRecord | null>
 }
 
+/** The paired-server accessor plus the symmetric erase ([#172](../codebase/172.md)). The concrete
+ *  return type of `createPairedServerStore` — deliberately NOT folded into the base
+ *  `PairedServerStore`, so existing base-typed consumers (pairing-status, pairing-confirmation,
+ *  daemon-connection) and their fakes need no `clear` stub. Only code holding the concrete store
+ *  (the composition root, and the follow-up IPC surface #173) can reach the erase. */
+export interface ClearablePairedServerStore extends PairedServerStore {
+  /** Erase the persisted paired-server record. Idempotent; fail-closed. */
+  clear(): Promise<void>
+}
+
 /** Thrown by `load` when a blob is PRESENT and decrypts, but is not a valid record — not JSON, not
  *  an object, or a missing / non-string field. Static message, carries NO field value. Lets the
  *  consumer branch to a "re-pair" recovery rather than treat corruption as never-paired. */
@@ -53,7 +64,7 @@ export const PAIRED_SERVER_NAME = 'pyrycode.paired_server'
 export function createPairedServerStore(deps: {
   secureStore: SecureStore   // #42, type-only import
   name?: string              // defaults to PAIRED_SERVER_NAME; injectable for tests + multi-server
-}): PairedServerStore
+}): ClearablePairedServerStore
 ```
 
 - **The one effectful edge is injected.** Persistence is the [`SecureStore`](secure-store.md) (type-only import — no runtime coupling). Serialization (`JSON.stringify`/`parse`, `TextEncoder`/`TextDecoder`) is pure, so — unlike #43's keygen seam — there is no second effectful edge and no second production file. The core imports neither `electron` nor `fs`, so its unit tests run with a fake `SecureStore` and no keychain/fs.
@@ -72,6 +83,7 @@ The record is stored as UTF-8 JSON of exactly the four fields under `PAIRED_SERV
 
 - **`save(record)`** — `await secureStore.set(name, encodeRecord(record))`. `set` is fail-closed: on keychain-unavailable it throws `EncryptionUnavailableError` **before any write**, which propagates out of `save` (nothing persisted). Calling `save` again overwrites.
 - **`load()`** — `const blob = await secureStore.get(name)`; if `blob === null` → return `null` (**absent = not paired**, the ONLY null path); else `return decodeRecord(blob)`. A decrypt failure inside `get` **propagates** (not caught); a decrypted-but-malformed blob throws `MalformedPairedServerRecordError`. No caching — a straight read each call, so a re-pair is observed immediately.
+- **`clear()`** — `await secureStore.delete(name)`, keyed by this store's own `name` local, never a delete-by-literal. No `try`/`catch`: a delete failure propagates unchanged (reporting success while a live bearer token still sits on disk is the one behavior to avoid). `SecureStore.delete` is idempotent (absent name → no-op), so clearing a never-paired store resolves without throwing. Because `name` is a fixed constant distinct from the [device static keypair](device-keypair.md)'s `pyrycode.device_static`, `clear` structurally cannot touch the device identity.
 
 The absent-vs-present distinction is exactly `secureStore.get`'s null-vs-non-null: a present blob that decodes to JSON `null`/`{}`/an incomplete object is **malformed**, not absent — it throws, it does not return `null`. This is the load-bearing property (a tampered record is never silently mistaken for never-paired).
 
@@ -104,6 +116,7 @@ This module persists the pairing `token` (a bearer credential the relay/daemon a
 - **No crypto of its own** — this module performs no cryptography; `server_static_pubkey` is stored as an **opaque string** (the transport's `Noise_IK` concern, #7/#30). No RNG, no hand-rolled crypto.
 - **Log-free by construction** — no `console.*` anywhere; the record is opaque locals, never named fields of a logged struct. `MalformedPairedServerRecordError` carries a static message with no token/URL/bytes. A test spies all six `console` methods across `save` + `load` + every error path and asserts none fire.
 - **Fixed store name** — `PAIRED_SERVER_NAME` is a constant, never derived from the QR/paste payload, so no untrusted input reaches the persistence path (no traversal surface). The per-server-id future must validate the `serverId` before it becomes part of the name.
+- **`clear()` shrinks the token-theft-from-disk window, and fails closed** ([#172](../codebase/172.md)) — the erase is a positive-posture change (it destroys the at-rest bearer `token` and `server_static_pubkey`), but only if a `delete` failure is never mistaken for success: `clear` has no `try`/`catch`, so a propagated error leaves the caller aware the token may still be on disk. No IPC/preload/`contextBridge` surface reaches it in #172 — a renderer compromise cannot invoke it until #173 ships the channel.
 
 ## Edge cases and limitations
 
@@ -113,16 +126,20 @@ This module persists the pairing `token` (a bearer credential the relay/daemon a
 - **Stored blob present, decrypts, but not a valid record** (bad JSON / missing / non-string field) — `MalformedPairedServerRecordError` (static message, no field value); not `null`.
 - **Re-pair** — `save` overwrites; last-writer-wins, exactly one blob kept.
 - **Caller stray fields** — dropped on both encode and decode; only the four record fields are ever persisted.
-- **Not wired yet** — nothing constructs a live store; `src/main/index.ts` is untouched. Composition-root wiring lands with the consumer: #9 (pairing input) constructs the store over the real `createSecureStore` and calls `save()` after validating; the transport (#7/#30) calls `load()` at connect time.
-- **Single pyrybox** — one record under `PAIRED_SERVER_NAME`. Per-server-id keying (`pyrycode.paired_server.<server-id>`) is a deferred one-line change via the injectable `name`. Un-pair/forget (a `delete`-backed `clear()`) and token rotation/revocation are out of scope.
+- **Clearing when never paired** — `clear()` resolves without throwing and leaves the not-paired state unchanged (`SecureStore.delete` is a documented no-op on an absent name).
+- **`clear()` is domain-only** — no IPC channel or preload method reaches it yet ([#172](../codebase/172.md)); it is reachable only where the concrete `ClearablePairedServerStore` type is held (the composition root). The renderer-triggered unpair channel is [#173](https://github.com/pyrycode/pyrycode-desktop/issues/173) (blocked-by #172). `clear()` also does not tear down a live Noise session or relay socket — it erases the at-rest record only; an active connection persists until next launch.
+- **Wired at the composition root** — `src/main/index.ts` constructs `pairedServerStore = createPairedServerStore({ secureStore })` and threads it into `createPairingConfirmation`, the pairing-status handler, and the daemon-connection driver deps, all typed against the base `PairedServerStore` (the `clear()` widening is a subtype, so this needed zero edits). #9 (pairing input) calls `save()` after validating; the transport (#7/#30) calls `load()` at connect time.
+- **Single pyrybox** — one record under `PAIRED_SERVER_NAME`. Per-server-id keying (`pyrycode.paired_server.<server-id>`) is a deferred one-line change via the injectable `name`. Token rotation/revocation remain out of scope.
 - **Decrypted token in memory** — while in use the token resides in main-process memory (inherent to `safeStorage`'s decrypt-to-memory model; a JS string cannot be reliably zeroised). Inherited from ADR 0005, not introduced here.
 
 ## Related
 
 - [Secure store](secure-store.md) / [#42](../codebase/42.md) — the injected persistence surface this consumes.
-- [Device static keypair](device-keypair.md) / [#43](../codebase/43.md) — the sibling consumer whose structure and security posture this mirrors.
+- [Device static keypair](device-keypair.md) / [#43](../codebase/43.md) — the sibling consumer whose structure and security posture this mirrors; `clear()` structurally cannot touch it (distinct store name).
 - [#44 codebase notes](../codebase/44.md) — implementation summary, patterns, and lessons.
+- [#172 codebase notes](../codebase/172.md) — the `clear()` erase capability: widened-return-type design, fail-closed delegation to `secureStore.delete`, no fixture cascade.
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — secret-at-rest via `safeStorage`, fail-closed, "recovery is a consumer decision".
+- #173 (blocked-by #172, not yet shipped) — the renderer-triggered unpair IPC channel + preload method that will call `clear()`.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model (token/keys never reach the renderer; mirror mobile).
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — the ported wire types, including `QrPayload`, that `PairedServerRecord` aliases.
 - Downstream consumers: the pairing input flow (#9, which validates then calls `save`) and the Noise_IK transport (#7/#30, which `load`s the record at connect time).

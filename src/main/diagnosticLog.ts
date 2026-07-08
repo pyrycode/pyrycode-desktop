@@ -61,6 +61,18 @@ export interface DiagnosticEvent {
    *  no plain string and no post-decryption value type-checks here, so a call site cannot smuggle
    *  plaintext-derived bytes in. `bytes` carries the true uncapped length alongside. */
   safeBytes?: SafeBytesEncoding
+  /** The desktop client build (app.getVersion()) — carried once per session by the startup banner
+   *  (#132), never per line. A static, non-secret attribution string. Main-only (sourced from
+   *  Electron at the composition root); see receiveDiagnostic.test.ts's Omit pin. */
+  appVersion?: string
+  /** The Noise handshake variant (NOISE_PROTOCOL, verbatim) — the load-bearing silent-failure axis:
+   *  a mismatch fails the handshake with no error (CLAUDE.md, ADR 0002). Session-banner only (#132),
+   *  main-only. A static, non-secret label — referenced only as attribution, not to drive a handshake. */
+  noiseProtocol?: string
+  /** The outer wire-protocol version (PROTOCOL_VERSION, verbatim; 'v1' vs 'v2'). Not redundant with
+   *  `noiseProtocol`: v1 and v2 share the same Noise variant, so this is the only v1↔v2 negotiation-
+   *  drift discriminator. Session-banner only (#132), main-only. A static, non-secret string. */
+  protocolVersion?: string
 }
 
 /**

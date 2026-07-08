@@ -20,9 +20,19 @@ import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent } from '../shared/ipc/
 // smuggle a field #126's logger would spread onto the log line); only the reverse capability-parity
 // direction is relaxed, and only for fields the renderer must never produce. A future main-only field
 // must be added to this Omit list — a conscious, reviewed decision — or the pin breaks.
+//
+// #132: the startup session banner adds three more main-only fields — `appVersion`, `noiseProtocol`,
+// `protocolVersion` — emitted ONLY from the composition root (sourced from Electron's app.getVersion()
+// and the shared wire constants). The renderer has no reason and no capability to emit a version
+// banner, so RendererDiagnosticEvent deliberately omits them too; keeping them out of the renderer
+// mirror is what preserves "every field the renderer can send is a canonical allowlisted field". They
+// are subtracted from the canonical side here, exactly as #133 did for `safeBytes`.
 type Equals<X, Y> =
   (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
-const _allowlistPin: Equals<RendererDiagnosticEvent, Omit<DiagnosticEvent, 'safeBytes'>> = true
+const _allowlistPin: Equals<
+  RendererDiagnosticEvent,
+  Omit<DiagnosticEvent, 'safeBytes' | 'appVersion' | 'noiseProtocol' | 'protocolVersion'>
+> = true
 void _allowlistPin
 
 // A structural stand-in for Electron's ipcMain: only on/removeListener, spied. No Electron

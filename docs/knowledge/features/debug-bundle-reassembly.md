@@ -2,7 +2,7 @@
 
 The **receive half of the client debug-bundle download**: the background process recognizes the daemon's streamed reply to [`request_debug_bundle`](debug-bundle-request.md) — ordered `debug_bundle_chunk`* frames followed by one `debug_bundle_done` marker, or a single `error` in lieu of the stream — and reassembles the chunks into the complete opaque `.tar.gz` archive, or fails cleanly. This is the `security-sensitive` sibling of [#115](../codebase/115.md) (outbound) and [#117](../codebase/117.md) (persistence): it is the layer that parses bytes sent by the relay peer.
 
-Introduced in [#116](../codebase/116.md). Entirely `src/main/`/`src/main/transport/` — the reassembled bytes never reach the renderer. **Additive throughout:** the existing `message` / `message_chunk` inbound path ([inbound message decode](inbound-message-decode.md)) is unchanged. The renderer command that triggers a request and consumes the result is the sibling [#118](https://github.com/pyrycode/pyrycode-desktop/issues/118) (open); saving the reassembled bytes to disk is [save-debug-bundle](save-debug-bundle.md) ([#117](../codebase/117.md), landed, independent).
+Introduced in [#116](../codebase/116.md). Entirely `src/main/`/`src/main/transport/` — the reassembled bytes never reach the renderer. **Additive throughout:** the existing `message` / `message_chunk` inbound path ([inbound message decode](inbound-message-decode.md)) is unchanged. The renderer command that triggers a request is the typed `requestDebugBundle` [command channel](command-channel.md) member ([#168](../codebase/168.md), landed); the orchestrator that consumes this ticket's `BundleConsumer` result is [#169](https://github.com/pyrycode/pyrycode-desktop/issues/169) (open — #118 split into #168+#169); saving the reassembled bytes to disk is [save-debug-bundle](save-debug-bundle.md) ([#117](../codebase/117.md), landed, independent).
 
 ## The daemon contract
 
@@ -145,7 +145,7 @@ All five reasons are static enum strings — no wire value, byte, or daemon mess
 - Content hygiene: the reassembler never logs; recognition logs are content-free (`event`/`code`/`bytes`/`hash`, never `data`/`seq`/`total`/the daemon's error text).
 - Fail-closed / no partial archive: a corrupt or out-of-order stream can never yield a partial or mixed archive — a malformed frame throws before advancing state, a `seq`/`total` violation settles to `fail`, and `settled` makes the terminal exactly-once.
 - Resource/DoS: memory is bounded per-frame by `MAX_PLAINTEXT_BYTES`; in aggregate this matches the daemon's own accepted stance for an authenticated, paired peer (no new cap introduced — see § Open questions below). The connection-teardown net prevents an interrupted stream from leaking a pending accumulator.
-- Renderer isolation upheld: everything lives in `src/main`/`src/main/transport`; `BundleConsumer` is a main-side interface, #118 forwards only content-free progress/result over IPC.
+- Renderer isolation upheld: everything lives in `src/main`/`src/main/transport`; `BundleConsumer` is a main-side interface, #169 (using #168's [`debugBundleProgress`/`debugBundleSaved`/`debugBundleFailed`](daemon-event-channel.md) events) forwards only content-free progress/result over IPC.
 
 ## Testing
 
@@ -165,10 +165,11 @@ All five reasons are static enum strings — no wire value, byte, or daemon mess
 
 - [#116 codebase notes](../codebase/116.md) — implementation summary, patterns, and lessons learned.
 - [Debug-bundle request (outbound)](debug-bundle-request.md) / [#115](../codebase/115.md) — the sibling that sends the bare `request_debug_bundle` frame this feature's stream responds to.
-- [Save debug bundle (persistence)](save-debug-bundle.md) / [#117](../codebase/117.md) — the independent persistence leaf that will consume `consumer.complete(bytes)` verbatim, wired by #118.
+- [Save debug bundle (persistence)](save-debug-bundle.md) / [#117](../codebase/117.md) — the independent persistence leaf that will consume `consumer.complete(bytes)` verbatim, wired by #169.
+- [Command channel](command-channel.md) / [Daemon-event channel](daemon-event-channel.md) / [#168](../codebase/168.md) — the typed IPC contract (`requestDebugBundle` command + `debugBundleProgress`/`debugBundleSaved`/`debugBundleFailed` events + `DebugBundleFailure`) that #169 uses to expose this ticket's `BundleConsumer` result to the renderer; #169 maps this ticket's `BundleFailReason` onto #168's coarser `DebugBundleFailure`.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — the `message`/`message_chunk` boundary this recognition is additive to; shares `parseInboundMessage`, `isRecord`, and the content-free logging pattern.
 - [Content-free diagnostic log](diagnostic-log.md) / [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md) — the logger the recognition layer's `inbound-decoded` calls write through; no allowlist growth needed (reuses `event`/`code`/`bytes`/`hash`).
 - [Daemon connection](daemon-connection.md) / [#62](../codebase/62.md) — hosts the reassembler slot and `requestDebugBundle(consumer)`.
 - [Noise session](noise-session.md) — the additive "recognize-or-drop" precedent (#108) this recognition-before-`default` pattern follows.
 - Daemon contract (QMD `pyrycode-docs`): `internal/protocol/messaging.go` (`DebugBundleChunkPayload`/`DebugBundleDonePayload`), `internal/relay/v2bundlestream.go` (the reassembly reference this mirrors), `docs/protocol-mobile.md` § Debug bundle (v2); pyrycode #812/#813 (stream/serve, merged).
-- Parent: [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split into #115/#116/#117/#118 — [[ticket-71-debug-bundle-split]].
+- Parent: [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split into #115/#116/#117/#118, and #118 further split into [#168](../codebase/168.md)+#169 — [[ticket-71-debug-bundle-split]], [[ticket-118-command-surface-refined]].

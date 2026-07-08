@@ -29,6 +29,7 @@ import type {
 import { buildClientHello, parseHelloAck } from './transport/helloExchange'
 import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
+import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
   createBundleReassembler,
@@ -40,7 +41,12 @@ import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { DeviceKeypairStore } from './deviceKeypair'
 import type { PairedServerStore } from './pairedServerStore'
-import { MAX_FRAME_BYTES, type HelloAckPayload, type SendMessagePayload } from '../shared/wire/types'
+import {
+  MAX_FRAME_BYTES,
+  type HelloAckPayload,
+  type SendMessagePayload,
+  type RequestSnapshotPayload
+} from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
 const SERVER_KEY_LENGTH = 32
@@ -96,6 +102,15 @@ export interface DaemonConnection {
    * a command arriving while disconnected is dropped, never propagated as a crash.
    */
   send(payload: SendMessagePayload): void
+  /**
+   * Encrypt a payload-carrying `request_snapshot` control envelope onto the live session — asks the
+   * daemon for the current `screen_snapshot` (its model / effort / yolo) for the given conversation.
+   * The `send` TWIN, not `requestDebugBundle`: a snapshot has no consumer, so it is an inert no-op
+   * when not connected (`driver === null` → return), never a `consumer.fail`. The reply arrives
+   * asynchronously as one `snapshotReceived` DaemonEvent (or, if the daemon rejects the id, an
+   * `error` that is dropped today — see #180 Out of scope). NEVER throws out of the module (parity #490).
+   */
+  requestSnapshot(payload: RequestSnapshotPayload): void
   /**
    * Encrypt a bare `request_debug_bundle` control envelope onto the live session — asks the daemon
    * to begin streaming the current debug bundle back — and ARM a reassembler for the streamed reply
@@ -239,6 +254,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           case 'daemon-error':
             reassembler?.fail('daemon-error')
             return
+          case 'snapshot':
+            // The content-minimisation seam (#180): `text` / `ts` / `conversation_id` are decoded but
+            // DROPPED here — only the three settings fields cross to the renderer. The dedicated
+            // minimal snapshotReceived event shape (NOT a reuse of ScreenSnapshotPayload) is what makes
+            // this hard to get wrong; a naive "reuse the wire type" would leak `text` to the renderer.
+            emitDaemonEvent(sink, {
+              type: 'snapshotReceived',
+              model: inbound.snapshot.model,
+              effort: inbound.snapshot.effort,
+              yolo: inbound.snapshot.yolo
+            })
+            return
         }
         return
       }
@@ -378,6 +405,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function requestSnapshot(payload: RequestSnapshotPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A snapshot has no consumer to fail; a request sent while
+    // disconnected simply produces no reply.
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send / requestDebugBundle — no second counter —
+      // so ids stay unique across interleaved calls (the daemon correlates replies by id).
+      const bytes = buildRequestSnapshot({ id: nextEnvelopeId, ts: now(), payload })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED (classify-don't-forward, inherited #62).
+    }
+  }
+
   function requestDebugBundle(consumer: BundleConsumer): void {
     // Not connected (before start(), mid-bootstrap, bootstrap-failed): fail the consumer terminally
     // so #118's command never hangs — the wire behaviour is still "send nothing," but the caller is
@@ -450,6 +494,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       driver?.stop()
     },
     send,
+    requestSnapshot,
     requestDebugBundle
   }
 }

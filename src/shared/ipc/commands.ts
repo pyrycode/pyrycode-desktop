@@ -7,15 +7,15 @@
 // So this module ships isRendererCommand — the runtime guard the main receiver applies at the
 // renderer→main boundary. Downstream consumers (#11/transport) receive only validated commands.
 //
-// The payload-bearing member (sendMessage) reuses a wire payload type from ../wire/types
-// verbatim; the bare member (requestDebugBundle) carries no payload at all — never a token,
-// key, or raw frame either way. AC5 is enforced by construction: no member has a field that
+// The payload-bearing members (sendMessage, requestSnapshot) reuse wire payload types from
+// ../wire/types verbatim; the bare member (requestDebugBundle) carries no payload at all — never a
+// token, key, or raw frame in any case. AC5 is enforced by construction: no member has a field that
 // could hold a secret (QrPayload/HelloClientPayload tokens, InnerFrameV2 bytes are not
 // referenced here), so a developer cannot serialize one onto this channel.
 //
 // Imported by src/main and src/preload, which have no @shared path alias — hence the
 // relative import here and in those callers (see tsconfig.node.json).
-import type { SendMessagePayload } from '../wire/types'
+import type { SendMessagePayload, RequestSnapshotPayload } from '../wire/types'
 
 /** The IPC channel every typed renderer command travels on, renderer → main.
  *  Single source of truth: the preload sender ships on it, the main receiver listens on it.
@@ -24,12 +24,13 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 
 /**
  * A single typed command from the renderer window to the background process. Sealed
- * discriminated union on `type`. Two members today: `sendMessage`, whose `payload` reuses the
- * wire SendMessagePayload verbatim so no field is remapped between layers; and the bare
- * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global —
- * there is nothing to parameterise. Neither member exposes a field that could hold a token,
- * key, or raw frame (AC5) — the payload-bearing one reuses only wire types, the bare one
- * carries nothing.
+ * discriminated union on `type`. Three members today: `sendMessage`, whose `payload` reuses the
+ * wire SendMessagePayload verbatim so no field is remapped between layers; the bare
+ * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global; and
+ * `requestSnapshot` (#180), whose `payload` reuses the wire RequestSnapshotPayload (a
+ * `conversation_id` routing id, not a secret) to ask the daemon for the current screen_snapshot.
+ * No member exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing
+ * ones reuse only wire types, the bare one carries nothing.
  *
  * Extend additively (connect/disconnect) when their transport tickets land — and add a
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
@@ -38,6 +39,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 export type RendererCommand =
   | { type: 'sendMessage'; payload: SendMessagePayload }
   | { type: 'requestDebugBundle' }
+  | { type: 'requestSnapshot'; payload: RequestSnapshotPayload }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -63,6 +65,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'requestDebugBundle':
       // Bare member: no payload to validate, so a well-formed `type` is complete acceptance.
       return true
+    case 'requestSnapshot':
+      return 'payload' in value && isRequestSnapshotPayload(value.payload)
     default:
       return false
   }
@@ -78,4 +82,12 @@ function isSendMessagePayload(value: unknown): value is SendMessagePayload {
     'text' in value &&
     typeof value.text === 'string'
   )
+}
+
+/** The untrusted renderer→main boundary guard for the requestSnapshot payload (#180) — the reason
+ *  this ticket is security-sensitive. Mirrors isSendMessagePayload: one `conversation_id` string
+ *  check (a routing id, not a secret). Pure; never throws. */
+function isRequestSnapshotPayload(value: unknown): value is RequestSnapshotPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string'
 }

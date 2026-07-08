@@ -99,4 +99,24 @@ describe('isRendererCommand', () => {
     const command: RendererCommand = { type: 'requestDebugBundle' }
     expect(isRendererCommand(command)).toBe(true)
   })
+
+  it('accepts a well-formed requestSnapshot command carrying a string conversation_id (#180)', () => {
+    // Compile-time proof the member is in RendererCommand, hence reachable through the existing
+    // generic sendCommand bridge — no new preload method or IPC channel exists.
+    const command: RendererCommand = { type: 'requestSnapshot', payload: { conversation_id: 'c1' } }
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum), like sendMessage.
+    expect(
+      isRendererCommand({ type: 'requestSnapshot', payload: { conversation_id: 'c1' }, extra: 1 })
+    ).toBe(true)
+  })
+
+  it('rejects a requestSnapshot with a missing payload or a non-string conversation_id (#180)', () => {
+    expect(isRendererCommand({ type: 'requestSnapshot' })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSnapshot', payload: null })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSnapshot', payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSnapshot', payload: { conversation_id: 42 } })).toBe(
+      false
+    )
+  })
 })

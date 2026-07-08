@@ -100,6 +100,12 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'debugBundleFailed', reason: 'unavailable' })).toBeNull()
   })
 
+  it('snapshotReceived → null (consumed by the Run configuration render bridge #181, not the session store)', () => {
+    expect(
+      translateDaemonEvent({ type: 'snapshotReceived', model: 'claude-opus-4-8', effort: 'high', yolo: true })
+    ).toBeNull()
+  })
+
   it('the three debug-bundle events dispatch nothing into the session store', () => {
     // Belt-and-suspenders, mirroring production: feed each new event through the same null-guarded
     // dispatch the bridge applies; the store stays at its initial state (no status flip, no message).

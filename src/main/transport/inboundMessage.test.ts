@@ -43,6 +43,21 @@ function encodeBundleDone(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 8, type: 'debug_bundle_done', ts: FIXED_TS, payload })
 }
 
+/** A `screen_snapshot` envelope's plaintext bytes, wrapping an arbitrary payload (#180). */
+function encodeSnapshot(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 9, type: 'screen_snapshot', ts: FIXED_TS, payload })
+}
+
+/** A fully-populated, well-formed screen_snapshot payload. */
+const SNAPSHOT = {
+  conversation_id: 'conv-1',
+  text: 'rendered screen contents',
+  ts: '2026-07-08T00:00:00Z',
+  model: 'claude-opus-4-8',
+  effort: 'high',
+  yolo: true
+}
+
 describe('parseInboundMessage — happy', () => {
   it('narrows a valid message envelope into a message result', () => {
     expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
@@ -154,6 +169,80 @@ describe('parseInboundMessage — debug-bundle fail-closed (#116, AC3/AC4)', () 
 
   it('throws when a debug_bundle_done payload is not an object', () => {
     expect(() => parseInboundMessage(encodeBundleDone('nope'))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — screen_snapshot recognition (#180, additive)', () => {
+  it('narrows a full screen_snapshot into { kind: snapshot } with all six fields', () => {
+    expect(parseInboundMessage(encodeSnapshot(SNAPSHOT))).toEqual({
+      kind: 'snapshot',
+      snapshot: SNAPSHOT
+    })
+  })
+
+  it('decodes empty model/effort and yolo:false as those values, never as absent (AC3)', () => {
+    const defaults = { ...SNAPSHOT, model: '', effort: '', yolo: false }
+    expect(parseInboundMessage(encodeSnapshot(defaults))).toEqual({
+      kind: 'snapshot',
+      snapshot: defaults
+    })
+  })
+
+  it('drops unknown server keys, keeping only the six known fields (forward-compat)', () => {
+    const withExtras = { ...SNAPSHOT, tokens_used: 512, extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeSnapshot(withExtras))).toEqual({
+      kind: 'snapshot',
+      snapshot: SNAPSHOT
+    })
+  })
+
+  it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — screen_snapshot fail-closed (#180, AC2/AC3)', () => {
+  it('throws when any of the five string fields is missing or non-string', () => {
+    const bad: unknown[] = [
+      { ...SNAPSHOT, conversation_id: undefined },
+      { ...SNAPSHOT, text: undefined },
+      { ...SNAPSHOT, ts: 42 },
+      { ...SNAPSHOT, model: undefined },
+      { ...SNAPSHOT, effort: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSnapshot(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when yolo is missing or non-boolean (a string/number is not a valid value)', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'c', text: 't', ts: 's', model: 'm', effort: 'e' }, // yolo absent
+      { ...SNAPSHOT, yolo: 'true' },
+      { ...SNAPSHOT, yolo: 1 },
+      { ...SNAPSHOT, yolo: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSnapshot(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a screen_snapshot payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeSnapshot('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeSnapshot(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws on an oversized snapshot plaintext even when the JSON is a valid snapshot', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 9,
+        type: 'screen_snapshot',
+        ts: FIXED_TS,
+        payload: { ...SNAPSHOT, text: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
   })
 })
 
@@ -329,6 +418,33 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(record.hash).toMatch(HEX64)
     // The exact content-free field set — no `total`.
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+  })
+
+  it('logs a screen_snapshot content-free, never text / model / effort (#180)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_TEXT = 'secret-rendered-terminal-output'
+    const plaintext = encodeSnapshot({ ...SNAPSHOT, text: SECRET_TEXT })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('screen_snapshot')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no snapshot field of any kind reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_TEXT)
+    expect(lines[0]).not.toContain('claude-opus-4-8')
+  })
+
+  it('does NOT log on a malformed screen_snapshot throw path (#180)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeSnapshot({ ...SNAPSHOT, yolo: 'nope' }), log)).toThrow(
+      WireDecodeError
+    )
+    expect(lines).toHaveLength(0)
   })
 
   it('logs a modeled error as inbound-decoded(error), never the ErrorPayload text (#116)', () => {

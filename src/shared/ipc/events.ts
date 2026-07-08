@@ -32,16 +32,19 @@ export type DebugBundleFailure = 'unavailable' | 'stream-corrupt' | 'write-faile
  * (connecting | connected | disconnected | failed | messageReceived | messagesReceived) map
  * 1:1 onto the session-store's SessionAction arms — #19 maps them with no gaps and no spares.
  * The debug-bundle members (debugBundleProgress | debugBundleSaved | debugBundleFailed, #168)
- * map to NO SessionAction — they are consumed by the download UI (#72), not the session store,
- * so the renderer bridge translates them to `null` (see daemonEventBridge).
+ * and `snapshotReceived` (#180) map to NO SessionAction — they are consumed by the download UI
+ * (#72) and the Run configuration render bridge (#181) respectively, not the session store, so the
+ * renderer bridge translates them to `null` (see daemonEventBridge).
  *
  * Spans transport-lifecycle events (`connecting`/`disconnected`, from the transport
  * supervisor) and daemon-originated events (`connected`/`failed`/messages, derived from
  * validated wire envelopes upstream). Never carries a token, key, raw frame, or bundle bytes
  * (AC4): the session members reuse only wire payload types, the debug-bundle members carry
- * only a count, a local path, and the closed DebugBundleFailure enum. Session member and field
- * names mirror SessionAction's so #19's mapping is near-identity, while the two unions stay
- * separately declared per layer.
+ * only a count, a local path, and the closed DebugBundleFailure enum, and `snapshotReceived`
+ * (#180) carries only the three session-settings fields — a DEDICATED minimal shape, deliberately
+ * NOT reusing ScreenSnapshotPayload, so the sensitive rendered-screen `text` can never ride this
+ * channel. Session member and field names mirror SessionAction's so #19's mapping is near-identity,
+ * while the two unions stay separately declared per layer.
  */
 export type DaemonEvent =
   | { type: 'connecting' }
@@ -53,3 +56,4 @@ export type DaemonEvent =
   | { type: 'debugBundleProgress'; chunksReceived: number }
   | { type: 'debugBundleSaved'; path: string }
   | { type: 'debugBundleFailed'; reason: DebugBundleFailure }
+  | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean }

@@ -47,6 +47,8 @@ export type EnvelopeType =
   | 'request_debug_bundle'
   | 'debug_bundle_chunk'
   | 'debug_bundle_done'
+  | 'request_snapshot'
+  | 'screen_snapshot'
   | 'ack'
   | 'error'
 
@@ -102,6 +104,37 @@ export interface SendMessagePayload {
   conversation_id: string
   message_id: string
   text: string
+}
+
+/**
+ * Outbound `request_snapshot` payload (client → daemon). Mirrors the daemon's
+ * RequestSnapshotPayload{ConversationID string}: names the conversation whose current screen to
+ * snapshot. Unlike `request_debug_bundle` (a bare, daemon-global control frame), this carries a real
+ * payload — the daemon rejects an empty/unknown id with `conversation.not_found`. See #180.
+ */
+export interface RequestSnapshotPayload {
+  conversation_id: string
+}
+
+/**
+ * Inbound `screen_snapshot` reply (daemon → client). Mirrors the daemon's
+ * internal/protocol/snapshot.go ScreenSnapshotPayload field-for-field, wire order
+ * `conversation_id, text, ts, model, effort, yolo` — all always present (no `omitempty`). ADR-025's
+ * always-available, parser-independent snapshot: NOT gated on the `interactive` capability, so a
+ * paired non-interactive client can request it (pyrycode #847). See #180.
+ */
+export interface ScreenSnapshotPayload {
+  conversation_id: string
+  /** The rendered screen text. Decoded at the transport boundary but NEVER surfaced past it (#180). */
+  text: string
+  /** RFC3339 (the daemon's `time.Time` serialises to a string). */
+  ts: string
+  /** Active model; '' = inherited daemon default (never treated as absent). */
+  model: string
+  /** Reasoning effort; '' = inherited daemon default. */
+  effort: string
+  /** Permissions posture; `false` = permissions enforced. */
+  yolo: boolean
 }
 
 /**

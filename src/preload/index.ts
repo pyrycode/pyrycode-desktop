@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { DAEMON_EVENT_CHANNEL, type DaemonEvent } from '../shared/ipc/events'
 import { COMMAND_CHANNEL, type RendererCommand } from '../shared/ipc/commands'
+import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent } from '../shared/ipc/diagnostics'
 import {
   PAIRING_CHANNEL,
   type PairingSubmitResponse,
@@ -21,6 +22,19 @@ const api = {
    */
   sendCommand: (command: RendererCommand): void => {
     ipcRenderer.send(COMMAND_CHANNEL, command)
+  },
+
+  /**
+   * Ship a content-free diagnostic record to the background process logger (#126). Fire-and-forget,
+   * one-way (returns void, no reply, no throw path back into the window — a diagnostics channel must
+   * not take down the window it observes). The typed `record` param is the compile-time half of the
+   * allowlist; the main-side projection (#131) is the runtime half that actually enforces it, since
+   * the renderer is untrusted at the IPC boundary regardless of the TS type. DIAGNOSTIC_CHANNEL is
+   * fixed here so the renderer cannot address arbitrary IPC channels, and ipcRenderer never crosses
+   * the bridge. No consumer is wired yet — the state-store instrumentation is #134.
+   */
+  sendDiagnostic: (record: RendererDiagnosticEvent): void => {
+    ipcRenderer.send(DIAGNOSTIC_CHANNEL, record)
   },
 
   /**

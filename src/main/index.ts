@@ -18,6 +18,7 @@ import { createDaemonConnection } from './daemonConnection'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { onCommand } from './receiveCommand'
+import { onDiagnostic } from './receiveDiagnostic'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
@@ -204,6 +205,16 @@ app.whenReady().then(() => {
     }
   })
   app.on('will-quit', () => unregisterCommands())
+
+  // The single onDiagnostic registration for the app lifetime (#131). Forwards content-free
+  // diagnostic records from the renderer (state store #134, later the render layer) into the SAME
+  // diagnosticLog instance constructed above — one seq counter, one file — so renderer-side faults
+  // land in the same debug bundle as the transport logs. The main-side projection re-validates at
+  // the untrusted boundary; a non-allowlisted field never reaches the logger's spread. Registered
+  // once via ipcMain.on (additive); inert until #134 emits — a record arriving before any consumer
+  // is simply a logged line. `will-quit` removes the exact listener, symmetric with unregisterCommands.
+  const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog)
+  app.on('will-quit', () => unregisterDiagnostics())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

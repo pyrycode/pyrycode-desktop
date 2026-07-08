@@ -37,6 +37,7 @@ export interface NoiseSessionConfig {
   sendFrame: (frame: Uint8Array) => void  // outbound raw-frame sink (e.g. relay.send); must not throw
   onEvent: (event: NoiseSessionEvent) => void  // typed sink; must not throw
   loadTimeoutMs?: number              // forwarded to loadNoiseLib; omit for the loader default
+  diagnosticLog?: DiagnosticLog       // #133 — optional; logs the capped raw frame at the three inbound-read catches
 }
 
 export type NoiseSessionErrorReason =
@@ -92,6 +93,21 @@ One session walks `idle → awaiting-handshake-reply → transport`, loops back 
 
 - **`Split()` no-swap.** `noise-c` returns `[send, recv]` **already role-adjusted for both roles** — the JS side does no `(cs1, cs2)` swap; only a raw `flynn/noise` peer needs it, which the daemon already performs (proven byte-for-byte in [#30](../codebase/30.md)). Crossing the two would sail through the handshake and only detonate on the first sealed frame — so the round-trip, not "no error thrown", is the structural pin.
 - **Empty prologue.** A zero-length `prologue` is passed as `null` to `Initialize` (noise-c treats zero-length as "no prologue set"), matching the daemon's empty-prologue handshake exactly.
+
+### Pre-decryption byte logging at the inbound-read catches (#133)
+
+The three **inbound-read** catches — `transport-decrypt-failed` (the post-handshake AEAD decrypt), and `handshake-read-failed` at the message-2 read and the rekey-reply read — call a `failWithFrame(reason, frame)` helper instead of plain `fail(reason)`:
+
+```ts
+function failWithFrame(reason: NoiseSessionErrorReason, frame: Uint8Array): void {
+  config.diagnosticLog?.event({
+    event: 'noise-frame-failed', code: reason, bytes: frame.length, safeBytes: encodeSafeBytes(frame)
+  })
+  fail(reason)
+}
+```
+
+`frame` at each of these three sites is **inbound, pre-decryption** bytes — AEAD ciphertext, or Noise handshake message 2 / rekey reply (ephemeral pubkey + encrypted static + MAC) — never client plaintext or a secret, so it is safe to log verbatim (capped, hex-encoded via [`encodeSafeBytes`](diagnostic-log.md)). The **outbound-write** catches (`start()`'s msg1 write, `beginRekey()`'s msg1 write) and the pre-`start()` `unexpected-frame` deliberately stay on plain `fail()` — message 1 carries the device token as early-data, so no catch that touches an outbound write ever logs bytes. Absent an injected `diagnosticLog`, `failWithFrame` degrades to exactly `fail(reason)` (optional-chaining short-circuits the whole call). The logged bytes reach only the main-process sink, never `config.onEvent` — the `{ type: 'error', reason }` surface is unchanged.
 
 ### Rekey-request recognition (#108)
 
@@ -154,7 +170,7 @@ Nothing in this flow reaches IPC, the preload, or the renderer. The `hello`/`hel
 Deliberately different shapes, keyed on whether a handle exists yet:
 
 - **Load failure (before the handle exists) → factory rejection.** `createNoiseSession` (and the folded-in `noiseKeyPairGenerator`) reject with `NoiseLoadError` (`wasm-load-failed` | `wasm-load-timeout`). Category-only. This is the "error/rejection rather than hanging" surface — the correct async shape when no `onEvent` sink is driving frames yet.
-- **Runtime failure (handle live) → typed `error` event.** The closed set flows through `onEvent` with a **static reason only, never bytes**. **Fail-closed**: a caught `ReadMessage`/`DecryptWithAd` throw emits the error event and **returns without emitting any `handshake-complete`/`message`** — no partial or leaked plaintext ever reaches the sink. A tampered, wrong-suite, or wrong-key frame MAC-fails inside the vetted library and lands here.
+- **Runtime failure (handle live) → typed `error` event.** The closed set flows through `onEvent` with a **static reason only, never bytes** — the frame bytes reach only the optional [`diagnosticLog`](diagnostic-log.md) sink at the three inbound-read catches (#133), never `onEvent`. **Fail-closed**: a caught `ReadMessage`/`DecryptWithAd` throw emits the error event and **returns without emitting any `handshake-complete`/`message`** — no partial or leaked plaintext ever reaches the sink. A tampered, wrong-suite, or wrong-key frame MAC-fails inside the vetted library and lands here.
 
 ## Security properties
 
@@ -162,7 +178,7 @@ Ticket carries `security-sensitive`; the architect's security review verdict is 
 
 - **Fail-closed transport.** Every inbound frame passes straight into the library's authenticated `ReadMessage`/`DecryptWithAd`, which MAC-verify and throw on failure → caught → typed `error`, never a partial decrypt. A tampered/wrong-suite/wrong-key frame is rejected before any byte surfaces.
 - **Injected keys, nothing persisted.** The static private key is a raw 32-byte X25519 local `Uint8Array`, injected as config, held in main-process memory only, freed by `close()`. The module sources no key from storage and generates none (that's [#43](../codebase/43.md)/[#42](../codebase/42.md)); the `hello` may carry a device token but is treated as opaque encrypted bytes.
-- **Log-free by construction.** Zero `console.*` in either file; every diagnostic is a typed reason or a category-only `NoiseLoadError` (never `err.message`). Pinned by a six-method `console`-spy assertion across handshake + transport + error **and the load-failure path**.
+- **Content-free logging by construction (was log-free; #133 added the one exception).** Zero `console.*` in either file; every diagnostic is a typed reason or a category-only `NoiseLoadError` (never `err.message`). Pinned by a six-method `console`-spy assertion across handshake + transport + error **and the load-failure path**. The one exception: the three inbound-read catches now log the capped raw pre-decryption frame through an optional injected [`DiagnosticLog`](diagnostic-log.md) (§ *Pre-decryption byte logging*, [#133](../codebase/133.md)) — safe because those bytes are ciphertext / handshake material, never plaintext or a secret; the outbound-write catches (which touch the token-bearing message 1) stay byte-free, pinned by a boundary test.
 - **No use-after-close.** `close()` frees the per-handshake / per-cipher wasm objects and flips state to `closed`; every entry point then guards on state / nulled handles and is inert — no call into a freed wasm object (a real heap-corruption vector). On a handshake read/write error the library auto-frees `hs` before throwing, so the catch nulls it to stay in step. This close-during-handshake invariant is pinned by a named regression fixture ([#33](../codebase/33.md), mobile #497 parity) — a garbage frame after `close()` in any state is dropped without re-entering freed wasm; the tests defend the guards, deliberately **not** a synchronization primitive (the single-threaded synchronous model makes the mutex mobile added a non-race).
 - **No renderer/IPC surface.** No `BrowserWindow`, `contextBridge`, `ipcMain`, or preload; a renderer compromise gains no path to keys, wasm, or cipher state.
 
@@ -180,6 +196,7 @@ Ticket carries `security-sensitive`; the architect's security review verdict is 
 - [#7 codebase notes](../codebase/7.md) — implementation summary, patterns, lessons.
 - [#108 codebase notes](../codebase/108.md) — the `rekey_request` recognition seam added to `transport` state (the type-peek, the module-private constant, the driver build-integrity edit); daemon twin pyrycode #454.
 - [#111 codebase notes](../codebase/111.md) — the **action** on the recognized trigger: the in-session IK re-handshake as initiator + the atomic cipher swap (`beginRekey`, the `awaiting-rekey-reply` phase, empty early-data, a failure returns to `transport` not `closed`); daemon twin pyrycode #453/#435.
+- [Content-free diagnostic log](diagnostic-log.md) / [#133 codebase notes](../codebase/133.md) — the optional injected `diagnosticLog` this session now logs through at the three inbound-read catches (§ *Pre-decryption byte logging*), carrying the capped raw ciphertext / handshake bytes via the branded `safeBytes` field; forwarded in by the [noise relay driver](noise-relay-driver.md).
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — the downstream `parseInboundMessage` whose `default → null` branch silently dropped `rekey_request` before #108; stays the sole app-message decode authority.
 - [#29 codebase notes](../codebase/29.md) — the library-selection spike that chose `noise-c.wasm`, established the harness contract, and flagged the async-load NIT this ticket closes.
 - [#30 codebase notes](../codebase/30.md) — the Go↔JS interop spike (verdict **RECOMMEND**); the byte-accurate interop invariants and the `Split()` asymmetry this session inherits.

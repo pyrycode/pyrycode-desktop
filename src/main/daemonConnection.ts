@@ -299,6 +299,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       driver = createDriver({
         connection: dc.connection,
         session: dc.session,
+        // Route the same process-singleton content-free logger (#126) into the driver — a SECOND
+        // downward path alongside the relay leg at connection.diagnosticLog above: the driver uses it
+        // for the framing decode catch AND forwards it into each Noise session it builds (#133).
+        diagnosticLog: deps.diagnosticLog,
         // Thread the provider so the driver's automatic supervisor reconnects re-source the record
         // from storage (#83) — for both the connection headers and the Noise session material —
         // instead of reusing this first dial's snapshot.

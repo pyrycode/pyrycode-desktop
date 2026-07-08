@@ -13,9 +13,13 @@
 // 0002). The sink is a plain in-process callback the background-process consumer owns; nothing here
 // touches IPC, the preload bridge, or the renderer.
 //
-// LOG-FREE by construction (inherited #5/#7/#22/#30): no console.*, and every caught error is
-// CLASSIFIED into a static reason and the caught object DROPPED — a codec/wasm error message can
-// echo transcript/frame bytes, so it never reaches the sink or a log.
+// CONTENT-FREE logging by construction (inherited #5/#7/#22/#30): no console.*, and every caught
+// error OBJECT is CLASSIFIED into a static reason and DROPPED — a codec/wasm error message can echo
+// transcript/frame bytes, so it never reaches the sink or a log. The one exception is the raw failing
+// frame at the inbound-frame-decode-failed catch: those bytes are pre-decryption (a base64-wrapped,
+// still-encrypted InnerFrameV2 / malformed length prefix — never plaintext), so they are logged
+// content-free (capped hex) through the optional injected DiagnosticLog (#133), which the driver also
+// forwards into each session it builds so the session's own read-failure catches can do the same.
 import { createRelaySupervisor } from './relaySupervisor'
 import type {
   RelaySupervisor,
@@ -31,6 +35,7 @@ import type {
   NoiseSessionEvent
 } from './noiseSession'
 import { base64StdDecode, base64StdEncode, decodeInnerFrame, encodeInnerFrame } from './codec'
+import { encodeSafeBytes, type DiagnosticLog } from '../diagnosticLog'
 
 /**
  * Cap on inbound frames buffered during the async gap between a synchronous `connected` and the
@@ -98,6 +103,11 @@ export interface NoiseRelayDriverConfig {
    * on every reconnect (unchanged pre-#83 behaviour). The FIRST connect always uses `session`.
    */
   loadDialConfig?: DialConfigProvider
+  /** Optional content-free diagnostic sink (#126/#133). The driver uses it directly for the framing
+   *  decode failure (onMessage) AND forwards it into each session's config, so both pre-decryption
+   *  boundaries converge here. Absent → silent. NOT carried on SessionMaterial: the driver injects its
+   *  own constant, so a #83 per-dial reload never has to thread it through DialConfig. */
+  diagnosticLog?: DiagnosticLog
   /** DI seams — default to the real factories. Tests inject fakes. */
   createSupervisor?: (config: RelaySupervisorConfig) => RelaySupervisor
   createSession?: (config: NoiseSessionConfig) => Promise<NoiseSession>
@@ -224,7 +234,10 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
       hello: material.hello,
       loadTimeoutMs: material.loadTimeoutMs,
       sendFrame,
-      onEvent: route
+      onEvent: route,
+      // The driver's OWN constant logger (not from SessionMaterial) so the session's pre-decryption
+      // read-failure catches log through the same sink as the framing catch below (#133).
+      diagnosticLog: config.diagnosticLog
     })
       .then((s) => {
         // A superseded session is closed BEFORE start() — it never sends a spurious noise_init.
@@ -253,6 +266,14 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
     try {
       raw = base64StdDecode(decodeInnerFrame(frame).data)
     } catch {
+      // The caught WireDecodeError object is still dropped (its message could echo more than the
+      // bounded prefix); only the static code + the capped raw pre-decryption frame are logged (#133).
+      config.diagnosticLog?.event({
+        event: 'relay-frame-decode-failed',
+        code: 'inbound-frame-decode-failed',
+        bytes: frame.length,
+        safeBytes: encodeSafeBytes(frame)
+      })
       emit({ type: 'error', reason: 'inbound-frame-decode-failed' })
       return
     }

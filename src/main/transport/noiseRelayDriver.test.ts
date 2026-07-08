@@ -19,6 +19,7 @@ import {
   type NoiseSessionEvent
 } from './noiseSession'
 import { base64StdEncode, encodeInnerFrame, decodeInnerFrame } from './codec'
+import type { DiagnosticEvent, DiagnosticLog } from '../diagnosticLog'
 
 // The driver is a pure in-process composition adapter, so its tests inject fakes at the two I/O
 // boundaries only — a fake supervisor factory (drive `connected`/`message`/`terminal` in) and a
@@ -187,6 +188,7 @@ function setup(opts: {
   createSession: (config: NoiseSessionConfig) => Promise<NoiseSession>
   fatalCloseCodes?: ReadonlySet<number>
   loadDialConfig?: DialConfigProvider
+  diagnosticLog?: DiagnosticLog
 }): {
   driver: ReturnType<typeof createNoiseRelayDriver>
   sink: ReturnType<typeof makeSink>
@@ -200,6 +202,7 @@ function setup(opts: {
     onEvent: sink.onEvent,
     fatalCloseCodes: opts.fatalCloseCodes,
     loadDialConfig: opts.loadDialConfig,
+    diagnosticLog: opts.diagnosticLog,
     createSupervisor: supFactory.createSupervisor,
     createSession: opts.createSession
   })
@@ -382,6 +385,46 @@ describe('createNoiseRelayDriver', () => {
     supervisor().emit({ type: 'message', frame: new TextEncoder().encode('not-an-inner-frame{') })
     expect(session.received).toEqual([])
     expect(errorsOf(sink.events)).toContainEqual({ type: 'error', reason: 'inbound-frame-decode-failed' })
+  })
+
+  it('logs the raw inbound frame content-free on a framing decode failure (#133)', async () => {
+    const factory = resolvedSessionFactory()
+    const captured: DiagnosticEvent[] = []
+    const diagnosticLog: DiagnosticLog = { event: (f) => void captured.push(f) }
+    const { sink, supervisor } = setup({ createSession: factory.createSession, diagnosticLog })
+
+    supervisor().emit({ type: 'connected' })
+    await tick()
+    const session = factory.sessions[0]
+
+    // A malformed inbound frame (not an InnerFrameV2) throws WireDecodeError in the codec; the driver
+    // classifies it and — now — logs the raw undecryptable bytes content-free before dropping it.
+    const badFrame = new TextEncoder().encode('not-an-inner-frame{')
+    supervisor().emit({ type: 'message', frame: badFrame })
+
+    expect(captured).toHaveLength(1)
+    expect(captured[0].event).toBe('relay-frame-decode-failed')
+    expect(captured[0].code).toBe('inbound-frame-decode-failed')
+    expect(captured[0].bytes).toBe(badFrame.length)
+    expect(captured[0].safeBytes).toBe(Buffer.from(badFrame.subarray(0, 64)).toString('hex'))
+
+    // Unchanged behaviour: the frame is still dropped (session never sees it) and the static-reason
+    // error still surfaces to the sink.
+    expect(session.received).toEqual([])
+    expect(errorsOf(sink.events)).toContainEqual({ type: 'error', reason: 'inbound-frame-decode-failed' })
+  })
+
+  it('forwards the diagnostic logger into each session config it builds (#133)', async () => {
+    const factory = resolvedSessionFactory()
+    const diagnosticLog: DiagnosticLog = { event: () => {} }
+    const { supervisor } = setup({ createSession: factory.createSession, diagnosticLog })
+
+    supervisor().emit({ type: 'connected' })
+    await tick()
+
+    // The driver injects its OWN constant logger into the session (not via SessionMaterial), so both
+    // pre-decryption boundaries — the driver's framing catch and the session's read catches — converge.
+    expect(factory.sessions[0].config.diagnosticLog).toBe(diagnosticLog)
   })
 
   it('surfaces an outbound over-cap failure without throwing back into the session', async () => {

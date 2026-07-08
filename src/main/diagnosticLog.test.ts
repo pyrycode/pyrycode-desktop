@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { createDiagnosticLog, type DiagnosticEvent, type DiagnosticSink } from './diagnosticLog'
+import {
+  createDiagnosticLog,
+  encodeSafeBytes,
+  MAX_SAFE_BYTES,
+  type DiagnosticEvent,
+  type DiagnosticSink
+} from './diagnosticLog'
 
 // Exercises the Electron-free core: its sole side effect is sink.write(one serialized line). A
 // capture sink pushes each line into an array so a test can parse and assert on it — no fs.
@@ -97,7 +103,53 @@ describe('createDiagnosticLog', () => {
     events.push({ event: 'x', url: 'wss://relay/v1/client?token=secret' })
     // @ts-expect-error — no `payload` field in the allowlist
     events.push({ event: 'x', payload: new Uint8Array([1, 2, 3]) })
-    expect(events).toHaveLength(4)
+
+    // #133 (AC5): `safeBytes` DOES exist, but it is branded — only the pre-decryption encoder's
+    // output satisfies it. A plain string, or a post-decryption-derived value (e.g. the `hash?`
+    // digest, a bare hex string), fails to type-check into it, so the pre/post-decryption boundary
+    // is enforced by the type system, not convention.
+    // @ts-expect-error — a plain string literal lacks the SafeBytesEncoding brand
+    events.push({ event: 'x', safeBytes: 'deadbeef' })
+    const postDecryptionHash: string = 'a'.repeat(64) // e.g. hashPlaintext() output — a bare string
+    // @ts-expect-error — a post-decryption-derived string is not a pre-decryption SafeBytesEncoding
+    events.push({ event: 'x', safeBytes: postDecryptionHash })
+    // The encoder's output DOES satisfy the field (the sole minter): this line must compile.
+    events.push({ event: 'x', safeBytes: encodeSafeBytes(new Uint8Array([1, 2, 3])) })
+
+    expect(events).toHaveLength(7)
+  })
+
+  it('hex-encodes a pre-decryption frame content-free, bounded to MAX_SAFE_BYTES (AC1/AC3)', () => {
+    // Short frames encode whole, as lowercase hex — never a decoded string.
+    expect(encodeSafeBytes(new Uint8Array([0x00, 0xff, 0x10, 0xab]))).toBe('00ff10ab')
+    expect(encodeSafeBytes(new Uint8Array(0))).toBe('')
+
+    // An over-long frame is truncated to the cap BEFORE hex-encoding: the hex is at most 2×cap chars.
+    const long = new Uint8Array(MAX_SAFE_BYTES + 32).fill(0xcd)
+    const hex = encodeSafeBytes(long)
+    expect(hex).toHaveLength(2 * MAX_SAFE_BYTES)
+    expect(hex).toBe('cd'.repeat(MAX_SAFE_BYTES))
+    expect(hex).toMatch(/^[0-9a-f]*$/)
+  })
+
+  it('carries a branded safeBytes value all the way to the sink (AC1)', () => {
+    const { lines, sink } = captureSink()
+    const log = createDiagnosticLog({ sink, now: () => FIXED_TS })
+    const frame = new Uint8Array([0xde, 0xad, 0xbe, 0xef])
+
+    log.event({
+      event: 'noise-frame-failed',
+      code: 'transport-decrypt-failed',
+      bytes: frame.length,
+      safeBytes: encodeSafeBytes(frame)
+    })
+
+    expect(JSON.parse(lines[0])).toMatchObject({
+      event: 'noise-frame-failed',
+      code: 'transport-decrypt-failed',
+      bytes: 4,
+      safeBytes: 'deadbeef'
+    })
   })
 
   it('emits exactly one line per call even when a field value contains a newline', () => {

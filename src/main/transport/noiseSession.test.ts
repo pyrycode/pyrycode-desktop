@@ -10,6 +10,7 @@ import {
   type NoiseSession,
   type NoiseSessionEvent
 } from './noiseSession'
+import type { DiagnosticEvent, DiagnosticLog } from '../diagnosticLog'
 
 // The #29 Noise spike is proven two ways, both deterministic and credential-free (no socket,
 // no daemon, no key on disk):
@@ -853,6 +854,121 @@ describe('close-during-handshake safety invariant (mobile #497 parity)', () => {
       initiator.close()
       initiator.close()
     }).not.toThrow()
+  })
+})
+
+describe('pre-decryption safe-bytes diagnostics (#133)', () => {
+  // A capture DiagnosticLog: records each content-free envelope so a test can assert the failing
+  // frame bytes reached the diagnostic sink — and ONLY the sink, never onEvent (bytes must not
+  // cross to the renderer path).
+  function captureLog(): { captured: DiagnosticEvent[]; diagnosticLog: DiagnosticLog } {
+    const captured: DiagnosticEvent[] = []
+    return { captured, diagnosticLog: { event: (f) => void captured.push(f) } }
+  }
+
+  // The expected content-free encoding of a captured frame: lowercase hex of at most 64 raw bytes
+  // (the session's MAX_SAFE_BYTES cap). The test frames are ≤ 64 bytes, so this is the whole frame.
+  const toHex = (u: Uint8Array): string => Buffer.from(u.subarray(0, 64)).toString('hex')
+
+  it('logs the ciphertext frame on transport-decrypt-failed, surfacing no bytes to onEvent (AC1/AC6)', async () => {
+    const lib = await loadNoiseLib()
+    const curve = lib.constants.NOISE_DH_CURVE25519
+    const [initPriv] = lib.CreateKeyPair(curve)
+    const [respPriv, respPub] = lib.CreateKeyPair(curve)
+    const init = collector<NoiseSessionEvent>()
+    const { captured, diagnosticLog } = captureLog()
+    let responder: NoiseResponder
+    const initiator = await createNoiseSession({
+      staticPrivateKey: initPriv,
+      remoteStaticPublicKey: respPub,
+      prologue: new Uint8Array(0),
+      hello: enc(HELLO),
+      sendFrame: (f) => responder.onFrame(f),
+      onEvent: init.onEvent,
+      diagnosticLog
+    })
+    responder = await createNoiseResponder({
+      staticPrivateKey: respPriv,
+      prologue: new Uint8Array(0),
+      helloAck: enc(HELLO_ACK),
+      sendFrame: (f) => initiator.onFrame(f),
+      onEvent: () => {}
+    })
+    handles.push(initiator, responder)
+    initiator.start()
+    expect(init.events.some((e) => e.type === 'handshake-complete')).toBe(true)
+
+    // A garbage post-handshake transport frame fails AEAD open → transport-decrypt-failed.
+    const garbage = new Uint8Array(48).fill(0x17)
+    initiator.onFrame(garbage)
+
+    // The diagnostic sink got the static code + the capped raw ciphertext bytes (safe: pre-decryption).
+    expect(captured).toHaveLength(1)
+    expect(captured[0].event).toBe('noise-frame-failed')
+    expect(captured[0].code).toBe('transport-decrypt-failed')
+    expect(captured[0].bytes).toBe(garbage.length)
+    expect(captured[0].safeBytes).toBe(toHex(garbage))
+
+    // onEvent still gets the static-reason error and nothing else — no bytes reach the renderer path.
+    expect(init.events).toContainEqual({ type: 'error', reason: 'transport-decrypt-failed' })
+    expect(JSON.stringify(init.events)).not.toContain(toHex(garbage))
+  })
+
+  it('logs the handshake message-2 frame on handshake-read-failed (AC1)', async () => {
+    const lib = await loadNoiseLib()
+    const curve = lib.constants.NOISE_DH_CURVE25519
+    const [initPriv] = lib.CreateKeyPair(curve)
+    const [, respPub] = lib.CreateKeyPair(curve)
+    const init = collector<NoiseSessionEvent>()
+    const { captured, diagnosticLog } = captureLog()
+    const initiator = await createNoiseSession({
+      staticPrivateKey: initPriv,
+      remoteStaticPublicKey: respPub,
+      prologue: new Uint8Array(0),
+      hello: enc(HELLO),
+      sendFrame: () => {},
+      onEvent: init.onEvent,
+      diagnosticLog
+    })
+    handles.push(initiator)
+    initiator.start()
+
+    // A malformed message 2 fails the handshake read.
+    const badMsg2 = new Uint8Array(64).fill(0x5a)
+    initiator.onFrame(badMsg2)
+
+    expect(captured).toHaveLength(1)
+    expect(captured[0].event).toBe('noise-frame-failed')
+    expect(captured[0].code).toBe('handshake-read-failed')
+    expect(captured[0].bytes).toBe(badMsg2.length)
+    expect(captured[0].safeBytes).toBe(toHex(badMsg2))
+    expect(init.events).toContainEqual({ type: 'error', reason: 'handshake-read-failed' })
+  })
+
+  it('captures no bytes for the pre-start unexpected-frame path — only the three inbound-read sites (AC6)', async () => {
+    const lib = await loadNoiseLib()
+    const curve = lib.constants.NOISE_DH_CURVE25519
+    const [initPriv] = lib.CreateKeyPair(curve)
+    const [, respPub] = lib.CreateKeyPair(curve)
+    const init = collector<NoiseSessionEvent>()
+    const { captured, diagnosticLog } = captureLog()
+    const initiator = await createNoiseSession({
+      staticPrivateKey: initPriv,
+      remoteStaticPublicKey: respPub,
+      prologue: new Uint8Array(0),
+      hello: enc(HELLO),
+      sendFrame: () => {},
+      onEvent: init.onEvent,
+      diagnosticLog
+    })
+    handles.push(initiator)
+
+    // A frame before start() is classified unexpected-frame. `frame` IS in scope at that catch, but
+    // byte-capture is scoped to the three inbound-read failures only — nothing is logged here.
+    initiator.onFrame(new Uint8Array(32).fill(0x01))
+
+    expect(initErrors(init.events)).toContain('unexpected-frame')
+    expect(captured).toHaveLength(0)
   })
 })
 

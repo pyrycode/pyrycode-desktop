@@ -4,15 +4,25 @@ import { createDiagnosticLog, type DiagnosticLog, type DiagnosticEvent } from '.
 import { DIAGNOSTIC_CHANNEL, type RendererDiagnosticEvent } from '../shared/ipc/diagnostics'
 
 // Compile-time pin (AC "single allowlist"): the renderer-safe RendererDiagnosticEvent must stay
-// field-for-field identical to #126's canonical DiagnosticEvent. A drift in EITHER direction turns
-// Equals<…> into `false`, so `const _pin: true = false` fails `npm run typecheck` (which includes
-// this .test.ts under the node project — the only project that spans both src/main and src/shared).
-// This is the deterministic net that lets the security audit trust ONE allowlist across the IPC
-// boundary. It lives here, main-side, because crossing the shared→main boundary is illegal from a
-// src/shared test (the web project cannot reach src/main).
+// identical to #126's canonical DiagnosticEvent MODULO the main-only fields. A drift in EITHER
+// direction turns Equals<…> into `false`, so `const _pin: true = false` fails `npm run typecheck`
+// (which includes this .test.ts under the node project — the only project that spans both src/main
+// and src/shared). This is the deterministic net that lets the security audit trust ONE allowlist
+// across the IPC boundary. It lives here, main-side, because crossing the shared→main boundary is
+// illegal from a src/shared test (the web project cannot reach src/main).
+//
+// #133: the canonical allowlist now also carries `safeBytes` — a branded pre-decryption byte
+// encoding populated ONLY by main-process transport failure paths. The renderer holds no frame bytes
+// (transport-out-of-the-window, CLAUDE.md) and cannot even reference the branded type across the
+// shared→main leaf boundary, so RendererDiagnosticEvent deliberately omits it. The pin therefore
+// subtracts `safeBytes` from the canonical side. The security-relevant guarantee is UNCHANGED: every
+// field the untrusted renderer can send is still exactly a canonical allowlisted field (so it cannot
+// smuggle a field #126's logger would spread onto the log line); only the reverse capability-parity
+// direction is relaxed, and only for fields the renderer must never produce. A future main-only field
+// must be added to this Omit list — a conscious, reviewed decision — or the pin breaks.
 type Equals<X, Y> =
   (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false
-const _allowlistPin: Equals<RendererDiagnosticEvent, DiagnosticEvent> = true
+const _allowlistPin: Equals<RendererDiagnosticEvent, Omit<DiagnosticEvent, 'safeBytes'>> = true
 void _allowlistPin
 
 // A structural stand-in for Electron's ipcMain: only on/removeListener, spied. No Electron

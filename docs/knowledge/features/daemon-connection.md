@@ -31,7 +31,7 @@ export interface DaemonConnectionDeps {
   clientVersion: string               // sourced at the root (app.getVersion()); hello + relay User-Agent
   now?: () => string                  // RFC3339 clock for the hello ts; default () => new Date().toISOString()
   createDriver?: (config: NoiseRelayDriverConfig) => NoiseRelayDriver  // DI seam; default createNoiseRelayDriver
-  diagnosticLog?: DiagnosticLog       // #126 content-free logger, injected at the root; the daemon-leg log sites consume it (#128)
+  diagnosticLog?: DiagnosticLog       // #126 content-free logger, injected at the root; the daemon-leg log sites consume it (#128), and a second downward path routes it into the driver's framing catch + session builds (#133)
 }
 
 export interface DaemonConnection {

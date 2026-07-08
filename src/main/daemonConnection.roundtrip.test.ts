@@ -32,6 +32,11 @@ import { startFakeDaemon, type FakeDaemon } from './transport/fakeDaemon'
 import { loadNoiseLib } from './transport/noiseLib'
 import { base64StdEncode, encodeEnvelope } from './transport/codec'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
+import { createDebugBundleDownload } from './debugBundleDownload'
+import { saveDebugBundle } from './saveDebugBundle'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import type { HelloAckPayload, MessagePayload, SendMessagePayload } from '../shared/wire/types'
 
 // A fixed clock for the fake-target run — the fake daemon decodes the `hello`/`send_message`
@@ -438,6 +443,62 @@ describe('createDaemonConnection debug-bundle round-trip (in-process fake target
       expect(completed).toEqual([])
       expect(failed).toEqual(['daemon-error'])
       // The error is an application frame, not a connection drop: no `failed` DaemonEvent.
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+    },
+    15_000
+  )
+})
+
+// --- debug-bundle download orchestrator round-trip (#169, AC1) -------------------------------
+// The end-to-end orchestration slice on top of the #116 reassembly path: a real orchestrator wires
+// the live connection.requestDebugBundle → real reassembler → real saveDebugBundle into a temp dir,
+// and asserts a `debugBundleSaved` event carries the written ABSOLUTE path whose bytes equal the
+// served archive. The orchestrator's `emit` pushes into the same `events`/`waiter` the sink uses, so
+// the bounded wait resolves on the terminal (bundle frames themselves emit no DaemonEvent).
+describe('createDaemonConnection debug-bundle download orchestrator round-trip (#169)', () => {
+  it(
+    'drives request → reassemble → save and emits debugBundleSaved with the saved absolute path',
+    async () => {
+      // A 50-byte archive split at 16 bytes → 4 chunks + done (5 frames) — a genuine multi-chunk stream.
+      const archive = new Uint8Array(50)
+      for (let i = 0; i < archive.length; i++) archive[i] = (i * 37 + 11) % 256
+      const frames = bundleFrames(archive, 16)
+
+      const { connection, events, waiter } = await standUpRoundTrip(UNUSED_BUILD_REPLY, {
+        buildReplyFrames: () => frames
+      })
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'pyry-bundle-'))
+      cleanups.push(() => rm(tmpDir, { recursive: true, force: true }))
+
+      const downloader = createDebugBundleDownload({
+        requestDebugBundle: (c) => connection.requestDebugBundle(c),
+        save: (b) => saveDebugBundle(tmpDir, b),
+        emit: (e) => {
+          events.push(e)
+          waiter.notify()
+        }
+      })
+      downloader.request()
+      await waiter.wait(
+        () => events.some((e) => e.type === 'debugBundleSaved' || e.type === 'debugBundleFailed'),
+        MESSAGE_TIMEOUT_MS
+      )
+
+      const saved = findEvent(events, 'debugBundleSaved')
+      expect(saved, `expected debugBundleSaved; observed ${types(events)}`).toBeDefined()
+      expect(
+        findEvent(events, 'debugBundleFailed'),
+        `unexpected debugBundleFailed; observed ${types(events)}`
+      ).toBeUndefined()
+      if (!saved) return // type-narrowing guard; the assertion above already failed the test otherwise
+
+      // The event carries an absolute path; the file exists there and its bytes are the served archive.
+      expect(isAbsolute(saved.path)).toBe(true)
+      const written = await readFile(saved.path)
+      expect([...written]).toEqual([...archive])
+      // The session stays open — a bundle download is not a connection-level failure.
       expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
     },
     15_000

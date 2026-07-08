@@ -2,7 +2,7 @@
 
 The **outbound "ask" half of the client debug-bundle download**: the background process encrypts a bare `request_debug_bundle` control envelope onto the live Noise session, so the pyry daemon begins streaming the current session's debug bundle back. This is the client sibling of the daemon's assemble/stream/serve path (pyrycode #811/#812/#813, all merged).
 
-Introduced in [#115](../codebase/115.md). Entirely `src/main/` — the request is built and encrypted in the background process; keys and bytes never reach the renderer. **Outbound only:** receiving/reassembling the streamed `.tar.gz` response (#116) and the renderer command that would trigger the request (#118) are sibling slices of the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split and are **not** part of this feature yet. Saving the reassembled bytes to disk is the [save-debug-bundle](save-debug-bundle.md) persistence leaf ([#117](../codebase/117.md), landed).
+Introduced in [#115](../codebase/115.md). Entirely `src/main/` — the request is built and encrypted in the background process; keys and bytes never reach the renderer. **Outbound only:** receiving/reassembling the streamed `.tar.gz` response is the [debug-bundle-reassembly](debug-bundle-reassembly.md) sibling ([#116](../codebase/116.md), landed); the renderer command that would trigger the request is [#118](https://github.com/pyrycode/pyrycode-desktop/issues/118) (open) — both are sibling slices of the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split. Saving the reassembled bytes to disk is the [save-debug-bundle](save-debug-bundle.md) persistence leaf ([#117](../codebase/117.md), landed).
 
 ## A bare control frame — no payload, no selector
 
@@ -25,7 +25,7 @@ export function buildRequestDebugBundle(input: RequestDebugBundleInput): Uint8Ar
 // Builds Envelope { id, type: 'request_debug_bundle', ts, payload: {} } → encodeEnvelope() UTF-8 bytes.
 ```
 
-2. **A connection method** — `requestDebugBundle(): void` added to [`createDaemonConnection`](daemon-connection.md), a **structural twin of `send`**: one `driver === null` no-op guard, one full-body `try/catch`, sharing the module-local `nextEnvelopeId` counter.
+2. **A connection method** — `requestDebugBundle(): void` added to [`createDaemonConnection`](daemon-connection.md), originally a **structural twin of `send`**: one `driver === null` no-op guard, one full-body `try/catch`, sharing the module-local `nextEnvelopeId` counter.
 
 ```ts
 function requestDebugBundle(): void {
@@ -40,7 +40,9 @@ function requestDebugBundle(): void {
 }
 ```
 
-**No `index.ts` change.** The `onCommand` switch stays `sendMessage`-only; the renderer command that would call `requestDebugBundle()` is the sibling ticket (#118). Adding the interface method is purely additive — its sole implementation is `createDaemonConnection`, and no existing consumer must call it.
+**No `index.ts` change** at this slice. The `onCommand` switch stays `sendMessage`-only; the renderer command that would call `requestDebugBundle()` is the sibling ticket (#118). Adding the interface method is purely additive — its sole implementation is `createDaemonConnection`, and no existing consumer must call it.
+
+> **Signature changed by [#116](../codebase/116.md).** `requestDebugBundle` now takes a `consumer: BundleConsumer` and arms a reassembler for the streamed reply before sending — see [debug-bundle-reassembly](debug-bundle-reassembly.md). The build/send body above (guard, shared counter, never-throw `try/catch`) is unchanged; only the caller-facing contract grew a required argument and a `not-connected` request now fails the consumer explicitly instead of silently no-op'ing.
 
 ## The empty-payload form — `payload: {}`, not an omission
 
@@ -55,7 +57,7 @@ Generalizes to any future "no payload" outbound frame (e.g. `interrupt`) — cap
 
 ## The shared envelope-id counter
 
-`requestDebugBundle` advances the **same** module-local, single-writer `nextEnvelopeId` that `send` uses — **no second counter**. So envelope ids stay unique and monotonic across interleaved `send`/`requestDebugBundle` calls (a `send` then a request yield ids 2 then 3). The daemon correlates replies by envelope `id`/`in_reply_to`, and the reassembly sibling (#116) relies on a well-formed request id to match the streamed response. Advancing only on a successful build, with no `await` in the method, keeps it race-free — identical discipline to the [outbound send path](outbound-send-path.md).
+`requestDebugBundle` advances the **same** module-local, single-writer `nextEnvelopeId` that `send` uses — **no second counter**. So envelope ids stay unique and monotonic across interleaved `send`/`requestDebugBundle` calls (a `send` then a request yield ids 2 then 3). Advancing only on a successful build, with no `await` in the method, keeps it race-free — identical discipline to the [outbound send path](outbound-send-path.md). (The daemon's streamed reply is **not** correlated by this id — see [debug-bundle-reassembly](debug-bundle-reassembly.md)'s § "The daemon contract"; it correlates by frame *type*, and the desktop has at most one bundle request in flight.)
 
 ## Data flow
 
@@ -65,7 +67,7 @@ Generalizes to any future "no payload" outbound frame (e.g. `interrupt`) — cap
   → buildRequestDebugBundle({ id, ts }) → driver.sendMessage(bytes)
   → session.sendMessage (AEAD seal) → sendFrame → InnerFrameV2 noise_msg → relay → daemon
   → daemon intercepts request_debug_bundle before dispatch.Route → begins streaming the bundle back
-    (the streamed response is the inbound-reassembly sibling #116's concern)
+    (the streamed response is reassembled by the debug-bundle-reassembly sibling, #116, landed)
 ```
 
 ## Error handling
@@ -81,6 +83,7 @@ No new `DaemonEvent`, no banner/dialog — the request is fire-and-forget. The d
 ## Related
 
 - [#115 codebase notes](../codebase/115.md) — implementation summary, patterns, lessons, and the sibling roadmap (#116/#117/#118).
+- [Debug-bundle reassembly (inbound)](debug-bundle-reassembly.md) / [#116](../codebase/116.md) — the receive-and-reassemble sibling that answers this request; the source of truth for `requestDebugBundle`'s current `(consumer)` signature.
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the `send_message` path this mirrors field-for-field: the pure builder shape, the single-`driver === null`-guard case analysis, the shared id-counter model, and the never-throw posture are all reused.
 - [Daemon connection](daemon-connection.md) / [#62](../codebase/62.md) — hosts the `requestDebugBundle()` method alongside `send`; owns the `nextEnvelopeId` counter and the `driver` fence.
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — `encodeEnvelope` (the serializer), `decodeEnvelope`'s `'payload' in obj` requirement (`codec.ts:133`, the constraint forcing a present payload), the `Envelope` type, and the "never emit null" posture.

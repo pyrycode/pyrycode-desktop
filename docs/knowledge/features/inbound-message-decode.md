@@ -18,9 +18,12 @@ Crucially, it is **IPC-free**: it never imports `DaemonEvent` or `emitDaemonEven
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
   | { kind: 'chunk'; messages: MessagePayload[] }
+  | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }   // #116, additive
+  | { kind: 'bundle-done'; total: number }                    // #116, additive
+  | { kind: 'daemon-error' }                                  // #116, additive — content-free
 
 // Decode + route + narrow one decrypted app-message plaintext:
-//  • InboundDaemonMessage  — a `message` or `message_chunk` envelope, fully narrowed
+//  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error` envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
 export function parseInboundMessage(
@@ -28,6 +31,8 @@ export function parseInboundMessage(
   diagnosticLog?: DiagnosticLog       // #130 — optional injected content-free logger; absent ⇒ silent
 ): InboundDaemonMessage | null
 ```
+
+**Extended by [#116](../codebase/116.md), additively.** The `message` / `message_chunk` recognition and narrowing described below are unchanged byte-for-byte. Three more kinds are now recognized *before* the `default` (unmodeled) branch: `debug_bundle_chunk` → `{ kind: 'bundle-chunk', seq, data }` (base64-decoded via the codec's **strict** `base64StdDecode` right at this boundary, so the [reassembler](debug-bundle-reassembly.md) downstream stays byte-pure), `debug_bundle_done` → `{ kind: 'bundle-done', total }`, and `error` → `{ kind: 'daemon-error' }` (content-free — no `ErrorPayload` field is narrowed). A new `requireNumber` helper sits beside `requireString` for the two numeric fields (`seq`/`total`). Modeling `error` is a deliberate, generally-applicable change: it moves from silently-dropped `inbound-unmodeled` to a modeled, content-free `inbound-decoded(code: 'error')` for **every** `error` frame, bundle-related or not — see the diagnostic-logging table below.
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 
@@ -42,7 +47,8 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
 3. **Route on `envelope.type`:**
    - `'message'` → `{ kind: 'message', message: parseMessagePayload(payload) }`
    - `'message_chunk'` → `{ kind: 'chunk', messages: parseMessageChunkPayload(payload).messages }`
-   - anything else → `return null` — a well-formed `ack` / `error` / `hello_ack` / etc. is **not an error**, it is simply not modeled here. Since [#130](../codebase/130.md) it is also **logged content-free** (`inbound-unmodeled`, § *Diagnostic logging*) before the `return null`, so an unforeseen envelope kind leaves a footprint instead of vanishing; the return value and the "not surfaced to the UI" behavior are unchanged.
+   - `'debug_bundle_chunk'` / `'debug_bundle_done'` / `'error'` → the three additive kinds ([#116](../codebase/116.md), see above) — narrowed and content-free-logged as `inbound-decoded` before the `default` branch is ever reached.
+   - anything else → `return null` — a well-formed `ack` / `hello_ack` / `backfill_since` / etc. is **not an error**, it is simply not modeled here. Since [#130](../codebase/130.md) it is also **logged content-free** (`inbound-unmodeled`, § *Diagnostic logging*) before the `return null`, so an unforeseen envelope kind leaves a footprint instead of vanishing; the return value and the "not surfaced to the UI" behavior are unchanged. (`error` was in this bucket until [#116](../codebase/116.md) promoted it to modeled — see above.)
 
 ### Payload narrowing
 
@@ -63,6 +69,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 |---|---|---|
 | modeled `message` | `inbound-decoded` | `code: 'message'`, `bytes: plaintext.length`, `hash` |
 | modeled `message_chunk` | `inbound-decoded` | `code: 'message_chunk'`, `bytes`, `count: messages.length`, `hash` |
+| modeled `debug_bundle_chunk` / `debug_bundle_done` / `error` ([#116](../codebase/116.md)) | `inbound-decoded` | `code: <the type>`, `bytes`, `hash` — never `seq`/`total`/`data`/the daemon's `ErrorPayload` text |
 | unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
 
 Load-bearing details:
@@ -76,7 +83,7 @@ The allowlist extension is a single additive optional field on `DiagnosticEvent`
 
 ### The consumer arm (`daemonConnection.ts`)
 
-The [daemon connection](daemon-connection.md)'s `case 'message'` arm is now a thin `InboundDaemonMessage → DaemonEvent` mapper — the module's single IPC choke point:
+The [daemon connection](daemon-connection.md)'s `case 'message'` arm is a thin `InboundDaemonMessage → DaemonEvent` mapper — the module's single IPC choke point. As of [#116](../codebase/116.md) it routes on `inbound.kind` via a `switch`, additively: the `message`/`chunk` arms are unchanged, and the three bundle kinds are routed to the [debug-bundle reassembler](debug-bundle-reassembly.md) instead of the IPC channel (bundle frames emit **no** `DaemonEvent`):
 
 ```ts
 case 'message': {
@@ -87,16 +94,28 @@ case 'message': {
     return                                            // fail-closed: drop the frame, no event, no throw
   }
   if (inbound === null) return                        // other envelope type: ignored, no event
-  if (inbound.kind === 'message') {
-    emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message })
-  } else {
-    emitDaemonEvent(sink, { type: 'messagesReceived', messages: inbound.messages })
+  switch (inbound.kind) {
+    case 'message':
+      emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message })
+      return
+    case 'chunk':
+      emitDaemonEvent(sink, { type: 'messagesReceived', messages: inbound.messages })
+      return
+    case 'bundle-chunk':
+      reassembler?.chunk(inbound.seq, inbound.data)     // #116: routed to the reassembler, not IPC
+      return
+    case 'bundle-done':
+      reassembler?.done(inbound.total)
+      return
+    case 'daemon-error':
+      reassembler?.fail('daemon-error')
+      return
   }
   return
 }
 ```
 
-The caught `WireDecodeError` is **dropped** (classify-don't-forward): its message could echo message plaintext, so it never reaches a log or an event.
+The caught `WireDecodeError` is **dropped** (classify-don't-forward): its message could echo message plaintext, so it never reaches a log or an event. A bundle frame with no active (or already-settled) `reassembler` is a no-op via optional chaining — preserving the pre-#116 drop behavior when no bundle request is in flight.
 
 ## Data flow
 
@@ -134,7 +153,8 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **No dedupe, no reorder — arrival order only.** Two `message` frames with the same `message_id` produce two `messageReceived` events. Ordering and dedupe are the renderer store's responsibility ([`appendUnique`, ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)); this module deliberately does neither.
 - **`message_chunk` carries complete messages, not partial tokens** — no token coalescing here (see the store's `SessionAction` doc comment). A chunk is a batch of whole `MessagePayload`s.
 - **An empty `message_chunk` emits `messagesReceived` with `[]`.** A zero-length batch is a valid, harmless event. If the daemon is later found to never send empty chunks, dropping them is a trivial future tightening — not this boundary's concern.
-- **Unmodeled envelope types are ignored but no longer *silent*.** `ack` / `error` / `backfill_since` / etc. still return `null` and emit no `DaemonEvent` — decoding/routing them is out of scope. Since [#130](../codebase/130.md) they *are* logged content-free (`inbound-unmodeled` — capped type + size + hash), so an unforeseen kind leaves a diagnosable footprint even though the runtime behavior is unchanged.
+- **Unmodeled envelope types are ignored but no longer *silent*.** `ack` / `backfill_since` / etc. still return `null` and emit no `DaemonEvent` — decoding/routing them is out of scope. Since [#130](../codebase/130.md) they *are* logged content-free (`inbound-unmodeled` — capped type + size + hash), so an unforeseen kind leaves a diagnosable footprint even though the runtime behavior is unchanged. `error` was in this bucket until [#116](../codebase/116.md) promoted it to a modeled, content-free `daemon-error` kind (see above) — it is no longer in the unmodeled set.
+- **The three bundle kinds emit no `DaemonEvent`.** Unlike `message`/`message_chunk`, `bundle-chunk`/`bundle-done`/`daemon-error` never reach the [daemon-event channel](daemon-event-channel.md) — they route to the [debug-bundle reassembler](debug-bundle-reassembly.md)'s injected `BundleConsumer` instead ([#116](../codebase/116.md)). A caller that also waits on daemon events must drive its own wait from the consumer's `complete`/`fail`, not the event sink.
 
 ### Why the explicit size guard, given the transport already bounds the plaintext
 
@@ -143,6 +163,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 ## Related
 
 - [#68 codebase notes](../codebase/68.md) — implementation summary, patterns, lessons (the boundary's introduction).
+- [Debug-bundle reassembly (inbound)](debug-bundle-reassembly.md) / [#116 codebase notes](../codebase/116.md) — the additive extension of this boundary: three new recognized kinds, the `error`-modeling change, and the `requireNumber` narrowing helper.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).
 - [Daemon connection](daemon-connection.md) / [#62](../codebase/62.md) — hosts the `case 'message'` arm that calls this and maps its result onto the IPC channel; owns the single choke point and the classify-don't-forward discipline this inherits.

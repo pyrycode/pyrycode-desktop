@@ -15,6 +15,9 @@ import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
+import { createDebugBundleDownload } from './debugBundleDownload'
+import { saveDebugBundle } from './saveDebugBundle'
+import { emitDaemonEvent } from './emitDaemonEvent'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
@@ -196,17 +199,34 @@ app.whenReady().then(() => {
   mainWindow.webContents.once('did-finish-load', () => connection.start())
   app.on('will-quit', () => connection.stop())
 
+  // The debug-bundle download orchestrator (#169): the sole slice that touches Electron + IPC for
+  // this feature. `app.getPath('downloads')` — this slice's one Electron touch — is closed into the
+  // saver so saveDebugBundle never imports `app` (#117); the transport/persistence slices stay
+  // IPC-free. The orchestrator drives request → reassemble → save and emits progress + one terminal
+  // result to the window; it enforces single-in-flight so a spammed command cannot orphan an
+  // in-flight download's reassembler slot.
+  const downloadsDir = app.getPath('downloads')
+  const downloader = createDebugBundleDownload({
+    requestDebugBundle: (consumer) => connection.requestDebugBundle(consumer),
+    save: (bytes) => saveDebugBundle(downloadsDir, bytes),
+    emit: (event) => emitDaemonEvent(mainWindow, event)
+  })
+
   // The single onCommand registration for the app lifetime (#17 deferred this wiring). The command
-  // is already validated by isRendererCommand at the boundary; route its payload to the send entry
-  // point. A switch on `type` (single member today) keeps it grow-ready. Registered once via
-  // ipcMain.on (additive) — this sole site is what makes "registering twice does not double-
-  // dispatch" true. Inert until a driver exists, so a command arriving before the connect is a safe
-  // no-op; no need to gate on did-finish-load. `will-quit` removes the exact listener, symmetric
-  // with unregisterPairing.
+  // is already validated by isRendererCommand at the boundary; route each member to its entry point.
+  // A switch on `type` keeps it grow-ready. Registered once via ipcMain.on (additive) — this sole
+  // site is what makes "registering twice does not double-dispatch" true. Inert until a driver
+  // exists, so a command arriving before the connect is a safe no-op (send is a no-op with no driver;
+  // requestDebugBundle fails its consumer `not-connected`, emitting `debugBundleFailed: unavailable`);
+  // no need to gate on did-finish-load. `will-quit` removes the exact listener, symmetric with
+  // unregisterPairing.
   const unregisterCommands = onCommand(ipcMain, (command) => {
     switch (command.type) {
       case 'sendMessage':
         connection.send(command.payload)
+        return
+      case 'requestDebugBundle':
+        downloader.request()
         return
     }
   })

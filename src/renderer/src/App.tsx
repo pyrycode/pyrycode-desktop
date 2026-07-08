@@ -16,14 +16,18 @@ function assertNever(route: never): never {
  * behavior is "stay put", which is exactly the absence of a navigating handler (AC5). Wiring a
  * navigating onCancel would risk exposing the conversation screen before pairing.
  */
-export function AppView(props: { route: AppRoute; onPaired: () => void }): JSX.Element | null {
+export function AppView(props: {
+  route: AppRoute
+  onPaired: () => void
+  onUnpaired: () => void
+}): JSX.Element | null {
   switch (props.route) {
     case 'pending':
       return null
     case 'pairing':
       return <PairingScreen onPaired={props.onPaired} />
     case 'conversation':
-      return <ConversationScreen />
+      return <ConversationScreen onUnpaired={props.onUnpaired} />
     default:
       return assertNever(props.route)
   }
@@ -58,11 +62,18 @@ function App(): JSX.Element {
     }
   }, [])
 
-  // onPaired is the whole of AC4: a successful confirm flips the route to conversation, unmounting
-  // the pairing screen and mounting the conversation screen with no restart. It can only fire after
-  // the launch query has already resolved to a non-paired route, so there is no ordering hazard with
-  // the launch effect's setRoute.
-  return <AppView route={route} onPaired={() => setRoute('conversation')} />
+  // onPaired flips the route to conversation on a successful confirm; onUnpaired is its exact reverse
+  // (#166) — a successful unpair flips back to pairing in-place, no restart. Both unmount one screen
+  // and mount the other with no restart. The unpair path clears the stored pairing BEFORE this flip
+  // (in runUnpair), so the launch-status invariant "conversation only when paired" still holds if the
+  // user relaunches immediately after.
+  return (
+    <AppView
+      route={route}
+      onPaired={() => setRoute('conversation')}
+      onUnpaired={() => setRoute('pairing')}
+    />
+  )
 }
 
 export default App

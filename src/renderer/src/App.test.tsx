@@ -18,7 +18,9 @@ const PAIRING_MARKER = 'Paste pairing code'
 describe('AppView', () => {
   it("route='pending' renders neither screen — an empty, neutral paint (AC3)", () => {
     // The pending phase mounts no screen; the dark canvas (color-scheme: dark) shows through.
-    expect(renderToStaticMarkup(<AppView route="pending" onPaired={noop} />)).toBe('')
+    expect(
+      renderToStaticMarkup(<AppView route="pending" onPaired={noop} onUnpaired={noop} />)
+    ).toBe('')
   })
 
   describe("route='pairing'", () => {
@@ -33,7 +35,9 @@ describe('AppView', () => {
     })
 
     it('shows the pairing screen and never the conversation screen (AC2)', () => {
-      const markup = renderToStaticMarkup(<AppView route="pairing" onPaired={noop} />)
+      const markup = renderToStaticMarkup(
+        <AppView route="pairing" onPaired={noop} onUnpaired={noop} />
+      )
       expect(markup).toContain(PAIRING_MARKER)
       expect(markup).not.toContain(CONVERSATION_MARKER)
     })
@@ -47,7 +51,9 @@ describe('AppView', () => {
     })
 
     it('shows the conversation screen and never the pairing screen', () => {
-      const markup = renderToStaticMarkup(<AppView route="conversation" onPaired={noop} />)
+      const markup = renderToStaticMarkup(
+        <AppView route="conversation" onPaired={noop} onUnpaired={noop} />
+      )
       expect(markup).toContain(CONVERSATION_MARKER)
       expect(markup).not.toContain(PAIRING_MARKER)
     })

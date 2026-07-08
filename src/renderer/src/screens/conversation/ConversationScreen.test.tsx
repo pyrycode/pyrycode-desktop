@@ -68,6 +68,16 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).toContain('aria-label="Send"')
   })
 
+  // #166: the conversation shell carries the unpair escape hatch — a header-row trigger with a
+  // stable accessible name. Only the idle phase is reachable under server render (the confirm-toggle
+  // and unpairing transitions are trivial useState glue, unit-tested nowhere — same discipline as
+  // Composer's `text` and PairingScreen's container wiring, which are smoke-only). window.pyry.unpair
+  // is dereferenced only in the click handler, so the container smoke-render never touches the bridge.
+  it('renders the unpair trigger (its accessible text is present in the idle-phase markup)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('>Unpair</button>')
+  })
+
   // #31: while not connected the send control is disabled and the composer shows an inline
   // "why" hint. The initial store state is `disconnected`, and zustand v5's useStore reads
   // getInitialState() under server rendering (never setState), so this container smoke test always

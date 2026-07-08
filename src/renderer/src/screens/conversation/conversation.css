@@ -15,6 +15,65 @@
   font-family: var(--font-sans);
 }
 
+/* Slim header row — the minimal seed of the future top app bar (#166), holding the de-emphasized
+   unpair control. flex-end right-aligns the idle trigger; the confirm prompt takes margin-right:auto
+   to sit left of the Cancel/Confirm pair. Never grows or shrinks. */
+.conversation__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* The AC3 confirm-guard question. Muted, so the row reads as a quiet escape hatch, not a destructive
+   banner — there is no --color-error token on desktop and a minimal control needs none. */
+.conversation__unpair-prompt {
+  margin-right: auto;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+/* De-emphasized text button — the muted M3 label treatment, gaining a surface tint only on hover. */
+.conversation__unpair {
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.conversation__unpair:hover:not(:disabled) {
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+}
+
+.conversation__unpair:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* In-flight (unpairing): reduced-emphasis, no pointer affordance — the composer__send:disabled
+   convention (muted content, not a raw opacity literal). */
+.conversation__unpair:disabled {
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
+}
+
+/* The confirm action gets full on-surface emphasis to read as the primary choice of the pair. */
+.conversation__unpair--confirm:not(:disabled) {
+  color: var(--color-on-surface);
+}
+
 /* Scrollable thread. min-height: 0 is load-bearing: without it the flex item
    refuses to shrink and the whole window scrolls instead of this region. */
 .conversation__thread {

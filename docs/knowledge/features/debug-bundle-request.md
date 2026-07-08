@@ -2,7 +2,7 @@
 
 The **outbound "ask" half of the client debug-bundle download**: the background process encrypts a bare `request_debug_bundle` control envelope onto the live Noise session, so the pyry daemon begins streaming the current session's debug bundle back. This is the client sibling of the daemon's assemble/stream/serve path (pyrycode #811/#812/#813, all merged).
 
-Introduced in [#115](../codebase/115.md). Entirely `src/main/` — the request is built and encrypted in the background process; keys and bytes never reach the renderer. **Outbound only:** receiving/reassembling the streamed `.tar.gz` response is the [debug-bundle-reassembly](debug-bundle-reassembly.md) sibling ([#116](../codebase/116.md), landed); the renderer command that triggers the request is the typed `requestDebugBundle` [command channel](command-channel.md) member ([#168](../codebase/168.md), landed), orchestrated by [#169](https://github.com/pyrycode/pyrycode-desktop/issues/169) (open, the ticket #118 split into, along with #168) — all sibling slices of the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split. Saving the reassembled bytes to disk is the [save-debug-bundle](save-debug-bundle.md) persistence leaf ([#117](../codebase/117.md), landed).
+Introduced in [#115](../codebase/115.md). Entirely `src/main/` — the request is built and encrypted in the background process; keys and bytes never reach the renderer. **Outbound only:** receiving/reassembling the streamed `.tar.gz` response is the [debug-bundle-reassembly](debug-bundle-reassembly.md) sibling ([#116](../codebase/116.md), landed); the renderer command that triggers the request is the typed `requestDebugBundle` [command channel](command-channel.md) member ([#168](../codebase/168.md), landed), orchestrated by the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed — the ticket #118 split into, along with #168) — all sibling slices of the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split. Saving the reassembled bytes to disk is the [save-debug-bundle](save-debug-bundle.md) persistence leaf ([#117](../codebase/117.md), landed).
 
 ## A bare control frame — no payload, no selector
 
@@ -40,7 +40,7 @@ function requestDebugBundle(): void {
 }
 ```
 
-**No `index.ts` change** at this slice. The `onCommand` switch stays `sendMessage`-only at #115; [#168](../codebase/168.md) later adds the bare `requestDebugBundle` [command](command-channel.md) member but still doesn't handle it (the switch has no `default` arm), so it stays a safe no-op until [#169](https://github.com/pyrycode/pyrycode-desktop/issues/169) calls this method from a handler. Adding the interface method is purely additive — its sole implementation is `createDaemonConnection`, and no existing consumer must call it.
+**No `index.ts` change** at this slice. The `onCommand` switch stays `sendMessage`-only at #115; [#168](../codebase/168.md) later adds the bare `requestDebugBundle` [command](command-channel.md) member but still doesn't handle it (the switch has no `default` arm), so it stayed a safe no-op until the [orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md)) called this method from a handler. Adding the interface method is purely additive — its sole implementation is `createDaemonConnection`, and no existing consumer must call it.
 
 > **Signature changed by [#116](../codebase/116.md).** `requestDebugBundle` now takes a `consumer: BundleConsumer` and arms a reassembler for the streamed reply before sending — see [debug-bundle-reassembly](debug-bundle-reassembly.md). The build/send body above (guard, shared counter, never-throw `try/catch`) is unchanged; only the caller-facing contract grew a required argument and a `not-connected` request now fails the consumer explicitly instead of silently no-op'ing.
 
@@ -62,7 +62,7 @@ Generalizes to any future "no payload" outbound frame (e.g. `interrupt`) — cap
 ## Data flow
 
 ```
-renderer requestDebugBundle command (#168, contract) → #169 orchestrator (open)
+renderer requestDebugBundle command (#168, contract) → #169 orchestrator (landed)
   → connection.requestDebugBundle()                          // ← this feature
   → buildRequestDebugBundle({ id, ts }) → driver.sendMessage(bytes)
   → session.sendMessage (AEAD seal) → sendFrame → InnerFrameV2 noise_msg → relay → daemon
@@ -83,7 +83,8 @@ No new `DaemonEvent`, no banner/dialog — the request is fire-and-forget. The d
 ## Related
 
 - [#115 codebase notes](../codebase/115.md) — implementation summary, patterns, lessons, and the sibling roadmap (#116/#117, and #118's split into #168/#169).
-- [Command channel](command-channel.md) / [#168](../codebase/168.md) — the typed `requestDebugBundle` renderer command that (via #169) calls this feature's method; ships the IPC contract, not the wiring.
+- [Command channel](command-channel.md) / [#168](../codebase/168.md) — the typed `requestDebugBundle` renderer command that (via the [orchestrator](debug-bundle-orchestrator.md)) calls this feature's method; ships the IPC contract, not the wiring.
+- [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the composition-root consumer that wires this method into the live daemon connection.
 - [Debug-bundle reassembly (inbound)](debug-bundle-reassembly.md) / [#116](../codebase/116.md) — the receive-and-reassemble sibling that answers this request; the source of truth for `requestDebugBundle`'s current `(consumer)` signature.
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the `send_message` path this mirrors field-for-field: the pure builder shape, the single-`driver === null`-guard case analysis, the shared id-counter model, and the never-throw posture are all reused.
 - [Daemon connection](daemon-connection.md) / [#62](../codebase/62.md) — hosts the `requestDebugBundle()` method alongside `send`; owns the `nextEnvelopeId` counter and the `driver` fence.

@@ -7,7 +7,7 @@ The **persistence leaf of the client debug-bundle download**: given the reassemb
 export function saveDebugBundle(dir: string, bytes: Uint8Array): Promise<string>
 ```
 
-Introduced in [#117](../codebase/117.md). One of the three unblocked leaf slices of the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split: [#115](debug-bundle-request.md) sends the request, #116 reassembles the streamed bytes, **#117 (this) persists them**; [#168](../codebase/168.md) shipped the typed IPC contract, and [#169](https://github.com/pyrycode/pyrycode-desktop/issues/169) (open) is the orchestrator that ties #115→#116→#117 together behind it (both are #118's split). This slice is **transport-independent** — it takes bytes + a target dir and returns a path — so it is built and unit-tested on its own against a temp dir, with **no `electron` import** in its module graph.
+Introduced in [#117](../codebase/117.md). One of the three unblocked leaf slices of the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) split: [#115](debug-bundle-request.md) sends the request, #116 reassembles the streamed bytes, **#117 (this) persists them**; [#168](../codebase/168.md) shipped the typed IPC contract, and the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed) ties #115→#116→#117 together behind it (both are #118's split). This slice is **transport-independent** — it takes bytes + a target dir and returns a path — so it is built and unit-tested on its own against a temp dir, with **no `electron` import** in its module graph.
 
 The bundle is the **highest-value secret surface in the system** (recent daemon logs + terminal recording), so file placement and permissions are a security design decision — this ticket carried the `security-sensitive` label.
 
@@ -21,7 +21,7 @@ The bundle is the **highest-value secret surface in the system** (recent daemon 
 
 ## The composition-root seam — injected `dir`, no `electron` import
 
-`dir` is a **parameter injected by the composition root**, not computed here. The production value is `app.getPath('downloads')`, computed by the orchestrating command handler (#169). This keeps the module free of any `electron`/`app` dependency, so its test module graph is Electron-free by construction (only `node:fs/promises` + `node:path`) — the exact same seam [`fileSecretPersistence`](secure-store.md) uses, whose production `dir` is likewise supplied by its consumer.
+`dir` is a **parameter injected by the composition root**, not computed here. The production value is `app.getPath('downloads')`, computed at `src/main/index.ts` and closed over by the [orchestrator](debug-bundle-orchestrator.md) (#169). This keeps the module free of any `electron`/`app` dependency, so its test module graph is Electron-free by construction (only `node:fs/promises` + `node:path`) — the exact same seam [`fileSecretPersistence`](secure-store.md) uses, whose production `dir` is likewise supplied by its consumer.
 
 ## The load-bearing decision — exclusive-create, the inverse of the precedent
 
@@ -54,7 +54,7 @@ Because the filename is a **module constant** (never derived from `bytes` or any
 `security-sensitive`; architect self-review verdict **PASS**.
 
 - **Confidentiality at rest = `0o600`.** The bundle is deliberately **not** `safeStorage`-encrypted: the user story needs a portable `.tar.gz` the user can open or share, and OS-keychain-bound encryption would make it un-openable off this machine. Owner-only file mode (POSIX) plus the user's custody of their downloads folder is the control. On **Windows** `0o600` is largely ignored — the per-user profile ACL on the Downloads folder is the control there; this is **called out, not worked around** (and the `0o600` perms test is `it.runIf(process.platform !== 'win32')`).
-- **No byte leak.** The module emits no logs of its own (user-facing progress is #169's job, over the [`debugBundleProgress`](daemon-event-channel.md) event #168 shipped). Rejections carry only the errno `code` and the destination path (the user's own new download path — not sensitive); `bytes` never enters any `Error`. Pinned by the "rejection message contains no byte values" test.
+- **No byte leak.** The module emits no logs of its own (user-facing progress is the [orchestrator](debug-bundle-orchestrator.md)'s (#169) job, over the [`debugBundleProgress`](daemon-event-channel.md) event #168 shipped). Rejections carry only the errno `code` and the destination path (the user's own new download path — not sensitive); `bytes` never enters any `Error`. Pinned by the "rejection message contains no byte values" test.
 - **No renderer reach / no IPC.** No channel, no `BrowserWindow`, no `contextBridge` API, no custom-protocol handler; no `electron` import.
 - **Residual (accepted, out of scope):** if the downloads folder is a cloud-synced folder (Dropbox/OneDrive), the bundle leaves the machine on save — inherent to the downloads-folder scope; the deferred user-chosen-path variant would let the user target a non-synced location. The save is an explicit, user-initiated action that materialises the evidence archive as a shareable file by design.
 
@@ -81,7 +81,8 @@ On any **non-`EEXIST`** errno the module does a best-effort `unlink(candidate).c
 ## Related
 
 - [#117 codebase notes](../codebase/117.md) — implementation summary, patterns, lessons, and the code-review NIT carried forward.
-- [Debug-bundle request (outbound)](debug-bundle-request.md) / [#115](../codebase/115.md) — the sibling outbound-ask slice; the same #71 split. #169 (the renderer-command orchestrator, blocked-by #168) will orchestrate #115→#116→#117.
-- [Command channel](command-channel.md) / [Daemon-event channel](daemon-event-channel.md) / [#168](../codebase/168.md) — the typed IPC contract #169 will use to trigger this slice and report `debugBundleSaved.path` back.
+- [Debug-bundle request (outbound)](debug-bundle-request.md) / [#115](../codebase/115.md) — the sibling outbound-ask slice; the same #71 split. The [orchestrator](debug-bundle-orchestrator.md) (#169) ties #115→#116→#117 together.
+- [Command channel](command-channel.md) / [Daemon-event channel](daemon-event-channel.md) / [#168](../codebase/168.md) — the typed IPC contract the [orchestrator](debug-bundle-orchestrator.md) (#169) uses to trigger this slice and report `debugBundleSaved.path` back.
+- [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the composition-root consumer that closes `app.getPath('downloads')` into this function and wires its result to `debugBundleSaved`/`debugBundleFailed`.
 - [Secure store](secure-store.md) / [#42](../codebase/42.md) — hosts [`fileSecretPersistence`](../codebase/42.md), the "sensitive bytes → disk" precedent this module mirrors-and-inverts (`isErrnoException` copied verbatim; temp-then-rename deliberately *not* copied — see the load-bearing decision above).
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — the fail-closed secret-at-rest posture; this module is the deliberate exception (plaintext-at-rest by design, `0o600` not `safeStorage`, for a portable/shareable artifact).

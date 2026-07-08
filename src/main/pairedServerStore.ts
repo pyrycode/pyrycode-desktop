@@ -42,6 +42,19 @@ export interface PairedServerStore {
 }
 
 /**
+ * The paired-server accessor plus the symmetric erase. `clear` removes the persisted record so a
+ * later `load` reports not-paired, returning the app to a clean state (#172). It is the concrete
+ * return type of `createPairedServerStore`, deliberately NOT folded into the base
+ * `PairedServerStore`: existing consumers (pairing-status, pairing-confirmation, daemon-connection)
+ * type against the base and their fakes need no `clear` stub — only code holding the concrete store
+ * (the composition root, and its follow-up IPC surface #173) can reach the erase.
+ */
+export interface ClearablePairedServerStore extends PairedServerStore {
+  /** Erase the persisted paired-server record. Idempotent; fail-closed. */
+  clear(): Promise<void>
+}
+
+/**
  * Thrown by `load` when a blob is PRESENT and decrypts, but is not a valid record — not JSON, not
  * an object, or a missing / non-string field. The message is static and carries NO field value (no
  * token, no URL, no bytes). It lets the consumer branch to a "re-pair" recovery rather than treat a
@@ -120,7 +133,7 @@ function decodeRecord(blob: Uint8Array): PairedServerRecord {
 export function createPairedServerStore(deps: {
   secureStore: SecureStore
   name?: string
-}): PairedServerStore {
+}): ClearablePairedServerStore {
   const { secureStore } = deps
   const name = deps.name ?? PAIRED_SERVER_NAME
 
@@ -133,6 +146,14 @@ export function createPairedServerStore(deps: {
       // Absent = not paired — the only null path. A present blob is decoded (a decrypt failure
       // inside get() has already propagated); a malformed decode throws, never returns null.
       return blob === null ? null : decodeRecord(blob)
+    },
+    async clear() {
+      // Erase exactly what save wrote and load reads: keyed by this store's own `name`, never a
+      // delete-by-literal. SecureStore.delete is idempotent (absent name → no-op), so a
+      // never-paired store clears cleanly. No try/catch: a delete failure propagates (fail-closed —
+      // reporting success while a live bearer token still sits on disk is the one behaviour to
+      // avoid). Because `name` is a fixed constant, this can never touch the device static keypair.
+      await secureStore.delete(name)
     }
   }
 }

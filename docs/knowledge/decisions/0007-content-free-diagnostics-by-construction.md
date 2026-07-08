@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-07-08. First realized in [#126](../codebase/126.md) (the connection-lifecycle slice of Bucket 1). Consumed by the relay leg (#127) and daemon leg (#128); extended, non-breaking, by the payload-hash / correlation-id slice (#125). See the [diagnostic-log feature doc](../features/diagnostic-log.md).
+Accepted, 2026-07-08. First realized in [#126](../codebase/126.md) (the connection-lifecycle slice of Bucket 1). Consumed by the relay leg ([#127](../codebase/127.md)), the daemon leg ([#128](../codebase/128.md)), and the inbound-decode boundary ([#130](../codebase/130.md)); the last **extended the allowlist non-breaking** with the payload-hash field (`hash?`), the first concrete proof of the additive-field property below. Further Bucket-1 slices (state transitions, correlation id) are deferred (#125). See the [diagnostic-log feature doc](../features/diagnostic-log.md).
 
 ## Context
 
@@ -41,7 +41,7 @@ The single logger is **constructed once at the composition root** (`app.isPackag
 
 ## Consequences
 
-- **New safe fields are additive, non-breaking.** #125's payload `hash + length + type` and shared correlation id slot into `DiagnosticEvent` as new **optional** properties; existing call sites and the serializer are unaffected (the serializer spreads `{ ...fields, seq, ts }` rather than hand-picking, precisely so this stays free). The record must never become a closed tuple or positional format.
+- **New safe fields are additive, non-breaking.** [#130](../codebase/130.md) proved this: it added the payload `hash?` (length reusing `bytes?`, type riding `code`) for the inbound-decode boundary, and `typecheck` stayed green with **no** other call site touched — because the serializer spreads `{ ...fields, seq, ts }` rather than hand-picking, and `JSON.stringify` drops the `undefined` field everywhere else. #125's remaining slices (state transitions, a shared correlation id) slot in the same way. The record must never become a closed tuple or positional format.
 - **The residual risk is a confused caller, mitigated by call-site review, not code.** `event` / `code` / `host` / `path` are `string`; the type cannot forbid a caller stuffing a secret into a string field. This is a documented SHOULD-FIX handled by a **deterministic** code-review checklist on the (few) #127/#128 call sites — static literals for `event`/`code`, `new URL(u).hostname` / `.pathname` for `host`/`path`, never `url.href` / `url.search` — not another stochastic rule (belt-and-suspenders means different fabric).
 - **The classify-then-drop discipline stays where it is.** The logger does not replace it — the transport modules still classify each caught error to a static `code` and drop the object; the logger only ever receives the already-classified `code`. The drop remains the place secrets die.
 - **Diagnostics ships freely.** Because a `main.log` holds no secret, it can be attached to a bug report or shipped off-machine without a redaction step — the content-free property is what makes the log *usable*, not just safe.

@@ -45,6 +45,8 @@ export type EnvelopeType =
   | 'backfill_since'
   | 'send_message'
   | 'request_debug_bundle'
+  | 'debug_bundle_chunk'
+  | 'debug_bundle_done'
   | 'ack'
   | 'error'
 
@@ -100,6 +102,28 @@ export interface SendMessagePayload {
   conversation_id: string
   message_id: string
   text: string
+}
+
+/**
+ * One ordered slice of a streamed debug bundle (daemon → client). Mirrors the daemon's
+ * DebugBundleChunkPayload{Seq int; Data []byte} field-for-field: `seq` is 0-based, contiguous,
+ * ascending, and `data` is the raw bundle slice as standard base64 on the wire (Go's `[]byte`
+ * auto-encodes std base64 via encoding/json). The archive is an opaque `.tar.gz`; the receiver
+ * concatenates the decoded `data` in `seq` order and never inspects it. See ADR 0002.
+ */
+export interface DebugBundleChunkPayload {
+  seq: number
+  data: string
+}
+
+/**
+ * The completion marker sent after the last debug_bundle_chunk (daemon → client). Mirrors the
+ * daemon's DebugBundleDonePayload{Total int}: `total` is the exact number of chunk frames in the
+ * stream, so a `total` that does not equal the count actually received is a truncation error,
+ * never accepted as complete. See ADR 0002.
+ */
+export interface DebugBundleDonePayload {
+  total: number
 }
 
 export interface BackfillSincePayload {

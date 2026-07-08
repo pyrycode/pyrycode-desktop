@@ -31,6 +31,7 @@ import { startFakeRelayForwarder } from './transport/fakeRelayForwarder'
 import { startFakeDaemon, type FakeDaemon } from './transport/fakeDaemon'
 import { loadNoiseLib } from './transport/noiseLib'
 import { base64StdEncode, encodeEnvelope } from './transport/codec'
+import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import type { HelloAckPayload, MessagePayload, SendMessagePayload } from '../shared/wire/types'
 
 // A fixed clock for the fake-target run — the fake daemon decodes the `hello`/`send_message`
@@ -159,7 +160,7 @@ interface RoundTripContext {
  */
 async function standUpRoundTrip(
   buildReply: () => Uint8Array,
-  daemonOpts?: { rekeyResumeMessage?: Uint8Array }
+  daemonOpts?: { rekeyResumeMessage?: Uint8Array; buildReplyFrames?: (inbound: Uint8Array) => Uint8Array[] }
 ): Promise<RoundTripContext> {
   const forwarder = await startFakeRelayForwarder()
   cleanups.push(() => forwarder.close())
@@ -167,6 +168,7 @@ async function standUpRoundTrip(
     url: forwarder.url,
     buildReply,
     helloAck: HELLO_ACK_OVERRIDES,
+    // buildReplyFrames (when present in daemonOpts) takes precedence over buildReply in the fake.
     ...daemonOpts
   })
   cleanups.push(() => daemon.close())
@@ -335,6 +337,110 @@ describe('createDaemonConnection round-trip (in-process fake target)', () => {
       expect(await daemon.whenSettled()).toEqual({ ok: true })
     },
     20_000
+  )
+})
+
+// --- debug-bundle reassembly through the real handshake (#116, AC5) --------------------------
+/** A never-invoked buildReply stub: the bundle tests drive the fake via buildReplyFrames, which
+ *  takes precedence, so buildReply is required by standUpRoundTrip but is never called. */
+const UNUSED_BUILD_REPLY = (): Uint8Array => new Uint8Array(0)
+
+/** Split raw archive bytes into ordered debug_bundle_chunk envelopes + a final debug_bundle_done. */
+function bundleFrames(raw: Uint8Array, chunkSize: number): Uint8Array[] {
+  const frames: Uint8Array[] = []
+  let seq = 0
+  for (let off = 0; off < raw.length; off += chunkSize) {
+    const slice = raw.subarray(off, off + chunkSize)
+    frames.push(
+      encodeEnvelope({
+        id: seq,
+        type: 'debug_bundle_chunk',
+        ts: FIXED_TS,
+        payload: { seq, data: base64StdEncode(slice) }
+      })
+    )
+    seq += 1
+  }
+  frames.push(encodeEnvelope({ id: seq, type: 'debug_bundle_done', ts: FIXED_TS, payload: { total: seq } }))
+  return frames
+}
+
+/** A spy consumer that also pokes the waiter so the bounded wait resolves on the terminal (bundle
+ *  frames emit no DaemonEvent, so the sink's own notify never fires for a completion). */
+function bundleConsumer(waiter: ReturnType<typeof makeWaiter>): {
+  consumer: BundleConsumer
+  completed: Uint8Array[]
+  failed: BundleFailReason[]
+} {
+  const completed: Uint8Array[] = []
+  const failed: BundleFailReason[] = []
+  return {
+    completed,
+    failed,
+    consumer: {
+      complete: (bytes) => {
+        completed.push(bytes)
+        waiter.notify()
+      },
+      fail: (reason) => {
+        failed.push(reason)
+        waiter.notify()
+      }
+    }
+  }
+}
+
+describe('createDaemonConnection debug-bundle round-trip (in-process fake target, #116)', () => {
+  it(
+    'reassembles a streamed multi-chunk bundle end-to-end to the served bytes',
+    async () => {
+      // A 50-byte archive split at 16 bytes → 4 chunks + done (5 frames) — more than one chunk.
+      const archive = new Uint8Array(50)
+      for (let i = 0; i < archive.length; i++) archive[i] = (i * 37 + 11) % 256
+      const frames = bundleFrames(archive, 16)
+
+      const { connection, events, waiter } = await standUpRoundTrip(UNUSED_BUILD_REPLY, {
+        buildReplyFrames: () => frames
+      })
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+
+      const { consumer, completed, failed } = bundleConsumer(waiter)
+      connection.requestDebugBundle(consumer)
+      await waiter.wait(() => completed.length + failed.length > 0, MESSAGE_TIMEOUT_MS)
+
+      expect(failed, `unexpected fail; observed ${types(events)}`).toEqual([])
+      expect(completed).toHaveLength(1)
+      expect([...completed[0]]).toEqual([...archive])
+      // The session stays open — a bundle stream is not a connection-level failure.
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+    },
+    15_000
+  )
+
+  it(
+    'fails the consumer daemon-error when the daemon replies with a single error frame',
+    async () => {
+      const errorFrame = encodeEnvelope({
+        id: 0,
+        type: 'error',
+        ts: FIXED_TS,
+        payload: { code: 'server.binary_offline', message: 'bundle unavailable', retryable: true }
+      })
+      const { connection, events, waiter } = await standUpRoundTrip(UNUSED_BUILD_REPLY, {
+        buildReplyFrames: () => [errorFrame]
+      })
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+
+      const { consumer, completed, failed } = bundleConsumer(waiter)
+      connection.requestDebugBundle(consumer)
+      await waiter.wait(() => completed.length + failed.length > 0, MESSAGE_TIMEOUT_MS)
+
+      expect(completed).toEqual([])
+      expect(failed).toEqual(['daemon-error'])
+      // The error is an application frame, not a connection drop: no `failed` DaemonEvent.
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+    },
+    15_000
   )
 })
 

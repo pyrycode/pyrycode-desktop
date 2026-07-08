@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ConversationScreen, MessageThread } from './ConversationScreen'
+import { ConversationScreen, MessageThread, StatusSheet } from './ConversationScreen'
 import type { Message } from './messageViewModel'
 import { sessionStore } from '../../store/sessionStore'
 
@@ -44,6 +44,39 @@ describe('MessageThread', () => {
     const markup = renderToStaticMarkup(<MessageThread messages={messages} />)
     expect(markup.indexOf('text m1')).toBeLessThan(markup.indexOf('text m2'))
     expect(markup.indexOf('text m2')).toBeLessThan(markup.indexOf('text m3'))
+  })
+})
+
+// #177: the Run configuration host modal. StatusSheet is the pure, exported open-state chrome (the
+// MessageThread pattern) — server-render it directly to prove the handle/title/close/empty-body
+// shell. The open/dismiss toggle in ConversationScreen is trivial useState glue, unreachable under
+// server render (same discipline as Composer's `text` and #166's confirm phase); the container
+// smoke tests below see only the closed initial state.
+describe('StatusSheet — the Run configuration host modal', () => {
+  it('renders the sheet title', () => {
+    const markup = renderToStaticMarkup(<StatusSheet onClose={() => {}} />)
+    expect(markup).toContain('Run configuration')
+  })
+
+  it('renders an accessible close control', () => {
+    const markup = renderToStaticMarkup(<StatusSheet onClose={() => {}} />)
+    expect(markup).toContain('aria-label="Close"')
+  })
+
+  it('renders the drag handle and an accessible modal dialog', () => {
+    const markup = renderToStaticMarkup(<StatusSheet onClose={() => {}} />)
+    expect(markup).toContain('status-sheet__handle')
+    expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('aria-modal="true"')
+  })
+
+  it('renders an empty scrollable body — the shell hosts no sections yet', () => {
+    const markup = renderToStaticMarkup(<StatusSheet onClose={() => {}} />)
+    expect(markup).toContain('status-sheet__body')
+    // Every scoped-out section (owned by #181 / #182 / #72) is absent — this pins "shell only".
+    for (const section of ['Model', 'Effort', 'YOLO', 'Context window', 'Log data', 'Download']) {
+      expect(markup).not.toContain(section)
+    }
   })
 })
 
@@ -93,5 +126,28 @@ describe('ConversationScreen — store binding', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).toContain('class="composer__hint"')
     expect(markup).toContain('role="status"')
+  })
+
+  // #177: the status row between the thread and the composer is the trigger that opens the Run
+  // configuration sheet. The row always renders, so its accessible name is reachable under server
+  // render; the sheet is closed initially, so its close control is absent. The open toggle is
+  // trivial useState glue, asserted through the pure StatusSheet surface above, not a click harness.
+  it('renders the status-row trigger that opens the Run configuration sheet', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('aria-label="Run configuration"')
+  })
+
+  it('does not render the sheet while closed (its close control is absent)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    // `Run configuration` is also the trigger's aria-label, so key "sheet closed" on the close
+    // control's accessible name, which exists only inside the sheet.
+    expect(markup).not.toContain('aria-label="Close"')
+  })
+
+  it('shows no live model · effort · context summary in the collapsed status row (#181/#182 own it)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('Opus 4.7')
+    expect(markup).not.toContain('% used')
+    expect(markup).not.toContain('high')
   })
 })

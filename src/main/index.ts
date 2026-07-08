@@ -12,6 +12,7 @@ import { parsePairingPayload } from './pairingPayload'
 import { selectRelayPolicy } from './relayPolicy'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
+import { registerUnpairHandler } from './unpairHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
@@ -140,6 +141,16 @@ app.whenReady().then(() => {
   // `will-quit` removes the handler, symmetric with unregisterPairing.
   const unregisterPairingStatus = registerPairingStatusHandler(ipcMain, { store: pairedServerStore })
   app.on('will-quit', () => unregisterPairingStatus())
+
+  // The unpair request (#173): reuse the same pairedServerStore — do not construct a second store —
+  // so the renderer can ask to erase the stored pairing and return to a clean, not-paired state. Its
+  // ClearablePairedServerStore.clear() (#172) is fail-closed; the handler maps every throw to a
+  // value-free `error`, never reporting success while a live token may remain on disk. Grouped with
+  // the pairing-status registration (needs only the store — no `connection`, no did-finish-load
+  // gate). No caller races it: the visible unpair UI is #166/#167. `will-quit` removes the handler,
+  // symmetric with unregisterPairingStatus.
+  const unregisterUnpair = registerUnpairHandler(ipcMain, { store: pairedServerStore })
+  app.on('will-quit', () => unregisterUnpair())
 
   // The transport consumer (#62): reuse the paired-server store, add a device-keypair store over
   // the same secret chain, and drive the Noise relay driver — emitting typed daemon events to the

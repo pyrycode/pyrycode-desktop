@@ -13,6 +13,9 @@
   background: var(--color-surface);
   color: var(--color-on-surface);
   font-family: var(--font-sans);
+  /* Containing block for the Run configuration sheet overlay (#177), which is absolutely positioned
+     with inset: 0 to cover the conversation surface — a self-contained modal, no portal. */
+  position: relative;
 }
 
 /* Slim header row — the minimal seed of the future top app bar (#166), holding the de-emphasized
@@ -212,4 +215,142 @@
 
 .composer__send-icon {
   display: block;
+}
+
+/* The collapsed status row (#177) — the trigger that opens the Run configuration sheet. A slim
+   full-width button between the thread and the composer, with a top border separating it from the
+   thread. Never grows or shrinks. The top border is --color-outline-variant and the muted icon is
+   --color-on-surface-variant: trust the token names, not the Figma export's swapped fallback hexes.
+   The Figma's 6px vertical padding is off the 4px grid → --space-2 (the 2px delta is imperceptible). */
+.status-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-top: 1px solid var(--color-outline-variant);
+  background: var(--color-surface);
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.status-row:hover {
+  background: var(--color-surface-container);
+}
+
+.status-row:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.status-row__chevron {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* The Run configuration sheet overlay (#177) — bottom-anchored inside .conversation (which is the
+   position: relative containing block), not a portal. flex-end anchors the panel to the bottom. */
+.status-sheet-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+/* A dedicated scrim element so the opaque panel sibling is never dimmed and no bare rgba()/color-mix
+   literal is needed. 40% via opacity (opacity is not a color literal). Backdrop-click dismissal. */
+.status-sheet-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+
+/* The panel — opaque, painted above the scrim by DOM order. A bottom sheet (mobile stretched to the
+   window); max-height keeps tall future section content scrolling inside the body rather than
+   overflowing the window. */
+.status-sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 90%;
+  padding: var(--space-3) 0 var(--space-6);
+  background: var(--color-surface-container-low);
+  border-radius: var(--radius-lg);
+  color: var(--color-on-surface);
+}
+
+/* The 32×4 drag handle — decorative. --color-on-surface-variant at 40% (opacity is faithful to the
+   Figma opacity-40, not a color literal). The 32px/4px are structural geometry, like the send square. */
+.status-sheet__handle {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 32px;
+  height: 4px;
+  margin-bottom: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-on-surface-variant);
+  opacity: 0.4;
+}
+
+/* The title row: the title on the left, the close tap target on the right. Paddings map the Figma
+   node 20-103 (pt 4 / pr 4 / pb 12 / pl 16) to space tokens. Never grows or shrinks. */
+.status-sheet__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-3) var(--space-4);
+}
+
+.status-sheet__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+  letter-spacing: var(--text-title-large-tracking);
+  font-weight: var(--text-title-large-weight);
+}
+
+/* The 40×40 close tap target wrapping the 22×22 × icon (Figma 20-105/20-106) — muted content that
+   gains a surface tint on hover, mirroring the unpair control / send-button treatment. */
+.status-sheet__close {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+}
+
+.status-sheet__close:hover {
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+}
+
+.status-sheet__close:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.status-sheet__close-icon {
+  display: block;
+}
+
+/* The empty, scrollable body follow-up tickets populate section by section. Reuses the thread's
+   flex-scroll pattern: min-height: 0 is load-bearing so the region shrinks instead of the window. */
+.status-sheet__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }

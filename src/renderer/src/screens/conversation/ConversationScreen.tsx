@@ -26,11 +26,18 @@ export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {})
   // at this boundary (ADR 0004). Selecting only the messages slice keeps connection-status
   // changes from re-rendering the thread.
   const messages = useSessionStore(selectMessages).map(toMessageViewModel)
+  // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
+  // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
+  // never reopens itself across a screen remount. The StatusRow trigger sits between the thread and
+  // the composer (per Figma); the sheet overlays the whole conversation surface as the last child.
+  const [sheetOpen, setSheetOpen] = useState(false)
   return (
     <div className="conversation">
       <UnpairControl onUnpaired={onUnpaired} />
       <MessageThread messages={messages} />
+      <StatusRow onExpand={() => setSheetOpen(true)} />
       <Composer />
+      {sheetOpen && <StatusSheet onClose={() => setSheetOpen(false)} />}
     </div>
   )
 }
@@ -52,6 +59,87 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
     <div className={`message-row message-row--${message.type}`}>
       <div className={`bubble bubble--${message.type}`} data-message-role={message.type}>
         {message.text}
+      </div>
+    </div>
+  )
+}
+
+// The collapsed status row between the thread and the composer (Figma node 16-57) — the trigger that
+// opens the Run configuration sheet (#177). Its live `model · effort · context%` summary (the left
+// region) is the collapsed mirror of the sheet's read sections, owned by #181/#182; this shell renders
+// the row as the trigger only, leaving that region empty. An icon-only button, so aria-label supplies
+// the accessible name (the .composer__send pattern). In-file and not exported, like Composer.
+function StatusRow({ onExpand }: { onExpand: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="status-row"
+      aria-label="Run configuration"
+      aria-haspopup="dialog"
+      onClick={onExpand}
+    >
+      {/* The live summary region, intentionally empty in this shell (#181/#182 populate it). */}
+      <span className="status-row__summary" />
+      <svg
+        className="status-row__chevron"
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M12 8l-6 6 1.41 1.41L12 10.83l4.59 4.58L18 14z" />
+      </svg>
+    </button>
+  )
+}
+
+// A stable id tying the dialog's aria-labelledby to its title element.
+const STATUS_SHEET_TITLE_ID = 'status-sheet-title'
+
+export interface StatusSheetProps {
+  onClose: () => void
+}
+
+// The Run configuration host modal (#177) — an absolutely-positioned overlay inside .conversation
+// (not a React portal), bottom-anchored, matching Figma node 20-100. This shell renders only the
+// drag handle, the title row, and an empty scrollable body; each section (Model/Effort/YOLO/Context
+// window/Log data) is a follow-up (#181/#182/#72) that owns both its header and its content — add
+// none here. Exported and pure (props in, markup out), the MessageThread pattern, so the open-state
+// chrome is server-rendered directly in tests. The × close control is the authoritative dismissal
+// (AC3); the scrim adds near-free backdrop-click dismissal.
+export function StatusSheet({ onClose }: StatusSheetProps): JSX.Element {
+  return (
+    <div className="status-sheet-overlay">
+      {/* A dedicated scrim element (not the overlay's own background) so the opaque panel sibling is
+          never dimmed and no bare color literal is needed. */}
+      <div className="status-sheet-overlay__scrim" aria-hidden="true" onClick={onClose} />
+      <div
+        className="status-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={STATUS_SHEET_TITLE_ID}
+      >
+        <div className="status-sheet__handle" aria-hidden="true" />
+        <div className="status-sheet__header">
+          <p id={STATUS_SHEET_TITLE_ID} className="status-sheet__title">
+            Run configuration
+          </p>
+          <button type="button" className="status-sheet__close" aria-label="Close" onClick={onClose}>
+            <svg
+              className="status-sheet__close-icon"
+              viewBox="0 0 24 24"
+              width="22"
+              height="22"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+            </svg>
+          </button>
+        </div>
+        {/* The empty, scrollable container follow-ups populate section by section. */}
+        <div className="status-sheet__body" />
       </div>
     </div>
   )

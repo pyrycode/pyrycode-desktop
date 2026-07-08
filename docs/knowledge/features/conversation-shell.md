@@ -12,6 +12,8 @@ The app bar, status row, tool-call chips, code blocks, session delimiters, and t
 
 A minimal seed of that future top app bar landed in [#166](../codebase/166.md): a slim header row above the thread holding an unpair escape hatch. See [Unpair control](#unpair-control-166) below.
 
+The status row and the "Run configuration" sheet it opens landed as a **chrome-only shell** in [#177](../codebase/177.md): a trigger row between the thread and the composer, and a host modal that renders no live data or sections yet. See [Run configuration sheet](#run-configuration-sheet-177) below.
+
 ## How it works
 
 ### Structure
@@ -19,14 +21,16 @@ A minimal seed of that future top app bar landed in [#166](../codebase/166.md): 
 `App.tsx` mounts `<ConversationScreen />` on the `conversation` route ([#80](../codebase/80.md) — see [App shell](app-shell.md); before #80, `App` rendered it directly). The screen is a flex column:
 
 ```
-ConversationScreen            .conversation        (flex column, full height)
+ConversationScreen            .conversation        (flex column, full height, position: relative)
 ├── UnpairControl              .conversation__header (slim header row, #166)
 ├── MessageThread             .conversation__thread (scroll region)
 │   └── MessageBubble × N     .message-row / .bubble
-└── Composer                  .composer            (pinned)
+├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
+├── Composer                  .composer            (pinned)
+└── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, last child, #177)
 ```
 
-`MessageBubble`, `Composer`, and `UnpairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread` is also in-file but **exported** ([#69](../codebase/69.md)), so tests server-render it as a pure view. `ConversationScreen` is the store-bound container; `MessageThread` is the props-in/markup-out view — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
+`MessageBubble`, `Composer`, `UnpairControl`, and `StatusRow` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
 ### Data shape
 
@@ -83,11 +87,57 @@ bridge. Styled with existing tokens only — no new `--color-error` (desktop has
 [#166 codebase notes](../codebase/166.md) for the full design and the [App shell](app-shell.md)
 for the route-flip half.
 
+### Run configuration sheet (#177)
+
+The host modal for the session's Model / Effort / YOLO controls, context-window state, and
+Log-data download — each section is a follow-up ticket (#181, #182, #72) that owns both its header
+and its content. This ticket ships only the chrome: the trigger and the empty, dismissible sheet.
+
+`StatusRow` is a full-width icon-only `<button aria-label="Run configuration" aria-haspopup="dialog">`
+between `MessageThread` and `Composer` (Figma node `16-57`), with a top border separating it from
+the thread. Its left summary region (`model · effort · context%`) is intentionally empty — that
+live text is the collapsed mirror of the sheet's read sections, owned by #181/#182, not this shell.
+Clicking it calls `onExpand`, which flips `sheetOpen` (a single `useState(false)` in
+`ConversationScreen` — the "trivial single-value local UI state" case carved out by
+[ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md), not its `useReducer`
+phase-machine case). It resets to closed on remount for free.
+
+`StatusSheet` (Figma node `20-100`) renders as the screen's last child when `sheetOpen` is true:
+
+```
+.status-sheet-overlay          absolute, inset: 0, flex column, justify-content: flex-end
+├── .status-sheet-overlay__scrim   absolute, inset: 0, --color-scrim @ opacity 0.4, onClick=onClose
+└── .status-sheet                 role="dialog" aria-modal="true" aria-labelledby=<title id>
+    ├── .status-sheet__handle       32×4 decorative drag bar, aria-hidden
+    ├── .status-sheet__header       title (left) + × close control (right, aria-label="Close")
+    └── .status-sheet__body         empty, flex:1 1 auto; min-height:0; overflow-y:auto
+```
+
+It is an **absolutely-positioned overlay inside `.conversation`** (which gained `position: relative`
+for this), not a React portal — no App-level z-index coordination, fully self-contained in the
+screen. The scrim is a **separate element**, not the overlay's own background, so the opaque panel
+sibling is never dimmed and no bare `rgba()`/`color-mix` literal is needed; it doubles as a
+near-free backdrop-click dismissal. The `×` close control is the **authoritative** dismissal path
+(clicking it or the scrim both call `onClose`, which flips `sheetOpen` back to `false`); Esc-to-close
+was left out (optional per spec, unobservable under the server-render harness).
+
+Two M3 dark-scheme tokens were ported into `tokens.css` ahead of their other consumers (sanctioned
+by that file's header comment): `--color-surface-container-low` (the panel fill) and
+`--color-scrim` (applied only via `opacity`, never as a raw color-with-alpha literal). Icons are
+inline `currentColor` SVGs, the `.composer__send` precedent — no remote asset fetch (CSP blocks it).
+
+Not wired yet, and correctly so: no live summary text in `StatusRow`, no Model/Effort/YOLO/Context-
+window/Log-data content in `StatusSheet`'s body, no focus trap/restore on open-close (accepted for
+this single-focusable-control shell; worth adding once the section follow-ups populate the body —
+see [#177 codebase notes](../codebase/177.md) for the full code-review record). See
+[#177 codebase notes](../codebase/177.md) for the full design and lessons learned.
+
 ## Seams (bound + still open)
 
 - **`MessageThread({ messages })`** — **bound in [#69](../codebase/69.md).** `ConversationScreen` now feeds this prop from `useSessionStore(selectMessages).map(toMessageViewModel)` instead of the deleted `placeholderMessages` array, adapting wire `MessagePayload` (`role`, `message_id`) to the `Message` view model (`type`, `id`) at the store-read boundary. `MessageThread` stays the pure `Message[]`-in view — the seam's shape held exactly as the swap target.
 - **`Composer`** — **bound in [#66](../codebase/66.md).** Now a thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id`, emits a `sendMessage` command, and appends an optimistic echo to the store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
+- **`StatusRow({ onExpand })` / `StatusSheet({ onClose })`** — **shell landed in [#177](../codebase/177.md); sections still open.** The host modal renders no live data; `StatusRow`'s summary region and `StatusSheet`'s body are the seams #181 (Model/Effort/YOLO), #182 (Context window), and #72 (Log data) each populate, per section, owning both header and content. See [Run configuration sheet](#run-configuration-sheet-177) above.
 
 ## Edge cases and limitations
 
@@ -103,6 +153,7 @@ for the route-flip half.
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66); the send half of this screen
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166)
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
-- [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md)
+- [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177)
+- [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

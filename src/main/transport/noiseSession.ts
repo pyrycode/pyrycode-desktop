@@ -23,11 +23,16 @@
 // sink, inbound frames arrive via `onFrame`, and lifecycle/errors leave as typed events through
 // `onEvent`. It runs in the main process only, never the renderer (transport-out-of-the-window).
 //
-// LOG-FREE by construction: no console.*, and NO key, token, or frame/plaintext bytes in any
-// diagnostic. A caught wasm-library error is CLASSIFIED into a static reason, never forwarded or
-// logged — a library error string can echo transcript bytes.
+// CONTENT-FREE logging by construction: no console.*, and NO key, token, or PLAINTEXT bytes in any
+// diagnostic. A caught wasm-library error is CLASSIFIED into a static reason, and the error OBJECT is
+// never forwarded or logged — a library error string can echo transcript bytes. The one exception is
+// the raw failing frame at the three INBOUND-read catches: those bytes are pre-decryption (AEAD
+// ciphertext / Noise handshake message 2 / rekey reply — never client plaintext or a secret), so
+// they are logged content-free (capped hex) through the optional injected DiagnosticLog (#133). The
+// OUTBOUND-write catches stay byte-free — message 1 carries the device token.
 import { type NoiseCipherState } from 'noise-c.wasm'
 import { NOISE_PROTOCOL } from '../../shared/wire/types'
+import { encodeSafeBytes, type DiagnosticLog } from '../diagnosticLog'
 import { decodeEnvelope } from './codec'
 import { loadNoiseLib } from './noiseLib'
 
@@ -51,6 +56,11 @@ export interface NoiseSessionConfig {
   onEvent: (event: NoiseSessionEvent) => void
   /** Forwarded to loadNoiseLib as its load deadline; omit for the loader default. */
   loadTimeoutMs?: number
+  /** Optional content-free diagnostic sink (#126/#133). When set, a pre-decryption inbound-read
+   *  failure logs its static reason + the capped raw failing bytes (safe: pre-decryption ciphertext /
+   *  handshake material). Absent → silent (optional-inject discipline; mirrors inboundMessage /
+   *  relayConnection). Injected by the driver, which forwards its own constant logger. */
+  diagnosticLog?: DiagnosticLog
 }
 
 /** Closed set of static error reasons — never carries key/token/frame bytes. */
@@ -153,6 +163,21 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
     config.onEvent({ type: 'error', reason })
   }
 
+  // Like fail(), but ALSO logs the raw failing inbound bytes content-free before surfacing the error.
+  // Used ONLY at the three INBOUND-read catches, where `frame` is the pre-decryption bytes that failed
+  // (AEAD ciphertext / handshake message 2 / rekey reply — safe to keep, Bucket 1). The outbound-write
+  // catches stay on plain fail(): they hold no inbound frame, and message 1 carries the device token.
+  // The bytes reach only config.diagnosticLog (the main-process sink), never config.onEvent.
+  function failWithFrame(reason: NoiseSessionErrorReason, frame: Uint8Array): void {
+    config.diagnosticLog?.event({
+      event: 'noise-frame-failed',
+      code: reason,
+      bytes: frame.length,
+      safeBytes: encodeSafeBytes(frame)
+    })
+    fail(reason)
+  }
+
   function start(): void {
     if (state !== 'idle' || hs === null) return
     let msg1: Uint8Array
@@ -212,7 +237,7 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
       try {
         plaintext = recvCipher.DecryptWithAd(EMPTY_AD, frame)
       } catch {
-        fail('transport-decrypt-failed') // cipher survives; non-terminal
+        failWithFrame('transport-decrypt-failed', frame) // cipher survives; non-terminal
         return
       }
       // Recognition (#108): a decrypted `rekey_request` control envelope is the daemon's in-session
@@ -239,7 +264,7 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
         // The library auto-freed hs and NO cipher was reassigned — both still hold the OLD keys.
         hs = null
         state = 'transport' // usable — NOT closed (the load-bearing difference from the initial handshake)
-        fail('handshake-read-failed')
+        failWithFrame('handshake-read-failed', frame) // `frame` is the daemon's rekey reply (pre-decryption)
         return
       }
       // Atomic swap (AC2/AC4): install BOTH new ciphers before freeing either old one. ReadMessage
@@ -274,7 +299,7 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
     } catch {
       hs = null // library auto-freed the handshake state on the throw
       state = 'closed'
-      fail('handshake-read-failed')
+      failWithFrame('handshake-read-failed', frame) // `frame` is the daemon's handshake message 2 (pre-decryption)
       return
     }
     hs = null

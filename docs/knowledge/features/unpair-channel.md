@@ -13,9 +13,10 @@ mutation* — the destructive-action counterpart in the same family as the [diag
 channel](diagnostics-channel.md) (#131), which established the general "ship the IPC boundary ahead
 of its UI consumer" shape this ticket reuses a second time.
 
-**No caller yet.** Nothing in `src/renderer` invokes `window.pyry.unpair()` as of #173 — the visible
-unpair action (manual unpair button, offer-re-pair-on-connection-failure prompt) ships in follow-ups
-[#166](https://github.com/pyrycode/pyrycode-desktop/issues/166) /
+**First caller: [#166](../codebase/166.md).** The conversation screen's unpair control now invokes
+`window.pyry.unpair()` through the pure `runUnpair` helper — a confirm-guarded manual "forget this
+pairing" action that, on `ok`, resets the renderer's session state and routes back to pairing. A
+second caller (an offer-re-pair-on-connection-failure prompt) may still ship in
 [#167](https://github.com/pyrycode/pyrycode-desktop/issues/167).
 
 ## Why this exists
@@ -159,15 +160,18 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
 
 ## Edge cases and limitations
 
-- **No caller yet.** Shipped unwired, by design — see [#173](../codebase/173.md)'s "ship the
-  boundary ahead of its consumer" pattern. The visible unpair UI is #166/#167.
-- **No confirmation gate.** This ticket ships only the mechanism; a "are you sure?" UI gate (if any)
-  is the #166/#167 caller's concern.
-- **Live-session teardown is out of scope.** Erasing the at-rest record does not tear down an
-  in-flight Noise session or relay socket — the current connection persists until next launch.
-- **No error sub-reason.** The `error` arm deliberately carries no detail beyond the discriminant. A
-  future recovery flow that needs to distinguish error sub-cases extends the union additively; it is
-  not pre-built here.
+- **Confirmation gate lives in the caller, not here.** This channel ships only the mechanism; the
+  "are you sure?" UI gate is [#166](../codebase/166.md)'s concern — a two-step confirm phase in the
+  conversation screen's `UnpairControl`, ahead of the `unpair()` invoke.
+- **Live-session teardown is still out of scope**, confirmed by #166: erasing the at-rest record and
+  resetting renderer state does not tear down an in-flight Noise session or relay socket — the
+  current connection persists until next launch. In #166's target scenario (a stale/wrong record
+  trapping the user on a dead conversation screen) the session is not live, so this is a
+  no-observed-failure edge deferred, not defended.
+- **No error sub-reason.** The `error` arm deliberately carries no detail beyond the discriminant.
+  #166's caller synthesizes its own generic `ConnectionError` (`code: 'unpair'`) on that arm rather
+  than threading a sub-reason through. A future recovery flow that needs to distinguish error
+  sub-cases extends the union additively; it is not pre-built here.
 
 ## Related
 
@@ -180,7 +184,11 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
 - [Pairing IPC channel](pairing-ipc-channel.md) — the stateful request/response sibling this
   contrasts with (that channel holds `pendingConfirm` state and validates a pasted request body; this
   one holds nothing and has no body to validate).
+- [Conversation shell](conversation-shell.md) / [App shell](app-shell.md) / [Session store](session-store.md)
+  — the three renderer-side seams [#166](../codebase/166.md) wires together as this channel's first caller.
 - [#173 codebase notes](../codebase/173.md) — implementation summary, patterns established, lessons
   learned.
+- [#166 codebase notes](../codebase/166.md) — the first consumer: confirm-guarded control, session
+  reset, and route flip.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model this
   channel's value-free contract enforces (token/keys never reach the renderer).

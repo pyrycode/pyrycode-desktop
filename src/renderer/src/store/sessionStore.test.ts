@@ -112,6 +112,26 @@ describe('reduceSession — optimistic send (messageSent)', () => {
   })
 })
 
+describe('reduceSession — reset', () => {
+  it('reset from a populated, connected state returns to initialSessionState (AC4)', () => {
+    const populated = reduceSession(
+      reduceSession(initialSessionState, { type: 'connected', ack }),
+      { type: 'messageSent', message: msg('m1', 'user') }
+    )
+    // Precondition: a genuinely non-empty, non-disconnected state — otherwise reset proves nothing.
+    expect(populated.messages.length).toBeGreaterThan(0)
+    expect(populated.status.type).not.toBe('disconnected')
+
+    const next = reduceSession(populated, { type: 'reset' })
+
+    // Both facets clear in one step: `disconnected` deliberately preserves messages, so reset is a
+    // distinct mutation path. Returning the shared const makes a second reset a no-op reference.
+    expect(next.status).toEqual({ type: 'disconnected' })
+    expect(next.messages).toHaveLength(0)
+    expect(next).toBe(initialSessionState)
+  })
+})
+
 describe('reduceSession — orthogonality', () => {
   it('a message action leaves status untouched', () => {
     const connecting = reduceSession(initialSessionState, { type: 'connecting' })

@@ -8,6 +8,7 @@ Introduced as a router in [#80](../codebase/80.md), consuming the launch-time [p
 
 - **On launch**, before first paint, it asks the background process "does a stored pairing already exist?" and shows the **conversation screen** if — and only if — the answer is a genuine `paired`; otherwise it shows the **pairing screen**. A fresh install lands on pairing; a returning paired user lands directly on the conversation, with no pairing flash.
 - **In-session**, when the user completes a pairing (the confirm step fires `onPaired`), it leaves the pairing screen and shows the conversation screen — no restart, no file edit.
+- **In-session, in reverse** ([#166](../codebase/166.md)): when the user unpairs from the conversation screen and the clear succeeds, it fires `onUnpaired` and flips back to the pairing screen — no restart, the exact mirror of `onPaired`.
 - **While the launch answer is still resolving**, it shows neither screen — a neutral dark canvas — so first paint is never the eventually-wrong screen.
 
 The load-bearing invariant ([ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md)): the conversation screen is reachable **only** on a genuine `paired`. Every other resolved launch outcome — `not-paired`, an unreadable stored pairing (`error`), or even a rejected IPC call — routes to the pairing screen. The re-pair surface is the fail-safe default; the conversation screen is never the fallback.
@@ -41,15 +42,21 @@ export function routeForStatus(status: PairingStatus): Exclude<AppRoute, 'pendin
 A hookless, effectless component that maps a route to a screen — living beside `App` exactly as `PairingView` lives beside `PairingScreen`:
 
 ```ts
-export function AppView(props: { route: AppRoute; onPaired: () => void }): JSX.Element | null {
+export function AppView(props: {
+  route: AppRoute
+  onPaired: () => void
+  onUnpaired: () => void
+}): JSX.Element | null {
   switch (props.route) {
     case 'pending':      return null
     case 'pairing':      return <PairingScreen onPaired={props.onPaired} />
-    case 'conversation': return <ConversationScreen />
+    case 'conversation': return <ConversationScreen onUnpaired={props.onUnpaired} />
     default:             return assertNever(props.route)
   }
 }
 ```
+
+`onUnpaired` is **required** on `AppView` — symmetric with `onPaired` — while `ConversationScreen`'s own `onUnpaired?` prop stays **optional**, so its pre-#166 bare `<ConversationScreen />` server-render tests keep compiling ([#166](../codebase/166.md)).
 
 `pending` renders `null` (see [Pending phase](#pending-phase-neutral-first-paint)). The `switch` closes over the three `AppRoute` members with an **`assertNever` default** — a new route without a case is a compile error (the `reduceSession` / `toMessageViewModel` exhaustiveness guard). Note the two different exhaustiveness strategies: `routeForStatus` fails *safe* on an unknown member (it maps an external, possibly-growing union), while `AppView` fails *at compile time* (it switches over an internal union we fully own). See [#80 notes](../codebase/80.md) for why.
 
@@ -70,7 +77,13 @@ function App(): JSX.Element {
     return () => { active = false }
   }, [])
 
-  return <AppView route={route} onPaired={() => setRoute('conversation')} />
+  return (
+    <AppView
+      route={route}
+      onPaired={() => setRoute('conversation')}
+      onUnpaired={() => setRoute('pairing')}
+    />
+  )
 }
 ```
 
@@ -78,7 +91,7 @@ The container owns three things and nothing else:
 
 1. **The daemon bridge, unchanged.** `useDaemonEventBridge()` stays the unconditional first line — see [Where the daemon bridge lives](#where-the-daemon-bridge-lives).
 2. **Route state** — one `useState<AppRoute>('pending')` (ephemeral shell-local UI state → `useState`, not the store; [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)).
-3. **The launch effect** — a single `[]`-deps mount effect that reads `pairingStatus()` once and sets the route via `routeForStatus`, or fails safe to `pairing` on rejection. `onPaired` (the whole of AC4) flips the route to `conversation`, unmounting the pairing screen and mounting the conversation screen with no restart.
+3. **The launch effect** — a single `[]`-deps mount effect that reads `pairingStatus()` once and sets the route via `routeForStatus`, or fails safe to `pairing` on rejection. `onPaired` (the whole of AC4 in #80) flips the route to `conversation`, unmounting the pairing screen and mounting the conversation screen with no restart. `onUnpaired` ([#166](../codebase/166.md)) is its exact reverse: a successful unpair flips back to `pairing`. Neither handler does any clearing itself — `onPaired` only navigates (the pairing IPC handler already persisted), and `onUnpaired` only navigates too (the [unpair channel](unpair-channel.md)'s `clear()` and the [session store](session-store.md)'s `reset` both complete in `runUnpair` *before* `onUnpaired` is called), so the launch-status invariant "conversation only when paired" still holds if the user relaunches immediately after either flip.
 
 ### Data flow
 
@@ -95,6 +108,10 @@ launch → App mounts, route = 'pending'  → AppView renders null (dark canvas)
 in-session, on the pairing screen:
        confirm succeeds → PairingScreen fires onPaired → setRoute('conversation')
                         → pairing screen unmounts, conversation screen mounts
+
+in-session, on the conversation screen (#166):
+       unpair confirmed → window.pyry.unpair() → ok → session store reset → onUnpaired
+                        → setRoute('pairing') → conversation screen unmounts, pairing screen mounts
 ```
 
 ### Pending phase (neutral first paint)
@@ -125,9 +142,11 @@ The pairing branch passes only `onPaired`, never `onCancel`. When unpaired the p
 
 - [Pairing-status signal](pairing-status-signal.md) / [#79](../codebase/79.md) — the launch-time `paired`/`not-paired`/`error` signal the router consumes; the data-path half to this routing half
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the screen the router mounts when unpaired; source of the `onPaired`/`onCancel` seams (`onPaired` wired, `onCancel` deliberately not)
-- [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md), [#69](../codebase/69.md) — the `paired` destination
+- [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md), [#69](../codebase/69.md) — the `paired` destination; source of the `onUnpaired` seam as of [#166](../codebase/166.md)
+- [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the main-side bridge `runUnpair` calls before firing `onUnpaired` ([#166](../codebase/166.md))
+- [Session store](session-store.md) — reset via `{ type: 'reset' }` before `onUnpaired` fires, so the flip and the state clear are never observed out of order ([#166](../codebase/166.md))
 - [Daemon-event bridge](daemon-event-bridge.md) / [#19](../codebase/19.md) — the app-lifetime subscription kept at shell level, above the route branch
 - [Composer send](composer-send.md) / [#31](../codebase/31.md) — why landing on the conversation screen before the socket is up is safe
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — an unreadable record is never masked as never-paired; why `error` routes to pairing
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — ephemeral screen-local state → `useState`, not the store
-- [#80 codebase notes](../codebase/80.md) · Spec: `docs/specs/architecture/80-app-shell-pairing-then-conversation.md`
+- [#80 codebase notes](../codebase/80.md) · [#166 codebase notes](../codebase/166.md) · Spec: `docs/specs/architecture/80-app-shell-pairing-then-conversation.md`

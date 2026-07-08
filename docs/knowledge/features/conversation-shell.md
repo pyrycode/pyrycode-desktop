@@ -10,6 +10,8 @@ Renders the conversation thread and composer for a session: a thread region that
 
 The app bar, status row, tool-call chips, code blocks, session delimiters, and the mic icon shown in the Figma node are **deliberately out of scope** — they render conversation/connection/model state that lands in later slices. This screen builds the message thread and composer only.
 
+A minimal seed of that future top app bar landed in [#166](../codebase/166.md): a slim header row above the thread holding an unpair escape hatch. See [Unpair control](#unpair-control-166) below.
+
 ## How it works
 
 ### Structure
@@ -18,12 +20,13 @@ The app bar, status row, tool-call chips, code blocks, session delimiters, and t
 
 ```
 ConversationScreen            .conversation        (flex column, full height)
+├── UnpairControl              .conversation__header (slim header row, #166)
 ├── MessageThread             .conversation__thread (scroll region)
 │   └── MessageBubble × N     .message-row / .bubble
 └── Composer                  .composer            (pinned)
 ```
 
-`MessageBubble` and `Composer` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread` is also in-file but **exported** ([#69](../codebase/69.md)), so tests server-render it as a pure view. `ConversationScreen` is the store-bound container; `MessageThread` is the props-in/markup-out view — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
+`MessageBubble`, `Composer`, and `UnpairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread` is also in-file but **exported** ([#69](../codebase/69.md)), so tests server-render it as a pure view. `ConversationScreen` is the store-bound container; `MessageThread` is the props-in/markup-out view — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
 ### Data shape
 
@@ -57,10 +60,34 @@ Bubbles use `max-width: min(680px, 75%)` (not a fixed width) so they reflow as t
 
 Every style references a token from `theme/tokens.css` — no color/type/spacing literal in `conversation.css`. Bare structural geometry (`100%`, flex ratios, the `48px` send button, the bubble measure) stays literal; those are layout, not theme. See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
 
+### Unpair control (#166)
+
+The escape hatch off a stale/dead conversation screen (no in-app way back to pairing existed
+before #120's split). A `.conversation__header` row above the thread, right-aligned, holding
+`UnpairControl` — a screen-local `useState<'idle' | 'confirming' | 'unpairing'>` phase machine:
+`idle` shows an `Unpair` trigger; `confirming` shows `Forget this pairing?` + `Cancel`/`Confirm`
+(the AC3 accidental-unpair guard); `unpairing` disables both buttons while the request is in
+flight.
+
+`ConversationScreen` takes an **optional** `onUnpaired?: () => void` prop — mirroring
+`PairingScreen`'s `onPaired?`/`onCancel?` — so the existing bare `<ConversationScreen />`
+server-render tests stay green. Confirm calls the pure `runUnpair` helper
+(`unpairAction.ts`, the `composerSend.ts` precedent: injected effects, spy-tested, no React) which
+invokes `window.pyry.unpair()` — the [unpair channel](unpair-channel.md) (#173) bridge — and
+either dispatches `{ type: 'reset' }` into the [session store](session-store.md) then calls
+`onUnpaired` (on `ok`), or dispatches `{ type: 'failed', error: { code: 'unpair', ... } }` and
+stays put (on `error` or a rejected invoke). `window.pyry.unpair` is dereferenced only inside the
+click handler, never during render, so the server-rendered smoke test never touches the preload
+bridge. Styled with existing tokens only — no new `--color-error` (desktop has none; the mobile
+`#BA1A1A` destructive color is deliberately not carried over for this minimal control). See
+[#166 codebase notes](../codebase/166.md) for the full design and the [App shell](app-shell.md)
+for the route-flip half.
+
 ## Seams (bound + still open)
 
 - **`MessageThread({ messages })`** — **bound in [#69](../codebase/69.md).** `ConversationScreen` now feeds this prop from `useSessionStore(selectMessages).map(toMessageViewModel)` instead of the deleted `placeholderMessages` array, adapting wire `MessagePayload` (`role`, `message_id`) to the `Message` view model (`type`, `id`) at the store-read boundary. `MessageThread` stays the pure `Message[]`-in view — the seam's shape held exactly as the swap target.
 - **`Composer`** — **bound in [#66](../codebase/66.md).** Now a thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id`, emits a `sendMessage` command, and appends an optimistic echo to the store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
+- **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 
 ## Edge cases and limitations
 
@@ -71,10 +98,11 @@ Every style references a token from `theme/tokens.css` — no color/type/spacing
 
 ## Related
 
-- [App shell](app-shell.md) — the router that mounts this screen on the `paired`/`conversation` route (#80)
-- [Session store](session-store.md) — the live state the thread now renders; the `MessageThread`/status seams bind to it (#2, bound in #69)
+- [App shell](app-shell.md) — the router that mounts this screen on the `paired`/`conversation` route (#80); gains the `onUnpaired` reverse-flip seam this screen's unpair control fires (#166)
+- [Session store](session-store.md) — the live state the thread now renders; the `MessageThread`/status seams bind to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166)
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66); the send half of this screen
+- [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166)
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

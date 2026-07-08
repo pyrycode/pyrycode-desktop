@@ -49,6 +49,10 @@ export type SessionAction =
   // delivery — though the reducer body is identical: append through the same `message_id`
   // dedupe so the daemon's later echo of the same id drops instead of double-posting.
   | { type: 'messageSent'; message: MessagePayload }
+  // Return the whole session to its initial state on unpair (#166). Unlike `disconnected`, which
+  // deliberately preserves `messages`, this clears BOTH facets so a later re-pair never shows the
+  // previous pairing's conversation.
+  | { type: 'reset' }
 
 /** The whole session state. Single source of truth. */
 export interface SessionState {
@@ -118,6 +122,10 @@ export function reduceSession(state: SessionState, action: SessionAction): Sessi
       return { status: state.status, messages: appendUnique(state.messages, action.messages) }
     case 'messageSent':
       return { status: state.status, messages: appendUnique(state.messages, [action.message]) }
+    case 'reset':
+      // Both facets clear in one step. `initialSessionState` is an immutable shared const, so
+      // returning it is safe and makes a second reset a no-op reference (idempotent).
+      return initialSessionState
     default:
       return assertNever(action)
   }

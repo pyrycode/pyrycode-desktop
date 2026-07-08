@@ -31,6 +31,7 @@ type SessionAction =
   | { type: 'messageReceived'; message: MessagePayload }             // ← one `message` envelope
   | { type: 'messagesReceived'; messages: readonly MessagePayload[] } // ← one `message_chunk` batch
   | { type: 'messageSent'; message: MessagePayload }                  // ← a local optimistic echo (#66)
+  | { type: 'reset' }                                                 // ← back to initialSessionState (#166)
 ```
 
 The first two message actions mirror the two wire envelope types 1:1, so #3's translation is obvious; `messageSent` ([#66](../codebase/66.md)) is a **locally-composed** echo dispatched by the composer, given a distinct name to document intent (not a daemon delivery) though its reducer body is identical. `message_chunk` is a **batch of complete messages** (backfill), not partial-token streaming — the reducer appends whole messages; there is no per-`message_id` token accumulator.
@@ -47,6 +48,7 @@ The first two message actions mirror the two wire envelope types 1:1, so #3's tr
 | `messageReceived` | append one via `appendUnique` (dedupe by `message_id`) |
 | `messagesReceived` | append batch via `appendUnique`, in order |
 | `messageSent` | append one optimistic echo via `appendUnique` (#66); identical body to `messageReceived` |
+| `reset` | return `initialSessionState` — clears **both** `status` and `messages` in one step (#166) |
 
 Invariants it holds:
 
@@ -98,7 +100,7 @@ Narrow-slice selection means a status change does not re-render the thread and a
 ## Edge cases and limitations
 
 - **Dedupe by `message_id`.** Every append routes through `appendUnique` (added in #27): a message whose `message_id` the store already holds is skipped in place (arrival order preserved), and the array reference is returned unchanged when nothing new is added, so a pure duplicate does not churn selectors. This covers `message_chunk` backfill overlap and — since [#66](../codebase/66.md) — the optimistic-send → daemon-echo case (the same-`message_id` echo drops against the local copy).
-- **History is never cleared.** A fresh `connecting`/`disconnected` leaves `messages` intact (status and messages are orthogonal). Reconnect-clears-history is an open question for #3's reconnect/backfill work.
+- **History is never cleared by a status action.** A fresh `connecting`/`disconnected` leaves `messages` intact (status and messages are orthogonal). Reconnect-clears-history is still an open question for #3's reconnect/backfill work. The one action that *does* clear both facets is `reset` ([#166](../codebase/166.md)) — a distinct, explicit mutation for the unpair flow, not a side effect of any connection-status transition.
 - **Single active conversation.** `MessagePayload` carries `conversation_id`, but #2 appends all messages to one list; multi-conversation routing is out of scope.
 - **Optimistic send (realized in [#66](../codebase/66.md)).** The composer's own-message echo dispatches the dedicated `messageSent` action, appending a wire `MessagePayload { role: 'user' }` through `appendUnique`. Carrying the **same `message_id`** sent on the wire is what lets the daemon's later echo dedupe against the optimistic copy instead of double-posting. See [Composer send](composer-send.md).
 - **Synchronous only.** The store does no async work, no I/O, no subscriptions to tear down; #3/#4 own the channel, cancellation, and teardown and call `dispatch` synchronously.
@@ -107,8 +109,9 @@ Narrow-slice selection means a status change does not re-render the thread and a
 
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store
-- [Conversation shell](conversation-shell.md) — the surface that reads `selectMessages` into the thread (bound in [#69](../codebase/69.md))
+- [Conversation shell](conversation-shell.md) — the surface that reads `selectMessages` into the thread (bound in [#69](../codebase/69.md)); its unpair control dispatches `reset` ([#166](../codebase/166.md))
 - [Composer send](composer-send.md) — dispatches the `messageSent` optimistic-echo action into this store ([#66](../codebase/66.md))
+- [Unpair channel](unpair-channel.md) — the main-side bridge whose `ok` result the `reset` action's caller dispatches after ([#173](../codebase/173.md), consumed in [#166](../codebase/166.md))
 - [Renderer→main diagnostics channel](diagnostics-channel.md) / [#134 codebase notes](../codebase/134.md) — the optional `observe` seam that logs every transition as a content-free record
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) · [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md)
-- [#2 codebase notes](../codebase/2.md) · Spec: `docs/specs/architecture/2-connection-and-conversation-state-store.md`
+- [#2 codebase notes](../codebase/2.md) · [#166 codebase notes](../codebase/166.md) · Spec: `docs/specs/architecture/2-connection-and-conversation-state-store.md`

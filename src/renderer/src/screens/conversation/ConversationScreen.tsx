@@ -3,6 +3,7 @@ import './conversation.css'
 import { toMessageViewModel, type Message } from './messageViewModel'
 import { useSessionStore, selectMessages, selectStatus } from '../../store/sessionStore'
 import { submitMessage, composerAvailability } from './composerSend'
+import { runUnpair } from './unpairAction'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -12,14 +13,22 @@ import { submitMessage, composerAvailability } from './composerSend'
 // ConversationScreen is the store-bound container (smoke-tested for "renders without
 // throwing"); MessageThread is the pure, props-in/markup-out view that the tests
 // server-render with arbitrary Message[] — the same container/view split PairingScreen
-// uses. Composer stays in-file. The load-bearing seam is the MessageThread prop.
-export function ConversationScreen(): JSX.Element {
+// uses. Composer and UnpairControl stay in-file. The load-bearing seam is the MessageThread prop.
+export interface ConversationScreenProps {
+  // The App route flip back to pairing (#166), mirroring PairingScreen's onPaired. Optional so the
+  // existing bare `<ConversationScreen />` server-render tests stay green; when absent, unpair still
+  // clears + resets, it just doesn't navigate.
+  onUnpaired?: () => void
+}
+
+export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {}): JSX.Element {
   // Read the messages slice and adapt each wire MessagePayload to the shell view model
   // at this boundary (ADR 0004). Selecting only the messages slice keeps connection-status
   // changes from re-rendering the thread.
   const messages = useSessionStore(selectMessages).map(toMessageViewModel)
   return (
     <div className="conversation">
+      <UnpairControl onUnpaired={onUnpaired} />
       <MessageThread messages={messages} />
       <Composer />
     </div>
@@ -122,6 +131,67 @@ function Composer(): JSX.Element {
           </svg>
         </button>
       </div>
+    </div>
+  )
+}
+
+// The minimal unpair escape hatch (#166) — a slim header row above the thread, the seed of the
+// future top app bar. Mirrors PairingScreen in reverse: a confirm guard (AC3) then an injected
+// route flip (AC2). All decision logic lives in the pure runUnpair helper; this is thin glue over an
+// ephemeral confirm phase (screen-local useState, ADR 0006 — like Composer's `text`).
+function UnpairControl({ onUnpaired }: { onUnpaired?: () => void }): JSX.Element {
+  const [phase, setPhase] = useState<'idle' | 'confirming' | 'unpairing'>('idle')
+  const dispatch = useSessionStore((s) => s.dispatch)
+
+  const handleConfirm = (): void => {
+    // `unpairing` disables both buttons so a double-click cannot launch a second runUnpair (belt-and-
+    // suspenders; clear() is idempotent regardless). window.pyry.unpair is dereferenced only here, at
+    // interaction time — never during render — so the server-rendered smoke test never touches the
+    // bridge (same discipline as Composer.handleSubmit).
+    setPhase('unpairing')
+    void runUnpair({ unpair: window.pyry.unpair, dispatch, onUnpaired: () => onUnpaired?.() }).then(
+      (outcome) => {
+        // On 'ok' the route flips and this screen unmounts, so no 'ok' branch is needed (a setState
+        // after unmount is a harmless React-18 no-op). On 'error' we stay; re-arm the idle trigger.
+        if (outcome === 'error') setPhase('idle')
+      }
+    )
+  }
+
+  if (phase === 'idle') {
+    return (
+      <div className="conversation__header">
+        <button
+          type="button"
+          className="conversation__unpair"
+          onClick={() => setPhase('confirming')}
+        >
+          Unpair
+        </button>
+      </div>
+    )
+  }
+
+  const busy = phase === 'unpairing'
+  return (
+    <div className="conversation__header">
+      <span className="conversation__unpair-prompt">Forget this pairing?</span>
+      <button
+        type="button"
+        className="conversation__unpair"
+        onClick={() => setPhase('idle')}
+        disabled={busy}
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        className="conversation__unpair conversation__unpair--confirm"
+        onClick={handleConfirm}
+        disabled={busy}
+      >
+        {busy ? 'Forgetting…' : 'Confirm'}
+      </button>
     </div>
   )
 }

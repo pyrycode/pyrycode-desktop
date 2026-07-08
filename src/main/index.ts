@@ -17,6 +17,7 @@ import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
+import { logSessionStart } from './sessionBanner'
 import { onCommand } from './receiveCommand'
 import { onDiagnostic } from './receiveDiagnostic'
 
@@ -153,6 +154,11 @@ app.whenReady().then(() => {
   const diagnosticLog = createDiagnosticLog({
     sink: app.isPackaged ? fileRotatingSink(join(app.getPath('userData'), 'logs')) : stdoutSink()
   })
+  // The once-per-session diagnostics banner (#132), emitted here so it is seq 0 — the first line of
+  // every bundle — attributing the bundle to this client build + wire-protocol identity. `whenReady`
+  // runs once per process, so the banner is fire-once; it must NOT be re-emitted from the transport
+  // start/reconnect/dial paths (AC3), which is why it lives at the root, not inside the connection.
+  logSessionStart(diagnosticLog, app.getVersion())
   const connection = createDaemonConnection({
     deviceKeypair: deviceKeypairStore,
     pairedServer: pairedServerStore,

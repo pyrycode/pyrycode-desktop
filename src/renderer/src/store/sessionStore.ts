@@ -10,6 +10,7 @@
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { HelloAckPayload, MessagePayload } from '@shared/wire/types'
+import { logSessionTransition } from './sessionDiagnostics'
 
 /** The active session's connection lifecycle. Discriminated on `type`. */
 export type ConnectionStatus =
@@ -59,6 +60,14 @@ export interface SessionState {
 export type SessionStore = SessionState & {
   dispatch: (action: SessionAction) => void
 }
+
+/**
+ * A passive post-reduce observer of every dispatched action — the store's one instrumentation seam
+ * (#134). Invoked synchronously inside `dispatch` after `set`, with the action and the resulting
+ * state. It must not mutate state, alter the data flow, or throw; it exists only to emit
+ * diagnostics. Optional, so a test store stays observer-free.
+ */
+export type TransitionObserver = (action: SessionAction, state: SessionState) => void
 
 /** Compile-time exhaustiveness guard: a new SessionAction arm without a case is a type error. */
 function assertNever(action: never): never {
@@ -119,16 +128,30 @@ export const initialSessionState: SessionState = {
   messages: []
 }
 
-/** DI-friendly, React-free store — one isolated instance per test. */
-export function createSessionStore(init: SessionState = initialSessionState) {
-  return createStore<SessionStore>((set) => ({
+/**
+ * DI-friendly, React-free store — one isolated instance per test. `observe`, when supplied, is
+ * called after each reduce with the action and the resulting (post-reduce) state; the app singleton
+ * wires it to the diagnostics logger while test stores omit it. Appended after `init` so the
+ * arg-less callers stay source-compatible.
+ */
+export function createSessionStore(
+  init: SessionState = initialSessionState,
+  observe?: TransitionObserver
+) {
+  return createStore<SessionStore>((set, get) => ({
     ...init,
-    dispatch: (action) => set((s) => reduceSession(s, action))
+    dispatch: (action) => {
+      set((s) => reduceSession(s, action))
+      // `set` is synchronous in zustand, so `get()` already reflects the reduced state.
+      observe?.(action, get())
+    }
   }))
 }
 
-/** App-wide singleton — the "one source of truth" #3 dispatches into and #12 reads. */
-export const sessionStore = createSessionStore()
+/** App-wide singleton — the "one source of truth" #3 dispatches into and #12 reads. Its dispatch is
+ *  observed by the diagnostics logger (#134); isolated test stores created via createSessionStore()
+ *  are not. */
+export const sessionStore = createSessionStore(initialSessionState, logSessionTransition)
 
 /** Narrow-slice React binding for #12. Selecting a single slice avoids cross-facet re-renders. */
 export function useSessionStore<T>(selector: (s: SessionStore) => T): T {

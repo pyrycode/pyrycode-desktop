@@ -197,7 +197,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
         let inbound: InboundDaemonMessage | null
         try {
-          inbound = parseInboundMessage(event.plaintext)
+          inbound = parseInboundMessage(event.plaintext, deps.diagnosticLog)
         } catch {
           // Fail-closed (AC4): oversized / malformed / unparseable / mistyped payload. Drop the
           // frame — no event, no throw. The caught WireDecodeError is DROPPED (classify-don't-

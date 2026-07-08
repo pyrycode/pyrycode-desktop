@@ -14,10 +14,40 @@
 // semantic narrowing the codec deliberately defers (Envelope.payload stays `unknown`) onto
 // decodeEnvelope's structural boundary, plus the oversized guard decodeEnvelope omits. Its error
 // messages name the failure CATEGORY only — never echoing the message text, the conversation/message
-// ids, the offending role value, or the raw bytes. This module performs no logging.
+// ids, the offending role value, or the raw bytes.
+//
+// It emits CONTENT-FREE diagnostic records (#130) through the OPTIONAL injected DiagnosticLog: for
+// each decoded outcome — a modeled `message` / `message_chunk`, or a well-formed-but-unmodeled type
+// that would otherwise vanish — it logs the envelope type, the plaintext byte length, and a one-way
+// BLAKE2s hash of the frame, never the payload value or any decoded field. The THROW path is never
+// logged here (a malformed/oversized frame leaves no record — the pre-decryption raw-byte case is
+// sibling #133). Absent a logger the module is silent; behaviour is otherwise identical.
+import { blake2s } from '@noble/hashes/blake2'
 import { decodeEnvelope, WireDecodeError } from './codec'
 import { MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
 import type { MessagePayload, MessageChunkPayload } from '../../shared/wire/types'
+import type { DiagnosticLog } from '../diagnosticLog'
+
+/**
+ * Cap on the peer-supplied `type` string logged in the unmodeled branch. Real wire types
+ * (`ack`, `error`, `hello_ack`, `message`, `message_chunk`) are all < 16 chars, so this is lossless
+ * for legitimate traffic; it deterministically bounds a hostile daemon that could otherwise stuff up
+ * to MAX_PLAINTEXT_BYTES of arbitrary text into `type` (#130 security review). Belt-and-suspenders:
+ * a code-level cap, not a stochastic rule.
+ */
+const MAX_LOGGED_TYPE_CHARS = 64
+
+/**
+ * A one-way, content-free digest of the decrypted plaintext FRAME bytes — never `envelope.payload`
+ * (a parsed `unknown` whose re-serialization is non-deterministic on JSON key order). BLAKE2s-256 as
+ * lowercase hex (64 chars). `blake2s` comes from @noble/hashes, not node:crypto: Electron's BoringSSL
+ * has no BLAKE2 family (note #101), and this stays synchronous. Hashing the whole frame — not just
+ * the payload text — implicitly salts the digest with the server-assigned id/ts/message_id, so a
+ * read-the-log dictionary attack must reconstruct the entire frame, not merely guess the text.
+ */
+function hashPlaintext(plaintext: Uint8Array): string {
+  return Buffer.from(blake2s(plaintext, { dkLen: 32 })).toString('hex')
+}
 
 /**
  * Which modeled app-message the envelope carried. NOT a wire type and NOT a DaemonEvent — the
@@ -89,7 +119,10 @@ function parseMessageChunkPayload(payload: unknown): MessageChunkPayload {
  * (ignored, AC5), or throws WireDecodeError — the single failure type, so the consumer's one catch
  * covers oversized / malformed / unparseable / mistyped alike (fail-closed, AC4).
  */
-export function parseInboundMessage(plaintext: Uint8Array): InboundDaemonMessage | null {
+export function parseInboundMessage(
+  plaintext: Uint8Array,
+  diagnosticLog?: DiagnosticLog
+): InboundDaemonMessage | null {
   // Size guard (AC4): decodeEnvelope does not size-check, so this is the only thing that makes an
   // oversized-but-valid-JSON frame fail closed here. The upstream Noise transport already bounds the
   // plaintext, but this boundary re-checks what it owns rather than trusting the caller (the unit
@@ -98,13 +131,41 @@ export function parseInboundMessage(plaintext: Uint8Array): InboundDaemonMessage
     throw new WireDecodeError('inbound plaintext exceeds max size')
   }
   const envelope = decodeEnvelope(plaintext)
+  // Each log fires AFTER the modeled envelope has fully narrowed, so the throw path stays unlogged: a
+  // frame that fails to narrow throws first and leaves no record. Optional chaining short-circuits the
+  // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
   switch (envelope.type) {
-    case 'message':
-      return { kind: 'message', message: parseMessagePayload(envelope.payload) }
-    case 'message_chunk':
-      return { kind: 'chunk', messages: parseMessageChunkPayload(envelope.payload).messages }
+    case 'message': {
+      const message = parseMessagePayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'message',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'message', message }
+    }
+    case 'message_chunk': {
+      const { messages } = parseMessageChunkPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'message_chunk',
+        bytes: plaintext.length,
+        count: messages.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'chunk', messages }
+    }
     default:
-      // A well-formed `ack` / `error` / etc. is not an error — it is simply not modeled here.
+      // A well-formed `ack` / `error` / etc. is not an error — it is simply not modeled here. Log it
+      // content-free (capped type + size + hash) so an unforeseen kind still leaves a footprint (#130
+      // catch-all), then keep the unchanged behaviour: still return null, still not surfaced to the UI.
+      diagnosticLog?.event({
+        event: 'inbound-unmodeled',
+        code: envelope.type.slice(0, MAX_LOGGED_TYPE_CHARS),
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
       return null
   }
 }

@@ -23,8 +23,13 @@ export type InboundDaemonMessage =
 //  • InboundDaemonMessage  — a `message` or `message_chunk` envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
-export function parseInboundMessage(plaintext: Uint8Array): InboundDaemonMessage | null
+export function parseInboundMessage(
+  plaintext: Uint8Array,
+  diagnosticLog?: DiagnosticLog       // #130 — optional injected content-free logger; absent ⇒ silent
+): InboundDaemonMessage | null
 ```
+
+The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 
 A **single throw type** (`WireDecodeError`) covers every failure, so the consumer's one `catch` handles oversized, malformed, unparseable, and mistyped alike — exactly the shape `parseHelloAck` uses for the `hello_ack` boundary.
 
@@ -37,7 +42,7 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
 3. **Route on `envelope.type`:**
    - `'message'` → `{ kind: 'message', message: parseMessagePayload(payload) }`
    - `'message_chunk'` → `{ kind: 'chunk', messages: parseMessageChunkPayload(payload).messages }`
-   - anything else → `return null` — a well-formed `ack` / `error` / `hello_ack` / etc. is **not an error**, it is simply not modeled here.
+   - anything else → `return null` — a well-formed `ack` / `error` / `hello_ack` / etc. is **not an error**, it is simply not modeled here. Since [#130](../codebase/130.md) it is also **logged content-free** (`inbound-unmodeled`, § *Diagnostic logging*) before the `return null`, so an unforeseen envelope kind leaves a footprint instead of vanishing; the return value and the "not surfaced to the UI" behavior are unchanged.
 
 ### Payload narrowing
 
@@ -50,6 +55,25 @@ Two private validators (tested through `parseInboundMessage`, never exported), b
 
 Every `WireDecodeError` names the failure **category only** (`'missing required field: role'`, `'malformed message payload'`, `'inbound plaintext exceeds max size'`) — it **never interpolates a field value**. `role`, `text`, and `conversation_id` are user conversation content; a `` `bad role: ${role}` `` message would echo that content into an error string a future caller might surface. The consumer drops the caught object today, so this is defense-in-depth — but it becomes load-bearing the moment any caller logs the message. Matches `codec.ts` / `helloExchange.ts`.
 
+### Diagnostic logging (#130)
+
+The module's header once declared *"This module performs no logging."* [#130](../codebase/130.md) deliberately flips that invariant **for this file only**, wiring in the merged [content-free diagnostic logger](diagnostic-log.md) ([#126](../codebase/126.md)) so a wire-integrity fault — a message recurring, changing between send and receive, truncating, or arriving as an unforeseen kind — leaves a footprint. Each of the two **non-throwing** outcomes emits one content-free record; the record carries the envelope type, the plaintext byte length, a one-way hash of the frame, and the logger's own monotonic `seq` — **never the payload value or any decoded field**:
+
+| Outcome | Event | Fields |
+|---|---|---|
+| modeled `message` | `inbound-decoded` | `code: 'message'`, `bytes: plaintext.length`, `hash` |
+| modeled `message_chunk` | `inbound-decoded` | `code: 'message_chunk'`, `bytes`, `count: messages.length`, `hash` |
+| unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
+
+Load-bearing details:
+
+- **Log AFTER the narrower returns.** Each modeled-arm `event()` fires *after* `parseMessagePayload` / `parseMessageChunkPayload` succeeds, so a frame that fails to narrow throws first and produces **no** record. The size guard and `decodeEnvelope` throws also precede the switch. Ordering — not a flag — is what keeps the **throw path unlogged** (the pre-decryption raw-byte case is sibling [#133](https://github.com/pyrycode/pyrycode-desktop/issues/133); a content-free log for the *post-decryption semantic* throw is a deferred open question).
+- **`hash` = BLAKE2s-256 of the plaintext FRAME, not `envelope.payload`.** `hashPlaintext` runs `blake2s(plaintext, { dkLen: 32 })` → 64-char hex, over the input bytes. Hashing the whole frame (not just the payload text) is a **security** choice as much as a determinism one: the digest is implicitly salted by the server-assigned `id` / `ts` / `message_id`, so a read-the-log dictionary attack ("did the user type X?") must reconstruct the entire frame, not merely guess the text. `blake2s` comes from `@noble/hashes`, not `node:crypto` — Electron's BoringSSL has no BLAKE2 ([#101](../codebase/101.md)).
+- **The one peer-controlled string is capped.** The modeled arms log a **static type literal** into `code`; the unmodeled arm logs the daemon-supplied `envelope.type` — capped `slice(0, MAX_LOGGED_TYPE_CHARS)` (64). Lossless for real wire types (all < 16 chars); a deterministic bound on a hostile daemon that could otherwise stuff up to `MAX_PLAINTEXT_BYTES` of text into `type`. The [#126](../codebase/126.md) serializer JSON-escapes it, so a crafted `type` cannot split one record into two lines.
+- **Absent-logger costs nothing.** `diagnosticLog?.event({ … hash: hashPlaintext(plaintext) })` — the `?.` short-circuits the whole call *including* the hash when no logger is injected, so existing callers pay zero and cannot throw (the AC5 backward-compat property, mirroring `relayConnection`).
+
+The allowlist extension is a single additive optional field on `DiagnosticEvent` — `hash?: string`; the length reuses the pre-existing `bytes?`. See [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md) for the allowlist-not-scrubber contract.
+
 ### The consumer arm (`daemonConnection.ts`)
 
 The [daemon connection](daemon-connection.md)'s `case 'message'` arm is now a thin `InboundDaemonMessage → DaemonEvent` mapper — the module's single IPC choke point:
@@ -58,7 +82,7 @@ The [daemon connection](daemon-connection.md)'s `case 'message'` arm is now a th
 case 'message': {
   let inbound: InboundDaemonMessage | null
   try {
-    inbound = parseInboundMessage(event.plaintext)
+    inbound = parseInboundMessage(event.plaintext, deps.diagnosticLog)   // #130: thread the logger
   } catch {
     return                                            // fail-closed: drop the frame, no event, no throw
   }
@@ -102,7 +126,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 
 - **A single explicit boundary.** `payload: unknown` never escapes `parseInboundMessage`; downstream (the consumer arm, `DaemonEvent`, the store) holds only concrete wire types. Envelope metadata (`id` / `ts` / `in_reply_to` / `event_id`) is never forwarded — only `type` (for routing) and the narrowed payload cross.
 - **Fail-closed on every hostile shape.** Malformed / oversized / unparseable / mistyped / unknown-`role` / non-array `messages` / one-bad-element chunk each drops the frame — no partial value ever surfaces.
-- **Log-free, secret-safe.** No `console.*` on any path; category-only `WireDecodeError` messages carry no field value; the consumer drops the caught object. Pinned by a six-method `console`-spy and an assertion that a thrown message never contains the `role` / `text` / `conversation_id` value (the `role` case is where a naive impl would interpolate). Message *content* reaching the renderer is the **intended data path**, not a leak — the [#18](../codebase/18.md) `DaemonEvent` union cannot hold a token/key/raw frame by construction.
+- **Content-free-log by construction, secret-safe.** No `console.*` on any path; category-only `WireDecodeError` messages carry no field value; the consumer drops the caught object. Since [#130](../codebase/130.md) the module *does* log — but only a content-free record (type + `seq` + length + one-way hash), never a payload byte or a decoded field: the modeled arms log a static type literal, the unmodeled arm a **capped** peer type, and every record's `hash` is a full-frame BLAKE2s digest implicitly salted by the server-assigned `id`/`ts`/`message_id` (so the log can't confirm a guessed message). Pinned by a six-method `console`-spy (still green — #130 logs via the injected sink, never `console`), an assertion that a thrown message never contains the `role` / `text` / `conversation_id` value, and an AC4 test asserting the serialized log line contains the hash but **neither** planted secret. Message *content* reaching the renderer is the **intended data path**, not a leak — the [#18](../codebase/18.md) `DaemonEvent` union cannot hold a token/key/raw frame by construction.
 - **Bounded per-frame work.** The size cap makes work O(size) with size capped; a `message_chunk` array is inherently small (each complete message > 60 bytes, cap 65519) and aborts on the first bad element. A hostile daemon cannot flood an unbounded frame; deep-nesting JSON fails closed via the codec's `RangeError` catch.
 
 ## Edge cases and limitations
@@ -110,7 +134,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **No dedupe, no reorder — arrival order only.** Two `message` frames with the same `message_id` produce two `messageReceived` events. Ordering and dedupe are the renderer store's responsibility ([`appendUnique`, ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)); this module deliberately does neither.
 - **`message_chunk` carries complete messages, not partial tokens** — no token coalescing here (see the store's `SessionAction` doc comment). A chunk is a batch of whole `MessagePayload`s.
 - **An empty `message_chunk` emits `messagesReceived` with `[]`.** A zero-length batch is a valid, harmless event. If the daemon is later found to never send empty chunks, dropping them is a trivial future tightening — not this boundary's concern.
-- **Unmodeled envelope types are silently ignored.** `ack` / `error` / `backfill_since` / etc. return `null` and emit nothing — decoding/routing them is out of scope for this ticket.
+- **Unmodeled envelope types are ignored but no longer *silent*.** `ack` / `error` / `backfill_since` / etc. still return `null` and emit no `DaemonEvent` — decoding/routing them is out of scope. Since [#130](../codebase/130.md) they *are* logged content-free (`inbound-unmodeled` — capped type + size + hash), so an unforeseen kind leaves a diagnosable footprint even though the runtime behavior is unchanged.
 
 ### Why the explicit size guard, given the transport already bounds the plaintext
 
@@ -118,7 +142,9 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 
 ## Related
 
-- [#68 codebase notes](../codebase/68.md) — implementation summary, patterns, lessons.
+- [#68 codebase notes](../codebase/68.md) — implementation summary, patterns, lessons (the boundary's introduction).
+- [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
+- [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).
 - [Daemon connection](daemon-connection.md) / [#62](../codebase/62.md) — hosts the `case 'message'` arm that calls this and maps its result onto the IPC channel; owns the single choke point and the classify-don't-forward discipline this inherits.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `parseHelloAck`, the fail-closed narrowing shape this mirrors (`isRecord` guard → per-field checks → `WireDecodeError`, category-only messages). The local `isRecord` / `requireString` copies follow its precedent.
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the outbound sibling under `transport/`; `sendMessageEnvelope.ts`'s header conventions this file mirrors.

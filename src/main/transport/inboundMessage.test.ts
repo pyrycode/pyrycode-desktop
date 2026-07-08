@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { parseInboundMessage } from './inboundMessage'
 import { encodeEnvelope, WireDecodeError } from './codec'
+import { createDiagnosticLog, type DiagnosticLog } from '../diagnosticLog'
 import { MAX_PLAINTEXT_BYTES, type MessagePayload } from '../../shared/wire/types'
 
 // parseInboundMessage sits on the untrusted→trusted boundary, mirroring parseHelloAck: it is fed
@@ -143,6 +144,140 @@ describe('parseInboundMessage — fail-closed (AC4)', () => {
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
     expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
+// A real content-free logger (#126) over a capture array — the assertions see the exact serialized
+// JSON line the logger produces, so AC4 (no secret byte in the serialized line) is checked at the
+// true boundary. `now` is pinned so the record is deterministic.
+function captureLog(): { log: DiagnosticLog; lines: string[] } {
+  const lines: string[] = []
+  const log = createDiagnosticLog({ sink: { write: (line) => lines.push(line) }, now: () => FIXED_TS })
+  return { log, lines }
+}
+
+const HEX64 = /^[0-9a-f]{64}$/
+
+describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
+  it('logs a modeled message content-free, never a payload value (AC1, AC4)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_TEXT = 'super-secret-conversation-text'
+    const SECRET_CONV = 'secret-conversation-id'
+    const payload = { conversation_id: SECRET_CONV, message_id: 'm1', role: 'user', text: SECRET_TEXT }
+    const plaintext = encodeMessage(payload)
+
+    const result = parseInboundMessage(plaintext, log)
+
+    expect(result).toEqual({ kind: 'message', message: payload })
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('message')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    expect(typeof record.seq).toBe('number')
+    // The AC4 guarantee at the serialized boundary: the hash is there, the plaintext is not.
+    expect(lines[0]).not.toContain(SECRET_TEXT)
+    expect(lines[0]).not.toContain(SECRET_CONV)
+  })
+
+  it('logs a modeled message_chunk with its batch count (AC1)', () => {
+    const { log, lines } = captureLog()
+    const plaintext = encodeChunk({ messages: [MSG_A, MSG_B] })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('message_chunk')
+    expect(record.count).toBe(2)
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+  })
+
+  it('logs an empty message_chunk as a zero-count content-free record', () => {
+    const { log, lines } = captureLog()
+
+    parseInboundMessage(encodeChunk({ messages: [] }), log)
+
+    const record = JSON.parse(lines[0])
+    expect(record.code).toBe('message_chunk')
+    expect(record.count).toBe(0)
+    expect(record.hash).toMatch(HEX64)
+  })
+
+  it('logs an unmodeled envelope by type instead of silently dropping it (AC2)', () => {
+    const { log, lines } = captureLog()
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+
+    const result = parseInboundMessage(bytes, log)
+
+    // The "not modeled here" behavior is unchanged: still returns null.
+    expect(result).toBeNull()
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-unmodeled')
+    expect(record.code).toBe('ack')
+    expect(record.bytes).toBe(bytes.length)
+    expect(record.hash).toMatch(HEX64)
+  })
+
+  it('caps a hostile long unmodeled type at 64 chars, one record, still null (security)', () => {
+    const { log, lines } = captureLog()
+    const bytes = encodeEnvelope({ id: 1, type: 'x'.repeat(200), ts: FIXED_TS, payload: {} })
+
+    const result = parseInboundMessage(bytes, log)
+
+    expect(result).toBeNull()
+    expect(lines).toHaveLength(1) // JSON-escape holds: no split across lines.
+    const record = JSON.parse(lines[0])
+    expect(record.code).toBe('x'.repeat(64))
+    expect(record.code.length).toBe(64)
+  })
+
+  it('hashes identical plaintext identically and different plaintext differently (recurrence signal)', () => {
+    const { log, lines } = captureLog()
+    const same = encodeMessage(MSG)
+    const other = encodeMessage({ ...MSG, text: 'a different body' })
+
+    parseInboundMessage(same, log)
+    parseInboundMessage(same, log)
+    parseInboundMessage(other, log)
+
+    const [r0, r1, r2] = lines.map((line) => JSON.parse(line))
+    expect(r0.hash).toBe(r1.hash)
+    expect(r0.hash).not.toBe(r2.hash)
+  })
+
+  it('does NOT log on the throw path — a modeled message that fails to narrow', () => {
+    const { log, lines } = captureLog()
+
+    expect(() => parseInboundMessage(encodeMessage({ ...MSG, text: undefined }), log)).toThrow(
+      WireDecodeError
+    )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('does NOT log on an oversized plaintext throw', () => {
+    const { log, lines } = captureLog()
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 1,
+        type: 'message',
+        ts: FIXED_TS,
+        payload: { ...MSG, text: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+      })
+    )
+
+    expect(() => parseInboundMessage(bytes, log)).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('does not log and does not throw when no logger is injected (AC5)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} }))).toBeNull()
+    expect(() => parseInboundMessage(encodeMessage({ ...MSG, text: undefined }))).toThrow(WireDecodeError)
   })
 })
 

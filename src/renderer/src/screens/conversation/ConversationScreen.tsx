@@ -9,6 +9,7 @@ import {
 } from '../../store/sessionStore'
 import { submitMessage, composerAvailability, shouldOfferRepair } from './composerSend'
 import { runUnpair } from './unpairAction'
+import { RunConfigData } from './RunConfigData'
 import { LogDataSection } from './LogDataSection'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
@@ -46,6 +47,9 @@ export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {})
       <RepairControl onUnpaired={onUnpaired} />
       {sheetOpen && (
         <StatusSheet onClose={() => setSheetOpen(false)}>
+          {/* #187: the headless data path — requests a snapshot on open and holds Model/Effort/YOLO.
+              Renders nothing (DOM order immaterial); #188 renders the held values here. */}
+          <RunConfigData />
           {/* Log data is the last section ("beneath Context-window"); #181/#182 prepend their
               sections above it as they land. */}
           <LogDataSection />

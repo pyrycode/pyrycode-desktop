@@ -10,7 +10,8 @@ Introduced in [#19](../codebase/19.md). Lives at `src/renderer/src/store/daemonE
 no-store-action member, `snapshotReceived`, and is the concrete case study for that forced touch: the
 ticket's own spec claimed "the renderer needs zero change," which held for the generic preload
 channels but not for this exhaustive switch — see its "Lessons learned" in [#180 codebase
-notes](../codebase/180.md).
+notes](../codebase/180.md). [#187](../codebase/187.md) landed the consumer this arm was reserved for
+— see [Run configuration store](run-config-store.md).
 
 ## What it does
 
@@ -36,7 +37,7 @@ A `switch (event.type)` over all ten `DaemonEvent` arms with a `default: return 
 | `debugBundleProgress` | `null` | consumed by the download UI (#72), not the session store |
 | `debugBundleSaved` | `null` | consumed by the download UI (#72), not the session store |
 | `debugBundleFailed` | `null` | consumed by the download UI (#72), not the session store |
-| `snapshotReceived` | `null` | consumed by #181's Run configuration render bridge, not the session store |
+| `snapshotReceived` | `null` | consumed by the [Run configuration store](run-config-store.md)'s data path (#187), not the session store |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 

@@ -1,9 +1,10 @@
-import { useState, type KeyboardEvent } from 'react'
+import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import './conversation.css'
 import { toMessageViewModel, type Message } from './messageViewModel'
 import { useSessionStore, selectMessages, selectStatus } from '../../store/sessionStore'
 import { submitMessage, composerAvailability } from './composerSend'
 import { runUnpair } from './unpairAction'
+import { LogDataSection } from './LogDataSection'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -37,7 +38,13 @@ export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {})
       <MessageThread messages={messages} />
       <StatusRow onExpand={() => setSheetOpen(true)} />
       <Composer />
-      {sheetOpen && <StatusSheet onClose={() => setSheetOpen(false)} />}
+      {sheetOpen && (
+        <StatusSheet onClose={() => setSheetOpen(false)}>
+          {/* Log data is the last section ("beneath Context-window"); #181/#182 prepend their
+              sections above it as they land. */}
+          <LogDataSection />
+        </StatusSheet>
+      )}
     </div>
   )
 }
@@ -99,6 +106,10 @@ const STATUS_SHEET_TITLE_ID = 'status-sheet-title'
 
 export interface StatusSheetProps {
   onClose: () => void
+  // Each Run configuration section (Model/Effort/YOLO/Context window/Log data) mounts as a child so
+  // StatusSheet stays a pure shell — a childless sheet has no sections, keeping the shell-only test
+  // (#177) valid. #72 mounts <LogDataSection/>; #181/#182 add the others.
+  children?: ReactNode
 }
 
 // The Run configuration host modal (#177) — an absolutely-positioned overlay inside .conversation
@@ -108,7 +119,7 @@ export interface StatusSheetProps {
 // none here. Exported and pure (props in, markup out), the MessageThread pattern, so the open-state
 // chrome is server-rendered directly in tests. The × close control is the authoritative dismissal
 // (AC3); the scrim adds near-free backdrop-click dismissal.
-export function StatusSheet({ onClose }: StatusSheetProps): JSX.Element {
+export function StatusSheet({ onClose, children }: StatusSheetProps): JSX.Element {
   return (
     <div className="status-sheet-overlay">
       {/* A dedicated scrim element (not the overlay's own background) so the opaque panel sibling is
@@ -138,8 +149,9 @@ export function StatusSheet({ onClose }: StatusSheetProps): JSX.Element {
             </svg>
           </button>
         </div>
-        {/* The empty, scrollable container follow-ups populate section by section. */}
-        <div className="status-sheet__body" />
+        {/* The scrollable container follow-ups populate section by section; each child owns both its
+            header and its content. Empty (no children) in the shell-only test. */}
+        <div className="status-sheet__body">{children}</div>
       </div>
     </div>
   )

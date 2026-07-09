@@ -11,6 +11,12 @@ Introduced in [#187](../codebase/187.md), split A (data path) of
 surface; the sibling [#188](../codebase/188.md) renders the three sections
 (`RunConfigSections`/`RunConfigView`) from the values it holds.
 
+[#191](../codebase/191.md) extended `snapshotReceived` with two more fields, `used_tokens` /
+`window_tokens` (context-window usage) — this store required **zero** change, exactly as the
+`toRunConfigSnapshot`'s explicit-copy comment below predicted. The render sibling for that data is
+[#192](https://github.com/pyrycode/pyrycode-desktop/issues/192) (blocked on #191 + #188), which will
+need its own store facet (or an extension here) to hold the two ints.
+
 ## What it does
 
 Requests a fresh `screen_snapshot` every time the Run configuration sheet opens, and holds the

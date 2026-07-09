@@ -1,17 +1,21 @@
 # Screen snapshot fetch (Model / Effort / YOLO)
 
 The **on-demand data path** that lets the desktop client ask the pyry daemon for the current
-session's model, reasoning effort, and YOLO (permissions) posture, so the [Run configuration
-sheet](conversation-shell.md) can display how the session is running. A client sends the
-`request_snapshot` v2 control envelope carrying a `conversation_id`; the daemon answers
-`screen_snapshot` with `{conversation_id, text, ts, model, effort, yolo}`.
+session's model, reasoning effort, YOLO (permissions) posture, and context-window usage, so the
+[Run configuration sheet](conversation-shell.md) can display how the session is running. A client
+sends the `request_snapshot` v2 control envelope carrying a `conversation_id`; the daemon answers
+`screen_snapshot` with `{conversation_id, text, ts, model, effort, yolo, used_tokens,
+window_tokens}`.
 
 Introduced in [#180](../codebase/180.md), split A of [#156](../codebase/156.md). Transport data path
 only — request → reply → one typed event. No UI, no store facet; those landed as a second-level
 split of [#181](https://github.com/pyrycode/pyrycode-desktop/issues/181) (itself split from #156):
 [#187](../codebase/187.md) (the conversation-id choice, the sheet-open trigger policy, and the
 [dedicated store](run-config-store.md)) and [#188](https://github.com/pyrycode/pyrycode-desktop/issues/188)
-(the render, blocked on #187).
+(the render, blocked on #187). Extended in [#191](../codebase/191.md) (pyrycode/pyrycode#857) to
+carry two more always-present fields, `used_tokens`/`window_tokens` — the transport slice of the
+context-window usage feature (split from #182); the gauge render is
+[#192](https://github.com/pyrycode/pyrycode-desktop/issues/192), blocked on #191 + #188.
 
 ## Why this is always-available, not gated on `interactive`
 
@@ -45,13 +49,19 @@ export interface ScreenSnapshotPayload {
   model: string       // '' = inherited daemon default (never treated as absent)
   effort: string      // '' = inherited daemon default
   yolo: boolean       // false = permissions enforced
+  used_tokens: number    // current context size on the latest usage-bearing entry; NOT a running total (#191)
+  window_tokens: number  // context-window size (200000 today); 0 = usage seam unwired (#191)
 }
 ```
 
-`request_snapshot` / `screen_snapshot` join `EnvelopeType`. **All six `ScreenSnapshotPayload` fields
-are always present on the wire (no `omitempty`)** — an empty `model`/`effort` means "inherited daemon
-default," and `yolo: false` means "permissions enforced," never "absent." This is why the decoder
-below treats every field as required, not optional-with-fallback.
+`request_snapshot` / `screen_snapshot` join `EnvelopeType`. **All eight `ScreenSnapshotPayload`
+fields are always present on the wire (no `omitempty`)** — an empty `model`/`effort` means
+"inherited daemon default," `yolo: false` means "permissions enforced," and `window_tokens: 0` means
+"usage seam unwired/unavailable" (a fresh session instead reports `window_tokens: 200000`,
+`used_tokens: 0`), never "absent." This is why the decoder below treats every field as required, not
+optional-with-fallback. `used_tokens`/`window_tokens` were added in [#191](../codebase/191.md)
+(pyrycode/pyrycode#857); this ticket carries them faithfully as values without normalizing or
+interpreting them (that's [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192)'s job).
 
 ### 2. The outbound builder (`requestSnapshotEnvelope.ts`, new)
 
@@ -117,14 +127,18 @@ function parseScreenSnapshotPayload(payload: unknown): ScreenSnapshotPayload {
     ts: requireString(payload, 'ts'),
     model: requireString(payload, 'model'),
     effort: requireString(payload, 'effort'),
-    yolo: requireBoolean(payload, 'yolo')
+    yolo: requireBoolean(payload, 'yolo'),
+    used_tokens: requireNumber(payload, 'used_tokens'),      // #191
+    window_tokens: requireNumber(payload, 'window_tokens')   // #191
   }
 }
 ```
 
 `requireBoolean` is the `yolo` sibling of `requireString`/`requireNumber` — it checks the value's
 *type*, never its truthiness, so `false` decodes as a real value (permissions enforced), not a missing
-field. Any missing/mistyped field throws `WireDecodeError` — never a partial value. Narrowed **before**
+field. `used_tokens`/`window_tokens` (#191) reuse `requireNumber` verbatim — the same helper the
+debug-bundle `seq`/`total` use — so `0` decodes as the value `0`, never as absence (AC3). Any
+missing/mistyped field throws `WireDecodeError` — never a partial value. Narrowed **before**
 the content-free diagnostic log fires, so a malformed snapshot throws first and leaves no record
 (reuses the existing `{event, code, bytes, hash}` fields — no new `DiagnosticEvent` field, so the #131
 renderer-side pin is untouched). `MAX_PLAINTEXT_BYTES` already bounds an oversized reply — no new size
@@ -138,19 +152,23 @@ case 'snapshot':
     type: 'snapshotReceived',
     model: inbound.snapshot.model,
     effort: inbound.snapshot.effort,
-    yolo: inbound.snapshot.yolo
+    yolo: inbound.snapshot.yolo,
+    used_tokens: inbound.snapshot.used_tokens,      // #191
+    window_tokens: inbound.snapshot.window_tokens   // #191
   })
   return
 ```
 
 This is the **load-bearing content-minimisation seam**: `text` / `ts` / `conversation_id` are decoded
-(so a malformed frame still fails closed) but **dropped here** — only the three settings fields cross
-IPC. The `snapshotReceived` `DaemonEvent` member is a **dedicated minimal shape**, deliberately *not*
-a reuse of `ScreenSnapshotPayload` — a naive "reuse the wire type like the other events" would put
-`text` (the rendered screen, potentially sensitive terminal output) one field away from a compromised
-renderer's DevTools console. Making the event shape structurally incapable of holding `text` is what
-the architect's security review flagged as the thing code review must confirm — and code review did
-(PASS, no findings), verified by test as well as by construction.
+(so a malformed frame still fails closed) but **dropped here** — only the settings fields plus the
+two usage ints (#191) cross IPC. The `snapshotReceived` `DaemonEvent` member is a **dedicated minimal
+shape**, deliberately *not* a reuse of `ScreenSnapshotPayload` — a naive "reuse the wire type like the
+other events" would put `text` (the rendered screen, potentially sensitive terminal output) one field
+away from a compromised renderer's DevTools console. Making the event shape structurally incapable of
+holding `text` is what the architect's security review flagged as the thing code review must confirm
+— and code review did (PASS, no findings for #180; PASS again for #191's two-field extension, one
+informational NIT on the deliberate snake_case field naming), verified by test as well as by
+construction.
 
 ### The command + event surface (`commands.ts` / `events.ts`)
 
@@ -164,7 +182,8 @@ function isRequestSnapshotPayload(value: unknown): value is RequestSnapshotPaylo
 }
 
 // DaemonEvent
-| { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean }
+| { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean
+    ; used_tokens: number; window_tokens: number }
 ```
 
 Both ride the **existing generic** `sendCommand`/`onDaemonEvent` channels — no new IPC channel, no
@@ -190,8 +209,10 @@ window → sendCommand({type:'requestSnapshot', payload:{conversation_id}})
 
 daemon → screen_snapshot frame → onDriverEvent 'message' → parseInboundMessage
       → {kind:'snapshot', snapshot} → emitDaemonEvent
-        {type:'snapshotReceived', model, effort, yolo}   [text/ts/conversation_id dropped here]
-      → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction) → run-config store (#187)
+        {type:'snapshotReceived', model, effort, yolo, used_tokens, window_tokens}
+        [text/ts/conversation_id dropped here; used_tokens/window_tokens added #191]
+      → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction) → run-config store (#187,
+        still 3-field — usage consumption is #192)
 ```
 
 ## Error handling
@@ -219,7 +240,13 @@ that failure is actually observed (evidence-based-fix).
 - **Which `conversation_id`, and the trigger policy** (sheet-open vs on-connect) — landed in
   [#187](../codebase/187.md) (see [Run configuration store](run-config-store.md)).
 - **Render** — [#188](https://github.com/pyrycode/pyrycode-desktop/issues/188), blocked on #187.
-- **Context-window usage** — [#182](https://github.com/pyrycode/pyrycode-desktop/issues/182), blocked on pyrycode/pyrycode#855 (no daemon message exists yet).
+- **Rendering / interpreting the context-window usage figures** — the "N% used" gauge, and
+  normalizing the `window_tokens == 0` seam-unwired signal, are
+  [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192) (blocked on #191 + #188). This
+  feature (as of [#191](../codebase/191.md)) carries `used_tokens`/`window_tokens` faithfully as
+  values and performs no interpretation.
+- **Extending the run-config store to hold usage** — also #192; the store stays three-field
+  ([#187](../codebase/187.md)) through #191.
 - **The `text` field's use** — decoded and validated, never surfaced; a future live-screen feature
   would need its own event.
 - **Daemon `error` reply correlation** — see § Correlation above.
@@ -227,6 +254,8 @@ that failure is actually observed (evidence-based-fix).
 ## Related
 
 - [#180 codebase notes](../codebase/180.md) — implementation summary, patterns, lessons.
+- [#191 codebase notes](../codebase/191.md) — the `used_tokens`/`window_tokens` extension to this
+  feature (pyrycode/pyrycode#857).
 - [Daemon connection](daemon-connection.md) — hosts `requestSnapshot()`, the `send` twin.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseScreenSnapshotPayload` and the
   `snapshot` `InboundDaemonMessage` kind.

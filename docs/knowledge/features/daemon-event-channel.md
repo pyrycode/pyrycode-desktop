@@ -20,6 +20,14 @@ timeline](thread-timeline.md) model, not the session store. Unlike every member 
 `assistantDelta.text` deliberately **carries content across the bridge rather than minimising it** —
 see below.
 
+[#139](../codebase/139.md) added a seventh no-`SessionAction` member, `conversationsReceived` — the
+[conversation list fetch](conversation-list-fetch.md) feature's reply, reusing the wire
+`ConversationSummary[]` row type verbatim (snake_case, order preserved from the wire). Like
+`assistantDelta`/`turnEnd`, nothing is dropped (no field is a secret) — but like `snapshotReceived`,
+it's a fire-and-forget request/reply, not a streamed delta. Consumed by the conversation-list store
+[#208](https://github.com/pyrycode/pyrycode-desktop/issues/208) (blocked on this), not the session
+store.
+
 ## What it does
 
 Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge.
@@ -57,6 +65,7 @@ export type DaemonEvent =
       ; used_tokens: number; window_tokens: number }
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
 ```
 
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
@@ -81,8 +90,15 @@ export type DaemonEvent =
   occupy rather than being dropped. Both members do drop `conversation_id` — the single field neither
   arm carries — since [#202](../codebase/202.md)'s bridge scopes identity for a single active
   conversation, the same assumption [session store](session-store.md) makes for `messageReceived`.
+- **`conversationsReceived{conversations}`** ([#139](../codebase/139.md)) also maps to *no*
+  `SessionAction`, consumed instead by the conversation-list store
+  [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208) (blocked on this ticket). Unlike
+  `snapshotReceived`, it reuses the wire row type **verbatim** (snake_case, `ConversationSummary[]`)
+  rather than a hand-built minimal shape — there is no sensitive field to strip, so
+  `parseConversationSummary`'s own decode-only-known-fields narrowing is the sole minimisation
+  control. See [conversation list fetch](conversation-list-fetch.md).
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
-- **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`. No redefinition, no drift.
+- **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
 - **`messagesReceived` carries complete messages, not partial tokens** — it mirrors the wire `message_chunk` (`MessageChunkPayload.messages`), a backfill batch. It flattens to the `messages` array directly, so `MessageChunkPayload` itself is *not* a member (its only field is the array the member already carries). `readonly` is a compile-time no-mutate signal; it is erased harmlessly across the IPC structured-clone boundary.
 
@@ -144,6 +160,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **The three debug-bundle members now have a real producer.** [#168](../codebase/168.md) declared them inert; the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md)) now calls `emitDaemonEvent` with `debugBundleProgress`/`debugBundleSaved`/`debugBundleFailed` from the composition root.
 - **`snapshotReceived` has a real producer from the start.** [#180](../codebase/180.md) wires `emitDaemonEvent` for it directly from `daemonConnection.ts`'s inbound `case 'message'` arm, the same choke point as `messageReceived`/`messagesReceived` — no separate orchestrator, unlike the debug-bundle members (a snapshot has no multi-step progress to coordinate).
 - **`assistantDelta`/`turnEnd` have a real producer, but no traffic yet.** [#199](../codebase/199.md) wires `emitDaemonEvent` for both from the same `case 'message'` choke point, but the daemon never actually sends `assistant_delta`/`turn_end` until [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) advertises the `interactive` capability — a Strangler-Fig decode path with a real emitter and zero live callers today, proven only by unit tests driving `daemonConnection` directly.
+- **`conversationsReceived` has a real producer, but no request trigger yet in this ticket.** [#139](../codebase/139.md) wires `emitDaemonEvent` for it from the same `case 'message'` choke point, and also adds the outbound `requestConversations` [command](command-channel.md) — but nothing calls `sendCommand({type:'requestConversations'})` until [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)'s store fires it on connect. Unlike `assistantDelta`/`turnEnd` (blocked on a daemon capability flip), this is blocked only on the sibling ticket landing.
 
 ## Security posture
 
@@ -161,6 +178,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `snapshotReceived` member, its `requestSnapshot` [command channel](command-channel.md) mirror, and the content-minimisation reasoning behind its dedicated (non-wire-type-reusing) shape
 - [Thread timeline (conversation model)](thread-timeline.md) / [#199](../codebase/199.md) — the `assistantDelta`/`turnEnd` members, the transport slice of the structured-stream render vertical, and the deliberate content-carrying divergence from `snapshotReceived`'s minimisation pattern
 - [Inbound message decode](inbound-message-decode.md) / [#199](../codebase/199.md) — the `assistant_delta`/`turn_end` decode this channel's two new members are constructed from
+- [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `conversationsReceived` member, its `requestConversations` [command channel](command-channel.md) mirror, and why it reuses the wire row type verbatim instead of a hand-built minimal shape
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#18 codebase notes](../codebase/18.md) · Spec: `docs/specs/architecture/18-typed-daemon-event-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

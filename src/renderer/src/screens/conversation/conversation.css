@@ -433,3 +433,192 @@
 .log-data__status--error {
   color: var(--color-tertiary);
 }
+
+/* #188 — the Run configuration Model / Effort / YOLO read-only sections (Figma node 20-100 subtree
+   20:111 / 20:130 / 20:143). All three reuse .status-sheet__section-header; the bodies below are
+   token-only, off-grid Figma paddings mapped to space tokens with the established ±2px convention. */
+
+/* Model (Figma 20:111): a column of radio rows. px 16, rows gap 4. */
+.run-config__model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
+}
+
+/* One model row (Figma 20:112): a 20px radio beside a name/descriptor column. gap 12 → --space-3;
+   px 4 / py 8 → --space-1 / --space-2. */
+.run-config__model-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-1);
+}
+
+/* The unselected M3 radio (Figma 20:119): a 20px ring, 2px --color-on-surface-variant, transparent.
+   20px/10px are structural component geometry (the send-square / handle convention). */
+.run-config__radio {
+  position: relative;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-on-surface-variant);
+  border-radius: var(--radius-full);
+}
+
+/* Selected (Figma 20:114): a --color-primary ring plus a centred filled --color-primary inner dot. */
+.run-config__radio--selected {
+  border-color: var(--color-primary);
+}
+
+.run-config__radio--selected::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+}
+
+/* The name/descriptor column (Figma 20:115). The 2px gap is a structural literal (like the handle's
+   32/4px), not a theme value. */
+.run-config__model-text {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.run-config__model-name {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+.run-config__model-descriptor {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* Effort (Figma 20:130): a row of five segment pills. gap 8 → --space-2; px 16 / py 4 →
+   --space-4 / --space-1. */
+.run-config__effort {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+}
+
+/* One segment (Figma 20:131, unselected): 1px --color-outline outline, transparent,
+   --color-on-surface-variant text. px 12 → --space-3, py 6 → --space-2 (±2px), rounded 8 →
+   --radius-xs (6px). box-sizing keeps heights equal across the selected/unselected border swap. */
+.run-config__effort-segment {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-outline);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+/* Selected (Figma 20:135): --color-secondary-container fill, --color-on-secondary-container text, no
+   visible border. A transparent 1px border preserves the box height; aria-current is the marker. */
+.run-config__effort-segment[aria-current='true'] {
+  border-color: transparent;
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+}
+
+/* YOLO (Figma 20:143): the "Auto-accept tool calls" text column and the switch, between-justified.
+   px 16 / py 8 → --space-4 / --space-2. */
+.run-config__yolo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+}
+
+.run-config__yolo-text {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.run-config__yolo-title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+.run-config__yolo-caption {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The M3 switch (Figma 20:147). Off — the designed state: a 52×32 track,
+   --color-surface-container-highest fill + 2px --color-outline border, fully rounded, with a 16px
+   --color-outline knob at the left. 52/32/16/24 are structural component geometry. */
+.run-config__switch {
+  box-sizing: border-box;
+  position: relative;
+  flex: 0 0 auto;
+  width: 52px;
+  height: 32px;
+  border: 2px solid var(--color-outline);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-container-highest);
+}
+
+.run-config__switch-knob {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  border-radius: var(--radius-full);
+  background: var(--color-outline);
+}
+
+/* On — Figma pins only the off state; this mirrors M3 on-switch semantics with existing tokens for
+   the rare yolo:true case (no new on-primary token): a --color-primary track and the knob grown to
+   24px, shifted right, --color-surface for contrast against the light track. */
+.run-config__switch--on {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.run-config__switch--on .run-config__switch-knob {
+  left: auto;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  background: var(--color-surface);
+}

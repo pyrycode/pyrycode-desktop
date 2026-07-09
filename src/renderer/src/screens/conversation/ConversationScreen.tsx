@@ -10,6 +10,7 @@ import {
 import { submitMessage, composerAvailability, shouldOfferRepair } from './composerSend'
 import { runUnpair } from './unpairAction'
 import { RunConfigData } from './RunConfigData'
+import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
@@ -50,8 +51,10 @@ export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {})
           {/* #187: the headless data path — requests a snapshot on open and holds Model/Effort/YOLO.
               Renders nothing (DOM order immaterial); #188 renders the held values here. */}
           <RunConfigData />
-          {/* Log data is the last section ("beneath Context-window"); #181/#182 prepend their
-              sections above it as they land. */}
+          {/* #188: the read-only Model / Effort / YOLO sections, reading the held snapshot. */}
+          <RunConfigSections />
+          {/* Log data is the last section ("beneath Context-window"); #182 prepends the
+              Context-window section above it as it lands. */}
           <LogDataSection />
         </StatusSheet>
       )}

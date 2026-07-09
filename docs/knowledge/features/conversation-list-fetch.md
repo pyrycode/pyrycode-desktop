@@ -7,8 +7,9 @@ control envelope; the daemon answers `conversations` with an ordered `{ conversa
 ConversationSummary[] }`.
 
 Introduced in [#139](../codebase/139.md). Transport data path only — request → reply → one typed
-event. No UI, no store facet; those land in the sibling [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)
-(blocked on this ticket), which in turn unblocks the list UI (#141/#142).
+event. The renderer store slice and the on-connect request trigger are the sibling
+[Conversation list store](conversation-list-store.md) (#208, shipped), which in turn unblocks the
+list UI (#141/#142).
 
 ## The wire contract
 
@@ -43,7 +44,7 @@ All seven `ConversationSummary` fields are always present on the wire (no `omite
 | `parseConversationSummary` / `parseConversationsPayload` + `conversations` kind | `src/main/transport/inboundMessage.ts` | fail-closed inbound decode |
 | `requestConversations` command / `conversationsReceived` event | `src/shared/ipc/commands.ts` / `events.ts` | the two sealed-union members |
 | `case 'requestConversations':` | `src/main/index.ts` | `onCommand` dispatch |
-| `case 'conversationsReceived': return null` | `src/renderer/src/store/daemonEventBridge.ts` | forced by `assertNever`, real consumer is #208 |
+| `case 'conversationsReceived': return null` | `src/renderer/src/store/daemonEventBridge.ts` | forced by `assertNever`, real consumer is the [conversation list store](conversation-list-store.md) (#208) |
 
 ### 1. The outbound builder (`listConversationsEnvelope.ts`, new)
 
@@ -83,8 +84,9 @@ function requestConversations(): void {
 The **`send` twin, not the `requestDebugBundle` twin** — same rationale as
 [`requestSnapshot`](screen-snapshot-fetch.md#3-the-connection-method-daemonconnectionts): a list
 request has no download-progress state to coordinate, so a request sent while disconnected simply
-produces no reply. `requestConversations` has **no caller in this ticket** — #208 triggers it via
-`sendCommand` on connect, exactly as #181 triggered `requestSnapshot`.
+produces no reply. `requestConversations` had **no caller in this ticket** — the [conversation list
+store](conversation-list-store.md) (#208) now triggers it via `sendCommand` on the rising edge to
+`connected`, exactly as #181 triggered `requestSnapshot`.
 
 ### 3. The inbound decode (`inboundMessage.ts`)
 
@@ -148,7 +150,8 @@ already returns only the seven known fields (unknown server-added keys are decod
 parse time, not filtered at emit time), so passing the decoded array reference through verbatim is
 safe. This mirrors `messagesReceived: inbound.messages`, not `snapshotReceived`'s hand-built minimal
 shape. Field names stay **snake_case** — the event reuses the wire `ConversationSummary` row type
-directly, so #208's store reads snake_case and derives the discussion/channel label itself.
+directly, so the [conversation list store](conversation-list-store.md) (#208) reads snake_case and
+derives the discussion/channel label itself.
 
 ### The command + event surface (`commands.ts` / `events.ts`)
 
@@ -173,13 +176,13 @@ list request has no consumer/reassembler.
 
 `daemonEventBridge.ts`'s `translateDaemonEvent` is the only exhaustive `DaemonEvent` consumer
 (`assertNever`-guarded), so adding `conversationsReceived` forced one case there too: `case
-'conversationsReceived': return null` — no `SessionAction`, consumed instead by #208's
-conversation-list store. See [daemon-event bridge](daemon-event-bridge.md).
+'conversationsReceived': return null` — no `SessionAction`, consumed instead by the [conversation
+list store](conversation-list-store.md) (#208). See [daemon-event bridge](daemon-event-bridge.md).
 
 ## Data flow
 
 ```
-#208 store (on `connected`)
+conversation list store (#208, on `connected`)
   → sendCommand({type:'requestConversations'})
   → COMMAND_CHANNEL → onCommand (isRendererCommand ✓, bare) → connection.requestConversations()
   → buildListConversations({id,ts}) → driver.sendMessage  [inert no-op if not connected]
@@ -187,7 +190,8 @@ conversation-list store. See [daemon-event bridge](daemon-event-bridge.md).
 daemon → conversations frame → onDriverEvent 'message' → parseInboundMessage
   → {kind:'conversations', conversations} → emitDaemonEvent
     {type:'conversationsReceived', conversations}
-  → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction) → #208 store lands it
+  → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction)
+  → conversation list store's own subscription lands it (#208)
 ```
 
 ## Error handling
@@ -207,15 +211,16 @@ daemon → conversations frame → onDriverEvent 'message' → parseInboundMessa
 Same posture as [screen snapshot fetch](screen-snapshot-fetch.md#correlation-is-deliberately-absent):
 no `in_reply_to` map. Any `conversations` reply that arrives — solicited or not — is decoded and
 emitted unconditionally; safe because only the authenticated daemon (inside the Noise session) can
-produce one. #208's store is the idempotent source of truth for what the UI shows, so an unsolicited
-or replayed reply is harmless.
+produce one. The [conversation list store](conversation-list-store.md) (#208) is the idempotent
+source of truth for what the UI shows (whole-list replace), so an unsolicited or replayed reply is
+harmless.
 
 ## Out of scope
 
-- **The store slice, the on-connect trigger, and any UI** — all [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)
-  (store) → #141/#142 (list UI), consuming `conversationsReceived`.
+- **Any UI** — #141/#142 (list UI), consuming the [conversation list store](conversation-list-store.md)
+  (#208, shipped) that in turn consumes `conversationsReceived`.
 - **Deriving "discussion" vs "channel" from `is_promoted`, or a relative "last active" label from
-  `last_message_ts`** — downstream store/UI concerns, not this transport ticket.
+  `last_message_ts`** — downstream UI concerns, not this transport ticket or the store (#208).
 - **Resolving `cwd` into a real filesystem path** — `cwd` is untrusted daemon-supplied text, carried
   here only as opaque display text. Any future consumer that performs a real fs operation on it
   **must** boundary-check (`path.resolve` + known-root prefix check) — flagged by the architect's
@@ -226,6 +231,8 @@ or replayed reply is harmless.
 
 ## Related
 
+- [Conversation list store](conversation-list-store.md) / [#208 codebase notes](../codebase/208.md)
+  — the renderer store + on-connect trigger built on this transport half.
 - [#139 codebase notes](../codebase/139.md) — implementation summary, patterns, lessons.
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180 codebase notes](../codebase/180.md) — the
   exact precedent this feature clones (both the inbound decode chain and the outbound

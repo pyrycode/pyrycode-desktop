@@ -99,6 +99,27 @@ Both facts derive from the single `selectStatus` read, so there is one source of
 
 In the container, `Composer` selects `status`, derives `{ canSend, hint }`, and:
 
+### 5. Re-pair gate — `shouldOfferRepair` ([#167](../codebase/167.md))
+
+A second pure predicate beside `composerAvailability`, over the same `ConnectionStatus`: whether the
+conversation screen should proactively surface a `Re-pair` escape hatch (see
+[Conversation shell → Re-pair control](conversation-shell.md#re-pair-control-167)).
+
+```ts
+export function shouldOfferRepair(status: ConnectionStatus): boolean {
+  return status.type === 'error' && !status.error.retryable && status.error.code !== 'unpair'
+}
+```
+
+Unlike `composerAvailability`, this is a boolean over the single `error` arm, not a total mapping over
+all four — no `assertNever` exhaustiveness switch is needed for a one-arm gate. `!retryable` is the
+primary gate (a terminal transport/handshake failure is always non-retryable; a retryable daemon
+wire-error like `server.binary_offline` is excluded); `code !== 'unpair'` is a self-loop guard excluding
+the synthetic error `runUnpair` ([unpair channel](unpair-channel.md), #166) itself dispatches on a
+failed clear — without it, a failed re-pair would immediately re-satisfy the predicate and re-offer
+itself. A transient transport drop never reaches `error` at all (the relay supervisor absorbs and
+re-dials it), so it is out of scope for this predicate by construction.
+
 - **Guards `handleSubmit`** with `if (!canSend) return` at the top — the authoritative gate, blocking the **Enter** path (`handleKeyDown → handleSubmit`) as well as the button. `submitMessage` is never reached while not connected, so no `sendCommand` and no optimistic `dispatch` fire; the input is **not** cleared.
 - **Natively disables** the send `<button>` with `disabled={!canSend}` (a disabled button fires no `onClick` — the visible affordance, platform-blocked in addition to the handler guard).
 - **Renders the hint** above the input/button row as `<p className="composer__hint" role="status">` — a polite live region, so a screen reader announces the status change without stealing focus. On connect, `hint` is `null`, the `<p>` unmounts, and the button re-enables with no reload.
@@ -140,3 +161,4 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) · [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#66 codebase notes](../codebase/66.md) — implementation summary, patterns, lessons.
 - [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control and inline "why" hint.
+- [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the `Re-pair` affordance it gates.

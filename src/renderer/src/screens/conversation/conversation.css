@@ -622,3 +622,67 @@
   height: 24px;
   background: var(--color-surface);
 }
+
+/* #192 — the Context window usage gauge (Figma node 20:151 body). Reuses .status-sheet__section-header
+   for the header above it. Fidelity note (mirrors the comment above): trust the token names over the
+   Figma export's fallback hexes — the export writes the light-scheme --schemes/success /
+   --schemes/surface-container-highest / --schemes/on-surface-variant; the desktop equivalents are the
+   --color-* tokens below. */
+
+/* The body frame (Figma 20:151): a column holding the usage line, the bar, and the explainer.
+   pt 4 / px 16 / pb 16 → --space-1 / --space-4 / --space-4; gap 8 → --space-2. */
+.run-config__context {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4) var(--space-4);
+}
+
+/* The usage line "73% used (146K of 200K tokens)" (Figma 20:152): body-large, on-surface. */
+.run-config__context-usage {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* The pill track (Figma 20:153): full-width 8px surface-container-highest bar; overflow-hidden clips
+   the fill to the rounded ends. 8px is structural component geometry (the switch/handle convention). */
+.run-config__context-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--color-surface-container-highest);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+/* The proportional fill (Figma 20:154): success green; width is set inline per render (used/window). */
+.run-config__context-fill {
+  height: 100%;
+  background: var(--color-success);
+  border-radius: var(--radius-full);
+}
+
+/* The explainer (Figma 20:155): body-small, on-surface-variant. */
+.run-config__context-explainer {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The "usage unavailable" line shown in place of the usage line + bar when window_tokens == 0 (no
+   Figma reference — the design pins only the populated state). Muted body-large, matching the usage
+   line it replaces. */
+.run-config__context-unavailable {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}

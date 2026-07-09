@@ -19,13 +19,21 @@ import { MILESTONE_CONVERSATION_ID } from './composerSend'
  * the intended, permanent behavior here (this path deliberately consumes only `snapshotReceived`).
  *
  * The fields are copied explicitly (not spread) so the store shape stays immune to `DaemonEvent`
- * gaining an unrelated field later, and the copy is unconditional so empty strings and `yolo: false`
- * flow through verbatim — no coercion, no validation, no dropped event (AC5).
+ * gaining an unrelated field later, and the copy is unconditional so empty strings, `yolo: false`,
+ * and the `window_tokens: 0` "usage unavailable" signal flow through verbatim — no coercion, no
+ * validation, no dropped event (AC5). The two usage figures (#192) map the wire snake_case
+ * (`used_tokens` / `window_tokens`) to the store's camelCase.
  */
 export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | null {
   switch (event.type) {
     case 'snapshotReceived':
-      return { model: event.model, effort: event.effort, yolo: event.yolo }
+      return {
+        model: event.model,
+        effort: event.effort,
+        yolo: event.yolo,
+        usedTokens: event.used_tokens,
+        windowTokens: event.window_tokens
+      }
     default:
       return null
   }

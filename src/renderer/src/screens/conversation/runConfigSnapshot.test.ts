@@ -19,9 +19,9 @@ const message: MessagePayload = {
 }
 
 describe('toRunConfigSnapshot', () => {
-  it('maps a snapshotReceived to the three fields verbatim, including empty/false (AC5)', () => {
-    // Input carries the two usage ints (#191); the three-field OUTPUT is unchanged — the run-config
-    // store deliberately stays model/effort/yolo until #192 owns the usage gauge.
+  it('maps a snapshotReceived to the five fields verbatim, including empty/false (AC5)', () => {
+    // Input carries the two usage ints (#191); #192 widens the OUTPUT to also carry them, mapping the
+    // wire snake_case (used_tokens / window_tokens) to the store's camelCase.
     const event: DaemonEvent = {
       type: 'snapshotReceived',
       model: '',
@@ -30,7 +30,13 @@ describe('toRunConfigSnapshot', () => {
       used_tokens: 45000,
       window_tokens: 200000
     }
-    expect(toRunConfigSnapshot(event)).toEqual({ model: '', effort: '', yolo: false })
+    expect(toRunConfigSnapshot(event)).toEqual({
+      model: '',
+      effort: '',
+      yolo: false,
+      usedTokens: 45000,
+      windowTokens: 200000
+    })
   })
 
   it('carries non-empty values through verbatim', () => {
@@ -42,7 +48,31 @@ describe('toRunConfigSnapshot', () => {
       used_tokens: 45000,
       window_tokens: 200000
     }
-    expect(toRunConfigSnapshot(event)).toEqual({ model: 'claude-x', effort: 'high', yolo: true })
+    expect(toRunConfigSnapshot(event)).toEqual({
+      model: 'claude-x',
+      effort: 'high',
+      yolo: true,
+      usedTokens: 45000,
+      windowTokens: 200000
+    })
+  })
+
+  it('carries window_tokens: 0 (usage unavailable) through as windowTokens: 0, not coerced', () => {
+    const event: DaemonEvent = {
+      type: 'snapshotReceived',
+      model: '',
+      effort: '',
+      yolo: false,
+      used_tokens: 0,
+      window_tokens: 0
+    }
+    expect(toRunConfigSnapshot(event)).toEqual({
+      model: '',
+      effort: '',
+      yolo: false,
+      usedTokens: 0,
+      windowTokens: 0
+    })
   })
 
   it('returns null for a sample of unrelated daemon events (the filter)', () => {
@@ -110,7 +140,13 @@ describe('subscribeRunConfig', () => {
       window_tokens: 200000
     })
     expect(setSnapshot).toHaveBeenCalledTimes(1)
-    expect(setSnapshot).toHaveBeenCalledWith({ model: '', effort: '', yolo: false })
+    expect(setSnapshot).toHaveBeenCalledWith({
+      model: '',
+      effort: '',
+      yolo: false,
+      usedTokens: 45000,
+      windowTokens: 200000
+    })
   })
 
   it('does not call setSnapshot for an unrelated event', () => {
@@ -143,8 +179,20 @@ describe('subscribeRunConfig', () => {
       used_tokens: 20000,
       window_tokens: 200000
     })
-    expect(setSnapshot).toHaveBeenNthCalledWith(1, { model: 'a', effort: 'low', yolo: false })
-    expect(setSnapshot).toHaveBeenNthCalledWith(2, { model: 'b', effort: 'high', yolo: true })
+    expect(setSnapshot).toHaveBeenNthCalledWith(1, {
+      model: 'a',
+      effort: 'low',
+      yolo: false,
+      usedTokens: 10000,
+      windowTokens: 200000
+    })
+    expect(setSnapshot).toHaveBeenNthCalledWith(2, {
+      model: 'b',
+      effort: 'high',
+      yolo: true,
+      usedTokens: 20000,
+      windowTokens: 200000
+    })
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {

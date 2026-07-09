@@ -91,13 +91,17 @@ function fillResult(
   toolUseId: string,
   result: ToolResult
 ): readonly ThreadItem[] {
-  const index = items.findIndex(
-    (item) => item.kind === 'toolCall' && item.toolUseId === toolUseId && item.result === null
-  )
-  if (index === -1) return items
-  const call = items[index] as Extract<ThreadItem, { kind: 'toolCall' }>
-  const filled: ThreadItem = { ...call, result }
-  return [...items.slice(0, index), filled, ...items.slice(index + 1)]
+  let filled = false
+  const next = items.map((item) => {
+    // The `kind === 'toolCall'` guard narrows `item` to the toolCall member, so the spread
+    // type-checks as a valid ThreadItem with no cast. `filled` fills only the first match.
+    if (!filled && item.kind === 'toolCall' && item.toolUseId === toolUseId && item.result === null) {
+      filled = true
+      return { ...item, result }
+    }
+    return item
+  })
+  return filled ? next : items
 }
 
 /**

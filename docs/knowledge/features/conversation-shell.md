@@ -14,6 +14,8 @@ A minimal seed of that future top app bar landed in [#166](../codebase/166.md): 
 
 The status row and the "Run configuration" sheet it opens landed as a **chrome-only shell** in [#177](../codebase/177.md): a trigger row between the thread and the composer, and a host modal that renders no live data or sections yet. See [Run configuration sheet](#run-configuration-sheet-177) below.
 
+The sheet's first section, **Log data** (a Download button for the debug bundle), landed in [#72](../codebase/72.md): the last child in the sheet body, beneath where Model/Effort/YOLO/Context-window will mount. See [Log data section](#log-data-section-72) below.
+
 ## How it works
 
 ### Structure
@@ -126,18 +128,55 @@ by that file's header comment): `--color-surface-container-low` (the panel fill)
 `--color-scrim` (applied only via `opacity`, never as a raw color-with-alpha literal). Icons are
 inline `currentColor` SVGs, the `.composer__send` precedent — no remote asset fetch (CSP blocks it).
 
-Not wired yet, and correctly so: no live summary text in `StatusRow`, no Model/Effort/YOLO/Context-
-window/Log-data content in `StatusSheet`'s body, no focus trap/restore on open-close (accepted for
-this single-focusable-control shell; worth adding once the section follow-ups populate the body —
-see [#177 codebase notes](../codebase/177.md) for the full code-review record). See
-[#177 codebase notes](../codebase/177.md) for the full design and lessons learned.
+Not wired yet at shell-landing time: no live summary text in `StatusRow`, no focus trap/restore on
+open-close (accepted for a shell with a single focusable control; worth adding once more than one
+section is interactive — see [#177 codebase notes](../codebase/177.md) for the full code-review
+record). The sheet body itself gained its first section in [#72](#log-data-section-72) below;
+Model/Effort/YOLO (#181) and Context window (#182) remain open. See
+[#177 codebase notes](../codebase/177.md) for the shell's full design and lessons learned.
+
+### Log data section (#72)
+
+The sheet's **first populated section** — the sole user-facing entry point for the client debug-bundle
+download (the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) family, whose background
+chain — request/reassemble/save/[orchestrator](debug-bundle-orchestrator.md) — was already merged and
+inert for want of a UI driver). Mounted as `<LogDataSection/>`, the sheet body's currently-only child,
+last in document order ("beneath Context-window" per Figma node `20-100` subtree `98:2`/`98:16`):
+
+```
+.status-sheet__body
+└── LogDataSection                    (container: useReducer + one onDaemonEvent subscription)
+    └── LogDataView                    (pure: props in, markup out)
+        ├── .status-sheet__section-header   "Log data" (reused across future sections)
+        └── .log-data
+            ├── button.log-data__download   full-width filled-tonal pill, "Download"/"Downloading…"
+            └── p.log-data__status[role=status]   count / saved path / mapped error (only when non-null)
+```
+
+The download state (`idle` / `downloading{chunks}` / `saved{path}` / `failed{reason}`) is a small,
+**pure, total, phase-agnostic** reducer (`logDataDownload.ts`, the `composerSend.ts`/`pairingState.ts`
+idiom) driven by `useReducer` per [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)
+— never the session store, since [`translateDaemonEvent`](daemon-event-bridge.md) already returns
+`null` for all three `debugBundle*` events. The container's single `onDaemonEvent` subscription filters
+those three events via `toDownloadAction` (the `translateDaemonEvent` analogue) and is torn down on
+unmount, so a sheet close/reopen nets exactly one live listener. Pressing Download sends the bare
+`requestDebugBundle` command and **optimistically** dispatches `requested` (not gated on the first
+daemon event — the `unavailable` failure path emits no progress at all). Single-in-flight is
+belt-and-suspenders: the button disables while busy and `onDownload` re-checks the phase, with the
+deterministic backstop being the [#169 orchestrator](debug-bundle-orchestrator.md)'s own `active`
+flag, not a second authoritative guard here. Failure text is drawn from a closed `reason → sentence`
+map — never the raw `DebugBundleFailure` token, an errno, or a stack (AC5).
+
+Two more M3 tokens landed for the button: `--color-secondary-container` / `--color-on-secondary-container`
+(filled-tonal fill/text). See [#72 codebase notes](../codebase/72.md) for the full design, patterns,
+and the one copy-only deviation from spec.
 
 ## Seams (bound + still open)
 
 - **`MessageThread({ messages })`** — **bound in [#69](../codebase/69.md).** `ConversationScreen` now feeds this prop from `useSessionStore(selectMessages).map(toMessageViewModel)` instead of the deleted `placeholderMessages` array, adapting wire `MessagePayload` (`role`, `message_id`) to the `Message` view model (`type`, `id`) at the store-read boundary. `MessageThread` stays the pure `Message[]`-in view — the seam's shape held exactly as the swap target.
 - **`Composer`** — **bound in [#66](../codebase/66.md).** Now a thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id`, emits a `sendMessage` command, and appends an optimistic echo to the store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
-- **`StatusRow({ onExpand })` / `StatusSheet({ onClose })`** — **shell landed in [#177](../codebase/177.md); sections still open.** The host modal renders no live data; `StatusRow`'s summary region and `StatusSheet`'s body are the seams #181 (Model/Effort/YOLO), #182 (Context window), and #72 (Log data) each populate, per section, owning both header and content. See [Run configuration sheet](#run-configuration-sheet-177) above.
+- **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<LogDataSection/>` and awaits two more children — #181 (Model/Effort/YOLO) and #182 (Context window) — each mounting above it, per section, owning both header and content. See [Run configuration sheet](#run-configuration-sheet-177) above.
 
 ## Edge cases and limitations
 
@@ -152,8 +191,9 @@ see [#177 codebase notes](../codebase/177.md) for the full code-review record). 
 - [Session store](session-store.md) — the live state the thread now renders; the `MessageThread`/status seams bind to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166)
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66); the send half of this screen
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166)
+- [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
-- [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177)
-- [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177)
+- [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
+- [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

@@ -17,7 +17,12 @@ import type {
 import type { DiagnosticEvent, DiagnosticLog } from './diagnosticLog'
 import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from './transport/codec'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
-import { MAX_PLAINTEXT_BYTES, type SendMessagePayload } from '../shared/wire/types'
+import {
+  MAX_PLAINTEXT_BYTES,
+  type SendMessagePayload,
+  type RequestSnapshotPayload,
+  type ScreenSnapshotPayload
+} from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
 // only — the two stores (`ensure()` / `load()`), a fake driver factory (captures the config it is
@@ -192,6 +197,11 @@ function bundleChunkPlaintext(seq: number, data: Uint8Array): Uint8Array {
 /** A `debug_bundle_done` plaintext (#116). */
 function bundleDonePlaintext(total: number): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'debug_bundle_done', ts: FIXED_TS, payload: { total } })
+}
+
+/** A `screen_snapshot` plaintext, wrapping an arbitrary payload (#180). */
+function snapshotPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'screen_snapshot', ts: FIXED_TS, payload })
 }
 
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
@@ -874,6 +884,105 @@ describe('createDaemonConnection — send (outbound send_message)', () => {
     } finally {
       for (const spy of spies) spy.mockRestore()
     }
+  })
+})
+
+describe('createDaemonConnection — requestSnapshot (screen_snapshot request/reply, #180)', () => {
+  const PAYLOAD: RequestSnapshotPayload = { conversation_id: 'conv-1' }
+  const SNAPSHOT: ScreenSnapshotPayload = {
+    conversation_id: 'conv-1',
+    text: 'secret rendered screen',
+    ts: '2026-07-08T00:00:00Z',
+    model: 'claude-opus-4-8',
+    effort: 'high',
+    yolo: true
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.requestSnapshot(PAYLOAD)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one request_snapshot envelope with id 2 and the payload', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.requestSnapshot(PAYLOAD)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('request_snapshot')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual(PAYLOAD)
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.requestSnapshot(PAYLOAD)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.requestSnapshot(PAYLOAD)).not.toThrow()
+  })
+
+  it('decodes an inbound screen_snapshot into one snapshotReceived carrying only model/effort/yolo', async () => {
+    const { sink, drivers } = await connected()
+
+    drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(SNAPSHOT) })
+
+    const events = emitted(sink)
+    expect(events.filter((e) => e.type === 'snapshotReceived')).toEqual([
+      { type: 'snapshotReceived', model: 'claude-opus-4-8', effort: 'high', yolo: true }
+    ])
+    // Content minimisation: the rendered screen text / ts / conversation_id are dropped at the choke
+    // point (only the three settings fields cross), so no emitted event carries them.
+    expect(JSON.stringify(events)).not.toContain('secret rendered screen')
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('decodes the empty-model/effort and yolo:false defaults as those values (AC3)', async () => {
+    const { sink, drivers } = await connected()
+
+    const defaults: ScreenSnapshotPayload = { ...SNAPSHOT, model: '', effort: '', yolo: false }
+    drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(defaults) })
+
+    expect(emitted(sink).find((e) => e.type === 'snapshotReceived')).toEqual({
+      type: 'snapshotReceived',
+      model: '',
+      effort: '',
+      yolo: false
+    })
+  })
+
+  it('drops a malformed screen_snapshot without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext({ ...SNAPSHOT, yolo: 'nope' }) })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 })
 

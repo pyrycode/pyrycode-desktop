@@ -19,9 +19,10 @@ function assertNever(event: never): never {
  * fails to compile (assertNever). The session-lifecycle arms are pass-through except `failed`,
  * which copies the wire ErrorPayload's fields into a fresh store-owned ConnectionError — an
  * explicit copy, not a spread, so the store shape stays immune to ErrorPayload gaining an
- * unrelated field later. The three debug-bundle arms (#168) return `null`: they are consumed by
- * the download UI (#72), not the session store, so they dispatch nothing. The `assertNever`
- * guard stays load-bearing — a future variant is still a compile error.
+ * unrelated field later. The three debug-bundle arms (#168) and `snapshotReceived` (#180) return
+ * `null`: they are consumed by the download UI (#72) and the Run configuration render bridge (#181)
+ * respectively, not the session store, so they dispatch nothing. The `assertNever` guard stays
+ * load-bearing — a future variant is still a compile error.
  */
 export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
   switch (event.type) {
@@ -48,6 +49,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'debugBundleSaved':
     case 'debugBundleFailed':
       // No session-store action: the download UI (#72) consumes these, not the session store.
+      return null
+    case 'snapshotReceived':
+      // No session-store action: the Run configuration render bridge (#181) consumes this, not the
+      // session store. Added here (not "zero renderer change") because the assertNever guard below
+      // makes every new DaemonEvent member a compile error until it has a case — #181 adds the facet.
       return null
     default:
       return assertNever(event)

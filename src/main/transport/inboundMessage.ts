@@ -25,7 +25,7 @@
 import { blake2s } from '@noble/hashes/blake2'
 import { decodeEnvelope, base64StdDecode, WireDecodeError } from './codec'
 import { MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
-import type { MessagePayload, MessageChunkPayload } from '../../shared/wire/types'
+import type { MessagePayload, MessageChunkPayload, ScreenSnapshotPayload } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
 /**
@@ -56,7 +56,9 @@ function hashPlaintext(plaintext: Uint8Array): string {
  *
  * The three debug-bundle kinds (#116) are recognised additively: the `message` / `message_chunk`
  * path is unchanged, and `daemon-error` is deliberately CONTENT-FREE — the daemon's ErrorPayload
- * text is never narrowed or surfaced, only "a terminal error arrived."
+ * text is never narrowed or surfaced, only "a terminal error arrived." The `snapshot` kind (#180)
+ * carries the full decoded ScreenSnapshotPayload; the consumer (#62) drops all but model/effort/yolo
+ * before emitting, so the sensitive `text` never crosses IPC.
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
@@ -64,6 +66,7 @@ export type InboundDaemonMessage =
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
   | { kind: 'bundle-done'; total: number }
   | { kind: 'daemon-error' }
+  | { kind: 'snapshot'; snapshot: ScreenSnapshotPayload }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -87,6 +90,17 @@ function requireString(payload: Record<string, unknown>, field: string): string 
 function requireNumber(payload: Record<string, unknown>, field: string): number {
   const value = payload[field]
   if (typeof value !== 'number') {
+    throw new WireDecodeError(`missing required field: ${field}`)
+  }
+  return value
+}
+
+/** Narrow one required boolean field off the payload, or fail closed with a category-only message.
+ *  The sibling of requireString / requireNumber for the snapshot's `yolo` (#180). The check is on the
+ *  TYPE, never truthiness — `false` is a valid value (permissions enforced), not an absence. */
+function requireBoolean(payload: Record<string, unknown>, field: string): boolean {
+  const value = payload[field]
+  if (typeof value !== 'boolean') {
     throw new WireDecodeError(`missing required field: ${field}`)
   }
   return value
@@ -155,11 +169,34 @@ function parseDebugBundleDonePayload(payload: unknown): { total: number } {
 }
 
 /**
+ * Narrow an opaque payload into a ScreenSnapshotPayload (#180). Fail-closed like parseMessagePayload:
+ * every field is required-present — an empty `model`/`effort` and `yolo:false` are valid VALUES
+ * (inherited daemon default / permissions enforced), never absences (AC2/AC3), so a missing or
+ * mistyped field throws WireDecodeError rather than defaulting. Returns only the six known fields;
+ * unknown server-added keys are tolerated (forward-compat, matching parseMessagePayload) but not
+ * copied through. Its messages name the failure category only — no field value is interpolated (the
+ * `text` / `conversation_id` could echo sensitive rendered output).
+ */
+function parseScreenSnapshotPayload(payload: unknown): ScreenSnapshotPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed screen_snapshot payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const text = requireString(payload, 'text')
+  const ts = requireString(payload, 'ts')
+  const model = requireString(payload, 'model')
+  const effort = requireString(payload, 'effort')
+  const yolo = requireBoolean(payload, 'yolo')
+  return { conversation_id, text, ts, model, effort, yolo }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
- * `debug_bundle_done` / `error` → `daemon-error`, #116), `null` for a well-formed envelope of any
- * OTHER type (ignored, AC5), or throws WireDecodeError — the single failure type, so the consumer's
- * one catch covers oversized / malformed / unparseable / mistyped alike (fail-closed, AC4).
+ * `debug_bundle_done` / `error` → `daemon-error`, #116), a `screen_snapshot` → `snapshot` (#180),
+ * `null` for a well-formed envelope of any OTHER type (ignored, AC5), or throws WireDecodeError — the
+ * single failure type, so the consumer's one catch covers oversized / malformed / unparseable /
+ * mistyped alike (fail-closed, AC4).
  */
 export function parseInboundMessage(
   plaintext: Uint8Array,
@@ -220,6 +257,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'bundle-done', total }
+    }
+    case 'screen_snapshot': {
+      // Narrow BEFORE logging so a malformed snapshot throws first and leaves no record. No decoded
+      // field (text / conversation_id / model / effort / yolo) is ever logged — only the frame's byte
+      // length + one-way hash, reusing the existing content-free field set (no new DiagnosticEvent
+      // field, so #131's renderer pin is untouched). The consumer drops all but model/effort/yolo.
+      const snapshot = parseScreenSnapshotPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'screen_snapshot',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'snapshot', snapshot }
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

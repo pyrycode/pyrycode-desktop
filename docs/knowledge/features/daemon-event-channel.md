@@ -6,6 +6,10 @@ Introduced in [#18](../codebase/18.md). It is the **event-pipe half** of the bac
 
 [#168](../codebase/168.md) added the union's first members with **no** `SessionAction` counterpart: `debugBundleProgress` / `debugBundleSaved` / `debugBundleFailed`, consumed by the download UI ([#72](https://github.com/pyrycode/pyrycode-desktop/issues/72)) rather than the session store. The 1:1 `DaemonEvent`↔`SessionAction` correspondence #19 relied on was a convenience, not a guarantee — see below.
 
+[#180](../codebase/180.md) added a fourth no-`SessionAction` member, `snapshotReceived` — the [screen
+snapshot fetch](screen-snapshot-fetch.md) feature's reply, consumed by #181's Run configuration render
+bridge instead of the session store.
+
 ## What it does
 
 Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge.
@@ -39,10 +43,12 @@ export type DaemonEvent =
   | { type: 'debugBundleProgress'; chunksReceived: number }
   | { type: 'debugBundleSaved'; path: string }
   | { type: 'debugBundleFailed'; reason: DebugBundleFailure }
+  | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean }
 ```
 
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
 - **The three debug-bundle members ([#168](../codebase/168.md)) map to *no* `SessionAction`.** `debugBundleProgress{chunksReceived}` / `debugBundleSaved{path}` / `debugBundleFailed{reason}` are consumed by the download UI ([#72](https://github.com/pyrycode/pyrycode-desktop/issues/72)), not the session store — the [daemon-event bridge](daemon-event-bridge.md)'s `translateDaemonEvent` maps all three to `null` and the bridge skips the dispatch. `DebugBundleFailure` is a **coarse, closed** three-value category enum by design: the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed) collapses the transport's finer 5-value `BundleFailReason` ([debug-bundle reassembly](debug-bundle-reassembly.md)) plus any save errno onto these three, so the renderer never learns transport internals. None of the three carries a token, key, raw frame, or bundle bytes — only a count, a local filesystem path, and a category.
+- **`snapshotReceived{model,effort,yolo}` ([#180](../codebase/180.md)) also maps to *no* `SessionAction`**, consumed instead by #181's Run configuration render bridge. It is a **dedicated minimal shape**, deliberately **not** a reuse of the wire `ScreenSnapshotPayload` it is derived from — that wire type also carries `text` (the rendered screen) and `ts`/`conversation_id`, none of which this member has a field for. See [screen snapshot fetch](screen-snapshot-fetch.md) for why that's the load-bearing content-minimisation control, not an incidental narrowing.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -104,6 +110,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **No runtime shape validation at the preload.** The producer is our own trusted main process; a `zod`-style validator would add a dependency to defend against a bug, not an attacker (a compromised main process is already game-over). Revisit only if a less-trusted producer ever sends on this channel.
 - **`connected.ack` carries the whole `HelloAckPayload`.** Narrow to `{ server_id, conn_id }` later only if #19/#12 prove the UI needs less — mirrors [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)'s deferral.
 - **The three debug-bundle members now have a real producer.** [#168](../codebase/168.md) declared them inert; the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md)) now calls `emitDaemonEvent` with `debugBundleProgress`/`debugBundleSaved`/`debugBundleFailed` from the composition root.
+- **`snapshotReceived` has a real producer from the start.** [#180](../codebase/180.md) wires `emitDaemonEvent` for it directly from `daemonConnection.ts`'s inbound `case 'message'` arm, the same choke point as `messageReceived`/`messagesReceived` — no separate orchestrator, unlike the debug-bundle members (a snapshot has no multi-step progress to coordinate).
 
 ## Security posture
 
@@ -118,6 +125,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Debug-bundle reassembly (inbound)](debug-bundle-reassembly.md) / [#116](../codebase/116.md) — source of the finer `BundleFailReason` (5 values) the [orchestrator](debug-bundle-orchestrator.md) (#169) maps onto this channel's coarse `DebugBundleFailure` (3 values)
 - [Command channel](command-channel.md) / [#168](../codebase/168.md) — the mirror-image `requestDebugBundle` command that triggers the download this channel's three new members report on
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the real producer of the three debug-bundle members, wired at the composition root
+- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `snapshotReceived` member, its `requestSnapshot` [command channel](command-channel.md) mirror, and the content-minimisation reasoning behind its dedicated (non-wire-type-reusing) shape
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#18 codebase notes](../codebase/18.md) · Spec: `docs/specs/architecture/18-typed-daemon-event-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

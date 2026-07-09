@@ -236,6 +236,11 @@ app.whenReady().then(() => {
       case 'sendMessage':
         connection.send(command.payload)
         return
+      case 'requestSnapshot':
+        // Direct to the connection method (mirrors sendMessage), no facade — a snapshot has no
+        // orchestrator/consumer, unlike requestDebugBundle. Inert no-op when not connected (#180).
+        connection.requestSnapshot(command.payload)
+        return
       case 'requestDebugBundle':
         downloader.request()
         return

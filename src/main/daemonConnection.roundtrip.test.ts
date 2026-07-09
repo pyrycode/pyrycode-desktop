@@ -30,7 +30,7 @@ import type { PairedServerRecord } from './pairedServerStore'
 import { startFakeRelayForwarder } from './transport/fakeRelayForwarder'
 import { startFakeDaemon, type FakeDaemon } from './transport/fakeDaemon'
 import { loadNoiseLib } from './transport/noiseLib'
-import { base64StdEncode, encodeEnvelope } from './transport/codec'
+import { base64StdEncode, encodeEnvelope, decodeEnvelope } from './transport/codec'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
@@ -499,6 +499,95 @@ describe('createDaemonConnection debug-bundle download orchestrator round-trip (
       const written = await readFile(saved.path)
       expect([...written]).toEqual([...archive])
       // The session stays open — a bundle download is not a connection-level failure.
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+    },
+    15_000
+  )
+})
+
+// --- screen_snapshot request/reply through the real handshake (#180, AC5) --------------------
+// Drives the assembled stack end-to-end: connection.requestSnapshot sends a real request_snapshot
+// over the live Noise session; the fake daemon (via buildReplyFrames, which receives the decrypted
+// inbound plaintext) asserts the outbound frame is a request_snapshot carrying the given
+// conversation_id, then streams back a crafted screen_snapshot; the client emits exactly one
+// snapshotReceived carrying only model/effort/yolo — and text never appears on any emitted event.
+describe('createDaemonConnection screen_snapshot round-trip (in-process fake target, #180)', () => {
+  const SECRET_SCREEN = 'secret-rendered-terminal-output'
+
+  /** A crafted screen_snapshot reply envelope with the given settings fields. */
+  function snapshotFrame(model: string, effort: string, yolo: boolean): Uint8Array {
+    return encodeEnvelope({
+      id: 200,
+      type: 'screen_snapshot',
+      ts: FIXED_TS,
+      payload: {
+        conversation_id: 'conv-snap',
+        text: SECRET_SCREEN,
+        ts: FIXED_TS,
+        model,
+        effort,
+        yolo
+      }
+    })
+  }
+
+  it(
+    'sends request_snapshot(conversation_id) and emits one snapshotReceived (text dropped)',
+    async () => {
+      let inboundType: string | undefined
+      let inboundConversationId: unknown
+      const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
+        const env = decodeEnvelope(inbound)
+        inboundType = env.type
+        inboundConversationId = (env.payload as { conversation_id?: unknown }).conversation_id
+        return [snapshotFrame('claude-opus-4-8', 'high', true)]
+      }
+
+      const { connection, events, waiter } = await standUpRoundTrip(UNUSED_BUILD_REPLY, {
+        buildReplyFrames
+      })
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+
+      connection.requestSnapshot({ conversation_id: 'conv-snap' })
+      await waiter.wait(() => events.some((e) => e.type === 'snapshotReceived'), MESSAGE_TIMEOUT_MS)
+
+      // The outbound frame the daemon decrypted was a request_snapshot carrying the supplied id.
+      expect(inboundType).toBe('request_snapshot')
+      expect(inboundConversationId).toBe('conv-snap')
+
+      // Exactly one snapshotReceived, carrying ONLY the three settings fields.
+      const snap = findEvent(events, 'snapshotReceived')
+      expect(snap, `expected snapshotReceived; observed ${types(events)}`).toBeDefined()
+      expect(snap).toEqual({
+        type: 'snapshotReceived',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+        yolo: true
+      })
+      // The rendered screen text never crosses to the renderer on any event.
+      for (const e of events) expect(JSON.stringify(e)).not.toContain(SECRET_SCREEN)
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+    },
+    15_000
+  )
+
+  it(
+    'emits the empty-model/effort and yolo:false defaults as those values (AC3)',
+    async () => {
+      const { connection, events, waiter } = await standUpRoundTrip(UNUSED_BUILD_REPLY, {
+        buildReplyFrames: () => [snapshotFrame('', '', false)]
+      })
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+
+      connection.requestSnapshot({ conversation_id: 'conv-snap' })
+      await waiter.wait(() => events.some((e) => e.type === 'snapshotReceived'), MESSAGE_TIMEOUT_MS)
+
+      expect(findEvent(events, 'snapshotReceived')).toEqual({
+        type: 'snapshotReceived',
+        model: '',
+        effort: '',
+        yolo: false
+      })
       expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
     },
     15_000

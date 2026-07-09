@@ -12,6 +12,8 @@ The app bar, status row, tool-call chips, code blocks, session delimiters, and t
 
 A minimal seed of that future top app bar landed in [#166](../codebase/166.md): a slim header row above the thread holding an unpair escape hatch. See [Unpair control](#unpair-control-166) below.
 
+A **proactive** twin of that escape hatch landed in [#167](../codebase/167.md): beneath the composer, a `Re-pair` button that appears only when the connection has hit a terminal failure or the daemon has rejected the pairing, instead of requiring the user to notice the manual header control. See [Re-pair control](#re-pair-control-167) below.
+
 The status row and the "Run configuration" sheet it opens landed as a **chrome-only shell** in [#177](../codebase/177.md): a trigger row between the thread and the composer, and a host modal that renders no live data or sections yet. See [Run configuration sheet](#run-configuration-sheet-177) below.
 
 The sheet's first section, **Log data** (a Download button for the debug bundle), landed in [#72](../codebase/72.md): the last child in the sheet body, beneath where Model/Effort/YOLO/Context-window will mount. See [Log data section](#log-data-section-72) below.
@@ -29,10 +31,11 @@ ConversationScreen            .conversation        (flex column, full height, po
 │   └── MessageBubble × N     .message-row / .bubble
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
 ├── Composer                  .composer            (pinned)
+├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
 └── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, last child, #177)
 ```
 
-`MessageBubble`, `Composer`, `UnpairControl`, and `StatusRow` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
+`MessageBubble`, `Composer`, `UnpairControl`, `StatusRow`, and `RepairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread`, `StatusSheet`, and `RepairPrompt` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md), [#167](../codebase/167.md)), so tests server-render them as pure views. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`RepairPrompt` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
 ### Data shape
 
@@ -88,6 +91,51 @@ bridge. Styled with existing tokens only — no new `--color-error` (desktop has
 `#BA1A1A` destructive color is deliberately not carried over for this minimal control). See
 [#166 codebase notes](../codebase/166.md) for the full design and the [App shell](app-shell.md)
 for the route-flip half.
+
+### Re-pair control (#167)
+
+The **proactive** twin of the unpair control above: instead of requiring the user to notice the
+header's manual `Unpair`, the screen surfaces a `Re-pair` button beneath the composer the moment
+the stored pairing can no longer be used — a terminal transport/handshake failure or a
+non-retryable daemon rejection. Closes the live incident (2026-07-07, #120) where a dead
+connection left the user staring at a disabled composer with no recovery.
+
+Gating is a single pure predicate, `shouldOfferRepair(status: ConnectionStatus): boolean` in
+`composerSend.ts` beside `composerAvailability` (see [Composer send](composer-send.md)):
+
+```ts
+status.type === 'error' && !status.error.retryable && status.error.code !== 'unpair'
+```
+
+`!retryable` admits a terminal transport/handshake failure (`daemonConnection.ts`'s `emitFailed`
+always reports `retryable: false`) and excludes a **retryable** daemon wire-error
+(`server.binary_offline`, `rate_limited` — transient, not a broken pairing). `code !== 'unpair'`
+excludes the self-inflicted `UNPAIR_FAILED_ERROR` `runUnpair` itself dispatches on a failed clear —
+without it, a failed re-pair would immediately re-satisfy the predicate and re-offer itself in a
+loop. A transient transport drop never reaches `error` at all (the relay supervisor absorbs and
+re-dials), so it never reaches this predicate either.
+
+The affordance is split along the file's pure-view/store-bound-container seam:
+
+- **`RepairPrompt({ status, onRepair })`** — exported pure view; returns `null` unless
+  `shouldOfferRepair(status)`, else a single `Re-pair` text button reusing the
+  `.conversation__unpair` de-emphasized treatment. `status` is a **prop**, not a store read, because
+  the populated true-branch isn't reachable under `renderToStaticMarkup` (zustand v5's
+  server-snapshot gotcha — see [#69 codebase notes](../codebase/69.md)); tests server-render this
+  view directly with an arbitrary status to prove the true/false matrix.
+- **`RepairControl({ onUnpaired })`** — in-file container, mounted right after `<Composer />`.
+  Selects `status`/`dispatch` from the [session store](session-store.md) independently of
+  `ConversationScreen` (which selects only `messages`), so a status change re-renders `Composer` and
+  this control only, never the thread. `handleRepair` fires the **same** `runUnpair` wiring
+  `UnpairControl` uses (`window.pyry.unpair` → `dispatch({ reset })` → `onUnpaired`) — no second
+  clear path.
+
+Unlike `UnpairControl`, there is **no confirm phase and no busy guard** — the button only ever
+appears in an already-terminal error, so a confirm step is pure friction, and the affordance
+self-hides on both outcomes (`ok` → store resets to `disconnected`, route unmounts the screen;
+`error` → store lands on `code: 'unpair'`, which the predicate excludes). `runUnpair` never
+rejects, so `handleRepair` fires it as a bare `void` with no `.then`. See
+[#167 codebase notes](../codebase/167.md) for the full design, patterns, and code-review NITs.
 
 ### Run configuration sheet (#177)
 
@@ -176,6 +224,7 @@ and the one copy-only deviation from spec.
 - **`MessageThread({ messages })`** — **bound in [#69](../codebase/69.md).** `ConversationScreen` now feeds this prop from `useSessionStore(selectMessages).map(toMessageViewModel)` instead of the deleted `placeholderMessages` array, adapting wire `MessagePayload` (`role`, `message_id`) to the `Message` view model (`type`, `id`) at the store-read boundary. `MessageThread` stays the pure `Message[]`-in view — the seam's shape held exactly as the swap target.
 - **`Composer`** — **bound in [#66](../codebase/66.md).** Now a thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id`, emits a `sendMessage` command, and appends an optimistic echo to the store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
+- **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<LogDataSection/>` and awaits two more children — #181 (Model/Effort/YOLO) and #182 (Context window) — each mounting above it, per section, owning both header and content. See [Run configuration sheet](#run-configuration-sheet-177) above.
 
 ## Edge cases and limitations
@@ -190,10 +239,10 @@ and the one copy-only deviation from spec.
 - [App shell](app-shell.md) — the router that mounts this screen on the `paired`/`conversation` route (#80); gains the `onUnpaired` reverse-flip seam this screen's unpair control fires (#166)
 - [Session store](session-store.md) — the live state the thread now renders; the `MessageThread`/status seams bind to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166)
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66); the send half of this screen
-- [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166)
+- [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

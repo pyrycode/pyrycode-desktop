@@ -1,8 +1,13 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import './conversation.css'
 import { toMessageViewModel, type Message } from './messageViewModel'
-import { useSessionStore, selectMessages, selectStatus } from '../../store/sessionStore'
-import { submitMessage, composerAvailability } from './composerSend'
+import {
+  useSessionStore,
+  selectMessages,
+  selectStatus,
+  type ConnectionStatus
+} from '../../store/sessionStore'
+import { submitMessage, composerAvailability, shouldOfferRepair } from './composerSend'
 import { runUnpair } from './unpairAction'
 import { LogDataSection } from './LogDataSection'
 
@@ -38,6 +43,7 @@ export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {})
       <MessageThread messages={messages} />
       <StatusRow onExpand={() => setSheetOpen(true)} />
       <Composer />
+      <RepairControl onUnpaired={onUnpaired} />
       {sheetOpen && (
         <StatusSheet onClose={() => setSheetOpen(false)}>
           {/* Log data is the last section ("beneath Context-window"); #181/#182 prepend their
@@ -233,6 +239,51 @@ function Composer(): JSX.Element {
       </div>
     </div>
   )
+}
+
+// #167: the proactive re-pair affordance's pure view. Returns null unless shouldOfferRepair(status),
+// i.e. only in a terminal, non-retryable error — where it extends the composer's inline error hint
+// with an escape hatch back to pairing. Visibility is a `status` PROP (not a store read) so the
+// present/absent matrix is proven by directly server-rendering this view — the container's populated
+// branch is unreachable under server render (zustand v5 reads getInitialState() = disconnected). A bare
+// text button whose accessible name is its visible `Re-pair` text, reusing the .conversation__unpair
+// de-emphasized treatment (#166's Unpair); the wrapper only positions it beneath the composer hint.
+export function RepairPrompt({
+  status,
+  onRepair
+}: {
+  status: ConnectionStatus
+  onRepair: () => void
+}): JSX.Element | null {
+  if (!shouldOfferRepair(status)) return null
+  return (
+    <div className="composer__repair">
+      <button type="button" className="conversation__unpair" onClick={onRepair}>
+        Re-pair
+      </button>
+    </div>
+  )
+}
+
+// The store-bound container for the re-pair affordance (#167). Selects `status` independently of
+// ConversationScreen (which selects only messages), so a status change re-renders Composer and this
+// control — never the thread. Re-pair reuses the SAME clear-and-return-to-pairing flow as the manual
+// unpair (runUnpair): no second clear path, no new IPC. Unlike UnpairControl it has no confirm or busy
+// phase — it only appears in an already-terminal error, so a confirm step is pure friction, and it
+// self-hides on both outcomes (ok → store resets to disconnected + route unmounts the screen; error →
+// store lands on code 'unpair', which the predicate excludes). So handleRepair fires runUnpair as a
+// bare `void`: runUnpair never rejects (it catches internally), so the floating promise is safe and
+// needs no `.then`. window.pyry is dereferenced only inside handleRepair (interaction time), never
+// during render, so the container smoke-render never touches the bridge.
+function RepairControl({ onUnpaired }: { onUnpaired?: () => void }): JSX.Element | null {
+  const status = useSessionStore(selectStatus)
+  const dispatch = useSessionStore((s) => s.dispatch)
+
+  const handleRepair = (): void => {
+    void runUnpair({ unpair: window.pyry.unpair, dispatch, onUnpaired: () => onUnpaired?.() })
+  }
+
+  return <RepairPrompt status={status} onRepair={handleRepair} />
 }
 
 // The minimal unpair escape hatch (#166) — a slim header row above the thread, the seed of the

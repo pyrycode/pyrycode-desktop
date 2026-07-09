@@ -15,13 +15,20 @@
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 
-/** The three session-settings fields the sheet displays. Fields are plain `string`/`boolean`, so an
+/** The session-settings fields the sheet displays. Fields are plain `string`/`boolean`, so an
  *  empty model, an empty effort (inherited default), or `yolo: false` (permissions enforced) are
- *  held verbatim by construction — never coerced (AC5). Mirrors the `snapshotReceived` event shape. */
+ *  held verbatim by construction — never coerced (AC5). Mirrors the `snapshotReceived` event shape.
+ *
+ *  `usedTokens` / `windowTokens` are the session's context-window usage figures (#192), held for the
+ *  Context window gauge. Both required (parallel to model/effort/yolo — held verbatim, never coerced):
+ *  the "usage unavailable" state is `windowTokens === 0` (the daemon's foreground / no-transcript
+ *  signal), NOT `undefined`. The gauge never divides when `windowTokens === 0`. */
 export interface RunConfigSnapshot {
   model: string
   effort: string
   yolo: boolean
+  usedTokens: number
+  windowTokens: number
 }
 
 /** The whole run-config state. `snapshot: null` is the distinct "not yet loaded" state; a received

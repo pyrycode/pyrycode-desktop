@@ -180,17 +180,19 @@ inline `currentColor` SVGs, the `.composer__send` precedent — no remote asset 
 Not wired yet at shell-landing time: no live summary text in `StatusRow`, no focus trap/restore on
 open-close (accepted for a shell with a single focusable control; worth adding once more than one
 section is interactive — see [#177 codebase notes](../codebase/177.md) for the full code-review
-record). The sheet body itself gained its first section in [#72](#log-data-section-72) below;
-Model/Effort/YOLO and Context window (#182) remain open. See
+record). The sheet body itself gained its first section in [#72](#log-data-section-72) below; all
+four read-only sections (Model/Effort/YOLO, #188, and Context window, #192) have since landed. See
 [#177 codebase notes](../codebase/177.md) for the shell's full design and lessons learned.
 
-A **headless data path** for the Model/Effort/YOLO section landed in [#187](../codebase/187.md):
-`<RunConfigData/>`, mounted as the sheet body's first child (ahead of `<RunConfigSections/>` and
-`<LogDataSection/>`), requests a fresh `screen_snapshot` on every sheet open and holds
-`model`/`effort`/`yolo` in a dedicated [Run configuration store](run-config-store.md). The render
-itself landed in [#188](../codebase/188.md): three read-only sections reading that store. See [Run
-configuration data path](#run-configuration-data-path-187) and [Run configuration Model/Effort/YOLO
-sections](#run-configuration-modeleffortyolo-sections-188) below.
+A **headless data path** for the Model/Effort/YOLO/Context-window sections landed in
+[#187](../codebase/187.md): `<RunConfigData/>`, mounted as the sheet body's first child (ahead of
+`<RunConfigSections/>` and `<LogDataSection/>`), requests a fresh `screen_snapshot` on every sheet
+open and holds `model`/`effort`/`yolo` (and, since [#192](../codebase/192.md), `usedTokens`/
+`windowTokens`) in a dedicated [Run configuration store](run-config-store.md). The Model/Effort/YOLO
+render landed in [#188](../codebase/188.md); the Context window render landed in
+[#192](../codebase/192.md). See [Run configuration data path](#run-configuration-data-path-187),
+[Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and
+[Run configuration Context window section](#run-configuration-context-window-section-192) below.
 
 ### Run configuration data path (#187)
 
@@ -251,9 +253,46 @@ switch off).
   knob) mirrors M3 on-switch semantics with tokens already in the palette — no new token, and
   low-risk since production data is always `yolo: false` until #183 lands the write path.
 
-One more M3 token landed: `--color-surface-container-highest` (the switch's off-track fill; reserved
-for [#182](https://github.com/pyrycode/pyrycode-desktop/issues/182)'s context-window bar too). See
-[#188 codebase notes](../codebase/188.md) for the full design and patterns established.
+One more M3 token landed: `--color-surface-container-highest` (the switch's off-track fill; reused by
+[#192](../codebase/192.md)'s context-window track below). See [#188 codebase notes](../codebase/188.md)
+for the full design and patterns established.
+
+### Run configuration Context window section (#192)
+
+```
+.status-sheet__body
+├── RunConfigData                     (headless: requests + holds, renders null, #187)
+├── RunConfigSections                 (container: reads store slice, coalesces null, #188/#192)
+│   └── RunConfigView                  (pure: five primitive props in, markup out)
+│       ├── ModelSection
+│       ├── EffortSection
+│       ├── YoloSection
+│       └── ContextWindowSection         .status-sheet__section-header "Context window" + usage gauge
+└── LogDataSection                    (container: useReducer + one onDaemonEvent subscription, #72)
+```
+
+The fourth and last section of the read-only surface, mounted between `YoloSection` and the sibling
+`LogDataSection` per Figma order. Widens the [Run configuration store](run-config-store.md)'s held
+`RunConfigSnapshot` (and the `toRunConfigSnapshot` copy) by the two usage figures [#191](../codebase/191.md)
+already carries on `snapshotReceived` — `usedTokens`/`windowTokens` — and renders them as:
+
+- **Available (`windowTokens > 0`):** a usage line — `` `${pct}% used (${abbreviateTokens(usedTokens)}
+  of ${abbreviateTokens(windowTokens)} tokens)` `` — above a `role="progressbar"` track/fill whose fill
+  width is set inline per render (`aria-valuenow`/`aria-valuemin`/`aria-valuemax`/`aria-label`
+  complete the honest a11y contract). `pct` is `used/window` rounded and clamped to `[0, 100]`, so an
+  over-full session reads "100% used" with a full (not overflowing) bar, while the raw abbreviated
+  figures stay honest about the overflow (e.g. "210K of 200K tokens").
+- **Unavailable (`windowTokens <= 0`):** a single muted "Context usage unavailable" line in place of
+  the usage line and bar — no progressbar role, no division ever runs.
+
+The container's null-default gained `usedTokens: 0, windowTokens: 0` — the same move [#188](../codebase/188.md)
+made for `model`/`effort`/`yolo`, one step further: **the not-yet-loaded default and the daemon's
+`window_tokens == 0` "usage unavailable" signal collapse into the identical `windowTokens > 0` branch**,
+so there is exactly one guard, not two, and the division genuinely never executes on either falsy
+path (AC5 — no NaN, no Infinity, no divide-by-zero). `abbreviateTokens` (1000+ → `"146K"`, else a raw
+count) stays an in-file, unexported one-liner; zero new public exports, zero new theme tokens (reuses
+`--color-success` and #188's `--color-surface-container-highest`). See
+[#192 codebase notes](../codebase/192.md) for the full design and patterns established.
 
 ### Log data section (#72)
 
@@ -298,7 +337,7 @@ and the one copy-only deviation from spec.
 - **`Composer`** — **bound in [#66](../codebase/66.md).** Now a thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id`, emits a `sendMessage` command, and appends an optimistic echo to the store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
-- **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (Model/Effort/YOLO, reading the store #187 populates), then `<LogDataSection/>`, and awaits one more visible child — #182 (Context window), which mounts above `LogDataSection` per Figma order. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), and [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188) above.
+- **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
 
 ## Edge cases and limitations
 
@@ -314,10 +353,10 @@ and the one copy-only deviation from spec.
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66); the send half of this screen
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
-- [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
-- [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180) `<RunConfigData/>` consumes via `snapshotReceived`
+- [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
+- [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
-- [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188)
+- [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

@@ -7,9 +7,9 @@ sheet](conversation-shell.md#run-configuration-sheet-177) can display how the se
 Introduced in [#187](../codebase/187.md), split A (data path) of
 [#181](https://github.com/pyrycode/pyrycode-desktop/issues/181) — itself split from
 [#156](../codebase/156.md). Consumes the transport [#180](../codebase/180.md) already shipped
-(`requestSnapshot` command, `snapshotReceived` event). Delivers **no visible surface**; the sibling
-[#188](https://github.com/pyrycode/pyrycode-desktop/issues/188) renders the three sections from the
-values this store holds.
+(`requestSnapshot` command, `snapshotReceived` event). This store itself delivered no visible
+surface; the sibling [#188](../codebase/188.md) renders the three sections
+(`RunConfigSections`/`RunConfigView`) from the values it holds.
 
 ## What it does
 
@@ -96,23 +96,23 @@ sheet opens → <RunConfigData/> mounts
 daemon → screen_snapshot → snapshotReceived{model,effort,yolo}
   → onDaemonEvent → toRunConfigSnapshot → setSnapshot(s)
   → runConfigStore                                          [most recent snapshot wins]
-  → #188's sections: useRunConfigStore(selectSnapshot)
+  → RunConfigSections (#188): useRunConfigStore(selectSnapshot)
 ```
 
 ## Configuration and usage
 
-- **Import surface for a future reader** (#188's sections):
+- **Import surface**, consumed by `RunConfigSections` (#188):
   `import { useRunConfigStore, selectSnapshot } from '@renderer/store/runConfigStore'`.
 - **Mount point:** `src/renderer/src/screens/conversation/ConversationScreen.tsx`, inside
-  `<StatusSheet>`, first child.
+  `<StatusSheet>` — `RunConfigData` (write) first, `RunConfigSections` (read, #188) second.
 - **Conversation id:** `MILESTONE_CONVERSATION_ID` (`'default'`) from `composerSend.ts` — the one
   place a future conversation-selection ticket replaces.
 
 ## Edge cases and limitations
 
-- **No reset on sheet close.** The store keeps its last snapshot across a close→reopen, so #188 can
-  show the last-known values immediately on reopen while a fresh request is in flight. Revisit only
-  if #188 surfaces a stale-value concern.
+- **No reset on sheet close.** The store keeps its last snapshot across a close→reopen, so
+  `RunConfigSections` shows the last-known values immediately on reopen while a fresh request is in
+  flight. Revisit only if this surfaces a stale-value concern.
 - **A response landing after an instant close is simply dropped** — the listener unsubscribed with
   the container; the store keeps its prior value and the next open re-requests. No app-level
   always-on listener; `screen_snapshot` is request/response, so it only arrives while a request is
@@ -138,5 +138,5 @@ daemon → screen_snapshot → snapshotReceived{model,effort,yolo}
 - [Composer send](composer-send.md) — hosts `MILESTONE_CONVERSATION_ID`, the single source of truth
   for the conversation id this store's fetch uses.
 - [#187 codebase notes](../codebase/187.md) — implementation summary and patterns established.
-- Blocks [#188](https://github.com/pyrycode/pyrycode-desktop/issues/188) — the three read-only
-  sections that read `selectSnapshot`.
+- [#188 codebase notes](../codebase/188.md) — the three read-only sections
+  (`RunConfigSections`/`RunConfigView`) that read `selectSnapshot`.

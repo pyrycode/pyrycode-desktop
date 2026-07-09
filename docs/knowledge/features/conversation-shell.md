@@ -185,11 +185,12 @@ Model/Effort/YOLO and Context window (#182) remain open. See
 [#177 codebase notes](../codebase/177.md) for the shell's full design and lessons learned.
 
 A **headless data path** for the Model/Effort/YOLO section landed in [#187](../codebase/187.md):
-`<RunConfigData/>`, mounted as the sheet body's first child (ahead of `<LogDataSection/>`), requests
-a fresh `screen_snapshot` on every sheet open and holds `model`/`effort`/`yolo` in a dedicated
-[Run configuration store](run-config-store.md) — no visible surface yet. See [Run configuration
-data path](#run-configuration-data-path-187) below; the render itself is
-[#188](https://github.com/pyrycode/pyrycode-desktop/issues/188), blocked on this.
+`<RunConfigData/>`, mounted as the sheet body's first child (ahead of `<RunConfigSections/>` and
+`<LogDataSection/>`), requests a fresh `screen_snapshot` on every sheet open and holds
+`model`/`effort`/`yolo` in a dedicated [Run configuration store](run-config-store.md). The render
+itself landed in [#188](../codebase/188.md): three read-only sections reading that store. See [Run
+configuration data path](#run-configuration-data-path-187) and [Run configuration Model/Effort/YOLO
+sections](#run-configuration-modeleffortyolo-sections-188) below.
 
 ### Run configuration data path (#187)
 
@@ -210,13 +211,58 @@ arriving `snapshotReceived` verbatim into the [Run configuration store](run-conf
 single setter. See [Run configuration store](run-config-store.md) for the full data-path design and
 [#187 codebase notes](../codebase/187.md) for patterns established.
 
+### Run configuration Model/Effort/YOLO sections (#188)
+
+```
+.status-sheet__body
+├── RunConfigData                     (headless: requests + holds, renders null, #187)
+├── RunConfigSections                 (container: reads store slice, coalesces null, #188)
+│   └── RunConfigView                  (pure: three primitive props in, markup out)
+│       ├── ModelSection                .status-sheet__section-header "Model" + 3-row radio list
+│       ├── EffortSection                .status-sheet__section-header "Effort" + 5-segment control
+│       └── YoloSection                  .status-sheet__section-header "YOLO mode" + labelled switch
+└── LogDataSection                    (container: useReducer + one onDaemonEvent subscription, #72)
+```
+
+The three sections the sheet's Model/Effort/YOLO controls needed, mounted between `RunConfigData`
+and `LogDataSection`. `RunConfigView` is the exported pure view — three primitive props
+(`model`/`effort`/`yolo`) in, markup out, no store read and no `window.pyry`, so it
+server-renders with no mock, the same seam `LogDataView`/`RunConfigData` use. `RunConfigSections` is
+the thin exported container: `useRunConfigStore(selectSnapshot)` reads one narrow slice and
+coalesces `snapshot ?? { model: '', effort: '', yolo: false }` before handing the triple to
+`RunConfigView` — so the store's pre-load `null` and a real all-defaults `screen_snapshot` render
+through the identical code path (both are AC4's blessed default: no radio filled, no segment marked,
+switch off).
+
+- **Model** — a static three-entry catalog (Opus 4.7 / Sonnet 4.6 / Haiku 4.5, each with a one-line
+  descriptor) is renderer content from the design, not daemon data; the snapshot's `model` string
+  only selects a row via `matchedFamily`, a case-insensitive substring match against each catalog
+  entry's family token (`opus`/`sonnet`/`haiku`). That handles both the short alias the wire fixture
+  uses (`"opus"`) and a full `claude --model` id (`"claude-opus-4-7"`) with one rule, and degrades to
+  no selection for `''` or anything unrecognized. The selected row's radio is `role="img"
+  aria-label="Current model"`; the other two are `aria-hidden`.
+- **Effort** — five fixed segments (`low`/`medium`/`high`/`xhigh`/`max`) matched by exact equality;
+  the current level carries `aria-current="true"`, which is both the accessibility marker and the
+  CSS hook (`[aria-current='true']`) for the filled-pill style — no parallel modifier class.
+- **YOLO** — a between-justified "Auto-accept tool calls" row with a switch rendered `role="switch"
+  aria-checked={yolo} aria-readonly="true"`: honestly read-only (not focusable) until
+  [#183](https://github.com/pyrycode/pyrycode-desktop/issues/183) drops `aria-readonly` and wires an
+  `onClick`. Figma pins only the off state; the on state (`--color-primary` track, `--color-surface`
+  knob) mirrors M3 on-switch semantics with tokens already in the palette — no new token, and
+  low-risk since production data is always `yolo: false` until #183 lands the write path.
+
+One more M3 token landed: `--color-surface-container-highest` (the switch's off-track fill; reserved
+for [#182](https://github.com/pyrycode/pyrycode-desktop/issues/182)'s context-window bar too). See
+[#188 codebase notes](../codebase/188.md) for the full design and patterns established.
+
 ### Log data section (#72)
 
 The sheet's **first populated section** — the sole user-facing entry point for the client debug-bundle
 download (the [#71](https://github.com/pyrycode/pyrycode-desktop/issues/71) family, whose background
 chain — request/reassemble/save/[orchestrator](debug-bundle-orchestrator.md) — was already merged and
-inert for want of a UI driver). Mounted as `<LogDataSection/>`, the sheet body's currently-only child,
-last in document order ("beneath Context-window" per Figma node `20-100` subtree `98:2`/`98:16`):
+inert for want of a UI driver). Mounted as `<LogDataSection/>`, the sheet body's last child (`<RunConfigSections/>`, #188, now
+precedes it), last in document order ("beneath Context-window" per Figma node `20-100` subtree
+`98:2`/`98:16`):
 
 ```
 .status-sheet__body
@@ -252,7 +298,7 @@ and the one copy-only deviation from spec.
 - **`Composer`** — **bound in [#66](../codebase/66.md).** Now a thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id`, emits a `sendMessage` command, and appends an optimistic echo to the store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
-- **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path for the second landed in [#187](../codebase/187.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup) ahead of `<LogDataSection/>`, and awaits two more visible children — #188 (Model/Effort/YOLO render, reading the store #187 populates) and #182 (Context window) — each mounting above `LogDataSection`, per section, owning both header and content. See [Run configuration sheet](#run-configuration-sheet-177) and [Run configuration data path](#run-configuration-data-path-187) above.
+- **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (Model/Effort/YOLO, reading the store #187 populates), then `<LogDataSection/>`, and awaits one more visible child — #182 (Context window), which mounts above `LogDataSection` per Figma order. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), and [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188) above.
 
 ## Edge cases and limitations
 
@@ -268,10 +314,10 @@ and the one copy-only deviation from spec.
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66); the send half of this screen
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
-- [Run configuration store](run-config-store.md) — the dedicated store + headless data path `<RunConfigData/>` feeds (#187); mounted as the sheet body's first child, ahead of `<LogDataSection/>`
+- [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180) `<RunConfigData/>` consumes via `snapshotReceived`
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
-- [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72)
+- [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

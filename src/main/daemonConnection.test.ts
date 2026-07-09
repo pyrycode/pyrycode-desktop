@@ -214,6 +214,11 @@ function turnEndPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'turn_end', ts: FIXED_TS, payload })
 }
 
+/** A `conversations` plaintext, wrapping an arbitrary payload (#139). */
+function conversationsPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'conversations', ts: FIXED_TS, payload })
+}
+
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
 function errorPlaintext(): Uint8Array {
   return encodeEnvelope({
@@ -1096,6 +1101,119 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
       { type: 'messageReceived', message },
       { type: 'messagesReceived', messages: [a] }
     ])
+  })
+})
+
+describe('createDaemonConnection — conversations (list_conversations request / conversations reply, #139)', () => {
+  const CONV_NAMED = {
+    id: 'conv-1',
+    name: 'My channel',
+    is_promoted: true,
+    is_archived: false,
+    cwd: '/home/user/project',
+    last_message_ts: '2026-07-08T00:00:00Z',
+    last_used_at: '2026-07-09T00:00:00Z'
+  }
+  const CONV_UNNAMED = {
+    id: 'conv-2',
+    name: null,
+    is_promoted: false,
+    is_archived: true,
+    cwd: '/tmp/scratch',
+    last_message_ts: '2026-07-07T00:00:00Z',
+    last_used_at: '2026-07-07T12:00:00Z'
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.requestConversations()).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one bare list_conversations envelope with id 2 and the fixed ts', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.requestConversations()
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('list_conversations')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    // Bare control frame: a present-but-empty payload, no conversation selector.
+    expect(envelope.payload).toEqual({})
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.requestConversations()
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.requestConversations()).not.toThrow()
+  })
+
+  it('decodes an inbound conversations reply into one conversationsReceived carrying the summaries (snake_case, null name preserved)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: conversationsPlaintext({ conversations: [CONV_NAMED, CONV_UNNAMED] })
+    })
+
+    // The event reuses the wire ConversationSummary verbatim (snake_case) — like messagesReceived
+    // reuses MessagePayload; #208's store derives the discussion/channel label from is_promoted.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'conversationsReceived', conversations: [CONV_NAMED, CONV_UNNAMED] }
+    ])
+  })
+
+  it('preserves wire order and carries an empty conversations list through unchanged', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: conversationsPlaintext({ conversations: [] })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'conversationsReceived', conversations: [] }
+    ])
+  })
+
+  it('drops a malformed conversations reply without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: conversationsPlaintext({ conversations: [{ ...CONV_NAMED, is_promoted: 'nope' }] })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 })
 

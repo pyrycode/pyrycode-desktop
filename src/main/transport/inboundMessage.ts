@@ -30,7 +30,8 @@ import type {
   MessageChunkPayload,
   ScreenSnapshotPayload,
   AssistantDeltaPayload,
-  TurnEndPayload
+  TurnEndPayload,
+  ConversationSummary
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
@@ -69,6 +70,10 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The two interactive-stream kinds (#199) carry the decoded AssistantDeltaPayload / TurnEndPayload.
  * Unlike `snapshot`, the assistant delta `text` IS the render payload — the consumer carries it onward
  * (dropping only `conversation_id`); the fail-closed decode here is the boundary this slice defends.
+ *
+ * The `conversations` kind (#139) carries the decoded ConversationSummary[] (order preserved from the
+ * wire). Like `chunk`, a single reply narrows to a whole list; the consumer forwards it verbatim as
+ * one `conversationsReceived` event — no field is a secret, so nothing is dropped.
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
@@ -79,6 +84,7 @@ export type InboundDaemonMessage =
   | { kind: 'snapshot'; snapshot: ScreenSnapshotPayload }
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
+  | { kind: 'conversations'; conversations: ConversationSummary[] }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -113,6 +119,20 @@ function requireNumber(payload: Record<string, unknown>, field: string): number 
 function requireBoolean(payload: Record<string, unknown>, field: string): boolean {
   const value = payload[field]
   if (typeof value !== 'boolean') {
+    throw new WireDecodeError(`missing required field: ${field}`)
+  }
+  return value
+}
+
+/** Narrow one required, nullable string field off the payload — a `string` OR a literal `null` — or
+ *  fail closed with a category-only message. The sibling of requireString for the conversation `name`
+ *  (#139), the only nullable wire field in the codec so far. A literal `null` is a VALID value (a
+ *  distinct "unnamed" conversation, AC2), NOT an absence: a missing/`undefined` field, a number, or an
+ *  object all fail closed (`name` is never omitted on the wire). The message names the field only — a
+ *  `name` value could echo a conversation title. */
+function requireStringOrNull(payload: Record<string, unknown>, field: string): string | null {
+  const value = payload[field]
+  if (typeof value !== 'string' && value !== null) {
     throw new WireDecodeError(`missing required field: ${field}`)
   }
   return value
@@ -241,10 +261,51 @@ function parseTurnEndPayload(payload: unknown): TurnEndPayload {
 }
 
 /**
+ * Narrow an opaque payload into one ConversationSummary (#139). Fail-closed like parseMessagePayload:
+ * every field is required-present — `name: null` is a valid VALUE (a distinct unnamed conversation,
+ * AC2), and `is_promoted: false` / `is_archived: false` are valid values (an ad-hoc discussion /
+ * unarchived), never absences, so requireStringOrNull / requireBoolean check the TYPE, not truthiness.
+ * Returns only the seven known fields; unknown server-added keys are tolerated (forward-compat) but
+ * NOT copied through — this is what keeps the emitted event minimal. Its messages name the failure
+ * category only — a `name` / `cwd` could echo a conversation title or workspace path.
+ */
+function parseConversationSummary(payload: unknown): ConversationSummary {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed conversation summary')
+  }
+  const id = requireString(payload, 'id')
+  const name = requireStringOrNull(payload, 'name')
+  const is_promoted = requireBoolean(payload, 'is_promoted')
+  const is_archived = requireBoolean(payload, 'is_archived')
+  const cwd = requireString(payload, 'cwd')
+  const last_message_ts = requireString(payload, 'last_message_ts')
+  const last_used_at = requireString(payload, 'last_used_at')
+  return { id, name, is_promoted, is_archived, cwd, last_message_ts, last_used_at }
+}
+
+/**
+ * Narrow an opaque payload into a conversations reply's row list (#139): `conversations` must be an
+ * array, and every element must narrow as a ConversationSummary — one bad row throws, failing the
+ * whole reply closed (mirroring parseMessageChunkPayload). Order is preserved from the wire — the
+ * daemon is the source of truth for ordering. An empty array is valid (no conversations yet).
+ */
+function parseConversationsPayload(payload: unknown): ConversationSummary[] {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed conversations payload')
+  }
+  const raw = payload.conversations
+  if (!Array.isArray(raw)) {
+    throw new WireDecodeError('malformed conversations list')
+  }
+  return raw.map(parseConversationSummary)
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), a `screen_snapshot` → `snapshot` (#180), an
- * `assistant_delta` → `assistant-delta` and a `turn_end` → `turn-end` (#199),
+ * `assistant_delta` → `assistant-delta` and a `turn_end` → `turn-end` (#199), a `conversations` →
+ * `conversations` (#139),
  * `null` for a well-formed envelope of any OTHER type (ignored, AC5), or throws WireDecodeError — the
  * single failure type, so the consumer's one catch covers oversized / malformed / unparseable /
  * mistyped alike (fail-closed, AC4).
@@ -348,6 +409,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'turn-end', turnEnd }
+    }
+    case 'conversations': {
+      // Narrow BEFORE logging so a malformed reply (a bad row, a non-array) throws first and leaves no
+      // record. No decoded field (id / name / cwd / timestamp) is logged — only the frame's byte length
+      // + one-way hash. Deliberately NO `count` field (unlike the message_chunk arm): AC7 restricts the
+      // set to type/bytes/hash, and a conversation-count is more identifying than a message-batch size.
+      const conversations = parseConversationsPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'conversations',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'conversations', conversations }
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

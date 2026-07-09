@@ -58,6 +58,11 @@ function encodeTurnEnd(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 11, type: 'turn_end', ts: FIXED_TS, payload })
 }
 
+/** A `conversations` envelope's plaintext bytes, wrapping an arbitrary payload (#139). */
+function encodeConversations(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 12, type: 'conversations', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -83,6 +88,28 @@ const TURN_END = {
   conversation_id: 'conv-1',
   turn_id: 'turn-1',
   stop_reason: 'end_turn'
+}
+
+/** A well-formed conversation summary with a string name — a saved channel (#139). */
+const CONV_NAMED = {
+  id: 'conv-1',
+  name: 'My channel',
+  is_promoted: true,
+  is_archived: false,
+  cwd: '/home/user/project',
+  last_message_ts: '2026-07-08T00:00:00Z',
+  last_used_at: '2026-07-09T00:00:00Z'
+}
+
+/** A well-formed conversation summary with a null name — an unnamed, archived scratch discussion (#139). */
+const CONV_UNNAMED = {
+  id: 'conv-2',
+  name: null,
+  is_promoted: false,
+  is_archived: true,
+  cwd: '/tmp/scratch',
+  last_message_ts: '2026-07-07T00:00:00Z',
+  last_used_at: '2026-07-07T12:00:00Z'
 }
 
 describe('parseInboundMessage — happy', () => {
@@ -382,6 +409,135 @@ describe('parseInboundMessage — assistant_delta / turn_end fail-closed (#199)'
   })
 })
 
+describe('parseInboundMessage — conversations recognition (#139, additive)', () => {
+  it('narrows a conversations reply into an ordered { kind: conversations } list', () => {
+    const result = parseInboundMessage(
+      encodeConversations({ conversations: [CONV_NAMED, CONV_UNNAMED] })
+    )
+    expect(result).toEqual({ kind: 'conversations', conversations: [CONV_NAMED, CONV_UNNAMED] })
+  })
+
+  it('decodes a null name as null (a distinct unnamed value, never "" or absent — AC2)', () => {
+    const result = parseInboundMessage(encodeConversations({ conversations: [CONV_UNNAMED] }))
+    expect(result).toEqual({ kind: 'conversations', conversations: [CONV_UNNAMED] })
+    // Pin the null specifically: an unnamed scratch conversation stays distinguishable downstream.
+    if (result?.kind === 'conversations') {
+      expect(result.conversations[0].name).toBeNull()
+    }
+  })
+
+  it('decodes is_promoted / is_archived false as those values, never as absent', () => {
+    // CONV_UNNAMED has is_promoted:false; assert both booleans survive both truth values.
+    const result = parseInboundMessage(
+      encodeConversations({ conversations: [CONV_NAMED, CONV_UNNAMED] })
+    )
+    if (result?.kind === 'conversations') {
+      expect(result.conversations[0].is_promoted).toBe(true)
+      expect(result.conversations[0].is_archived).toBe(false)
+      expect(result.conversations[1].is_promoted).toBe(false)
+      expect(result.conversations[1].is_archived).toBe(true)
+    }
+  })
+
+  it('treats an empty conversations array as a valid zero-length list', () => {
+    expect(parseInboundMessage(encodeConversations({ conversations: [] }))).toEqual({
+      kind: 'conversations',
+      conversations: []
+    })
+  })
+
+  it('drops unknown server keys per row, keeping only the seven known fields (forward-compat)', () => {
+    const withExtras = { ...CONV_NAMED, preview: 'ignore-me', unread: 3 }
+    expect(parseInboundMessage(encodeConversations({ conversations: [withExtras] }))).toEqual({
+      kind: 'conversations',
+      conversations: [CONV_NAMED]
+    })
+  })
+
+  it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — conversations fail-closed (#139, AC2/AC4)', () => {
+  it('throws when a conversations payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeConversations('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeConversations(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws when conversations is missing or not an array', () => {
+    const bad: unknown[] = [{}, { conversations: {} }, { conversations: 'x' }, { conversations: 3 }]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeConversations(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any string field is missing or non-string', () => {
+    const bad: unknown[] = [
+      { ...CONV_NAMED, id: undefined },
+      { ...CONV_NAMED, cwd: 42 },
+      { ...CONV_NAMED, last_message_ts: undefined },
+      { ...CONV_NAMED, last_used_at: null }
+    ]
+    for (const row of bad) {
+      expect(() => parseInboundMessage(encodeConversations({ conversations: [row] }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when name is absent/undefined (never omitted on the wire) or a non-string non-null', () => {
+    const bad: unknown[] = [
+      { id: 'c', is_promoted: true, is_archived: false, cwd: '/', last_message_ts: 't', last_used_at: 'u' }, // name absent
+      { ...CONV_NAMED, name: 42 }, // a number is not a valid name
+      { ...CONV_NAMED, name: {} } // an object is not a valid name
+    ]
+    for (const row of bad) {
+      expect(() => parseInboundMessage(encodeConversations({ conversations: [row] }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when is_promoted or is_archived is missing or non-boolean', () => {
+    const bad: unknown[] = [
+      { ...CONV_NAMED, is_promoted: 'true' },
+      { ...CONV_NAMED, is_promoted: 1 },
+      { ...CONV_NAMED, is_archived: undefined },
+      { ...CONV_NAMED, is_archived: null }
+    ]
+    for (const row of bad) {
+      expect(() => parseInboundMessage(encodeConversations({ conversations: [row] }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('fails the whole reply closed when any single row is invalid', () => {
+    const bad: unknown[] = [
+      { conversations: [CONV_NAMED, 'not-an-object'] },
+      { conversations: [CONV_NAMED, { ...CONV_UNNAMED, id: undefined }] },
+      { conversations: [{ ...CONV_NAMED, is_promoted: 'nope' }] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeConversations(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an oversized conversations plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 12,
+        type: 'conversations',
+        ts: FIXED_TS,
+        payload: { conversations: [{ ...CONV_NAMED, name: 'x'.repeat(MAX_PLAINTEXT_BYTES) }] }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -642,6 +798,41 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeTurnEnd({ ...TURN_END, stop_reason: 42 }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a conversations reply content-free, never a name / cwd / id, and no count (#139)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_NAME = 'secret-conversation-title'
+    const SECRET_CWD = '/home/secret/workspace'
+    const plaintext = encodeConversations({
+      conversations: [
+        { ...CONV_NAMED, name: SECRET_NAME, cwd: SECRET_CWD },
+        CONV_UNNAMED
+      ]
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('conversations')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no row field, and NO `count` (unlike message_chunk): a
+    // conversation-count is more identifying than a message-batch size (AC7 restricts to type/bytes/hash).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_NAME)
+    expect(lines[0]).not.toContain(SECRET_CWD)
+    expect(lines[0]).not.toContain('conv-1')
+  })
+
+  it('does NOT log on a malformed conversations throw path (#139)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeConversations({ conversations: [{ ...CONV_NAMED, name: 42 }] }), log)
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

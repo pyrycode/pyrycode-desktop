@@ -41,6 +41,7 @@ export interface DaemonConnection {
   send(payload: SendMessagePayload): void  // #65: encrypt a send_message onto the live session
   requestDebugBundle(): void  // #115: encrypt a bare request_debug_bundle control frame onto the live session
   requestSnapshot(payload: RequestSnapshotPayload): void  // #180: encrypt a request_snapshot onto the live session
+  requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
@@ -61,6 +62,18 @@ reply is routed through the same `case 'message'` → `parseInboundMessage` seam
 (see below) — no new driver event, no reassembler, no consumer. See the [screen snapshot
 fetch](screen-snapshot-fetch.md) feature doc for the full round trip, including the content-minimisation
 seam that drops the reply's `text` field before it reaches `emitDaemonEvent`.
+
+**`requestConversations()` was added in [#139](../codebase/139.md)** — the outbound half of the
+[conversation list fetch](conversation-list-fetch.md). Like `requestSnapshot`, it is the **`send`
+twin, not `requestDebugBundle`'s consumer-failing twin**: a list request has no consumer, so it stays
+an inert no-op (`driver === null` → return) rather than failing a `BundleConsumer`. Unlike
+`requestSnapshot`, it builds a **bare** `list_conversations` envelope (no payload — the request
+selects nothing) via `buildListConversations`, mirroring `requestDebugBundle`'s bare-builder shape
+instead. Shares the one `nextEnvelopeId` counter, never throws (parity #490). It has no caller in
+this ticket — [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208) triggers it via
+`sendCommand` on connect. The reply is routed through the same `case 'message'` seam and emits a
+fresh `conversationsReceived` literal reusing the decoded array **verbatim** — unlike
+`snapshotReceived`, there is no sensitive field to drop.
 
 ## Connect-on-pair (`reconnect()`, [#82](../codebase/82.md))
 
@@ -143,7 +156,7 @@ The single choke point. Nothing else emits.
 | `RelaySessionEvent` | Action |
 |---|---|
 | `handshake-complete{helloAck}` | `parseHelloAck` → `connected{ack}`; a `parseHelloAck` throw → `failed('malformed-hello-ack')` (the caught `WireDecodeError` is dropped — its message could echo the ack bytes) |
-| `message{plaintext}` | [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}` / `snapshotReceived{model,effort,yolo,used_tokens,window_tokens}` (#180, extended with the two usage ints by #191; `text`/`ts`/`conversation_id` dropped here); a throw (oversized/malformed/mistyped) → **drop** (no event, the caught `WireDecodeError` is dropped — its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)**, extended with the `snapshot` kind in [#180](../codebase/180.md), and again with `used_tokens`/`window_tokens` in [#191](../codebase/191.md) |
+| `message{plaintext}` | [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}` / `snapshotReceived{model,effort,yolo,used_tokens,window_tokens}` (#180, extended with the two usage ints by #191; `text`/`ts`/`conversation_id` dropped here) / `conversationsReceived{conversations}` (#139, no field dropped); a throw (oversized/malformed/mistyped) → **drop** (no event, the caught `WireDecodeError` is dropped — its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)**, extended with the `snapshot` kind in [#180](../codebase/180.md), again with `used_tokens`/`window_tokens` in [#191](../codebase/191.md), and again with the `conversations` kind in [#139](../codebase/139.md) |
 | `terminal{code, reason}` | if `stopped` → **suppress** (clean local teardown); else `failed('connection-closed', "…code ${code}")`. The supervisor `reason` string is **not** forwarded (conservative) |
 | `error{reason}` | `failed(reason)` — the driver's reason is a static enum string, safe as the category `code` |
 
@@ -212,6 +225,7 @@ The classification the module *already computes* now also lands in the [#126 con
 - [Debug-bundle request](debug-bundle-request.md) / [#115](../codebase/115.md) — the `requestDebugBundle()` method added to this factory (a structural twin of `send` sharing the same `nextEnvelopeId` counter), and the bare `request_debug_bundle` control-frame builder it drives.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the composition-root consumer that calls `requestDebugBundle(consumer)` from the `onCommand` switch.
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `requestSnapshot(payload)` method added to this factory (the `send` twin, not `requestDebugBundle`'s consumer-failing twin), the payload-carrying `buildRequestSnapshot` builder it drives, and the `snapshot` inbound kind + content-minimisation seam in the `case 'message'` consumer arm.
+- [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `requestConversations()` method added to this factory (another `send` twin, but bare like `requestDebugBundle`'s builder), the `buildListConversations` builder it drives, and the `conversations` inbound kind + verbatim (no-drop) emit in the `case 'message'` consumer arm.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello` builds the injected `session.hello`; `parseHelloAck` narrows the `handshake-complete{helloAck}` bytes into the `HelloAckPayload` this emits.

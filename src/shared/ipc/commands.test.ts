@@ -119,4 +119,18 @@ describe('isRendererCommand', () => {
       false
     )
   })
+
+  it('accepts the bare requestConversations command (no payload — the request carries nothing) (#139)', () => {
+    // The list request carries nothing to parameterise, so its guard case is a bare `return true`.
+    // A structurally-extra field is harmless (structural minimum), like requestDebugBundle.
+    expect(isRendererCommand({ type: 'requestConversations' })).toBe(true)
+    expect(isRendererCommand({ type: 'requestConversations', extra: 'ignored' })).toBe(true)
+  })
+
+  it('types the bare requestConversations member as part of the union (#139)', () => {
+    // Compile-time proof the bare member is in RendererCommand, hence reachable through the existing
+    // generic sendCommand bridge — no new preload method or IPC channel exists to test.
+    const command: RendererCommand = { type: 'requestConversations' }
+    expect(isRendererCommand(command)).toBe(true)
+  })
 })

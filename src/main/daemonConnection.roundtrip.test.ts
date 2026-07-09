@@ -600,6 +600,79 @@ describe('createDaemonConnection screen_snapshot round-trip (in-process fake tar
   )
 })
 
+// --- conversations request/reply through the real handshake (#139, AC8) ----------------------
+// Drives the assembled stack end-to-end: connection.requestConversations sends a real
+// list_conversations over the live Noise session; the fake daemon (via buildReplyFrames, which
+// receives the decrypted inbound plaintext) asserts the outbound frame is a bare list_conversations
+// with an empty payload, then streams back a crafted conversations reply; the client emits exactly
+// one conversationsReceived carrying the decoded summaries, including the null-name row.
+describe('createDaemonConnection conversations round-trip (in-process fake target, #139)', () => {
+  const CONV_NAMED = {
+    id: 'conv-1',
+    name: 'My channel',
+    is_promoted: true,
+    is_archived: false,
+    cwd: '/home/user/project',
+    last_message_ts: '2026-07-08T00:00:00Z',
+    last_used_at: '2026-07-09T00:00:00Z'
+  }
+  const CONV_UNNAMED = {
+    id: 'conv-2',
+    name: null,
+    is_promoted: false,
+    is_archived: true,
+    cwd: '/tmp/scratch',
+    last_message_ts: '2026-07-07T00:00:00Z',
+    last_used_at: '2026-07-07T12:00:00Z'
+  }
+
+  /** A crafted conversations reply envelope carrying the given rows. */
+  function conversationsFrame(rows: unknown[]): Uint8Array {
+    return encodeEnvelope({
+      id: 300,
+      type: 'conversations',
+      ts: FIXED_TS,
+      payload: { conversations: rows }
+    })
+  }
+
+  it(
+    'sends a bare list_conversations and emits one conversationsReceived (null name preserved)',
+    async () => {
+      let inboundType: string | undefined
+      let inboundPayload: unknown
+      const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
+        const env = decodeEnvelope(inbound)
+        inboundType = env.type
+        inboundPayload = env.payload
+        return [conversationsFrame([CONV_NAMED, CONV_UNNAMED])]
+      }
+
+      const { connection, events, waiter } = await standUpRoundTrip(UNUSED_BUILD_REPLY, {
+        buildReplyFrames
+      })
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+
+      connection.requestConversations()
+      await waiter.wait(
+        () => events.some((e) => e.type === 'conversationsReceived'),
+        MESSAGE_TIMEOUT_MS
+      )
+
+      // The outbound frame the daemon decrypted was a bare list_conversations with an empty payload.
+      expect(inboundType).toBe('list_conversations')
+      expect(inboundPayload).toEqual({})
+
+      // Exactly one conversationsReceived carrying the decoded summaries, including the null-name row.
+      const received = findEvent(events, 'conversationsReceived')
+      expect(received, `expected conversationsReceived; observed ${types(events)}`).toBeDefined()
+      expect(received?.conversations).toEqual([CONV_NAMED, CONV_UNNAMED])
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+    },
+    15_000
+  )
+})
+
 // --- opt-in live variant (operator-gated) — AC4 ----------------------------------------------
 // Reuses the interop test's env-var names + skip convention VERBATIM (do not invent a new one). The
 // real PYRY_LIVE_DEVICE_TOKEN is sourced from the environment only — never committed, logged, echoed

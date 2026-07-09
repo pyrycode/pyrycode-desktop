@@ -51,6 +51,8 @@ export type EnvelopeType =
   | 'screen_snapshot'
   | 'assistant_delta'
   | 'turn_end'
+  | 'list_conversations'
+  | 'conversations'
   | 'ack'
   | 'error'
 
@@ -171,6 +173,42 @@ export interface TurnEndPayload {
   conversation_id: string
   turn_id: string
   stop_reason: string
+}
+
+/**
+ * Outbound `list_conversations` request body (client → daemon). Empty by spec — mirrors the daemon's
+ * ListConversationsPayload `struct{}` (pyrycode internal/protocol/conversations_read.go). Documentary:
+ * the bare builder (listConversationsEnvelope.ts) emits `payload: {}` directly and does not import
+ * this type; it exists to name the wire contract, exactly as `request_debug_bundle` has no payload
+ * struct. See #139.
+ */
+export type ListConversationsPayload = Record<string, never>
+
+/**
+ * One row of a `conversations` reply. Mirrors the daemon ConversationSummary field-for-field
+ * (conversations_read.go, post-#880), wire order below — all always present, no `omitempty`.
+ * `name` is `string | null`: a literal `null` (never absent) is a distinct "unnamed scratch
+ * conversation", NOT an empty string. `is_promoted` (`true` = a saved channel, `false` = an ad-hoc
+ * discussion) and `is_archived` are booleans (`false` is a value, not an absence). "Discussion vs
+ * channel" is DERIVED from `is_promoted` downstream — there is no `kind` enum on the wire.
+ * `last_message_ts` is a TIMESTAMP (RFC3339), not preview text — there is no message text on this
+ * wire. `cwd` is an untrusted daemon-supplied string carried as opaque display text; this ticket
+ * never resolves it into a filesystem path. See #139.
+ */
+export interface ConversationSummary {
+  id: string
+  name: string | null
+  is_promoted: boolean
+  is_archived: boolean
+  cwd: string
+  last_message_ts: string
+  last_used_at: string
+}
+
+/** Inbound `conversations` reply body (daemon → client). Order preserved from the wire — the daemon
+ *  is the source of truth for ordering (e.g. most-recently-used first). See #139. */
+export interface ConversationsPayload {
+  conversations: ConversationSummary[]
 }
 
 /**

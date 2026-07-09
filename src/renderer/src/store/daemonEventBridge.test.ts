@@ -125,6 +125,34 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('conversationsReceived → null (consumed by the conversation-list store #208, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'conversationsReceived',
+        conversations: [
+          {
+            id: 'conv-1',
+            name: 'My channel',
+            is_promoted: true,
+            is_archived: false,
+            cwd: '/home/user/project',
+            last_message_ts: '2026-07-08T00:00:00Z',
+            last_used_at: '2026-07-09T00:00:00Z'
+          },
+          {
+            id: 'conv-2',
+            name: null,
+            is_promoted: false,
+            is_archived: true,
+            cwd: '/tmp/scratch',
+            last_message_ts: '2026-07-07T00:00:00Z',
+            last_used_at: '2026-07-07T12:00:00Z'
+          }
+        ]
+      })
+    ).toBeNull()
+  })
+
   it('the three debug-bundle events dispatch nothing into the session store', () => {
     // Belt-and-suspenders, mirroring production: feed each new event through the same null-guarded
     // dispatch the bridge applies; the store stays at its initial state (no status flip, no message).

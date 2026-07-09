@@ -1,0 +1,117 @@
+# Conversation timeline store
+
+The renderer's read/write surface over the [thread timeline](thread-timeline.md) model: a dedicated,
+unidirectional Zustand store wrapping the pure `reduceTimeline` reducer, plus a
+`daemonEventBridge`-shaped translator + React binding that feeds it from the two v2 interactive-stream
+`DaemonEvent` arms. Together, the store and bridge are what the render slice (#203) will mount and
+paint — the "single, ordered source of truth" #203's spec calls for.
+
+Introduced in [#202](../codebase/202.md), the L2 (store) slice of the Phase-2 structured-streaming
+vertical, blocked-by [#199](../codebase/199.md) (the L1 transport slice, shipped) and built directly
+on [#121](../codebase/121.md) (the pure model, shipped). Purely additive, Strangler Fig: nothing in
+the coarse `message`/`message_chunk` path imports or is changed by either new file, and nothing reads
+the timeline store yet — that's #203.
+
+## What it does
+
+Turns the two owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
+via `reduceTimeline`, exposing `selectItems`/`selectPhase` as the only read surface. A stream arrival
+(an `assistant_delta` chunk, a `turn_end` marker) re-renders only components selecting a timeline
+slice — orthogonal to `sessionStore` and `runConfigStore`.
+
+## How it works
+
+### The store (`src/renderer/src/store/timelineStore.ts`)
+
+```ts
+export type TimelineStore = TimelineState & { dispatch: (event: ThreadEvent) => void }
+
+createTimelineStore(init?)   // vanilla createStore — one isolated instance per test (DI seam)
+timelineStore                 // app-wide singleton
+useTimelineStore(selector)    // narrow-slice React binding: useStore(timelineStore, selector)
+export { selectItems, selectPhase } from './threadTimeline'   // re-exported, never redefined
+```
+
+Mirrors `createSessionStore`'s DI-factory → singleton → hook → selectors structure (ADR 0004), but
+wraps a real reducer + `dispatch` — `set((s) => reduceTimeline(s, event))` — rather than
+`runConfigStore`'s single setter, because `ThreadEvent` is a real five-member union to reduce, not a
+"latest value wins" replace. No `observe?` param: the #134 diagnostics seam is session-only, and a
+speculative observer here would defend an unobserved need.
+
+### The translator + binding (`src/renderer/src/store/timelineBridge.ts`)
+
+```ts
+translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
+// Owns exactly assistantDelta / turnEnd, each rebuilt as a fresh named-field literal (never `return
+// event`, never a spread). Every other arm -> null via explicit fall-through, then
+// default: assertNever(event) — a HARD guard, not a soft catch-all default.
+
+subscribeTimeline(onDaemonEvent, dispatch): () => void
+// onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te) })
+// returns the exact off handle (the subscribeRunConfig idiom) — pure, spy-testable, no React.
+
+useTimelineBridge(): void
+// useEffect(() => subscribeTimeline(window.pyry.onDaemonEvent, e => timelineStore.getState().dispatch(e)), [])
+// StrictMode double-mount (mount -> cleanup -> mount) nets exactly one live listener.
+```
+
+This is the deliberate mirror image of [`daemonEventBridge`](daemon-event-bridge.md): that bridge's
+`assertNever`-guarded switch returns `null` for these same two arms and owns the other eleven; this
+bridge owns exactly these two and returns `null` for the other eleven. Two independent subscribers on
+the same `window.pyry.onDaemonEvent` channel, each with its own hard exhaustiveness guard — so a
+future `DaemonEvent` member is a compile error in *both* files until each decides its mapping.
+
+The two owned arms are field-for-field identical between `DaemonEvent` and `ThreadEvent`
+(`turnId`/`seq`/`text`, `turnId`/`stopReason`), so this is a **filter, not a rename** — arm selection
+plus a fresh copy, no field mapping.
+
+### Data flow
+
+```
+daemon frame ─(#199 transport, snake→camel, conversation_id dropped)→ DaemonEvent{assistantDelta|turnEnd}
+   → window.pyry.onDaemonEvent (preload channel)
+   → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
+   → timelineStore.dispatch → reduceTimeline → TimelineState
+   → selectItems / selectPhase   (read by #203, not yet by anything)
+```
+
+## Configuration and usage
+
+- Nothing calls `useTimelineBridge()` yet — #203 is the first mount site, alongside where it paints
+  `selectItems`/`selectPhase`.
+- Import surface for #203: `import { useTimelineStore, selectItems, selectPhase } from
+  '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
+  '@renderer/store/timelineBridge'`.
+- No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
+  transport (single active conversation); the bridge translates and dispatches unconditionally.
+
+## Edge cases and limitations
+
+- **Ordering is arrival order, not `seq`.** `seq` is carried on `assistantDelta` through the
+  translator but not consulted anywhere in this slice — `reduceTimeline` (#121) already ignores it,
+  trusting the ordered transport.
+- **Orphan/duplicate `toolResult` and turn-phase churn are the reducer's concern**, already
+  same-reference no-ops (#121) — not re-handled by the store or bridge.
+- **No dedicated test for `useTimelineBridge`.** A bare hook is untestable without a React renderer
+  (none in this repo), exactly as `useDaemonEventBridge` has none — its behavior is fully carried by
+  the pure `subscribeTimeline` tests. See [#202 codebase notes](../codebase/202.md) § Lessons learned.
+- **Zero live traffic until #179.** Desktop withholds the `interactive` capability, so no
+  `assistant_delta`/`turn_end` frame reaches this bridge in production yet — the store and bridge are
+  built and tested against injected `DaemonEvent`s only.
+
+## Related
+
+- [Thread timeline (conversation model)](thread-timeline.md) — the `ThreadItem`/`ThreadEvent`/
+  `reduceTimeline` model this store wraps verbatim.
+- [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the sibling bridge this one mirrors in
+  shape and shares the `onDaemonEvent` channel with.
+- [Session store](session-store.md) / [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)
+  — the DI-factory → singleton → hook → selectors shape `timelineStore.ts` mirrors.
+- [Run configuration store](run-config-store.md) — the leaner single-setter store shape this one
+  deliberately does *not* use (a real reducer exists here; a single setter would not fit).
+- [#199 codebase notes](../codebase/199.md) — the transport slice: wire types, decode, and the
+  `assistantDelta`/`turnEnd` `DaemonEvent` arms this bridge consumes.
+- [#202 codebase notes](../codebase/202.md) — implementation summary and patterns established.
+- [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md).
+- #203 (blocked-by #202) — mounts `useTimelineBridge`, reads `selectItems`/`selectPhase`, and paints
+  the streamed assistant text — the blank-thread-critical slice that gates #179.

@@ -25,7 +25,13 @@
 import { blake2s } from '@noble/hashes/blake2'
 import { decodeEnvelope, base64StdDecode, WireDecodeError } from './codec'
 import { MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
-import type { MessagePayload, MessageChunkPayload, ScreenSnapshotPayload } from '../../shared/wire/types'
+import type {
+  MessagePayload,
+  MessageChunkPayload,
+  ScreenSnapshotPayload,
+  AssistantDeltaPayload,
+  TurnEndPayload
+} from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
 /**
@@ -59,6 +65,10 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * text is never narrowed or surfaced, only "a terminal error arrived." The `snapshot` kind (#180)
  * carries the full decoded ScreenSnapshotPayload; the consumer (#62) drops all but model/effort/yolo
  * before emitting, so the sensitive `text` never crosses IPC.
+ *
+ * The two interactive-stream kinds (#199) carry the decoded AssistantDeltaPayload / TurnEndPayload.
+ * Unlike `snapshot`, the assistant delta `text` IS the render payload — the consumer carries it onward
+ * (dropping only `conversation_id`); the fail-closed decode here is the boundary this slice defends.
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
@@ -67,6 +77,8 @@ export type InboundDaemonMessage =
   | { kind: 'bundle-done'; total: number }
   | { kind: 'daemon-error' }
   | { kind: 'snapshot'; snapshot: ScreenSnapshotPayload }
+  | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
+  | { kind: 'turn-end'; turnEnd: TurnEndPayload }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -195,9 +207,44 @@ function parseScreenSnapshotPayload(payload: unknown): ScreenSnapshotPayload {
 }
 
 /**
+ * Narrow an opaque payload into an AssistantDeltaPayload (#199). Fail-closed like
+ * parseScreenSnapshotPayload: every field is required-present — `seq:0` and `text:''` are valid VALUES
+ * (a turn's first slice / an empty slice), never absences, so requireNumber / requireString check the
+ * TYPE not truthiness. Returns only the four known fields; unknown server-added keys are tolerated
+ * (forward-compat) but not copied through. Its messages name the failure category only — the `text` /
+ * `turn_id` could echo conversation content, so no field value is interpolated.
+ */
+function parseAssistantDeltaPayload(payload: unknown): AssistantDeltaPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed assistant_delta payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const turn_id = requireString(payload, 'turn_id')
+  const seq = requireNumber(payload, 'seq')
+  const text = requireString(payload, 'text')
+  return { conversation_id, turn_id, seq, text }
+}
+
+/**
+ * Narrow an opaque payload into a TurnEndPayload (#199). Fail-closed: three required strings
+ * (`conversation_id` / `turn_id` / `stop_reason`), unknown keys tolerated but not copied, category-only
+ * error messages (no field value interpolated). `stop_reason` is carried through as an opaque string.
+ */
+function parseTurnEndPayload(payload: unknown): TurnEndPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed turn_end payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const turn_id = requireString(payload, 'turn_id')
+  const stop_reason = requireString(payload, 'stop_reason')
+  return { conversation_id, turn_id, stop_reason }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
- * `debug_bundle_done` / `error` → `daemon-error`, #116), a `screen_snapshot` → `snapshot` (#180),
+ * `debug_bundle_done` / `error` → `daemon-error`, #116), a `screen_snapshot` → `snapshot` (#180), an
+ * `assistant_delta` → `assistant-delta` and a `turn_end` → `turn-end` (#199),
  * `null` for a well-formed envelope of any OTHER type (ignored, AC5), or throws WireDecodeError — the
  * single failure type, so the consumer's one catch covers oversized / malformed / unparseable /
  * mistyped alike (fail-closed, AC4).
@@ -275,6 +322,32 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'snapshot', snapshot }
+    }
+    case 'assistant_delta': {
+      // Narrow BEFORE logging so a malformed delta throws first and leaves no record. The decoded
+      // `text` / `turn_id` / `seq` are NEVER logged — only the frame's byte length + one-way hash,
+      // reusing the existing content-free field set (no new DiagnosticEvent field). The `text` IS
+      // carried onward by the consumer (the render payload), but it does not enter the diagnostic log.
+      const delta = parseAssistantDeltaPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'assistant_delta',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'assistant-delta', delta }
+    }
+    case 'turn_end': {
+      // Narrow BEFORE logging (see the assistant_delta case). No decoded field (turn_id / stop_reason)
+      // is logged — only the frame's byte length + one-way hash.
+      const turnEnd = parseTurnEndPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'turn_end',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'turn-end', turnEnd }
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

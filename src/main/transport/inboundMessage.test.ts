@@ -48,6 +48,16 @@ function encodeSnapshot(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 9, type: 'screen_snapshot', ts: FIXED_TS, payload })
 }
 
+/** An `assistant_delta` envelope's plaintext bytes, wrapping an arbitrary payload (#199). */
+function encodeAssistantDelta(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 10, type: 'assistant_delta', ts: FIXED_TS, payload })
+}
+
+/** A `turn_end` envelope's plaintext bytes, wrapping an arbitrary payload (#199). */
+function encodeTurnEnd(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 11, type: 'turn_end', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -58,6 +68,21 @@ const SNAPSHOT = {
   yolo: true,
   used_tokens: 45000,
   window_tokens: 200000
+}
+
+/** A fully-populated, well-formed assistant_delta payload (#199). */
+const DELTA = {
+  conversation_id: 'conv-1',
+  turn_id: 'turn-1',
+  seq: 3,
+  text: 'one incremental slice'
+}
+
+/** A fully-populated, well-formed turn_end payload (#199). */
+const TURN_END = {
+  conversation_id: 'conv-1',
+  turn_id: 'turn-1',
+  stop_reason: 'end_turn'
 }
 
 describe('parseInboundMessage — happy', () => {
@@ -269,6 +294,94 @@ describe('parseInboundMessage — screen_snapshot fail-closed (#180, AC2/AC3)', 
   })
 })
 
+describe('parseInboundMessage — assistant_delta / turn_end recognition (#199, additive)', () => {
+  it('narrows a full assistant_delta into { kind: assistant-delta } with all four fields', () => {
+    expect(parseInboundMessage(encodeAssistantDelta(DELTA))).toEqual({
+      kind: 'assistant-delta',
+      delta: DELTA
+    })
+  })
+
+  it('decodes seq:0 as the value 0, never as absent (requireNumber is type-not-truthiness)', () => {
+    const first = { ...DELTA, seq: 0 }
+    expect(parseInboundMessage(encodeAssistantDelta(first))).toEqual({
+      kind: 'assistant-delta',
+      delta: first
+    })
+  })
+
+  it('decodes an empty-text delta as the value "", never as absent', () => {
+    const empty = { ...DELTA, text: '' }
+    expect(parseInboundMessage(encodeAssistantDelta(empty))).toEqual({
+      kind: 'assistant-delta',
+      delta: empty
+    })
+  })
+
+  it('drops unknown server keys, keeping only the four known delta fields (forward-compat)', () => {
+    const withExtras = { ...DELTA, model: 'claude', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeAssistantDelta(withExtras))).toEqual({
+      kind: 'assistant-delta',
+      delta: DELTA
+    })
+  })
+
+  it('narrows a full turn_end into { kind: turn-end } with all three fields', () => {
+    expect(parseInboundMessage(encodeTurnEnd(TURN_END))).toEqual({
+      kind: 'turn-end',
+      turnEnd: TURN_END
+    })
+  })
+
+  it('drops unknown server keys, keeping only the three known turn_end fields (forward-compat)', () => {
+    const withExtras = { ...TURN_END, usage: 42, extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeTurnEnd(withExtras))).toEqual({
+      kind: 'turn-end',
+      turnEnd: TURN_END
+    })
+  })
+
+  it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — assistant_delta / turn_end fail-closed (#199)', () => {
+  it('throws when any assistant_delta field is missing or wrong type', () => {
+    const bad: unknown[] = [
+      { ...DELTA, conversation_id: undefined },
+      { ...DELTA, turn_id: 42 },
+      { ...DELTA, seq: '3' }, // stringified number is not a valid seq
+      { ...DELTA, seq: null },
+      { ...DELTA, text: undefined }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeAssistantDelta(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when an assistant_delta payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeAssistantDelta('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeAssistantDelta(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws when any turn_end field is missing or wrong type', () => {
+    const bad: unknown[] = [
+      { ...TURN_END, conversation_id: undefined },
+      { ...TURN_END, turn_id: null },
+      { ...TURN_END, stop_reason: 42 } // a number is not a valid stop_reason
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeTurnEnd(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a turn_end payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeTurnEnd('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeTurnEnd(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -467,6 +580,69 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() => parseInboundMessage(encodeSnapshot({ ...SNAPSHOT, yolo: 'nope' }), log)).toThrow(
       WireDecodeError
     )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs an assistant_delta content-free, never the delta text / turn_id / seq (#199)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_TEXT = 'super-secret-assistant-reply-slice'
+    const SECRET_TURN = 'secret-turn-id'
+    const plaintext = encodeAssistantDelta({
+      ...DELTA,
+      turn_id: SECRET_TURN,
+      seq: 987654,
+      text: SECRET_TEXT
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('assistant_delta')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no delta field of any kind reaches the log. `seq`/`ts`
+    // here are the logger's own record stamps (diagnosticLog.ts), NOT the delta's seq (987654).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(record.seq).toBe(0) // the log sequence counter, not the delta's seq
+    expect(lines[0]).not.toContain(SECRET_TEXT)
+    expect(lines[0]).not.toContain(SECRET_TURN)
+    expect(lines[0]).not.toContain('987654')
+  })
+
+  it('does NOT log on a malformed assistant_delta throw path (#199)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeAssistantDelta({ ...DELTA, seq: 'nope' }), log)).toThrow(
+      WireDecodeError
+    )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a turn_end content-free, never the turn_id / stop_reason (#199)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_TURN = 'secret-turn-id'
+    const SECRET_REASON = 'secret-stop-reason'
+    const plaintext = encodeTurnEnd({ ...TURN_END, turn_id: SECRET_TURN, stop_reason: SECRET_REASON })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('turn_end')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_TURN)
+    expect(lines[0]).not.toContain(SECRET_REASON)
+  })
+
+  it('does NOT log on a malformed turn_end throw path (#199)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeTurnEnd({ ...TURN_END, stop_reason: 42 }), log)
+    ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })
 

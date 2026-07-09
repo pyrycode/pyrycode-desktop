@@ -12,10 +12,11 @@ surface; the sibling [#188](../codebase/188.md) renders the three sections
 (`RunConfigSections`/`RunConfigView`) from the values it holds.
 
 [#191](../codebase/191.md) extended `snapshotReceived` with two more fields, `used_tokens` /
-`window_tokens` (context-window usage) — this store required **zero** change, exactly as the
-`toRunConfigSnapshot`'s explicit-copy comment below predicted. The render sibling for that data is
-[#192](https://github.com/pyrycode/pyrycode-desktop/issues/192) (blocked on #191 + #188), which will
-need its own store facet (or an extension here) to hold the two ints.
+`window_tokens` (context-window usage) — this store required **zero** change at the time, exactly as
+the `toRunConfigSnapshot`'s explicit-copy comment predicted. [#192](../codebase/192.md) is that
+extension: it widens both the held `RunConfigSnapshot` and the `toRunConfigSnapshot` copy by the two
+figures (`usedTokens`/`windowTokens`) and renders the fourth read-only section, **Context window**,
+from them — see below.
 
 ## What it does
 
@@ -29,7 +30,10 @@ state and vice versa, so a snapshot arrival re-renders only components selecting
 ### The store (`src/renderer/src/store/runConfigStore.ts`)
 
 ```ts
-export interface RunConfigSnapshot { model: string; effort: string; yolo: boolean }
+export interface RunConfigSnapshot {
+  model: string; effort: string; yolo: boolean
+  usedTokens: number; windowTokens: number   // #192 — windowTokens === 0 means "usage unavailable"
+}
 export interface RunConfigState { snapshot: RunConfigSnapshot | null }  // null = not yet loaded
 export type RunConfigStore = RunConfigState & { setSnapshot: (s: RunConfigSnapshot) => void }
 
@@ -49,6 +53,12 @@ are held **verbatim**. `snapshot: null` is the distinct "no snapshot received ye
 received all-defaults snapshot (`{ model: '', effort: '', yolo: false }`) is never confused with
 "nothing loaded" — #188 needs to tell those two apart.
 
+`usedTokens`/`windowTokens` (#192) follow the same verbatim-hold rule: both required, never coerced.
+`windowTokens === 0` is the daemon's "usage unavailable" signal (foreground session, or no transcript
+yet) — not `undefined` — which lets [#192](../codebase/192.md)'s container null-default
+(`windowTokens: 0`) collapse into the *same* branch as a real unavailable snapshot, one guard instead
+of two.
+
 ### The data path (`src/renderer/src/screens/conversation/runConfigSnapshot.ts`)
 
 Framework-free, effects injected (the `composerSend.ts` / `logDataDownload.ts` idiom), so the whole
@@ -56,8 +66,9 @@ path unit-tests with plain spies — no React, no store, no Electron:
 
 ```ts
 toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | null
-// snapshotReceived → {model, effort, yolo} verbatim (explicit copy, not a spread — keeps the store
-// shape immune to DaemonEvent gaining an unrelated field later); every other event → null.
+// snapshotReceived → {model, effort, yolo, usedTokens, windowTokens} verbatim (explicit copy, not a
+// spread — keeps the store shape immune to DaemonEvent gaining an unrelated field later; #192 maps
+// the wire snake_case used_tokens/window_tokens to the store's camelCase); every other event → null.
 
 requestRunConfigSnapshot(sendCommand): void
 // Fires one requestSnapshot command for MILESTONE_CONVERSATION_ID (imported from composerSend.ts —
@@ -99,10 +110,10 @@ sheet opens → <RunConfigData/> mounts
   → subscribeRunConfig(onDaemonEvent, setSnapshot)         [listener live before the request goes out]
   → requestRunConfigSnapshot(sendCommand)                  [one requestSnapshot, guarded by useRef]
 
-daemon → screen_snapshot → snapshotReceived{model,effort,yolo}
+daemon → screen_snapshot → snapshotReceived{model,effort,yolo,used_tokens,window_tokens}
   → onDaemonEvent → toRunConfigSnapshot → setSnapshot(s)
   → runConfigStore                                          [most recent snapshot wins]
-  → RunConfigSections (#188): useRunConfigStore(selectSnapshot)
+  → RunConfigSections (#188/#192): useRunConfigStore(selectSnapshot)
 ```
 
 ## Configuration and usage
@@ -146,3 +157,7 @@ daemon → screen_snapshot → snapshotReceived{model,effort,yolo}
 - [#187 codebase notes](../codebase/187.md) — implementation summary and patterns established.
 - [#188 codebase notes](../codebase/188.md) — the three read-only sections
   (`RunConfigSections`/`RunConfigView`) that read `selectSnapshot`.
+- [#191 codebase notes](../codebase/191.md) — the transport slice that carried `used_tokens`/
+  `window_tokens` to this store's input event.
+- [#192 codebase notes](../codebase/192.md) — widened this store by the two usage figures and added
+  the fourth read-only section (Context window) that renders them.

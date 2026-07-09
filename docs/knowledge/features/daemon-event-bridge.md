@@ -6,6 +6,12 @@ Introduced in [#19](../codebase/19.md). Lives at `src/renderer/src/store/daemonE
 
 [#168](../codebase/168.md) widened `translateDaemonEvent`'s return type to `SessionAction | null` to tolerate three new `DaemonEvent` members (`debugBundleProgress`/`debugBundleSaved`/`debugBundleFailed`) that drive **no** session-store action — see § Tolerating events with no store action below. This module is the **only** exhaustive `DaemonEvent` consumer, so it is the one file any additive `DaemonEvent` change is forced to touch.
 
+[#180](../codebase/180.md) (the [screen snapshot fetch](screen-snapshot-fetch.md)) added a fourth
+no-store-action member, `snapshotReceived`, and is the concrete case study for that forced touch: the
+ticket's own spec claimed "the renderer needs zero change," which held for the generic preload
+channels but not for this exhaustive switch — see its "Lessons learned" in [#180 codebase
+notes](../codebase/180.md).
+
 ## What it does
 
 Turns each `DaemonEvent` arriving from the background process into the matching `SessionAction` (or `null`, for events the session store doesn't model) and dispatches non-null results into the one store the UI reads. Two exported symbols:
@@ -17,7 +23,7 @@ Turns each `DaemonEvent` arriving from the background process into the matching 
 
 ### 1. The pure translation (`translateDaemonEvent`)
 
-A `switch (event.type)` over all nine `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
+A `switch (event.type)` over all ten `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
 
 | `DaemonEvent` arm | `SessionAction` produced | conversion |
 |---|---|---|
@@ -30,6 +36,7 @@ A `switch (event.type)` over all nine `DaemonEvent` arms with a `default: return
 | `debugBundleProgress` | `null` | consumed by the download UI (#72), not the session store |
 | `debugBundleSaved` | `null` | consumed by the download UI (#72), not the session store |
 | `debugBundleFailed` | `null` | consumed by the download UI (#72), not the session store |
+| `snapshotReceived` | `null` | consumed by #181's Run configuration render bridge, not the session store |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 
@@ -107,5 +114,6 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Daemon-event channel](daemon-event-channel.md) — the `DaemonEvent` union + `onDaemonEvent` subscription this consumes (#18); gained three no-store-action members in [#168](../codebase/168.md)
 - [Session store](session-store.md) — the `SessionAction` write surface + app-singleton `sessionStore` this dispatches into (#2)
 - [Command channel](command-channel.md) / [#168](../codebase/168.md) — the mirror-image `requestDebugBundle` command that triggers the download the three tolerated events report on
+- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `snapshotReceived` member this bridge tolerates as a fourth `null`-returning case, and the concrete "renderer needs zero change" correction
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [#19 codebase notes](../codebase/19.md) · Spec: `docs/specs/architecture/19-translate-daemon-events-to-session-actions.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

@@ -40,6 +40,7 @@ export interface DaemonConnection {
   reconnect(): void  // #82: tear down any driver + dial fresh, re-sourcing the record; no-op once stopped
   send(payload: SendMessagePayload): void  // #65: encrypt a send_message onto the live session
   requestDebugBundle(): void  // #115: encrypt a bare request_debug_bundle control frame onto the live session
+  requestSnapshot(payload: RequestSnapshotPayload): void  // #180: encrypt a request_snapshot onto the live session
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
@@ -48,6 +49,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 **`send(payload)` was added in [#65](../codebase/65.md)** — the outbound send entry point. It builds a `send_message` envelope (via `buildSendMessage`, id counter continuing from 2 after the hello's id 1) and hands the bytes to `driver.sendMessage`. It is an **idempotent no-op** when not connected (no driver, pre-handshake, or post-terminal) and **never throws out of the module** (a single `driver === null` guard plus a full-body `try/catch`; parity mobile #490). See the [outbound send path](outbound-send-path.md) feature doc for the full contract — the id-counter model, the "why a single guard suffices" case analysis, and the composition-root `onCommand` registration that drives it.
 
 **`requestDebugBundle()` was added in [#115](../codebase/115.md)** — a **structural twin of `send`** for the debug-bundle download's outbound "ask". It builds a **bare `request_debug_bundle` control envelope** (no payload struct, no `conversation_id`, no session selector — the bundle is daemon-global) via `buildRequestDebugBundle` and hands the bytes to `driver.sendMessage`. It **shares the same `nextEnvelopeId` counter** as `send` (no second counter — ids stay monotonic across interleaved calls), is an idempotent no-op when not connected, and never throws (parity #490). The renderer command that calls it is wired by the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed — the orchestrator half of #118's split; the IPC contract itself shipped in [#168](debug-bundle-request.md)). See the [debug-bundle request](debug-bundle-request.md) feature doc for the full contract, including why "no payload" is a present-but-empty `payload: {}` rather than an omission.
+
+**`requestSnapshot(payload)` was added in [#180](../codebase/180.md)** — the outbound half of an
+on-demand fetch of the session's current model/effort/YOLO via the daemon's always-available
+`screen_snapshot` reply (ADR-025, not gated on `interactive`). Unlike `requestDebugBundle`, it is the
+**`send` twin, not a consumer-failing twin**: a snapshot has no consumer, so it stays an inert no-op
+(`driver === null` → return) rather than failing a `BundleConsumer`. It builds a **payload-carrying**
+`request_snapshot` envelope (a real `conversation_id`, unlike the bare debug-bundle frame) via
+`buildRequestSnapshot`, shares the one `nextEnvelopeId` counter, and never throws (parity #490). The
+reply is routed through the same `case 'message'` → `parseInboundMessage` seam as everything else
+(see below) — no new driver event, no reassembler, no consumer. See the [screen snapshot
+fetch](screen-snapshot-fetch.md) feature doc for the full round trip, including the content-minimisation
+seam that drops the reply's `text` field before it reaches `emitDaemonEvent`.
 
 ## Connect-on-pair (`reconnect()`, [#82](../codebase/82.md))
 
@@ -130,7 +143,7 @@ The single choke point. Nothing else emits.
 | `RelaySessionEvent` | Action |
 |---|---|
 | `handshake-complete{helloAck}` | `parseHelloAck` → `connected{ack}`; a `parseHelloAck` throw → `failed('malformed-hello-ack')` (the caught `WireDecodeError` is dropped — its message could echo the ack bytes) |
-| `message{plaintext}` | [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}`; a throw (oversized/malformed/mistyped) → **drop** (no event, the caught `WireDecodeError` is dropped — its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)** |
+| `message{plaintext}` | [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}` / `snapshotReceived{model,effort,yolo}` (#180, `text`/`ts`/`conversation_id` dropped here); a throw (oversized/malformed/mistyped) → **drop** (no event, the caught `WireDecodeError` is dropped — its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)**, extended with the `snapshot` kind in [#180](../codebase/180.md) |
 | `terminal{code, reason}` | if `stopped` → **suppress** (clean local teardown); else `failed('connection-closed', "…code ${code}")`. The supervisor `reason` string is **not** forwarded (conservative) |
 | `error{reason}` | `failed(reason)` — the driver's reason is a static enum string, safe as the category `code` |
 
@@ -198,6 +211,7 @@ The classification the module *already computes* now also lands in the [#126 con
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the `send(payload)` entry point added to this factory, the `buildSendMessage` envelope builder it drives, and the composition-root `onCommand` registration that routes a `sendMessage` command to it.
 - [Debug-bundle request](debug-bundle-request.md) / [#115](../codebase/115.md) — the `requestDebugBundle()` method added to this factory (a structural twin of `send` sharing the same `nextEnvelopeId` counter), and the bare `request_debug_bundle` control-frame builder it drives.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the composition-root consumer that calls `requestDebugBundle(consumer)` from the `onCommand` switch.
+- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `requestSnapshot(payload)` method added to this factory (the `send` twin, not `requestDebugBundle`'s consumer-failing twin), the payload-carrying `buildRequestSnapshot` builder it drives, and the `snapshot` inbound kind + content-minimisation seam in the `case 'message'` consumer arm.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello` builds the injected `session.hello`; `parseHelloAck` narrows the `handshake-complete{helloAck}` bytes into the `HelloAckPayload` this emits.

@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ConversationScreen, MessageThread, StatusSheet, RepairPrompt } from './ConversationScreen'
+import {
+  ConversationScreen,
+  MessageThread,
+  Timeline,
+  StatusSheet,
+  RepairPrompt
+} from './ConversationScreen'
 import type { Message } from './messageViewModel'
+import type { ThreadItem } from '../../store/threadTimeline'
 import { sessionStore } from '../../store/sessionStore'
 
 // No DOM harness (jsdom/Testing Library) — mirrors PairingScreen.test.tsx. MessageThread
@@ -44,6 +51,96 @@ describe('MessageThread', () => {
     const markup = renderToStaticMarkup(<MessageThread messages={messages} />)
     expect(markup.indexOf('text m1')).toBeLessThan(markup.indexOf('text m2'))
     expect(markup.indexOf('text m2')).toBeLessThan(markup.indexOf('text m3'))
+  })
+})
+
+// #203: the streamed-assistant-text timeline view. Timeline is the MessageThread twin — pure
+// (readonly ThreadItem[] in, markup out) — so a server-rendered string proves the render: one
+// assistant bubble per assistantText item in array order, untrusted text escaped, and the streaming
+// cursor derived structurally (the tail assistantText, not from `phase`). toolCall / turnBoundary
+// draw nothing. Injected ThreadItem[]: no store, no IPC — the populated store path is unreachable
+// under server render (zustand v5 reads getInitialState()), so the populated assertions live here.
+function threadBubbleCount(markup: string): number {
+  return markup.match(/data-thread-role="assistant"/g)?.length ?? 0
+}
+
+const CURSOR = 'bubble__cursor'
+
+describe('Timeline — the streamed assistant text', () => {
+  it('an empty timeline is inert — renders nothing (zero layout footprint, AC4)', () => {
+    expect(renderToStaticMarkup(<Timeline items={[]} />)).toBe('')
+  })
+
+  it('renders one assistant bubble per assistantText item, carrying its text and the daemon-bubble treatment', () => {
+    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'hello there' }]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(threadBubbleCount(markup)).toBe(1)
+    expect(markup).toContain('bubble bubble--daemon')
+    expect(markup).toContain('data-thread-role="assistant">hello there')
+  })
+
+  it('renders untrusted delta text as visible characters, never live markup (discharges #199)', () => {
+    // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
+    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: '<b>hi</b>' }]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('&lt;b&gt;hi&lt;/b&gt;')
+    expect(markup).not.toContain('<b>hi</b>')
+  })
+
+  it('shows the streaming cursor on the in-progress tail (a trailing, not-yet-closed assistantText)', () => {
+    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'streaming' }]
+    expect(renderToStaticMarkup(<Timeline items={items} />)).toContain(CURSOR)
+  })
+
+  it('shows no cursor once the turn is closed by a trailing turnBoundary', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: 'done' },
+      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+    ]
+    expect(renderToStaticMarkup(<Timeline items={items} />)).not.toContain(CURSOR)
+  })
+
+  it('preserves array order and shows the cursor only on the tail assistantText', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: 'first turn' },
+      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' },
+      { kind: 'assistantText', turnId: 't2', text: 'second turn' }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(threadBubbleCount(markup)).toBe(2)
+    expect(markup.indexOf('first turn')).toBeLessThan(markup.indexOf('second turn'))
+    // Exactly one cursor, and it trails the second (tail) bubble's text.
+    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
+    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('second turn'))
+  })
+
+  it('renders a toolCall as a safe no-op — no throw, no assistant bubble for it (its render is #205/#206)', () => {
+    const items: ThreadItem[] = [
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'Read',
+        inputSummary: 'file.ts',
+        result: null
+      }
+    ]
+    let markup = ''
+    expect(() => {
+      markup = renderToStaticMarkup(<Timeline items={items} />)
+    }).not.toThrow()
+    expect(threadBubbleCount(markup)).toBe(0)
+    expect(markup).not.toContain(CURSOR)
+  })
+
+  it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {
+    const items: ThreadItem[] = [{ kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }]
+    let markup = ''
+    expect(() => {
+      markup = renderToStaticMarkup(<Timeline items={items} />)
+    }).not.toThrow()
+    expect(threadBubbleCount(markup)).toBe(0)
+    expect(markup).not.toContain(CURSOR)
   })
 })
 
@@ -130,6 +227,14 @@ describe('ConversationScreen — store binding', () => {
     }).not.toThrow()
     // The old placeholder array held 8 messages; the store is empty → zero bubbles.
     expect(bubbleCount(markup)).toBe(0)
+  })
+
+  // #203: the timeline view mounts against the empty timeline store (getInitialState items: []), so
+  // it returns null and contributes no streaming cursor — the inert render slice, layout unchanged
+  // until #179 flips `interactive` (AC4). The populated path is proven on the pure Timeline above.
+  it('mounts the empty timeline with no streaming cursor (the inert render slice, AC4)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('bubble__cursor')
   })
 
   it('renders the composer with a text input and an accessible send control', () => {

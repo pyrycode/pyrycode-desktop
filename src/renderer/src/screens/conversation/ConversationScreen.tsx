@@ -7,6 +7,8 @@ import {
   selectStatus,
   type ConnectionStatus
 } from '../../store/sessionStore'
+import { useTimelineStore, selectItems } from '../../store/timelineStore'
+import type { ThreadItem } from '../../store/threadTimeline'
 import { submitMessage, composerAvailability, shouldOfferRepair } from './composerSend'
 import { runUnpair } from './unpairAction'
 import { RunConfigData } from './RunConfigData'
@@ -34,6 +36,12 @@ export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {})
   // at this boundary (ADR 0004). Selecting only the messages slice keeps connection-status
   // changes from re-rendering the thread.
   const messages = useSessionStore(selectMessages).map(toMessageViewModel)
+  // #203: the structured-stream timeline slice. `ThreadItem` is already the render model (ADR 0008,
+  // camelCase, conversation_id-free) so it flows straight to the pure Timeline view — no adapter,
+  // unlike the coarse `messages` path above. Selecting only the items slice keeps a stream delta from
+  // re-rendering unrelated facets. Inert in production until #179 flips `interactive` (the store stays
+  // empty), so Timeline renders null and the layout is pixel-identical to today.
+  const items = useTimelineStore(selectItems)
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. The StatusRow trigger sits between the thread and
@@ -43,6 +51,7 @@ export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {})
     <div className="conversation">
       <UnpairControl onUnpaired={onUnpaired} />
       <MessageThread messages={messages} />
+      <Timeline items={items} />
       <StatusRow onExpand={() => setSheetOpen(true)} />
       <Composer />
       <RepairControl onUnpaired={onUnpaired} />
@@ -82,6 +91,78 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
       </div>
     </div>
   )
+}
+
+// #203: the structured-stream timeline view — MessageThread's twin over the reducer's ThreadItem[]
+// (#121/#202). Pure props-in/markup-out (exported so tests server-render an injected ThreadItem[]
+// with no store, no IPC). Maps items → rows 1:1 in array order; the reducer already coalesced deltas
+// into the tail assistantText, so the view never merges. Reuses the coarse daemon-bubble treatment.
+//
+// Empty items → null (not an empty <div>): the timeline is the inert path until #179 flips
+// `interactive`, so a zero-footprint render keeps today's layout pixel-identical (AC4). The coarse
+// MessageThread stays the live path and keeps its own empty-region behavior. (After #179 the two
+// threads need reconciling — the coarse thread would then be the empty one; #179 owns that seam.)
+export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Element | null {
+  if (items.length === 0) return null
+  const lastIndex = items.length - 1
+  return (
+    <div className="conversation__thread">
+      {items.map((item, index) => (
+        // Array index as key. The list is append-only with tail-mutation and never inserts or
+        // reorders mid-list (threadTimeline.ts: appendDelta grows the tail assistantText in place;
+        // every other arm appends a new tail; fillResult replaces a toolCall at its own index), so
+        // index identity is stable per logical item — the usual index-key hazard is absent here.
+        // turnId alone is not collision-safe (a tool can split one turn into two assistantText items,
+        // post-#205), and any text-bearing key would change every delta and remount the growing bubble.
+        <TimelineRow
+          key={index}
+          item={item}
+          inProgress={index === lastIndex && item.kind === 'assistantText'}
+        />
+      ))}
+    </div>
+  )
+}
+
+// One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
+// over today's three kinds (two of them null), so a future fourth ThreadItem kind makes it
+// non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
+// while an unsourced-today kind (toolCall) still degrades to nothing rather than throwing.
+function TimelineRow({
+  item,
+  inProgress
+}: {
+  item: ThreadItem
+  inProgress: boolean
+}): JSX.Element | null {
+  switch (item.kind) {
+    case 'assistantText':
+      return (
+        <div className="message-row message-row--daemon">
+          {/* Text passed as React children (auto-escaped) — never dangerouslySetInnerHTML — so HTML
+              inside a delta renders as visible characters, discharging #199's untrusted-text handoff. */}
+          <div className="bubble bubble--daemon" data-thread-role="assistant">
+            {item.text}
+            {/* The streaming cursor (Figma 16:56, ▎ U+258E): a trailing inline visual on the
+                in-progress bubble's text run, inheriting the bubble's color/size. Derived structurally
+                (the tail, still-open assistantText), never from `phase` (which has no source until
+                #204). Decorative → aria-hidden. */}
+            {inProgress && (
+              <span className="bubble__cursor" aria-hidden="true">
+                ▎
+              </span>
+            )}
+          </div>
+        </div>
+      )
+    case 'toolCall':
+      // Deferred: #205 / #206 own the tool render. A legitimate union member with no source yet.
+      return null
+    case 'turnBoundary':
+      // Structural marker only — no drawn element (Figma has no per-turn divider). Its sole
+      // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.
+      return null
+  }
 }
 
 // The collapsed status row between the thread and the composer (Figma node 16-57) — the trigger that

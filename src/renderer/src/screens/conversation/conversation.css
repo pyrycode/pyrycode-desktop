@@ -135,6 +135,26 @@
   border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-xs);
 }
 
+/* #203 — the streaming cursor (Figma node 16:56): the ▎ glyph (U+258E) trailing the in-progress
+   assistant bubble's text run, inline, inheriting .bubble's on-surface color and body-medium size —
+   no color/type literal of its own. A subtle blink conveys the live-streaming state; the static caret
+   is the load-bearing indicator, so the animation is guarded for reduced-motion below. */
+.bubble__cursor {
+  animation: bubble-cursor-blink 1s step-end infinite;
+}
+
+@keyframes bubble-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble__cursor {
+    animation: none;
+  }
+}
+
 /* Pinned composer — never grows or shrinks. A vertical stack so the status hint (#31) can sit
    above the input/button row without disturbing that row's flex layout. */
 .composer {

@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
-import { submitMessage, composerAvailability, MILESTONE_CONVERSATION_ID } from './composerSend'
+import {
+  submitMessage,
+  composerAvailability,
+  shouldOfferRepair,
+  MILESTONE_CONVERSATION_ID
+} from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { SessionAction } from '../../store/sessionStore'
 import type { HelloAckPayload } from '@shared/wire/types'
@@ -160,5 +165,64 @@ describe('composerAvailability', () => {
       }).hint
     ]
     expect(new Set(hints).size).toBe(3)
+  })
+})
+
+// shouldOfferRepair is the pure predicate (#167) deciding when the app proactively surfaces a re-pair
+// escape hatch: true ONLY for a terminal, non-retryable connection `error`. React-free and store-free,
+// the same discipline as composerAvailability, so the whole true/false matrix is unit-testable without
+// a DOM. The three retryability sources are validated against the merged transport in the spec.
+describe('shouldOfferRepair', () => {
+  const ack: HelloAckPayload = {
+    protocol_version: '1',
+    server_id: 's',
+    conn_id: 'c',
+    capabilities: []
+  }
+
+  it('true for a terminal transport error (supervisor gave up / fatal close code — always non-retryable)', () => {
+    expect(
+      shouldOfferRepair({
+        type: 'error',
+        error: { code: 'transport', message: 'gave up', retryable: false }
+      })
+    ).toBe(true)
+  })
+
+  it('true for a terminal handshake error (daemon rejected a stale/unknown device, close 4401)', () => {
+    expect(
+      shouldOfferRepair({
+        type: 'error',
+        error: { code: 'handshake', message: 'unauthorized', retryable: false }
+      })
+    ).toBe(true)
+  })
+
+  it('false for connected / connecting / disconnected — not the error arm', () => {
+    expect(shouldOfferRepair({ type: 'connected', ack })).toBe(false)
+    expect(shouldOfferRepair({ type: 'connecting' })).toBe(false)
+    expect(shouldOfferRepair({ type: 'disconnected' })).toBe(false)
+  })
+
+  // AC4: a retryable daemon wire-error (server.binary_offline, rate_limited) is a transient daemon-side
+  // condition, not a broken pairing — the composer keeps its plain error hint, no re-pair prompt.
+  it('false for a retryable daemon error (server.binary_offline)', () => {
+    expect(
+      shouldOfferRepair({
+        type: 'error',
+        error: { code: 'server.binary_offline', message: 'binary offline', retryable: true }
+      })
+    ).toBe(false)
+  })
+
+  // AC5: runUnpair dispatches UNPAIR_FAILED_ERROR { code: 'unpair', retryable: false } when the clear
+  // itself fails. Without the code guard, a failed re-pair would immediately re-offer itself in a loop.
+  it("false for the self-inflicted unpair-failure error (code 'unpair')", () => {
+    expect(
+      shouldOfferRepair({
+        type: 'error',
+        error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
+      })
+    ).toBe(false)
   })
 })

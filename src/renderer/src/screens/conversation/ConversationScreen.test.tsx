@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ConversationScreen, MessageThread, StatusSheet } from './ConversationScreen'
+import { ConversationScreen, MessageThread, StatusSheet, RepairPrompt } from './ConversationScreen'
 import type { Message } from './messageViewModel'
 import { sessionStore } from '../../store/sessionStore'
 
@@ -80,6 +80,43 @@ describe('StatusSheet — the Run configuration host modal', () => {
   })
 })
 
+// #167: the proactive re-pair affordance. RepairPrompt is the pure, exported view (the MessageThread
+// pattern) — server-render it directly with an arbitrary `status` prop to prove the present/absent
+// matrix (AC1) without touching the store. The store-bound RepairControl container's populated branch
+// is NOT server-render-reachable (zustand v5's useStore reads getInitialState() = disconnected under
+// server render), which is exactly why visibility is a prop-driven pure view rather than store-read.
+describe('RepairPrompt — the proactive re-pair affordance', () => {
+  it('renders a Re-pair button for a terminal, non-retryable error status (AC1 present)', () => {
+    const markup = renderToStaticMarkup(
+      <RepairPrompt
+        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+        onRepair={() => {}}
+      />
+    )
+    expect(markup).toContain('>Re-pair</button>')
+  })
+
+  it('renders nothing for a retryable daemon error (AC1/AC4 absent)', () => {
+    const markup = renderToStaticMarkup(
+      <RepairPrompt
+        status={{
+          type: 'error',
+          error: { code: 'server.binary_offline', message: 'offline', retryable: true }
+        }}
+        onRepair={() => {}}
+      />
+    )
+    expect(markup).toBe('')
+  })
+
+  it('renders nothing for a non-error status (AC1 absent)', () => {
+    const markup = renderToStaticMarkup(
+      <RepairPrompt status={{ type: 'disconnected' }} onRepair={() => {}} />
+    )
+    expect(markup).toBe('')
+  })
+})
+
 describe('ConversationScreen — store binding', () => {
   beforeEach(() => {
     // setState shallow-merges (preserving dispatch); reset to a clean, empty session.
@@ -109,6 +146,15 @@ describe('ConversationScreen — store binding', () => {
   it('renders the unpair trigger (its accessible text is present in the idle-phase markup)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).toContain('>Unpair</button>')
+  })
+
+  // #167: the proactive re-pair affordance is absent in the disconnected initial state (the only state
+  // server-render sees). RepairControl mounts safely against the empty store — shouldOfferRepair is
+  // false, so RepairPrompt returns null. The populated true-branch is proven in the RepairPrompt
+  // pure-view describe above, not here (the zustand server-snapshot gotcha noted below).
+  it('does not render the re-pair affordance while disconnected (RepairControl mounts, shows nothing)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('>Re-pair</button>')
   })
 
   // #31: while not connected the send control is disabled and the composer shows an inline

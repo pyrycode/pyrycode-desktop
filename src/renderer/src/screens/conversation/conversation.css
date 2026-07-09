@@ -77,6 +77,16 @@
   color: var(--color-on-surface);
 }
 
+/* The proactive re-pair affordance (#167). Surfaces beneath the composer only in a terminal,
+   non-retryable connection error, extending the composer's inline error hint with an escape hatch back
+   to pairing. Reuses the .conversation__unpair de-emphasized text-button treatment for the button
+   itself; this wrapper only positions it — left-aligned under the composer hint (matching the hint's
+   --space-4 inset), never growing or shrinking. */
+.composer__repair {
+  flex: 0 0 auto;
+  padding: 0 var(--space-4) var(--space-2);
+}
+
 /* Scrollable thread. min-height: 0 is load-bearing: without it the flex item
    refuses to shrink and the whole window scrolls instead of this region. */
 .conversation__thread {

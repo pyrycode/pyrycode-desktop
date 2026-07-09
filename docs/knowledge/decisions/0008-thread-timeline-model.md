@@ -1,0 +1,62 @@
+# 0008 — Conversation-timeline model: a heterogeneous `ThreadItem` union + pure reducer, alongside `MessagePayload[]`
+
+## Status
+
+Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199) and the `interactive` flip (#179).
+
+## Context
+
+Desktop today holds replies as a flat `messages: readonly MessagePayload[]` on `sessionStore` (ADR [0004](0004-renderer-session-store-reducer-wire-types.md)) and adapts only `user`/`assistant` text roles (`messageViewModel.ts`). That shape is a homogeneous list of complete text messages — it has no room for a tool call sitting between two assistant text turns, no way to grow one bubble as streamed text deltas arrive, and no way to link a tool result back to the tool call it completes.
+
+The v2 daemon fans out a richer live-session stream — `assistant_delta`, `turn_state`, `tool_use`, `tool_result`, `turn_end` (pyrycode `docs/protocol-mobile.md` § Interactive events, mobile ADR 025 § "The event model") — to any client that echoes the `interactive` capability. Desktop deliberately withholds that capability today (`codec.ts:147‑151`, `helloExchange.ts:33‑38`), so none of it arrives yet; flipping it on is #179. Before the wire, transport, IPC, and render layers of that vertical can be built (#199 and its peel-offs), they need one unit-tested data model to append the structured events onto. This ADR fixes that model.
+
+This is desktop's equivalent of mobile's Phase-2 timeline (`ThreadItem`, pyrycode ADR 025). The open architect's-call questions it settles: what member set does the union carry; what feeds the reducer if the wire types don't exist yet; how do successive text deltas coalesce; how is a tool result correlated to its tool call, and what happens when it can't be; where does the coarse `turn_state` lifecycle live; and how does the new model coexist with `MessagePayload[]` without disturbing the coarse `message` path.
+
+## Decision
+
+A new, **standalone, framework-free** module `src/renderer/src/store/threadTimeline.ts` introduces the timeline model **alongside** `sessionStore`'s `MessagePayload[]`. It delivers only the **pure model + reducer half** — no Zustand store, no React hook, no wire types, no IPC. Its five pieces:
+
+- **`ThreadItem`** — a discriminated union on `kind`, the durable, ordered content of one conversation's timeline:
+  - `{ kind: 'assistantText'; turnId; text }` — one coalesced, growing assistant text bubble.
+  - `{ kind: 'toolCall'; turnId; toolUseId; name; inputSummary; result: ToolResult | null }` — a tool invocation; `result` starts `null` and is filled in place when the correlated `tool_result` arrives.
+  - `{ kind: 'turnBoundary'; turnId; stopReason }` — a turn-end marker.
+- **`ToolResult`** — `{ isError: boolean; resultSummary: string }`, the filled-in half of a `toolCall`.
+- **`TurnPhase`** — `'thinking' | 'responding' | 'idle'`, the coarse conversation-level lifecycle.
+- **`ThreadEvent`** — the renderer-local, sealed input union the reducer consumes (§ the wire boundary below): `assistantDelta` | `toolUse` | `toolResult` | `turnState` | `turnEnd`.
+- **`TimelineState`** — `{ items: readonly ThreadItem[]; phase: TurnPhase }`.
+
+Plus a **pure, exported `reduceTimeline(state, event): TimelineState`**, an `initialTimelineState` const, and narrow pure selectors (`selectItems`, `selectPhase`) — the same discipline as `reduceSession`: no mutation, returns fresh state, `switch` on the sealed union with an `assertNever` exhaustiveness guard, unit-tested with no React and no store.
+
+**`turn_state` is a scalar `phase` on the state, not a `ThreadItem`.** It is a coarse conversation-level status (the "thinking…" indicator), carries no `turn_id`, and is updated in place — appending it as a timeline item would produce noise rows interleaved with real content. So the union's boundary member is `turnBoundary` (from `turn_end`) only; the lifecycle phase lives beside `items`.
+
+### The wire boundary — the reducer consumes a renderer-local event union, not wire types
+
+The structured wire types do not exist in desktop yet (`EnvelopeType` stops at `screen_snapshot`; there is no `DaemonEvent` arm for the stream) and are **out of scope here** — they are #199's. So the reducer's input is a renderer-owned, camelCase, sealed `ThreadEvent` union defined in this module, exactly as `sessionStore`'s `SessionAction` is a renderer-owned union that #3's bridge translates envelopes into. When #199 lands the wire types and the transport bridge, that bridge maps wire (snake_case) → `ThreadEvent` (camelCase) — the desktop analog of `daemonEventBridge.ts` mapping `DaemonEvent` → `SessionAction`. The pure model stays free of wire coupling, and the model is testable today against injected `ThreadEvent` sequences with no transport in the tree.
+
+`conversation_id` is dropped from the events: the timeline models the single active conversation, mirroring `sessionStore`'s single-conversation assumption (ADR 0004 § Consequences). Multi-conversation scoping is the bridge's responsibility, deferred to #199.
+
+### Reducer behavior (the contract each arm honors)
+
+- **`assistantDelta{turnId, seq, text}`** — coalesce iff the **tail** item is an `assistantText` for the same `turnId`: replace the tail with a copy whose `text` is the concatenation. Otherwise append a fresh `assistantText`. This tail-check naturally renders *text → tool → text* as three items while collapsing consecutive deltas into one growing bubble. `seq` is carried for wire fidelity and a future monotonicity guard but **not consulted** — arrival order is authoritative (ADR 0004's caller-owns-ordering stance); the ordered Noise/WS transport delivers deltas in order, and no reordering has been observed.
+- **`toolUse{turnId, toolUseId, name, inputSummary}`** — append a fresh `toolCall` with `result: null`.
+- **`toolResult{turnId, toolUseId, isError, resultSummary}`** — correlate by `toolUseId` alone (the wire's stable correlation key, unique across the conversation): find the `toolCall` with a matching `toolUseId` **and** `result === null`, and replace it with a copy whose `result` is filled. If none matches (no such pending call, or the call was already resolved), the outcome is a **deterministic no-op — the same `state` reference is returned** (documented, non-throwing per AC4). This absorbs an orphaned or duplicated result (e.g. a mid-turn reconnect where the `tool_use` fell before the replay cursor) without killing the timeline.
+- **`turnState{state}`** — set `phase` to `state`; `items` is preserved by reference. If `state === phase` already, return the same `state` reference (no-churn, mirroring `appendUnique`'s pure-duplicate discipline).
+- **`turnEnd{turnId, stopReason}`** — append a `turnBoundary`. It does **not** reset `phase`; the daemon emits `turn_state: 'idle'` separately. Phase and boundary stay orthogonal, mirroring `sessionStore`'s status/messages orthogonality.
+
+## Rationale
+
+- **A tool result merges into its tool call, because the AC puts correlation in the reducer.** AC4 — "a tool-result is correlated to its originating tool-use by the wire's stable id; an uncorrelated tool-result resolves to a documented, deterministic outcome" — only makes sense if the reducer performs the lookup. Keeping `tool_use` and `tool_result` as two independent appended items would push correlation to render time and leave "uncorrelated" meaningless. Merging (`result: null` → filled) gives the renderer one row per tool call that updates in place, and gives the reducer a concrete "no matching pending call" branch to make deterministic.
+- **Drop-and-document is the right orphan outcome, not a rich recovery path.** The stream is not even received yet (evidence-based-fix: no orphan has been observed), so building an orphan-surfacing render case now would be a defense for an unobserved failure. Returning the same reference is deterministic, testable, non-throwing, and loses only anomalous data that the daemon's `event_id` replay ring is designed to prevent in normal operation. #199 can revisit surfacing orphans if reconnect replay proves to produce them.
+- **Coalescing by tail-check, not by `seq`, keeps the reducer simple and correct.** The natural timeline shape (text, then a tool, then more text) falls out of "coalesce only into the tail assistantText of the same turn." Consulting `seq` to reorder or dedup would defend against out-of-order delivery that the ordered transport does not produce — the same restraint ADR 0004 applied to status transition guards ("no transition guard is built because none has been needed").
+- **`turn_state` as a scalar phase, not an item, matches its wire shape and its render role.** It has no `turn_id`, it is a coarse lifecycle signal, and it is the "thinking…" indicator — a status, not durable content. A scalar `phase` beside `items` renders as an indicator and never pollutes the timeline with lifecycle rows.
+- **A renderer-local event union, because the wire types are #199's.** Reusing the `sessionStore` seam (a sealed renderer union that a bridge feeds) keeps this model buildable and testable before any wire/transport/IPC exists, and keeps the pure model decoupled from snake_case wire fidelity — the bridge owns that translation, exactly as `daemonEventBridge` does for `SessionAction`.
+- **Pure reducer + no store this ticket, because only the model half ships.** AC5 requires exercising the model against injected sequences with no React/JSDOM. A pure `TimelineState → TimelineState` function does that with no store and no mocks. The Zustand container, singleton, diagnostics observer, and React hook (the ADR 0004 factory pattern) are render-integration and belong to #199, which wires the timeline into the conversation UI. Shipping an unused store singleton now would be speculative surface with no consumer.
+
+## Consequences
+
+- **The Strangler Fig is planted, nothing is cut over.** `sessionStore`, its `messages: MessagePayload[]`, `messageViewModel.ts`, and the coarse `message`/`message_chunk` render path are **untouched**; no consumer imports `threadTimeline`. `npm run build` and `npm test` stay green because the module is standalone. The cutover — making the timeline the render source for structured turns, and deciding the fate of the coarse path once `interactive` is on — is #179/#199's, not this ticket's.
+- **#199 splits along this ADR's seams, not guessed ones.** The reducer arms (`assistantDelta` → `turn_state` → `tool_use` → `tool_result`) are the natural decomposition boundaries for the render vertical: #199 becomes the `assistant_delta` + `turn_end` text slice (blank-thread-critical, since v2 removed the coarse `message` fan-out per pyrycode #699), and spawns the `turn_state` / `tool_use` / `tool_result` peel-offs. Each peels a wire type + bridge arm + render onto an existing, tested `ThreadItem` member.
+- **The wire→event bridge is the next module.** #199 adds the structured wire types, a transport decode, a `DaemonEvent` arm, and a `daemonEventBridge`-shaped translator that produces `ThreadEvent`s. This ADR's `ThreadEvent` union is the stable target contract that bridge maps onto.
+- **Deferred by design (revisit in #199 when rendering):** a stable per-item `id` for React keys (`turnId` alone is not unique — a tool can split a turn into two `assistantText` items); a `seq` monotonicity/dedup guard if reconnect replay is observed to duplicate deltas; whether an orphan `tool_result` should be surfaced rather than dropped; and multi-conversation scoping. The sealed unions extend cleanly for each.
+
+Related: [0004](0004-renderer-session-store-reducer-wire-types.md) (the `MessagePayload[]` store this coexists with and the pure-reducer template it follows), [0006](0006-ephemeral-screen-state-usereducer-not-store.md) (the pure-reducer discipline shared across both renderer state shapes), [0002](0002-remote-head-over-relay-shared-wire.md) (the wire contract #199's bridge will mirror), and mobile ADR 025 (the Phase-2 `ThreadItem` this mirrors).

@@ -9,6 +9,9 @@ Introduced in [#18](../codebase/18.md). It is the **event-pipe half** of the bac
 [#180](../codebase/180.md) added a fourth no-`SessionAction` member, `snapshotReceived` — the [screen
 snapshot fetch](screen-snapshot-fetch.md) feature's reply, consumed by the [Run configuration
 store](run-config-store.md)'s data path ([#187](../codebase/187.md)) instead of the session store.
+[#191](../codebase/191.md) extended that member with two more always-present fields,
+`used_tokens`/`window_tokens` (pyrycode/pyrycode#857) — the context-window usage figures the render
+sibling [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192) will consume.
 
 ## What it does
 
@@ -43,12 +46,22 @@ export type DaemonEvent =
   | { type: 'debugBundleProgress'; chunksReceived: number }
   | { type: 'debugBundleSaved'; path: string }
   | { type: 'debugBundleFailed'; reason: DebugBundleFailure }
-  | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean }
+  | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean
+      ; used_tokens: number; window_tokens: number }
 ```
 
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
 - **The three debug-bundle members ([#168](../codebase/168.md)) map to *no* `SessionAction`.** `debugBundleProgress{chunksReceived}` / `debugBundleSaved{path}` / `debugBundleFailed{reason}` are consumed by the download UI ([#72](https://github.com/pyrycode/pyrycode-desktop/issues/72)), not the session store — the [daemon-event bridge](daemon-event-bridge.md)'s `translateDaemonEvent` maps all three to `null` and the bridge skips the dispatch. `DebugBundleFailure` is a **coarse, closed** three-value category enum by design: the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed) collapses the transport's finer 5-value `BundleFailReason` ([debug-bundle reassembly](debug-bundle-reassembly.md)) plus any save errno onto these three, so the renderer never learns transport internals. None of the three carries a token, key, raw frame, or bundle bytes — only a count, a local filesystem path, and a category.
-- **`snapshotReceived{model,effort,yolo}` ([#180](../codebase/180.md)) also maps to *no* `SessionAction`**, consumed instead by the [Run configuration store](run-config-store.md)'s data path ([#187](../codebase/187.md)). It is a **dedicated minimal shape**, deliberately **not** a reuse of the wire `ScreenSnapshotPayload` it is derived from — that wire type also carries `text` (the rendered screen) and `ts`/`conversation_id`, none of which this member has a field for. See [screen snapshot fetch](screen-snapshot-fetch.md) for why that's the load-bearing content-minimisation control, not an incidental narrowing.
+- **`snapshotReceived{model,effort,yolo,used_tokens,window_tokens}`** ([#180](../codebase/180.md);
+  extended with the two usage ints by [#191](../codebase/191.md)) **also maps to *no*
+  `SessionAction`**, consumed instead by the [Run configuration store](run-config-store.md)'s data
+  path ([#187](../codebase/187.md)) — which as of #191 still copies out only `model`/`effort`/`yolo`,
+  ignoring the two ints until [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192). It is
+  a **dedicated minimal shape**, deliberately **not** a reuse of the wire `ScreenSnapshotPayload` it
+  is derived from — that wire type also carries `text` (the rendered screen) and `ts`/
+  `conversation_id`, none of which this member has a field for. See [screen snapshot
+  fetch](screen-snapshot-fetch.md) for why that's the load-bearing content-minimisation control, not
+  an incidental narrowing.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

@@ -895,7 +895,9 @@ describe('createDaemonConnection — requestSnapshot (screen_snapshot request/re
     ts: '2026-07-08T00:00:00Z',
     model: 'claude-opus-4-8',
     effort: 'high',
-    yolo: true
+    yolo: true,
+    used_tokens: 45000,
+    window_tokens: 200000
   }
 
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
@@ -946,17 +948,24 @@ describe('createDaemonConnection — requestSnapshot (screen_snapshot request/re
     expect(() => connection.requestSnapshot(PAYLOAD)).not.toThrow()
   })
 
-  it('decodes an inbound screen_snapshot into one snapshotReceived carrying only model/effort/yolo', async () => {
+  it('decodes an inbound screen_snapshot into one snapshotReceived carrying model/effort/yolo + usage (#191)', async () => {
     const { sink, drivers } = await connected()
 
     drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(SNAPSHOT) })
 
     const events = emitted(sink)
     expect(events.filter((e) => e.type === 'snapshotReceived')).toEqual([
-      { type: 'snapshotReceived', model: 'claude-opus-4-8', effort: 'high', yolo: true }
+      {
+        type: 'snapshotReceived',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+        yolo: true,
+        used_tokens: 45000,
+        window_tokens: 200000
+      }
     ])
     // Content minimisation: the rendered screen text / ts / conversation_id are dropped at the choke
-    // point (only the three settings fields cross), so no emitted event carries them.
+    // point (only the settings fields + usage ints cross), so no emitted event carries them.
     expect(JSON.stringify(events)).not.toContain('secret rendered screen')
     expect(JSON.stringify(events)).not.toContain('conv-1')
   })
@@ -971,7 +980,25 @@ describe('createDaemonConnection — requestSnapshot (screen_snapshot request/re
       type: 'snapshotReceived',
       model: '',
       effort: '',
-      yolo: false
+      yolo: false,
+      used_tokens: 45000,
+      window_tokens: 200000
+    })
+  })
+
+  it('carries used_tokens:0 / window_tokens:0 through as those values, not dropped/defaulted (#191, AC3)', async () => {
+    const { sink, drivers } = await connected()
+
+    const zeros: ScreenSnapshotPayload = { ...SNAPSHOT, used_tokens: 0, window_tokens: 0 }
+    drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(zeros) })
+
+    expect(emitted(sink).find((e) => e.type === 'snapshotReceived')).toEqual({
+      type: 'snapshotReceived',
+      model: 'claude-opus-4-8',
+      effort: 'high',
+      yolo: true,
+      used_tokens: 0,
+      window_tokens: 0
     })
   })
 

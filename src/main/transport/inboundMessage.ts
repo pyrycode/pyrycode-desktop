@@ -172,10 +172,12 @@ function parseDebugBundleDonePayload(payload: unknown): { total: number } {
  * Narrow an opaque payload into a ScreenSnapshotPayload (#180). Fail-closed like parseMessagePayload:
  * every field is required-present — an empty `model`/`effort` and `yolo:false` are valid VALUES
  * (inherited daemon default / permissions enforced), never absences (AC2/AC3), so a missing or
- * mistyped field throws WireDecodeError rather than defaulting. Returns only the six known fields;
+ * mistyped field throws WireDecodeError rather than defaulting. Returns only the eight known fields;
  * unknown server-added keys are tolerated (forward-compat, matching parseMessagePayload) but not
  * copied through. Its messages name the failure category only — no field value is interpolated (the
- * `text` / `conversation_id` could echo sensitive rendered output).
+ * `text` / `conversation_id` could echo sensitive rendered output). The two usage ints (#191) are
+ * `used_tokens` / `window_tokens` — required numbers like the bundle `seq` / `total`, so a missing
+ * field or a non-number throws (AC2) and `0` is decoded as the value `0`, never treated as absent (AC3).
  */
 function parseScreenSnapshotPayload(payload: unknown): ScreenSnapshotPayload {
   if (!isRecord(payload)) {
@@ -187,7 +189,9 @@ function parseScreenSnapshotPayload(payload: unknown): ScreenSnapshotPayload {
   const model = requireString(payload, 'model')
   const effort = requireString(payload, 'effort')
   const yolo = requireBoolean(payload, 'yolo')
-  return { conversation_id, text, ts, model, effort, yolo }
+  const used_tokens = requireNumber(payload, 'used_tokens')
+  const window_tokens = requireNumber(payload, 'window_tokens')
+  return { conversation_id, text, ts, model, effort, yolo, used_tokens, window_tokens }
 }
 
 /**

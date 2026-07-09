@@ -102,7 +102,14 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
 
   it('snapshotReceived → null (consumed by the Run configuration render bridge #181, not the session store)', () => {
     expect(
-      translateDaemonEvent({ type: 'snapshotReceived', model: 'claude-opus-4-8', effort: 'high', yolo: true })
+      translateDaemonEvent({
+        type: 'snapshotReceived',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+        yolo: true,
+        used_tokens: 45000,
+        window_tokens: 200000
+      })
     ).toBeNull()
   })
 

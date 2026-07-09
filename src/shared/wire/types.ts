@@ -119,9 +119,10 @@ export interface RequestSnapshotPayload {
 /**
  * Inbound `screen_snapshot` reply (daemon → client). Mirrors the daemon's
  * internal/protocol/snapshot.go ScreenSnapshotPayload field-for-field, wire order
- * `conversation_id, text, ts, model, effort, yolo` — all always present (no `omitempty`). ADR-025's
- * always-available, parser-independent snapshot: NOT gated on the `interactive` capability, so a
- * paired non-interactive client can request it (pyrycode #847). See #180.
+ * `conversation_id, text, ts, model, effort, yolo, used_tokens, window_tokens` — all always present
+ * (no `omitempty`). ADR-025's always-available, parser-independent snapshot: NOT gated on the
+ * `interactive` capability, so a paired non-interactive client can request it (pyrycode #847). See
+ * #180; the two usage fields are #191 (pyrycode #857).
  */
 export interface ScreenSnapshotPayload {
   conversation_id: string
@@ -135,6 +136,10 @@ export interface ScreenSnapshotPayload {
   effort: string
   /** Permissions posture; `false` = permissions enforced. */
   yolo: boolean
+  /** Current context size on the latest usage-bearing transcript entry; NOT a running total (#191). */
+  used_tokens: number
+  /** Context-window size (200000 today); `0` = usage seam unwired/unavailable (#191). */
+  window_tokens: number
 }
 
 /**

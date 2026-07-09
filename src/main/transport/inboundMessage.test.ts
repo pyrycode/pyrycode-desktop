@@ -55,7 +55,9 @@ const SNAPSHOT = {
   ts: '2026-07-08T00:00:00Z',
   model: 'claude-opus-4-8',
   effort: 'high',
-  yolo: true
+  yolo: true,
+  used_tokens: 45000,
+  window_tokens: 200000
 }
 
 describe('parseInboundMessage — happy', () => {
@@ -173,7 +175,7 @@ describe('parseInboundMessage — debug-bundle fail-closed (#116, AC3/AC4)', () 
 })
 
 describe('parseInboundMessage — screen_snapshot recognition (#180, additive)', () => {
-  it('narrows a full screen_snapshot into { kind: snapshot } with all six fields', () => {
+  it('narrows a full screen_snapshot into { kind: snapshot } with all eight fields', () => {
     expect(parseInboundMessage(encodeSnapshot(SNAPSHOT))).toEqual({
       kind: 'snapshot',
       snapshot: SNAPSHOT
@@ -188,7 +190,15 @@ describe('parseInboundMessage — screen_snapshot recognition (#180, additive)',
     })
   })
 
-  it('drops unknown server keys, keeping only the six known fields (forward-compat)', () => {
+  it('decodes used_tokens:0 / window_tokens:0 as those values, never as absent (#191, AC3)', () => {
+    const zeros = { ...SNAPSHOT, used_tokens: 0, window_tokens: 0 }
+    expect(parseInboundMessage(encodeSnapshot(zeros))).toEqual({
+      kind: 'snapshot',
+      snapshot: zeros
+    })
+  })
+
+  it('drops unknown server keys, keeping only the eight known fields (forward-compat)', () => {
     const withExtras = { ...SNAPSHOT, tokens_used: 512, extra: 'ignore-me' }
     expect(parseInboundMessage(encodeSnapshot(withExtras))).toEqual({
       kind: 'snapshot',
@@ -221,6 +231,19 @@ describe('parseInboundMessage — screen_snapshot fail-closed (#180, AC2/AC3)', 
       { ...SNAPSHOT, yolo: 'true' },
       { ...SNAPSHOT, yolo: 1 },
       { ...SNAPSHOT, yolo: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSnapshot(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when used_tokens or window_tokens is missing or non-number (#191, AC2)', () => {
+    const bad: unknown[] = [
+      { ...SNAPSHOT, used_tokens: undefined }, // used_tokens absent
+      { ...SNAPSHOT, window_tokens: undefined }, // window_tokens absent
+      { ...SNAPSHOT, used_tokens: '45000' }, // stringified number
+      { ...SNAPSHOT, window_tokens: null }, // JSON null (never a valid value)
+      { ...SNAPSHOT, used_tokens: true } // boolean is not a number
     ]
     for (const payload of bad) {
       expect(() => parseInboundMessage(encodeSnapshot(payload))).toThrow(WireDecodeError)

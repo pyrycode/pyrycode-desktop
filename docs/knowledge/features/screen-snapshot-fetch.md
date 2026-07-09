@@ -7,9 +7,11 @@ sheet](conversation-shell.md) can display how the session is running. A client s
 `screen_snapshot` with `{conversation_id, text, ts, model, effort, yolo}`.
 
 Introduced in [#180](../codebase/180.md), split A of [#156](../codebase/156.md). Transport data path
-only — request → reply → one typed event. No UI, no store facet; the render, the conversation-id
-choice, and the trigger policy (sheet-open vs on-connect) are [#181](https://github.com/pyrycode/pyrycode-desktop/issues/181),
-blocked on this.
+only — request → reply → one typed event. No UI, no store facet; those landed as a second-level
+split of [#181](https://github.com/pyrycode/pyrycode-desktop/issues/181) (itself split from #156):
+[#187](../codebase/187.md) (the conversation-id choice, the sheet-open trigger policy, and the
+[dedicated store](run-config-store.md)) and [#188](https://github.com/pyrycode/pyrycode-desktop/issues/188)
+(the render, blocked on #187).
 
 ## Why this is always-available, not gated on `interactive`
 
@@ -175,7 +177,8 @@ state to coordinate.
 **Renderer touch, despite the "zero renderer change" framing.** `daemonEventBridge.ts`'s
 `translateDaemonEvent` is the only exhaustive `DaemonEvent` consumer (`assertNever`-guarded), so
 adding `snapshotReceived` forced one case there too: `case 'snapshotReceived': return null` — no
-`SessionAction`, consumed instead by #181's render bridge. See [daemon-event bridge](daemon-event-bridge.md).
+`SessionAction`, consumed instead by the [Run configuration store](run-config-store.md)'s data path
+(#187). See [daemon-event bridge](daemon-event-bridge.md).
 
 ## Data flow
 
@@ -188,7 +191,7 @@ window → sendCommand({type:'requestSnapshot', payload:{conversation_id}})
 daemon → screen_snapshot frame → onDriverEvent 'message' → parseInboundMessage
       → {kind:'snapshot', snapshot} → emitDaemonEvent
         {type:'snapshotReceived', model, effort, yolo}   [text/ts/conversation_id dropped here]
-      → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction) → #181 render bridge
+      → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction) → run-config store (#187)
 ```
 
 ## Error handling
@@ -213,8 +216,9 @@ that failure is actually observed (evidence-based-fix).
 
 ## Out of scope
 
-- **Which `conversation_id`, and the trigger policy** (sheet-open vs on-connect) — #181.
-- **Store facet + render** — #181.
+- **Which `conversation_id`, and the trigger policy** (sheet-open vs on-connect) — landed in
+  [#187](../codebase/187.md) (see [Run configuration store](run-config-store.md)).
+- **Render** — [#188](https://github.com/pyrycode/pyrycode-desktop/issues/188), blocked on #187.
 - **Context-window usage** — [#182](https://github.com/pyrycode/pyrycode-desktop/issues/182), blocked on pyrycode/pyrycode#855 (no daemon message exists yet).
 - **The `text` field's use** — decoded and validated, never surfaced; a future live-screen feature
   would need its own event.
@@ -235,7 +239,9 @@ that failure is actually observed (evidence-based-fix).
 - [Debug-bundle request](debug-bundle-request.md) / [#115](../codebase/115.md) — the closest prior
   precedent for a connection-method twin of `send`; contrasted above on the no-consumer vs
   fail-the-consumer distinction.
-- [Conversation shell](conversation-shell.md) — the Run configuration sheet this feature's data will
-  populate (via #181).
+- [Conversation shell](conversation-shell.md) — the Run configuration sheet this feature's data
+  populates (via [Run configuration store](run-config-store.md), #187/#188).
+- [Run configuration store](run-config-store.md) / [#187 codebase notes](../codebase/187.md) — the
+  data-path consumer of this feature's `snapshotReceived` event.
 - Daemon twin (QMD `pyrycode-docs`): `internal/protocol/snapshot.go` `ScreenSnapshotPayload`;
   `docs/protocol-mobile.md` § Screen snapshot; pyrycode #847/#848 (ADR-025 always-available snapshot).

@@ -49,6 +49,8 @@ export type EnvelopeType =
   | 'debug_bundle_done'
   | 'request_snapshot'
   | 'screen_snapshot'
+  | 'assistant_delta'
+  | 'turn_end'
   | 'ack'
   | 'error'
 
@@ -140,6 +142,35 @@ export interface ScreenSnapshotPayload {
   used_tokens: number
   /** Context-window size (200000 today); `0` = usage seam unwired/unavailable (#191). */
   window_tokens: number
+}
+
+/**
+ * Inbound `assistant_delta` event (daemon → client). Mirrors the daemon's AssistantDeltaPayload
+ * field-for-field (pyrycode #607, protocol-mobile.md), wire order `conversation_id, turn_id, seq,
+ * text` — all always present (no `omitempty`). One incremental slice of the assistant reply on the
+ * v2 interactive stream, which REPLACES the coarse `message` fan-out (pyrycode #699): assistant text
+ * arrives only here once #179 flips `interactive` on. `text` is the render payload (#203), carried
+ * verbatim; unlike `screen_snapshot.text` it is NOT dropped downstream. See #199.
+ */
+export interface AssistantDeltaPayload {
+  conversation_id: string
+  turn_id: string
+  /** Per-turn sequence, non-negative, resets each turn (daemon Seq int, #607); `0` is a valid value. */
+  seq: number
+  /** One incremental slice of assistant reply text. */
+  text: string
+}
+
+/**
+ * Inbound `turn_end` event (daemon → client). Mirrors the daemon's TurnEndPayload field-for-field
+ * (pyrycode #607, protocol-mobile.md), wire order `conversation_id, turn_id, stop_reason` — all
+ * always present (no `omitempty`). Closes a turn on the v2 interactive stream. `stop_reason` (e.g.
+ * "end_turn") is an opaque enum string, decoded but not interpreted at the transport (#199).
+ */
+export interface TurnEndPayload {
+  conversation_id: string
+  turn_id: string
+  stop_reason: string
 }
 
 /**

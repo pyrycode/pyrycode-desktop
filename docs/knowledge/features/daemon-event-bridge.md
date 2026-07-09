@@ -13,6 +13,12 @@ channels but not for this exhaustive switch — see its "Lessons learned" in [#1
 notes](../codebase/180.md). [#187](../codebase/187.md) landed the consumer this arm was reserved for
 — see [Run configuration store](run-config-store.md).
 
+[#199](../codebase/199.md) added a fifth and sixth no-store-action member, `assistantDelta` /
+`turnEnd` — the transport slice of the structured-stream render vertical. Unlike `snapshotReceived`,
+both carry real content (`text` is the render payload) across IPC; this bridge still maps them to
+`null` because their consumer is the renderer *timeline* bridge [#202](../codebase/202.md) is
+building, not the session store.
+
 ## What it does
 
 Turns each `DaemonEvent` arriving from the background process into the matching `SessionAction` (or `null`, for events the session store doesn't model) and dispatches non-null results into the one store the UI reads. Two exported symbols:
@@ -24,7 +30,7 @@ Turns each `DaemonEvent` arriving from the background process into the matching 
 
 ### 1. The pure translation (`translateDaemonEvent`)
 
-A `switch (event.type)` over all ten `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
+A `switch (event.type)` over all twelve `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
 
 | `DaemonEvent` arm | `SessionAction` produced | conversion |
 |---|---|---|
@@ -38,6 +44,8 @@ A `switch (event.type)` over all ten `DaemonEvent` arms with a `default: return 
 | `debugBundleSaved` | `null` | consumed by the download UI (#72), not the session store |
 | `debugBundleFailed` | `null` | consumed by the download UI (#72), not the session store |
 | `snapshotReceived` | `null` | consumed by the [Run configuration store](run-config-store.md)'s data path (#187), not the session store |
+| `assistantDelta` | `null` | consumed by the renderer timeline bridge (#202, on the [thread timeline](thread-timeline.md) model), not the session store — present only for exhaustiveness (#199) |
+| `turnEnd` | `null` | consumed by the renderer timeline bridge (#202), not the session store — present only for exhaustiveness (#199) |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 
@@ -116,5 +124,6 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Session store](session-store.md) — the `SessionAction` write surface + app-singleton `sessionStore` this dispatches into (#2)
 - [Command channel](command-channel.md) / [#168](../codebase/168.md) — the mirror-image `requestDebugBundle` command that triggers the download the three tolerated events report on
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `snapshotReceived` member this bridge tolerates as a fourth `null`-returning case, and the concrete "renderer needs zero change" correction
+- [Thread timeline (conversation model)](thread-timeline.md) / [#199](../codebase/199.md) — the `assistantDelta`/`turnEnd` members this bridge tolerates as a fifth and sixth `null`-returning case; both carry real content (unlike the four members above) but still map to `null` here because their consumer is [#202](../codebase/202.md)'s renderer timeline bridge, not this session-store bridge
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [#19 codebase notes](../codebase/19.md) · Spec: `docs/specs/architecture/19-translate-daemon-events-to-session-actions.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

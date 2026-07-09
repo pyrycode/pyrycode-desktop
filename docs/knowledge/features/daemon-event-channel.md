@@ -13,6 +13,13 @@ store](run-config-store.md)'s data path ([#187](../codebase/187.md)) instead of 
 `used_tokens`/`window_tokens` (pyrycode/pyrycode#857) — the context-window usage figures the render
 sibling [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192) will consume.
 
+[#199](../codebase/199.md) added a fifth and sixth no-`SessionAction` member, `assistantDelta` /
+`turnEnd` — the transport slice (L1) of the structured-stream render vertical, consumed by the
+renderer timeline bridge [#202](../codebase/202.md) will build over the [thread
+timeline](thread-timeline.md) model, not the session store. Unlike every member above,
+`assistantDelta.text` deliberately **carries content across the bridge rather than minimising it** —
+see below.
+
 ## What it does
 
 Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge.
@@ -48,6 +55,8 @@ export type DaemonEvent =
   | { type: 'debugBundleFailed'; reason: DebugBundleFailure }
   | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean
       ; used_tokens: number; window_tokens: number }
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string }
 ```
 
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
@@ -62,6 +71,16 @@ export type DaemonEvent =
   `conversation_id`, none of which this member has a field for. See [screen snapshot
   fetch](screen-snapshot-fetch.md) for why that's the load-bearing content-minimisation control, not
   an incidental narrowing.
+- **`assistantDelta{turnId,seq,text}` / `turnEnd{turnId,stopReason}`** ([#199](../codebase/199.md))
+  also map to *no* `SessionAction`, consumed instead by the renderer timeline bridge
+  [#202](../codebase/202.md) will build. Field names are renamed from the wire's `snake_case`
+  (`AssistantDeltaPayload`/`TurnEndPayload`) to camelCase here — the snake→camel rename happens at
+  this consumer boundary, same as every other member. **Unlike `snapshotReceived`, these are
+  deliberately *not* content-minimised**: `assistantDelta.text` is the assistant reply text the
+  thread renders, carried across IPC on purpose (it is the product, not a leak), so it has a field to
+  occupy rather than being dropped. Both members do drop `conversation_id` — the single field neither
+  arm carries — since [#202](../codebase/202.md)'s bridge scopes identity for a single active
+  conversation, the same assumption [session store](session-store.md) makes for `messageReceived`.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -124,10 +143,11 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **`connected.ack` carries the whole `HelloAckPayload`.** Narrow to `{ server_id, conn_id }` later only if #19/#12 prove the UI needs less — mirrors [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)'s deferral.
 - **The three debug-bundle members now have a real producer.** [#168](../codebase/168.md) declared them inert; the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md)) now calls `emitDaemonEvent` with `debugBundleProgress`/`debugBundleSaved`/`debugBundleFailed` from the composition root.
 - **`snapshotReceived` has a real producer from the start.** [#180](../codebase/180.md) wires `emitDaemonEvent` for it directly from `daemonConnection.ts`'s inbound `case 'message'` arm, the same choke point as `messageReceived`/`messagesReceived` — no separate orchestrator, unlike the debug-bundle members (a snapshot has no multi-step progress to coordinate).
+- **`assistantDelta`/`turnEnd` have a real producer, but no traffic yet.** [#199](../codebase/199.md) wires `emitDaemonEvent` for both from the same `case 'message'` choke point, but the daemon never actually sends `assistant_delta`/`turn_end` until [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) advertises the `interactive` capability — a Strangler-Fig decode path with a real emitter and zero live callers today, proven only by unit tests driving `daemonConnection` directly.
 
 ## Security posture
 
-AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by the type, not by convention.** The union references only `HelloAckPayload` / `ErrorPayload` / `MessagePayload` for its session-lifecycle members, none of which has a token, key, or raw-byte field. `QrPayload` (token, `server_static_pubkey`), `HelloClientPayload` (token), and `InnerFrameV2` (base64 `data`) are **not** members and must never become members — a developer cannot serialize a secret here because no member has a field to hold one. `MessagePayload.text` does cross (messages are displayed — that is the product, not a leak) and must not be logged. The channel is **receive-only** and exposes no `ipcRenderer`, so a compromised renderer gains no command capability toward the transport, keys, or socket through #18. The [#168](../codebase/168.md) debug-bundle members hold the same invariant with different carriers: `debugBundleProgress.chunksReceived` is a count, `debugBundleSaved.path` is a local filesystem path, `debugBundleFailed.reason` is the closed `DebugBundleFailure` enum — never a token, key, raw frame, or bundle bytes. The closed enum is a deliberate information-minimisation boundary: a hostile daemon's raw error string cannot be assigned to `reason` (a `string` isn't a `DebugBundleFailure`), so the [orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md)) is structurally forced to map transport internals down to one of the three categories before they can reach the renderer.
+AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by the type, not by convention.** The union references only `HelloAckPayload` / `ErrorPayload` / `MessagePayload` for its session-lifecycle members, none of which has a token, key, or raw-byte field. `QrPayload` (token, `server_static_pubkey`), `HelloClientPayload` (token), and `InnerFrameV2` (base64 `data`) are **not** members and must never become members — a developer cannot serialize a secret here because no member has a field to hold one. `MessagePayload.text` does cross (messages are displayed — that is the product, not a leak) and must not be logged. The channel is **receive-only** and exposes no `ipcRenderer`, so a compromised renderer gains no command capability toward the transport, keys, or socket through #18. The [#168](../codebase/168.md) debug-bundle members hold the same invariant with different carriers: `debugBundleProgress.chunksReceived` is a count, `debugBundleSaved.path` is a local filesystem path, `debugBundleFailed.reason` is the closed `DebugBundleFailure` enum — never a token, key, raw frame, or bundle bytes. The closed enum is a deliberate information-minimisation boundary: a hostile daemon's raw error string cannot be assigned to `reason` (a `string` isn't a `DebugBundleFailure`), so the [orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md)) is structurally forced to map transport internals down to one of the three categories before they can reach the renderer. [#199](../codebase/199.md)'s `assistantDelta`/`turnEnd` are the one deliberate exception to "minimise what crosses": `assistantDelta.text` carries real assistant-reply content (the render payload, same category as `messageReceived.text`) — the AC5 invariant it still satisfies is narrower ("never a token/key/raw frame"), not "never any content."
 
 > Pre-existing hardening note (out of scope for #18): `src/main/index.ts` sets `sandbox: false`. The whole bridge surface is `sandbox: true`-compatible; route the flip to a dedicated hardening ticket. (#17, the command half, also left it untouched — still open.)
 
@@ -139,6 +159,8 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Command channel](command-channel.md) / [#168](../codebase/168.md) — the mirror-image `requestDebugBundle` command that triggers the download this channel's three new members report on
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the real producer of the three debug-bundle members, wired at the composition root
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `snapshotReceived` member, its `requestSnapshot` [command channel](command-channel.md) mirror, and the content-minimisation reasoning behind its dedicated (non-wire-type-reusing) shape
+- [Thread timeline (conversation model)](thread-timeline.md) / [#199](../codebase/199.md) — the `assistantDelta`/`turnEnd` members, the transport slice of the structured-stream render vertical, and the deliberate content-carrying divergence from `snapshotReceived`'s minimisation pattern
+- [Inbound message decode](inbound-message-decode.md) / [#199](../codebase/199.md) — the `assistant_delta`/`turn_end` decode this channel's two new members are constructed from
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#18 codebase notes](../codebase/18.md) · Spec: `docs/specs/architecture/18-typed-daemon-event-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

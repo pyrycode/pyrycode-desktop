@@ -204,6 +204,16 @@ function snapshotPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'screen_snapshot', ts: FIXED_TS, payload })
 }
 
+/** An `assistant_delta` plaintext, wrapping an arbitrary payload (#199). */
+function assistantDeltaPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'assistant_delta', ts: FIXED_TS, payload })
+}
+
+/** A `turn_end` plaintext, wrapping an arbitrary payload (#199). */
+function turnEndPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'turn_end', ts: FIXED_TS, payload })
+}
+
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
 function errorPlaintext(): Uint8Array {
   return encodeEnvelope({
@@ -1010,6 +1020,82 @@ describe('createDaemonConnection — requestSnapshot (screen_snapshot request/re
       drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext({ ...SNAPSHOT, yolo: 'nope' }) })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — structured stream (assistant_delta / turn_end, #199)', () => {
+  const DELTA = { conversation_id: 'conv-1', turn_id: 'turn-1', seq: 3, text: 'a reply slice' }
+  const TURN_END = { conversation_id: 'conv-1', turn_id: 'turn-1', stop_reason: 'end_turn' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound assistant_delta into one assistantDelta carrying turnId/seq/text (camelCase)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: assistantDeltaPlaintext(DELTA) })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([{ type: 'assistantDelta', turnId: 'turn-1', seq: 3, text: 'a reply slice' }])
+    // conversation_id is dropped at the choke point (single active conversation; #202 scopes it).
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('carries seq:0 and empty text through as those values, not dropped/defaulted', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: assistantDeltaPlaintext({ ...DELTA, seq: 0, text: '' })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'assistantDelta', turnId: 'turn-1', seq: 0, text: '' }
+    ])
+  })
+
+  it('decodes an inbound turn_end into one turnEnd carrying turnId/stopReason (camelCase)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: turnEndPlaintext(TURN_END) })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([{ type: 'turnEnd', turnId: 'turn-1', stopReason: 'end_turn' }])
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('drops a malformed assistant_delta without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({ type: 'message', plaintext: assistantDeltaPlaintext({ ...DELTA, seq: 'x' }) })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('leaves the coarse message / message_chunk path untouched (Strangler-Fig, no regression)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi' }
+    const a = { conversation_id: 'c1', message_id: 'm2', role: 'user', text: 'one' }
+
+    drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+    drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'messageReceived', message },
+      { type: 'messagesReceived', messages: [a] }
+    ])
   })
 })
 

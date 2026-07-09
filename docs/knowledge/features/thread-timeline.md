@@ -1,9 +1,18 @@
 # Thread timeline (conversation model)
 
 A heterogeneous, ordered conversation-timeline data model — the foundation the structured
-event-stream render vertical (#199 and its peel-offs) will build on. Introduced **alongside**
+event-stream render vertical builds on. Introduced **alongside**
 [session store](session-store.md)'s flat `MessagePayload[]` as a Strangler Fig: nothing cuts over,
 no consumer imports it yet, and the coarse `message`/`message_chunk` render path is untouched.
+
+The vertical this feeds decomposed along the transport → store → render seams the [screen snapshot
+fetch](screen-snapshot-fetch.md) vertical (#180 → #187/#188) proved: [#199](../codebase/199.md)
+(shipped) built the wire types, transport decode, and `DaemonEvent` arms (`assistantDelta`/`turnEnd`)
+this module's `ThreadEvent` union is the eventual target of; #202 (blocked-by #199, in progress) adds
+the Zustand store + the `DaemonEvent → ThreadEvent` bridge over `reduceTimeline`; #203 (blocked-by
+#202) renders the streamed text — the blank-thread-critical slice that gates #179 (advertising the
+`interactive` capability). #204/#205/#206 add `turn_state`/`tool_use`/`tool_result` render
+afterward.
 
 Introduced in [#121](../codebase/121.md). Lives at
 `src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
@@ -16,7 +25,7 @@ the full rationale and normative reducer contract.
 tool call between two assistant text turns, no way to grow one bubble as streamed text deltas
 arrive, no way to link a tool result back to the tool call it completes. This module models that
 richer shape as a pure, unit-tested value type + reducer — nothing more. There is no Zustand store,
-no singleton, no React hook here; that render-integration layer is #199's.
+no singleton, no React hook here; that render-integration layer is #202/#203's.
 
 ## How it works
 
@@ -78,21 +87,29 @@ indicator), so it's carried as `phase` beside `items` rather than interleaved as
 
 ## Configuration and usage
 
-Nothing imports this module yet. The intended consumer, #199, will add:
+Nothing imports this module yet.
 
-- Structured wire types (`assistant_delta`, `turn_state`, `tool_use`, `tool_result`, `turn_end`)
-- A transport decode + `DaemonEvent` arm
-- A `daemonEventBridge`-shaped translator mapping wire snake_case → this module's `ThreadEvent`
-  (field names here already mirror the wire, so that bridge is a thin rename)
-- The Zustand store, singleton, React hook, and first render slice — the same factory pattern
-  `sessionStore` uses (ADR 0004), applied to `TimelineState`/`reduceTimeline`
+- **[#199](../codebase/199.md) (shipped)** added the structured wire types
+  (`AssistantDeltaPayload`/`TurnEndPayload`, `assistant_delta`/`turn_end` on `EnvelopeType`), the
+  transport decode (`inboundMessage.ts`), and the `assistantDelta`/`turnEnd` `DaemonEvent` arms
+  (`src/shared/ipc/events.ts`) — see [inbound message decode](inbound-message-decode.md) and
+  [daemon-event channel](daemon-event-channel.md). `turn_state`/`tool_use`/`tool_result` are not yet
+  decoded (still fall to `inbound-unmodeled → null`) — that's #204/#205/#206.
+- **#202 (blocked-by #199, in progress)** adds the `daemonEventBridge`-shaped translator mapping
+  `DaemonEvent`'s wire-derived snake→camel fields onto this module's `ThreadEvent` (field names here
+  already mirror #199's arms exactly — `turnId`/`seq`/`text`, `turnId`/`stopReason` — so that bridge
+  is expected to be a thin rename, not a reshape), plus the Zustand store, singleton, and React hook
+  — the same factory pattern `sessionStore` uses (ADR 0004), applied to
+  `TimelineState`/`reduceTimeline`.
+- **#203 (blocked-by #202)** adds the first render slice: the streamed assistant text + a streaming
+  cursor on the timeline — the blank-thread-critical render that gates #179.
 
 ## Edge cases and limitations
 
 - **Uncorrelated or duplicate `tool_result` is a silent no-op, not a surfaced error.** Evidence-based:
   the structured stream isn't receivable yet (desktop withholds the `interactive` capability until
   #179), so no orphan has been observed in practice. This absorbs a mid-turn-reconnect orphan (the
-  `tool_use` fell before a replay cursor) without killing the timeline, but revisit if #199's
+  `tool_use` fell before a replay cursor) without killing the timeline, but revisit if #202's
   reconnect replay is shown to actually produce them.
   - No corresponding test currently is left uncovered — both the orphan and duplicate cases are
     unit-tested with `toBe` reference assertions.
@@ -100,13 +117,14 @@ Nothing imports this module yet. The intended consumer, #199, will add:
   future monotonicity guard, but the reducer trusts arrival order — no reordering has been
   observed from the ordered Noise/WS transport.
 - **Single active conversation.** `conversation_id` is dropped from `ThreadEvent`, mirroring
-  `sessionStore`'s single-conversation assumption (ADR 0004). Multi-conversation scoping is
-  deferred to #199's bridge.
+  `sessionStore`'s single-conversation assumption (ADR 0004). [#199](../codebase/199.md) already
+  drops it at the `DaemonEvent` construction step (`daemonConnection.ts`), one layer below this
+  module — #202's bridge inherits an event that has no `conversation_id` to further scope.
 - **No stable per-item `id`.** `turnId` alone isn't unique (a tool call can split one turn into
-  two `assistantText` items) — React keys are a #199 render-time concern, deliberately deferred.
+  two `assistantText` items) — React keys are a #203 render-time concern, deliberately deferred.
 - **Strangler Fig, not a migration.** `sessionStore`, `messageViewModel.ts`, and the coarse
   `message`/`message_chunk` path are completely untouched by this module's existence. The cutover
-  decision (does the coarse path retire once `interactive` is on?) belongs to #179/#199.
+  decision (does the coarse path retire once `interactive` is on?) belongs to #179/#203.
 
 ## Related
 
@@ -116,6 +134,10 @@ Nothing imports this module yet. The intended consumer, #199, will add:
 - [Session store](session-store.md) — the `MessagePayload[]` store this coexists with and the
   `reduceSession`/`appendUnique` template this module's shape mirrors.
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the `DaemonEvent → SessionAction`
-  translator #199's `wire → ThreadEvent` bridge is modeled on.
+  translator #202's `wire → ThreadEvent` bridge is modeled on.
+- [#199 codebase notes](../codebase/199.md) — the transport slice: wire types, decode, and the
+  `assistantDelta`/`turnEnd` `DaemonEvent` arms this module's `ThreadEvent` union targets.
+- [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
+  — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)
   — the pure-reducer / sealed-union / wire-types-are-a-bridge-concern discipline this ADR extends.

@@ -65,3 +65,9 @@ export type DaemonEvent =
       used_tokens: number
       window_tokens: number
     }
+  // The two v2 interactive-stream arms (#199). Unlike snapshotReceived, `text` IS the render payload
+  // (#203) and crosses IPC deliberately — the boundary defended upstream is the fail-closed decode, not
+  // this internal channel. Consumed by the renderer timeline bridge (#202), not the session store.
+  // camelCase per AC3; carry only turnId / seq / text / stopReason — no token, key, or raw frame.
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  | { type: 'turnEnd'; turnId: string; stopReason: string }

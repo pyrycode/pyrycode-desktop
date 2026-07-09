@@ -269,6 +269,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               window_tokens: inbound.snapshot.window_tokens
             })
             return
+          case 'assistant-delta':
+            // The interactive-stream data path (#199). snake→camel here (wire is snake, IPC is camel);
+            // `conversation_id` is DROPPED (single active conversation; #202's bridge scopes identity).
+            // Unlike snapshot, `text` IS carried — it is the render payload (#203), not a secret. A
+            // fresh literal with named fields, never a spread of the decoded payload, so only the three
+            // known fields cross IPC.
+            emitDaemonEvent(sink, {
+              type: 'assistantDelta',
+              turnId: inbound.delta.turn_id,
+              seq: inbound.delta.seq,
+              text: inbound.delta.text
+            })
+            return
+          case 'turn-end':
+            emitDaemonEvent(sink, {
+              type: 'turnEnd',
+              turnId: inbound.turnEnd.turn_id,
+              stopReason: inbound.turnEnd.stop_reason
+            })
+            return
         }
         return
       }

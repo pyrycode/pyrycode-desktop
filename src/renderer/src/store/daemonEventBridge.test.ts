@@ -113,6 +113,18 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('assistantDelta → null (consumed by the renderer timeline bridge #202, not the session store)', () => {
+    expect(
+      translateDaemonEvent({ type: 'assistantDelta', turnId: 'turn-1', seq: 0, text: 'slice' })
+    ).toBeNull()
+  })
+
+  it('turnEnd → null (consumed by the renderer timeline bridge #202, not the session store)', () => {
+    expect(
+      translateDaemonEvent({ type: 'turnEnd', turnId: 'turn-1', stopReason: 'end_turn' })
+    ).toBeNull()
+  })
+
   it('the three debug-bundle events dispatch nothing into the session store', () => {
     // Belt-and-suspenders, mirroring production: feed each new event through the same null-guarded
     // dispatch the bridge applies; the store stays at its initial state (no status flip, no message).

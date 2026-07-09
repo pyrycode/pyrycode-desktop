@@ -3,7 +3,9 @@ import { NOISE_PROTOCOL, PROTOCOL_VERSION, CAPABILITY_INTERACTIVE } from './type
 import type {
   EnvelopeType,
   DebugBundleChunkPayload,
-  DebugBundleDonePayload
+  DebugBundleDonePayload,
+  AssistantDeltaPayload,
+  TurnEndPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -39,5 +41,34 @@ describe('debug-bundle wire vocabulary (#116)', () => {
   it('shapes DebugBundleDonePayload as { total }', () => {
     const payload: DebugBundleDonePayload = { total: 4 }
     expect(payload.total).toBe(4)
+  })
+})
+
+describe('structured-stream wire vocabulary (#199)', () => {
+  it('admits the two interactive-stream inbound envelope types', () => {
+    // Compile-time membership: these assign only if the members are part of EnvelopeType.
+    const delta: EnvelopeType = 'assistant_delta'
+    const end: EnvelopeType = 'turn_end'
+    expect(delta).toBe('assistant_delta')
+    expect(end).toBe('turn_end')
+  })
+
+  it('shapes AssistantDeltaPayload as { conversation_id, turn_id, seq, text } (mobile field-for-field)', () => {
+    const payload: AssistantDeltaPayload = {
+      conversation_id: 'conv-1',
+      turn_id: 'turn-1',
+      seq: 0,
+      text: 'hello'
+    }
+    expect(payload).toEqual({ conversation_id: 'conv-1', turn_id: 'turn-1', seq: 0, text: 'hello' })
+  })
+
+  it('shapes TurnEndPayload as { conversation_id, turn_id, stop_reason }', () => {
+    const payload: TurnEndPayload = {
+      conversation_id: 'conv-1',
+      turn_id: 'turn-1',
+      stop_reason: 'end_turn'
+    }
+    expect(payload).toEqual({ conversation_id: 'conv-1', turn_id: 'turn-1', stop_reason: 'end_turn' })
   })
 })

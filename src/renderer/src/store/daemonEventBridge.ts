@@ -55,6 +55,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // session store. Added here (not "zero renderer change") because the assertNever guard below
       // makes every new DaemonEvent member a compile error until it has a case — #181 adds the facet.
       return null
+    case 'assistantDelta':
+    case 'turnEnd':
+      // No session-store action: the renderer timeline bridge (#202), not the session store, consumes
+      // these. Present only because the assertNever guard below makes a new arm a compile error.
+      return null
     default:
       return assertNever(event)
   }

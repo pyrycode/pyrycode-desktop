@@ -18,6 +18,8 @@ The status row and the "Run configuration" sheet it opens landed as a **chrome-o
 
 The sheet's first section, **Log data** (a Download button for the debug bundle), landed in [#72](../codebase/72.md): the last child in the sheet body, beneath where Model/Effort/YOLO/Context-window will mount. See [Log data section](#log-data-section-72) below.
 
+A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `Timeline` view mounted beside `MessageThread`, rendering [thread-timeline store](conversation-timeline-store.md) items (the streamed assistant text, with a streaming cursor on the in-progress bubble) in a Strangler-Fig coexistence with the coarse thread above it. Inert (empty, zero footprint) in production until #179 flips the `interactive` capability. See [Structured-stream timeline render](#structured-stream-timeline-render-203) below.
+
 ## How it works
 
 ### Structure
@@ -27,8 +29,10 @@ The sheet's first section, **Log data** (a Download button for the debug bundle)
 ```
 ConversationScreen            .conversation        (flex column, full height, position: relative)
 ├── UnpairControl              .conversation__header (slim header row, #166)
-├── MessageThread             .conversation__thread (scroll region)
+├── MessageThread             .conversation__thread (scroll region, the coarse `message` path)
 │   └── MessageBubble × N     .message-row / .bubble
+├── Timeline                  .conversation__thread (null when empty, the structured-stream path, #203)
+│   └── TimelineRow × N       .message-row--daemon / .bubble--daemon (assistantText only)
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
 ├── Composer                  .composer            (pinned)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
@@ -331,6 +335,57 @@ Two more M3 tokens landed for the button: `--color-secondary-container` / `--col
 (filled-tonal fill/text). See [#72 codebase notes](../codebase/72.md) for the full design, patterns,
 and the one copy-only deviation from spec.
 
+### Structured-stream timeline render (#203)
+
+The render slice (L3) of the Phase-2 structured-streaming vertical (transport [#199](../codebase/199.md)
+→ store [#202](../codebase/202.md) → render #203), mounted immediately after `<MessageThread/>`:
+
+```
+.conversation
+├── MessageThread              messages={useSessionStore(selectMessages).map(toMessageViewModel)}
+└── Timeline                   items={useTimelineStore(selectItems)}
+```
+
+`Timeline({ items }: { items: readonly ThreadItem[] })` is `MessageThread`'s twin — a pure, exported,
+in-file component (props-in/markup-out, server-rendered in tests from an injected `ThreadItem[]`, no
+store, no IPC). It reuses `MessageThread`'s scroll region class (`.conversation__thread`) and the
+coarse path's daemon-bubble treatment (`.message-row--daemon` / `.bubble--daemon`) verbatim — no new
+bubble styling. `ThreadItem` (from [thread-timeline](thread-timeline.md)) is already the render model
+(camelCase, `conversation_id`-free, ADR 0008), so the container passes `selectItems`'s result straight
+through — no adapter, unlike the coarse path's `toMessageViewModel`.
+
+Per-item render, by `kind`, with **no `default`/`assertNever`** (an exhaustive switch that degrades an
+unsourced-today kind to `null` rather than throwing — the render-path counterpart to the store
+bridges' hard `assertNever`, see [#203 codebase notes § Patterns established](../codebase/203.md)):
+
+- `assistantText` → one bubble, text as React children (never `dangerouslySetInnerHTML` — HTML inside
+  a delta renders as visible characters, discharging #199's untrusted-text handoff), carrying
+  `data-thread-role="assistant"` as the test hook (`MessageThread`'s `data-message-role` counterpart).
+- `toolCall` → `null` (no source until #205/#206 — a real union member, not yet renderable).
+- `turnBoundary` → `null` (structural only; Figma has no per-turn divider).
+
+**Streaming cursor** (Figma `16:56`, glyph `▎` U+258E): a trailing `<span class="bubble__cursor"
+aria-hidden="true">` inside the in-progress bubble, rendered only on the tail item when
+`item.kind === 'assistantText'` — derived from array position, never from `selectPhase` (which has no
+source until #204, so it's always `idle` in this slice). CSS blink guarded by
+`@media (prefers-reduced-motion: reduce)`.
+
+**React key = array index**, deliberately: the reducer's `appendDelta`/`fillResult` invariants
+guarantee the list is append-only with tail-mutation, never reordering or inserting mid-list, so index
+identity is stable per logical item (`turnId` alone would collide once #205 lets a tool split one turn
+into two `assistantText` items; a text-bearing key would remount the growing bubble every delta).
+
+**Strangler-Fig coexistence, not a cutover.** `Timeline` sits directly beside `MessageThread`; the
+coarse path is completely untouched and stays the *live* one — `Timeline` returns `null` on an empty
+`items` array (not an empty `<div>`), giving it zero layout footprint so the thread is pixel-identical
+to before this ticket. The store stays empty in production until #179 flips the `interactive`
+capability (a non-interactive v2 connection receives no structured stream), so this entire render path
+is inert today. **Open question, deliberately left to #179:** once `interactive` flips and the coarse
+`message` fan-out stops, `MessageThread` will render an *empty* `.conversation__thread` beside the
+now-populated `Timeline` — a half-height dead region — which #179 must reconcile (#203 must not flip
+or gate anything here). See [#203 codebase notes](../codebase/203.md) for the full design and code
+review record.
+
 ## Seams (bound + still open)
 
 - **`MessageThread({ messages })`** — **bound in [#69](../codebase/69.md).** `ConversationScreen` now feeds this prop from `useSessionStore(selectMessages).map(toMessageViewModel)` instead of the deleted `placeholderMessages` array, adapting wire `MessagePayload` (`role`, `message_id`) to the `Message` view model (`type`, `id`) at the store-read boundary. `MessageThread` stays the pure `Message[]`-in view — the seam's shape held exactly as the swap target.
@@ -338,6 +393,7 @@ and the one copy-only deviation from spec.
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
+- **`Timeline({ items })`** — **bound in [#203](../codebase/203.md).** A second, independent thread beside `MessageThread`, reading the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Inert (empty, `null`) in production until #179 flips `interactive`. See [Structured-stream timeline render](#structured-stream-timeline-render-203) above.
 
 ## Edge cases and limitations
 
@@ -355,8 +411,9 @@ and the one copy-only deviation from spec.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`
+- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

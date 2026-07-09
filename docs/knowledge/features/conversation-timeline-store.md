@@ -3,14 +3,16 @@
 The renderer's read/write surface over the [thread timeline](thread-timeline.md) model: a dedicated,
 unidirectional Zustand store wrapping the pure `reduceTimeline` reducer, plus a
 `daemonEventBridge`-shaped translator + React binding that feeds it from the two v2 interactive-stream
-`DaemonEvent` arms. Together, the store and bridge are what the render slice (#203) will mount and
-paint — the "single, ordered source of truth" #203's spec calls for.
+`DaemonEvent` arms. Together, the store and bridge are what the render slice
+([#203](../codebase/203.md), shipped) mounts and paints — the "single, ordered source of truth" #203's
+spec called for.
 
 Introduced in [#202](../codebase/202.md), the L2 (store) slice of the Phase-2 structured-streaming
 vertical, blocked-by [#199](../codebase/199.md) (the L1 transport slice, shipped) and built directly
 on [#121](../codebase/121.md) (the pure model, shipped). Purely additive, Strangler Fig: nothing in
-the coarse `message`/`message_chunk` path imports or is changed by either new file, and nothing reads
-the timeline store yet — that's #203.
+the coarse `message`/`message_chunk` path imports or is changed by either new file. [#203](../codebase/203.md)
+(shipped) is now the sole reader — the store's read surface (`selectItems`/`selectPhase`) and
+`useTimelineBridge()` mount are otherwise unchanged from what #202 shipped.
 
 ## What it does
 
@@ -72,14 +74,18 @@ daemon frame ─(#199 transport, snake→camel, conversation_id dropped)→ Daem
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
    → timelineStore.dispatch → reduceTimeline → TimelineState
-   → selectItems / selectPhase   (read by #203, not yet by anything)
+   → selectItems / selectPhase   (read by #203's Timeline view; selectPhase still unread — #204)
 ```
 
 ## Configuration and usage
 
-- Nothing calls `useTimelineBridge()` yet — #203 is the first mount site, alongside where it paints
-  `selectItems`/`selectPhase`.
-- Import surface for #203: `import { useTimelineStore, selectItems, selectPhase } from
+- **`useTimelineBridge()` mounts in `App.tsx`**, right after `useDaemonEventBridge()` ([#203](../codebase/203.md),
+  shipped) — app-lifetime, unconditional, one stable listener.
+- **`selectItems` is read in `ConversationScreen`** via `useTimelineStore(selectItems)`, feeding the
+  new `Timeline` pure view straight (no adapter — `ThreadItem` is already the render model). See
+  [Conversation shell § Structured-stream timeline render](conversation-shell.md#structured-stream-timeline-render-203).
+  `selectPhase` still has no reader — `phase` has no source until #204 (`turn_state`).
+- Import surface: `import { useTimelineStore, selectItems, selectPhase } from
   '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
   '@renderer/store/timelineBridge'`.
 - No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
@@ -96,8 +102,8 @@ daemon frame ─(#199 transport, snake→camel, conversation_id dropped)→ Daem
   (none in this repo), exactly as `useDaemonEventBridge` has none — its behavior is fully carried by
   the pure `subscribeTimeline` tests. See [#202 codebase notes](../codebase/202.md) § Lessons learned.
 - **Zero live traffic until #179.** Desktop withholds the `interactive` capability, so no
-  `assistant_delta`/`turn_end` frame reaches this bridge in production yet — the store and bridge are
-  built and tested against injected `DaemonEvent`s only.
+  `assistant_delta`/`turn_end` frame reaches this bridge in production yet — the store, bridge, and
+  #203's `Timeline` view are built and tested against injected `DaemonEvent`s/`ThreadItem[]` only.
 
 ## Related
 
@@ -113,5 +119,6 @@ daemon frame ─(#199 transport, snake→camel, conversation_id dropped)→ Daem
   `assistantDelta`/`turnEnd` `DaemonEvent` arms this bridge consumes.
 - [#202 codebase notes](../codebase/202.md) — implementation summary and patterns established.
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md).
-- #203 (blocked-by #202) — mounts `useTimelineBridge`, reads `selectItems`/`selectPhase`, and paints
-  the streamed assistant text — the blank-thread-critical slice that gates #179.
+- [#203 codebase notes](../codebase/203.md) — mounts `useTimelineBridge`, reads
+  `selectItems`, and paints the streamed assistant text — the blank-thread-critical slice that gates
+  #179.

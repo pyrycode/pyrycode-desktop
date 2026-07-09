@@ -354,3 +354,72 @@
   min-height: 0;
   overflow-y: auto;
 }
+
+/* The reusable section header (first defined by #72's Log data section; #181/#182 reuse it for their
+   Model/Effort/YOLO/Context window sections). Muted M3 label-large. Paddings map Figma node 98:2
+   (pt 12 / pr 16 / pb 4 / pl 24) to space tokens. margin: 0 resets the <p> default. */
+.status-sheet__section-header {
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-1) var(--space-6);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+/* The Log data section body (#72, Figma node 98:16): a column holding the Download button and its
+   optional status caption. Figma pt 4 / px 16, no bottom padding (the sheet's own pb-24 provides it). */
+.log-data {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4) 0;
+}
+
+/* Full-width filled-tonal pill (Figma node 98:18): secondary-container fill, on-secondary-container
+   text, pill radius. Figma py 10 maps to --space-3 (the ±2px-tokenized convention the status-row /
+   pairing styles already use); px 16 → --space-4. No hover state (no design reference, no state-layer
+   token). :disabled uses muted content (the composer__send:disabled convention, no opacity literal). */
+.log-data__download {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+  cursor: pointer;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.log-data__download:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.log-data__download:disabled {
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
+}
+
+/* The status caption: the running count, the saved path, or the mapped error sentence. Muted
+   body-small; word-break so a long saved path wraps inside the sheet. The --error variant uses
+   --color-tertiary, the palette's attention color (the pairing__error precedent — there is no
+   --color-error token on desktop). margin: 0 resets the <p> default. */
+.log-data__status {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  word-break: break-word;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+.log-data__status--error {
+  color: var(--color-tertiary);
+}

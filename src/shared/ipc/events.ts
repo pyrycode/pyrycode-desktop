@@ -11,7 +11,12 @@
 //
 // Imported by src/main and src/preload, which have no @shared path alias — hence the
 // relative import here and in those callers (see tsconfig.node.json).
-import type { HelloAckPayload, MessagePayload, ErrorPayload } from '../wire/types'
+import type {
+  HelloAckPayload,
+  MessagePayload,
+  ErrorPayload,
+  ConversationSummary
+} from '../wire/types'
 
 /** The IPC channel every typed daemon event travels on, main → renderer.
  *  Single source of truth: the emit helper sends on it, the preload subscribes to it.
@@ -71,3 +76,9 @@ export type DaemonEvent =
   // camelCase per AC3; carry only turnId / seq / text / stopReason — no token, key, or raw frame.
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
+  // The conversation-list arm (#139). Reuses the wire ConversationSummary row type verbatim (the
+  // messagesReceived precedent) — snake_case, order preserved from the wire. Consumed by the
+  // conversation-list store (#208), not the session store, so the session bridge maps it to `null`.
+  // No token/key/raw frame — ConversationSummary carries only ids, a nullable title, two flags, a
+  // workspace path (opaque display text), and two timestamps.
+  | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }

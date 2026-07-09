@@ -30,6 +30,7 @@ import { buildClientHello, parseHelloAck } from './transport/helloExchange'
 import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
+import { buildListConversations } from './transport/listConversationsEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
   createBundleReassembler,
@@ -111,6 +112,16 @@ export interface DaemonConnection {
    * `error` that is dropped today — see #180 Out of scope). NEVER throws out of the module (parity #490).
    */
   requestSnapshot(payload: RequestSnapshotPayload): void
+  /**
+   * Encrypt a bare `list_conversations` control envelope onto the live session — asks the daemon for
+   * the current conversation list. The `send` TWIN, not `requestDebugBundle`: a list request has no
+   * consumer to fail, so it is an inert no-op when not connected (`driver === null` → return). The
+   * reply arrives asynchronously as one `conversationsReceived` DaemonEvent, consumed by the
+   * conversation-list store (#208), not the session store. Bare — no payload argument. It has no
+   * caller in this ticket; #208 triggers it via `sendCommand` on connect (as #181 triggered
+   * `requestSnapshot`). NEVER throws out of the module (parity #490).
+   */
+  requestConversations(): void
   /**
    * Encrypt a bare `request_debug_bundle` control envelope onto the live session — asks the daemon
    * to begin streaming the current debug bundle back — and ARM a reassembler for the streamed reply
@@ -289,6 +300,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               stopReason: inbound.turnEnd.stop_reason
             })
             return
+          case 'conversations':
+            // The conversation-list data path (#139). Emit a fresh literal reusing the already-minimal
+            // decoded array — mirror messagesReceived, NOT the snapshot content-drop: there is nothing
+            // to drop (no secret field), so the ConversationSummary[] reference passes through verbatim.
+            // Field names stay snake_case (the event reuses the wire row type, like messagesReceived
+            // reuses MessagePayload) — #208's store derives the discussion/channel label from is_promoted.
+            emitDaemonEvent(sink, {
+              type: 'conversationsReceived',
+              conversations: inbound.conversations
+            })
+            return
         }
         return
       }
@@ -445,6 +467,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function requestConversations(): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A list request has no consumer to fail; a request sent
+    // while disconnected simply produces no reply.
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send / requestSnapshot / requestDebugBundle — no
+      // second counter — so ids stay unique across interleaved calls (the daemon correlates by id).
+      const bytes = buildListConversations({ id: nextEnvelopeId, ts: now() })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but
+      // driver.sendMessage can throw. The caught object is DROPPED (classify-don't-forward, inherited #62).
+    }
+  }
+
   function requestDebugBundle(consumer: BundleConsumer): void {
     // Not connected (before start(), mid-bootstrap, bootstrap-failed): fail the consumer terminally
     // so #118's command never hangs — the wire behaviour is still "send nothing," but the caller is
@@ -518,6 +557,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     },
     send,
     requestSnapshot,
+    requestConversations,
     requestDebugBundle
   }
 }

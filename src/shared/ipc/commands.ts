@@ -24,13 +24,14 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 
 /**
  * A single typed command from the renderer window to the background process. Sealed
- * discriminated union on `type`. Three members today: `sendMessage`, whose `payload` reuses the
+ * discriminated union on `type`. Four members today: `sendMessage`, whose `payload` reuses the
  * wire SendMessagePayload verbatim so no field is remapped between layers; the bare
- * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global; and
+ * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global;
  * `requestSnapshot` (#180), whose `payload` reuses the wire RequestSnapshotPayload (a
- * `conversation_id` routing id, not a secret) to ask the daemon for the current screen_snapshot.
- * No member exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing
- * ones reuse only wire types, the bare one carries nothing.
+ * `conversation_id` routing id, not a secret) to ask the daemon for the current screen_snapshot; and
+ * the bare `requestConversations` (#139), which carries NO payload — the daemon returns every
+ * conversation. No member exposes a field that could hold a token, key, or raw frame (AC5) — the
+ * payload-bearing ones reuse only wire types, the bare ones carry nothing.
  *
  * Extend additively (connect/disconnect) when their transport tickets land — and add a
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
@@ -40,6 +41,7 @@ export type RendererCommand =
   | { type: 'sendMessage'; payload: SendMessagePayload }
   | { type: 'requestDebugBundle' }
   | { type: 'requestSnapshot'; payload: RequestSnapshotPayload }
+  | { type: 'requestConversations' }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -67,6 +69,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return true
     case 'requestSnapshot':
       return 'payload' in value && isRequestSnapshotPayload(value.payload)
+    case 'requestConversations':
+      // Bare member (#139): no payload to validate, so a well-formed `type` is complete acceptance.
+      return true
     default:
       return false
   }

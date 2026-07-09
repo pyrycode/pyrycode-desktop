@@ -60,6 +60,10 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // No session-store action: the renderer timeline bridge (#202), not the session store, consumes
       // these. Present only because the assertNever guard below makes a new arm a compile error.
       return null
+    case 'conversationsReceived':
+      // No session-store action: the conversation-list store (#208), not the session store, consumes
+      // this. Present only because the assertNever guard below makes a new arm a compile error.
+      return null
     default:
       return assertNever(event)
   }

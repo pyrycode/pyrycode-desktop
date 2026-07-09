@@ -69,7 +69,14 @@ describe('toDownloadAction', () => {
     const unrelated: DaemonEvent[] = [
       { type: 'connecting' },
       { type: 'disconnected' },
-      { type: 'snapshotReceived', model: 'Opus 4.7', effort: 'high', yolo: false }
+      {
+        type: 'snapshotReceived',
+        model: 'Opus 4.7',
+        effort: 'high',
+        yolo: false,
+        used_tokens: 45000,
+        window_tokens: 200000
+      }
     ]
     for (const event of unrelated) {
       expect(toDownloadAction(event)).toBeNull()

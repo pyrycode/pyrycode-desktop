@@ -526,7 +526,9 @@ describe('createDaemonConnection screen_snapshot round-trip (in-process fake tar
         ts: FIXED_TS,
         model,
         effort,
-        yolo
+        yolo,
+        used_tokens: 45000,
+        window_tokens: 200000
       }
     })
   }
@@ -562,7 +564,9 @@ describe('createDaemonConnection screen_snapshot round-trip (in-process fake tar
         type: 'snapshotReceived',
         model: 'claude-opus-4-8',
         effort: 'high',
-        yolo: true
+        yolo: true,
+        used_tokens: 45000,
+        window_tokens: 200000
       })
       // The rendered screen text never crosses to the renderer on any event.
       for (const e of events) expect(JSON.stringify(e)).not.toContain(SECRET_SCREEN)
@@ -586,7 +590,9 @@ describe('createDaemonConnection screen_snapshot round-trip (in-process fake tar
         type: 'snapshotReceived',
         model: '',
         effort: '',
-        yolo: false
+        yolo: false,
+        used_tokens: 45000,
+        window_tokens: 200000
       })
       expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
     },

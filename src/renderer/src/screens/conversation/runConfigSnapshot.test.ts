@@ -20,7 +20,16 @@ const message: MessagePayload = {
 
 describe('toRunConfigSnapshot', () => {
   it('maps a snapshotReceived to the three fields verbatim, including empty/false (AC5)', () => {
-    const event: DaemonEvent = { type: 'snapshotReceived', model: '', effort: '', yolo: false }
+    // Input carries the two usage ints (#191); the three-field OUTPUT is unchanged — the run-config
+    // store deliberately stays model/effort/yolo until #192 owns the usage gauge.
+    const event: DaemonEvent = {
+      type: 'snapshotReceived',
+      model: '',
+      effort: '',
+      yolo: false,
+      used_tokens: 45000,
+      window_tokens: 200000
+    }
     expect(toRunConfigSnapshot(event)).toEqual({ model: '', effort: '', yolo: false })
   })
 
@@ -29,7 +38,9 @@ describe('toRunConfigSnapshot', () => {
       type: 'snapshotReceived',
       model: 'claude-x',
       effort: 'high',
-      yolo: true
+      yolo: true,
+      used_tokens: 45000,
+      window_tokens: 200000
     }
     expect(toRunConfigSnapshot(event)).toEqual({ model: 'claude-x', effort: 'high', yolo: true })
   })
@@ -90,7 +101,14 @@ describe('subscribeRunConfig', () => {
     const setSnapshot = vi.fn()
     subscribeRunConfig(bridge.onDaemonEvent, setSnapshot)
 
-    bridge.emit({ type: 'snapshotReceived', model: '', effort: '', yolo: false })
+    bridge.emit({
+      type: 'snapshotReceived',
+      model: '',
+      effort: '',
+      yolo: false,
+      used_tokens: 45000,
+      window_tokens: 200000
+    })
     expect(setSnapshot).toHaveBeenCalledTimes(1)
     expect(setSnapshot).toHaveBeenCalledWith({ model: '', effort: '', yolo: false })
   })
@@ -109,8 +127,22 @@ describe('subscribeRunConfig', () => {
     const setSnapshot = vi.fn()
     subscribeRunConfig(bridge.onDaemonEvent, setSnapshot)
 
-    bridge.emit({ type: 'snapshotReceived', model: 'a', effort: 'low', yolo: false })
-    bridge.emit({ type: 'snapshotReceived', model: 'b', effort: 'high', yolo: true })
+    bridge.emit({
+      type: 'snapshotReceived',
+      model: 'a',
+      effort: 'low',
+      yolo: false,
+      used_tokens: 10000,
+      window_tokens: 200000
+    })
+    bridge.emit({
+      type: 'snapshotReceived',
+      model: 'b',
+      effort: 'high',
+      yolo: true,
+      used_tokens: 20000,
+      window_tokens: 200000
+    })
     expect(setSnapshot).toHaveBeenNthCalledWith(1, { model: 'a', effort: 'low', yolo: false })
     expect(setSnapshot).toHaveBeenNthCalledWith(2, { model: 'b', effort: 'high', yolo: true })
   })

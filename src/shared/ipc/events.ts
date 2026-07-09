@@ -41,10 +41,11 @@ export type DebugBundleFailure = 'unavailable' | 'stream-corrupt' | 'write-faile
  * validated wire envelopes upstream). Never carries a token, key, raw frame, or bundle bytes
  * (AC4): the session members reuse only wire payload types, the debug-bundle members carry
  * only a count, a local path, and the closed DebugBundleFailure enum, and `snapshotReceived`
- * (#180) carries only the three session-settings fields — a DEDICATED minimal shape, deliberately
- * NOT reusing ScreenSnapshotPayload, so the sensitive rendered-screen `text` can never ride this
- * channel. Session member and field names mirror SessionAction's so #19's mapping is near-identity,
- * while the two unions stay separately declared per layer.
+ * (#180) carries the three session-settings fields plus two usage ints (#191) — five fields, a
+ * DEDICATED minimal shape, deliberately NOT reusing ScreenSnapshotPayload, so the sensitive
+ * rendered-screen `text` can never ride this channel. Session member and field names mirror
+ * SessionAction's so #19's mapping is near-identity, while the two unions stay separately declared
+ * per layer.
  */
 export type DaemonEvent =
   | { type: 'connecting' }
@@ -56,4 +57,11 @@ export type DaemonEvent =
   | { type: 'debugBundleProgress'; chunksReceived: number }
   | { type: 'debugBundleSaved'; path: string }
   | { type: 'debugBundleFailed'; reason: DebugBundleFailure }
-  | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean }
+  | {
+      type: 'snapshotReceived'
+      model: string
+      effort: string
+      yolo: boolean
+      used_tokens: number
+      window_tokens: number
+    }

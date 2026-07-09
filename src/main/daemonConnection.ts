@@ -256,14 +256,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           case 'snapshot':
             // The content-minimisation seam (#180): `text` / `ts` / `conversation_id` are decoded but
-            // DROPPED here — only the three settings fields cross to the renderer. The dedicated
-            // minimal snapshotReceived event shape (NOT a reuse of ScreenSnapshotPayload) is what makes
-            // this hard to get wrong; a naive "reuse the wire type" would leak `text` to the renderer.
+            // DROPPED here — only the three settings fields plus the two usage ints (#191) cross to the
+            // renderer. The dedicated minimal snapshotReceived event shape (NOT a reuse of
+            // ScreenSnapshotPayload) is what makes this hard to get wrong; a naive "reuse the wire type"
+            // would leak `text` to the renderer. The two ints are non-secret context-window counts.
             emitDaemonEvent(sink, {
               type: 'snapshotReceived',
               model: inbound.snapshot.model,
               effort: inbound.snapshot.effort,
-              yolo: inbound.snapshot.yolo
+              yolo: inbound.snapshot.yolo,
+              used_tokens: inbound.snapshot.used_tokens,
+              window_tokens: inbound.snapshot.window_tokens
             })
             return
         }

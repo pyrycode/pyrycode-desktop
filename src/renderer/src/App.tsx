@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { PairingScreen } from './screens/pairing/PairingScreen'
 import { useDaemonEventBridge } from './store/daemonEventBridge'
+import { ConversationListData } from './store/conversationListBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -67,12 +68,20 @@ function App(): JSX.Element {
   // and mount the other with no restart. The unpair path clears the stored pairing BEFORE this flip
   // (in runUnpair), so the launch-status invariant "conversation only when paired" still holds if the
   // user relaunches immediately after.
+  // ConversationListData is a headless leaf mounted app-level alongside the daemon-event bridge: it
+  // keeps the conversation-list store live for #141 regardless of the current route. A component (not
+  // a hook here) deliberately isolates its connected-gate `useSessionStore` read, so status flips
+  // re-render the leaf, not App (whose inline onPaired/onUnpaired arrows would otherwise cascade a
+  // re-render into ConversationScreen). It renders null, so the neutral-paint invariant holds.
   return (
-    <AppView
-      route={route}
-      onPaired={() => setRoute('conversation')}
-      onUnpaired={() => setRoute('pairing')}
-    />
+    <>
+      <ConversationListData />
+      <AppView
+        route={route}
+        onPaired={() => setRoute('conversation')}
+        onUnpaired={() => setRoute('pairing')}
+      />
+    </>
   )
 }
 

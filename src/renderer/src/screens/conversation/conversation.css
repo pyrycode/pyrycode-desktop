@@ -495,6 +495,106 @@
   overflow-y: auto;
 }
 
+/* #224 — the interactive permission/trust modal (Figma "Dialogs" section, node 22-3). Reuses the
+   status-sheet overlay+scrim STRUCTURE but centers the panel (a centered M3 dialog) instead of
+   bottom-anchoring it (a bottom sheet). A distinct class set, not the status-sheet classes: the two
+   modals share a chrome pattern, not a stylesheet, so the sheet's future changes never leak here. */
+.permission-modal-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+/* A dedicated scrim so the opaque panel sibling is never dimmed and no bare color literal is needed.
+   40% via opacity (not a color literal) — the status-sheet-overlay__scrim idiom. */
+.permission-modal-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+
+/* The centered M3 dialog panel (Figma 19:14 et al.): surface-container-high, 28px radius, 24px padding,
+   a column with 16px gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows;
+   max-height + overflow keep a long untrusted prompt scrolling inside the panel, not overflowing. */
+.permission-modal {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 360px;
+  max-height: 90%;
+  overflow-y: auto;
+  padding: var(--space-6);
+  background: var(--color-surface-container-high);
+  border-radius: var(--radius-lg);
+  color: var(--color-on-surface);
+}
+
+/* The headline-small title. margin: 0 resets the heading default. */
+.permission-modal__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-headline-small-size);
+  line-height: var(--text-headline-small-line);
+  letter-spacing: var(--text-headline-small-tracking);
+  font-weight: var(--text-headline-small-weight);
+}
+
+/* The body prompt — body-medium, muted. margin: 0 resets the <p> default; word-break so an unbounded
+   untrusted daemon string wraps inside the panel rather than overflowing. */
+.permission-modal__prompt {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  word-break: break-word;
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The bottom action-button row (Figma 19:19): right-aligned pills; wraps for N > 2 options or long
+   daemon labels so the row degrades gracefully instead of overflowing. */
+.permission-modal__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* One option — the Dialogs text-button treatment: pill, transparent fill, --color-primary label,
+   label-large. Inert this slice (no hover state, mirroring .log-data__download); the answer path wires
+   interaction later. focus-visible keeps it keyboard-reachable, the file's button convention. */
+.permission-modal__option {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.permission-modal__option:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* The fail-safe default (the safe deny) is the emphasized, filled-tonal choice: --color-secondary-container
+   fill + --color-on-secondary-container text (the .log-data__download / effort-selected treatment) — a
+   clear, assertable distinction that makes the safe option the prominent one. */
+.permission-modal__option--default {
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+}
+
 /* The reusable section header (first defined by #72's Log data section; #181/#182 reuse it for their
    Model/Effort/YOLO/Context window sections). Muted M3 label-large. Paddings map Figma node 98:2
    (pt 12 / pr 16 / pb 4 / pl 24) to space tokens. margin: 0 resets the <p> default. */

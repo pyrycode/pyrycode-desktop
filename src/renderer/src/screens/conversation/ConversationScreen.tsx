@@ -14,6 +14,7 @@ import { runUnpair } from './unpairAction'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
+import { PermissionModal } from './PermissionModal'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -80,6 +81,10 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
           <LogDataSection />
         </StatusSheet>
       )}
+      {/* #224: the interactive permission/trust modal — the last child so it overlays the whole
+          conversation surface (the StatusSheet placement). Renders null until an outstanding prompt
+          exists, so the layout is unchanged today (inert until #179 flips `interactive`). */}
+      <PermissionModal />
     </div>
   )
 }

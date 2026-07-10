@@ -20,6 +20,10 @@ first nullable-field wire type — see below.
 `turn-state` kind — the coarse turn-lifecycle scalar of the same v2 interactive stream `assistant_delta`/
 `turn_end` belong to, decoded with a closed-enum idiom instead of `requireString` — see below.
 
+[#217](../codebase/217.md) extended it a seventh time, additively, with a `tool_use` → `tool-use` kind —
+the tool-call enrichment of the same v2 interactive stream, decoded via the `requireString`
+required-presence idiom scaled to five fields (no enum, unlike `turn_state`'s `state`) — see below.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -42,11 +46,12 @@ export type InboundDaemonMessage =
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }              // #199, additive
   | { kind: 'conversations'; conversations: ConversationSummary[] }  // #139, additive
   | { kind: 'turn-state'; turnState: TurnStatePayload }         // #214, additive
+  | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
-//                            `assistant_delta`/`turn_end`/`conversations`/`turn_state` envelope,
-//                            fully narrowed
+//                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`tool_use`
+//                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
 export function parseInboundMessage(
@@ -90,6 +95,16 @@ file; a future closed-enum wire field should reach for it by default. Unlike `as
 `state` — there is no separate content-minimisation question here, since a 3-value enum has no field
 worth stripping either way.
 
+**Extended a seventh time by [#217](../codebase/217.md), additively.** `tool_use` → `{ kind: 'tool-use',
+toolUse: ToolUsePayload }` via `parseToolUsePayload`, the tool-call enrichment of the same v2 interactive
+stream (pyrycode #607, ADR 025, `protocol-mobile.md`). `ToolUsePayload{conversation_id, turn_id,
+tool_use_id, name, input_summary}` is five plain strings, all always present — narrowed with **five
+`requireString` calls, no enum check** (unlike `turn_state`'s `state`), cloning `parseTurnEndPayload`'s
+idiom scaled from three fields to five. The consumer arm drops only `conversation_id`; `name` and
+`input_summary` are opaque daemon display text (the `stop_reason` #199 / `cwd` #139 posture) carried
+onward to the render slice ([#218](https://github.com/pyrycode/pyrycode-desktop/issues/218)) verbatim,
+never interpreted here.
+
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 
 A **single throw type** (`WireDecodeError`) covers every failure, so the consumer's one `catch` handles oversized, malformed, unparseable, and mistyped alike — exactly the shape `parseHelloAck` uses for the `hello_ack` boundary.
@@ -108,6 +123,7 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
    - `'assistant_delta'` → `{ kind: 'assistant-delta', delta }` / `'turn_end'` → `{ kind: 'turn-end', turnEnd }` ([#199](../codebase/199.md)) — narrowed via `parseAssistantDeltaPayload` / `parseTurnEndPayload`, each content-free-logged as `inbound-decoded(code: 'assistant_delta' | 'turn_end')` before the `default` branch. The two v2 interactive-stream kinds that graduate out of `inbound-unmodeled` once #179 flips `interactive` on.
    - `'conversations'` → `{ kind: 'conversations', conversations }` ([#139](../codebase/139.md)) — narrowed via `parseConversationsPayload`, content-free-logged as `inbound-decoded(code: 'conversations')` before the `default` branch — **deliberately no `count` field**, unlike `message_chunk`'s log (a conversation count is more identifying than a message-batch size).
    - `'turn_state'` → `{ kind: 'turn-state', turnState }` ([#214](../codebase/214.md)) — narrowed via `parseTurnStatePayload` (the `role`-style closed-enum check on `state`), content-free-logged as `inbound-decoded(code: 'turn_state')` before the `default` branch. The third v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`.
+   - `'tool_use'` → `{ kind: 'tool-use', toolUse }` ([#217](../codebase/217.md)) — narrowed via `parseToolUsePayload` (five `requireString` calls, no enum), content-free-logged as `inbound-decoded(code: 'tool_use')` before the `default` branch. The fourth v2 interactive-stream kind to graduate out of `inbound-unmodeled`.
    - anything else → `return null` — a well-formed `ack` / `hello_ack` / `backfill_since` / etc. is **not an error**, it is simply not modeled here. Since [#130](../codebase/130.md) it is also **logged content-free** (`inbound-unmodeled`, § *Diagnostic logging*) before the `return null`, so an unforeseen envelope kind leaves a footprint instead of vanishing; the return value and the "not surfaced to the UI" behavior are unchanged. (`error` was in this bucket until [#116](../codebase/116.md) promoted it to modeled — see above.)
 
 ### Payload narrowing
@@ -134,6 +150,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `assistant_delta` / `turn_end` ([#199](../codebase/199.md)) | `inbound-decoded` | `code: 'assistant_delta' \| 'turn_end'`, `bytes`, `hash` — never `text`/`turn_id`/`seq`/`stop_reason`/`conversation_id`, even though the consumer arm carries `text` onward to the renderer (the log stays content-free regardless of what the event carries) |
 | modeled `conversations` ([#139](../codebase/139.md)) | `inbound-decoded` | `code: 'conversations'`, `bytes`, `hash` — never `id`/`name`/`cwd`/`is_promoted`/`is_archived`/`last_message_ts`/`last_used_at`, and deliberately **no `count`** |
 | modeled `turn_state` ([#214](../codebase/214.md)) | `inbound-decoded` | `code: 'turn_state'`, `bytes`, `hash` — never `state`/`conversation_id` |
+| modeled `tool_use` ([#217](../codebase/217.md)) | `inbound-decoded` | `code: 'tool_use'`, `bytes`, `hash` — never `name`/`input_summary`/`tool_use_id`/`turn_id`/`conversation_id` |
 | unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
 
 Load-bearing details:
@@ -217,6 +234,17 @@ case 'message': {
       // active conversation); state carried onward — a 3-value enum, nothing left to minimise.
       emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
       return
+    case 'tool-use':
+      // #217: fresh named-field literal, mirrors 'turn-state'. conversation_id dropped (single active
+      // conversation); name/input_summary carried onward as opaque display text for the render slice.
+      emitDaemonEvent(sink, {
+        type: 'toolUse',
+        turnId: inbound.toolUse.turn_id,
+        toolUseId: inbound.toolUse.tool_use_id,
+        name: inbound.toolUse.name,
+        inputSummary: inbound.toolUse.input_summary
+      })
+      return
   }
   return
 }
@@ -267,6 +295,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **`assistant_delta`/`turn_end` are received by nobody yet.** Desktop withholds the `interactive` capability ([#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) turns it on), so these two cases are exercised only by direct unit tests today, not a live daemon — a textbook Strangler-Fig: the decode path exists and is tested before the traffic that will use it does.
 - **`conversations` has no request trigger yet either, but for a different reason.** [#139](../codebase/139.md) ships both the decode path *and* the outbound `requestConversations` command, but nothing in this ticket calls `sendCommand({type:'requestConversations'})` — that's [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)'s on-connect trigger. Unlike `assistant_delta`/`turn_end`, this is blocked only on a sibling renderer ticket, not a daemon capability flip — the daemon would answer today if asked.
 - **`turn_state` is received by nobody yet, for the same reason as `assistant_delta`/`turn_end`.** [#214](../codebase/214.md) sits on the same `interactive`-capability gate ([#179](https://github.com/pyrycode/pyrycode-desktop/issues/179)) — exercised only by direct unit tests today. Unlike those two, its consumer arm has nothing to carry-vs-drop debate over: `state` is a closed 3-value enum, so there's no sensitive-vs-render-payload distinction to make; only `conversation_id` is dropped.
+- **`tool_use` is received by nobody yet, same capability gate — and its two untrusted strings forward a render constraint.** [#217](../codebase/217.md) sits on the same `interactive`-capability gate ([#179](https://github.com/pyrycode/pyrycode-desktop/issues/179)) — exercised only by direct unit tests today. Like `assistant_delta`/`turn_end` (and unlike `turn_state`), the consumer arm carries content onward rather than minimising it: `name`/`input_summary` are opaque daemon-supplied strings that reach the render slice ([#218](https://github.com/pyrycode/pyrycode-desktop/issues/218)) as free text — that sibling ticket must render them as plain text, never `dangerouslySetInnerHTML`, and must not re-parse `input_summary`.
 
 ### Why the explicit size guard, given the transport already bounds the plaintext
 
@@ -281,6 +310,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [#199 codebase notes](../codebase/199.md) — the fourth additive extension: `assistant_delta`/`turn_end`, the two v2 interactive-stream kinds, and the deliberate content-carrying divergence from the `snapshot` kind's minimisation pattern.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139 codebase notes](../codebase/139.md) — the fifth additive extension: the `conversations` kind, `parseConversationSummary`/`parseConversationsPayload`, and the new `requireStringOrNull` helper (the codec's first nullable-field checker).
 - [Conversation timeline store](conversation-timeline-store.md) / [#214 codebase notes](../codebase/214.md) — the sixth additive extension: the `turn_state` kind, `parseTurnStatePayload`, and the closed-enum idiom's second instance (cloned from `role`, not `requireString`).
+- [Conversation timeline store](conversation-timeline-store.md) / [#217 codebase notes](../codebase/217.md) — the seventh additive extension: the `tool_use` kind, `parseToolUsePayload`, and the required-string-presence idiom scaled to five fields with no enum.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

@@ -51,6 +51,26 @@ describe('translateTimelineEvent — the two owned arms', () => {
       expect(translated).not.toBe(event)
     }
   })
+
+  it('toolUse → a ThreadEvent toolUse with the same fields, a fresh object', () => {
+    const event: DaemonEvent = {
+      type: 'toolUse',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Read',
+      inputSummary: 'reads /etc/hosts'
+    }
+    const translated = translateTimelineEvent(event)
+    expect(translated).toEqual({
+      type: 'toolUse',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Read',
+      inputSummary: 'reads /etc/hosts'
+    })
+    // A fresh literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
 })
 
 describe('translateTimelineEvent — every other arm returns null (the inverse filter)', () => {
@@ -188,5 +208,47 @@ describe('subscribeTimeline', () => {
     // Same state again — the reducer returns the same state object, so the store does not churn.
     bridge.emit({ type: 'turnState', state: 'thinking' })
     expect(store.getState()).toBe(afterFirst)
+  })
+
+  it('AC5: a toolUse event appends one pending toolCall item (result: null) via the store, no React', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    bridge.emit({
+      type: 'toolUse',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Read',
+      inputSummary: 'reads /etc/hosts'
+    })
+
+    const items = selectItems(store.getState())
+    expect(items).toHaveLength(1)
+    const item = items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(item).toEqual({
+      kind: 'toolCall',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Read',
+      inputSummary: 'reads /etc/hosts',
+      result: null
+    })
+  })
+
+  it('AC5: a delta → toolUse → delta yields [assistantText, toolCall, assistantText] (the #121 split)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const sequence: DaemonEvent[] = [
+      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'before ' },
+      { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' },
+      { type: 'assistantDelta', turnId: 'A', seq: 1, text: 'after' }
+    ]
+    for (const event of sequence) bridge.emit(event)
+
+    const items = selectItems(store.getState())
+    expect(items.map((i) => i.kind)).toEqual(['assistantText', 'toolCall', 'assistantText'])
   })
 })

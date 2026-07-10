@@ -19,12 +19,20 @@ the transport slice that finally feeds `phase` a live value. `selectPhase` now h
 source; [#215](../codebase/215.md) gave it its first reader, `ConversationScreen`'s `ThinkingIndicator`
 (see [Conversation shell § Thinking indicator](conversation-shell.md#thinking-indicator-215)).
 
+[#217](../codebase/217.md) added a fourth arm, `toolUse` — the tool-call enrichment of the same v2
+interactive stream. Unlike the three arms before it, this is the first whose mapping produces a
+durable, appended `ThreadItem` (a `toolCall`, `result: null`) rather than growing text or setting a
+scalar: `reduceTimeline`'s pre-existing `toolUse` arm (#121) splits the turn's text into
+`[assistantText, toolCall, assistantText]`. `selectItems` now has a second content kind to expose
+beyond `assistantText`; nothing in the renderer paints a `toolCall` row yet — that is the sibling slice
+[#218](https://github.com/pyrycode/pyrycode-desktop/issues/218).
+
 ## What it does
 
-Turns the two owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
+Turns the four owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
 via `reduceTimeline`, exposing `selectItems`/`selectPhase` as the only read surface. A stream arrival
-(an `assistant_delta` chunk, a `turn_end` marker) re-renders only components selecting a timeline
-slice — orthogonal to `sessionStore` and `runConfigStore`.
+(an `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call) re-renders only components
+selecting a timeline slice — orthogonal to `sessionStore` and `runConfigStore`.
 
 ## How it works
 
@@ -49,9 +57,9 @@ speculative observer here would defend an unobserved need.
 
 ```ts
 translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
-// Owns exactly assistantDelta / turnEnd / turnState (#214), each rebuilt as a fresh named-field
-// literal (never `return event`, never a spread). Every other arm -> null via explicit fall-through,
-// then default: assertNever(event) — a HARD guard, not a soft catch-all default.
+// Owns exactly assistantDelta / turnEnd / turnState / toolUse (#217), each rebuilt as a fresh
+// named-field literal (never `return event`, never a spread). Every other arm -> null via explicit
+// fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te) })
@@ -63,28 +71,34 @@ useTimelineBridge(): void
 ```
 
 This is the deliberate mirror image of [`daemonEventBridge`](daemon-event-bridge.md): that bridge's
-`assertNever`-guarded switch returns `null` for these same three arms and owns the rest; this bridge
-owns exactly these three and returns `null` for the rest. Two independent subscribers on the same
+`assertNever`-guarded switch returns `null` for these same four arms and owns the rest; this bridge
+owns exactly these four and returns `null` for the rest. Two independent subscribers on the same
 `window.pyry.onDaemonEvent` channel, each with its own hard exhaustiveness guard — so a future
 `DaemonEvent` member is a compile error in *both* files until each decides its mapping. [#214](../codebase/214.md)
 was the first ticket to pay that doubled cost: adding `turnState` forced a new case in both this file
-and `daemonEventBridge.ts` at once.
+and `daemonEventBridge.ts` at once. [#217](../codebase/217.md) paid it a second time for `toolUse`.
 
 The `assistantDelta`/`turnEnd` arms are field-for-field identical between `DaemonEvent` and
 `ThreadEvent` (`turnId`/`seq`/`text`, `turnId`/`stopReason`), so mapping them is a **filter, not a
 rename** — arm selection plus a fresh copy, no field mapping. `turnState` is the same shape of
 filter-not-rename: `event.state` (`WireTurnState`) assigns to the `ThreadEvent` arm's `state`
 (`TurnPhase`) with no cast, because the two are the same literal union declared on either side of the
-shared/renderer boundary (see [#214](../codebase/214.md)).
+shared/renderer boundary (see [#214](../codebase/214.md)). `toolUse` ([#217](../codebase/217.md)) is
+likewise a pure filter-and-copy — `DaemonEvent.toolUse` and `ThreadEvent.toolUse` are field-for-field
+identical (`turnId`/`toolUseId`/`name`/`inputSummary`), a deliberate lockstep design from ADR 0008 — but
+it is the first owned arm whose `ThreadEvent` counterpart `reduceTimeline` folds into an **appended
+`ThreadItem`** (a `toolCall`) rather than a text delta or a scalar.
 
 ### Data flow
 
 ```
-daemon frame ─(#199/#214 transport, snake→camel, conversation_id dropped)→ DaemonEvent{assistantDelta|turnEnd|turnState}
+daemon frame ─(#199/#214/#217 transport, snake→camel, conversation_id dropped)→
+   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
    → timelineStore.dispatch → reduceTimeline → TimelineState
-   → selectItems / selectPhase   (selectItems read by #203's Timeline view; selectPhase read by
+   → selectItems / selectPhase   (selectItems read by #203's Timeline view, now also carrying
+                                   pending toolCall items from #217; selectPhase read by
                                    #215's ThinkingIndicator view)
 ```
 
@@ -116,9 +130,13 @@ daemon frame ─(#199/#214 transport, snake→camel, conversation_id dropped)→
   (none in this repo), exactly as `useDaemonEventBridge` has none — its behavior is fully carried by
   the pure `subscribeTimeline` tests. See [#202 codebase notes](../codebase/202.md) § Lessons learned.
 - **Zero live traffic until #179.** Desktop withholds the `interactive` capability, so no
-  `assistant_delta`/`turn_end`/`turn_state` frame reaches this bridge in production yet — the store,
-  bridge, #203's `Timeline` view, and #215's `ThinkingIndicator` view are built and tested against
+  `assistant_delta`/`turn_end`/`turn_state`/`tool_use` frame reaches this bridge in production yet — the
+  store, bridge, #203's `Timeline` view, and #215's `ThinkingIndicator` view are built and tested against
   injected `DaemonEvent`s/`ThreadItem[]`/booleans only.
+- **The `toolCall` item's `result` is permanently `null` in this slice.** Correlating a later
+  `tool_result` into the field by `toolUseId` is [#206](https://github.com/pyrycode/pyrycode-desktop/issues/206),
+  a separate still-open ticket — `reduceTimeline`'s `toolResult` arm already exists (#121) but nothing
+  feeds it yet.
 
 ## Related
 
@@ -138,6 +156,10 @@ daemon frame ─(#199/#214 transport, snake→camel, conversation_id dropped)→
   source.
 - [#215 codebase notes](../codebase/215.md) — `selectPhase`'s first reader, the `ThinkingIndicator`
   render slice.
+- [#217 codebase notes](../codebase/217.md) — the `toolUse` transport slice: wire types, decode, and
+  the fourth arm this bridge's `translateTimelineEvent` owns, the first to drive a durable `toolCall`
+  item; unblocks the render slice [#218](https://github.com/pyrycode/pyrycode-desktop/issues/218) and
+  feeds the still-open correlation ticket [#206](https://github.com/pyrycode/pyrycode-desktop/issues/206).
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md).
 - [#203 codebase notes](../codebase/203.md) — mounts `useTimelineBridge`, reads
   `selectItems`, and paints the streamed assistant text — the blank-thread-critical slice that gates

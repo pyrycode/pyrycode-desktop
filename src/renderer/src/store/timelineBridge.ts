@@ -20,8 +20,8 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the three v2 stream arms (`assistantDelta` / `turnEnd` / `turnState`,
- * #214); each is reconstructed as a fresh literal with named fields — not `return event`, not a spread
+ * timeline state. Owns exactly the four v2 stream arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * `toolUse`, #217); each is reconstructed as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
  * rename: the owned arms are field-for-field identical to their `ThreadEvent` counterparts, so there
@@ -42,6 +42,17 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // `event.state` is WireTurnState; the ThreadEvent arm expects TurnPhase — the same literal union,
       // so this assigns with no cast and no import of TurnPhase (a rename, not a re-validation).
       return { type: 'turnState', state: event.state }
+    case 'toolUse':
+      // The tool-call arm (#217). The DaemonEvent and ThreadEvent `toolUse` shapes are field-for-field
+      // identical, so this is a filter + fresh copy (arm selection), not a field remap. reduceTimeline
+      // folds it into a pending `toolCall` item (result: null) in arrival order (#121).
+      return {
+        type: 'toolUse',
+        turnId: event.turnId,
+        toolUseId: event.toolUseId,
+        name: event.name,
+        inputSummary: event.inputSummary
+      }
     case 'connecting':
     case 'connected':
     case 'disconnected':

@@ -306,6 +306,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // The timeline bridge (#202), not the session store, maps this onto the reducer's `phase`.
             emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
             return
+          case 'tool-use':
+            // The tool-call data path (#217). snake→camel here; `conversation_id` is DROPPED (single
+            // active conversation; #202's bridge scopes identity). A fresh literal with the four named
+            // fields, never a spread of the decoded payload, so only the render fields cross IPC. The
+            // timeline bridge (#202), not the session store, folds this into a pending `toolCall` item.
+            emitDaemonEvent(sink, {
+              type: 'toolUse',
+              turnId: inbound.toolUse.turn_id,
+              toolUseId: inbound.toolUse.tool_use_id,
+              name: inbound.toolUse.name,
+              inputSummary: inbound.toolUse.input_summary
+            })
+            return
           case 'conversations':
             // The conversation-list data path (#139). Emit a fresh literal reusing the already-minimal
             // decoded array — mirror messagesReceived, NOT the snapshot content-drop: there is nothing

@@ -58,6 +58,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'assistantDelta':
     case 'turnEnd':
     case 'turnState':
+    case 'toolUse':
       // No session-store action: the renderer timeline bridge (#202), not the session store, consumes
       // these. Present only because the assertNever guard below makes a new arm a compile error.
       return null

@@ -52,6 +52,7 @@ export type EnvelopeType =
   | 'assistant_delta'
   | 'turn_end'
   | 'turn_state'
+  | 'tool_use'
   | 'list_conversations'
   | 'conversations'
   | 'ack'
@@ -195,6 +196,25 @@ export type WireTurnState = 'thinking' | 'responding' | 'idle'
 export interface TurnStatePayload {
   conversation_id: string
   state: WireTurnState
+}
+
+/**
+ * Inbound `tool_use` event (daemon → client). Mirrors the daemon's ToolUsePayload field-for-field
+ * (pyrycode #607 / ADR 025, protocol-mobile.md), wire order `conversation_id, turn_id, tool_use_id,
+ * name, input_summary` — all always present (no `omitempty`), all plain strings (no enum, unlike
+ * `turn_state`). The tool-call enrichment of the v2 interactive stream (ADR 0008): a durable, ordered
+ * timeline item (a `toolCall`), NOT a coarse scalar. `name` and `input_summary` are untrusted
+ * daemon-supplied strings carried as opaque display text (like `stop_reason` #199, `cwd` #139) —
+ * decoded, never interpreted. `input_summary` is the daemon's human-readable précis of the tool input,
+ * NOT the raw input (pyrycode `internal/turnbridge`), carried verbatim and never re-summarized. The
+ * render slice (#218) must render both as plain text, never HTML. See #217.
+ */
+export interface ToolUsePayload {
+  conversation_id: string
+  turn_id: string
+  tool_use_id: string
+  name: string
+  input_summary: string
 }
 
 /**

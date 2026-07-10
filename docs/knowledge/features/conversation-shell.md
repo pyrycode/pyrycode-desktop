@@ -20,6 +20,8 @@ The sheet's first section, **Log data** (a Download button for the debug bundle)
 
 A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `Timeline` view mounted beside `MessageThread`, rendering [thread-timeline store](conversation-timeline-store.md) items (the streamed assistant text, with a streaming cursor on the in-progress bubble) in a Strangler-Fig coexistence with the coarse thread above it. Inert (empty, zero footprint) in production until #179 flips the `interactive` capability. See [Structured-stream timeline render](#structured-stream-timeline-render-203) below.
 
+`Timeline`'s structural twin over the store's coarse `phase` scalar landed in [#215](../codebase/215.md): a "Thinking…" affordance mounted right after `Timeline`, covering the pre-text window the daemon opens with `turn_state{thinking}` before any assistant delta — otherwise the thread shows nothing and a slow turn looks stalled. Also inert until #179. See [Thinking indicator](#thinking-indicator-215) below.
+
 This screen is now the **thread view** of the [paired shell](paired-shell.md), landed in [#140](../codebase/140.md): the paired region enters at a list first, and opening a conversation mounts this screen, which gained a leading back affordance to return to the list. See [Back control](#back-control-140) below.
 
 ## How it works
@@ -36,6 +38,8 @@ ConversationScreen            .conversation        (flex column, full height, po
 │   └── MessageBubble × N     .message-row / .bubble
 ├── Timeline                  .conversation__thread (null when empty, the structured-stream path, #203)
 │   └── TimelineRow × N       .message-row--daemon / .bubble--daemon (assistantText only)
+├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
+│   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…")
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
 ├── Composer                  .composer            (pinned)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
@@ -404,6 +408,41 @@ now-populated `Timeline` — a half-height dead region — which #179 must recon
 or gate anything here). See [#203 codebase notes](../codebase/203.md) for the full design and code
 review record.
 
+### Thinking indicator (#215)
+
+`Timeline`'s structural twin over the coarse `phase` scalar (`TurnPhase`, [ADR 0008](../decisions/0008-thread-timeline-model.md))
+rather than the `items` list, mounted immediately after it:
+
+```
+.conversation
+├── Timeline                   items={useTimelineStore(selectItems)}
+└── ThinkingIndicator           isThinking={useTimelineStore(selectPhase) === 'thinking'}
+```
+
+The daemon opens a turn with `turn_state{thinking}` before any `assistant_delta` (pyrycode #632), so
+during that window `Timeline` is `null` (no items yet) and, before this ticket, the thread showed
+nothing — a slow turn was indistinguishable from a stalled one. `ThinkingIndicator({ isThinking })` is
+`Timeline`'s twin: pure, exported, in-file, server-rendered from an injected boolean. `isThinking ===
+false` → `null` (zero footprint, the `Timeline`-on-empty-`items` precedent); `isThinking === true` → a
+`flex: 0 0 auto` `.conversation__thinking` wrapper (deliberately not the thread's `flex: 1 1 auto`, so
+it never claims a competing region) holding `<div className="bubble bubble--daemon
+bubble--thinking">Thinking…</div>` — the daemon-bubble surface, text muted to
+`--color-on-surface-variant`. The label is a static, client-owned constant, never `phase` itself.
+
+**Boolean input, not `phase`.** The view's prop is `isThinking: boolean`, never `phase: TurnPhase` —
+this makes "no daemon-supplied string is rendered by this slice" a **type-level guarantee**: the view
+structurally cannot render a daemon string because it never receives one. The container does the
+trivial `phase === 'thinking'` derivation. No animation shipped (an optional pulse was explicitly
+non-load-bearing per spec); the interim treatment is deliberately minimal, since the locked mobile
+design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no dedicated thinking-indicator node — the polished
+version rolls into the deferred desktop-design pass.
+
+Dormant until #179 flips `interactive` (`phase` stays `idle` in production until then), the same
+posture as `Timeline`. Code review flagged one non-gating NIT: `.conversation__thinking` has no live
+region (`role="status"`), so a screen reader won't announce it appearing/disappearing — deferred to
+#179 or the desktop-design pass. See [#215 codebase notes](../codebase/215.md) for the full design,
+patterns established, and open questions.
+
 ## Seams (bound + still open)
 
 - **`onBack?: () => void`** — **bound in [#140](../codebase/140.md).** Optional, gated exactly like `onUnpaired?`; wired by the [paired shell](paired-shell.md) when this screen is mounted as its `thread` view, absent for a bare `<ConversationScreen />`. See [Back control](#back-control-140) above.
@@ -413,6 +452,7 @@ review record.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md).** A second, independent thread beside `MessageThread`, reading the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Inert (empty, `null`) in production until #179 flips `interactive`. See [Structured-stream timeline render](#structured-stream-timeline-render-203) above.
+- **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. Inert (`null`) in production until #179 flips `interactive`. See [Thinking indicator](#thinking-indicator-215) above.
 
 ## Edge cases and limitations
 
@@ -431,9 +471,9 @@ review record.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`
-- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`
+- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215)
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

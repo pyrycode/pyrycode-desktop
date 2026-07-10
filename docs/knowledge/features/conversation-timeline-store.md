@@ -16,8 +16,8 @@ the coarse `message`/`message_chunk` path imports or is changed by either new fi
 
 [#214](../codebase/214.md) added a third arm to `translateTimelineEvent`'s owned block, `turnState` —
 the transport slice that finally feeds `phase` a live value. `selectPhase` now has a real upstream
-source for the first time; nothing in the renderer reads it yet (the thinking-indicator render is a
-still-open sibling slice, blocked on this ticket landing).
+source; [#215](../codebase/215.md) gave it its first reader, `ConversationScreen`'s `ThinkingIndicator`
+(see [Conversation shell § Thinking indicator](conversation-shell.md#thinking-indicator-215)).
 
 ## What it does
 
@@ -84,9 +84,8 @@ daemon frame ─(#199/#214 transport, snake→camel, conversation_id dropped)→
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
    → timelineStore.dispatch → reduceTimeline → TimelineState
-   → selectItems / selectPhase   (selectItems read by #203's Timeline view; selectPhase has a real
-                                   source as of #214 but no reader yet — the thinking indicator is a
-                                   still-open sibling slice)
+   → selectItems / selectPhase   (selectItems read by #203's Timeline view; selectPhase read by
+                                   #215's ThinkingIndicator view)
 ```
 
 ## Configuration and usage
@@ -96,8 +95,10 @@ daemon frame ─(#199/#214 transport, snake→camel, conversation_id dropped)→
 - **`selectItems` is read in `ConversationScreen`** via `useTimelineStore(selectItems)`, feeding the
   new `Timeline` pure view straight (no adapter — `ThreadItem` is already the render model). See
   [Conversation shell § Structured-stream timeline render](conversation-shell.md#structured-stream-timeline-render-203).
-  `selectPhase` has a real source as of [#214](../codebase/214.md) (`turn_state`) but still has no
-  reader — the thinking-indicator render is the still-open sibling slice.
+  `selectPhase` has a real source as of [#214](../codebase/214.md) (`turn_state`) and its first reader
+  as of [#215](../codebase/215.md) — `ConversationScreen`'s `ThinkingIndicator`, reading
+  `useTimelineStore(selectPhase)` to derive `isThinking`. See
+  [Conversation shell § Thinking indicator](conversation-shell.md#thinking-indicator-215).
 - Import surface: `import { useTimelineStore, selectItems, selectPhase } from
   '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
   '@renderer/store/timelineBridge'`.
@@ -116,8 +117,8 @@ daemon frame ─(#199/#214 transport, snake→camel, conversation_id dropped)→
   the pure `subscribeTimeline` tests. See [#202 codebase notes](../codebase/202.md) § Lessons learned.
 - **Zero live traffic until #179.** Desktop withholds the `interactive` capability, so no
   `assistant_delta`/`turn_end`/`turn_state` frame reaches this bridge in production yet — the store,
-  bridge, and #203's `Timeline` view are built and tested against injected `DaemonEvent`s/`ThreadItem[]`
-  only.
+  bridge, #203's `Timeline` view, and #215's `ThinkingIndicator` view are built and tested against
+  injected `DaemonEvent`s/`ThreadItem[]`/booleans only.
 
 ## Related
 
@@ -135,6 +136,8 @@ daemon frame ─(#199/#214 transport, snake→camel, conversation_id dropped)→
 - [#214 codebase notes](../codebase/214.md) — the `turnState` transport slice: wire types, decode, and
   the third arm this bridge's `translateTimelineEvent` owns, giving `selectPhase` its first real
   source.
+- [#215 codebase notes](../codebase/215.md) — `selectPhase`'s first reader, the `ThinkingIndicator`
+  render slice.
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md).
 - [#203 codebase notes](../codebase/203.md) — mounts `useTimelineBridge`, reads
   `selectItems`, and paints the streamed assistant text — the blank-thread-critical slice that gates

@@ -85,6 +85,13 @@ export type DaemonEvent =
   // `conversation_id` is dropped at the emit (single active conversation). Consumed by the renderer
   // timeline bridge (#202) → `phase`, not the session store. No token, key, or raw frame.
   | { type: 'turnState'; state: WireTurnState }
+  // The session-boundary arm (#254). Carries ONLY `newSessionId` (the addressing key the #259 holder
+  // retains); `previous_session_id` / `reason` / `occurred_at` / `workspace_cwd` are decoded then dropped
+  // at the emit (the snapshotReceived dedicated-minimal-shape precedent, #180). A session_id is a routing
+  // id, not a secret (the conversation_id / snapshotReceived convention), so no token, key, or raw frame
+  // can ride this arm. Consumed by the renderer holder (#259, not yet built), so all three exhaustive
+  // bridges no-op it for now — matching how snapshotReceived was a no-op in daemonEventBridge until #187.
+  | { type: 'sessionTransition'; newSessionId: string }
   // The tool-call arm (#217). Carries the four render fields (`conversation_id` dropped at the emit,
   // single active conversation). Consumed by the renderer timeline bridge (#202) → a `toolCall` item,
   // not the session store. `name` / `inputSummary` are opaque daemon display text the render slice

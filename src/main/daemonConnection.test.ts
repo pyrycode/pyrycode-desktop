@@ -254,6 +254,11 @@ function conversationCreatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversation_created', ts: FIXED_TS, payload })
 }
 
+/** A `session_transition` plaintext, wrapping an arbitrary payload (#254). */
+function sessionTransitionPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'session_transition', ts: FIXED_TS, payload })
+}
+
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
 function errorPlaintext(): Uint8Array {
   return encodeEnvelope({
@@ -1224,6 +1229,99 @@ describe('createDaemonConnection — turn_state stream (#214)', () => {
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — session_transition stream (#254)', () => {
+  const SESSION_TRANSITION = {
+    previous_session_id: 'sess-1',
+    new_session_id: 'sess-2',
+    reason: 'clear',
+    occurred_at: '2026-07-10T00:00:00.000000000Z',
+    workspace_cwd: null
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound session_transition into one sessionTransition carrying only newSessionId', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: sessionTransitionPlaintext(SESSION_TRANSITION) })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'sessionTransition', newSessionId: 'sess-2' }
+    ])
+  })
+
+  it('drops the other four marker fields at the emit — only type + newSessionId cross IPC (content-drop, the security property)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // A workspace_change frame carries a non-null workspace_cwd; it must STILL never cross IPC.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionTransitionPlaintext({
+        previous_session_id: 'sess-old',
+        new_session_id: 'sess-new',
+        reason: 'workspace_change',
+        occurred_at: '2026-07-10T00:00:00.000000000Z',
+        workspace_cwd: '/home/user/secret-workspace'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([{ type: 'sessionTransition', newSessionId: 'sess-new' }])
+    // The emitted event has exactly the two keys — the four dropped fields (and any snake/camel
+    // variant) are absent.
+    expect(Object.keys(events[0]).sort()).toEqual(['newSessionId', 'type'])
+    const serialized = JSON.stringify(events)
+    for (const dropped of [
+      'sess-old',
+      'previous_session_id',
+      'reason',
+      'workspace_change',
+      'occurred_at',
+      'workspace_cwd',
+      '/home/user/secret-workspace'
+    ]) {
+      expect(serialized).not.toContain(dropped)
+    }
+  })
+
+  it('drops a malformed session_transition without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: sessionTransitionPlaintext({ ...SESSION_TRANSITION, reason: 'evicted' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('leaves the coarse message / message_chunk path untouched (no regression)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi' }
+    const a = { conversation_id: 'c1', message_id: 'm2', role: 'user', text: 'one' }
+
+    drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+    drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'messageReceived', message },
+      { type: 'messagesReceived', messages: [a] }
+    ])
   })
 })
 

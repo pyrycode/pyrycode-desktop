@@ -52,6 +52,7 @@ export type EnvelopeType =
   | 'assistant_delta'
   | 'turn_end'
   | 'turn_state'
+  | 'session_transition'
   | 'tool_use'
   | 'tool_result'
   | 'modal_shown'
@@ -203,6 +204,39 @@ export type WireTurnState = 'thinking' | 'responding' | 'idle'
 export interface TurnStatePayload {
   conversation_id: string
   state: WireTurnState
+}
+
+/**
+ * The reason a daemon session rotated, on the wire. Mirrors WireTurnState / MessagePayload.role: a plain
+ * daemon-side string over a closed set (no named enum), closed to the three SSOT #656 values. The producer
+ * (pyrycode/pyrycode#657) emits only `clear` / `idle_evict` today; `workspace_change` is kept in the closed
+ * set anyway so the wire contract stays fully expressible (a consumer enum may admit a value the producer
+ * cannot yet emit — SSOT #656). A future fourth reason would fail closed here (the frame drops) until this
+ * decoder is widened — the correct no-drift posture for a wire enum.
+ */
+export type WireSessionTransitionReason = 'clear' | 'idle_evict' | 'workspace_change'
+
+/**
+ * Inbound `session_transition` marker (daemon → client). Mirrors the daemon's SessionTransitionPayload
+ * field-for-field (pyrycode/pyrycode#656, internal/protocol/messaging.go), wire order
+ * `previous_session_id, new_session_id, reason, occurred_at, workspace_cwd` — all always present (no
+ * `omitempty`). A session-boundary event the daemon emits when a conversation's session rotates (a `/clear`,
+ * an idle eviction, a workspace change); it carries `new_session_id`, the addressing key a client needs to
+ * change per-session settings (model / effort / YOLO). **There is NO `conversation_id`** — a session
+ * boundary is attributed by the connection it arrives on, and desktop targets a single active conversation
+ * (MILESTONE_CONVERSATION_ID). `reason` is a plain wire string like `MessagePayload.role`, closed to the
+ * three WireSessionTransitionReason values. `occurred_at` is RFC3339Nano (a plain string on the wire; the
+ * decoder requires a string but does not parse the timestamp). `workspace_cwd` is `string | null` (the
+ * `ConversationSummary.name` valid-`null` idiom): the new workspace dir, non-null iff
+ * `reason == workspace_change`, literal `null` for `clear` / `idle_evict`. Interactive-capability gated
+ * (#179). See #254.
+ */
+export interface SessionTransitionPayload {
+  previous_session_id: string
+  new_session_id: string
+  reason: WireSessionTransitionReason
+  occurred_at: string
+  workspace_cwd: string | null
 }
 
 /**

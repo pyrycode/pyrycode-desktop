@@ -115,6 +115,7 @@ export type DaemonEvent =
   | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   | { type: 'conversationCreated'; conversation: ConversationCreatedPayload }
+  | { type: 'sessionTransition'; newSessionId: string }
 ```
 
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
@@ -181,6 +182,15 @@ export type DaemonEvent =
   required boolean whose `false` is a value, decoded via `requireBoolean` (the `yolo` #180 idiom);
   `resultSummary` is opaque daemon-supplied display text (the `input_summary` #217 / `stop_reason` #199
   posture); `conversation_id` is the one field dropped.
+- **`sessionTransition{newSessionId}`** ([#254](../codebase/254.md)) also maps to *no* `SessionAction`,
+  consumed by **none of the three** existing bridges — its consumer is a not-yet-built renderer holder,
+  [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259) (blocked on this ticket). Unlike
+  every prior member, this is a **content-minimised** shape over a **five**-field wire payload
+  (`SessionTransitionPayload`): `previous_session_id` / `reason` / `occurred_at` / `workspace_cwd` are
+  decoded and fail-closed validated at the transport boundary but dropped at the emit — only
+  `new_session_id` (the addressing key #259 retains) crosses IPC, the `snapshotReceived`
+  dedicated-minimal-shape precedent applied to a second field family. No `conversation_id` to drop — a
+  session boundary is attributed by the connection it arrives on, not a wire field.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -272,6 +282,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member, the twelfth no-`SessionAction` arm and the vertical's last transport slice; the fifth arm the `timelineBridge` owns and the first to resolve an existing `ThreadItem` in place rather than append one or set a scalar
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `conversationCreated` member, the thirteenth no-`SessionAction` arm and the write-side twin of `conversationsReceived` (#139); consumed by neither existing bridge, real consumer is the render sibling #242
+- [#254 codebase notes](../codebase/254.md) — the `sessionTransition` member, the fourteenth no-`SessionAction` arm and the second (after `snapshotReceived`) to content-minimise its emit relative to its decoded wire payload; consumed by none of the three existing bridges, real consumer is the renderer holder #259, blocked on this ticket
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

@@ -93,6 +93,11 @@ function encodeConversationCreated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 18, type: 'conversation_created', ts: FIXED_TS, payload })
 }
 
+/** A `session_transition` envelope's plaintext bytes, wrapping an arbitrary payload (#254). */
+function encodeSessionTransition(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 19, type: 'session_transition', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -202,6 +207,15 @@ const CREATED_UNNAMED = {
   cwd: '/tmp/scratch',
   name: null,
   last_used_at: '2026-07-10T01:00:00Z'
+}
+
+/** A fully-populated, well-formed session_transition payload — a /clear rotation, workspace_cwd null (#254). */
+const SESSION_TRANSITION = {
+  previous_session_id: 'sess-1',
+  new_session_id: 'sess-2',
+  reason: 'clear',
+  occurred_at: '2026-07-10T00:00:00.000000000Z',
+  workspace_cwd: null
 }
 
 describe('parseInboundMessage — happy', () => {
@@ -719,6 +733,127 @@ describe('parseInboundMessage — conversation_created fail-closed (#241, AC5)',
         type: 'conversation_created',
         ts: FIXED_TS,
         payload: { ...CREATED_NAMED, name: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — session_transition recognition (#254, additive)', () => {
+  it('narrows a full session_transition into { kind: session-transition } for each reason', () => {
+    // clear / idle_evict carry workspace_cwd:null; workspace_change carries a non-null path.
+    const cases = [
+      { ...SESSION_TRANSITION, reason: 'clear', workspace_cwd: null },
+      { ...SESSION_TRANSITION, reason: 'idle_evict', workspace_cwd: null },
+      { ...SESSION_TRANSITION, reason: 'workspace_change', workspace_cwd: '/home/user/other' }
+    ]
+    for (const payload of cases) {
+      expect(parseInboundMessage(encodeSessionTransition(payload))).toEqual({
+        kind: 'session-transition',
+        sessionTransition: payload
+      })
+    }
+  })
+
+  it('decodes workspace_cwd:null as null (a valid clear/idle_evict value, never absent — AC2)', () => {
+    const result = parseInboundMessage(encodeSessionTransition(SESSION_TRANSITION))
+    expect(result).toEqual({ kind: 'session-transition', sessionTransition: SESSION_TRANSITION })
+    // Pin the null specifically — a clear/idle_evict frame stays distinguishable from workspace_change.
+    if (result?.kind === 'session-transition') {
+      expect(result.sessionTransition.workspace_cwd).toBeNull()
+    }
+  })
+
+  it('drops unknown server keys (incl. a spurious conversation_id), keeping only the five known fields', () => {
+    const withExtras = { ...SESSION_TRANSITION, conversation_id: 'conv-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeSessionTransition(withExtras))).toEqual({
+      kind: 'session-transition',
+      sessionTransition: SESSION_TRANSITION
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — session_transition fail-closed (#254)', () => {
+  it('throws when reason is absent, a non-string, or a string outside the closed enum', () => {
+    const bad: unknown[] = [
+      (() => {
+        const { reason: _dropped, ...missing } = SESSION_TRANSITION
+        return missing
+      })(), // reason absent
+      { ...SESSION_TRANSITION, reason: 42 }, // non-string
+      { ...SESSION_TRANSITION, reason: null },
+      { ...SESSION_TRANSITION, reason: {} },
+      { ...SESSION_TRANSITION, reason: 'evicted' }, // a string outside the closed enum
+      { ...SESSION_TRANSITION, reason: '' } // empty string is still outside the enum
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionTransition(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when previous_session_id / new_session_id / occurred_at is absent or non-string', () => {
+    const bad: unknown[] = [
+      { ...SESSION_TRANSITION, previous_session_id: undefined },
+      { ...SESSION_TRANSITION, new_session_id: 42 },
+      { ...SESSION_TRANSITION, occurred_at: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionTransition(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when workspace_cwd is absent/undefined (must be present, even as null) or non-string-non-null', () => {
+    const bad: unknown[] = [
+      (() => {
+        const { workspace_cwd: _dropped, ...missing } = SESSION_TRANSITION
+        return missing
+      })(), // workspace_cwd absent
+      { ...SESSION_TRANSITION, workspace_cwd: 42 }, // a number is not a valid value
+      { ...SESSION_TRANSITION, workspace_cwd: {} } // an object is not a valid value
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionTransition(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a session_transition payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeSessionTransition('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeSessionTransition(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('names the failure category only for a bad reason — never echoes the value or a workspace path', () => {
+    // reason out-of-enum, with a secret workspace_cwd present as a valid string: a naive impl would
+    // interpolate the offending reason value (and the path) into the error message.
+    let thrown: unknown = null
+    try {
+      parseInboundMessage(
+        encodeSessionTransition({
+          ...SESSION_TRANSITION,
+          reason: 'evicted',
+          workspace_cwd: '/home/secret/workspace'
+        })
+      )
+    } catch (e) {
+      thrown = e
+    }
+    expect(thrown).toBeInstanceOf(WireDecodeError)
+    const message = (thrown as Error).message
+    expect(message).not.toContain('evicted')
+    expect(message).not.toContain('/home/secret/workspace')
+  })
+
+  it('throws on an oversized session_transition plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 19,
+        type: 'session_transition',
+        ts: FIXED_TS,
+        payload: { ...SESSION_TRANSITION, new_session_id: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
       })
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
@@ -1608,6 +1743,43 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeConversationCreated({ ...CREATED_NAMED, is_promoted: 'nope' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a session_transition content-free, never a decoded field (#254)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_PREV = 'secret-previous-session-id'
+    const SECRET_NEW = 'secret-new-session-id'
+    const SECRET_CWD = '/home/secret/workspace'
+    const plaintext = encodeSessionTransition({
+      previous_session_id: SECRET_PREV,
+      new_session_id: SECRET_NEW,
+      reason: 'workspace_change',
+      occurred_at: '2026-07-10T00:00:00.000000000Z',
+      workspace_cwd: SECRET_CWD
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('session_transition')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field (session ids / reason / occurred_at /
+    // workspace_cwd) reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_PREV, SECRET_NEW, SECRET_CWD, 'workspace_change']) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed session_transition throw path (#254)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeSessionTransition({ ...SESSION_TRANSITION, reason: 'evicted' }), log)
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

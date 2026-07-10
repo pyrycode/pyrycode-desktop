@@ -76,6 +76,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // No session-store action: the modal store + bridge (#223), not the session store, consumes
       // these. Present only because the assertNever guard below makes a new arm a compile error.
       return null
+    case 'sessionTransition':
+      // No session-store action: the #259 holder (not yet built) retains the current session id, not
+      // the session store. Present only because the assertNever guard below makes a new arm a compile
+      // error (the snapshotReceived-was-a-no-op-until-#187 precedent).
+      return null
     default:
       return assertNever(event)
   }

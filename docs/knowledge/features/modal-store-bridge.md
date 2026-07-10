@@ -154,5 +154,8 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
 - [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the
   `conversationCreated` arm that folds into this bridge's no-op case alongside `toolResult`; the real
   consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242).
+- [#254 codebase notes](../codebase/254.md) — the `sessionTransition` arm that folds into this bridge's
+  no-op case alongside `toolResult`/`conversationCreated`; the real consumer is the not-yet-built
+  renderer holder [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259).
 - [#179 codebase notes](../codebase/179.md) — flips `interactive` live, so `modal_shown`/`modal_dismissed`
   carry real daemon traffic through this bridge in production for the first time.

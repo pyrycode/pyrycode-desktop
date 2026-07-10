@@ -101,8 +101,14 @@ landed:
   maps the two arms onto `ModalEvent` and dispatches into `modalStore.ts`, a Zustand container
   wrapping `reduceModal` — the consumer this module's `ModalEvent` union has been the stable target
   contract for since #122.
-- the interactive render of an outstanding `ModalPrompt` (#224, next — mounts `useModalBridge`) and
-  the answer/cancel path (#225);
+- **[#224](../codebase/224.md) (shipped)** — the interactive render of an outstanding `ModalPrompt`
+  (mounts `useModalBridge`, new `PermissionModal.tsx`), read-only inert buttons.
+- the answer/cancel path, split 3-way from #225 by transport/render layer:
+  **[#235](../codebase/235.md) (shipped)** — the [outbound wire types + fail-closed
+  builders](modal-resolution-envelope.md) (`modal_answer`/`modal_cancel`), no consumer yet;
+  [#236](https://github.com/pyrycode/pyrycode-desktop/issues/236) — main-command wiring, mints
+  `answer_token`; [#237](https://github.com/pyrycode/pyrycode-desktop/issues/237) — the renderer
+  buttons that call it, replacing #224's inert ones.
 - the destructive second-confirm (#226) / surface-rejection (#227) UX policy (client-side only — no
   wire signal exists for it).
 
@@ -144,6 +150,9 @@ this store; the id-addressed array keeps each a small extension rather than a re
   contract for; unblocked [#223](../codebase/223.md) (the bridge + `modalStore.ts` that consumes them).
 - [Modal store + bridge](modal-store-bridge.md) / [#223 codebase notes](../codebase/223.md) — the
   Zustand container + `DaemonEvent → ModalEvent` bridge built on this module.
+- [Modal resolution envelope](modal-resolution-envelope.md) / [#235 codebase notes](../codebase/235.md)
+  — the outbound `modal_answer`/`modal_cancel` wire types + builders, the base slice of the
+  answer/cancel path split from #225.
 - [Daemon-event channel](daemon-event-channel.md) / [Daemon-event bridge](daemon-event-bridge.md) /
   [Conversation timeline store](conversation-timeline-store.md) — both bridges keep discarding the two
   modal arms as `null`; the real consumer is the third, independent [modal store +

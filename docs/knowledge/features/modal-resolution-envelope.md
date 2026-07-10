@@ -80,10 +80,16 @@ catches it and drops the send, the same posture as `buildSendMessage`/`buildRequ
 
 ## Configuration and usage
 
-**No consumer yet.** Nothing calls either builder; nothing imports this file outside its own test.
-The command path that mints `answer_token` (`crypto.randomUUID`, main-side — contrast
-`composerSend`'s renderer-side `message_id`) and calls these builders is #236; the renderer buttons
-that trigger it are #237.
+**Consumer landed: [#236](../codebase/236.md).** `daemonConnection.answerModal`/`cancelModal` (
+`src/main/daemonConnection.ts`) call the two builders directly — the `send`/`requestSnapshot` inert
+no-op shape (`driver === null` → return; full-body `try {} catch {}`, never throws out of the
+module), sharing the module's single `nextEnvelopeId` counter. `answerModal` mints `answer_token` via
+a new `mintToken` DI seam (default `crypto.randomUUID`, main-side — contrast `composerSend`'s
+renderer-side `message_id`) and builds the wire payload as a **fresh object literal**, never a spread
+of the caller's payload — the deterministic net against a renderer-smuggled token. Routed from a new
+pair of `RendererCommand` members (`answerModal`/`cancelModal`, [command channel](command-channel.md))
+through `src/main/index.ts`'s `onCommand` switch. The renderer buttons that dispatch those commands
+are [#237](https://github.com/pyrycode/pyrycode-desktop/issues/237), the next and final slice.
 
 ## Edge cases and limitations
 
@@ -109,3 +115,5 @@ that trigger it are #237.
 - [Wire codec](wire-codec.md) — `encodeEnvelope`/`WireEncodeError`/`MAX_PLAINTEXT_BYTES`, unchanged by
   this slice.
 - [#235 codebase notes](../codebase/235.md) — implementation summary.
+- [#236 codebase notes](../codebase/236.md) — the main-side command wiring that consumes both
+  builders and mints `answer_token`.

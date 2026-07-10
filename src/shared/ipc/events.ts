@@ -133,3 +133,14 @@ export type DaemonEvent =
       defaultOptionId: string
     }
   | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }
+  // The correlated modal-answer rejection arm (#248). Emitted by the MAIN-side correlation window
+  // (daemonConnection.ts) when a content-free daemon `error` (#116) arrives while a `modal_answer` this
+  // client sent (#236) is awaiting its reply — an ungranted device's answer round-trips to an `error`
+  // that carries NO `modal_id` (ADR 0009), so attribution is the transport's own outstanding-answer
+  // memory, never a field read from the untrusted `error`. Carries ONLY `modalId` — the one-time nonce
+  // already renderer-visible from `modalShown` (#201), NEVER the daemon ErrorPayload text (AC4/AC3 by
+  // construction: no field can hold the error content, a token, key, or raw frame). Consumed by the
+  // modal bridge (#249, render), NOT the session or timeline store — so this slice ships the arm
+  // DORMANT (every exhaustive bridge routes or no-ops it), matching how sessionTransition (#254) added
+  // the arm + three bridge no-ops while its consumer (#259) waited.
+  | { type: 'modalAnswerRejected'; modalId: string }

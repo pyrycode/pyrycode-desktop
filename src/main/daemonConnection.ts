@@ -264,6 +264,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // `null` before/between requests; a settled reassembler stays referenced but inert (its own
   // `settled` flag absorbs stray late frames) until the next request replaces it.
   let reassembler: BundleReassembler | null = null
+  // modal_ids whose modal_answer (#236) is awaiting the daemon's reply (#248). FIFO: the wire `error`
+  // (#116) carries no modal_id (ADR 0009), so a rejection dequeues the OLDEST outstanding answer.
+  // Pushed after a successful send in answerModal, drained by a matching modal_dismissed (the answer
+  // was accepted), and reset on each dial() (a fresh connection starts with no correlation). Single-
+  // writer — every mutation runs to completion inside a synchronous answerModal / onDriverEvent body,
+  // no await between a read and a write (the nextEnvelopeId single-writer rationale above).
+  const outstandingAnswers: string[] = []
 
   function emitFailed(code: string, message = messageFor(code)): void {
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
@@ -321,9 +328,21 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           case 'bundle-done':
             reassembler?.done(inbound.total)
             return
-          case 'daemon-error':
+          case 'daemon-error': {
             reassembler?.fail('daemon-error')
+            // Correlate the content-free error against the oldest outstanding modal_answer (#248). The
+            // wire `error` carries no modal_id (ADR 0009), so a rejection dequeues in send order. An
+            // empty queue → shift() is undefined → no event, preserving the prior drop / reassembler-
+            // only behaviour (AC2). The emitted modalId is the client's OWN outstanding-queue value,
+            // never read from the untrusted error payload (AC3 no-echo). Independent of the reassembler
+            // above — a bundle error still fails the bundle; a rejection emits iff an answer is
+            // outstanding (the documented, accepted double-fire on the rare overlap).
+            const rejectedModalId = outstandingAnswers.shift()
+            if (rejectedModalId !== undefined) {
+              emitDaemonEvent(sink, { type: 'modalAnswerRejected', modalId: rejectedModalId })
+            }
             return
+          }
           case 'snapshot':
             // The content-minimisation seam (#180): `text` / `ts` / `conversation_id` are decoded but
             // DROPPED here — only the three settings fields plus the two usage ints (#191) cross to the
@@ -444,7 +463,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               defaultOptionId: inbound.modalShown.default_option_id
             })
             return
-          case 'modal-dismissed':
+          case 'modal-dismissed': {
             // The modal-resolution data path (#201). snake→camel here; NO `conversation_id` (a modal
             // carries none). `outcome` is an opaque string carried verbatim. A fresh literal, never a
             // spread. Consumed by the modal store + bridge (#223).
@@ -454,7 +473,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               outcome: inbound.modalDismissed.outcome,
               source: inbound.modalDismissed.source
             })
+            // Drain the accepted answer from the correlation window (#248): a dismissal for a modal this
+            // client answered confirms the answer landed, so its id must not later mis-attribute an
+            // unrelated `error`. Remove the FIRST matching id; a no-op when absent (a dismissal for a
+            // modal this client didn't answer — a local/timeout source, or an already-drained id).
+            const answered = outstandingAnswers.indexOf(inbound.modalDismissed.modal_id)
+            if (answered !== -1) outstandingAnswers.splice(answered, 1)
             return
+          }
         }
         return
       }
@@ -703,6 +729,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
+      // Record the answered modal_id in the correlation window (#248) AFTER the send succeeds: a
+      // build/send throw skips this (caught below), so no phantom outstanding answer is left for an
+      // `error` that will never come back. Drained by the matching modal_dismissed (accept) or
+      // dequeued by a daemon `error` (reject); reset on each dial().
+      outstandingAnswers.push(payload.modal_id)
     } catch {
       // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
       // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
@@ -768,6 +799,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // envelopes restart at 2. Correctness-neutral (the daemon correlates by id, not sequence; see
     // the nextEnvelopeId comment above) but keeps a re-dialed session self-consistent.
     nextEnvelopeId = 2
+    // Reset the modal-answer correlation window (#248): a fresh connection starts with no outstanding
+    // answer, so a stale answer from a dead session can never correlate an `error` on the reconnected
+    // one. Holds only strings — nothing to abort, just clear the array in place.
+    outstandingAnswers.length = 0
     // Emitted synchronously, before any await, so status leaves "connecting" the moment the connect
     // begins (AC2). On the first start() the driver is null so the stop above is a no-op — no
     // behavior change from the original once-only start.

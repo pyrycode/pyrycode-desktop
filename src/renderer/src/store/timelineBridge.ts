@@ -80,10 +80,12 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'modalShown':
     case 'modalDismissed':
     case 'sessionTransition':
+    case 'modalAnswerRejected':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
-      // (#181), conversation-list store (#208), modal store + bridge (#223), the create render slice
-      // (#242), and the #259 session-id holder consume these — not the timeline store. sessionTransition
-      // is NOT a timeline item — unlike turnState, it drives no timeline row.
+      // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
+      // render), the create render slice (#242), and the #259 session-id holder consume these — not the
+      // timeline store. sessionTransition and modalAnswerRejected are NOT timeline items — unlike
+      // turnState, neither drives a timeline row.
       return null
     default:
       return assertNever(event)

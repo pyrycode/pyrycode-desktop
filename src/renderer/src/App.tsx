@@ -5,6 +5,7 @@ import { useDaemonEventBridge } from './store/daemonEventBridge'
 import { useTimelineBridge } from './store/timelineBridge'
 import { useModalBridge } from './store/modalBridge'
 import { ConversationListData } from './store/conversationListBridge'
+import { SessionIdData } from './store/sessionIdBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -87,9 +88,13 @@ function App(): JSX.Element {
   // a hook here) deliberately isolates its connected-gate `useSessionStore` read, so status flips
   // re-render the leaf, not App (whose inline onPaired/onUnpaired arrows would otherwise cascade a
   // re-render into ConversationScreen). It renders null, so the neutral-paint invariant holds.
+  // SessionIdData (#259) is a sibling headless leaf: it retains the current daemon session_id from
+  // the always-arriving `sessionTransition` marker for #257, on the same App-level always-listening
+  // rationale. Reactive-only (no request half), so it has no connected-gate read at all.
   return (
     <>
       <ConversationListData />
+      <SessionIdData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

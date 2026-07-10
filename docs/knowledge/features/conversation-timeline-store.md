@@ -157,14 +157,15 @@ daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id d
 - **No dedicated test for `useTimelineBridge`.** A bare hook is untestable without a React renderer
   (none in this repo), exactly as `useDaemonEventBridge` has none — its behavior is fully carried by
   the pure `subscribeTimeline` tests. See [#202 codebase notes](../codebase/202.md) § Lessons learned.
-- **Zero live traffic until #179.** Desktop withholds the `interactive` capability, so no
-  `assistant_delta`/`turn_end`/`turn_state`/`tool_use`/`tool_result` frame reaches this bridge in
-  production yet — the store, bridge, #203's `Timeline` view, and #215's `ThinkingIndicator` view are
-  built and tested against injected `DaemonEvent`s/`ThreadItem[]`/booleans only.
-- **The `toolCall` item's `result` now fills as of [#229](../codebase/229.md), but nothing renders it
-  yet.** The transport-to-reducer chain is complete — a `tool_result` frame resolves its correlated
-  `toolCall`'s `result` in place, visible via `selectItems` — but the success/error visual is the still-open
-  sibling slice [#230](https://github.com/pyrycode/pyrycode-desktop/issues/230).
+- **Zero live traffic until [#179](../codebase/179.md).** Through #178, desktop withheld the
+  `interactive` capability, so no `assistant_delta`/`turn_end`/`turn_state`/`tool_use`/`tool_result`
+  frame reached this bridge in production — the store, bridge, #203's `Timeline` view, and #215's
+  `ThinkingIndicator` view were built and tested against injected `DaemonEvent`s/`ThreadItem[]`/booleans
+  only. #179 flipped `interactive`; all five now carry live daemon traffic, plus a sixth,
+  renderer-sourced `userText` event the composer echo dispatches directly (not via the bridge).
+- **The `toolCall` item's `result` fills as of [#229](../codebase/229.md), rendered as of
+  [#230](../codebase/230.md).** The transport-to-reducer chain resolves its correlated `toolCall`'s
+  `result` in place, visible via `selectItems`; the success/error visual landed in #230.
 
 ## Related
 
@@ -200,9 +201,11 @@ daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id d
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md).
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the vertical [#201](../codebase/201.md) is the transport slice of; this store deliberately stays outside it.
 - [#203 codebase notes](../codebase/203.md) — mounts `useTimelineBridge`, reads
-  `selectItems`, and paints the streamed assistant text — the blank-thread-critical slice that gates
-  #179.
+  `selectItems`, and paints the streamed assistant text — the blank-thread-critical slice [#179](../codebase/179.md)
+  later flipped live.
 - [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the
   `conversationCreated` transport slice: another `DaemonEvent` arm this bridge does **not** own,
   folded into the inverse-filter `null` list alongside `modalShown`/`modalDismissed`; the real
   consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242).
+- [#179 codebase notes](../codebase/179.md) — flips `interactive` live, and adds `Composer`'s direct
+  `userText` dispatch as this store's sixth write path (renderer-sourced, not bridge-translated).

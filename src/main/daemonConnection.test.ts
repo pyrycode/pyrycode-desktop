@@ -336,6 +336,41 @@ describe('createDaemonConnection', () => {
     ])
   })
 
+  it('surfaces the daemon-accepted capability set on the connected event (#179 AC2)', async () => {
+    const { connection, sink, drivers } = build()
+    connection.start()
+    await tick()
+
+    // The daemon echoes the accepted (intersection) set in hello_ack.capabilities; parseHelloAck
+    // already narrows it onto the ack, so the negotiated set must be observable on connected — not
+    // just the empty case the test above covers.
+    drivers[0].emit({
+      type: 'handshake-complete',
+      helloAck: encodeEnvelope({
+        id: 2,
+        type: 'hello_ack',
+        ts: FIXED_TS,
+        payload: {
+          protocol_version: 'v2',
+          server_id: 'srv-1',
+          conn_id: 'conn-1',
+          capabilities: ['interactive']
+        }
+      })
+    })
+
+    const connected = emitted(sink).find((e) => e.type === 'connected')
+    expect(connected).toEqual({
+      type: 'connected',
+      ack: {
+        protocol_version: 'v2',
+        server_id: 'srv-1',
+        conn_id: 'conn-1',
+        capabilities: ['interactive']
+      }
+    })
+  })
+
   it('sources the hello early-data from the record token via buildClientHello', async () => {
     const { connection, drivers } = build()
     connection.start()
@@ -346,6 +381,18 @@ describe('createDaemonConnection', () => {
     const payload = envelope.payload as Record<string, unknown>
     expect(payload.token).toBe(TOKEN)
     expect(payload.device_name).toBe('my-desktop')
+  })
+
+  it('advertises the interactive capability in the client hello (#179 AC1)', async () => {
+    const { connection, drivers } = build()
+    connection.start()
+    await tick()
+
+    // Decode the real hello loadDialConfig built — the flip lives at that call site, not in
+    // buildClientHello in isolation, so this pins the production wiring, not the codec default.
+    const envelope = decodeEnvelope(drivers[0].config.session.hello)
+    const payload = envelope.payload as Record<string, unknown>
+    expect(payload.capabilities).toEqual(['interactive'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {

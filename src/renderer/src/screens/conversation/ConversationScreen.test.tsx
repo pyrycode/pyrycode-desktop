@@ -280,6 +280,43 @@ describe('Timeline — the streamed assistant text', () => {
     expect(threadBubbleCount(markup)).toBe(0)
     expect(markup).not.toContain(CURSOR)
   })
+
+  // #179: the user's own message renders through the timeline as a right-aligned user bubble
+  // (the coarse MessageThread's user treatment, now sourced from timelineStore). Its own thread
+  // role — data-thread-role="user" — distinct from the assistant/tool roles and from
+  // MessageBubble's data-message-role, so no test-count seam collides.
+  it('renders a userText item as a right-aligned user bubble, no cursor, not an assistant (AC3)', () => {
+    const items: ThreadItem[] = [{ kind: 'userText', text: 'hi there' }]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('message-row message-row--user')
+    expect(markup).toContain('bubble bubble--user')
+    expect(markup).toContain('data-thread-role="user">hi there')
+    // A user bubble is neither an assistant bubble nor a streaming tail.
+    expect(threadBubbleCount(markup)).toBe(0)
+    expect(markup).not.toContain(CURSOR)
+  })
+
+  it('renders untrusted userText as visible characters, never live markup (AC3)', () => {
+    // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
+    const items: ThreadItem[] = [{ kind: 'userText', text: '<b>x</b>' }]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
+    expect(markup).not.toContain('<b>x</b>')
+  })
+
+  it('reads userText → assistantText as one ordered thread, cursor on the assistant tail only (AC3)', () => {
+    const items: ThreadItem[] = [
+      { kind: 'userText', text: 'the user asks' },
+      { kind: 'assistantText', turnId: 't1', text: 'the assistant answers' }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    // Array order: the user bubble precedes the assistant bubble.
+    expect(markup.indexOf('the user asks')).toBeLessThan(markup.indexOf('the assistant answers'))
+    // Exactly one assistant bubble, and the streaming cursor trails only it (never the user bubble).
+    expect(threadBubbleCount(markup)).toBe(1)
+    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
+    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('the assistant answers'))
+  })
 })
 
 // #215: the thinking indicator bound to the coarse `phase` scalar. ThinkingIndicator is the Timeline
@@ -387,6 +424,17 @@ describe('ConversationScreen — store binding', () => {
     }).not.toThrow()
     // The old placeholder array held 8 messages; the store is empty → zero bubbles.
     expect(bubbleCount(markup)).toBe(0)
+  })
+
+  // #179 AC4: the coarse MessageThread mount is retired, leaving the timeline the single thread
+  // surface. Against the empty stores that means no thread region renders at all — no coarse
+  // data-message-role bubbles, no timeline data-thread-role rows, and no second empty thread
+  // container (MessageThread used to render an empty .conversation__thread even with no messages).
+  it('renders exactly one thread surface — no split-brain, no empty second thread region (AC4)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(bubbleCount(markup)).toBe(0)
+    expect(markup).not.toContain('data-thread-role')
+    expect(markup).not.toContain('conversation__thread')
   })
 
   // #203: the timeline view mounts against the empty timeline store (getInitialState items: []), so

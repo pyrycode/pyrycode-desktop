@@ -1,12 +1,7 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import './conversation.css'
-import { toMessageViewModel, type Message } from './messageViewModel'
-import {
-  useSessionStore,
-  selectMessages,
-  selectStatus,
-  type ConnectionStatus
-} from '../../store/sessionStore'
+import type { Message } from './messageViewModel'
+import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
 import { useTimelineStore, selectItems, selectPhase } from '../../store/timelineStore'
 import type { ThreadItem } from '../../store/threadTimeline'
 import { submitMessage, composerAvailability, shouldOfferRepair } from './composerSend'
@@ -18,13 +13,14 @@ import { PermissionModal } from './PermissionModal'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
-// to the window. The thread now reads the live session store (#69); the composer
-// stays inert (controlled input + send dispatch are #66).
+// to the window. Since #179 the thread reads the structured-stream timeline store
+// (the single thread surface); the composer's echo writes there too.
 //
 // ConversationScreen is the store-bound container (smoke-tested for "renders without
-// throwing"); MessageThread is the pure, props-in/markup-out view that the tests
-// server-render with arbitrary Message[] — the same container/view split PairingScreen
-// uses. Composer and UnpairControl stay in-file. The load-bearing seam is the MessageThread prop.
+// throwing"); Timeline is the pure, props-in/markup-out view that the tests server-render with
+// an injected ThreadItem[] — the same container/view split PairingScreen uses. MessageThread /
+// MessageBubble are retained as pure, still-tested residue of the retired coarse path (a later
+// cleanup ticket removes them). Composer and UnpairControl stay in-file.
 export interface ConversationScreenProps {
   // The App route flip back to pairing (#166), mirroring PairingScreen's onPaired. Optional so the
   // existing bare `<ConversationScreen />` server-render tests stay green; when absent, unpair still
@@ -38,15 +34,12 @@ export interface ConversationScreenProps {
 }
 
 export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenProps = {}): JSX.Element {
-  // Read the messages slice and adapt each wire MessagePayload to the shell view model
-  // at this boundary (ADR 0004). Selecting only the messages slice keeps connection-status
-  // changes from re-rendering the thread.
-  const messages = useSessionStore(selectMessages).map(toMessageViewModel)
-  // #203: the structured-stream timeline slice. `ThreadItem` is already the render model (ADR 0008,
-  // camelCase, conversation_id-free) so it flows straight to the pure Timeline view — no adapter,
-  // unlike the coarse `messages` path above. Selecting only the items slice keeps a stream delta from
-  // re-rendering unrelated facets. Inert in production until #179 flips `interactive` (the store stays
-  // empty), so Timeline renders null and the layout is pixel-identical to today.
+  // #179: the structured-stream timeline slice is now the single thread surface — the coarse
+  // `MessageThread` is retired (its mount + the `selectMessages` read are gone), and the composer's
+  // optimistic echo routes here as a `userText` item beside the daemon's structured reply. `ThreadItem`
+  // is already the render model (ADR 0008, camelCase, conversation_id-free) so it flows straight to the
+  // pure Timeline view — no adapter. Selecting only the items slice keeps a stream delta from
+  // re-rendering unrelated facets.
   const items = useTimelineStore(selectItems)
   // #215: the coarse `phase` scalar, read beside the items slice (mirrors the selectItems → Timeline
   // line above). The container derives the `isThinking` boolean and passes only that down, so no
@@ -63,7 +56,6 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
     <div className="conversation">
       <BackControl onBack={onBack} />
       <UnpairControl onUnpaired={onUnpaired} />
-      <MessageThread messages={messages} />
       <Timeline items={items} />
       <ThinkingIndicator isThinking={phase === 'thinking'} />
       <StatusRow onExpand={() => setSheetOpen(true)} />
@@ -111,15 +103,15 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
   )
 }
 
-// #203: the structured-stream timeline view — MessageThread's twin over the reducer's ThreadItem[]
-// (#121/#202). Pure props-in/markup-out (exported so tests server-render an injected ThreadItem[]
+// #203: the structured-stream timeline view — the single thread surface since #179 retired the coarse
+// MessageThread. Pure props-in/markup-out (exported so tests server-render an injected ThreadItem[]
 // with no store, no IPC). Maps items → rows 1:1 in array order; the reducer already coalesced deltas
-// into the tail assistantText, so the view never merges. Reuses the coarse daemon-bubble treatment.
+// into the tail assistantText, so the view never merges. Carries both the user's echo (userText) and
+// the daemon's structured reply, so arrival order interleaves them into one continuous thread.
 //
-// Empty items → null (not an empty <div>): the timeline is the inert path until #179 flips
-// `interactive`, so a zero-footprint render keeps today's layout pixel-identical (AC4). The coarse
-// MessageThread stays the live path and keeps its own empty-region behavior. (After #179 the two
-// threads need reconciling — the coarse thread would then be the empty one; #179 owns that seam.)
+// Empty items → null (not an empty <div>): the pre-first-message thread is absent — exactly as the
+// retired MessageThread's empty region was effectively zero-height (AC4). With MessageThread gone,
+// this is the only thread container, so an empty timeline means no thread region renders at all.
 export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Element | null {
   if (items.length === 0) return null
   const lastIndex = items.length - 1
@@ -143,7 +135,7 @@ export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Eleme
 }
 
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
-// over today's three kinds (only turnBoundary null), so a future fourth ThreadItem kind makes it
+// over the four kinds (only turnBoundary null), so a future fifth ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
 // while a structural-only kind (turnBoundary) still degrades to nothing rather than throwing.
 function TimelineRow({
@@ -205,11 +197,19 @@ function TimelineRow({
       // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.
       return null
     case 'userText':
-      // #245: dormant placeholder satisfying the exhaustiveness tripwire above. No producer emits a
-      // userText item yet, so this arm is never hit at runtime — zero-footprint. `return null` is safe
-      // ONLY because the item is unproduced: a real user message is content and must be drawn. #179
-      // replaces this with the user bubble in the same PR that lands the composer-echo producer.
-      return null
+      // #179: the user's own message, sourced from the composer echo (composerSend → timelineStore).
+      // The right-aligned user bubble mirrors MessageBubble's user treatment but carries the timeline's
+      // role attribute (data-thread-role="user", distinct from MessageBubble's data-message-role so the
+      // two test-count seams stay separate) and reuses .message-row--user / .bubble--user (no CSS
+      // change). `text` is auto-escaped React children — never dangerouslySetInnerHTML — so any markup
+      // renders as visible characters (this is the least-trusted of the row sources: local user input).
+      return (
+        <div className="message-row message-row--user">
+          <div className="bubble bubble--user" data-thread-role="user">
+            {item.text}
+          </div>
+        </div>
+      )
   }
 }
 
@@ -329,10 +329,13 @@ function Composer(): JSX.Element {
   // split). Input text is ephemeral single-value screen-local state → useState, never the store
   // (ADR 0006). `dispatch` identity is stable, so selecting it adds no re-render churn.
   const [text, setText] = useState('')
-  const dispatch = useSessionStore((s) => s.dispatch)
+  // #179: the optimistic echo now writes into timelineStore (a userText ThreadEvent), not sessionStore
+  // — content lives in one store. The send gate below still reads sessionStore's connection status;
+  // two stores in one component is fine (status vs. content are orthogonal facets).
+  const dispatch = useTimelineStore((s) => s.dispatch)
   // #31: gate the send control on the live connection status. Selecting `status` re-renders the
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
-  // The thread selects only `selectMessages`, so status changes don't re-render it.
+  // The thread selects only the timeline `items` slice, so status changes don't re-render it.
   const status = useSessionStore(selectStatus)
   const { canSend, hint } = composerAvailability(status)
 

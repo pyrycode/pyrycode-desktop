@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199, #203, #214, #217, #218, #229, #230 — all shipped) and the `interactive` flip (#179, the only piece remaining). Extended by [#245](../codebase/245.md) with a fourth, renderer-sourced `ThreadItem` member (`userText`), ships dormant pending #179's producer.
+Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199, #203, #214, #217, #218, #229, #230 — all shipped) and the `interactive` flip ([#179](../codebase/179.md), shipped — the vertical's last piece). Extended by [#245](../codebase/245.md) with a fourth, renderer-sourced `ThreadItem` member (`userText`), shipped dormant pending a producer; [#179](../codebase/179.md) wired that producer (the composer echo) and the real render row, and in the same commit retired the coarse `MessageThread` — `Timeline` is now the conversation's single thread surface.
 
 ## Context
 
@@ -20,7 +20,7 @@ A new, **standalone, framework-free** module `src/renderer/src/store/threadTimel
   - `{ kind: 'assistantText'; turnId; text }` — one coalesced, growing assistant text bubble.
   - `{ kind: 'toolCall'; turnId; toolUseId; name; inputSummary; result: ToolResult | null }` — a tool invocation; `result` starts `null` and is filled in place when the correlated `tool_result` arrives.
   - `{ kind: 'turnBoundary'; turnId; stopReason }` — a turn-end marker.
-  - `{ kind: 'userText'; text }` — the user's own message, a renderer-sourced echo rather than daemon content, so it carries neither `turnId` (the daemon assigns those) nor `seq` (wire fidelity for daemon deltas). Added by [#245](../codebase/245.md), dormant until #179 wires a producer and a real render row.
+  - `{ kind: 'userText'; text }` — the user's own message, a renderer-sourced echo rather than daemon content, so it carries neither `turnId` (the daemon assigns those) nor `seq` (wire fidelity for daemon deltas). Added by [#245](../codebase/245.md), dormant until [#179](../codebase/179.md) wired a producer (the composer echo) and a real render row.
 - **`ToolResult`** — `{ isError: boolean; resultSummary: string }`, the filled-in half of a `toolCall`.
 - **`TurnPhase`** — `'thinking' | 'responding' | 'idle'`, the coarse conversation-level lifecycle.
 - **`ThreadEvent`** — the renderer-local, sealed input union the reducer consumes (§ the wire boundary below): `assistantDelta` | `toolUse` | `toolResult` | `turnState` | `turnEnd` | `userText` (#245).
@@ -56,7 +56,7 @@ The structured wire types do not exist in desktop yet (`EnvelopeType` stops at `
 
 ## Consequences
 
-- **The Strangler Fig is planted, nothing is cut over.** `sessionStore`, its `messages: MessagePayload[]`, `messageViewModel.ts`, and the coarse `message`/`message_chunk` render path are **untouched**; no consumer imports `threadTimeline`. `npm run build` and `npm test` stay green because the module is standalone. The cutover — making the timeline the render source for structured turns, and deciding the fate of the coarse path once `interactive` is on — is #179/#199's, not this ticket's.
+- **The Strangler Fig is planted, nothing is cut over — at this ticket.** `sessionStore`, its `messages: MessagePayload[]`, `messageViewModel.ts`, and the coarse `message`/`message_chunk` render path were **untouched** here; no consumer imported `threadTimeline` yet. `npm run build` and `npm test` stayed green because the module was standalone. **The cutover shipped in [#179](../codebase/179.md):** the client hello now advertises `interactive`, the coarse fan-out stops (daemon-side, pyrycode #699), the composer's echo routes into `timelineStore` as a `userText` event, and `MessageThread`'s mount is retired — `Timeline` is the conversation's single thread surface. `MessageThread`/`MessageBubble`/`messageViewModel.ts`/`selectMessages` are kept as dead-but-tested residue (a later cleanup ticket removes them); `sessionStore.messages` stays populated but unread.
 - **#199 splits along this ADR's seams, not guessed ones.** The reducer arms (`assistantDelta` → `turn_state` → `tool_use` → `tool_result`) are the natural decomposition boundaries for the render vertical: #199 becomes the `assistant_delta` + `turn_end` text slice (blank-thread-critical, since v2 removed the coarse `message` fan-out per pyrycode #699), and spawns the `turn_state` / `tool_use` / `tool_result` peel-offs. Each peels a wire type + bridge arm + render onto an existing, tested `ThreadItem` member.
 - **The wire→event bridge is the next module.** #199 adds the structured wire types, a transport decode, a `DaemonEvent` arm, and a `daemonEventBridge`-shaped translator that produces `ThreadEvent`s. This ADR's `ThreadEvent` union is the stable target contract that bridge maps onto.
 - **Deferred by design (revisit in #199 when rendering):** a stable per-item `id` for React keys (`turnId` alone is not unique — a tool can split a turn into two `assistantText` items); a `seq` monotonicity/dedup guard if reconnect replay is observed to duplicate deltas; whether an orphan `tool_result` should be surfaced rather than dropped; and multi-conversation scoping. The sealed unions extend cleanly for each.

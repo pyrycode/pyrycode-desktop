@@ -47,6 +47,7 @@ import type { DeviceKeypairStore } from './deviceKeypair'
 import type { PairedServerStore } from './pairedServerStore'
 import {
   MAX_FRAME_BYTES,
+  CAPABILITY_INTERACTIVE,
   type HelloAckPayload,
   type SendMessagePayload,
   type RequestSnapshotPayload,
@@ -467,7 +468,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       ts: now(),
       deviceName,
       clientVersion,
-      token: record.token
+      token: record.token,
+      // Advertise `interactive` (#179): the daemon opens the v2 structured stream (turn state,
+      // deltas, tool use/result, thinking, modal prompts) and accepts the interactive control verbs
+      // — the mounted render pipeline (timeline + modal bridges) draws them. `interactive` is the
+      // whole vocabulary, so this turns on everything a paired interactive client gets. The daemon
+      // echoes the accepted intersection back in hello_ack.capabilities (surfaced on `connected`).
+      capabilities: [CAPABILITY_INTERACTIVE]
     })
     return {
       connection: {

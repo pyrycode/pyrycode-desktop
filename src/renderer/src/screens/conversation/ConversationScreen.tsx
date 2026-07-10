@@ -204,6 +204,12 @@ function TimelineRow({
       // Structural marker only — no drawn element (Figma has no per-turn divider). Its sole
       // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.
       return null
+    case 'userText':
+      // #245: dormant placeholder satisfying the exhaustiveness tripwire above. No producer emits a
+      // userText item yet, so this arm is never hit at runtime — zero-footprint. `return null` is safe
+      // ONLY because the item is unproduced: a real user message is content and must be drawn. #179
+      // replaces this with the user bubble in the same PR that lands the composer-echo producer.
+      return null
   }
 }
 

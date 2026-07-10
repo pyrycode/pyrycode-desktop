@@ -16,7 +16,9 @@ import type {
   ModalShownPayload,
   ModalDismissedPayload,
   ModalAnswerPayload,
-  ModalCancelPayload
+  ModalCancelPayload,
+  CreateConversationPayload,
+  ConversationCreatedPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -247,5 +249,60 @@ describe('outbound modal wire vocabulary (#235)', () => {
     expect(payload).toEqual({ modal_id: 'mdl-7f3a' })
     // No conversation_id — modal_id is the sole correlation key (ADR 0009).
     expect(payload).not.toHaveProperty('conversation_id')
+  })
+})
+
+describe('conversations-write wire vocabulary (#241)', () => {
+  it('admits the create request + created reply envelope types', () => {
+    // Compile-time membership: these assign only if the members are part of EnvelopeType.
+    const create: EnvelopeType = 'create_conversation'
+    const created: EnvelopeType = 'conversation_created'
+    expect(create).toBe('create_conversation')
+    expect(created).toBe('conversation_created')
+  })
+
+  it('shapes CreateConversationPayload as { is_promoted, name, cwd } — all nullable-and-present', () => {
+    // All three fields default server-side: a literal null (never absent) means "let the daemon
+    // choose". They are T | null (present, nullable), NOT T | undefined (optional) — the daemon's
+    // request struct uses *T without omitempty, so the key is always on the wire with an explicit null.
+    const allNull: CreateConversationPayload = { is_promoted: null, name: null, cwd: null }
+    expect(allNull).toEqual({ is_promoted: null, name: null, cwd: null })
+
+    const populated: CreateConversationPayload = {
+      is_promoted: true,
+      name: 'design review',
+      cwd: '/home/user/project'
+    }
+    expect(populated).toEqual({
+      is_promoted: true,
+      name: 'design review',
+      cwd: '/home/user/project'
+    })
+  })
+
+  it('shapes ConversationCreatedPayload as its OWN 5 fields — NOT a ConversationSummary (spec #274)', () => {
+    // The daemon deliberately omits is_archived + last_message_ts on a create reply, so this is a
+    // dedicated 5-field shape, not a reuse of the 7-field ConversationSummary. name is string | null.
+    const payload: ConversationCreatedPayload = {
+      id: 'conv-9',
+      is_promoted: false,
+      cwd: '/tmp/scratch',
+      name: null,
+      last_used_at: '2026-07-10T00:00:00Z'
+    }
+    expect(payload).toEqual({
+      id: 'conv-9',
+      is_promoted: false,
+      cwd: '/tmp/scratch',
+      name: null,
+      last_used_at: '2026-07-10T00:00:00Z'
+    })
+    // The two fields the daemon excludes on a create reply are absent (no ConversationSummary reuse).
+    expect(payload).not.toHaveProperty('is_archived')
+    expect(payload).not.toHaveProperty('last_message_ts')
+
+    // A populated name is an equally valid value (a named conversation).
+    const named: ConversationCreatedPayload = { ...payload, name: 'design review' }
+    expect(named.name).toBe('design review')
   })
 })

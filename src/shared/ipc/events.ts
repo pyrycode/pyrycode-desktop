@@ -16,6 +16,7 @@ import type {
   MessagePayload,
   ErrorPayload,
   ConversationSummary,
+  ConversationCreatedPayload,
   WireTurnState,
   WireModalClass,
   WireModalSource,
@@ -101,6 +102,14 @@ export type DaemonEvent =
   // No token/key/raw frame — ConversationSummary carries only ids, a nullable title, two flags, a
   // workspace path (opaque display text), and two timestamps.
   | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
+  // The conversation-created arm (#241). Reuses the wire ConversationCreatedPayload verbatim (the
+  // conversationsReceived / messageReceived precedent) — nothing to drop, no secret field: it carries
+  // an id, a flag, a nullable title, a workspace path, and a timestamp. Consumed by the render slice
+  // (#242, which opens the new thread), not the session store, so every exhaustive consumer no-ops it.
+  // `name` and `cwd` are UNTRUSTED daemon-supplied strings: the render slice #242 must render them as
+  // plain text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML). This ticket has no DOM sink, but
+  // the constraint is inherited here — do not drop this warning.
+  | { type: 'conversationCreated'; conversation: ConversationCreatedPayload }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
   // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is

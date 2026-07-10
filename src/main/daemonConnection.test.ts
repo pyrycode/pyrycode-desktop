@@ -21,7 +21,8 @@ import {
   MAX_PLAINTEXT_BYTES,
   type SendMessagePayload,
   type RequestSnapshotPayload,
-  type ScreenSnapshotPayload
+  type ScreenSnapshotPayload,
+  type CreateConversationPayload
 } from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
@@ -246,6 +247,11 @@ function modalShownPlaintext(payload: unknown): Uint8Array {
 /** A `modal_dismissed` plaintext, wrapping an arbitrary payload (#201). */
 function modalDismissedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'modal_dismissed', ts: FIXED_TS, payload })
+}
+
+/** A `conversation_created` plaintext, wrapping an arbitrary payload (#241). */
+function conversationCreatedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'conversation_created', ts: FIXED_TS, payload })
 }
 
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
@@ -1533,6 +1539,118 @@ describe('createDaemonConnection — conversations (list_conversations request /
       drivers[0].emit({
         type: 'message',
         plaintext: conversationsPlaintext({ conversations: [{ ...CONV_NAMED, is_promoted: 'nope' }] })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — createConversation (create_conversation request / conversation_created reply, #241)', () => {
+  const ALL_NULL: CreateConversationPayload = { is_promoted: null, name: null, cwd: null }
+  const POPULATED: CreateConversationPayload = {
+    is_promoted: true,
+    name: 'design review',
+    cwd: '/home/user/project'
+  }
+  const CREATED = {
+    id: 'conv-9',
+    is_promoted: false,
+    cwd: '/tmp/scratch',
+    name: null,
+    last_used_at: '2026-07-10T00:00:00Z'
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.createConversation(ALL_NULL)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one create_conversation envelope with id 2, ts, and the three explicit nulls', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.createConversation(ALL_NULL)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('create_conversation')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    // The explicit nulls cross the wire — the daemon's "take the server default" signal.
+    expect(envelope.payload).toEqual({ is_promoted: null, name: null, cwd: null })
+  })
+
+  it('forwards a fully-populated payload verbatim', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.createConversation(POPULATED)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).payload).toEqual(POPULATED)
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.createConversation(ALL_NULL)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.createConversation(ALL_NULL)).not.toThrow()
+  })
+
+  it('strips a smuggled extra field — the sent payload is exactly the three modeled fields (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an extra key past the structural-minimum guard. The
+    // fresh-literal construction in createConversation must bound the wire to exactly the three fields.
+    connection.createConversation({
+      is_promoted: null,
+      name: null,
+      cwd: null,
+      is_archived: true
+    } as unknown as CreateConversationPayload)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual({ is_promoted: null, name: null, cwd: null })
+    expect(JSON.stringify(payload)).not.toContain('is_archived')
+  })
+
+  it('decodes an inbound conversation_created into one conversationCreated carrying the summary (null name preserved)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: conversationCreatedPlaintext(CREATED) })
+
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'conversationCreated', conversation: CREATED }])
+  })
+
+  it('drops a malformed conversation_created reply without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: conversationCreatedPlaintext({ ...CREATED, is_promoted: 'nope' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

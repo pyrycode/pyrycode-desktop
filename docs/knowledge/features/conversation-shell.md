@@ -26,7 +26,7 @@ A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `
 
 This screen is now the **thread view** of the [paired shell](paired-shell.md), landed in [#140](../codebase/140.md): the paired region enters at a list first, and opening a conversation mounts this screen, which gained a leading back affordance to return to the list. See [Back control](#back-control-140) below.
 
-The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226) below.
+The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249) below.
 
 ## How it works
 
@@ -537,7 +537,7 @@ Was dormant until [#179](../codebase/179.md) flipped `interactive`, the same pos
 structured-stream render slice; now live. See [#230 codebase notes](../codebase/230.md) for the full
 design, the token-provenance rationale, and patterns established.
 
-### Permission modal (#224, answerable since #237, second-confirm since #226)
+### Permission modal (#224, answerable since #237, second-confirm since #226, rejection surface since #249)
 
 The render half of the modal vertical (ADR [0009](../decisions/0009-modal-prompt-model.md)):
 [#223](../codebase/223.md) shipped the store + bridge but left `useModalBridge` dormant, so
@@ -547,7 +547,10 @@ The render half of the modal vertical (ADR [0009](../decisions/0009-modal-prompt
 [#226](../codebase/226.md) then inserted a **client-side second-confirm gate** in front of an allow
 answer: there is no machine-readable `destructive` class on the wire (ADR 0009), so "a consequential
 action needs a second confirm" can only be a renderer UX policy, gated on the one signal available —
-`prompt.defaultOptionId`.
+`prompt.defaultOptionId`. [#249](../codebase/249.md) then added a **rejection surface**: because
+#237's answer path clears the prompt optimistically, an ungranted device's answer round-tripping to a
+daemon `error` (correlated by [#248](../codebase/248.md)) had nothing left on screen to show it — see
+§ Rejection surface below.
 
 `PermissionModal.tsx`, mirroring `RepairPrompt`/`RepairControl`:
 
@@ -583,17 +586,19 @@ action needs a second confirm" can only be a renderer UX policy, gated on the on
   `useModalStore(s => s.dispatch)` (#237), renders `outstanding[0]` via `PermissionModalView`, or `null`
   when nothing is outstanding. One dialog at a time, oldest-first FIFO; no `selectCurrentModal` selector
   (ADR 0009 defers it — the container derives `[0]` locally). Gained one `useState<string |
-  null>` (#226), `pendingOptionId` — declared **before** the `if (!prompt) return null` early return
-  (rules-of-hooks) — and derives `pendingOption = prompt.options.find(o => o.id === pendingOptionId) ??
-  null` against the **current** prompt's options every render, not a cached snapshot: a deterministic
-  safety net so a stale pending id against a swapped-out prompt degrades to list mode rather than
-  confirming the wrong prompt (a known, currently-unreachable staleness gap remains when the swapped-in
-  prompt reuses the same option id — see [#226 codebase notes](../codebase/226.md)). `onSelect` routes
-  through the pure `selectOption` gate in `modalResolution.ts`: the default option answers straight
-  through (`answerPrompt`, unchanged from #237); any other option calls `setPendingOptionId` and holds.
-  `onConfirm` calls `answerPrompt` then clears the pending marker; `onBack` just clears it (no send).
-  `onCancel` is unchanged from #237 (`cancelPrompt`, never gated). All handlers dereference
-  `window.pyry.sendCommand` only inside the closures (#237's discipline).
+  null>` (#226), `pendingOptionId` — declared **before** the early-return (rules-of-hooks) — and derives
+  `pendingOption = prompt.options.find(o => o.id === pendingOptionId) ?? null` against the **current**
+  prompt's options every render, not a cached snapshot: a deterministic safety net so a stale pending id
+  against a swapped-out prompt degrades to list mode rather than confirming the wrong prompt (a known,
+  currently-unreachable staleness gap remains when the swapped-in prompt reuses the same option id — see
+  [#226 codebase notes](../codebase/226.md)). `onSelect` routes through the pure `selectOption` gate in
+  `modalResolution.ts`: the default option answers straight through (`answerPrompt`, unchanged from
+  #237); any other option calls `setPendingOptionId` and holds. `onConfirm` calls `answerPrompt` then
+  clears the pending marker; `onBack` just clears it (no send). `onCancel` is unchanged from #237
+  (`cancelPrompt`, never gated). All handlers dereference `window.pyry.sendCommand` only inside the
+  closures (#237's discipline). Since [#249](../codebase/249.md), also reads
+  `useModalStore(selectRejections)` and renders `RejectionSurfaceView` alongside `PermissionModalView` —
+  see § Rejection surface below.
 
 Mounted as the **last child** of `.conversation` in `ConversationScreen.tsx`, after the conditional
 `StatusSheet`, so it overlays the whole conversation surface. Selecting the default option or clicking
@@ -608,6 +613,45 @@ original render design, [#237 codebase notes](../codebase/237.md) for the answer
 still-open code-review items (Cancel placement, focus trap/`Escape`, programmatic default-option cue),
 and [#226 codebase notes](../codebase/226.md) for the second-confirm gate design and its own
 still-open code-review NIT (the pending-marker staleness gap).
+
+#### Rejection surface (#249)
+
+Because the answer path (#237) clears `outstanding` **optimistically** on click, an ungranted device's
+answer round-tripping to a daemon `error` (correlated main-side by [#248](../codebase/248.md) into a
+content-free `modalAnswerRejected` event) had no prompt left on screen to attach to — the user just
+watched it vanish with no explanation. This slice adds a second, **orthogonal** surface at the same
+host, fed by a new `rejections: readonly string[]` slice on `ModalState` (arrival-ordered,
+de-duplicated `modalId`s — see [Modal-prompt model](modal-prompt-model.md)):
+
+- **`RejectionSurfaceView({ rejections, onDismiss })`** — new, exported, pure, SSR-testable, mirroring
+  `PermissionModalView`. Returns `null` on an empty list (the `Timeline`/`ThinkingIndicator`
+  zero-layout-footprint idiom). Else renders `.modal-rejections`, one `.modal-rejection` banner per id
+  (**keyed by `modalId`**), each with `role="alert"` (a live region — a screen reader announces the
+  failure on arrival), the client-owned category copy **"Your answer was rejected."**, and a `Dismiss`
+  button calling `onDismiss(modalId)`. The `modalId` is used **only** as the React key and the
+  `onDismiss` argument — never rendered as visible text (it is meaningless to a human and the prompt
+  title is already gone). No daemon content anywhere: the event carries none, the copy is a client
+  constant. `onDismiss` is a **required** injected prop (the "a view that cannot answer is a bug" rule).
+- **`PermissionModal()`** — extended, not forked: reads the new `selectRejections` slice alongside
+  `selectOutstanding`; the early return now fires only when **both** are empty
+  (`if (!prompt && rejections.length === 0) return null`), since a rejection can render with no
+  outstanding prompt; `pendingOption` is guarded on `prompt` existing (it can be `undefined` while a
+  rejection shows alone). Returns a fragment: `<PermissionModalView>` only when `prompt` exists, plus
+  `<RejectionSurfaceView>` unconditionally, wired with an inline
+  `dispatch({ type: 'rejectionDismissed', modalId })` — deliberately not a `modalResolution.ts` helper,
+  since it neither sends a command nor renames to the wire.
+- **Styling** (`conversation.css`) — `.modal-rejections` is a bottom-anchored absolute stack inside
+  `.conversation`, `pointer-events: none` so it never blocks the composer beneath it (each
+  `.modal-rejection` banner re-enables its own `pointer-events: auto`). Each banner is a
+  `--color-surface-container-high` card with a `--color-error` `border-left` accent (a leading accent,
+  not a filled error container — only the bare `--color-error` role token exists, #230). No new theme
+  tokens. No bespoke Figma design exists for this surface yet (PO-confirmed gap in node `22-3`); the
+  chrome is a placeholder reusing the modal/M3 tokens pending a follow-up.
+
+Not security-sensitive — a pure renderer reading an already-typed, content-free event; no keys, sockets,
+tokens, or raw bytes (the guarantee was defended upstream by #248). See [#248 codebase
+notes](../codebase/248.md) for the transport half and [#249 codebase notes](../codebase/249.md) for the
+full render design, testing strategy, and lessons learned.
 
 ### The interactive flip + thread cutover (#179)
 
@@ -657,7 +701,7 @@ learned.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md).** Reads the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply. See [Structured-stream timeline render](#structured-stream-timeline-render-203) and [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
 - **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. See [Thinking indicator](#thinking-indicator-215) above.
-- **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding` and `dispatch`, mounted as the last child of `.conversation`. `null` when nothing is outstanding; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226) above.
+- **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md); gained a rejection surface in [#249](../codebase/249.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, `selectRejections`, and `dispatch`, mounted as the last child of `.conversation`. `null` only when both the outstanding prompt and the rejection list are empty; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first, and a round-tripped rejection renders a dismissible banner independent of the prompt. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249) above.
 
 ## Edge cases and limitations
 

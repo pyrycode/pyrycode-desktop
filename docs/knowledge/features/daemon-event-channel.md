@@ -62,6 +62,14 @@ that bridge owns, and the first whose mapping **resolves** an existing `ThreadIt
 not attacker text; `resultSummary` is opaque daemon display text the render slice
 ([#230](https://github.com/pyrycode/pyrycode-desktop/issues/230)) must render as plain text.
 
+[#241](../codebase/241.md) added a thirteenth no-`SessionAction` member, `conversationCreated` — the
+[conversation create](conversation-create.md) feature's reply, the write-side twin of
+`conversationsReceived` (#139). Reuses the wire `ConversationCreatedPayload` verbatim (its own 5-field
+shape, **not** `ConversationSummary`) — nothing to drop, no secret field. Consumed by neither existing
+bridge; the real consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242)
+(blocked on this ticket), which must render `name`/`cwd` as plain text, never HTML — the doc-comment
+on this arm carries that warning forward since this ticket has no DOM sink of its own.
+
 ## What it does
 
 Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge.
@@ -106,6 +114,7 @@ export type DaemonEvent =
       ; options: readonly WireModalOption[]; defaultOptionId: string }
   | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
+  | { type: 'conversationCreated'; conversation: ConversationCreatedPayload }
 ```
 
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
@@ -262,6 +271,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member, the fourth arm the `timelineBridge` owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member, the twelfth no-`SessionAction` arm and the vertical's last transport slice; the fifth arm the `timelineBridge` owns and the first to resolve an existing `ThreadItem` in place rather than append one or set a scalar
+- [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `conversationCreated` member, the thirteenth no-`SessionAction` arm and the write-side twin of `conversationsReceived` (#139); consumed by neither existing bridge, real consumer is the render sibling #242
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

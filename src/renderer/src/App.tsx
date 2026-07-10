@@ -3,6 +3,7 @@ import { PairedShell } from './PairedShell'
 import { PairingScreen } from './screens/pairing/PairingScreen'
 import { useDaemonEventBridge } from './store/daemonEventBridge'
 import { useTimelineBridge } from './store/timelineBridge'
+import { useModalBridge } from './store/modalBridge'
 import { ConversationListData } from './store/conversationListBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
@@ -50,6 +51,11 @@ function App(): JSX.Element {
   // and unconditional, matching the coarse bridge; both deref window.pyry only inside their effect, so
   // the <App/> server-render test stays ''. Inert until #179 flips `interactive` (no stream arrives).
   useTimelineBridge()
+  // #224: the modal bridge is the third independent subscriber on the one daemon-event channel (#202),
+  // folding the two modal arms into modalStore so the outstanding permission/trust prompt becomes live
+  // renderer state. App-lifetime and unconditional like its twins; it derefs window.pyry only inside its
+  // effect, so the <App/> server-render test stays ''. Inert until #179 flips `interactive`.
+  useModalBridge()
   const [route, setRoute] = useState<AppRoute>('pending')
 
   useEffect(() => {

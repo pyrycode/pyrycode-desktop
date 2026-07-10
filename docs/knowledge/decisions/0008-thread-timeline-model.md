@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199, #203, #214, #217, #218, #229, #230 — all shipped) and the `interactive` flip (#179, the only piece remaining).
+Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199, #203, #214, #217, #218, #229, #230 — all shipped) and the `interactive` flip (#179, the only piece remaining). Extended by [#245](../codebase/245.md) with a fourth, renderer-sourced `ThreadItem` member (`userText`), ships dormant pending #179's producer.
 
 ## Context
 
@@ -20,9 +20,10 @@ A new, **standalone, framework-free** module `src/renderer/src/store/threadTimel
   - `{ kind: 'assistantText'; turnId; text }` — one coalesced, growing assistant text bubble.
   - `{ kind: 'toolCall'; turnId; toolUseId; name; inputSummary; result: ToolResult | null }` — a tool invocation; `result` starts `null` and is filled in place when the correlated `tool_result` arrives.
   - `{ kind: 'turnBoundary'; turnId; stopReason }` — a turn-end marker.
+  - `{ kind: 'userText'; text }` — the user's own message, a renderer-sourced echo rather than daemon content, so it carries neither `turnId` (the daemon assigns those) nor `seq` (wire fidelity for daemon deltas). Added by [#245](../codebase/245.md), dormant until #179 wires a producer and a real render row.
 - **`ToolResult`** — `{ isError: boolean; resultSummary: string }`, the filled-in half of a `toolCall`.
 - **`TurnPhase`** — `'thinking' | 'responding' | 'idle'`, the coarse conversation-level lifecycle.
-- **`ThreadEvent`** — the renderer-local, sealed input union the reducer consumes (§ the wire boundary below): `assistantDelta` | `toolUse` | `toolResult` | `turnState` | `turnEnd`.
+- **`ThreadEvent`** — the renderer-local, sealed input union the reducer consumes (§ the wire boundary below): `assistantDelta` | `toolUse` | `toolResult` | `turnState` | `turnEnd` | `userText` (#245).
 - **`TimelineState`** — `{ items: readonly ThreadItem[]; phase: TurnPhase }`.
 
 Plus a **pure, exported `reduceTimeline(state, event): TimelineState`**, an `initialTimelineState` const, and narrow pure selectors (`selectItems`, `selectPhase`) — the same discipline as `reduceSession`: no mutation, returns fresh state, `switch` on the sealed union with an `assertNever` exhaustiveness guard, unit-tested with no React and no store.
@@ -42,6 +43,7 @@ The structured wire types do not exist in desktop yet (`EnvelopeType` stops at `
 - **`toolResult{turnId, toolUseId, isError, resultSummary}`** — correlate by `toolUseId` alone (the wire's stable correlation key, unique across the conversation): find the `toolCall` with a matching `toolUseId` **and** `result === null`, and replace it with a copy whose `result` is filled. If none matches (no such pending call, or the call was already resolved), the outcome is a **deterministic no-op — the same `state` reference is returned** (documented, non-throwing per AC4). This absorbs an orphaned or duplicated result (e.g. a mid-turn reconnect where the `tool_use` fell before the replay cursor) without killing the timeline.
 - **`turnState{state}`** — set `phase` to `state`; `items` is preserved by reference. If `state === phase` already, return the same `state` reference (no-churn, mirroring `appendUnique`'s pure-duplicate discipline).
 - **`turnEnd{turnId, stopReason}`** — append a `turnBoundary`. It does **not** reset `phase`; the daemon emits `turn_state: 'idle'` separately. Phase and boundary stay orthogonal, mirroring `sessionStore`'s status/messages orthogonality.
+- **`userText{text}`** (#245) — append a fresh `userText` item; `phase` untouched. Same fresh-tail-append discipline as `toolUse`/`turnEnd` — never coalesced via the `assistantDelta` path, since a user message is one whole message rather than a stream of deltas.
 
 ## Rationale
 

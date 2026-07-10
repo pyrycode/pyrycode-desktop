@@ -73,6 +73,16 @@ function encodeToolUse(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 14, type: 'tool_use', ts: FIXED_TS, payload })
 }
 
+/** A `modal_shown` envelope's plaintext bytes, wrapping an arbitrary payload (#201). */
+function encodeModalShown(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 15, type: 'modal_shown', ts: FIXED_TS, payload })
+}
+
+/** A `modal_dismissed` envelope's plaintext bytes, wrapping an arbitrary payload (#201). */
+function encodeModalDismissed(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 16, type: 'modal_dismissed', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -113,6 +123,26 @@ const TOOL_USE = {
   tool_use_id: 'tu-1',
   name: 'Read',
   input_summary: 'reads /etc/hosts'
+}
+
+/** A fully-populated, well-formed modal_shown payload with two ordered options (#201). */
+const MODAL_SHOWN = {
+  modal_id: 'mdl-7f3a',
+  class: 'permission',
+  title: 'Allow Bash?',
+  prompt: 'claude wants to run: rm -rf build/',
+  options: [
+    { id: 'allow', label: 'Allow' },
+    { id: 'deny', label: 'Deny' }
+  ],
+  default_option_id: 'deny'
+}
+
+/** A fully-populated, well-formed modal_dismissed payload (#201). */
+const MODAL_DISMISSED = {
+  modal_id: 'mdl-7f3a',
+  outcome: 'allow',
+  source: 'remote'
 }
 
 /** A well-formed conversation summary with a string name — a saved channel (#139). */
@@ -667,6 +697,199 @@ describe('parseInboundMessage — tool_use fail-closed (#217)', () => {
   })
 })
 
+describe('parseInboundMessage — modal_shown recognition (#201, additive)', () => {
+  it('narrows a full modal_shown into { kind: modal-shown } carrying all six fields verbatim', () => {
+    expect(parseInboundMessage(encodeModalShown(MODAL_SHOWN))).toEqual({
+      kind: 'modal-shown',
+      modalShown: MODAL_SHOWN
+    })
+  })
+
+  it('preserves option order — options[0] before options[1] (array order is selection order)', () => {
+    const result = parseInboundMessage(encodeModalShown(MODAL_SHOWN))
+    if (result?.kind === 'modal-shown') {
+      expect(result.modalShown.options.map((o) => o.id)).toEqual(['allow', 'deny'])
+      expect(result.modalShown.options[0]).toEqual({ id: 'allow', label: 'Allow' })
+      expect(result.modalShown.options[1]).toEqual({ id: 'deny', label: 'Deny' })
+    }
+  })
+
+  it('narrows a full modal_shown for the trust class too', () => {
+    const trust = { ...MODAL_SHOWN, class: 'trust' }
+    expect(parseInboundMessage(encodeModalShown(trust))).toEqual({
+      kind: 'modal-shown',
+      modalShown: trust
+    })
+  })
+
+  it('treats an empty options array as a valid zero-option modal (structural)', () => {
+    const empty = { ...MODAL_SHOWN, options: [] }
+    expect(parseInboundMessage(encodeModalShown(empty))).toEqual({
+      kind: 'modal-shown',
+      modalShown: empty
+    })
+  })
+
+  it('drops unknown server keys, keeping only the six known fields (forward-compat)', () => {
+    const withExtras = { ...MODAL_SHOWN, conversation_id: 'conv-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeModalShown(withExtras))).toEqual({
+      kind: 'modal-shown',
+      modalShown: MODAL_SHOWN
+    })
+  })
+
+  it('drops unknown keys per option, keeping only { id, label } (forward-compat)', () => {
+    const withExtras = {
+      ...MODAL_SHOWN,
+      options: [{ id: 'allow', label: 'Allow', keystroke: '1' }]
+    }
+    expect(parseInboundMessage(encodeModalShown(withExtras))).toEqual({
+      kind: 'modal-shown',
+      modalShown: { ...MODAL_SHOWN, options: [{ id: 'allow', label: 'Allow' }] }
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — modal_shown fail-closed (#201)', () => {
+  it('throws when class is absent, a non-string, or a string outside the closed enum', () => {
+    const bad: unknown[] = [
+      (() => {
+        const { class: _dropped, ...missing } = MODAL_SHOWN
+        return missing
+      })(), // class absent
+      { ...MODAL_SHOWN, class: 42 }, // non-string
+      { ...MODAL_SHOWN, class: null },
+      { ...MODAL_SHOWN, class: {} },
+      { ...MODAL_SHOWN, class: 'destructive' }, // a string outside the closed enum (no destructive class)
+      { ...MODAL_SHOWN, class: '' } // empty string is still outside the enum
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModalShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any string field is absent (never a partial)', () => {
+    for (const field of ['modal_id', 'title', 'prompt', 'default_option_id'] as const) {
+      const { [field]: _dropped, ...missing } = MODAL_SHOWN
+      expect(() => parseInboundMessage(encodeModalShown(missing))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any string field is a non-string (number, object, null)', () => {
+    const bad: unknown[] = [
+      { ...MODAL_SHOWN, modal_id: 42 },
+      { ...MODAL_SHOWN, title: {} },
+      { ...MODAL_SHOWN, prompt: null },
+      { ...MODAL_SHOWN, default_option_id: ['a'] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModalShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when options is absent or not an array', () => {
+    const bad: unknown[] = [
+      (() => {
+        const { options: _dropped, ...missing } = MODAL_SHOWN
+        return missing
+      })(), // options absent
+      { ...MODAL_SHOWN, options: {} },
+      { ...MODAL_SHOWN, options: 'x' },
+      { ...MODAL_SHOWN, options: 3 }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModalShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('fails the whole modal closed when any single option is invalid', () => {
+    const bad: unknown[] = [
+      { ...MODAL_SHOWN, options: [{ id: 'allow', label: 'Allow' }, 'not-an-object'] },
+      { ...MODAL_SHOWN, options: [{ id: 'allow' }] }, // label missing
+      { ...MODAL_SHOWN, options: [{ label: 'Allow' }] }, // id missing
+      { ...MODAL_SHOWN, options: [{ id: 42, label: 'Allow' }] }, // id non-string
+      { ...MODAL_SHOWN, options: [{ id: 'allow', label: 7 }] } // label non-string
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModalShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a modal_shown payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeModalShown('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeModalShown(['a']))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — modal_dismissed recognition (#201, additive)', () => {
+  it('narrows a full modal_dismissed into { kind: modal-dismissed } for each of the three sources', () => {
+    for (const source of ['remote', 'local', 'timeout'] as const) {
+      const payload = { ...MODAL_DISMISSED, source }
+      expect(parseInboundMessage(encodeModalDismissed(payload))).toEqual({
+        kind: 'modal-dismissed',
+        modalDismissed: payload
+      })
+    }
+  })
+
+  it('carries an opaque outcome (an option id or a sentinel) verbatim, never enum-checked', () => {
+    const sentinel = { ...MODAL_DISMISSED, outcome: '__timeout__' }
+    expect(parseInboundMessage(encodeModalDismissed(sentinel))).toEqual({
+      kind: 'modal-dismissed',
+      modalDismissed: sentinel
+    })
+  })
+
+  it('drops unknown server keys, keeping only the three known fields (forward-compat)', () => {
+    const withExtras = { ...MODAL_DISMISSED, conversation_id: 'conv-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeModalDismissed(withExtras))).toEqual({
+      kind: 'modal-dismissed',
+      modalDismissed: MODAL_DISMISSED
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — modal_dismissed fail-closed (#201)', () => {
+  it('throws when source is absent, a non-string, or a string outside the closed enum', () => {
+    const bad: unknown[] = [
+      { modal_id: 'mdl-7f3a', outcome: 'allow' }, // source absent
+      { ...MODAL_DISMISSED, source: 42 }, // non-string
+      { ...MODAL_DISMISSED, source: null },
+      { ...MODAL_DISMISSED, source: {} },
+      { ...MODAL_DISMISSED, source: 'admin' }, // a string outside the closed enum
+      { ...MODAL_DISMISSED, source: '' } // empty string is still outside the enum
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModalDismissed(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when modal_id or outcome is absent or a non-string', () => {
+    const bad: unknown[] = [
+      { outcome: 'allow', source: 'remote' }, // modal_id absent
+      { ...MODAL_DISMISSED, modal_id: 42 },
+      { modal_id: 'mdl-7f3a', source: 'remote' }, // outcome absent
+      { ...MODAL_DISMISSED, outcome: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModalDismissed(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a modal_dismissed payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeModalDismissed('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeModalDismissed(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -996,6 +1219,75 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a modal_shown content-free, never a title / prompt / option label / modal_id (#201)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_MODAL = 'secret-modal-id'
+    const SECRET_TITLE = 'secret-modal-title'
+    const SECRET_PROMPT = 'secret-modal-prompt'
+    const SECRET_LABEL = 'secret-option-label'
+    const plaintext = encodeModalShown({
+      ...MODAL_SHOWN,
+      modal_id: SECRET_MODAL,
+      title: SECRET_TITLE,
+      prompt: SECRET_PROMPT,
+      options: [{ id: 'allow', label: SECRET_LABEL }]
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('modal_shown')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_MODAL, SECRET_TITLE, SECRET_PROMPT, SECRET_LABEL]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('logs a modal_dismissed content-free, never the modal_id / outcome / source (#201)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_MODAL = 'secret-modal-id'
+    const SECRET_OUTCOME = 'secret-outcome-value'
+    const plaintext = encodeModalDismissed({
+      modal_id: SECRET_MODAL,
+      outcome: SECRET_OUTCOME,
+      source: 'remote'
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('modal_dismissed')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_MODAL, SECRET_OUTCOME]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed modal_shown throw path (#201)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeModalShown({ ...MODAL_SHOWN, class: 'destructive' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('does NOT log on a malformed modal_dismissed throw path (#201)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeModalDismissed({ ...MODAL_DISMISSED, source: 'admin' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('logs a conversations reply content-free, never a name / cwd / id, and no count (#139)', () => {
     const { log, lines } = captureLog()
     const SECRET_NAME = 'secret-conversation-title'
@@ -1160,6 +1452,43 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
       for (const spy of spies) expect(spy).not.toHaveBeenCalled()
     } finally {
       for (const spy of spies) spy.mockRestore()
+    }
+  })
+
+  it('names the failure category only for a bad modal class / source — never echoes the value (#201, AC3)', () => {
+    // A modal_shown whose class is out-of-enum, with the secret title/prompt present as valid strings.
+    let shownErr: unknown = null
+    try {
+      parseInboundMessage(
+        encodeModalShown({
+          ...MODAL_SHOWN,
+          class: 'destructive',
+          title: 'secret-title',
+          prompt: 'secret-prompt'
+        })
+      )
+    } catch (e) {
+      shownErr = e
+    }
+    expect(shownErr).toBeInstanceOf(WireDecodeError)
+    const shownMsg = (shownErr as Error).message
+    for (const leak of ['destructive', 'secret-title', 'secret-prompt']) {
+      expect(shownMsg).not.toContain(leak)
+    }
+
+    // A modal_dismissed whose source is out-of-enum, with the secret outcome present.
+    let dismissedErr: unknown = null
+    try {
+      parseInboundMessage(
+        encodeModalDismissed({ modal_id: 'mdl', outcome: 'secret-outcome', source: 'admin' })
+      )
+    } catch (e) {
+      dismissedErr = e
+    }
+    expect(dismissedErr).toBeInstanceOf(WireDecodeError)
+    const dismissedMsg = (dismissedErr as Error).message
+    for (const leak of ['admin', 'secret-outcome']) {
+      expect(dismissedMsg).not.toContain(leak)
     }
   })
 })

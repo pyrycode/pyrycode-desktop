@@ -169,6 +169,34 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('modalShown → null (consumed by the modal store + bridge #223, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'modalShown',
+        modalId: 'mdl-7f3a',
+        class: 'permission',
+        title: 'Allow Bash?',
+        prompt: 'run rm -rf',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' }
+        ],
+        defaultOptionId: 'deny'
+      })
+    ).toBeNull()
+  })
+
+  it('modalDismissed → null (consumed by the modal store + bridge #223, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'modalDismissed',
+        modalId: 'mdl-7f3a',
+        outcome: 'allow',
+        source: 'remote'
+      })
+    ).toBeNull()
+  })
+
   it('the three debug-bundle events dispatch nothing into the session store', () => {
     // Belt-and-suspenders, mirroring production: feed each new event through the same null-guarded
     // dispatch the bridge applies; the store stays at its initial state (no status flip, no message).

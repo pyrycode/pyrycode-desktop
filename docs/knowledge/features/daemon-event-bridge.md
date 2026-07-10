@@ -40,6 +40,14 @@ consumer is the [conversation timeline store](conversation-timeline-store.md)'s 
 that bridge owns), not the session store. The second `DaemonEvent` arm forcing a case in both
 `assertNever`-guarded switches at once, confirming the pattern #214 established holds for a second load.
 
+[#201](../codebase/201.md) added a tenth and eleventh no-store-action member, `modalShown` /
+`modalDismissed` — the transport slice of the [modal-prompt model](modal-prompt-model.md) vertical
+(ADR 0009). Unlike every arm above, **neither existing bridge owns these** — the [conversation timeline
+store](conversation-timeline-store.md)'s bridge also maps them to `null` (added to its inverse-filter
+list, not its owned block); the real consumer is a **third** bridge + modal store landing in
+[#223](https://github.com/pyrycode/pyrycode-desktop/issues/223). The third `DaemonEvent` arm addition
+forcing a case in both `assertNever`-guarded switches at once.
+
 ## What it does
 
 Turns each `DaemonEvent` arriving from the background process into the matching `SessionAction` (or `null`, for events the session store doesn't model) and dispatches non-null results into the one store the UI reads. Two exported symbols:
@@ -51,7 +59,7 @@ Turns each `DaemonEvent` arriving from the background process into the matching 
 
 ### 1. The pure translation (`translateDaemonEvent`)
 
-A `switch (event.type)` over all fifteen `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
+A `switch (event.type)` over all seventeen `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
 
 | `DaemonEvent` arm | `SessionAction` produced | conversion |
 |---|---|---|
@@ -70,6 +78,8 @@ A `switch (event.type)` over all fifteen `DaemonEvent` arms with a `default: ret
 | `conversationsReceived` | `null` | consumed by the conversation-list store (#208), not the session store — present only for exhaustiveness (#139) |
 | `turnState` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#214) |
 | `toolUse` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#217) |
+| `modalShown` | `null` | consumed by neither existing bridge; the real consumer is a third bridge + [modal store](modal-prompt-model.md) (#223) — present only for exhaustiveness (#201) |
+| `modalDismissed` | `null` | consumed by neither existing bridge; the real consumer is a third bridge + [modal store](modal-prompt-model.md) (#223) — present only for exhaustiveness (#201) |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 
@@ -152,5 +162,6 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `conversationsReceived` member this bridge tolerates as a seventh `null`-returning case; consumed by the conversation-list store [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208), not this session-store bridge
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turnState` member this bridge tolerates as an eighth `null`-returning case; the third arm the timeline bridge owns, alongside `assistantDelta`/`turnEnd`
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member this bridge tolerates as a ninth `null`-returning case; the fourth arm the timeline bridge owns, and the first to drive a durable `toolCall` item rather than text or a scalar
+- [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members this bridge tolerates as a tenth and eleventh `null`-returning case; unlike every prior member, the timeline bridge ALSO returns `null` for these — the real consumer is a third bridge + modal store landing in [#223](https://github.com/pyrycode/pyrycode-desktop/issues/223)
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [#19 codebase notes](../codebase/19.md) · Spec: `docs/specs/architecture/19-translate-daemon-events-to-session-actions.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

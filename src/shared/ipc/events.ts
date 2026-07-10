@@ -16,7 +16,10 @@ import type {
   MessagePayload,
   ErrorPayload,
   ConversationSummary,
-  WireTurnState
+  WireTurnState,
+  WireModalClass,
+  WireModalSource,
+  WireModalOption
 } from '../wire/types'
 
 /** The IPC channel every typed daemon event travels on, main → renderer.
@@ -92,3 +95,19 @@ export type DaemonEvent =
   // No token/key/raw frame — ConversationSummary carries only ids, a nullable title, two flags, a
   // workspace path (opaque display text), and two timestamps.
   | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
+  // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
+  // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
+  // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is
+  // carried (the wire carries none on a modal). `title` / `prompt` / `options[].label` are untrusted
+  // `claude`-surfaced display text the render slice (#224) must render as plain text, never HTML.
+  // No token, key, or raw frame (AC4).
+  | {
+      type: 'modalShown'
+      modalId: string
+      class: WireModalClass
+      title: string
+      prompt: string
+      options: readonly WireModalOption[]
+      defaultOptionId: string
+    }
+  | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }

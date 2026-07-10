@@ -229,6 +229,16 @@ function toolUsePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'tool_use', ts: FIXED_TS, payload })
 }
 
+/** A `modal_shown` plaintext, wrapping an arbitrary payload (#201). */
+function modalShownPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'modal_shown', ts: FIXED_TS, payload })
+}
+
+/** A `modal_dismissed` plaintext, wrapping an arbitrary payload (#201). */
+function modalDismissedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'modal_dismissed', ts: FIXED_TS, payload })
+}
+
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
 function errorPlaintext(): Uint8Array {
   return encodeEnvelope({
@@ -1208,6 +1218,114 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
           name: 'Read'
           // input_summary missing → fail closed
         })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — modal_shown stream (#201)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound modal_shown into one modalShown carrying all six camelCase fields, options in order', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modalShownPlaintext({
+        modal_id: 'mdl-7f3a',
+        class: 'permission',
+        title: 'Allow Bash?',
+        prompt: 'claude wants to run: rm -rf build/',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' }
+        ],
+        default_option_id: 'deny'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([
+      {
+        type: 'modalShown',
+        modalId: 'mdl-7f3a',
+        class: 'permission',
+        title: 'Allow Bash?',
+        prompt: 'claude wants to run: rm -rf build/',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' }
+        ],
+        defaultOptionId: 'deny'
+      }
+    ])
+  })
+
+  it('drops a malformed modal_shown (out-of-enum class) without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: modalShownPlaintext({
+          modal_id: 'mdl-7f3a',
+          class: 'destructive', // no destructive wire class → fail closed
+          title: 'Allow Bash?',
+          prompt: 'run rm -rf',
+          options: [{ id: 'allow', label: 'Allow' }],
+          default_option_id: 'allow'
+        })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — modal_dismissed stream (#201)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound modal_dismissed into one modalDismissed for each of the three sources', async () => {
+    for (const source of ['remote', 'local', 'timeout'] as const) {
+      const { sink, drivers } = await connected()
+      const before = emitted(sink).length
+
+      drivers[0].emit({
+        type: 'message',
+        plaintext: modalDismissedPlaintext({ modal_id: 'mdl-7f3a', outcome: 'allow', source })
+      })
+
+      const events = emitted(sink).slice(before)
+      expect(events).toEqual([
+        { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source }
+      ])
+    }
+  })
+
+  it('drops a malformed modal_dismissed (out-of-enum source) without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: modalDismissedPlaintext({ modal_id: 'mdl-7f3a', outcome: 'allow', source: 'admin' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

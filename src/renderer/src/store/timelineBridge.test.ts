@@ -106,7 +106,20 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
             last_used_at: '2026-07-09T00:00:00Z'
           }
         ]
-      }
+      },
+      {
+        type: 'modalShown',
+        modalId: 'mdl-7f3a',
+        class: 'permission',
+        title: 'Allow Bash?',
+        prompt: 'run rm -rf',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' }
+        ],
+        defaultOptionId: 'deny'
+      },
+      { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })

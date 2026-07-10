@@ -66,6 +66,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // No session-store action: the conversation-list store (#208), not the session store, consumes
       // this. Present only because the assertNever guard below makes a new arm a compile error.
       return null
+    case 'modalShown':
+    case 'modalDismissed':
+      // No session-store action: the modal store + bridge (#223), not the session store, consumes
+      // these. Present only because the assertNever guard below makes a new arm a compile error.
+      return null
     default:
       return assertNever(event)
   }

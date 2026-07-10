@@ -53,6 +53,8 @@ export type EnvelopeType =
   | 'turn_end'
   | 'turn_state'
   | 'tool_use'
+  | 'modal_shown'
+  | 'modal_dismissed'
   | 'list_conversations'
   | 'conversations'
   | 'ack'
@@ -215,6 +217,72 @@ export interface ToolUsePayload {
   tool_use_id: string
   name: string
   input_summary: string
+}
+
+/**
+ * The modal class on the wire. A plain daemon-side string over a closed set exactly like
+ * `MessagePayload.role` / `WireTurnState` — the desktop narrows it to the two SHIPPED values
+ * (`permission | trust`, #716), structurally equal to the renderer-side `ModalClass` (modalPrompts.ts
+ * / ADR 0009) so the #223 bridge assigns one to the other with no cast. There is NO `destructive` wire
+ * class — a "second confirm" is a client-side UX policy on the answer path, not a wire distinction
+ * (ADR 0009). This is stricter-than-wire (the daemon models `class` as an open string, SSOT #701), so
+ * the fail-closed decode drops an unknown class — a deliberate no-drift posture (a dropped modal blocks
+ * `claude`, so widening is a coordinated 3-touch change: this + `ModalClass` #122 + the decoder). See #201.
+ */
+export type WireModalClass = 'permission' | 'trust'
+
+/**
+ * What resolved a modal, on the wire. A closed set `{ remote, local, timeout }`, fully determined by
+ * the resolution mechanism (SSOT #701): `remote` = a phone/desktop answer, `local` = answered at the
+ * desktop TTY, `timeout` = deny-on-timeout fired. A plain wire string closed to the three values like
+ * `WireTurnState`; structurally equal to the inline union on `ModalEvent.dismissed` (modalPrompts.ts).
+ */
+export type WireModalSource = 'remote' | 'local' | 'timeout'
+
+/**
+ * One selectable modal option. Mirrors the daemon `ModalOption` field-for-field (SSOT #701), both
+ * fields always present (no `omitempty`). Array position (in `ModalShownPayload.options`) IS the
+ * display/selection order. Structurally equal to the renderer-side `ModalOption` (modalPrompts.ts).
+ */
+export interface WireModalOption {
+  id: string
+  label: string
+}
+
+/**
+ * Inbound `modal_shown` event (daemon → client). Mirrors the daemon's ModalShownPayload field-for-field
+ * (SSOT #701, ADR 0009), wire order `modal_id, class, title, prompt, options, default_option_id` — all
+ * always present (no `omitempty`). The permission/trust prompt `claude` raises during an interactive
+ * session (surfaced once #179 flips `interactive` on). **`modal_id` is the sole correlation key — a
+ * one-time nonce; NO `conversation_id` is carried on a modal** (the daemon hosts one active conversation
+ * and resolves `modal_id` against its own outstanding-modal state, ADR 0009). `class` is a plain wire
+ * string closed to `WireModalClass` exactly like `MessagePayload.role`. `options` is ORDERED.
+ * `default_option_id` is the id of a fail-safe deny default set daemon-side (its `∈ options[].id`
+ * invariant is a render concern, #224, not cross-checked at decode). `title` / `prompt` / each
+ * `options[].label` are untrusted `claude`-surfaced FREE TEXT the render slice (#224) must render as
+ * plain text, never HTML. See #201.
+ */
+export interface ModalShownPayload {
+  modal_id: string
+  class: WireModalClass
+  title: string
+  prompt: string
+  options: WireModalOption[]
+  default_option_id: string
+}
+
+/**
+ * Inbound `modal_dismissed` event (daemon → client). Mirrors the daemon's ModalDismissedPayload
+ * field-for-field (SSOT #701, ADR 0009), wire order `modal_id, outcome, source` — all always present
+ * (no `omitempty`). Clears an outstanding modal by `modal_id` (the sole correlation key; no
+ * `conversation_id`). `outcome` is the answered option id or a producer sentinel — an OPAQUE string
+ * (the vocabulary is the producer's), carried verbatim, never enum-checked. `source` is closed to
+ * `WireModalSource`. See #201.
+ */
+export interface ModalDismissedPayload {
+  modal_id: string
+  outcome: string
+  source: WireModalSource
 }
 
 /**

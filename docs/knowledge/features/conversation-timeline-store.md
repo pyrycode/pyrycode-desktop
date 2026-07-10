@@ -30,8 +30,8 @@ beyond `assistantText`; nothing in the renderer paints a `toolCall` row yet — 
 [#201](../codebase/201.md) added `modalShown` / `modalDismissed` to `translateTimelineEvent`'s
 **inverse-filter** `null` list (alongside `conversationsReceived`), **not** its owned block — the first
 `DaemonEvent` pair since this bridge existed that this store does **not** consume. A modal is neither a
-session action nor a timeline event; the real consumer is a third bridge + [modal
-store](modal-prompt-model.md) landing in [#223](https://github.com/pyrycode/pyrycode-desktop/issues/223).
+session action nor a timeline event; the real consumer is the third, independent [modal store +
+bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md).
 This forced a matching `null` case in `daemonEventBridge.ts` at the same time — the third pair of arms
 to force both `assertNever`-guarded switches at once (after `turnState` #214 and `toolUse` #217).
 
@@ -170,8 +170,8 @@ daemon frame ─(#199/#214/#217 transport, snake→camel, conversation_id droppe
   feeds the still-open correlation ticket [#206](https://github.com/pyrycode/pyrycode-desktop/issues/206).
 - [Modal-prompt model](modal-prompt-model.md) / [#201 codebase notes](../codebase/201.md) — the
   `modalShown`/`modalDismissed` transport slice: the first `DaemonEvent` pair this bridge does **not**
-  own, added to the inverse-filter `null` list instead; the real consumer is a third bridge + modal
-  store landing in [#223](https://github.com/pyrycode/pyrycode-desktop/issues/223).
+  own, added to the inverse-filter `null` list instead; the real consumer is the third, independent
+  [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md).
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md).
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the vertical [#201](../codebase/201.md) is the transport slice of; this store deliberately stays outside it.
 - [#203 codebase notes](../codebase/203.md) — mounts `useTimelineBridge`, reads

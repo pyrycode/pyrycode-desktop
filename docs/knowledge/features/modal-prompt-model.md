@@ -11,6 +11,11 @@ renderer state — no IPC, no preload bridge, no transport, no React, no wire ty
 contract; this is the exact modal analog of [ADR 0008](../decisions/0008-thread-timeline-model.md) /
 [#121](../codebase/121.md)'s timeline model.
 
+[#223](../codebase/223.md) (shipped) added the [Zustand store + the `DaemonEvent → ModalEvent`
+bridge](modal-store-bridge.md) wrapping `reduceModal` — this module's `ModalEvent` union is the target
+contract that bridge maps onto. This module itself remains untouched; no wire-type import, no IPC,
+still no React.
+
 ## What it does
 
 When `claude` hits a permission or trust prompt in a desktop-driven interactive session, the daemon
@@ -92,16 +97,18 @@ landed:
   channel](daemon-event-channel.md) / [Daemon-event bridge](daemon-event-bridge.md) / [Conversation
   timeline store](conversation-timeline-store.md). This module itself is **untouched** by #201 — it
   still has no wire-type import, no IPC, no consumer.
-- **#223 (next)** — the daemon-event bridge that actually maps the two arms onto `ModalEvent` and
-  dispatches into a new `modalStore.ts` Zustand container wrapping `reduceModal` — the consumer this
-  module's `ModalEvent` union has been the stable target contract for since #122.
-- the interactive render of an outstanding `ModalPrompt` (#224) and the answer/cancel path (#225);
+- **[#223](../codebase/223.md) (shipped)** — the [modal store + bridge](modal-store-bridge.md) that
+  maps the two arms onto `ModalEvent` and dispatches into `modalStore.ts`, a Zustand container
+  wrapping `reduceModal` — the consumer this module's `ModalEvent` union has been the stable target
+  contract for since #122.
+- the interactive render of an outstanding `ModalPrompt` (#224, next — mounts `useModalBridge`) and
+  the answer/cancel path (#225);
 - the destructive second-confirm (#226) / surface-rejection (#227) UX policy (client-side only — no
   wire signal exists for it).
 
-The `modalStore.ts` Zustand-container name is reserved for that follow-up, mirroring how
-[conversation timeline store](conversation-timeline-store.md) (`timelineStore.ts`, #202) wrapped
-`reduceTimeline`.
+The `modalStore.ts` Zustand-container name this ADR reserved is exactly what
+[#223](modal-store-bridge.md) named it, mirroring how [conversation timeline
+store](conversation-timeline-store.md) (`timelineStore.ts`, #202) wrapped `reduceTimeline`.
 
 [#195](https://github.com/pyrycode/pyrycode-desktop/issues/195) (match-and-replace by `modalId`,
 no-second-notification, answered-id no-op) and
@@ -134,10 +141,13 @@ this store; the id-addressed array keeps each a small extension rather than a re
 - [#122 codebase notes](../codebase/122.md) — implementation summary.
 - [#201 codebase notes](../codebase/201.md) — the transport slice: wire types, fail-closed decode, and
   the `modalShown`/`modalDismissed` `DaemonEvent` arms this module's `ModalEvent` is the target
-  contract for; unblocks #223 (the bridge + `modalStore.ts` that actually consumes them).
+  contract for; unblocked [#223](../codebase/223.md) (the bridge + `modalStore.ts` that consumes them).
+- [Modal store + bridge](modal-store-bridge.md) / [#223 codebase notes](../codebase/223.md) — the
+  Zustand container + `DaemonEvent → ModalEvent` bridge built on this module.
 - [Daemon-event channel](daemon-event-channel.md) / [Daemon-event bridge](daemon-event-bridge.md) /
-  [Conversation timeline store](conversation-timeline-store.md) — where the two `DaemonEvent` arms
-  land today: real producer, zero consumer, both bridges discarding them as `null` until #223.
+  [Conversation timeline store](conversation-timeline-store.md) — both bridges keep discarding the two
+  modal arms as `null`; the real consumer is the third, independent [modal store +
+  bridge](modal-store-bridge.md) (#223).
 - [Thread timeline (conversation model)](thread-timeline.md) — the #121/ADR 0008 sibling model this
   mirrors piece-for-piece (array + scan-by-id, same-reference no-churn, renderer-local event union,
   `…Store` container reserved for the follow-up).

@@ -49,6 +49,7 @@ export type EnvelopeType =
   | 'debug_bundle_done'
   | 'request_snapshot'
   | 'set_session_settings'
+  | 'session_settings_updated'
   | 'screen_snapshot'
   | 'assistant_delta'
   | 'turn_end'
@@ -153,6 +154,21 @@ export interface SetSessionSettingsPayload {
   effort?: string
   /** *bool omitempty — absent = leave unchanged; false = permissions enforced (never omitted-as-false). */
   yolo?: boolean
+}
+
+/**
+ * Inbound `session_settings_updated` reply (daemon → client). Mirrors the daemon's
+ * SessionSettingsUpdatedPayload{SessionID string} field-for-field (pyrycode #844 wire vocab, #845
+ * handler, both on `main`): confirms a `set_session_settings` (#263) request landed. It carries ONLY
+ * `session_id` — no `omitempty`, the one field is always present on the wire — and deliberately does NOT
+ * echo the applied `model` / `effort` / `yolo` (the client already knows what it sent; the reply carries
+ * only the addressing id). `session_id` is the addressing key (matches the request's `session_id` and the
+ * daemon's Pool.UpdateSettings id), a routing id, NEVER a secret (the `SetSessionSettingsPayload.session_id`
+ * / `conversation_id` convention). Correlation to the specific pending request is by `Envelope.in_reply_to`
+ * (on the Envelope, NOT the payload) — decoded/carried by #261 when its consumer exists, never here. See #264.
+ */
+export interface SessionSettingsUpdatedPayload {
+  session_id: string
 }
 
 /**

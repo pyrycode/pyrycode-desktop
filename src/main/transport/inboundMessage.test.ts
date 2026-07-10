@@ -98,6 +98,11 @@ function encodeSessionTransition(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 19, type: 'session_transition', ts: FIXED_TS, payload })
 }
 
+/** A `session_settings_updated` envelope's plaintext bytes, wrapping an arbitrary payload (#264). */
+function encodeSessionSettingsUpdated(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 20, type: 'session_settings_updated', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -216,6 +221,11 @@ const SESSION_TRANSITION = {
   reason: 'clear',
   occurred_at: '2026-07-10T00:00:00.000000000Z',
   workspace_cwd: null
+}
+
+/** A well-formed session_settings_updated reply — its one field, the addressing key (#264). */
+const SESSION_SETTINGS_UPDATED = {
+  session_id: 'sess-2'
 }
 
 describe('parseInboundMessage — happy', () => {
@@ -854,6 +864,71 @@ describe('parseInboundMessage — session_transition fail-closed (#254)', () => 
         type: 'session_transition',
         ts: FIXED_TS,
         payload: { ...SESSION_TRANSITION, new_session_id: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — session_settings_updated recognition (#264, additive)', () => {
+  it('narrows a full session_settings_updated into { kind: session-settings-updated }', () => {
+    expect(parseInboundMessage(encodeSessionSettingsUpdated(SESSION_SETTINGS_UPDATED))).toEqual({
+      kind: 'session-settings-updated',
+      sessionSettingsUpdated: SESSION_SETTINGS_UPDATED
+    })
+  })
+
+  it('drops unknown server keys (incl. a spurious echoed model/reason), keeping only session_id', () => {
+    const withExtras = { ...SESSION_SETTINGS_UPDATED, model: 'claude-opus-4-8', reason: 'clear' }
+    expect(parseInboundMessage(encodeSessionSettingsUpdated(withExtras))).toEqual({
+      kind: 'session-settings-updated',
+      sessionSettingsUpdated: SESSION_SETTINGS_UPDATED
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — session_settings_updated fail-closed (#264)', () => {
+  it('throws when session_id is absent or a non-string', () => {
+    const bad: unknown[] = [
+      {}, // session_id absent
+      { session_id: 42 }, // a number is not a valid value
+      { session_id: null }, // a null is not a valid value (session_id is never nullable)
+      { session_id: {} } // an object is not a valid value
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionSettingsUpdated(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a session_settings_updated payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeSessionSettingsUpdated('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeSessionSettingsUpdated(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('names the failure category only for a missing session_id — never echoes the value', () => {
+    // session_id present as an object carrying a secret string: a naive impl might interpolate it.
+    let thrown: unknown = null
+    try {
+      parseInboundMessage(encodeSessionSettingsUpdated({ session_id: { secret: 'sess-secret-value' } }))
+    } catch (e) {
+      thrown = e
+    }
+    expect(thrown).toBeInstanceOf(WireDecodeError)
+    expect((thrown as Error).message).not.toContain('sess-secret-value')
+  })
+
+  it('throws on an oversized session_settings_updated plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 20,
+        type: 'session_settings_updated',
+        ts: FIXED_TS,
+        payload: { session_id: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
       })
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
@@ -1781,6 +1856,30 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() =>
       parseInboundMessage(encodeSessionTransition({ ...SESSION_TRANSITION, reason: 'evicted' }), log)
     ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a session_settings_updated content-free, never the session_id (#264)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_ID = 'secret-session-id-value'
+    const plaintext = encodeSessionSettingsUpdated({ session_id: SECRET_ID })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('session_settings_updated')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — the decoded session_id never reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_ID)
+  })
+
+  it('does NOT log on a malformed session_settings_updated throw path (#264)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeSessionSettingsUpdated({}), log)).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })
 

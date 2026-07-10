@@ -10,11 +10,11 @@ shape, opposite direction.
 Ships **dormant**: no renderer surface dispatches this command yet. Its caller is the interactive
 Run-configuration controls ([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257)), exactly as
 [#236](modal-resolution-envelope.md)'s `answerModal` shipped ahead of its render consumer. This ticket
-does **not** decode the `session_settings_updated` reply (the sibling decode-arm slice,
-[#264](https://github.com/pyrycode/pyrycode-desktop/issues/264), blocked by this ticket via file overlap
-on `daemonConnection.ts` and the wire `EnvelopeType` union), correlate reply↔request
-([#261](https://github.com/pyrycode/pyrycode-desktop/issues/261)), or build the store/controls
-([#256](https://github.com/pyrycode/pyrycode-desktop/issues/256)/#257).
+does **not** decode the `session_settings_updated` reply, correlate reply↔request, or build the
+store/controls. The sibling decode-arm slice, [#264](../codebase/264.md), has since shipped — it decodes
+the reply into a dormant `sessionSettingsUpdated` `DaemonEvent`, still uncorrelated. Correlation is
+[#261](https://github.com/pyrycode/pyrycode-desktop/issues/261) (blocked by #264); the store/controls are
+[#256](https://github.com/pyrycode/pyrycode-desktop/issues/256)/#257.
 
 ## The omitempty presence contract — the crux of this slice
 
@@ -215,3 +215,6 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
   `session_id` this command's payload will address, once #257 wires the two together.
 - [Run configuration store](run-config-store.md) / [#187](../codebase/187.md) — the read half this
   write path is the eventual write-side twin of; #256/#257 join them.
+- [#264 codebase notes](../codebase/264.md) — the decode arm for this ticket's `session_settings_updated`
+  reply: wire type, fail-closed parse, and a dormant `sessionSettingsUpdated` `DaemonEvent`, no-op in
+  every bridge until #261/#256 exist.

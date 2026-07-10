@@ -33,6 +33,7 @@ import type {
   TurnEndPayload,
   TurnStatePayload,
   SessionTransitionPayload,
+  SessionSettingsUpdatedPayload,
   ToolUsePayload,
   ToolResultPayload,
   ConversationSummary,
@@ -89,6 +90,12 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * fail-closed `reason` closed-enum check plus the nullable `workspace_cwd` here are the boundary this slice
  * defends. `workspace_cwd` is opaque workspace display text (like `cwd` #139), decoded but dropped at the emit.
  *
+ * The `session-settings-updated` kind (#264) carries the decoded SessionSettingsUpdatedPayload — the
+ * daemon's confirmation that a `set_session_settings` (#263) request landed. It carries ONLY `session_id`
+ * (the addressing key, a routing id not a secret); the reply echoes no settings. The fail-closed defence
+ * is a single required `session_id` string (no enum, no nullable). The consumer emits a fresh literal
+ * carrying only `sessionId`; its real consumer is #261 / #256 (correlation / store), not yet built.
+ *
  * The `tool-use` kind (#217) carries the decoded ToolUsePayload — the tool-call enrichment that drives
  * a durable `toolCall` timeline item (#202 / #121). The consumer carries the four render fields onward
  * (dropping `conversation_id`); the fail-closed required-string presence here (five strings, no enum)
@@ -128,6 +135,7 @@ export type InboundDaemonMessage =
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
+  | { kind: 'session-settings-updated'; sessionSettingsUpdated: SessionSettingsUpdatedPayload }
   | { kind: 'tool-use'; toolUse: ToolUsePayload }
   | { kind: 'tool-result'; toolResult: ToolResultPayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
@@ -358,6 +366,24 @@ function parseSessionTransitionPayload(payload: unknown): SessionTransitionPaylo
     throw new WireDecodeError('missing required field: reason')
   }
   return { previous_session_id, new_session_id, reason, occurred_at, workspace_cwd }
+}
+
+/**
+ * Narrow an opaque payload into a SessionSettingsUpdatedPayload (#264). Fail-closed like
+ * parseSessionTransitionPayload, scaled down to the reply's ONE field: a single
+ * `requireString(payload, 'session_id')` (no closed enum, no nullable, no cross-field validation — the
+ * reply echoes no settings, so `session_id` is all there is). Returns exactly the one known field;
+ * unknown server-added keys (e.g. a spurious echoed `model` / `reason`, or an `in_reply_to` echoed onto
+ * the payload) are tolerated (forward-compat) but NOT copied through. Its message names the failure
+ * CATEGORY only (`requireString` emits `missing required field: session_id`) — never interpolating the
+ * value, which is conversation-correlating.
+ */
+function parseSessionSettingsUpdatedPayload(payload: unknown): SessionSettingsUpdatedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed session_settings_updated payload')
+  }
+  const session_id = requireString(payload, 'session_id')
+  return { session_id }
 }
 
 /**
@@ -666,6 +692,19 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'session-transition', sessionTransition }
+    }
+    case 'session_settings_updated': {
+      // Narrow BEFORE logging so a malformed frame (an absent / non-string `session_id`) throws first
+      // and leaves no record. No decoded field (session_id) is logged — only the frame's byte length +
+      // one-way hash, reusing the existing content-free field set.
+      const sessionSettingsUpdated = parseSessionSettingsUpdatedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'session_settings_updated',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'session-settings-updated', sessionSettingsUpdated }
     }
     case 'tool_use': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field) throws first and

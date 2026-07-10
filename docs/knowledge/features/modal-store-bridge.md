@@ -171,6 +171,9 @@ add the corresponding `reduceModal` arm — the same shape [#223](../codebase/22
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` arm that folds into this bridge's
   no-op case alongside `toolResult`/`conversationCreated`; the real consumer is the not-yet-built
   renderer holder [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259).
+- [Session settings send](session-settings-send.md) / [#264 codebase notes](../codebase/264.md) — the
+  `sessionSettingsUpdated` arm that folds into this bridge's no-op case alongside `sessionTransition`;
+  the real consumer is #261 / #256, not yet built.
 - [#179 codebase notes](../codebase/179.md) — flips `interactive` live, so `modal_shown`/`modal_dismissed`
   carry real daemon traffic through this bridge in production for the first time.
 - [#248 codebase notes](../codebase/248.md) — adds the dormant third owned arm, `modalAnswerRejected`,

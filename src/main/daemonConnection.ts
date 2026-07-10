@@ -396,6 +396,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               newSessionId: inbound.sessionTransition.new_session_id
             })
             return
+          case 'session-settings-updated':
+            // The set_session_settings confirmation data path (#264). Emit a fresh literal carrying ONLY
+            // `sessionId` (= session_id) — the reply's one field. Never a spread of the decoded payload,
+            // so a spurious echoed key (a `model` / `reason`, or an `in_reply_to` on the payload) cannot
+            // ride the arm to the renderer. Do NOT add `inReplyTo` — #261 widens this arm to carry the
+            // Envelope.in_reply_to correlation key when its consumer exists. A session_id is a routing id,
+            // not a secret (the conversation_id convention). Consumed by #261 / #256 (not yet built).
+            emitDaemonEvent(sink, {
+              type: 'sessionSettingsUpdated',
+              sessionId: inbound.sessionSettingsUpdated.session_id
+            })
+            return
           case 'tool-use':
             // The tool-call data path (#217). snake→camel here; `conversation_id` is DROPPED (single
             // active conversation; #202's bridge scopes identity). A fresh literal with the four named

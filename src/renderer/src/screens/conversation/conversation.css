@@ -220,6 +220,19 @@
   opacity: 0.5;
 }
 
+/* #230 — the resolved states. When #121's reducer fills the toolCall's `result` in place, the arm adds
+   these modifiers to the wrapper. Placed immediately after the base .tool-row so source order gives the
+   equal-specificity modifier precedence over the pending opacity. tool-row--resolved lifts the pending
+   dimming for BOTH outcomes (the success state is the mock's chip with dimming lifted — no accent
+   added); tool-row--error additionally retints the chip border to signal the failure. */
+.tool-row--resolved {
+  opacity: 1;
+}
+
+.tool-row--error .tool-row__chip {
+  border-color: var(--color-error);
+}
+
 /* The chip (Figma node 16-29): surface-container fill, 1px outline-variant border, 12px radius. gap 8
    → --space-2; py 8 / px 12 → --space-2 / --space-3. max-width/min-width/overflow bound the chip so an
    arbitrarily long untrusted summary can't blow out the layout. */

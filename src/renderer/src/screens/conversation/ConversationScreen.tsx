@@ -173,22 +173,33 @@ function TimelineRow({
           </div>
         </div>
       )
-    case 'toolCall':
-      // #218: the pending tool row (Figma node 16-28) — a compact chip, not a message bubble, so
+    case 'toolCall': {
+      // #218: the tool row (Figma node 16-28) — a compact chip, not a message bubble, so
       // data-thread-role="tool" (not "assistant") keeps it out of the daemon bubble count. `name` and
       // `inputSummary` are untrusted daemon strings rendered as inert React children (auto-escaped) —
       // never dangerouslySetInnerHTML, no markup/path interpretation — the assistantText posture above.
-      // This slice draws only the pending (`result: null`) state; #206 fills `result` and owns whether
-      // the .tool-row pending dimming lifts. `toolUseId` stays on the item as #206's correlation key,
-      // never a React key here (Timeline keys by array index — AC2).
+      // `toolUseId` stays on the item as #121's correlation key, never a React key here (Timeline keys
+      // by array index).
+      //
+      // #230: the row resolves in place when `result` fills. Only the wrapper className varies with
+      // `item.result` (narrowed to ToolResult | null by this case) — the chip's inner markup is
+      // unchanged, so `resultSummary` is NOT surfaced (the Figma mock has no result-text slot; the
+      // not-pending + isError signals satisfy the story), keeping the untrusted surface at today's two
+      // fields. `tool-row--resolved` iff resolved (lifts .tool-row's 50% pending dimming, both
+      // outcomes); `tool-row--error` on top iff `result.isError` (the error accent). See conversation.css.
+      const { result } = item
+      const rowClass = result
+        ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
+        : 'tool-row'
       return (
-        <div className="tool-row">
+        <div className={rowClass}>
           <div className="tool-row__chip" data-thread-role="tool">
             <span className="tool-row__name">{item.name}</span>
             <span className="tool-row__summary">{item.inputSummary}</span>
           </div>
         </div>
       )
+    }
     case 'turnBoundary':
       // Structural marker only — no drawn element (Figma has no per-turn divider). Its sole
       // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.

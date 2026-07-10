@@ -12,14 +12,16 @@ Introduced in [#223](../codebase/223.md), the fourth slice of the modal vertical
 transport slice, shipped) and built directly on [#122](../codebase/122.md) (the pure model, shipped).
 Purely additive, Strangler Fig: nothing in `daemonEventBridge.ts` or `timelineBridge.ts` imports or is
 changed by either new file — both keep returning `null` for the two modal arms, exactly as they did
-before this ticket.
+before this ticket. [#248](../codebase/248.md) later added a third, still-dormant owned case here
+(`modalAnswerRejected`) — see § Modal-answer rejection (dormant) below.
 
 ## What it does
 
 Turns the two owned `DaemonEvent` modal arms into `ModalEvent`s and folds them into `ModalState` via
 `reduceModal`, exposing `selectOutstanding` as the only read surface. A `modalShown`/`modalDismissed`
 arrival re-renders only components selecting the outstanding slice — orthogonal to `sessionStore`,
-`timelineStore`, and `runConfigStore`.
+`timelineStore`, and `runConfigStore`. Owns a third arm, `modalAnswerRejected` ([#248](../codebase/248.md)),
+but that case is dormant — it returns `null`, no `ModalEvent`/reduce arm exists yet; see below.
 
 ## How it works
 
@@ -130,6 +132,18 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
   production before then — the store and bridge were built and tested against injected `DaemonEvent`s
   only. Now live.
 
+## Modal-answer rejection (dormant, [#248](../codebase/248.md))
+
+`translateModalEvent` gained a third owned arm, `case 'modalAnswerRejected':`, kept as a **distinct**
+case rather than folded into the anonymous null group below it — so ownership is visible even while
+dormant. It returns `null` this slice: no `ModalEvent` variant, no `reduceModal` arm, no UI. The arm's
+producer is a main-side FIFO correlation window in [daemon connection](daemon-connection.md) that
+attributes a content-free daemon `error` to the `modal_id` it was answering (the wire `error` carries
+none — ADR 0009). #249, the render slice, is what flips this case to translate a real `ModalEvent` and
+add the corresponding `reduceModal` arm — the same shape [#223](../codebase/223.md) itself followed for
+`modalShown`/`modalDismissed` relative to [#201](../codebase/201.md), and the same dormant-arm posture
+`sessionTransition` ([#254](../codebase/254.md)) used ahead of its holder ([#259](../codebase/259.md)).
+
 ## Related
 
 - [Modal-prompt model](modal-prompt-model.md) / [#122 codebase notes](../codebase/122.md) — the pure
@@ -159,3 +173,8 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
   renderer holder [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259).
 - [#179 codebase notes](../codebase/179.md) — flips `interactive` live, so `modal_shown`/`modal_dismissed`
   carry real daemon traffic through this bridge in production for the first time.
+- [#248 codebase notes](../codebase/248.md) — adds the dormant third owned arm, `modalAnswerRejected`,
+  and the main-side FIFO correlation window in [daemon connection](daemon-connection.md) that produces
+  it (see § Modal-answer rejection above). Render slice is [#249](https://github.com/pyrycode/pyrycode-desktop/issues/249).
+- [#254 codebase notes](../codebase/254.md) — the `sessionTransition` arm's dormant-arm-ahead-of-holder
+  posture this ticket's `modalAnswerRejected` case follows.

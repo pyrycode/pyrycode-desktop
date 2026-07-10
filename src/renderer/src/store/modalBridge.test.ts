@@ -116,6 +116,7 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         resultSummary: 'read 12 lines'
       },
       { type: 'sessionTransition', newSessionId: 'sess-2' },
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-2' },
       // Dormant this slice (#248): the modal bridge OWNS modalAnswerRejected as a distinct case but
       // returns null until #249 flips it to a rejection ModalEvent — so it belongs in the null table now.
       { type: 'modalAnswerRejected', modalId: 'mdl-1' }

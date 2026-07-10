@@ -213,6 +213,10 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'sessionTransition', newSessionId: 'sess-2' })).toBeNull()
   })
 
+  it('sessionSettingsUpdated → null (consumed by #261 / #256, not the session store)', () => {
+    expect(translateDaemonEvent({ type: 'sessionSettingsUpdated', sessionId: 'sess-2' })).toBeNull()
+  })
+
   it('modalAnswerRejected → null (consumed by the modal bridge #249, not the session store)', () => {
     expect(translateDaemonEvent({ type: 'modalAnswerRejected', modalId: 'mdl-1' })).toBeNull()
   })

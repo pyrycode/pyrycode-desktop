@@ -260,6 +260,11 @@ function sessionTransitionPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'session_transition', ts: FIXED_TS, payload })
 }
 
+/** A `session_settings_updated` plaintext, wrapping an arbitrary payload (#264). */
+function sessionSettingsUpdatedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'session_settings_updated', ts: FIXED_TS, payload })
+}
+
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
 function errorPlaintext(): Uint8Array {
   return encodeEnvelope({
@@ -1306,6 +1311,80 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
         type: 'message',
         plaintext: sessionTransitionPlaintext({ ...SESSION_TRANSITION, reason: 'evicted' })
       })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('leaves the coarse message / message_chunk path untouched (no regression)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi' }
+    const a = { conversation_id: 'c1', message_id: 'm2', role: 'user', text: 'one' }
+
+    drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+    drivers[0].emit({ type: 'message', plaintext: chunkPlaintext({ messages: [a] }) })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'messageReceived', message },
+      { type: 'messagesReceived', messages: [a] }
+    ])
+  })
+})
+
+describe('createDaemonConnection — session_settings_updated stream (#264)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound session_settings_updated into one sessionSettingsUpdated carrying sessionId', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'sess-2' })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-2' }
+    ])
+  })
+
+  it('emits a fresh literal — only type + sessionId cross IPC, no in_reply_to and no spurious echoed key', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // A hostile frame carrying a spurious echoed model / reason / in_reply_to must NOT ride the arm.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsUpdatedPlaintext({
+        session_id: 'sess-3',
+        model: 'claude-opus-4-8',
+        in_reply_to: 42
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([{ type: 'sessionSettingsUpdated', sessionId: 'sess-3' }])
+    // The emitted event has exactly the two keys — no in_reply_to / inReplyTo, no echoed key.
+    expect(Object.keys(events[0]).sort()).toEqual(['sessionId', 'type'])
+    const serialized = JSON.stringify(events)
+    for (const dropped of ['in_reply_to', 'inReplyTo', 'model', 'claude-opus-4-8']) {
+      expect(serialized).not.toContain(dropped)
+    }
+  })
+
+  it('drops a malformed session_settings_updated without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({ type: 'message', plaintext: sessionSettingsUpdatedPlaintext({}) })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })

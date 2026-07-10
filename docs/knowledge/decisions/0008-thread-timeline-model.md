@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199, #203, #214, #217, #218) and the `interactive` flip (#179).
+Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199, #203, #214, #217, #218, #229, #230 — all shipped) and the `interactive` flip (#179, the only piece remaining).
 
 ## Context
 

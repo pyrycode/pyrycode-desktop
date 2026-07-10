@@ -19,7 +19,11 @@ blank-thread-critical slice that gates #179 (advertising the `interactive` capab
 order (no render yet — that is the sibling slice #218). [#229](../codebase/229.md) (shipped) wired the
 `tool_result` transport → bridge chain, the vertical's last transport slice — giving `reduceTimeline`'s
 pre-existing `toolResult` arm its first real feed, resolving the correlated `toolCall`'s `result` in
-place via `fillResult` (no render yet — that is the sibling slice #230).
+place via `fillResult` (no render yet — that was the sibling slice [#230](../codebase/230.md)).
+[#230](../codebase/230.md) (shipped) rendered that filled `result` — the `toolCall` chip resolves in
+place (pending dimming lifts, `result.isError` selects a success/error border treatment via a new
+`--color-error` token) — the vertical's last render slice. Only `#179` (the `interactive` capability
+flip) remains.
 
 Introduced in [#121](../codebase/121.md). Lives at
 `src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
@@ -133,6 +137,13 @@ Nothing imports this module yet.
   by the time it shipped, [#223](../codebase/223.md) had added a **third** independent exhaustive
   `DaemonEvent` switch (`modalBridge.ts`), so a new arm now forces a case in three renderer bridges, not
   two — see [#229 codebase notes](../codebase/229.md) § Lessons learned.
+- **[#230](../codebase/230.md) (shipped)** rendered the `toolResult`-filled `result` — `TimelineRow`'s
+  `case 'toolCall'` now derives the wrapper `className` from `item.result` (`tool-row--resolved` iff
+  filled, `tool-row--error` on top iff `isError`), lifting the pending 50% dimming and tinting the
+  chip border with a newly-introduced `--color-error` token (M3 default dark error role, tone 80 —
+  desktop's first error-family token). `reduceTimeline`'s `fillResult`/`ToolResult` shape is
+  unmodified; `result.resultSummary` is deliberately not surfaced (no result-text slot in the Figma
+  mock). The vertical's last render slice — only `#179` remains.
 
 ## Edge cases and limitations
 
@@ -185,10 +196,13 @@ Nothing imports this module yet.
 - [#217 codebase notes](../codebase/217.md) — the `tool_use` transport slice: wire types, decode
   (required-string presence, no enum), and the `toolUse` `DaemonEvent`/`ThreadEvent` arms; gave
   `reduceTimeline`'s `toolUse` arm its first real feed, appending a `toolCall` item onto `selectItems`.
-- [#229 codebase notes](../codebase/229.md) — the `tool_result` transport slice, the vertical's last:
-  wire types, decode (four required strings + one `requireBoolean`), and the `toolResult`
-  `DaemonEvent`/`ThreadEvent` arms; gave `reduceTimeline`'s pre-existing `fillResult` correlation its
-  first real feed, resolving a `toolCall`'s `result` in place on `selectItems`.
+- [#229 codebase notes](../codebase/229.md) — the `tool_result` transport slice, the vertical's last
+  transport slice: wire types, decode (four required strings + one `requireBoolean`), and the
+  `toolResult` `DaemonEvent`/`ThreadEvent` arms; gave `reduceTimeline`'s pre-existing `fillResult`
+  correlation its first real feed, resolving a `toolCall`'s `result` in place on `selectItems`.
+- [#230 codebase notes](../codebase/230.md) — the vertical's last render slice: extends #218's
+  pending `toolCall` chip to resolve in place from `item.result`, and introduces desktop's first
+  error-family design token, `--color-error`.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

@@ -39,7 +39,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── MessageThread             .conversation__thread (scroll region, the coarse `message` path)
 │   └── MessageBubble × N     .message-row / .bubble
 ├── Timeline                  .conversation__thread (null when empty, the structured-stream path, #203)
-│   └── TimelineRow × N       .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218)
+│   └── TimelineRow × N       .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
 │   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…")
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
@@ -385,8 +385,9 @@ bridges' hard `assertNever`, see [#203 codebase notes § Patterns established](.
 - `assistantText` → one bubble, text as React children (never `dangerouslySetInnerHTML` — HTML inside
   a delta renders as visible characters, discharging #199's untrusted-text handoff), carrying
   `data-thread-role="assistant"` as the test hook (`MessageThread`'s `data-message-role` counterpart).
-- `toolCall` → the pending tool-row chip ([#218](#pending-tool-call-row-218), below) — no longer a
-  no-op as of that ticket; the resolved success/error treatment is #206's.
+- `toolCall` → the tool-row chip ([#218](#pending-tool-call-row-218), below) — no longer a no-op as
+  of that ticket; the resolved success/error treatment ([#230](#resolved-tool-call-row-230), below)
+  lifted the pending dimming and added the error accent.
 - `turnBoundary` → `null` (structural only; Figma has no per-turn divider).
 
 **Streaming cursor** (Figma `16:56`, glyph `▎` U+258E): a trailing `<span class="bubble__cursor"
@@ -449,8 +450,10 @@ patterns established, and open questions.
 
 `Timeline`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md): a compact chip —
 tool name and one-line input summary — replaces the earlier `case 'toolCall': return null` no-op, at
-50% opacity for the unresolved (`result: null`) state. Also dormant until #179. See
-[Pending tool-call row](#pending-tool-call-row-218) below.
+50% opacity for the unresolved (`result: null`) state. [#230](../codebase/230.md) later taught the
+same arm to resolve that chip in place once `result` fills. Also dormant until #179. See
+[Pending tool-call row](#pending-tool-call-row-218) and
+[Resolved tool-call row](#resolved-tool-call-row-230) below.
 
 ### Pending tool-call row (#218)
 
@@ -481,14 +484,52 @@ unread here, reserved for [#206](https://github.com/pyrycode/pyrycode-desktop/is
 correlation.
 
 This is the **pending** (`result: null`) treatment only — the whole `.tool-row` sits at 50% opacity,
-the unresolved-state dimming. #206 fills `result` and owns lifting (or overriding) that dimming plus
-the success/error visual; this ticket's chip styling stays untouched by that follow-up. Every value in
-the three new `.tool-row*` CSS rules is a token (`--font-mono`, `--color-tertiary`,
-`--color-surface-container`, `--color-outline-variant`, `--color-on-surface-variant`,
-`--text-body-small-*`, `--space-2`/`--space-3`, `--radius-sm`) — no hex/rgb/px literal. Dormant until
-#179 flips `interactive` (no `tool_use` frames arrive while it's off), the same posture as
-`Timeline`/`ThinkingIndicator`. See [#218 codebase notes](../codebase/218.md) for the full design and
-patterns established.
+the unresolved-state dimming. #206 (later split into transport #229 + render #230) fills `result` and
+owns lifting (or overriding) that dimming plus the success/error visual; this ticket's chip styling
+stays untouched by that follow-up. Every value in the three new `.tool-row*` CSS rules is a token
+(`--font-mono`, `--color-tertiary`, `--color-surface-container`, `--color-outline-variant`,
+`--color-on-surface-variant`, `--text-body-small-*`, `--space-2`/`--space-3`, `--radius-sm`) — no
+hex/rgb/px literal. Dormant until #179 flips `interactive` (no `tool_use` frames arrive while it's
+off), the same posture as `Timeline`/`ThinkingIndicator`. See
+[#218 codebase notes](../codebase/218.md) for the full design and patterns established.
+
+### Resolved tool-call row (#230)
+
+The render half of the `toolResult`-fills-`toolCall` correlation (the transport half,
+[#229](../codebase/229.md), decodes the daemon's `tool_result` stream and resolves the item's
+`result` in place via `fillResult`, #121; this ticket only teaches `TimelineRow` to draw the filled
+state). Split from #206 alongside #229, the vertical's **last** render slice — extends #218's pending
+chip rather than adding a new component.
+
+`TimelineRow`'s `case 'toolCall'` now reads `item.result` (`ToolResult | null`) and derives the
+wrapper `className`; the chip's inner markup — the two spans — is **byte-identical** to #218:
+
+```html
+<!-- result === null (unchanged) -->
+<div class="tool-row"> … </div>
+
+<!-- result filled, isError: false -->
+<div class="tool-row tool-row--resolved"> … </div>
+
+<!-- result filled, isError: true -->
+<div class="tool-row tool-row--resolved tool-row--error"> … </div>
+```
+
+`tool-row--resolved` lifts the pending 50% dimming (`opacity: 1`) for **both** outcomes — the
+resolved-success treatment is exactly the mock's chip with the dimming lifted, no accent added.
+`tool-row--error` layers on top only when `result.isError`, retinting `.tool-row__chip`'s border from
+the neutral `--color-outline-variant` to a new token, `--color-error` (`#ffb4ab` — M3 default dark
+error role, tone 80; desktop's **first** error-family token, mirrored from the same M3 scheme
+`tokens.css`'s header names as the palette's source, since no Figma node in this file references an
+error scheme to copy from directly). `result.resultSummary` is **deliberately not rendered** — the
+Figma mock has no result-text slot, and not-surfacing it (rather than surfacing-then-escaping) keeps
+the untrusted-text surface at exactly `name` + `inputSummary`, unchanged from #218. `Timeline`'s
+array-index key strategy is untouched: `fillResult` replaces the `toolCall` at its own index, so a
+resolving row never remounts.
+
+Dormant until #179 flips `interactive`, the same posture as every other structured-stream render
+slice. See [#230 codebase notes](../codebase/230.md) for the full design, the token-provenance
+rationale, and patterns established.
 
 ### Permission modal (#224)
 
@@ -531,7 +572,7 @@ to the answer-path slice (focus trap/`Escape`, programmatic default-option cue).
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
-- **`Timeline({ items })`** — **bound in [#203](../codebase/203.md).** A second, independent thread beside `MessageThread`, reading the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Inert (empty, `null`) in production until #179 flips `interactive`. See [Structured-stream timeline render](#structured-stream-timeline-render-203) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above.
+- **`Timeline({ items })`** — **bound in [#203](../codebase/203.md).** A second, independent thread beside `MessageThread`, reading the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Inert (empty, `null`) in production until #179 flips `interactive`. See [Structured-stream timeline render](#structured-stream-timeline-render-203) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
 - **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. Inert (`null`) in production until #179 flips `interactive`. See [Thinking indicator](#thinking-indicator-215) above.
 - **`PermissionModal()`** — **bound in [#224](../codebase/224.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, mounted as the last child of `.conversation`. `null` when nothing is outstanding; read-only (inert option buttons) until the answer-path slice wires them. See [Permission modal](#permission-modal-224) above.
 
@@ -552,10 +593,10 @@ to the answer-path slice (focus trap/`Escape`, programmatic default-option cue).
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`
-- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip now renders (#218, transport #217)
+- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229) — the vertical's last render slice
 - [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, dormant since #223
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

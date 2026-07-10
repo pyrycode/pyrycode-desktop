@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { answerPrompt, cancelPrompt, MODAL_CANCEL_OUTCOME } from './modalResolution'
+import { answerPrompt, cancelPrompt, selectOption, MODAL_CANCEL_OUTCOME } from './modalResolution'
 import { answerModalCommand, cancelModalCommand, type RendererCommand } from '@shared/ipc/commands'
+import type { ModalPrompt } from '../../store/modalPrompts'
 
 // answerPrompt / cancelPrompt are pure, React-free helpers (the composerSend precedent): their two
 // effects — the guarded sendCommand and the unconditional local `dismissed` dispatch — are injected,
@@ -57,6 +58,66 @@ describe('answerPrompt', () => {
       source: 'local'
     })
     errorSpy.mockRestore()
+  })
+})
+
+// #226: selectOption is the pure second-confirm gate — it routes a just-clicked option to one of two
+// injected effects (answer straight through, or hold pending a confirm) purely on prompt.defaultOptionId,
+// sending/dispatching nothing itself. The container binds `answer` to answerPrompt and `requestConfirm`
+// to the transient confirm state; both are plain spies here (the container/pure-view split, AC3).
+describe('selectOption — the second-confirm gate', () => {
+  const PROMPT: ModalPrompt = {
+    modalId: 'm1',
+    class: 'permission',
+    title: 'Allow file write',
+    prompt: 'claude wants to write to schema.ts',
+    options: [
+      { id: 'allow-once', label: 'Allow once' },
+      { id: 'deny', label: 'Deny' },
+      { id: 'allow-always', label: 'Allow always' }
+    ],
+    defaultOptionId: 'deny'
+  }
+
+  it('routes the default (fail-safe deny) option straight through to answer, ungated (AC2)', () => {
+    const answer = vi.fn()
+    const requestConfirm = vi.fn()
+
+    selectOption(PROMPT, 'deny', { answer, requestConfirm })
+
+    expect(answer).toHaveBeenCalledTimes(1)
+    expect(answer).toHaveBeenCalledWith('deny')
+    expect(requestConfirm).not.toHaveBeenCalled()
+  })
+
+  it('holds a non-default option pending confirm, never answering directly (AC1)', () => {
+    const answer = vi.fn()
+    const requestConfirm = vi.fn()
+
+    selectOption(PROMPT, 'allow-once', { answer, requestConfirm })
+
+    expect(requestConfirm).toHaveBeenCalledTimes(1)
+    expect(requestConfirm).toHaveBeenCalledWith('allow-once')
+    expect(answer).not.toHaveBeenCalled()
+  })
+
+  it('leaves the degenerate single-option-is-default prompt ungated (the only choice is the safe default)', () => {
+    const single: ModalPrompt = {
+      modalId: 'm3',
+      class: 'trust',
+      title: 'Trust this workspace',
+      prompt: 'Grant access',
+      options: [{ id: 'ok', label: 'OK' }],
+      defaultOptionId: 'ok'
+    }
+    const answer = vi.fn()
+    const requestConfirm = vi.fn()
+
+    selectOption(single, 'ok', { answer, requestConfirm })
+
+    expect(answer).toHaveBeenCalledTimes(1)
+    expect(answer).toHaveBeenCalledWith('ok')
+    expect(requestConfirm).not.toHaveBeenCalled()
   })
 })
 

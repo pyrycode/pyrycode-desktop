@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { useModalStore, selectOutstanding } from '../../store/modalStore'
-import type { ModalPrompt } from '../../store/modalPrompts'
-import { answerPrompt, cancelPrompt } from './modalResolution'
+import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
+import { answerPrompt, cancelPrompt, selectOption } from './modalResolution'
 
 // #224/#237: the interactive permission/trust modal — the store → UI half of the modal vertical. Two
 // components mirroring RepairPrompt / RepairControl: a pure, exported view (ModalPrompt in, markup out,
@@ -20,16 +21,29 @@ const PERMISSION_MODAL_TITLE_ID = 'permission-modal-title'
 // (role="dialog", aria-modal, a dedicated scrim, an opaque panel absolutely positioned inside
 // .conversation, no portal) but centers the panel as an M3 dialog (Figma "Dialogs", node 22-3) rather
 // than bottom-anchoring it. The scrim is decorative here (no backdrop dismissal — the cancel button is
-// the dismissal affordance). onAnswer / onCancel are REQUIRED injected effects (the RepairPrompt idiom
-// — a view that cannot answer is a bug), speaking the store's camelCase; the container renames into the
-// wire vocabulary. The `Cancel` label is client-owned copy, not daemon-supplied.
+// the dismissal affordance).
+//
+// #226: the view renders one of two modes off the `pendingOption` prop — the state is a PROP (not
+// internal useState) so both modes stay SSR-testable under the `node` env. `pendingOption === null` →
+// the daemon option list (list mode); a set `pendingOption` → the client-owned confirm sub-step
+// (confirm mode), reusing this same chrome. Every option click routes through `onSelect`; the container
+// (via the selectOption gate) decides answer-straight-through vs hold-pending-confirm. onSelect /
+// onConfirm / onBack / onCancel are REQUIRED injected effects (the RepairPrompt idiom — a view that
+// cannot answer is a bug), speaking the store's camelCase; the container renames into the wire
+// vocabulary. The `Cancel` / confirm-sentence / `Back` / `Confirm` copy is client-owned, not daemon-supplied.
 export function PermissionModalView({
   prompt,
-  onAnswer,
+  pendingOption,
+  onSelect,
+  onConfirm,
+  onBack,
   onCancel
 }: {
   prompt: ModalPrompt
-  onAnswer: (modalId: string, optionId: string) => void
+  pendingOption: ModalOption | null
+  onSelect: (modalId: string, optionId: string) => void
+  onConfirm: (modalId: string, optionId: string) => void
+  onBack: () => void
   onCancel: (modalId: string) => void
 }): JSX.Element {
   return (
@@ -43,44 +57,73 @@ export function PermissionModalView({
         aria-modal="true"
         aria-labelledby={PERMISSION_MODAL_TITLE_ID}
       >
-        {/* title / prompt / labels are daemon-supplied, untrusted display text rendered as React
+        {/* The title stays shown in BOTH modes so the user remains oriented on what they are approving.
+            title / prompt / labels are daemon-supplied, untrusted display text rendered as React
             children (auto-escaped) — never dangerouslySetInnerHTML, no markup interpretation (AC4). */}
         <h2 id={PERMISSION_MODAL_TITLE_ID} className="permission-modal__title">
           {prompt.title}
         </h2>
-        <p className="permission-modal__prompt">{prompt.prompt}</p>
-        <div className="permission-modal__options">
-          {/* The leading (first) child of the action row: the de-emphasized cancel, at the left, the M3
-              leading-dismissive placement (Figma "Dialogs", node 22-3). Its own class — NOT
-              permission-modal__option — so it neither carries the option treatment nor inflates the
-              option count. */}
-          <button
-            type="button"
-            className="permission-modal__cancel"
-            onClick={() => onCancel(prompt.modalId)}
-          >
-            Cancel
-          </button>
-          {prompt.options.map((option) => {
-            // The fail-safe deny default carries the --default modifier (visually distinct, assertable);
-            // every other option carries only the base class — the codebase message-row--${type} idiom.
-            const isDefault = option.id === prompt.defaultOptionId
-            return (
-              <button
-                key={option.id}
-                type="button"
-                className={
-                  isDefault
-                    ? 'permission-modal__option permission-modal__option--default'
-                    : 'permission-modal__option'
-                }
-                onClick={() => onAnswer(prompt.modalId, option.id)}
-              >
-                {option.label}
+        {pendingOption ? (
+          // Confirm mode (#226): a client-owned confirm sentence naming the held option's (auto-escaped)
+          // label + a Back/Confirm action row. The daemon option list is NOT rendered here.
+          <>
+            <p className="permission-modal__prompt">
+              Send &quot;{pendingOption.label}&quot;? This grants the requested action.
+            </p>
+            <div className="permission-modal__options">
+              {/* Back is the leading (left) action — margin-right: auto, the M3 leading-dismissive
+                  placement — returning to the option list without sending. */}
+              <button type="button" className="permission-modal__back" onClick={() => onBack()}>
+                Back
               </button>
-            )
-          })}
-        </div>
+              <button
+                type="button"
+                className="permission-modal__confirm"
+                onClick={() => onConfirm(prompt.modalId, pendingOption.id)}
+              >
+                Confirm
+              </button>
+            </div>
+          </>
+        ) : (
+          // List mode (#237): the daemon prompt + one button per option, plus the leading Cancel.
+          <>
+            <p className="permission-modal__prompt">{prompt.prompt}</p>
+            <div className="permission-modal__options">
+              {/* The leading (first) child of the action row: the de-emphasized cancel, at the left, the
+                  M3 leading-dismissive placement (Figma "Dialogs", node 22-3). Its own class — NOT
+                  permission-modal__option — so it neither carries the option treatment nor inflates the
+                  option count. */}
+              <button
+                type="button"
+                className="permission-modal__cancel"
+                onClick={() => onCancel(prompt.modalId)}
+              >
+                Cancel
+              </button>
+              {prompt.options.map((option) => {
+                // The fail-safe deny default carries the --default modifier (visually distinct,
+                // assertable); every other option carries only the base class — the message-row--${type}
+                // idiom. Every click routes through onSelect; the gate decides answer vs hold.
+                const isDefault = option.id === prompt.defaultOptionId
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={
+                      isDefault
+                        ? 'permission-modal__option permission-modal__option--default'
+                        : 'permission-modal__option'
+                    }
+                    onClick={() => onSelect(prompt.modalId, option.id)}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
@@ -98,14 +141,34 @@ export function PermissionModalView({
 export function PermissionModal(): JSX.Element | null {
   const outstanding = useModalStore(selectOutstanding)
   const dispatch = useModalStore((s) => s.dispatch)
+  // #226: the transient second-confirm marker — the id of the option held pending a confirm, or null in
+  // list mode. useState (not a store slice): the lowest scope that survives re-render, cleared on confirm
+  // or back, never persisted. Declared BEFORE the early return (rules-of-hooks); the empty-case SSR test
+  // still returns null because the guard fires after the hook runs.
+  const [pendingOptionId, setPendingOptionId] = useState<string | null>(null)
   const prompt = outstanding[0]
   if (!prompt) return null
+  // Derive the pending option from the CURRENT prompt's options — a deterministic safety net: if
+  // outstanding[0] is swapped out (a remote/timeout dismissed clears the current prompt, the next
+  // renders) while a confirm is pending, a stale id no longer matches and the view falls back to list
+  // mode rather than confirming against the wrong prompt.
+  const pendingOption = prompt.options.find((o) => o.id === pendingOptionId) ?? null
   return (
     <PermissionModalView
       prompt={prompt}
-      onAnswer={(modalId, optionId) =>
-        answerPrompt(modalId, optionId, { sendCommand: window.pyry.sendCommand, dispatch })
+      pendingOption={pendingOption}
+      onSelect={(modalId, optionId) =>
+        selectOption(prompt, optionId, {
+          answer: (id) =>
+            answerPrompt(modalId, id, { sendCommand: window.pyry.sendCommand, dispatch }),
+          requestConfirm: setPendingOptionId
+        })
       }
+      onConfirm={(modalId, optionId) => {
+        answerPrompt(modalId, optionId, { sendCommand: window.pyry.sendCommand, dispatch })
+        setPendingOptionId(null)
+      }}
+      onBack={() => setPendingOptionId(null)}
       onCancel={(modalId) =>
         cancelPrompt(modalId, { sendCommand: window.pyry.sendCommand, dispatch })
       }

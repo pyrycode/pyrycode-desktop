@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PermissionModal, PermissionModalView } from './PermissionModal'
-import type { ModalPrompt } from '../../store/modalPrompts'
+import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 
 // No DOM harness — mirrors ConversationScreen.test.tsx. PermissionModalView is the pure, exported view
 // (ModalPrompt in, markup out), so a server-rendered string proves the render: title/prompt, one button
@@ -12,12 +12,20 @@ import type { ModalPrompt } from '../../store/modalPrompts'
 // The click → answerPrompt / cancelPrompt behavior lives in modalResolution.test.ts (plain spies): the
 // `node` environment fires no clicks, so the view is server-rendered for structure only.
 
-// #237: onAnswer / onCancel are required props now (a view that cannot answer is a bug). The structural
-// tests inject no-op effects; the wiring is exercised in modalResolution.test.ts.
+// #237/#226: onSelect / onConfirm / onBack / onCancel are required props (a view that cannot answer is a
+// bug). The structural tests inject no-op effects; the wiring is exercised in modalResolution.test.ts.
+// `pendingOption` selects the render mode: null = the option list, set = the confirm sub-step (#226).
 const noop = (): void => {}
-function renderView(prompt: ModalPrompt): string {
+function renderView(prompt: ModalPrompt, pendingOption: ModalOption | null = null): string {
   return renderToStaticMarkup(
-    <PermissionModalView prompt={prompt} onAnswer={noop} onCancel={noop} />
+    <PermissionModalView
+      prompt={prompt}
+      pendingOption={pendingOption}
+      onSelect={noop}
+      onConfirm={noop}
+      onBack={noop}
+      onCancel={noop}
+    />
   )
 }
 
@@ -121,6 +129,48 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
     expect(markup.indexOf('permission-modal__cancel')).toBeLessThan(
       markup.indexOf('class="permission-modal__option"')
     )
+  })
+})
+
+// #226: the confirm sub-step — when `pendingOption` is set, the view renders a client-owned confirm
+// sentence + a Back/Confirm action row INSTEAD of the daemon option list, reusing the same dialog chrome.
+describe('PermissionModalView — the second-confirm sub-step (#226)', () => {
+  const pending: ModalOption = { id: 'allow-once', label: 'Allow once' }
+
+  it('renders a client-owned confirm sentence naming the held option, not the daemon option list (AC1)', () => {
+    const markup = renderView(PROMPT, pending)
+    expect(markup).toContain('Send')
+    expect(markup).toContain('Allow once')
+    // The daemon option list is NOT rendered in confirm mode…
+    expect(optionCount(markup)).toBe(0)
+    // …nor the daemon prompt body or the other (unselected) daemon options.
+    expect(markup).not.toContain('claude wants to write to schema.ts')
+    expect(markup).not.toContain('Allow always')
+  })
+
+  it('renders a leading Back and a trailing Confirm affordance (AC1)', () => {
+    const markup = renderView(PROMPT, pending)
+    expect(markup).toContain('class="permission-modal__back">Back</button>')
+    expect(markup).toContain('class="permission-modal__confirm">Confirm</button>')
+    // Back is the leading (left) action; Confirm trails it. The list-mode Cancel is gone in this mode.
+    expect(markup.indexOf('permission-modal__back')).toBeLessThan(
+      markup.indexOf('permission-modal__confirm')
+    )
+    expect(markup).not.toContain('permission-modal__cancel')
+  })
+
+  it('escapes an untrusted held-option label in the confirm sentence (AC4)', () => {
+    const markup = renderView(PROMPT, { id: 'x', label: '<img src=x onerror=alert(1)>' })
+    expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(markup).not.toContain('<img src=x onerror=alert(1)>')
+  })
+
+  it('keeps the dialog chrome, aria, and title so the user stays oriented on what is being approved', () => {
+    const markup = renderView(PROMPT, pending)
+    expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('aria-modal="true"')
+    expect(markup).toContain('aria-labelledby="permission-modal-title"')
+    expect(markup).toContain('Allow file write')
   })
 })
 

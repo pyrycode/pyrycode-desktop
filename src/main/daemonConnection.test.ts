@@ -141,6 +141,7 @@ function build(
     ensure?: () => Promise<DeviceKeyPair>
     throwOnSend?: boolean
     diagnosticLog?: DiagnosticLog
+    mintToken?: () => string
   } = {}
 ): {
   connection: DaemonConnection
@@ -157,7 +158,10 @@ function build(
     clientVersion: '0.1.0',
     now: () => FIXED_TS,
     createDriver: factory.createDriver,
-    diagnosticLog: overrides.diagnosticLog
+    diagnosticLog: overrides.diagnosticLog,
+    // Deterministic answer_token mint (#236) — a fixed default so the sent modal_answer frame is
+    // pinnable; the uniqueness test injects a counter instead.
+    mintToken: overrides.mintToken ?? ((): string => 'test-token')
   }
   return { connection: createDaemonConnection(deps), sink, drivers: factory.drivers }
 }
@@ -1532,6 +1536,158 @@ describe('createDaemonConnection — conversations (list_conversations request /
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — answerModal (outbound modal_answer, #236)', () => {
+  const PAYLOAD = { modal_id: 'md-1', option_id: 'opt-1' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.answerModal(PAYLOAD)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one modal_answer envelope with id 2, the fixed ts, and the minted token', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.answerModal(PAYLOAD)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('modal_answer')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    // The main-side-minted answer_token lands in the sent frame alongside the passed-through fields.
+    expect(envelope.payload).toEqual({
+      modal_id: 'md-1',
+      option_id: 'opt-1',
+      answer_token: 'test-token'
+    })
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.answerModal(PAYLOAD)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.answerModal(PAYLOAD)).not.toThrow()
+  })
+
+  it('mints a fresh answer_token per call — two answers carry two distinct tokens (anti-replay)', async () => {
+    let n = 0
+    const ctx = build({ mintToken: () => `tok-${(n += 1)}` })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    ctx.connection.answerModal(PAYLOAD)
+    ctx.connection.answerModal(PAYLOAD)
+
+    const first = decodeEnvelope(ctx.drivers[0].sent[0]).payload as { answer_token: string }
+    const second = decodeEnvelope(ctx.drivers[0].sent[1]).payload as { answer_token: string }
+    expect(first.answer_token).toBe('tok-1')
+    expect(second.answer_token).toBe('tok-2')
+    expect(first.answer_token).not.toBe(second.answer_token)
+  })
+
+  it('ignores a renderer-smuggled answer_token — the sent frame carries the minted one (fresh literal, no-smuggle)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an answer_token onto the payload despite the Omit type.
+    // The fresh-literal construction in answerModal must ignore it — the minted token wins.
+    connection.answerModal({
+      modal_id: 'md-1',
+      option_id: 'opt-1',
+      answer_token: 'smuggled'
+    } as unknown as { modal_id: string; option_id: string })
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload as { answer_token: string }
+    expect(payload.answer_token).toBe('test-token')
+    expect(JSON.stringify(payload)).not.toContain('smuggled')
+  })
+})
+
+describe('createDaemonConnection — cancelModal (outbound modal_cancel, #236)', () => {
+  const PAYLOAD = { modal_id: 'md-1' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.cancelModal(PAYLOAD)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one modal_cancel envelope with id 2, the fixed ts, and { modal_id }', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.cancelModal(PAYLOAD)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('modal_cancel')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual({ modal_id: 'md-1' })
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.cancelModal(PAYLOAD)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.cancelModal(PAYLOAD)).not.toThrow()
+  })
+
+  it('strips a smuggled extra field — the sent modal_cancel payload is exactly { modal_id } (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.cancelModal({ modal_id: 'md-1', option_id: 'opt-1' } as unknown as {
+      modal_id: string
+    })
+
+    expect(decodeEnvelope(drivers[0].sent[0]).payload).toEqual({ modal_id: 'md-1' })
   })
 })
 

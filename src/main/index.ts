@@ -246,6 +246,15 @@ app.whenReady().then(() => {
         // has no consumer/reassembler. Inert no-op when not connected (#139).
         connection.requestConversations()
         return
+      case 'answerModal':
+        // Direct to the connection method (mirrors requestSnapshot), no orchestrator. The method
+        // mints the answer_token main-side and sends modal_answer. Inert no-op when not connected (#236).
+        connection.answerModal(command.payload)
+        return
+      case 'cancelModal':
+        // Direct to the connection method, sends modal_cancel. Inert no-op when not connected (#236).
+        connection.cancelModal(command.payload)
+        return
       case 'requestDebugBundle':
         downloader.request()
         return

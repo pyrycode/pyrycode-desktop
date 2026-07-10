@@ -48,6 +48,11 @@
   --text-title-large-tracking: 0px;
   --text-title-large-weight: 400;
 
+  --text-title-medium-size: 16px;
+  --text-title-medium-line: 24px;
+  --text-title-medium-tracking: 0.15px;
+  --text-title-medium-weight: 500;
+
   --text-body-large-size: 16px;
   --text-body-large-line: 24px;
   --text-body-large-tracking: 0.5px;

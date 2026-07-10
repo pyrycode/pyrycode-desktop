@@ -11,14 +11,15 @@ import { sessionStore } from './store/sessionStore'
 const noop = (): void => {}
 
 // Markers that discriminate the two views: the thread carries the composer's Send control and the
-// leading back affordance; the list carries the placeholder's open affordance.
+// leading back affordance; the list carries the Channel List's always-present wrapper (#141). Its
+// row content is covered by ChannelList.test.tsx, not here.
 const CONVERSATION_MARKER = 'aria-label="Send"'
 const BACK_MARKER = 'aria-label="Back"'
-const LIST_MARKER = 'Open conversation'
+const LIST_MARKER = 'aria-label="Conversations"'
 
 describe('PairedShellView', () => {
   describe("route='list'", () => {
-    it('shows the open affordance and never the thread', () => {
+    it('shows the Channel List wrapper and never the thread', () => {
       const markup = renderToStaticMarkup(
         <PairedShellView route="list" onOpen={noop} onBack={noop} onUnpaired={noop} />
       )
@@ -45,7 +46,7 @@ describe('PairedShellView', () => {
 })
 
 describe('PairedShell', () => {
-  it('enters at the list view — the open affordance, not straight into the thread (AC2)', () => {
+  it('enters at the list view — the Channel List, not straight into the thread (AC2)', () => {
     const markup = renderToStaticMarkup(<PairedShell onUnpaired={noop} />)
     expect(markup).toContain(LIST_MARKER)
     expect(markup).not.toContain(CONVERSATION_MARKER)

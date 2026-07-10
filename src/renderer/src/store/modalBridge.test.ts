@@ -70,7 +70,7 @@ describe('translateModalEvent — the two owned arms', () => {
 })
 
 describe('translateModalEvent — every other arm returns null (the inverse filter)', () => {
-  it('returns null for all 17 non-modal DaemonEvent arms', () => {
+  it('returns null for all 18 arms that translate to no ModalEvent this slice', () => {
     const others: DaemonEvent[] = [
       { type: 'connecting' },
       { type: 'connected', ack },
@@ -115,7 +115,10 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         isError: false,
         resultSummary: 'read 12 lines'
       },
-      { type: 'sessionTransition', newSessionId: 'sess-2' }
+      { type: 'sessionTransition', newSessionId: 'sess-2' },
+      // Dormant this slice (#248): the modal bridge OWNS modalAnswerRejected as a distinct case but
+      // returns null until #249 flips it to a rejection ModalEvent — so it belongs in the null table now.
+      { type: 'modalAnswerRejected', modalId: 'mdl-1' }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()
   })

@@ -2220,6 +2220,122 @@ describe('createDaemonConnection — debug-bundle reassembly routing (#116)', ()
   })
 })
 
+describe('createDaemonConnection — modal-answer rejection correlation (#248)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** The modalAnswerRejected events emitted so far, in order. */
+  function rejections(sink: ReturnType<typeof fakeSink>): DaemonEvent[] {
+    return emitted(sink).filter((e) => e.type === 'modalAnswerRejected')
+  }
+
+  it('emits one correlated modalAnswerRejected when an error follows an outstanding answer (AC1)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(rejections(sink)).toEqual([{ type: 'modalAnswerRejected', modalId: 'mdl-1' }])
+  })
+
+  it('does not emit a rejection when no answer is outstanding — the error keeps its drop behaviour (AC2)', async () => {
+    const { sink, drivers } = await connected()
+
+    // No prior answerModal: the content-free error is unattributable, so it stays dropped (no bundle in
+    // flight either) — exactly the pre-#248 behaviour.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(rejections(sink)).toEqual([])
+  })
+
+  it('an accepted answer (modal_dismissed) drains the window, so a later unrelated error does not mis-attribute', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    // The daemon accepts the answer and dismisses the modal — this drains the outstanding-answer window.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modalDismissedPlaintext({ modal_id: 'mdl-1', outcome: 'allow', source: 'remote' })
+    })
+    // A later, unrelated error must NOT be attributed to the already-accepted answer.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(rejections(sink)).toEqual([])
+  })
+
+  it('correlates two outstanding answers in FIFO send order across two errors', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    connection.answerModal({ modal_id: 'mdl-2', option_id: 'deny' })
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(rejections(sink)).toEqual([
+      { type: 'modalAnswerRejected', modalId: 'mdl-1' },
+      { type: 'modalAnswerRejected', modalId: 'mdl-2' }
+    ])
+  })
+
+  it('carries only { type, modalId } and never echoes the daemon error content (AC3 no-echo)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    const rejection = rejections(sink)[0]
+    expect(Object.keys(rejection).sort()).toEqual(['modalId', 'type'])
+    // errorPlaintext()'s ErrorPayload message ('secret error detail') must appear in no emitted event.
+    expect(JSON.stringify(emitted(sink))).not.toContain('secret error detail')
+  })
+
+  it('reconnect resets the window, so an error after a fresh dial does not correlate a stale answer', async () => {
+    const ctx = await connected()
+
+    ctx.connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    ctx.drivers[1].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(rejections(ctx.sink)).toEqual([])
+  })
+
+  it('a bundle download and an outstanding answer both react to one error (independent consumers)', async () => {
+    const { connection, sink, drivers } = await connected()
+    const { consumer, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    // Both fire: the reassembler fails the bundle AND the correlation emits the rejection — the
+    // documented, accepted double-fire for a genuinely unattributable content-free error.
+    expect(failed).toEqual(['daemon-error'])
+    expect(rejections(sink)).toEqual([{ type: 'modalAnswerRejected', modalId: 'mdl-1' }])
+  })
+
+  it('an answer whose send throws records no outstanding answer — a later error emits no rejection', async () => {
+    const { connection, sink, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    // The send throws (caught), so the push after sendMessage never runs — no phantom outstanding.
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(rejections(sink)).toEqual([])
+  })
+})
+
 describe('createDaemonConnection — diagnostic logging (#128)', () => {
   it('logs a coordinate-free daemon-dial anchor synchronously with connecting (AC1)', () => {
     const cap = captureLog()

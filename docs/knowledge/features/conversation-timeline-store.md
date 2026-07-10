@@ -211,5 +211,10 @@ daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id d
   `DaemonEvent` arm this bridge does **not** own, folded into the inverse-filter `null` list (not a
   timeline item, unlike `turnState`); the real consumer is the not-yet-built renderer holder
   [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259).
+- [#248 codebase notes](../codebase/248.md) — the `modalAnswerRejected` transport slice: another
+  `DaemonEvent` arm this bridge does **not** own, folded into the inverse-filter `null` list alongside
+  `modalShown`/`modalDismissed`/`sessionTransition`; the real, still-dormant owner is the
+  [modal store + bridge](modal-store-bridge.md), render lands in
+  [#249](https://github.com/pyrycode/pyrycode-desktop/issues/249).
 - [#179 codebase notes](../codebase/179.md) — flips `interactive` live, and adds `Composer`'s direct
   `userText` dispatch as this store's sixth write path (renderer-sourced, not bridge-translated).

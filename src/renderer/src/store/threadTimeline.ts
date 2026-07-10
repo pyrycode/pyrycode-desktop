@@ -33,6 +33,10 @@ export type ThreadItem =
       result: ToolResult | null
     }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
+  // The user's own message — a renderer-sourced echo, not daemon content, so it carries no `turnId`
+  // (the daemon assigns those) and no `seq` (wire fidelity for daemon deltas): just the text. Ships
+  // dormant; #179 wires the producer (the composer echo) and the render row.
+  | { kind: 'userText'; text: string }
 
 /**
  * The renderer-local, sealed input union the reducer consumes. camelCase and
@@ -47,6 +51,9 @@ export type ThreadEvent =
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
+  // The user's own message. A whole message, never a stream of deltas — folded by a plain fresh
+  // tail-append (like `toolUse`/`turnEnd`), not coalesced via `appendDelta`.
+  | { type: 'userText'; text: string }
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase. */
 export interface TimelineState {
@@ -147,6 +154,13 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
           ...state.items,
           { kind: 'turnBoundary', turnId: event.turnId, stopReason: event.stopReason }
         ],
+        phase: state.phase
+      }
+    case 'userText':
+      // A whole user message: fresh tail-append (never coalesced), `phase` untouched — the `turnEnd`
+      // arm's discipline. Always a new `items` array (a fresh append is always a change).
+      return {
+        items: [...state.items, { kind: 'userText', text: event.text }],
         phase: state.phase
       }
     default:

@@ -32,6 +32,10 @@ function turnEnd(turnId: string, stopReason = 'end_turn'): ThreadEvent {
   return { type: 'turnEnd', turnId, stopReason }
 }
 
+function userText(text: string): ThreadEvent {
+  return { type: 'userText', text }
+}
+
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
 function run(events: readonly ThreadEvent[]): TimelineState {
   return events.reduce(reduceTimeline, initialTimelineState)
@@ -146,6 +150,47 @@ describe('reduceTimeline — turn boundary', () => {
     const boundary = ended.items[0] as Extract<ThreadItem, { kind: 'turnBoundary' }>
     expect(boundary).toEqual({ kind: 'turnBoundary', turnId: 'A', stopReason: 'max_tokens' })
     expect(ended.phase).toBe('thinking')
+  })
+})
+
+describe('reduceTimeline — userText (user message)', () => {
+  it('appends exactly one userText item carrying the text, leaving phase idle', () => {
+    const state = run([userText('hello')])
+    expect(state.items).toHaveLength(1)
+    expect(state.items[0]).toEqual({ kind: 'userText', text: 'hello' })
+    expect(state.phase).toBe('idle')
+  })
+
+  it('appends at the tail, preserving existing items by reference', () => {
+    const withText = run([delta('A', 'hi')])
+    const priorItem = withText.items[0]
+    const next = reduceTimeline(withText, userText('you typed this'))
+    expect(next.items.map((i) => i.kind)).toEqual(['assistantText', 'userText'])
+    // The prior assistantText survives, same reference, original text intact.
+    expect(next.items[0]).toBe(priorItem)
+    expect((next.items[0] as Extract<ThreadItem, { kind: 'assistantText' }>).text).toBe('hi')
+    expect(next.items[1]).toEqual({ kind: 'userText', text: 'you typed this' })
+  })
+
+  it('leaves phase untouched — a user message is not a lifecycle event', () => {
+    const thinking = reduceTimeline(initialTimelineState, { type: 'turnState', state: 'thinking' })
+    const after = reduceTimeline(thinking, userText('still thinking?'))
+    expect(after.phase).toBe('thinking')
+    expect(after.items).toEqual([{ kind: 'userText', text: 'still thinking?' }])
+  })
+
+  it('returns a new items array without mutating the input state or its items', () => {
+    const start = run([delta('A', 'hi')])
+    const startItems = start.items
+    const next = reduceTimeline(start, userText('typed'))
+    expect(next.items).not.toBe(start.items)
+    expect(start.items).toBe(startItems)
+    expect(start.items).toHaveLength(1)
+  })
+
+  it('lands in arrival order interleaved among the other fresh-append arms', () => {
+    const state = run([userText('q'), delta('A', 'answer'), turnEnd('A')])
+    expect(state.items.map((i) => i.kind)).toEqual(['userText', 'assistantText', 'turnBoundary'])
   })
 })
 

@@ -8,10 +8,10 @@ builders — no command wiring, no token minting, no renderer consumer.
 
 Introduced in [#235](../codebase/235.md), the base slice of the answer/cancel path split from
 [#225](https://github.com/pyrycode/pyrycode-desktop/issues/225) (3-way, by transport/render layer):
-**#235 (this, wire + builders)** → [#236](https://github.com/pyrycode/pyrycode-desktop/issues/236)
+**#235 (this, wire + builders)** → [#236](../codebase/236.md)
 (main-command wiring, mints `answer_token`, security-sensitive) →
-[#237](https://github.com/pyrycode/pyrycode-desktop/issues/237) (the answerable-modal renderer
-buttons). See [ADR 0009](../decisions/0009-modal-prompt-model.md) for the modal vertical's normative
+[#237](../codebase/237.md) (the answerable-modal renderer buttons, shipped — closes the modal
+vertical). See [ADR 0009](../decisions/0009-modal-prompt-model.md) for the modal vertical's normative
 model; this is the wire counterpart to that ADR's renderer-side `ModalPrompt`/`ModalEvent`.
 
 ## What it does
@@ -89,7 +89,8 @@ renderer-side `message_id`) and builds the wire payload as a **fresh object lite
 of the caller's payload — the deterministic net against a renderer-smuggled token. Routed from a new
 pair of `RendererCommand` members (`answerModal`/`cancelModal`, [command channel](command-channel.md))
 through `src/main/index.ts`'s `onCommand` switch. The renderer buttons that dispatch those commands
-are [#237](https://github.com/pyrycode/pyrycode-desktop/issues/237), the next and final slice.
+are [#237](../codebase/237.md) — the `PermissionModal` option/Cancel `onClick`s, via the new
+`modalResolution.ts` helper — the vertical's last slice.
 
 ## Edge cases and limitations
 
@@ -117,3 +118,5 @@ are [#237](https://github.com/pyrycode/pyrycode-desktop/issues/237), the next an
 - [#235 codebase notes](../codebase/235.md) — implementation summary.
 - [#236 codebase notes](../codebase/236.md) — the main-side command wiring that consumes both
   builders and mints `answer_token`.
+- [#237 codebase notes](../codebase/237.md) — the renderer buttons dispatching `answerModalCommand`/
+  `cancelModalCommand` through this envelope's consumer path; closes the modal vertical.

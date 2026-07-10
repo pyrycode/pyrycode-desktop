@@ -14,6 +14,11 @@ the coarse `message`/`message_chunk` path imports or is changed by either new fi
 (shipped) is now the sole reader — the store's read surface (`selectItems`/`selectPhase`) and
 `useTimelineBridge()` mount are otherwise unchanged from what #202 shipped.
 
+[#214](../codebase/214.md) added a third arm to `translateTimelineEvent`'s owned block, `turnState` —
+the transport slice that finally feeds `phase` a live value. `selectPhase` now has a real upstream
+source for the first time; nothing in the renderer reads it yet (the thinking-indicator render is a
+still-open sibling slice, blocked on this ticket landing).
+
 ## What it does
 
 Turns the two owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
@@ -44,9 +49,9 @@ speculative observer here would defend an unobserved need.
 
 ```ts
 translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
-// Owns exactly assistantDelta / turnEnd, each rebuilt as a fresh named-field literal (never `return
-// event`, never a spread). Every other arm -> null via explicit fall-through, then
-// default: assertNever(event) — a HARD guard, not a soft catch-all default.
+// Owns exactly assistantDelta / turnEnd / turnState (#214), each rebuilt as a fresh named-field
+// literal (never `return event`, never a spread). Every other arm -> null via explicit fall-through,
+// then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te) })
@@ -58,23 +63,30 @@ useTimelineBridge(): void
 ```
 
 This is the deliberate mirror image of [`daemonEventBridge`](daemon-event-bridge.md): that bridge's
-`assertNever`-guarded switch returns `null` for these same two arms and owns the other eleven; this
-bridge owns exactly these two and returns `null` for the other eleven. Two independent subscribers on
-the same `window.pyry.onDaemonEvent` channel, each with its own hard exhaustiveness guard — so a
-future `DaemonEvent` member is a compile error in *both* files until each decides its mapping.
+`assertNever`-guarded switch returns `null` for these same three arms and owns the rest; this bridge
+owns exactly these three and returns `null` for the rest. Two independent subscribers on the same
+`window.pyry.onDaemonEvent` channel, each with its own hard exhaustiveness guard — so a future
+`DaemonEvent` member is a compile error in *both* files until each decides its mapping. [#214](../codebase/214.md)
+was the first ticket to pay that doubled cost: adding `turnState` forced a new case in both this file
+and `daemonEventBridge.ts` at once.
 
-The two owned arms are field-for-field identical between `DaemonEvent` and `ThreadEvent`
-(`turnId`/`seq`/`text`, `turnId`/`stopReason`), so this is a **filter, not a rename** — arm selection
-plus a fresh copy, no field mapping.
+The `assistantDelta`/`turnEnd` arms are field-for-field identical between `DaemonEvent` and
+`ThreadEvent` (`turnId`/`seq`/`text`, `turnId`/`stopReason`), so mapping them is a **filter, not a
+rename** — arm selection plus a fresh copy, no field mapping. `turnState` is the same shape of
+filter-not-rename: `event.state` (`WireTurnState`) assigns to the `ThreadEvent` arm's `state`
+(`TurnPhase`) with no cast, because the two are the same literal union declared on either side of the
+shared/renderer boundary (see [#214](../codebase/214.md)).
 
 ### Data flow
 
 ```
-daemon frame ─(#199 transport, snake→camel, conversation_id dropped)→ DaemonEvent{assistantDelta|turnEnd}
+daemon frame ─(#199/#214 transport, snake→camel, conversation_id dropped)→ DaemonEvent{assistantDelta|turnEnd|turnState}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
    → timelineStore.dispatch → reduceTimeline → TimelineState
-   → selectItems / selectPhase   (read by #203's Timeline view; selectPhase still unread — #204)
+   → selectItems / selectPhase   (selectItems read by #203's Timeline view; selectPhase has a real
+                                   source as of #214 but no reader yet — the thinking indicator is a
+                                   still-open sibling slice)
 ```
 
 ## Configuration and usage
@@ -84,7 +96,8 @@ daemon frame ─(#199 transport, snake→camel, conversation_id dropped)→ Daem
 - **`selectItems` is read in `ConversationScreen`** via `useTimelineStore(selectItems)`, feeding the
   new `Timeline` pure view straight (no adapter — `ThreadItem` is already the render model). See
   [Conversation shell § Structured-stream timeline render](conversation-shell.md#structured-stream-timeline-render-203).
-  `selectPhase` still has no reader — `phase` has no source until #204 (`turn_state`).
+  `selectPhase` has a real source as of [#214](../codebase/214.md) (`turn_state`) but still has no
+  reader — the thinking-indicator render is the still-open sibling slice.
 - Import surface: `import { useTimelineStore, selectItems, selectPhase } from
   '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
   '@renderer/store/timelineBridge'`.
@@ -102,8 +115,9 @@ daemon frame ─(#199 transport, snake→camel, conversation_id dropped)→ Daem
   (none in this repo), exactly as `useDaemonEventBridge` has none — its behavior is fully carried by
   the pure `subscribeTimeline` tests. See [#202 codebase notes](../codebase/202.md) § Lessons learned.
 - **Zero live traffic until #179.** Desktop withholds the `interactive` capability, so no
-  `assistant_delta`/`turn_end` frame reaches this bridge in production yet — the store, bridge, and
-  #203's `Timeline` view are built and tested against injected `DaemonEvent`s/`ThreadItem[]` only.
+  `assistant_delta`/`turn_end`/`turn_state` frame reaches this bridge in production yet — the store,
+  bridge, and #203's `Timeline` view are built and tested against injected `DaemonEvent`s/`ThreadItem[]`
+  only.
 
 ## Related
 
@@ -118,6 +132,9 @@ daemon frame ─(#199 transport, snake→camel, conversation_id dropped)→ Daem
 - [#199 codebase notes](../codebase/199.md) — the transport slice: wire types, decode, and the
   `assistantDelta`/`turnEnd` `DaemonEvent` arms this bridge consumes.
 - [#202 codebase notes](../codebase/202.md) — implementation summary and patterns established.
+- [#214 codebase notes](../codebase/214.md) — the `turnState` transport slice: wire types, decode, and
+  the third arm this bridge's `translateTimelineEvent` owns, giving `selectPhase` its first real
+  source.
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md).
 - [#203 codebase notes](../codebase/203.md) — mounts `useTimelineBridge`, reads
   `selectItems`, and paints the streamed assistant text — the blank-thread-critical slice that gates

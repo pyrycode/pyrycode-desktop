@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { PermissionModal, PermissionModalView } from './PermissionModal'
+import { PermissionModal, PermissionModalView, RejectionSurfaceView } from './PermissionModal'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 
 // No DOM harness — mirrors ConversationScreen.test.tsx. PermissionModalView is the pure, exported view
@@ -174,10 +174,48 @@ describe('PermissionModalView — the second-confirm sub-step (#226)', () => {
   })
 })
 
+// #249: the rejection surface — a transient "your answer was rejected" banner stack at the modal host.
+// A pure, exported view (rejection modalIds in, markup out), server-render-tested like PermissionModalView.
+// The dismiss click → dispatch wiring is proven at two seams instead of a DOM click (the `node` env fires
+// none): the `rejectionDismissed` reduce arm (modalPrompts.test.ts) and the button's presence here.
+describe('RejectionSurfaceView — the modal-answer rejection surface (#249)', () => {
+  function renderRejections(rejections: readonly string[]): string {
+    return renderToStaticMarkup(
+      <RejectionSurfaceView rejections={rejections} onDismiss={noop} />
+    )
+  }
+
+  it('renders nothing when there are no rejections (AC5 — zero layout footprint)', () => {
+    expect(renderRejections([])).toBe('')
+  })
+
+  it('renders the client-owned category copy and a dismiss control, never the raw modalId (AC1/AC3/AC4)', () => {
+    // A distinctive nonce so the "not rendered" assertion is meaningful — the modalId is the React key
+    // and the onDismiss argument only, never visible text (it is meaningless to a human, AC4).
+    const markup = renderRejections(['mdl-nonce-deadbeef'])
+    expect(markup).toContain('Your answer was rejected.')
+    // A dismiss control with an accessible name (its visible text).
+    expect(markup).toContain('class="modal-rejection__dismiss">Dismiss</button>')
+    // No daemon content and no raw nonce reaches the DOM.
+    expect(markup).not.toContain('mdl-nonce-deadbeef')
+  })
+
+  it('announces each banner to assistive tech via a live region', () => {
+    const markup = renderRejections(['m1'])
+    expect(markup).toContain('role="alert"')
+  })
+
+  it('stacks one banner per rejection, keyed by modalId (AC1 — ≥1 rejection)', () => {
+    const markup = renderRejections(['m1', 'm2'])
+    // Count banner elements (the container is `modal-rejections`, quote-terminated differently).
+    expect(markup.match(/class="modal-rejection"/g)?.length ?? 0).toBe(2)
+  })
+})
+
 describe('PermissionModal — the store-bound container', () => {
-  it('renders nothing when no prompt is outstanding (AC2)', () => {
+  it('renders nothing when no prompt is outstanding and no rejection is showing (AC2)', () => {
     // The modal store singleton is at its initial (empty) state; zustand v5 reads getInitialState()
-    // under server render → no outstanding[0] → null.
+    // under server render → no outstanding[0] and no rejections → null.
     expect(renderToStaticMarkup(<PermissionModal />)).toBe('')
   })
 })

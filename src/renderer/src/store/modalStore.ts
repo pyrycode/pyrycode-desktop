@@ -40,6 +40,6 @@ export function useModalStore<T>(selector: (s: ModalStore) => T): T {
   return useStore(modalStore, selector)
 }
 
-// Re-export the read surface so #224 imports the outstanding selector from one site. It already
-// exists on the pure reducer module (#122) — re-exported, never redefined.
-export { selectOutstanding } from './modalPrompts'
+// Re-export the read surface so consumers import the selectors from one site. Both already exist on the
+// pure reducer module (#122 / #249) — re-exported, never redefined.
+export { selectOutstanding, selectRejections } from './modalPrompts'

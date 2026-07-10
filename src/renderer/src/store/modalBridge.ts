@@ -53,12 +53,11 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'modalDismissed':
       return { type: 'dismissed', modalId: event.modalId, outcome: event.outcome, source: event.source }
     case 'modalAnswerRejected':
-      // Owned here — the render slice (#249) flips this to translate a rejection ModalEvent. Dormant
-      // this slice: returns null (no ModalEvent, no reduce arm added), so the arm renders nothing —
-      // matching how sessionTransition (#254) added the arm + bridge cases while its consumer waited.
-      // Kept a DISTINCT case (not lumped into the null group below) so this bridge's ownership is
-      // visible: #248 is transport-only, #249 lands the ModalEvent + reduce arm + UI here.
-      return null
+      // #249 flips the dormant #248 case: a fresh named-field literal (never `return event`, matching
+      // modalShown/modalDismissed above) so the translator stays immune to the DaemonEvent arm gaining
+      // an unrelated field later. The discriminant is renamed across the boundary: modalAnswerRejected
+      // → 'rejected'. Content-free by construction — only the correlation nonce crosses (AC3).
+      return { type: 'rejected', modalId: event.modalId }
     case 'connecting':
     case 'connected':
     case 'disconnected':

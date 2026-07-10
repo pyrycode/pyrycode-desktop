@@ -12,16 +12,17 @@ Introduced in [#223](../codebase/223.md), the fourth slice of the modal vertical
 transport slice, shipped) and built directly on [#122](../codebase/122.md) (the pure model, shipped).
 Purely additive, Strangler Fig: nothing in `daemonEventBridge.ts` or `timelineBridge.ts` imports or is
 changed by either new file — both keep returning `null` for the two modal arms, exactly as they did
-before this ticket. [#248](../codebase/248.md) later added a third, still-dormant owned case here
-(`modalAnswerRejected`) — see § Modal-answer rejection (dormant) below.
+before this ticket. [#248](../codebase/248.md) later added a third owned case here
+(`modalAnswerRejected`), shipped dormant; [#249](../codebase/249.md) flipped it live — see
+§ Modal-answer rejection below.
 
 ## What it does
 
-Turns the two owned `DaemonEvent` modal arms into `ModalEvent`s and folds them into `ModalState` via
-`reduceModal`, exposing `selectOutstanding` as the only read surface. A `modalShown`/`modalDismissed`
-arrival re-renders only components selecting the outstanding slice — orthogonal to `sessionStore`,
-`timelineStore`, and `runConfigStore`. Owns a third arm, `modalAnswerRejected` ([#248](../codebase/248.md)),
-but that case is dormant — it returns `null`, no `ModalEvent`/reduce arm exists yet; see below.
+Turns the three owned `DaemonEvent` modal arms into `ModalEvent`s and folds them into `ModalState` via
+`reduceModal`, exposing `selectOutstanding` (the prompt queue) and `selectRejections` (the rejection
+surface, [#249](../codebase/249.md)) as its two read surfaces. A `modalShown`/`modalDismissed` arrival
+re-renders only components selecting the outstanding slice, a `modalAnswerRejected` arrival only those
+selecting rejections — both orthogonal to `sessionStore`, `timelineStore`, and `runConfigStore`.
 
 ## How it works
 
@@ -33,7 +34,7 @@ export type ModalStore = ModalState & { dispatch: (event: ModalEvent) => void }
 createModalStore(init?)      // vanilla createStore — one isolated instance per test (DI seam)
 modalStore                    // app-wide singleton
 useModalStore(selector)       // narrow-slice React binding: useStore(modalStore, selector)
-export { selectOutstanding } from './modalPrompts'   // re-exported, never redefined
+export { selectOutstanding, selectRejections } from './modalPrompts'   // re-exported, never redefined
 ```
 
 Mirrors `createTimelineStore`'s DI-factory → singleton → hook → selectors structure (ADR 0008/#202),
@@ -45,9 +46,9 @@ defend an unobserved need (the same call #202 made for the timeline store).
 
 ```ts
 translateModalEvent(event: DaemonEvent): ModalEvent | null
-// Owns exactly modalShown / modalDismissed, each rebuilt as a fresh named-field literal (never
-// `return event`, never a spread). Every other arm -> null via explicit fall-through,
-// then default: assertNever(event) — a HARD guard, not a soft catch-all default.
+// Owns exactly modalShown / modalDismissed / modalAnswerRejected, each rebuilt as a fresh
+// named-field literal (never `return event`, never a spread). Every other arm -> null via explicit
+// fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeModal(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const me = translateModalEvent(event); if (me) dispatch(me) })
@@ -60,7 +61,7 @@ useModalBridge(): void
 
 This is the **third** independent subscriber on the `onDaemonEvent` channel:
 [`daemonEventBridge`](daemon-event-bridge.md) owns the session arms, [`timelineBridge`](conversation-timeline-store.md)
-the interactive-stream arms, and this bridge owns exactly the two modal arms — all three are
+the interactive-stream arms, and this bridge owns exactly the three modal arms — all three are
 independently `assertNever`-guarded over the full `DaemonEvent` union, so a future arm is a
 compile error in all three files until each decides its mapping. [#229](../codebase/229.md) proved this
 concretely: adding `toolResult` (the vertical's last transport arm) forced a seventh single-line no-op
@@ -71,11 +72,12 @@ bridges) diverged from a spec written before this file existed as a third exhaus
 **The one detail that breaks the naive "clone `timelineBridge`" approach: the discriminant tag renames
 across the boundary.** Every arm `timelineBridge` owns (`assistantDelta`, `turnEnd`, `turnState`,
 `toolUse`) keeps an identical `type` tag on both the `DaemonEvent` and `ThreadEvent` sides. This
-bridge's two owned arms do not: `modalShown` → `type: 'shown'`, `modalDismissed` → `type: 'dismissed'`.
-Field **names** are unchanged (already camelCase, field-for-field identical — the snake→camel decode
-happened at #201's transport), so the copy is still a filter, not a rename — just the tag itself
-changes. The translator tests pin `translated.type === 'shown'`/`'dismissed'` specifically to catch a
-blind clone carrying the wrong tag forward.
+bridge's owned arms do not: `modalShown` → `type: 'shown'`, `modalDismissed` → `type: 'dismissed'`,
+`modalAnswerRejected` → `type: 'rejected'` ([#249](../codebase/249.md)). Field **names** are unchanged
+(already camelCase, field-for-field identical — the snake→camel decode happened at #201's transport),
+so the copy is still a filter, not a rename — just the tag itself changes. The translator tests pin
+`translated.type === 'shown'`/`'dismissed'`/`'rejected'` specifically to catch a blind clone carrying
+the wrong tag forward.
 
 ### No cast
 
@@ -90,12 +92,13 @@ fields.
 ### Data flow
 
 ```
-daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)→
-   DaemonEvent{modalShown|modalDismissed}
+daemon frame ─(#201/#248 transport, snake→camel, no conversation_id on a modal)→
+   DaemonEvent{modalShown|modalDismissed|modalAnswerRejected}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeModal listener → translateModalEvent → ModalEvent (or null → skip)
    → modalStore.dispatch → reduceModal → ModalState
-   → selectOutstanding   (read by #224's interactive render slice, not yet built)
+   → selectOutstanding (the prompt queue) / selectRejections (the rejection surface, #249)
+   → both read by PermissionModal (#224 prompt render, #249 rejection render)
 ```
 
 ## Configuration and usage
@@ -106,8 +109,8 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
   live `modalShown`/`modalDismissed` frame reaches `modalStore`, and [`PermissionModal`](conversation-shell.md#permission-modal-224)
   reads `selectOutstanding` to render it. Was gated behind the `interactive` capability flip in
   production through #178; live since [#179](../codebase/179.md).
-- Import surface: `import { useModalStore, selectOutstanding } from '@renderer/store/modalStore'` and
-  `import { useModalBridge } from '@renderer/store/modalBridge'`.
+- Import surface: `import { useModalStore, selectOutstanding, selectRejections } from
+  '@renderer/store/modalStore'` and `import { useModalBridge } from '@renderer/store/modalBridge'`.
 - No conversation-id scoping — a modal carries no `conversation_id` on the wire at all (ADR 0009); the
   bridge translates and dispatches unconditionally.
 
@@ -132,17 +135,27 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
   production before then — the store and bridge were built and tested against injected `DaemonEvent`s
   only. Now live.
 
-## Modal-answer rejection (dormant, [#248](../codebase/248.md))
+## Modal-answer rejection ([#248](../codebase/248.md) transport, [#249](../codebase/249.md) render)
 
 `translateModalEvent` gained a third owned arm, `case 'modalAnswerRejected':`, kept as a **distinct**
-case rather than folded into the anonymous null group below it — so ownership is visible even while
-dormant. It returns `null` this slice: no `ModalEvent` variant, no `reduceModal` arm, no UI. The arm's
-producer is a main-side FIFO correlation window in [daemon connection](daemon-connection.md) that
-attributes a content-free daemon `error` to the `modal_id` it was answering (the wire `error` carries
-none — ADR 0009). #249, the render slice, is what flips this case to translate a real `ModalEvent` and
-add the corresponding `reduceModal` arm — the same shape [#223](../codebase/223.md) itself followed for
-`modalShown`/`modalDismissed` relative to [#201](../codebase/201.md), and the same dormant-arm posture
-`sessionTransition` ([#254](../codebase/254.md)) used ahead of its holder ([#259](../codebase/259.md)).
+case by [#248](../codebase/248.md) rather than folded into the anonymous null group below it — so
+ownership was visible even while dormant. [#249](../codebase/249.md) flipped it: the case now returns
+`{ type: 'rejected', modalId: event.modalId }`, a fresh named-field literal matching the
+`modalShown`/`modalDismissed` reconstruction — content-free by construction, only the correlation nonce
+crosses. The arm's producer is a main-side FIFO correlation window in
+[daemon connection](daemon-connection.md) that attributes a content-free daemon `error` to the
+`modal_id` it was answering (the wire `error` carries none — ADR 0009). This is the same shape
+[#223](../codebase/223.md) itself followed for `modalShown`/`modalDismissed` relative to
+[#201](../codebase/201.md), and the same dormant-arm-ahead-of-its-consumer posture `sessionTransition`
+([#254](../codebase/254.md)) used ahead of its holder ([#259](../codebase/259.md)).
+
+The translated `rejected` event feeds a new, `outstanding`-orthogonal `ModalState.rejections: readonly
+string[]` slice — arrival-ordered, de-duplicated `modalId`s — reduced by two new `ModalEvent` arms,
+`rejected` (append, dedup) and the local-only `rejectionDismissed` (remove, dispatched by the user
+clicking a dismiss control, never by the bridge). [`RejectionSurfaceView`](conversation-shell.md#rejection-surface-249)
+renders the stack as a transient banner at the modal host. See [Modal-prompt
+model](modal-prompt-model.md) for the full reducer contract and [#249 codebase
+notes](../codebase/249.md) for the render design.
 
 ## Related
 
@@ -176,8 +189,11 @@ add the corresponding `reduceModal` arm — the same shape [#223](../codebase/22
   the real consumer is #261 / #256, not yet built.
 - [#179 codebase notes](../codebase/179.md) — flips `interactive` live, so `modal_shown`/`modal_dismissed`
   carry real daemon traffic through this bridge in production for the first time.
-- [#248 codebase notes](../codebase/248.md) — adds the dormant third owned arm, `modalAnswerRejected`,
-  and the main-side FIFO correlation window in [daemon connection](daemon-connection.md) that produces
-  it (see § Modal-answer rejection above). Render slice is [#249](https://github.com/pyrycode/pyrycode-desktop/issues/249).
+- [#248 codebase notes](../codebase/248.md) — adds the third owned arm, `modalAnswerRejected`, shipped
+  dormant, and the main-side FIFO correlation window in [daemon connection](daemon-connection.md) that
+  produces it (see § Modal-answer rejection above).
+- [#249 codebase notes](../codebase/249.md) — flips the dormant `modalAnswerRejected` case live, adds the
+  `rejected`/`rejectionDismissed` `ModalEvent` arms and the `rejections` slice, and renders the surface
+  at the modal host (see § Modal-answer rejection above).
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` arm's dormant-arm-ahead-of-holder
-  posture this ticket's `modalAnswerRejected` case follows.
+  posture `modalAnswerRejected` followed until #249.

@@ -623,6 +623,76 @@
   color: var(--color-on-secondary-container);
 }
 
+/* #249 — the modal-answer rejection surface: a transient, bottom-anchored stack of "your answer was
+   rejected" banners at the modal host. The answer path clears the modal optimistically (#237), so when
+   an ungranted device's answer round-trips to a daemon error (#248) the prompt is already gone — this
+   banner is the only surface telling the user it did not go through. Content-free: client-owned category
+   copy only, no daemon text (AC3). A minimal placeholder chrome pending a bespoke Figma follow-up —
+   reuses the modal chrome tokens + the --color-error accent (#230); no new theme tokens (ticket forbids).
+   pointer-events: none so the full-width strip never blocks the composer beneath it (it is NOT a scrim);
+   each banner re-enables its own pointer events so the Dismiss control stays clickable. */
+.modal-rejections {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* One banner: a surface-container-high card with an error-colored LEADING ACCENT (a border, not a
+   filled error container — only the --color-error role token exists on desktop). A row: the copy + a
+   de-emphasized Dismiss text button (the .permission-modal__cancel treatment). */
+.modal-rejection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 360px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border-left: 4px solid var(--color-error);
+  border-radius: var(--radius-md);
+  pointer-events: auto;
+}
+
+/* The category copy — body-medium. margin: 0 resets the <p> default. */
+.modal-rejection__copy {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The de-emphasized dismiss text button — the permission-modal__cancel text-button treatment. */
+.modal-rejection__dismiss {
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.modal-rejection__dismiss:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
 /* The reusable section header (first defined by #72's Log data section; #181/#182 reuse it for their
    Model/Effort/YOLO/Context window sections). Muted M3 label-large. Paddings map Figma node 98:2
    (pt 12 / pr 16 / pb 4 / pl 24) to space tokens. margin: 0 resets the <p> default. */

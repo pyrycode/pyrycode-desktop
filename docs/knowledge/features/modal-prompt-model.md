@@ -46,8 +46,16 @@ interface ModalPrompt {
 type ModalEvent =
   | { type: 'shown'; modalId: string; class: ModalClass; title: string; prompt: string; options: readonly ModalOption[]; defaultOptionId: string }
   | { type: 'dismissed'; modalId: string; outcome: string; source: 'remote' | 'local' | 'timeout' }
+  // #249: a modal answer that round-tripped to a daemon `error`. Produced by the bridge from the
+  // content-free `modalAnswerRejected` daemon event (#248) — carries ONLY the `modalId` nonce.
+  | { type: 'rejected'; modalId: string }
+  // #249: a LOCAL user action — dismissing a rejection banner. Never produced by the bridge.
+  | { type: 'rejectionDismissed'; modalId: string }
 
-interface ModalState { outstanding: readonly ModalPrompt[] }
+interface ModalState {
+  outstanding: readonly ModalPrompt[]
+  rejections: readonly string[]   // #249: modalIds of round-tripped rejections, arrival order, deduped
+}
 ```
 
 `ModalPrompt` is the durable, held content; `ModalEvent` is the renderer-local (camelCase,
@@ -62,6 +70,13 @@ correlation key — no `conversation_id` exists on a modal). This mirrors `Threa
 scan-by-id shape exactly: the selector returns the array by reference (referential stability for a
 future render), and insertion order survives without leaning on `Record` key ordering.
 
+`rejections` ([#249](../codebase/249.md)) is **orthogonal** to `outstanding` — the answered prompt is
+already gone by the time a rejection can round-trip (#237's optimistic clear), so a rejection is new UI
+state, never a re-surfaced prompt. It holds bare `modalId` strings, not objects: the `rejected` event is
+content-free, so there is genuinely nothing else to carry (unlike `dismissed`'s `outcome`/`source`,
+which mirror wire fields). Each id doubles as the stable React key when more than one rejection banner
+shows.
+
 ### The reducer
 
 `reduceModal(state, event): ModalState` is pure and exported — no mutation, fresh state, `switch`
@@ -70,17 +85,28 @@ on `event.type` with an `assertNever` default — the same discipline as `reduce
 
 | event | effect |
 |---|---|
-| `shown` | append a fresh `ModalPrompt` built from the event's fields. Always a new state. A `shown` for an already-outstanding `modalId` (reconnect re-delivery) is **not** defended here — plain append is correct for first-delivery; match-and-replace is #195's. |
-| `dismissed` | remove the `ModalPrompt` whose `modalId` matches. No match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4). `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. |
+| `shown` | append a fresh `ModalPrompt` built from the event's fields. Always a new state (spreads `state` so `rejections` survives). A `shown` for an already-outstanding `modalId` (reconnect re-delivery) is **not** defended here — plain append is correct for first-delivery; match-and-replace is #195's. |
+| `dismissed` | remove the `ModalPrompt` whose `modalId` matches (spreads `state` so `rejections` survives). No match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4). `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. |
+| `rejected` ([#249](../codebase/249.md)) | append `modalId` to `rejections`, de-duplicated (`appendUnique`). Repeat id → **same `state` reference** (no churn); `outstanding` is untouched. |
+| `rejectionDismissed` ([#249](../codebase/249.md)) | remove `modalId` from `rejections` (`removeRejection`). Unknown/already-dismissed id → **same `state` reference**, a non-throwing no-op; `outstanding` is untouched. |
 
-`initialModalState = { outstanding: [] }`; the pure selector `selectOutstanding` is the only read
-surface, returning `state.outstanding` by reference.
+Note that `shown`/`dismissed` originally built their return value as `{ outstanding: … }` — #249 changed
+both to `{ ...state, outstanding: … }` so they stop silently dropping the (then-new) `rejections` field;
+any future field added to `ModalState` needs the same audit of every non-spreading reduce arm.
+
+`initialModalState = { outstanding: [], rejections: [] }`; `selectOutstanding` and `selectRejections`
+are the two read surfaces, each returning its slice by reference.
 
 ### Internal helpers (unexported)
 
 - `removeById(outstanding, modalId)` — filters by `modalId`, returning the **same array reference**
   when nothing was removed, so `dismissed` can return the same `state` on an unknown id. Mirrors
   `threadTimeline`'s `fillResult` same-reference-on-no-match discipline.
+- `appendUnique(rejections, modalId)` ([#249](../codebase/249.md)) — appends if absent, else returns the
+  **same array reference** (defends #248's FIFO window redelivering an id in a race). Mirrors
+  `removeById`'s same-reference-on-no-change contract for the append direction.
+- `removeRejection(rejections, modalId)` ([#249](../codebase/249.md)) — `removeById`'s twin over
+  `readonly string[]`.
 - `assertNever(event)` — the compile-time exhaustiveness guard, reused verbatim from
   `threadTimeline`.
 
@@ -109,8 +135,11 @@ landed:
   [#236](https://github.com/pyrycode/pyrycode-desktop/issues/236) — main-command wiring, mints
   `answer_token`; [#237](https://github.com/pyrycode/pyrycode-desktop/issues/237) — the renderer
   buttons that call it, replacing #224's inert ones.
-- the destructive second-confirm (#226) / surface-rejection (#227) UX policy (client-side only — no
-  wire signal exists for it).
+- the destructive second-confirm (#226) UX policy (client-side only — no wire signal exists for it).
+- surface-rejection (#227), split into a transport half — **[#248](../codebase/248.md) (shipped)**, a
+  main-side FIFO correlation window emitting a content-free `modalAnswerRejected` `DaemonEvent` — and a
+  render half — **[#249](../codebase/249.md) (shipped)**, which adds the `rejected`/`rejectionDismissed`
+  `ModalEvent` arms, the `rejections` slice above, and a transient banner stack at the modal host.
 
 The `modalStore.ts` Zustand-container name this ADR reserved is exactly what
 [#223](modal-store-bridge.md) named it, mirroring how [conversation timeline
@@ -132,9 +161,11 @@ this store; the id-addressed array keeps each a small extension rather than a re
   [thread timeline](thread-timeline.md)'s orphan `tool_result`.
 - **No answered-id memory.** A `dismissed` prompt's id can be re-shown by a later `shown` with no
   memory that it was already resolved — deliberately deferred to #195.
-- **`outcome`/`source` have no home in this state.** A resolved prompt is removed outright, so the
-  resolution metadata is carried on the `dismissed` event for a future consumer (a resolution
-  toast) but never lands in `ModalState`.
+- **`outcome`/`source` still have no home in this state.** A resolved prompt is removed outright, so
+  that metadata is carried on the `dismissed` event but never lands in `ModalState`. The anticipated
+  "resolution toast" this comment referred to shipped as [#249](../codebase/249.md)'s rejection surface
+  — but it consumes a *different*, content-free event (`rejected`, carrying only `modalId`), not
+  `dismissed`'s `outcome`/`source`; those two fields remain genuinely unconsumed.
 - **Nothing to gate on here.** The `--allow-remote-permissions` grant is a daemon-side, per-device
   flag, not on the wire and not in `PairedServerRecord` — the desktop cannot self-gate. The follow-up
   renders and answers regardless; an ungranted answer round-trips to an `error` envelope.
@@ -166,3 +197,8 @@ this store; the id-addressed array keeps each a small extension rather than a re
   ADR this one is modeled on.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)
   — the pure-reducer / sealed-union / wire-types-are-a-bridge-concern discipline both ADRs extend.
+- [#248 codebase notes](../codebase/248.md) — the transport half of surface-rejection: the main-side
+  FIFO correlation window and the dormant `modalAnswerRejected` bridge case #249 flips.
+- [#249 codebase notes](../codebase/249.md) — the render half: `rejected`/`rejectionDismissed`, the
+  orthogonal `rejections` slice, `selectRejections`, and the `RejectionSurfaceView` banner stack at the
+  modal host ([Conversation shell](conversation-shell.md)).

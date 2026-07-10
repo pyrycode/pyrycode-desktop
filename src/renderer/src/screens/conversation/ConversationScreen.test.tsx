@@ -301,4 +301,17 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('% used')
     expect(markup).not.toContain('high')
   })
+
+  // #140: the leading back affordance (Figma 16-9's arrow_back). Gated on the optional `onBack` prop
+  // exactly like #166's `onUnpaired`: present only when the shell wires navigation, so the existing
+  // bare `<ConversationScreen />` render is unchanged (AC3).
+  it('renders the back affordance when onBack is provided (the shell-mounted thread)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen onBack={() => {}} />)
+    expect(markup).toContain('aria-label="Back"')
+  })
+
+  it('renders no back affordance for a bare ConversationScreen (onBack absent — unchanged, AC3)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('aria-label="Back"')
+  })
 })

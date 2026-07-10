@@ -45,16 +45,20 @@ describe('AppView', () => {
 
   describe("route='conversation'", () => {
     beforeEach(() => {
-      // setState shallow-merges (preserving dispatch); reset to a clean, empty session so the
-      // store-bound conversation screen renders deterministically.
+      // setState shallow-merges (preserving dispatch); reset to a clean, empty session. Kept as a
+      // defensive baseline now that the conversation route enters PairedShell's list view (which reads
+      // no store); the thread view it opens into is the store-bound ConversationScreen.
       sessionStore.setState({ status: { type: 'disconnected' }, messages: [] })
     })
 
-    it('shows the conversation screen and never the pairing screen', () => {
+    it('enters the paired shell at the list view, never straight into the thread (#140)', () => {
+      // #140 put the inner list ⇄ thread shell under the conversation route: it now enters at the
+      // list placeholder, not directly on the ConversationScreen thread.
       const markup = renderToStaticMarkup(
         <AppView route="conversation" onPaired={noop} onUnpaired={noop} />
       )
-      expect(markup).toContain(CONVERSATION_MARKER)
+      expect(markup).toContain('Open conversation')
+      expect(markup).not.toContain(CONVERSATION_MARKER)
       expect(markup).not.toContain(PAIRING_MARKER)
     })
   })

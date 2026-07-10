@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ConversationScreen } from './screens/conversation/ConversationScreen'
+import { PairedShell } from './PairedShell'
 import { PairingScreen } from './screens/pairing/PairingScreen'
 import { useDaemonEventBridge } from './store/daemonEventBridge'
 import { useTimelineBridge } from './store/timelineBridge'
@@ -29,7 +29,9 @@ export function AppView(props: {
     case 'pairing':
       return <PairingScreen onPaired={props.onPaired} />
     case 'conversation':
-      return <ConversationScreen onUnpaired={props.onUnpaired} />
+      // #140: the conversation route now mounts the inner list ⇄ thread shell (PairedShell) rather
+      // than dropping straight into a single ConversationScreen. onUnpaired threads through unchanged.
+      return <PairedShell onUnpaired={props.onUnpaired} />
     default:
       return assertNever(props.route)
   }

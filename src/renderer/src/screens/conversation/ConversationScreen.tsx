@@ -29,9 +29,14 @@ export interface ConversationScreenProps {
   // existing bare `<ConversationScreen />` server-render tests stay green; when absent, unpair still
   // clears + resets, it just doesn't navigate.
   onUnpaired?: () => void
+  // #140: return from the thread to the paired shell's list view (the leading arrow_back of Figma
+  // 16-9). Optional and gated exactly like onUnpaired: when absent, BackControl renders null, so a
+  // bare `<ConversationScreen />` keeps today's behavior with no top-bar back affordance (AC3). The
+  // PairedShell-mounted thread wires it to a nav dispatch.
+  onBack?: () => void
 }
 
-export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {}): JSX.Element {
+export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenProps = {}): JSX.Element {
   // Read the messages slice and adapt each wire MessagePayload to the shell view model
   // at this boundary (ADR 0004). Selecting only the messages slice keeps connection-status
   // changes from re-rendering the thread.
@@ -49,6 +54,7 @@ export function ConversationScreen({ onUnpaired }: ConversationScreenProps = {})
   const [sheetOpen, setSheetOpen] = useState(false)
   return (
     <div className="conversation">
+      <BackControl onBack={onBack} />
       <UnpairControl onUnpaired={onUnpaired} />
       <MessageThread messages={messages} />
       <Timeline items={items} />
@@ -372,6 +378,30 @@ function RepairControl({ onUnpaired }: { onUnpaired?: () => void }): JSX.Element
   }
 
   return <RepairPrompt status={status} onRepair={handleRepair} />
+}
+
+// #140: the leading back affordance of the thread's top app bar (Figma node 16-9 → arrow_back 16-11):
+// a 48px touch target holding the 24px arrow_back glyph in on-surface, returning to the paired shell's
+// list view. Optional-prop-gated exactly like #166's onUnpaired — returns null when onBack is absent,
+// so a bare `<ConversationScreen />` (no shell) is unchanged DOM-wise and only the PairedShell-mounted
+// thread shows it (AC3/AC4). Icon-only, so aria-label supplies the accessible name (the
+// .composer__send / StatusRow pattern). The title and overflow menu from Figma 16-9 are future tickets.
+function BackControl({ onBack }: { onBack?: () => void }): JSX.Element | null {
+  if (!onBack) return null
+  return (
+    <button type="button" className="conversation__back" aria-label="Back" onClick={onBack}>
+      <svg
+        className="conversation__back-icon"
+        viewBox="0 0 24 24"
+        width="24"
+        height="24"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
+      </svg>
+    </button>
+  )
 }
 
 // The minimal unpair escape hatch (#166) — a slim header row above the thread, the seed of the

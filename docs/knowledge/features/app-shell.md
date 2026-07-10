@@ -50,13 +50,15 @@ export function AppView(props: {
   switch (props.route) {
     case 'pending':      return null
     case 'pairing':      return <PairingScreen onPaired={props.onPaired} />
-    case 'conversation': return <ConversationScreen onUnpaired={props.onUnpaired} />
+    case 'conversation': return <PairedShell onUnpaired={props.onUnpaired} />
     default:             return assertNever(props.route)
   }
 }
 ```
 
 `onUnpaired` is **required** on `AppView` — symmetric with `onPaired` — while `ConversationScreen`'s own `onUnpaired?` prop stays **optional**, so its pre-#166 bare `<ConversationScreen />` server-render tests keep compiling ([#166](../codebase/166.md)).
+
+As of [#140](../codebase/140.md), the `conversation` case mounts the [paired shell](paired-shell.md) — the second-level `list ⇄ thread` router — rather than `ConversationScreen` directly; `ConversationScreen` is now `PairedShellView`'s `'thread'` case, one level down. `onUnpaired` threads through `PairedShell` unchanged.
 
 `pending` renders `null` (see [Pending phase](#pending-phase-neutral-first-paint)). The `switch` closes over the three `AppRoute` members with an **`assertNever` default** — a new route without a case is a compile error (the `reduceSession` / `toMessageViewModel` exhaustiveness guard). Note the two different exhaustiveness strategies: `routeForStatus` fails *safe* on an unknown member (it maps an external, possibly-growing union), while `AppView` fails *at compile time* (it switches over an internal union we fully own). See [#80 notes](../codebase/80.md) for why.
 
@@ -143,6 +145,7 @@ The pairing branch passes only `onPaired`, never `onCancel`. When unpaired the p
 - [Pairing-status signal](pairing-status-signal.md) / [#79](../codebase/79.md) — the launch-time `paired`/`not-paired`/`error` signal the router consumes; the data-path half to this routing half
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the screen the router mounts when unpaired; source of the `onPaired`/`onCancel` seams (`onPaired` wired, `onCancel` deliberately not)
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md), [#69](../codebase/69.md) — the `paired` destination; source of the `onUnpaired` seam as of [#166](../codebase/166.md)
+- [Paired shell](paired-shell.md) / [#140](../codebase/140.md) — the second-level `list ⇄ thread` router now mounted on the `conversation` route, nesting the conversation shell one level down
 - [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the main-side bridge `runUnpair` calls before firing `onUnpaired` ([#166](../codebase/166.md))
 - [Session store](session-store.md) — reset via `{ type: 'reset' }` before `onUnpaired` fires, so the flip and the state clear are never observed out of order ([#166](../codebase/166.md))
 - [Daemon-event bridge](daemon-event-bridge.md) / [#19](../codebase/19.md) — the app-lifetime subscription kept at shell level, above the route branch

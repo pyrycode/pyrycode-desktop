@@ -12,8 +12,12 @@ or frames, so not security-sensitive.
 
 ## What it does
 
-- The paired region now enters at a **list** view (a throwaway placeholder, [#141](https://github.com/pyrycode/pyrycode-desktop/issues/141) replaces it) instead of the single conversation thread.
-- The list view's one affordance (`Open conversation`) opens the active conversation into the **thread** view — the existing [conversation shell](conversation-shell.md), unchanged.
+- The paired region now enters at a **list** view — the [Channel List home screen](channel-list.md)
+  (two-tier Channels/Recent discussions, [#141](../codebase/141.md)) — instead of the single
+  conversation thread.
+- Every row in the list view opens the active conversation into the **thread** view — the existing
+  [conversation shell](conversation-shell.md), unchanged. (Per-row opening of a *specific* conversation
+  is deferred — see the [Channel List doc](channel-list.md).)
 - The thread view shows a leading back affordance (Figma node 16-9's `arrow_back`) that returns to the list.
 - Navigation is a two-state spine (`list ⇄ thread`) today; a future `settings`/`archive` view is an added `PairedRoute` member and an added `PairedShellView` case, not a rewrite (the ticket's extensibility requirement).
 
@@ -67,7 +71,7 @@ export function PairedShellView(props: {
   onUnpaired: () => void
 }): JSX.Element {
   switch (props.route) {
-    case 'list':   return <PlaceholderList onOpen={props.onOpen} />
+    case 'list':   return <ChannelList onOpen={props.onOpen} />
     case 'thread': return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
     default:       return assertNever(props.route)
   }
@@ -77,12 +81,11 @@ export function PairedShellView(props: {
 Both routes render a real view (no `null` arm, unlike `AppView`'s `pending` case) — the paired region
 always has *something* to show.
 
-`PlaceholderList` is an **in-file, unexported, throwaway** stand-in: a `.paired-list-placeholder` div
-holding a bare `<button onClick={onOpen}>Open conversation</button>`. No list visuals were built —
-out of scope per the ticket; [#141](https://github.com/pyrycode/pyrycode-desktop/issues/141) replaces
-the whole view. Its one affordance keeps today's send/stream round-trip reachable (AC2 — no regression
-from the direct-to-thread landing the app had before this ticket), since the single active conversation
-already lives in the [session store](session-store.md).
+`case 'list'` originally rendered an in-file `PlaceholderList` throwaway (a bare `Open conversation`
+button); [#141](../codebase/141.md) replaced it wholesale with the real
+[Channel List home screen](channel-list.md) — see that doc for the store it reads and its row/section
+behavior. Every row's `onClick` still opens the single active conversation (the placeholder's one
+affordance, preserved), since per-conversation selection needs a transport path that doesn't exist yet.
 
 `PairedShell` is the container — the only new state owner:
 
@@ -133,7 +136,7 @@ interim, not an oversight.
 ```
 AppView (route='conversation')
   └─ PairedShell            useReducer(nextPairedRoute, 'list')  ← nav state (ADR 0006)
-       └─ PairedShellView   route='list'   → PlaceholderList — [Open conversation] → dispatch{open}
+       └─ PairedShellView   route='list'   → ChannelList (store-backed) — any row → dispatch{open}
                             route='thread' → ConversationScreen (store-backed) + BackControl — [←] → dispatch{back}
 ```
 
@@ -147,7 +150,8 @@ navigation, and hence no remount, before this ticket).
 ## Edge cases and limitations
 
 - **No `conversationId` on the route today.** A bare `'list' | 'thread'` spine is sufficient because
-  there is exactly one active conversation in `sessionStore`. When [#141](https://github.com/pyrycode/pyrycode-desktop/issues/141)/[#142](https://github.com/pyrycode/pyrycode-desktop/issues/142) add per-conversation selection, `{ type: 'open' }` grows a payload
+  there is exactly one active conversation in `sessionStore`. When a future select-and-load ticket
+  (or [#142](https://github.com/pyrycode/pyrycode-desktop/issues/142)) adds per-conversation selection, `{ type: 'open' }` grows a payload
   (`{ type: 'open'; conversationId }`) and `'thread'` may carry the id — an added field on the sealed
   event, caught by the same `assertNever` surface. Deliberately deferred, not an oversight.
 - **The click-driven open→thread→back transition is not DOM-tested.** The codebase has no DOM harness
@@ -160,6 +164,7 @@ navigation, and hence no remount, before this ticket).
 ## Related
 
 - [App shell](app-shell.md) / [#80](../codebase/80.md) — the outer router; `PairedShell` mounts under its `conversation` route
+- [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — the real `list` view, replacing the placeholder described above
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
 - [Session store](session-store.md) — untouched by this ticket; the store-backed messages that survive navigation
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the ephemeral-state rule `PairedShell`'s `useReducer` follows

@@ -41,6 +41,17 @@ create-reply into its own 5-field `ConversationCreatedPayload` (**not** a reuse 
 `ConversationSummary`). Four `requireString` fields plus one `requireBoolean` (`is_promoted`) plus one
 `requireStringOrNull` (`name`, reusing #139's nullable-field checker verbatim) — see below.
 
+[#254](../codebase/254.md) extended it an eleventh time, additively, with a `session_transition` →
+`session-transition` kind — the interactive session-boundary marker (pyrycode/pyrycode#656),
+`SessionTransitionPayload`. Three `requireString` fields (`previous_session_id`/`new_session_id`/
+`occurred_at`) plus one `requireStringOrNull` (`workspace_cwd`, reusing #139's nullable-field checker)
+plus a **closed three-way `reason` enum check cloned from `parseTurnStatePayload`'s `state` check**
+(`role`/`state`/`reason` is now the idiom's third instance) — deliberately not `requireString`, which
+would accept any string and defeat the closed-enum boundary this slice exists to defend. Unlike every
+prior kind, the consumer arm (`daemonConnection.ts`) drops **four** of the five decoded fields at the
+emit — only `new_session_id` crosses IPC, the #180 content-drop model applied to a second wire type —
+see [daemon connection](daemon-connection.md).
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -68,11 +79,13 @@ export type InboundDaemonMessage =
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
   | { kind: 'tool-result'; toolResult: ToolResultPayload }      // #229, additive
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }  // #241, additive
+  | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }  // #254, additive
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`tool_use`/
-//                            `modal_shown`/`modal_dismissed`/`tool_result`/`conversation_created`
+//                            `modal_shown`/`modal_dismissed`/`tool_result`/`conversation_created`/
+//                            `session_transition`
 //                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
@@ -401,6 +414,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [Modal-prompt model](modal-prompt-model.md) / [#201 codebase notes](../codebase/201.md) — the eighth additive extension: the `modal_shown`/`modal_dismissed` kinds, `parseModalShownPayload`/`parseModalDismissedPayload`/`parseModalOption`, the closed-enum idiom's third and fourth instances (`class`/`source`), and the array-of-structs narrower's second use (`options`).
 - [Conversation timeline store](conversation-timeline-store.md) / [#229 codebase notes](../codebase/229.md) — the ninth and last additive extension of the v2 interactive-stream family: the `tool_result` kind, `parseToolResultPayload`, and `requireBoolean`'s second use (`is_error`, after `yolo` #180) alongside four `requireString` calls.
 - [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the tenth additive extension, the write-side twin of #139: the `conversation_created` kind, `parseConversationCreatedPayload`, and `requireStringOrNull`'s second use (`name`) alongside `requireBoolean` (`is_promoted`) and four `requireString` calls.
+- [#254 codebase notes](../codebase/254.md) — the eleventh additive extension: the `session_transition` kind, `parseSessionTransitionPayload`, the closed-enum idiom's third instance (`reason`, after `state` #214 and `class`/`source` #201), and `requireStringOrNull`'s third use (`workspace_cwd`). The consumer arm ([daemon connection](daemon-connection.md)) drops four of the five decoded fields at the emit — the #180 content-drop model's second application.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

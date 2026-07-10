@@ -65,7 +65,7 @@ This is the JS analog of the Go harness's `WaitBinary` gate (which polls a map e
 | `close()` before both legs up | Pending `whenReady` rejects; teardown proceeds; idempotent. |
 | Double `close()` | Second call resolves the same promise; no throw, no double close. |
 
-- **Deliberately far simpler than the Go `fakerelay`.** No routing envelope, no `server-id`/token headers, no first-claim-wins grace, no `close_code` honouring, no token injection. It is a raw two-leg byte pipe — none of the Go surface is ported.
+- **Deliberately far simpler than the Go `fakerelay`.** No routing envelope, no `server-id`/token headers, no first-claim-wins grace, no `close_code` honouring, no token injection. It is a raw two-leg byte pipe — none of the Go surface is ported. That dropped surface now lives in the sibling [fake routing relay](fake-routing-relay.md) (#251), which bridges a *real* daemon's routing-envelope leg instead of a fake raw one.
 - **Log-free** — mirrors `relayConnection.ts`'s log-free construction; a stray `console.log` in shared test infra pollutes every consumer's output. All observable behaviour is via the returned handle and the spliced frames.
 - **No production consumer yet** — zero blast radius. The `security-sensitive` frame-inspecting responder is #91; this is opaque-byte plumbing only.
 
@@ -76,5 +76,6 @@ This is the JS analog of the Go harness's `WaitBinary` gate (which polls a map e
 - [E2E test harness](e2e-harness.md) / [#40](../codebase/40.md) — the *other* test harness: Playwright over the built app (UI-level, real Electron DOM). This forwarder is the transport-level round-trip harness (real client ↔ fake daemon), a strictly different layer.
 - Consumers: [fake daemon](fake-daemon.md) / [#91](../codebase/91.md) (the Noise responder that answers on `/v1/server`, **landed**) → [#89](../codebase/89.md) (the round-trip test that drives both, **landed**).
 - Cross-project prior art: pyrycode `fakerelay-harness.md` (Go, `internal/e2e/internal/fakerelay`, #295) — the same ship-the-forwarder-alone phasing and the `WaitBinary` readiness rationale `whenReady` mirrors. The desktop forwarder deliberately drops the Go harness's routing/header/close-code surface.
+- [Fake routing relay](fake-routing-relay.md) / [#251](../codebase/251.md) — the routing-aware sibling that ports the dropped Go surface back in, for bridging a *real* daemon instead of the fake one this module bridges.
 </content>
 </invoke>

@@ -330,6 +330,35 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversations: inbound.conversations
             })
             return
+          case 'modal-shown':
+            // The modal data path (#201). snake→camel here (`modal_id`→`modalId`,
+            // `default_option_id`→`defaultOptionId`); `options` is reused verbatim (the `conversations`
+            // precedent — parseModalOption already stripped each option to `{ id, label }`, nothing to
+            // drop, no snake→camel on id/label). NO `conversation_id` to drop — a modal carries none.
+            // A fresh literal with named fields, never a spread. The modal store + bridge (#223), not
+            // the session or timeline store, consumes this. `title` / `prompt` / `options[].label` are
+            // untrusted `claude`-surfaced display text the render slice (#224) must render as plain text.
+            emitDaemonEvent(sink, {
+              type: 'modalShown',
+              modalId: inbound.modalShown.modal_id,
+              class: inbound.modalShown.class,
+              title: inbound.modalShown.title,
+              prompt: inbound.modalShown.prompt,
+              options: inbound.modalShown.options,
+              defaultOptionId: inbound.modalShown.default_option_id
+            })
+            return
+          case 'modal-dismissed':
+            // The modal-resolution data path (#201). snake→camel here; NO `conversation_id` (a modal
+            // carries none). `outcome` is an opaque string carried verbatim. A fresh literal, never a
+            // spread. Consumed by the modal store + bridge (#223).
+            emitDaemonEvent(sink, {
+              type: 'modalDismissed',
+              modalId: inbound.modalDismissed.modal_id,
+              outcome: inbound.modalDismissed.outcome,
+              source: inbound.modalDismissed.source
+            })
+            return
         }
         return
       }

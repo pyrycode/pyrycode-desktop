@@ -8,7 +8,12 @@ import type {
   TurnEndPayload,
   TurnStatePayload,
   WireTurnState,
-  ToolUsePayload
+  ToolUsePayload,
+  WireModalClass,
+  WireModalSource,
+  WireModalOption,
+  ModalShownPayload,
+  ModalDismissedPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -116,5 +121,66 @@ describe('tool-use wire vocabulary (#217)', () => {
       name: 'Read',
       input_summary: 'reads /etc/hosts'
     })
+  })
+})
+
+describe('modal wire vocabulary (#201)', () => {
+  it('admits the two inbound modal envelope types', () => {
+    // Compile-time membership: these assign only if the members are part of EnvelopeType.
+    const shown: EnvelopeType = 'modal_shown'
+    const dismissed: EnvelopeType = 'modal_dismissed'
+    expect(shown).toBe('modal_shown')
+    expect(dismissed).toBe('modal_dismissed')
+  })
+
+  it('admits exactly the two WireModalClass values — no destructive class (ADR 0009)', () => {
+    const classes: WireModalClass[] = ['permission', 'trust']
+    expect(classes).toEqual(['permission', 'trust'])
+  })
+
+  it('admits exactly the three WireModalSource values (closed set)', () => {
+    const sources: WireModalSource[] = ['remote', 'local', 'timeout']
+    expect(sources).toEqual(['remote', 'local', 'timeout'])
+  })
+
+  it('shapes WireModalOption as { id, label } — ordered by array position', () => {
+    const option: WireModalOption = { id: 'allow', label: 'Allow' }
+    expect(option).toEqual({ id: 'allow', label: 'Allow' })
+  })
+
+  it('shapes ModalShownPayload as { modal_id, class, title, prompt, ordered options, default_option_id }', () => {
+    const payload: ModalShownPayload = {
+      modal_id: 'mdl-7f3a',
+      class: 'permission',
+      title: 'Allow Bash?',
+      prompt: 'claude wants to run: rm -rf build/',
+      options: [
+        { id: 'allow', label: 'Allow' },
+        { id: 'deny', label: 'Deny' }
+      ],
+      default_option_id: 'deny'
+    }
+    expect(payload).toEqual({
+      modal_id: 'mdl-7f3a',
+      class: 'permission',
+      title: 'Allow Bash?',
+      prompt: 'claude wants to run: rm -rf build/',
+      options: [
+        { id: 'allow', label: 'Allow' },
+        { id: 'deny', label: 'Deny' }
+      ],
+      default_option_id: 'deny'
+    })
+    // No conversation_id — modal_id is the sole correlation key (ADR 0009).
+    expect(payload).not.toHaveProperty('conversation_id')
+  })
+
+  it('shapes ModalDismissedPayload as { modal_id, outcome, source } with source a closed wire enum', () => {
+    const payload: ModalDismissedPayload = {
+      modal_id: 'mdl-7f3a',
+      outcome: 'allow',
+      source: 'remote'
+    }
+    expect(payload).toEqual({ modal_id: 'mdl-7f3a', outcome: 'allow', source: 'remote' })
   })
 })

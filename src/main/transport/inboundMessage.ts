@@ -33,7 +33,10 @@ import type {
   TurnEndPayload,
   TurnStatePayload,
   ToolUsePayload,
-  ConversationSummary
+  ConversationSummary,
+  ModalShownPayload,
+  ModalDismissedPayload,
+  WireModalOption
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
@@ -85,6 +88,13 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The `conversations` kind (#139) carries the decoded ConversationSummary[] (order preserved from the
  * wire). Like `chunk`, a single reply narrows to a whole list; the consumer forwards it verbatim as
  * one `conversationsReceived` event — no field is a secret, so nothing is dropped.
+ *
+ * The two modal kinds (#201) carry the decoded ModalShownPayload / ModalDismissedPayload — the
+ * permission/trust prompt `claude` blocks on. The fail-closed decode here (two closed-enum checks on
+ * `class` / `source` + a per-option narrower over the ordered `options` array) is the boundary this
+ * slice defends; `title` / `prompt` / `options[].label` are untrusted display text carried onward
+ * (dropping nothing — a modal has no `conversation_id`). BOTH renderer bridges no-op these arms; the
+ * real consumer is the modal store + bridge (#223).
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
@@ -98,6 +108,8 @@ export type InboundDaemonMessage =
   | { kind: 'turn-state'; turnState: TurnStatePayload }
   | { kind: 'tool-use'; toolUse: ToolUsePayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
+  | { kind: 'modal-shown'; modalShown: ModalShownPayload }
+  | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -355,6 +367,72 @@ function parseConversationsPayload(payload: unknown): ConversationSummary[] {
 }
 
 /**
+ * Narrow one opaque option into a WireModalOption (#201). Fail-closed like parseConversationSummary:
+ * two required strings (`id` / `label`), unknown keys tolerated but not copied. Its message names the
+ * category only — an option `label` is untrusted `claude`-surfaced display text.
+ */
+function parseModalOption(payload: unknown): WireModalOption {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed modal option')
+  }
+  const id = requireString(payload, 'id')
+  const label = requireString(payload, 'label')
+  return { id, label }
+}
+
+/**
+ * Narrow an opaque payload into a ModalShownPayload (#201). Fail-closed like parseTurnStatePayload,
+ * scaled to six fields plus a nested ordered array. The `class` closed-enum check is cloned from the
+ * `role` / `state` idiom: it covers non-string and unknown-string alike, narrowing to WireModalClass
+ * without a cast — a bare requireString would accept any string and defeat the closed-enum boundary
+ * this slice exists to defend (there is NO `destructive` wire class, ADR 0009). `options` must be an
+ * array, then each element narrows via parseModalOption — one bad option throws the whole modal closed
+ * (the `conversations` precedent), an empty array tolerated. `default_option_id ∈ options[].id` is NOT
+ * cross-checked here (a render concern, #224). Returns exactly the six known fields; unknown keys are
+ * tolerated but not copied. Its messages name the failure CATEGORY only — never interpolating
+ * `title` / `prompt` / `options[].label` / `modal_id` / `class` (untrusted content or the nonce).
+ */
+function parseModalShownPayload(payload: unknown): ModalShownPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed modal_shown payload')
+  }
+  const modal_id = requireString(payload, 'modal_id')
+  const cls = payload.class
+  if (cls !== 'permission' && cls !== 'trust') {
+    throw new WireDecodeError('missing required field: class')
+  }
+  const title = requireString(payload, 'title')
+  const prompt = requireString(payload, 'prompt')
+  const rawOptions = payload.options
+  if (!Array.isArray(rawOptions)) {
+    throw new WireDecodeError('malformed modal options')
+  }
+  const options = rawOptions.map(parseModalOption)
+  const default_option_id = requireString(payload, 'default_option_id')
+  return { modal_id, class: cls, title, prompt, options, default_option_id }
+}
+
+/**
+ * Narrow an opaque payload into a ModalDismissedPayload (#201). Fail-closed: `modal_id` a required
+ * string, `outcome` a required OPAQUE string (an option id or producer sentinel — carried verbatim,
+ * NOT enum-checked), and the `source` closed-enum check (the `state` idiom, narrows to WireModalSource
+ * without a cast). Returns the three known fields; unknown keys tolerated but not copied. Its messages
+ * name the failure category only — never interpolating `outcome` / `modal_id` / `source`.
+ */
+function parseModalDismissedPayload(payload: unknown): ModalDismissedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed modal_dismissed payload')
+  }
+  const modal_id = requireString(payload, 'modal_id')
+  const outcome = requireString(payload, 'outcome')
+  const src = payload.source
+  if (src !== 'remote' && src !== 'local' && src !== 'timeout') {
+    throw new WireDecodeError('missing required field: source')
+  }
+  return { modal_id, outcome, source: src }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), a `screen_snapshot` → `snapshot` (#180), an
@@ -505,6 +583,34 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'conversations', conversations }
+    }
+    case 'modal_shown': {
+      // Narrow BEFORE logging so a malformed frame (a `class` outside the closed enum, a bad option)
+      // throws first and leaves no record. No decoded field (modal_id / class / title / prompt /
+      // options / default_option_id) is logged — only the frame's byte length + one-way hash, reusing
+      // the existing content-free field set. `title` / `prompt` / `options[].label` are carried onward
+      // by the consumer (the render payload, #224), but they never enter the diagnostic log.
+      const modalShown = parseModalShownPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'modal_shown',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'modal-shown', modalShown }
+    }
+    case 'modal_dismissed': {
+      // Narrow BEFORE logging so a malformed frame (a `source` outside the closed enum) throws first
+      // and leaves no record. No decoded field (modal_id / outcome / source) is logged — only the
+      // frame's byte length + one-way hash.
+      const modalDismissed = parseModalDismissedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'modal_dismissed',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'modal-dismissed', modalDismissed }
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

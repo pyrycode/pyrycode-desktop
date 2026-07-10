@@ -18,13 +18,15 @@ The status row and the "Run configuration" sheet it opens landed as a **chrome-o
 
 The sheet's first section, **Log data** (a Download button for the debug bundle), landed in [#72](../codebase/72.md): the last child in the sheet body, beneath where Model/Effort/YOLO/Context-window will mount. See [Log data section](#log-data-section-72) below.
 
-A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `Timeline` view mounted beside `MessageThread`, rendering [thread-timeline store](conversation-timeline-store.md) items (the streamed assistant text, with a streaming cursor on the in-progress bubble) in a Strangler-Fig coexistence with the coarse thread above it. Inert (empty, zero footprint) in production until #179 flips the `interactive` capability. See [Structured-stream timeline render](#structured-stream-timeline-render-203) below.
+A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `Timeline` view mounted beside `MessageThread`, rendering [thread-timeline store](conversation-timeline-store.md) items (the streamed assistant text, with a streaming cursor on the in-progress bubble) in a Strangler-Fig coexistence with the coarse thread above it. Inert (empty, zero footprint) in production until #179 flipped the `interactive` capability. See [Structured-stream timeline render](#structured-stream-timeline-render-203) below.
 
-`Timeline`'s structural twin over the store's coarse `phase` scalar landed in [#215](../codebase/215.md): a "Thinking…" affordance mounted right after `Timeline`, covering the pre-text window the daemon opens with `turn_state{thinking}` before any assistant delta — otherwise the thread shows nothing and a slow turn looks stalled. Also inert until #179. See [Thinking indicator](#thinking-indicator-215) below.
+`Timeline`'s structural twin over the store's coarse `phase` scalar landed in [#215](../codebase/215.md): a "Thinking…" affordance mounted right after `Timeline`, covering the pre-text window the daemon opens with `turn_state{thinking}` before any assistant delta — otherwise the thread shows nothing and a slow turn looks stalled. Also inert until #179 (below). See [Thinking indicator](#thinking-indicator-215) below.
+
+**The cutover landed in [#179](../codebase/179.md):** the client hello now advertises `interactive`, the coarse `message` fan-out stops daemon-side, the composer's optimistic echo routes into the timeline as a `userText` item, and the coarse `MessageThread` mount is retired. `Timeline` is now the conversation's **single** thread surface — every "inert until #179" render slice below (the structured-stream thread, the thinking indicator, the tool-call rows, the permission modal) is now live. See [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) below.
 
 This screen is now the **thread view** of the [paired shell](paired-shell.md), landed in [#140](../codebase/140.md): the paired region enters at a list first, and opening a conversation mounts this screen, which gained a leading back affordance to return to the list. See [Back control](#back-control-140) below.
 
-The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Inert in production until #179 flips the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237) below.
+The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237) below.
 
 ## How it works
 
@@ -36,10 +38,8 @@ The screen gained an interactive **permission/trust modal** in [#224](../codebas
 ConversationScreen            .conversation        (flex column, full height, position: relative)
 ├── BackControl                .conversation__back   (leading icon button, #140, null when onBack absent)
 ├── UnpairControl              .conversation__header (slim header row, #166)
-├── MessageThread             .conversation__thread (scroll region, the coarse `message` path)
-│   └── MessageBubble × N     .message-row / .bubble
-├── Timeline                  .conversation__thread (null when empty, the structured-stream path, #203)
-│   └── TimelineRow × N       .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
+├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
+│   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
 │   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…")
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
@@ -51,9 +51,9 @@ ConversationScreen            .conversation        (flex column, full height, po
 
 `MessageBubble`, `Composer`, `UnpairControl`, `StatusRow`, and `RepairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread`, `StatusSheet`, and `RepairPrompt` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md), [#167](../codebase/167.md)), so tests server-render them as pure views. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`RepairPrompt`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
-### Data shape
+### Data shape (coarse path — retired residue since #179)
 
-The thread's view model is a discriminated union on `type`, following the project's sealed-event convention and forward-compatible with the richer kinds later slices add. It lives in `messageViewModel.ts` (relocated from the deleted `placeholderMessages.ts` in [#69](../codebase/69.md)):
+The thread's view model is a discriminated union on `type`, following the project's sealed-event convention. It lives in `messageViewModel.ts` (relocated from the deleted `placeholderMessages.ts` in [#69](../codebase/69.md)):
 
 ```ts
 export type Message =
@@ -61,11 +61,13 @@ export type Message =
   | { id: string; type: 'daemon'; text: string }
 ```
 
-The **data source is the [session store](session-store.md)**, which holds wire `MessagePayload` verbatim (ADR 0004). `ConversationScreen` reads the messages slice and adapts each payload at the store-read boundary:
+The data source was the [session store](session-store.md), which holds wire `MessagePayload` verbatim (ADR 0004). `ConversationScreen` used to read the messages slice and adapt each payload at the store-read boundary:
 
 ```ts
 const messages = useSessionStore(selectMessages).map(toMessageViewModel)
 ```
+
+**[#179](../codebase/179.md) removed this read from `ConversationScreen`** along with the `MessageThread` mount — `Message`/`toMessageViewModel`/`MessageThread`/`MessageBubble`/`selectMessages` are kept as dead-but-tested residue (a later cleanup ticket removes them), but nothing in production reads or renders them anymore. The live thread's data shape is `ThreadItem` (see [Thread timeline](thread-timeline.md)), read via `useTimelineStore(selectItems)` — see [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) below.
 
 `toMessageViewModel` (in `messageViewModel.ts`) is a pure, exhaustive `switch (m.role)`: `role: 'user' → type: 'user'`, `role: 'assistant' → type: 'daemon'`, `message_id → id`, `text` carried through, `conversation_id` dropped; an `assertNever` default makes a future third `WireRole` a compile error. Selecting only the `messages` slice keeps connection-status changes from re-rendering the thread. Each bubble carries `data-message-role={message.type}` — the test hook the structural render test asserts against.
 
@@ -402,16 +404,18 @@ guarantee the list is append-only with tail-mutation, never reordering or insert
 identity is stable per logical item (`turnId` alone would collide once #205 lets a tool split one turn
 into two `assistantText` items; a text-bearing key would remount the growing bubble every delta).
 
-**Strangler-Fig coexistence, not a cutover.** `Timeline` sits directly beside `MessageThread`; the
-coarse path is completely untouched and stays the *live* one — `Timeline` returns `null` on an empty
-`items` array (not an empty `<div>`), giving it zero layout footprint so the thread is pixel-identical
-to before this ticket. The store stays empty in production until #179 flips the `interactive`
-capability (a non-interactive v2 connection receives no structured stream), so this entire render path
-is inert today. **Open question, deliberately left to #179:** once `interactive` flips and the coarse
-`message` fan-out stops, `MessageThread` will render an *empty* `.conversation__thread` beside the
-now-populated `Timeline` — a half-height dead region — which #179 must reconcile (#203 must not flip
-or gate anything here). See [#203 codebase notes](../codebase/203.md) for the full design and code
-review record.
+**Strangler-Fig coexistence at ship time, not a cutover** — as originally shipped, `Timeline` sat
+directly beside `MessageThread`; the coarse path was completely untouched and stayed the *live* one,
+`Timeline` returning `null` on an empty `items` array (not an empty `<div>`) for zero layout footprint
+so the thread was pixel-identical to before this ticket. The store stayed empty in production until
+`interactive` flipped (a non-interactive v2 connection receives no structured stream), so this entire
+render path was inert at ship time.
+
+**Reconciled in [#179](../codebase/179.md):** the client hello now advertises `interactive`, the coarse
+`message` fan-out stopped daemon-side, and `MessageThread` was retired rather than left as an empty
+dead region — `Timeline` is now the conversation's single thread surface. See
+[The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) below and
+[#203 codebase notes](../codebase/203.md) for the original design and code review record.
 
 ### Thinking indicator (#215)
 
@@ -442,16 +446,18 @@ non-load-bearing per spec); the interim treatment is deliberately minimal, since
 design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no dedicated thinking-indicator node — the polished
 version rolls into the deferred desktop-design pass.
 
-Dormant until #179 flips `interactive` (`phase` stays `idle` in production until then), the same
-posture as `Timeline`. Code review flagged one non-gating NIT: `.conversation__thinking` has no live
-region (`role="status"`), so a screen reader won't announce it appearing/disappearing — deferred to
-#179 or the desktop-design pass. See [#215 codebase notes](../codebase/215.md) for the full design,
-patterns established, and open questions.
+Was dormant until [#179](../codebase/179.md) flipped `interactive` (`phase` stayed `idle` in
+production until then, the same posture as `Timeline`); now live. Code review flagged one non-gating
+NIT: `.conversation__thinking` has no live region (`role="status"`), so a screen reader won't announce
+it appearing/disappearing — still unaddressed (not part of #179's scope), deferred to the
+desktop-design pass. See [#215 codebase notes](../codebase/215.md) for the full design, patterns
+established, and open questions.
 
 `Timeline`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md): a compact chip —
 tool name and one-line input summary — replaces the earlier `case 'toolCall': return null` no-op, at
 50% opacity for the unresolved (`result: null`) state. [#230](../codebase/230.md) later taught the
-same arm to resolve that chip in place once `result` fills. Also dormant until #179. See
+same arm to resolve that chip in place once `result` fills. Both were dormant until
+[#179](../codebase/179.md); now live. See
 [Pending tool-call row](#pending-tool-call-row-218) and
 [Resolved tool-call row](#resolved-tool-call-row-230) below.
 
@@ -489,8 +495,8 @@ owns lifting (or overriding) that dimming plus the success/error visual; this ti
 stays untouched by that follow-up. Every value in the three new `.tool-row*` CSS rules is a token
 (`--font-mono`, `--color-tertiary`, `--color-surface-container`, `--color-outline-variant`,
 `--color-on-surface-variant`, `--text-body-small-*`, `--space-2`/`--space-3`, `--radius-sm`) — no
-hex/rgb/px literal. Dormant until #179 flips `interactive` (no `tool_use` frames arrive while it's
-off), the same posture as `Timeline`/`ThinkingIndicator`. See
+hex/rgb/px literal. Was dormant until [#179](../codebase/179.md) flipped `interactive` (no `tool_use`
+frames arrived while it was off, the same posture as `Timeline`/`ThinkingIndicator`); now live. See
 [#218 codebase notes](../codebase/218.md) for the full design and patterns established.
 
 ### Resolved tool-call row (#230)
@@ -527,9 +533,9 @@ the untrusted-text surface at exactly `name` + `inputSummary`, unchanged from #2
 array-index key strategy is untouched: `fillResult` replaces the `toolCall` at its own index, so a
 resolving row never remounts.
 
-Dormant until #179 flips `interactive`, the same posture as every other structured-stream render
-slice. See [#230 codebase notes](../codebase/230.md) for the full design, the token-provenance
-rationale, and patterns established.
+Was dormant until [#179](../codebase/179.md) flipped `interactive`, the same posture as every other
+structured-stream render slice; now live. See [#230 codebase notes](../codebase/230.md) for the full
+design, the token-provenance rationale, and patterns established.
 
 ### Permission modal (#224, answerable since #237)
 
@@ -558,8 +564,8 @@ The render half of the modal vertical (ADR [0009](../decisions/0009-modal-prompt
   gives it `margin-right: auto` so it sits at the row's far left while the daemon options stay
   right-aligned — a code-review SHOULD-FIX flagged this as diverging from the Figma Dialogs reference
   (which clusters Cancel at the trailing/right edge next to the confirm action) and asked the PO/
-  architect to confirm the placement before #179 makes the modal live; **unresolved**, see [#237
-  codebase notes](../codebase/237.md).
+  architect to confirm the placement before the modal went live; **still unresolved** now that
+  [#179](../codebase/179.md) made it live, see [#237 codebase notes](../codebase/237.md).
 - **`PermissionModal()`** — the store-bound container: `useModalStore(selectOutstanding)` plus (#237)
   `useModalStore(s => s.dispatch)`, renders `outstanding[0]` via `PermissionModalView`, or `null` when
   nothing is outstanding. One dialog at a time, oldest-first FIFO; no `selectCurrentModal` selector
@@ -572,28 +578,68 @@ Mounted as the **last child** of `.conversation` in `ConversationScreen.tsx`, af
 `answerModalCommand({ modal_id, option_id })` (#236) and clicking Cancel dispatches
 `cancelModalCommand({ modal_id })`, both through a guarded `window.pyry.sendCommand` (a bridge failure
 is swallowed, never crashes the window); either way the prompt clears **locally and optimistically** via
-the existing `dismissed` reducer arm — no new store representation, no new event arm. Inert in
-production until #179 flips the `interactive` capability (no `modal_shown` frame arrives, so nothing to
-answer). See [#224 codebase notes](../codebase/224.md) for the original render design and [#237
-codebase notes](../codebase/237.md) for the answer-path design, the `modalResolution.ts` helper, and the
-still-open code-review items (Cancel placement, focus trap/`Escape`, programmatic default-option cue).
+the existing `dismissed` reducer arm — no new store representation, no new event arm. Was inert in
+production until [#179](../codebase/179.md) flipped the `interactive` capability (previously no
+`modal_shown` frame arrived, so nothing to answer); now live. See [#224 codebase notes](../codebase/224.md)
+for the original render design and [#237 codebase notes](../codebase/237.md) for the answer-path
+design, the `modalResolution.ts` helper, and the still-open code-review items (Cancel placement, focus
+trap/`Escape`, programmatic default-option cue).
+
+### The interactive flip + thread cutover (#179)
+
+The on-switch for the whole structured surface above. `loadDialConfig` (`daemonConnection.ts`) now
+passes `capabilities: [CAPABILITY_INTERACTIVE]` to `buildClientHello` — the single production call
+site, previously always `[]`. `interactive` is the only capability in the vocabulary, so advertising
+it turns on everything the daemon offers a paired interactive client: the v2 structured stream (turn
+state, deltas, tool use/result, thinking) and the `modal_shown` prompts, all decoded by the
+already-shipped, previously-inert transport (#199–#230) and rendered by the already-mounted pipeline
+above. The daemon's accepted set echoes back on `hello_ack.capabilities`, surfaced unchanged on the
+`connected{ack}` event (`parseHelloAck` already did this — no production change needed for that half).
+
+Advertising `interactive` stops the daemon's coarse `message` fan-out in the same instant
+(pyrycode #699), so the flip and the render cutover **land in one commit**:
+
+- **The composer's echo retargets.** `Composer`'s `dispatch` now reads
+  `useTimelineStore((s) => s.dispatch)` instead of `useSessionStore((s) => s.dispatch)`;
+  `composerSend.ts`'s `submitMessage` dispatches `{ type: 'userText', text: trimmed }` (the
+  [#245](../codebase/245.md) event) instead of a `messageSent` `SessionAction`. The `message_id`
+  minted in `submitMessage` is now used for the **wire** command only — the old "reuse the id so the
+  daemon's re-echo dedupes" rationale is retired: in interactive mode the `DaemonEvent` union carries
+  no user-message arm and the coarse fan-out is off, so the optimistic echo is the sole source of the
+  user's own message and needs no dedup key.
+- **`TimelineRow`'s `case 'userText'`** (the [#245](../codebase/245.md) dormant placeholder) now draws
+  the right-aligned user bubble — `.message-row--user` / `.bubble--user` (`data-thread-role="user"`,
+  distinct from `MessageBubble`'s `data-message-role`), reusing the coarse thread's own user-bubble
+  treatment verbatim (no new CSS). Text renders as auto-escaped React children, never
+  `dangerouslySetInnerHTML`.
+- **`MessageThread` is retired.** Its mount (`<MessageThread messages={messages} />`) and the
+  `useSessionStore(selectMessages)` read are removed from `ConversationScreen`. `MessageThread` /
+  `MessageBubble` / `messageViewModel.ts` / `selectMessages` all stay as **dead-but-tested residue**
+  (deliberate — a later cleanup ticket removes them); `sessionStore.messages` is populated but unread.
+
+`Timeline` is now the conversation's **single** thread surface: the user's `userText` echo and the
+daemon's structured reply share the one ordered `timelineStore.items` array, so arrival order gives
+one continuous thread with no split-brain and no empty second region. See
+[#179 codebase notes](../codebase/179.md) for the full design, the security review, and lessons
+learned.
 
 ## Seams (bound + still open)
 
 - **`onBack?: () => void`** — **bound in [#140](../codebase/140.md).** Optional, gated exactly like `onUnpaired?`; wired by the [paired shell](paired-shell.md) when this screen is mounted as its `thread` view, absent for a bare `<ConversationScreen />`. See [Back control](#back-control-140) above.
-- **`MessageThread({ messages })`** — **bound in [#69](../codebase/69.md).** `ConversationScreen` now feeds this prop from `useSessionStore(selectMessages).map(toMessageViewModel)` instead of the deleted `placeholderMessages` array, adapting wire `MessagePayload` (`role`, `message_id`) to the `Message` view model (`type`, `id`) at the store-read boundary. `MessageThread` stays the pure `Message[]`-in view — the seam's shape held exactly as the swap target.
-- **`Composer`** — **bound in [#66](../codebase/66.md).** Now a thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id`, emits a `sendMessage` command, and appends an optimistic echo to the store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
+- **`MessageThread({ messages })`** — **bound in [#69](../codebase/69.md); unmounted (retired to dead-but-tested residue) in [#179](../codebase/179.md).** `ConversationScreen` fed this prop from `useSessionStore(selectMessages).map(toMessageViewModel)` from #69 through #178; #179 removed the mount and the read. `MessageThread` itself is untouched and still server-render-tested as a pure `Message[]`-in view, but nothing in production calls it.
+- **`Composer`** — **bound in [#66](../codebase/66.md); echo retargeted in [#179](../codebase/179.md).** A thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id` for the wire command, and dispatches an optimistic `userText` echo into the timeline store since #179 — previously a `messageSent` action into the session store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
-- **`Timeline({ items })`** — **bound in [#203](../codebase/203.md).** A second, independent thread beside `MessageThread`, reading the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Inert (empty, `null`) in production until #179 flips `interactive`. See [Structured-stream timeline render](#structured-stream-timeline-render-203) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
-- **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. Inert (`null`) in production until #179 flips `interactive`. See [Thinking indicator](#thinking-indicator-215) above.
+- **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md).** Reads the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply. See [Structured-stream timeline render](#structured-stream-timeline-render-203) and [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
+- **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. See [Thinking indicator](#thinking-indicator-215) above.
 - **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding` and `dispatch`, mounted as the last child of `.conversation`. `null` when nothing is outstanding; each option and the new Cancel button dispatch a command and clear the prompt locally. See [Permission modal](#permission-modal-224-answerable-since-237) above.
 
 ## Edge cases and limitations
 
-- An **empty `messages` array** renders a valid empty scroll region — no crash, no placeholder fallback. The store returns `[]` on initial state, so a just-connected session with no replies yet renders a clean empty thread.
-- The send button is **wired** ([#66](../codebase/66.md)): a click (or Enter) sends the composed message and appends an optimistic echo. A whitespace-only input does nothing; a send-bridge failure is swallowed (no crash). See [Composer send](composer-send.md).
+- An **empty `items` array** renders a valid empty scroll region — no crash, no placeholder fallback (`Timeline` returns `null`). A just-connected session with no messages yet renders a clean empty thread. (Historical: before [#179](../codebase/179.md) this was the coarse `messages` array; `sessionStore.messages` still returns `[]` on initial state, but nothing reads it in production anymore.)
+- Since [#179](../codebase/179.md), the timeline is the **only** thread surface — no split-brain, no empty second region. `MessageThread`/`selectMessages` are retained but unread residue.
+- The send button is **wired** ([#66](../codebase/66.md)): a click (or Enter) sends the composed message and appends an optimistic echo, now into the timeline ([#179](../codebase/179.md)). A whitespace-only input does nothing; a send-bridge failure is swallowed (no crash). See [Composer send](composer-send.md).
 - **Dark scheme only**; no responsive layout beyond flex reflow; no desktop-native layout (the plan defers that until the app is fully functioning).
 - No DOM interactivity is tested yet — the render test uses `renderToStaticMarkup`, not a DOM harness. Because zustand v5's `useStore` reads `getInitialState()` (not `getState()`) for its server snapshot, a *server*-rendered store-bound container always shows the store's **initial** state; #69 therefore proves ordering + role→type on the pure `MessageThread` view and smoke-tests the container against the empty store. Observing a *populated* container render needs a jsdom harness — still deferred. See [#69 codebase notes](../codebase/69.md).
 
@@ -601,17 +647,17 @@ still-open code-review items (Cancel placement, focus trap/`Escape`, programmati
 
 - [App shell](app-shell.md) — the router that mounts the `paired`/`conversation` route (#80); gains the `onUnpaired` reverse-flip seam this screen's unpair control fires (#166)
 - [Paired shell](paired-shell.md) — the second-level `list ⇄ thread` router now mounting this screen as its `thread` view (#140); source of the `onBack` seam this screen's back control fires
-- [Session store](session-store.md) — the live state the thread now renders; the `MessageThread`/status seams bind to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166)
-- [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66); the send half of this screen
+- [Session store](session-store.md) — the state the coarse thread rendered through #69–#178; the `MessageThread`/status seams bound to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166); its `messages` slice is unread residue since [#179](../codebase/179.md) (status/`selectStatus` is still live, read by the composer's send gate)
+- [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66), retargeted from the session store into the timeline store since [#179](../codebase/179.md); the send half of this screen
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`
-- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229) — the vertical's last render slice
-- [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224) and now also `dispatch` (#237); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, dormant since #223
+- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` now also writes to this store's `dispatch` as the `userText` producer, and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece
+- [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224) and now also `dispatch` (#237); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, live since [#179](../codebase/179.md) flipped `interactive` (dormant #223–#178)
 - [Modal resolution envelope](modal-resolution-envelope.md) / [Command channel](command-channel.md) — the `answerModalCommand`/`cancelModalCommand` this screen's `PermissionModal` now dispatches through `modalResolution.ts` (#237), routed main-side by [Daemon connection](daemon-connection.md)'s `answerModal`/`cancelModal` (#236)
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

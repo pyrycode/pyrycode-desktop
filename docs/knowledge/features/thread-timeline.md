@@ -2,8 +2,10 @@
 
 A heterogeneous, ordered conversation-timeline data model — the foundation the structured
 event-stream render vertical builds on. Introduced **alongside**
-[session store](session-store.md)'s flat `MessagePayload[]` as a Strangler Fig: nothing cuts over,
-no consumer imports it yet, and the coarse `message`/`message_chunk` render path is untouched.
+[session store](session-store.md)'s flat `MessagePayload[]` as a Strangler Fig. The cutover shipped in
+[#179](../codebase/179.md): the coarse `message`/`message_chunk` render path (`MessageThread`) is
+retired to dead-but-tested residue, and this model — via [timelineStore](conversation-timeline-store.md) —
+is now the conversation's single thread surface.
 
 The vertical this feeds decomposed along the transport → store → render seams the [screen snapshot
 fetch](screen-snapshot-fetch.md) vertical (#180 → #187/#188) proved: [#199](../codebase/199.md)
@@ -22,8 +24,12 @@ pre-existing `toolResult` arm its first real feed, resolving the correlated `too
 place via `fillResult` (no render yet — that was the sibling slice [#230](../codebase/230.md)).
 [#230](../codebase/230.md) (shipped) rendered that filled `result` — the `toolCall` chip resolves in
 place (pending dimming lifts, `result.isError` selects a success/error border treatment via a new
-`--color-error` token) — the vertical's last render slice. Only `#179` (the `interactive` capability
-flip) remains.
+`--color-error` token) — the vertical's last render slice. [#245](../codebase/245.md) (shipped) added a
+fourth `ThreadItem` kind, `userText`, dormant with a placeholder render arm. [#179](../codebase/179.md)
+(shipped) flipped the `interactive` capability — every arm above now carries live daemon traffic in
+production — and wired `userText`'s producer (the composer's optimistic echo, retargeted from
+`sessionStore`) and real render row, retiring the coarse `MessageThread` in the same commit. The
+vertical is complete.
 
 Introduced in [#121](../codebase/121.md). Lives at
 `src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
@@ -50,6 +56,7 @@ type ThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string }
   | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; result: ToolResult | null }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
+  | { kind: 'userText'; text: string }
 
 type ThreadEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
@@ -57,6 +64,7 @@ type ThreadEvent =
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
+  | { type: 'userText'; text: string }
 
 interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase }
 ```
@@ -79,6 +87,7 @@ indicator), so it's carried as `phase` beside `items` rather than interleaved as
 | `toolResult` | find the `toolCall` with matching `toolUseId` **and** `result === null`, fill it in place. No match (orphan or already-resolved duplicate) → **same `state` reference**, a deterministic non-throwing no-op. |
 | `turnState` | set `phase`; same reference if unchanged (no-churn) |
 | `turnEnd` | append a `turnBoundary`; does **not** touch `phase` |
+| `userText` | append a fresh `userText` item (never coalesced); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
 `items`. `initialTimelineState = { items: [], phase: 'idle' }`; pure selectors `selectItems`,
@@ -143,16 +152,27 @@ Nothing imports this module yet.
   chip border with a newly-introduced `--color-error` token (M3 default dark error role, tone 80 —
   desktop's first error-family token). `reduceTimeline`'s `fillResult`/`ToolResult` shape is
   unmodified; `result.resultSummary` is deliberately not surfaced (no result-text slot in the Figma
-  mock). The vertical's last render slice — only `#179` remains.
+  mock).
+- **[#245](../codebase/245.md) (shipped)** added the fourth `ThreadItem` kind, `userText` — a plain
+  fresh-tail-append (the `toolUse`/`turnEnd` discipline, not `assistantDelta`'s coalescing), no
+  `turnId`/`seq` (a renderer-sourced echo has neither). Shipped **dormant**: no producer dispatched a
+  `userText` event yet, and `TimelineRow`'s `case 'userText'` was a placeholder `return null`.
+- **[#179](../codebase/179.md) (shipped)** wired `userText`'s producer — the composer's optimistic
+  echo, retargeted from a `messageSent` `SessionAction` into `timelineStore.dispatch` — and the real
+  render row (the right-aligned user bubble, replacing #245's placeholder). Flipped the `interactive`
+  capability the whole vertical had been gated on, and retired the coarse `MessageThread` mount in the
+  same commit. `reduceTimeline`'s `userText` arm is unmodified by this ticket. The vertical is
+  complete.
 
 ## Edge cases and limitations
 
 - **Uncorrelated or duplicate `tool_result` is a silent no-op, not a surfaced error.** Evidence-based:
-  the structured stream isn't receivable yet (desktop withholds the `interactive` capability until
-  #179), so no orphan has been observed in practice. This absorbs a mid-turn-reconnect orphan (the
+  the structured stream wasn't receivable before [#179](../codebase/179.md) flipped `interactive`, so
+  no orphan had been observed in practice at design time. This absorbs a mid-turn-reconnect orphan (the
   `tool_use` fell before a replay cursor) without killing the timeline, but revisit if #202's
-  reconnect replay is shown to actually produce them. The transport → bridge chain that can now feed a
-  real `tool_result` is wired as of #229; the no-op behavior itself is unchanged.
+  reconnect replay is shown to actually produce them now that the stream carries live traffic. The
+  transport → bridge chain that can now feed a real `tool_result` is wired as of #229; the no-op
+  behavior itself is unchanged.
   - No corresponding test currently is left uncovered — both the orphan and duplicate cases are
     unit-tested with `toBe` reference assertions (`timelineBridge.test.ts`, #229, driving a real store
     end to end).
@@ -169,9 +189,11 @@ Nothing imports this module yet.
   reorders or inserts mid-list (`appendDelta` grows the tail in place, every other arm appends a new
   tail, `fillResult` replaces a `toolCall` at its own index), so index identity is stable per logical
   item without needing a dedicated `id` field on `ThreadItem`.
-- **Strangler Fig, not a migration.** `sessionStore`, `messageViewModel.ts`, and the coarse
-  `message`/`message_chunk` path are completely untouched by this module's existence. The cutover
-  decision (does the coarse path retire once `interactive` is on?) belongs to #179/#203.
+- **Strangler Fig, cut over in [#179](../codebase/179.md).** `sessionStore`, `messageViewModel.ts`,
+  and the coarse `message`/`message_chunk` path were completely untouched by this module through
+  #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
+  residue) and made this module's store the conversation's single thread surface — `sessionStore`
+  itself (and its `messages` slice) is untouched code-wise but its render consumer is gone.
 
 ## Related
 
@@ -200,9 +222,12 @@ Nothing imports this module yet.
   transport slice: wire types, decode (four required strings + one `requireBoolean`), and the
   `toolResult` `DaemonEvent`/`ThreadEvent` arms; gave `reduceTimeline`'s pre-existing `fillResult`
   correlation its first real feed, resolving a `toolCall`'s `result` in place on `selectItems`.
-- [#230 codebase notes](../codebase/230.md) — the vertical's last render slice: extends #218's
-  pending `toolCall` chip to resolve in place from `item.result`, and introduces desktop's first
-  error-family design token, `--color-error`.
+- [#230 codebase notes](../codebase/230.md) — extends #218's pending `toolCall` chip to resolve in
+  place from `item.result`, and introduces desktop's first error-family design token, `--color-error`.
+- [#245 codebase notes](../codebase/245.md) — added the fourth `ThreadItem` kind, `userText`, dormant
+  with a placeholder render arm.
+- [#179 codebase notes](../codebase/179.md) — the vertical's final piece: flips `interactive`, wires
+  `userText`'s producer and real render row, and retires the coarse `MessageThread` in the same commit.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

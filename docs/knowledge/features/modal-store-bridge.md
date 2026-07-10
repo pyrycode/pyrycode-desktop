@@ -102,8 +102,8 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
   `useDaemonEventBridge()`/`useTimelineBridge()` in `App.tsx`, the third independent subscriber on the
   channel, mirroring how #202 shipped `useTimelineBridge` before #203 mounted it. From #224 onward, a
   live `modalShown`/`modalDismissed` frame reaches `modalStore`, and [`PermissionModal`](conversation-shell.md#permission-modal-224)
-  reads `selectOutstanding` to render it (still gated behind #179's `interactive` capability flip in
-  production).
+  reads `selectOutstanding` to render it. Was gated behind the `interactive` capability flip in
+  production through #178; live since [#179](../codebase/179.md).
 - Import surface: `import { useModalStore, selectOutstanding } from '@renderer/store/modalStore'` and
   `import { useModalBridge } from '@renderer/store/modalBridge'`.
 - No conversation-id scoping — a modal carries no `conversation_id` on the wire at all (ADR 0009); the
@@ -125,9 +125,10 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
   in this repo), exactly as `useDaemonEventBridge` and `useTimelineBridge` have none — its behavior is
   fully carried by the pure `subscribeModal` tests. See [#202 codebase notes](../codebase/202.md) §
   Lessons learned for the precedent.
-- **Zero live traffic until #179.** Desktop withholds the `interactive` capability, so no
-  `modal_shown`/`modal_dismissed` frame reaches this bridge in production yet — the store and bridge
-  are built and tested against injected `DaemonEvent`s only.
+- **Zero live traffic through #178.** Desktop withheld the `interactive` capability until
+  [#179](../codebase/179.md), so no `modal_shown`/`modal_dismissed` frame reached this bridge in
+  production before then — the store and bridge were built and tested against injected `DaemonEvent`s
+  only. Now live.
 
 ## Related
 
@@ -153,3 +154,5 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
 - [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the
   `conversationCreated` arm that folds into this bridge's no-op case alongside `toolResult`; the real
   consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242).
+- [#179 codebase notes](../codebase/179.md) — flips `interactive` live, so `modal_shown`/`modal_dismissed`
+  carry real daemon traffic through this bridge in production for the first time.

@@ -13,8 +13,11 @@ added the [Zustand store + the `DaemonEvent → ThreadEvent` bridge](conversatio
 over `reduceTimeline`; [#203](../codebase/203.md) (shipped) renders the streamed text — the
 blank-thread-critical slice that gates #179 (advertising the `interactive` capability). [#214](../codebase/214.md)
 (shipped) wired the `turn_state` transport → bridge chain, giving `selectPhase` its first real source
-(no render yet — the thinking indicator is a still-open sibling slice). `tool_use`/`tool_result`
-transport + render trail after.
+(no render yet — the thinking indicator is a still-open sibling slice). [#217](../codebase/217.md)
+(shipped) wired the `tool_use` transport → bridge chain, giving `reduceTimeline`'s pre-existing
+`toolUse` arm its first real feed — a `toolCall` `ThreadItem` now lands on `selectItems` in arrival
+order (no render yet — that is the sibling slice #218). `tool_result` transport + both render slices
+trail after.
 
 Introduced in [#121](../codebase/121.md). Lives at
 `src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
@@ -111,6 +114,12 @@ Nothing imports this module yet.
   closed-enum idiom instead of `requireString`. `reduceTimeline`'s pre-existing `turnState` arm and
   `selectPhase` are unmodified by this ticket; it only wires up a real feed. No render — the thinking
   indicator is a still-open sibling slice.
+- **[#217](../codebase/217.md) (shipped)** added the `tool_use` wire type, transport decode, and the
+  `toolUse` `DaemonEvent`/`ThreadEvent` arms — five required-string fields, no enum (unlike
+  `turn_state`). `reduceTimeline`'s pre-existing `toolUse` arm (append a `toolCall`, `result: null`,
+  splitting a turn's text) and `selectItems` are unmodified by this ticket; it only wires up a real
+  feed. No render — the tool row is a still-open sibling slice (#218), and correlating a later
+  `tool_result` into `result` is a separate still-open ticket (#206).
 
 ## Edge cases and limitations
 
@@ -158,6 +167,9 @@ Nothing imports this module yet.
 - [#214 codebase notes](../codebase/214.md) — the `turn_state` transport slice: wire types, decode
   (closed-enum idiom), and the `turnState` `DaemonEvent`/`ThreadEvent` arms; gave `selectPhase` its
   first real source.
+- [#217 codebase notes](../codebase/217.md) — the `tool_use` transport slice: wire types, decode
+  (required-string presence, no enum), and the `toolUse` `DaemonEvent`/`ThreadEvent` arms; gave
+  `reduceTimeline`'s `toolUse` arm its first real feed, appending a `toolCall` item onto `selectItems`.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

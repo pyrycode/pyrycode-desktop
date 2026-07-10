@@ -19,6 +19,7 @@
 // classification code and the event name — never the caught error object, the human-readable banner
 // (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
+import { randomUUID } from 'node:crypto'
 import { createNoiseRelayDriver } from './transport/noiseRelayDriver'
 import type {
   DialConfig,
@@ -31,6 +32,7 @@ import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
+import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
   createBundleReassembler,
@@ -46,7 +48,9 @@ import {
   MAX_FRAME_BYTES,
   type HelloAckPayload,
   type SendMessagePayload,
-  type RequestSnapshotPayload
+  type RequestSnapshotPayload,
+  type ModalAnswerPayload,
+  type ModalCancelPayload
 } from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
@@ -72,6 +76,14 @@ export interface DaemonConnectionDeps {
   now?: () => string
   /** DI seam — defaults to the real createNoiseRelayDriver. Tests inject a fake. */
   createDriver?: (config: NoiseRelayDriverConfig) => NoiseRelayDriver
+  /**
+   * Mints the client-side idempotency `answer_token` per `modal_answer` (#236). Default:
+   * crypto.randomUUID (Node CSPRNG — NOT Math.random). A DI seam like `now` / `createDriver` so the
+   * mint is deterministic under test. MAIN-side only — the renderer never mints (the token needs
+   * randomness and never reaches the web layer). The token is an anti-replay key, not a credential:
+   * only its uniqueness + stability per call matter, not its secrecy.
+   */
+  mintToken?: () => string
   /**
    * The one content-free diagnostic logger (#126), constructed at the composition root and shared by
    * every transport consumer. Optional injection seam only: #126 threads the dependency here; the
@@ -122,6 +134,22 @@ export interface DaemonConnection {
    * `requestSnapshot`). NEVER throws out of the module (parity #490).
    */
   requestConversations(): void
+  /**
+   * Resolve an outstanding permission/trust modal with the user's answer (#236): MINT a fresh
+   * client-side idempotency `answer_token` (main-side — the renderer never mints), fold it into a
+   * `modal_answer` envelope alongside the `modal_id` + `option_id`, and encrypt it onto the live
+   * session. `modal_id` is the sole correlation key (ADR 0009). The `send` TWIN, not
+   * `requestDebugBundle`: a modal resolution has no consumer to fail, so it is an inert no-op when not
+   * connected (`driver === null` → return). A replayed/reordered answer is inert daemon-side
+   * (first-answer-wins on `modal_id`). NEVER throws out of the module (parity #490).
+   */
+  answerModal(payload: Omit<ModalAnswerPayload, 'answer_token'>): void
+  /**
+   * Cancel an outstanding modal from the desktop (#236): encrypt a `modal_cancel` envelope keyed by
+   * `modal_id` (the sole correlation key, ADR 0009) onto the live session. The `send` TWIN: an inert
+   * no-op when not connected. NEVER throws out of the module (parity #490).
+   */
+  cancelModal(payload: ModalCancelPayload): void
   /**
    * Encrypt a bare `request_debug_bundle` control envelope onto the live session — asks the daemon
    * to begin streaming the current debug bundle back — and ARM a reassembler for the streamed reply
@@ -179,6 +207,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   const { deviceKeypair, pairedServer, sink, deviceName, clientVersion } = deps
   const now = deps.now ?? ((): string => new Date().toISOString())
   const createDriver = deps.createDriver ?? createNoiseRelayDriver
+  // The main-side answer_token mint (#236). Default: crypto.randomUUID (Node CSPRNG). A DI seam like
+  // now / createDriver — the renderer never mints (the token needs randomness, stays out of the web
+  // layer). It is an anti-replay idempotency key, not a credential; uniqueness + stability suffice.
+  const mintToken = deps.mintToken ?? ((): string => randomUUID())
 
   // Three locals, no store: the renderer's sessionStore (#2) is the single source of session
   // state; this module only emits into it. `stopped` doubles as the "stopping" flag that
@@ -546,6 +578,51 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function answerModal(payload: Omit<ModalAnswerPayload, 'answer_token'>): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A modal resolution has no consumer to fail.
+    if (driver === null) return
+    try {
+      // Mint the token into a FRESH literal naming exactly the three modeled fields — never a spread
+      // of `payload`. This is the deterministic net that ignores a renderer-smuggled `answer_token`:
+      // the minted value always wins, and no stale ADR-025 field can leak (#235's pinned shape).
+      const bytes = buildModalAnswer({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          modal_id: payload.modal_id,
+          option_id: payload.option_id,
+          answer_token: mintToken()
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
+      // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
+  function cancelModal(payload: ModalCancelPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale).
+    if (driver === null) return
+    try {
+      // Fresh literal naming only `modal_id` — strips any smuggled extra field so nothing beyond the
+      // one modeled field crosses the wire (#235's pinned shape; no stale ADR-025 leakage).
+      const bytes = buildModalCancel({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: { modal_id: payload.modal_id }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): the caught object is DROPPED
+      // (classify-don't-forward, inherited #62).
+    }
+  }
+
   function requestDebugBundle(consumer: BundleConsumer): void {
     // Not connected (before start(), mid-bootstrap, bootstrap-failed): fail the consumer terminally
     // so #118's command never hangs — the wire behaviour is still "send nothing," but the caller is
@@ -620,6 +697,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     send,
     requestSnapshot,
     requestConversations,
+    answerModal,
+    cancelModal,
     requestDebugBundle
   }
 }

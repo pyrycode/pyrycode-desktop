@@ -7,7 +7,8 @@ import type {
   AssistantDeltaPayload,
   TurnEndPayload,
   TurnStatePayload,
-  WireTurnState
+  WireTurnState,
+  ToolUsePayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -90,5 +91,30 @@ describe('turn-state wire vocabulary (#214)', () => {
   it('admits exactly the three WireTurnState values (mobile field-for-field, no named enum)', () => {
     const states: WireTurnState[] = ['thinking', 'responding', 'idle']
     expect(states).toEqual(['thinking', 'responding', 'idle'])
+  })
+})
+
+describe('tool-use wire vocabulary (#217)', () => {
+  it('admits the tool_use inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const toolUse: EnvelopeType = 'tool_use'
+    expect(toolUse).toBe('tool_use')
+  })
+
+  it('shapes ToolUsePayload as { conversation_id, turn_id, tool_use_id, name, input_summary } — all strings', () => {
+    const payload: ToolUsePayload = {
+      conversation_id: 'conv-1',
+      turn_id: 'turn-1',
+      tool_use_id: 'tu-1',
+      name: 'Read',
+      input_summary: 'reads /etc/hosts'
+    }
+    expect(payload).toEqual({
+      conversation_id: 'conv-1',
+      turn_id: 'turn-1',
+      tool_use_id: 'tu-1',
+      name: 'Read',
+      input_summary: 'reads /etc/hosts'
+    })
   })
 })

@@ -81,6 +81,11 @@ export type DaemonEvent =
   // `conversation_id` is dropped at the emit (single active conversation). Consumed by the renderer
   // timeline bridge (#202) → `phase`, not the session store. No token, key, or raw frame.
   | { type: 'turnState'; state: WireTurnState }
+  // The tool-call arm (#217). Carries the four render fields (`conversation_id` dropped at the emit,
+  // single active conversation). Consumed by the renderer timeline bridge (#202) → a `toolCall` item,
+  // not the session store. `name` / `inputSummary` are opaque daemon display text the render slice
+  // (#218) must render as plain text. No token, key, or raw frame.
+  | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string }
   // The conversation-list arm (#139). Reuses the wire ConversationSummary row type verbatim (the
   // messagesReceived precedent) — snake_case, order preserved from the wire. Consumed by the
   // conversation-list store (#208), not the session store, so the session bridge maps it to `null`.

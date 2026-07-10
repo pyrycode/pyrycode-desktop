@@ -32,6 +32,7 @@ import type {
   AssistantDeltaPayload,
   TurnEndPayload,
   TurnStatePayload,
+  ToolUsePayload,
   ConversationSummary
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
@@ -76,6 +77,11 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * drives the timeline `phase` (#202). The consumer carries only `state` onward (dropping
  * `conversation_id`); the fail-closed `state` enum check here is the boundary this slice defends.
  *
+ * The `tool-use` kind (#217) carries the decoded ToolUsePayload — the tool-call enrichment that drives
+ * a durable `toolCall` timeline item (#202 / #121). The consumer carries the four render fields onward
+ * (dropping `conversation_id`); the fail-closed required-string presence here (five strings, no enum)
+ * is the boundary this slice defends. `name` / `input_summary` are opaque display text (like `stop_reason`).
+ *
  * The `conversations` kind (#139) carries the decoded ConversationSummary[] (order preserved from the
  * wire). Like `chunk`, a single reply narrows to a whole list; the consumer forwards it verbatim as
  * one `conversationsReceived` event — no field is a secret, so nothing is dropped.
@@ -90,6 +96,7 @@ export type InboundDaemonMessage =
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
+  | { kind: 'tool-use'; toolUse: ToolUsePayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
@@ -288,6 +295,26 @@ function parseTurnStatePayload(payload: unknown): TurnStatePayload {
 }
 
 /**
+ * Narrow an opaque payload into a ToolUsePayload (#217). Fail-closed like parseTurnEndPayload: five
+ * required strings (`conversation_id` / `turn_id` / `tool_use_id` / `name` / `input_summary`), unknown
+ * keys tolerated but not copied, category-only error messages (no field value interpolated — `name` /
+ * `input_summary` could echo tool content). Unlike parseTurnStatePayload there is NO enum: the
+ * fail-closed defence is required-string presence, and requireString covers missing / non-string alike.
+ * `name` / `input_summary` are carried through as opaque display text, never interpreted here.
+ */
+function parseToolUsePayload(payload: unknown): ToolUsePayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed tool_use payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const turn_id = requireString(payload, 'turn_id')
+  const tool_use_id = requireString(payload, 'tool_use_id')
+  const name = requireString(payload, 'name')
+  const input_summary = requireString(payload, 'input_summary')
+  return { conversation_id, turn_id, tool_use_id, name, input_summary }
+}
+
+/**
  * Narrow an opaque payload into one ConversationSummary (#139). Fail-closed like parseMessagePayload:
  * every field is required-present — `name: null` is a valid VALUE (a distinct unnamed conversation,
  * AC2), and `is_promoted: false` / `is_archived: false` are valid values (an ad-hoc discussion /
@@ -449,6 +476,21 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'turn-state', turnState }
+    }
+    case 'tool_use': {
+      // Narrow BEFORE logging so a malformed frame (a missing / non-string field) throws first and
+      // leaves no record. No decoded field (name / input_summary / tool_use_id / turn_id /
+      // conversation_id) is logged — only the frame's byte length + one-way hash, reusing the existing
+      // content-free field set. `name` / `input_summary` are carried onward by the consumer (the render
+      // payload, #218), but they never enter the diagnostic log.
+      const toolUse = parseToolUsePayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'tool_use',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'tool-use', toolUse }
     }
     case 'conversations': {
       // Narrow BEFORE logging so a malformed reply (a bad row, a non-array) throws first and leaves no

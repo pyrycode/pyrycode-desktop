@@ -68,6 +68,11 @@ function encodeTurnState(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 13, type: 'turn_state', ts: FIXED_TS, payload })
 }
 
+/** A `tool_use` envelope's plaintext bytes, wrapping an arbitrary payload (#217). */
+function encodeToolUse(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 14, type: 'tool_use', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -99,6 +104,15 @@ const TURN_END = {
 const TURN_STATE = {
   conversation_id: 'conv-1',
   state: 'thinking'
+}
+
+/** A fully-populated, well-formed tool_use payload (#217). */
+const TOOL_USE = {
+  conversation_id: 'conv-1',
+  turn_id: 'turn-1',
+  tool_use_id: 'tu-1',
+  name: 'Read',
+  input_summary: 'reads /etc/hosts'
 }
 
 /** A well-formed conversation summary with a string name — a saved channel (#139). */
@@ -605,6 +619,54 @@ describe('parseInboundMessage — turn_state fail-closed (#214)', () => {
   })
 })
 
+describe('parseInboundMessage — tool_use recognition (#217, additive)', () => {
+  it('narrows a full tool_use into { kind: tool-use } carrying all five fields verbatim', () => {
+    expect(parseInboundMessage(encodeToolUse(TOOL_USE))).toEqual({
+      kind: 'tool-use',
+      toolUse: TOOL_USE
+    })
+  })
+
+  it('drops unknown server keys, keeping only the five known tool_use fields (forward-compat)', () => {
+    const withExtras = { ...TOOL_USE, raw_input: '{"path":"/etc/hosts"}', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeToolUse(withExtras))).toEqual({
+      kind: 'tool-use',
+      toolUse: TOOL_USE
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — tool_use fail-closed (#217)', () => {
+  it('throws when any single field is absent (never a partial)', () => {
+    for (const field of ['conversation_id', 'turn_id', 'tool_use_id', 'name', 'input_summary'] as const) {
+      const { [field]: _dropped, ...missing } = TOOL_USE
+      expect(() => parseInboundMessage(encodeToolUse(missing))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any single field is a non-string (number, object, null)', () => {
+    const bad: unknown[] = [
+      { ...TOOL_USE, name: 42 },
+      { ...TOOL_USE, input_summary: {} },
+      { ...TOOL_USE, tool_use_id: null },
+      { ...TOOL_USE, turn_id: ['a'] },
+      { ...TOOL_USE, conversation_id: 7 }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeToolUse(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a tool_use payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeToolUse('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeToolUse(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -891,6 +953,44 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
   it('does NOT log on a malformed turn_state throw path (#214)', () => {
     const { log, lines } = captureLog()
     expect(() => parseInboundMessage(encodeTurnState({ ...TURN_STATE, state: 'done' }), log)).toThrow(
+      WireDecodeError
+    )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a tool_use content-free, never a decoded field (#217)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_TURN = 'secret-turn-id'
+    const SECRET_TU = 'secret-tool-use-id'
+    const SECRET_NAME = 'secret-tool-name'
+    const SECRET_SUMMARY = 'secret-input-summary'
+    const plaintext = encodeToolUse({
+      conversation_id: SECRET_CONV,
+      turn_id: SECRET_TURN,
+      tool_use_id: SECRET_TU,
+      name: SECRET_NAME,
+      input_summary: SECRET_SUMMARY
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('tool_use')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_CONV, SECRET_TURN, SECRET_TU, SECRET_NAME, SECRET_SUMMARY]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed tool_use throw path (#217)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeToolUse({ ...TOOL_USE, name: 42 }), log)).toThrow(
       WireDecodeError
     )
     expect(lines).toHaveLength(0)

@@ -224,6 +224,11 @@ function turnStatePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'turn_state', ts: FIXED_TS, payload })
 }
 
+/** A `tool_use` plaintext, wrapping an arbitrary payload (#217). */
+function toolUsePlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'tool_use', ts: FIXED_TS, payload })
+}
+
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
 function errorPlaintext(): Uint8Array {
   return encodeEnvelope({
@@ -1144,6 +1149,65 @@ describe('createDaemonConnection — turn_state stream (#214)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: turnStatePlaintext({ conversation_id: 'conv-1', state: 'done' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — tool_use stream (#217)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound tool_use into one toolUse carrying the four camelCase fields (conversation_id dropped)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: toolUsePlaintext({
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        tool_use_id: 'tu-1',
+        name: 'Read',
+        input_summary: 'reads /etc/hosts'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([
+      {
+        type: 'toolUse',
+        turnId: 'turn-1',
+        toolUseId: 'tu-1',
+        name: 'Read',
+        inputSummary: 'reads /etc/hosts'
+      }
+    ])
+    // conversation_id is dropped at the choke point (single active conversation; #202 scopes it).
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('drops a malformed tool_use without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: toolUsePlaintext({
+          conversation_id: 'conv-1',
+          turn_id: 'turn-1',
+          tool_use_id: 'tu-1',
+          name: 'Read'
+          // input_summary missing → fail closed
+        })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

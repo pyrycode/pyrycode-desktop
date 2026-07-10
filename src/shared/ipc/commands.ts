@@ -53,9 +53,13 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * whose `payload` reuses the wire CreateConversationPayload (three nullable-and-present fields, all
  * server-defaultable — no secret); and `setSessionSettings` (#263), whose `payload` reuses the wire
  * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
- * presence contract is applied main-side by the builder, not carried here). No member exposes a field
- * that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only wire types (or
- * a token-excluded derivative), the bare ones carry nothing.
+ * presence contract is applied main-side by the builder, not carried here) and additionally carries a
+ * `changeId` (#261): a renderer-minted, client-internal correlation string riding ALONGSIDE `payload` (a
+ * top-level sibling, NEVER a field inside the wire payload — the builder consumes only `payload`, so the
+ * key stays off the wire, mirroring how the composer mints `message_id` main-side). `changeId` is an
+ * opaque correlation key, never a token/key/raw frame and never serialized onto the wire. No member
+ * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
+ * wire types (or a token-excluded derivative), the bare ones carry nothing.
  *
  * Extend additively (connect/disconnect) when their transport tickets land — and add a
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
@@ -69,7 +73,7 @@ export type RendererCommand =
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
   | { type: 'cancelModal'; payload: ModalCancelPayload }
   | { type: 'createConversation'; payload: CreateConversationPayload }
-  | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload }
+  | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -127,7 +131,14 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'createConversation':
       return 'payload' in value && isCreateConversationPayload(value.payload)
     case 'setSessionSettings':
-      return 'payload' in value && isSetSessionSettingsPayload(value.payload)
+      // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
+      // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.
+      return (
+        'payload' in value &&
+        isSetSessionSettingsPayload(value.payload) &&
+        'changeId' in value &&
+        typeof value.changeId === 'string'
+      )
     default:
       return false
   }

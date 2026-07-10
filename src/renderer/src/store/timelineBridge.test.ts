@@ -141,7 +141,7 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       },
       { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' },
       { type: 'sessionTransition', newSessionId: 'sess-2' },
-      { type: 'sessionSettingsUpdated', sessionId: 'sess-2' },
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-x' },
       { type: 'modalAnswerRejected', modalId: 'mdl-1' }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()

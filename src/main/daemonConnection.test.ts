@@ -260,9 +260,16 @@ function sessionTransitionPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'session_transition', ts: FIXED_TS, payload })
 }
 
-/** A `session_settings_updated` plaintext, wrapping an arbitrary payload (#264). */
-function sessionSettingsUpdatedPlaintext(payload: unknown): Uint8Array {
-  return encodeEnvelope({ id: 3, type: 'session_settings_updated', ts: FIXED_TS, payload })
+/** A `session_settings_updated` plaintext, wrapping an arbitrary payload (#264). The optional
+ *  `inReplyTo` rides the ENVELOPE (not the payload) — the #261 request↔reply correlation key. */
+function sessionSettingsUpdatedPlaintext(payload: unknown, inReplyTo?: number): Uint8Array {
+  return encodeEnvelope({
+    id: 3,
+    type: 'session_settings_updated',
+    ts: FIXED_TS,
+    payload,
+    ...(inReplyTo !== undefined ? { in_reply_to: inReplyTo } : {})
+  })
 }
 
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
@@ -1331,7 +1338,7 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
   })
 })
 
-describe('createDaemonConnection — session_settings_updated stream (#264)', () => {
+describe('createDaemonConnection — session_settings_updated correlation (#261, reworks #264)', () => {
   /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
   async function connected(): Promise<ReturnType<typeof build>> {
     const ctx = build()
@@ -1341,52 +1348,164 @@ describe('createDaemonConnection — session_settings_updated stream (#264)', ()
     return ctx
   }
 
-  it('decodes an inbound session_settings_updated into one sessionSettingsUpdated carrying sessionId', async () => {
+  it('ignores a reply whose in_reply_to matches no pending change — no confirmed event (AC3 fail-closed)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
+    // No prior setSessionSettings send: the reply's in_reply_to correlates to nothing, so it is
+    // ignored — no coercion, no confirmed event (a hostile daemon cannot forge a confirmation).
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'sess-2' }, 99)
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([])
+  })
+
+  it('correlates a reply by in_reply_to to its pending change and emits the confirmed event with the changeId (AC1/AC2)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    // The daemon echoes the request envelope id as in_reply_to (pyrycode#845).
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'sess-2' }, id)
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-1' }
+    ])
+  })
+
+  it('ignores a reply with an absent in_reply_to even while a change is outstanding (fail-closed before lookup)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const before = emitted(sink).length
+
+    // A reply that omits in_reply_to cannot correlate — the undefined short-circuits before the map
+    // lookup, so it is ignored despite the outstanding pending change.
     drivers[0].emit({
       type: 'message',
       plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'sess-2' })
     })
 
-    expect(emitted(sink).slice(before)).toEqual([
-      { type: 'sessionSettingsUpdated', sessionId: 'sess-2' }
-    ])
+    expect(emitted(sink).slice(before)).toEqual([])
   })
 
-  it('emits a fresh literal — only type + sessionId cross IPC, no in_reply_to and no spurious echoed key', async () => {
-    const { sink, drivers } = await connected()
+  it('emits a fresh literal — only type + sessionId + changeId cross IPC, never in_reply_to or a spurious echoed key (AC2 no-echo)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-3' }, 'change-1')
+    const id = decodeEnvelope(drivers[0].sent[0]).id
     const before = emitted(sink).length
 
-    // A hostile frame carrying a spurious echoed model / reason / in_reply_to must NOT ride the arm.
+    // A hostile frame echoing a spurious model / in_reply_to onto the PAYLOAD must not ride the arm;
+    // the emitted event carries the CLIENT-minted changeId, never the wire in_reply_to routing id.
     drivers[0].emit({
       type: 'message',
-      plaintext: sessionSettingsUpdatedPlaintext({
-        session_id: 'sess-3',
-        model: 'claude-opus-4-8',
-        in_reply_to: 42
-      })
+      plaintext: sessionSettingsUpdatedPlaintext(
+        { session_id: 'sess-3', model: 'claude-opus-4-8', in_reply_to: 42 },
+        id
+      )
     })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'sessionSettingsUpdated', sessionId: 'sess-3' }])
-    // The emitted event has exactly the two keys — no in_reply_to / inReplyTo, no echoed key.
-    expect(Object.keys(events[0]).sort()).toEqual(['sessionId', 'type'])
+    expect(events).toEqual([
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-3', changeId: 'change-1' }
+    ])
+    // Exactly the three keys — no in_reply_to / inReplyTo, no echoed key. Load-bearing regression pin.
+    expect(Object.keys(events[0]).sort()).toEqual(['changeId', 'sessionId', 'type'])
     const serialized = JSON.stringify(events)
     for (const dropped of ['in_reply_to', 'inReplyTo', 'model', 'claude-opus-4-8']) {
       expect(serialized).not.toContain(dropped)
     }
   })
 
-  it('drops a malformed session_settings_updated without emitting or throwing (fail-closed)', async () => {
-    const { sink, drivers } = await connected()
+  it('distinguishes two outstanding changes to the SAME session by changeId, replies in either order (AC4)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-x' }, 'change-1')
+    connection.setSessionSettings({ session_id: 'sess-x' }, 'change-2')
+    const id1 = decodeEnvelope(drivers[0].sent[0]).id
+    const id2 = decodeEnvelope(drivers[0].sent[1]).id
+    const before = emitted(sink).length
+
+    // Replies arrive REVERSED; each confirmed event still carries the exact matching changeId, so the
+    // renderer can tell two same-session_id changes apart.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'sess-x' }, id2)
+    })
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'sess-x' }, id1)
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-x', changeId: 'change-2' },
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-x', changeId: 'change-1' }
+    ])
+  })
+
+  it('clears the pending map on reconnect — a reply for an abandoned change emits nothing (AC5)', async () => {
+    const ctx = await connected()
+
+    ctx.connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const id = decodeEnvelope(ctx.drivers[0].sent[0]).id
+
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = emitted(ctx.sink).length
+
+    // dial() abandoned the outstanding change; a reply echoing the old id (ids also recycle from 2)
+    // correlates to nothing on the fresh connection — no stale correlation survives.
+    ctx.drivers[1].emit({
+      type: 'message',
+      plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'sess-2' }, id)
+    })
+
+    expect(emitted(ctx.sink).slice(before)).toEqual([])
+  })
+
+  it('drops a malformed session_settings_updated without emitting or throwing, even with a pending change (fail-closed)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const id = decodeEnvelope(drivers[0].sent[0]).id
     const before = sink.webContents.send.mock.calls.length
 
+    // A malformed payload (no session_id) throws in the decoder and is caught BEFORE correlation — no
+    // event, no throw, even though the in_reply_to matches an outstanding change.
     expect(() =>
-      drivers[0].emit({ type: 'message', plaintext: sessionSettingsUpdatedPlaintext({}) })
+      drivers[0].emit({ type: 'message', plaintext: sessionSettingsUpdatedPlaintext({}, id) })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('records no pending entry when the send throws — a later matching reply emits nothing', async () => {
+    const { connection, sink, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    // The send throws (caught); the pendingSettings.set that FOLLOWS the send never runs — no phantom
+    // entry (the answerModal record-after-send precedent, #248).
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const before = emitted(sink).length
+
+    // The would-be minted id is 2 (fresh connect starts nextEnvelopeId at 2); echoing it correlates to
+    // nothing because no pending entry was recorded.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsUpdatedPlaintext({ session_id: 'sess-2' }, 2)
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([])
   })
 
   it('leaves the coarse message / message_chunk path untouched (no regression)', async () => {
@@ -1897,14 +2016,14 @@ describe('createDaemonConnection — setSessionSettings (outbound set_session_se
   it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
     const { connection, drivers } = build()
 
-    expect(() => connection.setSessionSettings(PARTIAL)).not.toThrow()
+    expect(() => connection.setSessionSettings(PARTIAL, 'change-1')).not.toThrow()
     expect(drivers).toHaveLength(0)
   })
 
   it('after handshake-complete, forwards one set_session_settings envelope with id 2, ts, and the payload', async () => {
     const { connection, drivers } = await connected()
 
-    connection.setSessionSettings(PARTIAL)
+    connection.setSessionSettings(PARTIAL, 'change-1')
 
     expect(drivers[0].sent).toHaveLength(1)
     const envelope = decodeEnvelope(drivers[0].sent[0])
@@ -1912,14 +2031,18 @@ describe('createDaemonConnection — setSessionSettings (outbound set_session_se
     expect(envelope.id).toBe(2)
     expect(envelope.ts).toBe(FIXED_TS)
     // The present zero-value (yolo:false) crosses; the unset optionals are absent (builder contract).
+    // This assertion also doubles as the "changeId never rides the wire" check (#261): the client-minted
+    // 'change-1' correlation key is NOT in the payload and NOT on the envelope — the builder reads only
+    // `payload`, so the key stays IPC-internal.
     expect(envelope.payload).toEqual({ session_id: 'sess-a', yolo: false })
+    expect(JSON.stringify(drivers[0].sent[0])).not.toContain('change-1')
   })
 
   it('shares the one envelope-id counter with send (no second counter)', async () => {
     const { connection, drivers } = await connected()
 
     connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
-    connection.setSessionSettings(PARTIAL)
+    connection.setSessionSettings(PARTIAL, 'change-1')
 
     expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
     expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
@@ -1931,7 +2054,7 @@ describe('createDaemonConnection — setSessionSettings (outbound set_session_se
     await tick()
     drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
-    expect(() => connection.setSessionSettings(PARTIAL)).not.toThrow()
+    expect(() => connection.setSessionSettings(PARTIAL, 'change-1')).not.toThrow()
   })
 
   it('drops an over-cap payload: no throw, no frame, and the id is not consumed', async () => {
@@ -1940,12 +2063,12 @@ describe('createDaemonConnection — setSessionSettings (outbound set_session_se
     // A payload whose serialized envelope exceeds MAX_PLAINTEXT_BYTES makes the builder throw
     // WireEncodeError; the method catches it (parity #490) and advances no id.
     expect(() =>
-      connection.setSessionSettings({ session_id: 'x'.repeat(MAX_PLAINTEXT_BYTES + 1) })
+      connection.setSessionSettings({ session_id: 'x'.repeat(MAX_PLAINTEXT_BYTES + 1) }, 'change-1')
     ).not.toThrow()
     expect(drivers[0].sent).toHaveLength(0)
 
     // The next successful send still gets id 2 — the dropped over-cap build consumed nothing.
-    connection.setSessionSettings(PARTIAL)
+    connection.setSessionSettings(PARTIAL, 'change-2')
     expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
   })
 })

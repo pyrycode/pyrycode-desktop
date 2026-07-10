@@ -263,9 +263,10 @@ app.whenReady().then(() => {
         return
       case 'setSessionSettings':
         // Direct to the connection method (mirrors requestSnapshot), no orchestrator. Sends
-        // set_session_settings; the daemon replies with one session_settings_updated (decoded by #264).
-        // Inert no-op when not connected (#263).
-        connection.setSessionSettings(command.payload)
+        // set_session_settings; the daemon replies with one session_settings_updated (decoded by #264,
+        // correlated by #261). The renderer-minted `changeId` rides through so main can match the reply
+        // back to this change (never onto the wire). Inert no-op when not connected (#263).
+        connection.setSessionSettings(command.payload, command.changeId)
         return
       case 'requestDebugBundle':
         downloader.request()

@@ -93,8 +93,12 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The `session-settings-updated` kind (#264) carries the decoded SessionSettingsUpdatedPayload — the
  * daemon's confirmation that a `set_session_settings` (#263) request landed. It carries ONLY `session_id`
  * (the addressing key, a routing id not a secret); the reply echoes no settings. The fail-closed defence
- * is a single required `session_id` string (no enum, no nullable). The consumer emits a fresh literal
- * carrying only `sessionId`; its real consumer is #261 / #256 (correlation / store), not yet built.
+ * is a single required `session_id` string (no enum, no nullable). It ALSO carries the optional
+ * `inReplyTo` — the numeric `Envelope.in_reply_to` routing id (#261) already surfaced by decodeEnvelope,
+ * propagated (not re-decoded) so the consumer (#261) can correlate the reply back to its originating
+ * `set_session_settings` request. `inReplyTo` is `undefined` when the frame omits `in_reply_to`, which
+ * makes correlation fail closed downstream. The consumer emits `{ sessionId, changeId }` (the client
+ * changeId, never the wire in_reply_to); its store consumer is #256, not yet built.
  *
  * The `tool-use` kind (#217) carries the decoded ToolUsePayload — the tool-call enrichment that drives
  * a durable `toolCall` timeline item (#202 / #121). The consumer carries the four render fields onward
@@ -135,7 +139,11 @@ export type InboundDaemonMessage =
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
-  | { kind: 'session-settings-updated'; sessionSettingsUpdated: SessionSettingsUpdatedPayload }
+  | {
+      kind: 'session-settings-updated'
+      sessionSettingsUpdated: SessionSettingsUpdatedPayload
+      inReplyTo?: number
+    }
   | { kind: 'tool-use'; toolUse: ToolUsePayload }
   | { kind: 'tool-result'; toolResult: ToolResultPayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
@@ -696,7 +704,8 @@ export function parseInboundMessage(
     case 'session_settings_updated': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-string `session_id`) throws first
       // and leaves no record. No decoded field (session_id) is logged — only the frame's byte length +
-      // one-way hash, reusing the existing content-free field set.
+      // one-way hash, reusing the existing content-free field set. The numeric `in_reply_to` is a
+      // routing id, not logged (no new DiagnosticEvent field, so #131's renderer pin is untouched).
       const sessionSettingsUpdated = parseSessionSettingsUpdatedPayload(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',
@@ -704,7 +713,9 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'session-settings-updated', sessionSettingsUpdated }
+      // Propagate the ALREADY-decoded Envelope.in_reply_to (#261) — do not re-decode. `undefined` when
+      // the frame omits it, which makes the consumer's correlation fail closed.
+      return { kind: 'session-settings-updated', sessionSettingsUpdated, inReplyTo: envelope.in_reply_to }
     }
     case 'tool_use': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field) throws first and

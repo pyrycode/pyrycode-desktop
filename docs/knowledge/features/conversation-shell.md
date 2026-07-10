@@ -37,7 +37,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── MessageThread             .conversation__thread (scroll region, the coarse `message` path)
 │   └── MessageBubble × N     .message-row / .bubble
 ├── Timeline                  .conversation__thread (null when empty, the structured-stream path, #203)
-│   └── TimelineRow × N       .message-row--daemon / .bubble--daemon (assistantText only)
+│   └── TimelineRow × N       .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218)
 ├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
 │   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…")
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
@@ -382,7 +382,8 @@ bridges' hard `assertNever`, see [#203 codebase notes § Patterns established](.
 - `assistantText` → one bubble, text as React children (never `dangerouslySetInnerHTML` — HTML inside
   a delta renders as visible characters, discharging #199's untrusted-text handoff), carrying
   `data-thread-role="assistant"` as the test hook (`MessageThread`'s `data-message-role` counterpart).
-- `toolCall` → `null` (no source until #205/#206 — a real union member, not yet renderable).
+- `toolCall` → the pending tool-row chip ([#218](#pending-tool-call-row-218), below) — no longer a
+  no-op as of that ticket; the resolved success/error treatment is #206's.
 - `turnBoundary` → `null` (structural only; Figma has no per-turn divider).
 
 **Streaming cursor** (Figma `16:56`, glyph `▎` U+258E): a trailing `<span class="bubble__cursor"
@@ -443,6 +444,49 @@ region (`role="status"`), so a screen reader won't announce it appearing/disappe
 #179 or the desktop-design pass. See [#215 codebase notes](../codebase/215.md) for the full design,
 patterns established, and open questions.
 
+`Timeline`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md): a compact chip —
+tool name and one-line input summary — replaces the earlier `case 'toolCall': return null` no-op, at
+50% opacity for the unresolved (`result: null`) state. Also dormant until #179. See
+[Pending tool-call row](#pending-tool-call-row-218) below.
+
+### Pending tool-call row (#218)
+
+The render half of the `toolCall` `ThreadItem` (the transport half, [#217](../codebase/217.md), decodes
+the daemon's `tool_use` stream into the item; this ticket only teaches `TimelineRow` to draw it).
+Split from #205 alongside #217, mirroring the transport/render split every #199-family slice has taken.
+
+`TimelineRow`'s `case 'toolCall'` (previously `return null`) now renders a compact bordered chip —
+Figma node `16:28` — left-aligned in the thread, in the reducer's arrival order beside the
+`assistantText` bubbles:
+
+```html
+<div class="tool-row">
+  <div class="tool-row__chip" data-thread-role="tool">
+    <span class="tool-row__name">{item.name}</span>
+    <span class="tool-row__summary">{item.inputSummary}</span>
+  </div>
+</div>
+```
+
+`name` and `inputSummary` — the daemon's untrusted `tool_use` précis, flagged for plain-text-only
+rendering back at the #217 decode boundary — are React children (auto-escaped), never
+`dangerouslySetInnerHTML`, the identical posture to the `assistantText` arm one case up.
+`data-thread-role="tool"` (not `"assistant"`) is the render's own test hook and deliberately keeps
+`threadBubbleCount` (which matches only `"assistant"`) at 0 for tool rows — a tool row is not a
+message bubble. `Timeline`'s array-index key strategy is untouched; `toolUseId` stays on the item,
+unread here, reserved for [#206](https://github.com/pyrycode/pyrycode-desktop/issues/206)'s result
+correlation.
+
+This is the **pending** (`result: null`) treatment only — the whole `.tool-row` sits at 50% opacity,
+the unresolved-state dimming. #206 fills `result` and owns lifting (or overriding) that dimming plus
+the success/error visual; this ticket's chip styling stays untouched by that follow-up. Every value in
+the three new `.tool-row*` CSS rules is a token (`--font-mono`, `--color-tertiary`,
+`--color-surface-container`, `--color-outline-variant`, `--color-on-surface-variant`,
+`--text-body-small-*`, `--space-2`/`--space-3`, `--radius-sm`) — no hex/rgb/px literal. Dormant until
+#179 flips `interactive` (no `tool_use` frames arrive while it's off), the same posture as
+`Timeline`/`ThinkingIndicator`. See [#218 codebase notes](../codebase/218.md) for the full design and
+patterns established.
+
 ## Seams (bound + still open)
 
 - **`onBack?: () => void`** — **bound in [#140](../codebase/140.md).** Optional, gated exactly like `onUnpaired?`; wired by the [paired shell](paired-shell.md) when this screen is mounted as its `thread` view, absent for a bare `<ConversationScreen />`. See [Back control](#back-control-140) above.
@@ -451,7 +495,7 @@ patterns established, and open questions.
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
-- **`Timeline({ items })`** — **bound in [#203](../codebase/203.md).** A second, independent thread beside `MessageThread`, reading the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Inert (empty, `null`) in production until #179 flips `interactive`. See [Structured-stream timeline render](#structured-stream-timeline-render-203) above.
+- **`Timeline({ items })`** — **bound in [#203](../codebase/203.md).** A second, independent thread beside `MessageThread`, reading the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Inert (empty, `null`) in production until #179 flips `interactive`. See [Structured-stream timeline render](#structured-stream-timeline-render-203) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above.
 - **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. Inert (`null`) in production until #179 flips `interactive`. See [Thinking indicator](#thinking-indicator-215) above.
 
 ## Edge cases and limitations
@@ -471,9 +515,9 @@ patterns established, and open questions.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`
-- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215)
+- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip now renders (#218, transport #217)
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

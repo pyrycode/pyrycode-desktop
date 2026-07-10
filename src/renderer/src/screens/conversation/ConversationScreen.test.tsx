@@ -115,23 +115,78 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('second turn'))
   })
 
-  it('renders a toolCall as a safe no-op — no throw, no assistant bubble for it (its render is #205/#206)', () => {
+  // #218: the pending tool row (Figma node 16-28) — the compact chip carrying the tool name and its
+  // one-line input summary, distinct from the daemon message bubble. Supersedes the deferred no-op
+  // that #217's transport slice fed but #203 could not yet draw. `result: null` is the pending state;
+  // the resolved success/error treatment is #206.
+  it('renders a pending tool row — the tool name and its input summary, not an assistant bubble', () => {
     const items: ThreadItem[] = [
       {
         kind: 'toolCall',
         turnId: 't1',
         toolUseId: 'u1',
-        name: 'Read',
-        inputSummary: 'file.ts',
+        name: 'read_file',
+        inputSummary: 'kitchenclaw/db/schema.ts · 184 lines',
         result: null
       }
     ]
-    let markup = ''
-    expect(() => {
-      markup = renderToStaticMarkup(<Timeline items={items} />)
-    }).not.toThrow()
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    // The compact tool chip, hooked by its own thread role — NOT the assistant daemon bubble.
+    expect(markup).toContain('tool-row__chip')
+    expect(markup).toContain('data-thread-role="tool"')
+    // Both daemon-supplied runs render verbatim.
+    expect(markup).toContain('read_file')
+    expect(markup).toContain('kitchenclaw/db/schema.ts · 184 lines')
+    // A tool row is not an assistant bubble and carries no streaming cursor.
     expect(threadBubbleCount(markup)).toBe(0)
     expect(markup).not.toContain(CURSOR)
+  })
+
+  // #218/AC4: `name` and `inputSummary` are untrusted daemon strings rendered as inert React children
+  // (auto-escaped), the assistant-bubble posture one case up — never dangerouslySetInnerHTML, never
+  // markup/path interpretation. Both fields are exercised.
+  it('renders the tool name and summary as inert text, never live markup (AC4)', () => {
+    // No apostrophes — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
+    const items: ThreadItem[] = [
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: '<b>tool</b>',
+        inputSummary: '<i>path</i>',
+        result: null
+      }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('&lt;b&gt;tool&lt;/b&gt;')
+    expect(markup).toContain('&lt;i&gt;path&lt;/i&gt;')
+    expect(markup).not.toContain('<b>tool</b>')
+    expect(markup).not.toContain('<i>path</i>')
+  })
+
+  // #218/AC1: the reducer already interleaves a toolCall between assistantText items in arrival order
+  // (#121); the view renders that order as-is. The tool row sits between the two bubbles and neither
+  // reorders the list nor steals the cursor from the tail assistantText.
+  it('renders a toolCall row between assistant bubbles in array order, cursor only on the tail (AC1)', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: 'before tool' },
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'read_file',
+        inputSummary: 'schema.ts',
+        result: null
+      },
+      { kind: 'assistantText', turnId: 't1', text: 'after tool' }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(threadBubbleCount(markup)).toBe(2)
+    expect(markup.indexOf('before tool')).toBeLessThan(markup.indexOf('read_file'))
+    expect(markup.indexOf('read_file')).toBeLessThan(markup.indexOf('after tool'))
+    // Exactly one cursor, trailing the tail (last) assistantText — the tool row takes none.
+    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
+    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('after tool'))
   })
 
   it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {

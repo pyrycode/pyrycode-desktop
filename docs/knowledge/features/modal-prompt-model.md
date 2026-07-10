@@ -81,13 +81,23 @@ surface, returning `state.outstanding` by reference.
 
 ## Configuration and usage
 
-Nothing imports this module yet. The peeled follow-up (blocked-by #122) adds:
+Nothing imports this module yet. The vertical is decomposed into six slices (ADR 0009); the first has
+landed:
 
-- the modal wire types (`ModalShownPayload`/`ModalDismissedPayload`) and the transport decode;
-- the `modalShown`/`modalDismissed` `DaemonEvent` arms + the daemon-event bridge (wire snake_case →
-  this module's camelCase `ModalEvent`);
-- the interactive render of an outstanding `ModalPrompt` and the answer/cancel path;
-- the destructive second-confirm UX policy (client-side only — no wire signal exists for it).
+- **[#201](../codebase/201.md) (shipped)** — the modal wire types (`ModalShownPayload`/
+  `ModalDismissedPayload`/`WireModalOption`/`WireModalClass`/`WireModalSource`) and the fail-closed
+  transport decode, plus the `modalShown`/`modalDismissed` `DaemonEvent` arms. Field names/types
+  mirror this module's `ModalEvent` so the next slice's bridge is a thin snake→camel rename. **Both**
+  existing renderer bridges (session, timeline) discard the two arms as `null` — see [Daemon-event
+  channel](daemon-event-channel.md) / [Daemon-event bridge](daemon-event-bridge.md) / [Conversation
+  timeline store](conversation-timeline-store.md). This module itself is **untouched** by #201 — it
+  still has no wire-type import, no IPC, no consumer.
+- **#223 (next)** — the daemon-event bridge that actually maps the two arms onto `ModalEvent` and
+  dispatches into a new `modalStore.ts` Zustand container wrapping `reduceModal` — the consumer this
+  module's `ModalEvent` union has been the stable target contract for since #122.
+- the interactive render of an outstanding `ModalPrompt` (#224) and the answer/cancel path (#225);
+- the destructive second-confirm (#226) / surface-rejection (#227) UX policy (client-side only — no
+  wire signal exists for it).
 
 The `modalStore.ts` Zustand-container name is reserved for that follow-up, mirroring how
 [conversation timeline store](conversation-timeline-store.md) (`timelineStore.ts`, #202) wrapped
@@ -122,6 +132,12 @@ this store; the id-addressed array keeps each a small extension rather than a re
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — full rationale, every
   reducer arm's normative contract, and the Strangler-Fig coexistence decision.
 - [#122 codebase notes](../codebase/122.md) — implementation summary.
+- [#201 codebase notes](../codebase/201.md) — the transport slice: wire types, fail-closed decode, and
+  the `modalShown`/`modalDismissed` `DaemonEvent` arms this module's `ModalEvent` is the target
+  contract for; unblocks #223 (the bridge + `modalStore.ts` that actually consumes them).
+- [Daemon-event channel](daemon-event-channel.md) / [Daemon-event bridge](daemon-event-bridge.md) /
+  [Conversation timeline store](conversation-timeline-store.md) — where the two `DaemonEvent` arms
+  land today: real producer, zero consumer, both bridges discarding them as `null` until #223.
 - [Thread timeline (conversation model)](thread-timeline.md) — the #121/ADR 0008 sibling model this
   mirrors piece-for-piece (array + scan-by-id, same-reference no-churn, renderer-local event union,
   `…Store` container reserved for the follow-up).

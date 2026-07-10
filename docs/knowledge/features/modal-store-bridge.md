@@ -44,7 +44,7 @@ defend an unobserved need (the same call #202 made for the timeline store).
 ```ts
 translateModalEvent(event: DaemonEvent): ModalEvent | null
 // Owns exactly modalShown / modalDismissed, each rebuilt as a fresh named-field literal (never
-// `return event`, never a spread). Every other arm (15 of them) -> null via explicit fall-through,
+// `return event`, never a spread). Every other arm -> null via explicit fall-through,
 // then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeModal(onDaemonEvent, dispatch): () => void
@@ -59,8 +59,12 @@ useModalBridge(): void
 This is the **third** independent subscriber on the `onDaemonEvent` channel:
 [`daemonEventBridge`](daemon-event-bridge.md) owns the session arms, [`timelineBridge`](conversation-timeline-store.md)
 the interactive-stream arms, and this bridge owns exactly the two modal arms — all three are
-independently `assertNever`-guarded over the full 17-member `DaemonEvent` union, so a future arm is a
-compile error in all three files until each decides its mapping.
+independently `assertNever`-guarded over the full `DaemonEvent` union, so a future arm is a
+compile error in all three files until each decides its mapping. [#229](../codebase/229.md) proved this
+concretely: adding `toolResult` (the vertical's last transport arm) forced a seventh single-line no-op
+case here, the first time a new arm's true touchpoint floor (wire + decode + emit + event + **three**
+bridges) diverged from a spec written before this file existed as a third exhaustive subscriber — see
+[#229 codebase notes](../codebase/229.md) § Lessons learned.
 
 **The one detail that breaks the naive "clone `timelineBridge`" approach: the discriminant tag renames
 across the boundary.** Every arm `timelineBridge` owns (`assistantDelta`, `turnEnd`, `turnState`,
@@ -135,6 +139,9 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
 - [Conversation timeline store](conversation-timeline-store.md) — the direct structural precedent this
   store + bridge clones (DI-factory → singleton → hook, translate/subscribe/hook shape), and the
   second bridge that also nulls the two modal arms (its inverse-filter list, not its owned block).
+- [#229 codebase notes](../codebase/229.md) — the ticket that added `toolResult`, forcing this bridge's
+  seventh no-op case and demonstrating that a new `DaemonEvent` arm's touchpoint floor now includes all
+  three exhaustive bridges, not two.
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative reducer
   contract this store wraps without altering; reserves the `modalStore.ts` name for exactly this
   container.

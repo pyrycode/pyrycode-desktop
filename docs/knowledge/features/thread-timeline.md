@@ -16,8 +16,10 @@ blank-thread-critical slice that gates #179 (advertising the `interactive` capab
 (no render yet — the thinking indicator is a still-open sibling slice). [#217](../codebase/217.md)
 (shipped) wired the `tool_use` transport → bridge chain, giving `reduceTimeline`'s pre-existing
 `toolUse` arm its first real feed — a `toolCall` `ThreadItem` now lands on `selectItems` in arrival
-order (no render yet — that is the sibling slice #218). `tool_result` transport + both render slices
-trail after.
+order (no render yet — that is the sibling slice #218). [#229](../codebase/229.md) (shipped) wired the
+`tool_result` transport → bridge chain, the vertical's last transport slice — giving `reduceTimeline`'s
+pre-existing `toolResult` arm its first real feed, resolving the correlated `toolCall`'s `result` in
+place via `fillResult` (no render yet — that is the sibling slice #230).
 
 Introduced in [#121](../codebase/121.md). Lives at
 `src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
@@ -119,7 +121,18 @@ Nothing imports this module yet.
   `turn_state`). `reduceTimeline`'s pre-existing `toolUse` arm (append a `toolCall`, `result: null`,
   splitting a turn's text) and `selectItems` are unmodified by this ticket; it only wires up a real
   feed. No render — the tool row is a still-open sibling slice (#218), and correlating a later
-  `tool_result` into `result` is a separate still-open ticket (#206).
+  `tool_result` into `result` is a separate still-open ticket (#206, later split into transport #229 +
+  render #230).
+- **[#229](../codebase/229.md) (shipped)** added the `tool_result` wire type, transport decode, and the
+  `toolResult` `DaemonEvent`/`ThreadEvent` arms — four required-string fields plus one required boolean
+  (`is_error`, via `requireBoolean` — the `yolo` #180 idiom, `false` is a value, not an absence).
+  `reduceTimeline`'s pre-existing `toolResult` arm and `fillResult` (below) are unmodified by this
+  ticket; it only wires up a real feed, **resolving** the correlated `toolCall`'s `result` in place
+  rather than appending a new item — the last transport slice of the vertical. No render — the
+  success/error visual is the still-open sibling slice (#230). Also the ticket that surfaced a cost:
+  by the time it shipped, [#223](../codebase/223.md) had added a **third** independent exhaustive
+  `DaemonEvent` switch (`modalBridge.ts`), so a new arm now forces a case in three renderer bridges, not
+  two — see [#229 codebase notes](../codebase/229.md) § Lessons learned.
 
 ## Edge cases and limitations
 
@@ -127,9 +140,11 @@ Nothing imports this module yet.
   the structured stream isn't receivable yet (desktop withholds the `interactive` capability until
   #179), so no orphan has been observed in practice. This absorbs a mid-turn-reconnect orphan (the
   `tool_use` fell before a replay cursor) without killing the timeline, but revisit if #202's
-  reconnect replay is shown to actually produce them.
+  reconnect replay is shown to actually produce them. The transport → bridge chain that can now feed a
+  real `tool_result` is wired as of #229; the no-op behavior itself is unchanged.
   - No corresponding test currently is left uncovered — both the orphan and duplicate cases are
-    unit-tested with `toBe` reference assertions.
+    unit-tested with `toBe` reference assertions (`timelineBridge.test.ts`, #229, driving a real store
+    end to end).
 - **`seq` is not consulted.** It's carried on `assistantDelta` for wire fidelity and a possible
   future monotonicity guard, but the reducer trusts arrival order — no reordering has been
   observed from the ordered Noise/WS transport.
@@ -170,6 +185,10 @@ Nothing imports this module yet.
 - [#217 codebase notes](../codebase/217.md) — the `tool_use` transport slice: wire types, decode
   (required-string presence, no enum), and the `toolUse` `DaemonEvent`/`ThreadEvent` arms; gave
   `reduceTimeline`'s `toolUse` arm its first real feed, appending a `toolCall` item onto `selectItems`.
+- [#229 codebase notes](../codebase/229.md) — the `tool_result` transport slice, the vertical's last:
+  wire types, decode (four required strings + one `requireBoolean`), and the `toolResult`
+  `DaemonEvent`/`ThreadEvent` arms; gave `reduceTimeline`'s pre-existing `fillResult` correlation its
+  first real feed, resolving a `toolCall`'s `result` in place on `selectItems`.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

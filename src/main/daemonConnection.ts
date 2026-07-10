@@ -319,6 +319,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               inputSummary: inbound.toolUse.input_summary
             })
             return
+          case 'tool-result':
+            // The tool-result data path (#229). snake→camel here; `conversation_id` is DROPPED (single
+            // active conversation; #202's bridge scopes identity). A fresh literal with the four named
+            // fields, never a spread of the decoded payload, so only the render fields cross IPC. The
+            // timeline bridge (#202), not the session store, folds this through `fillResult` to resolve
+            // the correlated `toolCall`'s result in place. `isError` is a boolean; `false` is a value.
+            emitDaemonEvent(sink, {
+              type: 'toolResult',
+              turnId: inbound.toolResult.turn_id,
+              toolUseId: inbound.toolResult.tool_use_id,
+              isError: inbound.toolResult.is_error,
+              resultSummary: inbound.toolResult.result_summary
+            })
+            return
           case 'conversations':
             // The conversation-list data path (#139). Emit a fresh literal reusing the already-minimal
             // decoded array — mirror messagesReceived, NOT the snapshot content-drop: there is nothing

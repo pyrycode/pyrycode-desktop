@@ -71,6 +71,26 @@ describe('translateTimelineEvent — the two owned arms', () => {
     // A fresh literal, not a pass-through of the DaemonEvent object.
     expect(translated).not.toBe(event)
   })
+
+  it('toolResult → a ThreadEvent toolResult with the same fields, a fresh object', () => {
+    const event: DaemonEvent = {
+      type: 'toolResult',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      isError: false,
+      resultSummary: 'read 12 lines'
+    }
+    const translated = translateTimelineEvent(event)
+    expect(translated).toEqual({
+      type: 'toolResult',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      isError: false,
+      resultSummary: 'read 12 lines'
+    })
+    // A fresh literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
 })
 
 describe('translateTimelineEvent — every other arm returns null (the inverse filter)', () => {
@@ -263,5 +283,67 @@ describe('subscribeTimeline', () => {
 
     const items = selectItems(store.getState())
     expect(items.map((i) => i.kind)).toEqual(['assistantText', 'toolCall', 'assistantText'])
+  })
+
+  it('AC3: a toolUse then a correlated toolResult fills the call result in place (isError false)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const sequence: DaemonEvent[] = [
+      { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' },
+      { type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: false, resultSummary: 'read 12 lines' }
+    ]
+    for (const event of sequence) bridge.emit(event)
+
+    const items = selectItems(store.getState())
+    expect(items).toHaveLength(1)
+    const item = items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(item.result).toEqual({ isError: false, resultSummary: 'read 12 lines' })
+  })
+
+  it('AC3: a correlated toolResult with isError:true fills an error result in place', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const sequence: DaemonEvent[] = [
+      { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Bash', inputSummary: 'rm -rf build/' },
+      { type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: true, resultSummary: 'permission denied' }
+    ]
+    for (const event of sequence) bridge.emit(event)
+
+    const item = selectItems(store.getState())[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(item.result).toEqual({ isError: true, resultSummary: 'permission denied' })
+  })
+
+  it('AC3: an orphan toolResult (no matching toolCall) is a deterministic no-op (same state ref)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({ type: 'toolResult', turnId: 'A', toolUseId: 'nope', isError: false, resultSummary: 'x' })
+
+    // No pending toolCall → fillResult returns the same array → the reducer returns the same state.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('AC3: a duplicate toolResult (call already resolved) is a no-op — result not overwritten', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    bridge.emit({ type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' })
+    bridge.emit({ type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: false, resultSummary: 'read 12 lines' })
+    const afterFirst = store.getState()
+
+    // A second toolResult for the same toolUseId — the call is already resolved, so it is a no-op.
+    bridge.emit({ type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: true, resultSummary: 'overwrite attempt' })
+
+    expect(store.getState()).toBe(afterFirst)
+    const item = selectItems(store.getState())[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(item.result).toEqual({ isError: false, resultSummary: 'read 12 lines' })
   })
 })

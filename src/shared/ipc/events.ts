@@ -89,6 +89,12 @@ export type DaemonEvent =
   // not the session store. `name` / `inputSummary` are opaque daemon display text the render slice
   // (#218) must render as plain text. No token, key, or raw frame.
   | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string }
+  // The tool-result arm (#229). Carries the four render fields (`conversation_id` dropped at the emit).
+  // Consumed by the renderer timeline bridge (#202), which folds it through `fillResult` to RESOLVE the
+  // correlated `toolCall`'s result in place — not the session store. `isError` is a boolean (`false` =
+  // success, a value); `resultSummary` is opaque daemon display text the render slice (#230) must render
+  // as plain text. No token, key, or raw frame.
+  | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   // The conversation-list arm (#139). Reuses the wire ConversationSummary row type verbatim (the
   // messagesReceived precedent) — snake_case, order preserved from the wire. Consumed by the
   // conversation-list store (#208), not the session store, so the session bridge maps it to `null`.

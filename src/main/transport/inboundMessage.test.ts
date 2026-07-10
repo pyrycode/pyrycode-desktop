@@ -73,6 +73,11 @@ function encodeToolUse(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 14, type: 'tool_use', ts: FIXED_TS, payload })
 }
 
+/** A `tool_result` envelope's plaintext bytes, wrapping an arbitrary payload (#229). */
+function encodeToolResult(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 17, type: 'tool_result', ts: FIXED_TS, payload })
+}
+
 /** A `modal_shown` envelope's plaintext bytes, wrapping an arbitrary payload (#201). */
 function encodeModalShown(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 15, type: 'modal_shown', ts: FIXED_TS, payload })
@@ -123,6 +128,15 @@ const TOOL_USE = {
   tool_use_id: 'tu-1',
   name: 'Read',
   input_summary: 'reads /etc/hosts'
+}
+
+/** A fully-populated, well-formed tool_result payload — a success (#229). */
+const TOOL_RESULT = {
+  conversation_id: 'conv-1',
+  turn_id: 'turn-1',
+  tool_use_id: 'tu-1',
+  is_error: false,
+  result_summary: 'read 12 lines'
 }
 
 /** A fully-populated, well-formed modal_shown payload with two ordered options (#201). */
@@ -697,6 +711,91 @@ describe('parseInboundMessage — tool_use fail-closed (#217)', () => {
   })
 })
 
+describe('parseInboundMessage — tool_result recognition (#229, additive)', () => {
+  it('narrows a full tool_result into { kind: tool-result } carrying all five fields verbatim', () => {
+    expect(parseInboundMessage(encodeToolResult(TOOL_RESULT))).toEqual({
+      kind: 'tool-result',
+      toolResult: TOOL_RESULT
+    })
+  })
+
+  it('decodes is_error:false as the value false, never as absent (the yolo #180 idiom)', () => {
+    const success = { ...TOOL_RESULT, is_error: false }
+    expect(parseInboundMessage(encodeToolResult(success))).toEqual({
+      kind: 'tool-result',
+      toolResult: success
+    })
+  })
+
+  it('decodes is_error:true as the value true (an errored tool)', () => {
+    const failed = { ...TOOL_RESULT, is_error: true, result_summary: 'permission denied' }
+    expect(parseInboundMessage(encodeToolResult(failed))).toEqual({
+      kind: 'tool-result',
+      toolResult: failed
+    })
+  })
+
+  it('decodes an empty result_summary as the value "", never as absent', () => {
+    const empty = { ...TOOL_RESULT, result_summary: '' }
+    expect(parseInboundMessage(encodeToolResult(empty))).toEqual({
+      kind: 'tool-result',
+      toolResult: empty
+    })
+  })
+
+  it('drops unknown server keys, keeping only the five known tool_result fields (forward-compat)', () => {
+    const withExtras = { ...TOOL_RESULT, raw_output: '{"lines":12}', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeToolResult(withExtras))).toEqual({
+      kind: 'tool-result',
+      toolResult: TOOL_RESULT
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — tool_result fail-closed (#229)', () => {
+  it('throws when any single field is absent (never a partial)', () => {
+    for (const field of ['conversation_id', 'turn_id', 'tool_use_id', 'is_error', 'result_summary'] as const) {
+      const { [field]: _dropped, ...missing } = TOOL_RESULT
+      expect(() => parseInboundMessage(encodeToolResult(missing))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any string field is a non-string (number, object, null)', () => {
+    const bad: unknown[] = [
+      { ...TOOL_RESULT, conversation_id: 7 },
+      { ...TOOL_RESULT, turn_id: ['a'] },
+      { ...TOOL_RESULT, tool_use_id: null },
+      { ...TOOL_RESULT, result_summary: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeToolResult(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when is_error is a non-boolean (a "true"/"false" string, number, null, object)', () => {
+    const bad: unknown[] = [
+      { ...TOOL_RESULT, is_error: 'true' }, // the string, not the boolean — a truthiness check would accept it
+      { ...TOOL_RESULT, is_error: 'false' },
+      { ...TOOL_RESULT, is_error: 1 },
+      { ...TOOL_RESULT, is_error: 0 },
+      { ...TOOL_RESULT, is_error: null },
+      { ...TOOL_RESULT, is_error: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeToolResult(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a tool_result payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeToolResult('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeToolResult(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — modal_shown recognition (#201, additive)', () => {
   it('narrows a full modal_shown into { kind: modal-shown } carrying all six fields verbatim', () => {
     expect(parseInboundMessage(encodeModalShown(MODAL_SHOWN))).toEqual({
@@ -1216,6 +1315,43 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() => parseInboundMessage(encodeToolUse({ ...TOOL_USE, name: 42 }), log)).toThrow(
       WireDecodeError
     )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a tool_result content-free, never a decoded field (#229)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_TURN = 'secret-turn-id'
+    const SECRET_TU = 'secret-tool-use-id'
+    const SECRET_SUMMARY = 'secret-result-summary'
+    const plaintext = encodeToolResult({
+      conversation_id: SECRET_CONV,
+      turn_id: SECRET_TURN,
+      tool_use_id: SECRET_TU,
+      is_error: true,
+      result_summary: SECRET_SUMMARY
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('tool_result')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_CONV, SECRET_TURN, SECRET_TU, SECRET_SUMMARY]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed tool_result throw path (#229)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeToolResult({ ...TOOL_RESULT, is_error: 'nope' }), log)
+    ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })
 

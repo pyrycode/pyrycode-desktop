@@ -7,7 +7,7 @@ import {
   selectStatus,
   type ConnectionStatus
 } from '../../store/sessionStore'
-import { useTimelineStore, selectItems } from '../../store/timelineStore'
+import { useTimelineStore, selectItems, selectPhase } from '../../store/timelineStore'
 import type { ThreadItem } from '../../store/threadTimeline'
 import { submitMessage, composerAvailability, shouldOfferRepair } from './composerSend'
 import { runUnpair } from './unpairAction'
@@ -47,6 +47,12 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
   // re-rendering unrelated facets. Inert in production until #179 flips `interactive` (the store stays
   // empty), so Timeline renders null and the layout is pixel-identical to today.
   const items = useTimelineStore(selectItems)
+  // #215: the coarse `phase` scalar, read beside the items slice (mirrors the selectItems → Timeline
+  // line above). The container derives the `isThinking` boolean and passes only that down, so no
+  // daemon-supplied string reaches the view (AC3 is a type-level guarantee, not a convention).
+  // Selecting only `phase` adds no meaningful churn — the container already re-renders per items delta.
+  // Inert in production until #179 flips `interactive` (phase stays `idle`), so the indicator is null.
+  const phase = useTimelineStore(selectPhase)
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. The StatusRow trigger sits between the thread and
@@ -58,6 +64,7 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
       <UnpairControl onUnpaired={onUnpaired} />
       <MessageThread messages={messages} />
       <Timeline items={items} />
+      <ThinkingIndicator isThinking={phase === 'thinking'} />
       <StatusRow onExpand={() => setSheetOpen(true)} />
       <Composer />
       <RepairControl onUnpaired={onUnpaired} />
@@ -169,6 +176,31 @@ function TimelineRow({
       // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.
       return null
   }
+}
+
+// #215: the thinking indicator — Timeline's twin over the coarse `phase` scalar rather than the
+// items list. The daemon opens a turn with `turn_state{thinking}` before any assistant_delta
+// (pyrycode #632), so during that window there are no timeline items and the thread shows nothing;
+// this affordance covers "the daemon is working, no text yet" — distinct from #203's streaming cursor
+// (which covers text already arriving on an assistantText tail). Pure props-in/markup-out and exported
+// so tests server-render an injected boolean with no store.
+//
+// Takes `isThinking: boolean`, NOT `phase: TurnPhase` — the boolean makes AC3 ("no daemon-supplied
+// string is rendered") a type-level guarantee: the view structurally cannot render a daemon string
+// because it never receives one. The container does the trivial `phase === 'thinking'` derivation.
+// The visible label is a client-owned constant, not `phase`. A plain boolean guard (no switch /
+// assertNever — there is no union to discriminate).
+//
+// isThinking false → null (zero layout footprint, AC2 — exactly like Timeline returning null on an
+// empty list); the interim treatment reuses the daemon-bubble surface with muted text (a transient
+// affordance), pending the deferred desktop-design pass (the mobile Figma has no thinking node).
+export function ThinkingIndicator({ isThinking }: { isThinking: boolean }): JSX.Element | null {
+  if (!isThinking) return null
+  return (
+    <div className="conversation__thinking">
+      <div className="bubble bubble--daemon bubble--thinking">Thinking…</div>
+    </div>
+  )
 }
 
 // The collapsed status row between the thread and the composer (Figma node 16-57) — the trigger that

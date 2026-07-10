@@ -4,6 +4,7 @@ import {
   ConversationScreen,
   MessageThread,
   Timeline,
+  ThinkingIndicator,
   StatusSheet,
   RepairPrompt
 } from './ConversationScreen'
@@ -144,6 +145,28 @@ describe('Timeline — the streamed assistant text', () => {
   })
 })
 
+// #215: the thinking indicator bound to the coarse `phase` scalar. ThinkingIndicator is the Timeline
+// twin over a boolean rather than a ThreadItem[] — pure (isThinking in, markup out) — so a
+// server-rendered string proves both the present affordance (thinking) and the zero-footprint absent
+// case. Boolean input, not `phase`: the view structurally cannot render a daemon-supplied string
+// (AC3). Injected boolean: no store, no IPC — the container's `thinking` branch is unreachable under
+// server render (zustand v5 reads getInitialState() → phase: 'idle'), so the "showing" assertion lives
+// here, exactly like Timeline's populated assertions.
+describe('ThinkingIndicator — the pre-text working affordance', () => {
+  it('is inert when not thinking — renders nothing (zero layout footprint, AC2)', () => {
+    expect(renderToStaticMarkup(<ThinkingIndicator isThinking={false} />)).toBe('')
+  })
+
+  it('shows the daemon-styled Thinking affordance while thinking', () => {
+    const markup = renderToStaticMarkup(<ThinkingIndicator isThinking={true} />)
+    // The stable test seam (the bubble__cursor role), the muted daemon-bubble treatment, and the
+    // client-owned static label — the ellipsis glyph … (U+2026), no apostrophe to survive escaping.
+    expect(markup).toContain('conversation__thinking')
+    expect(markup).toContain('bubble--thinking')
+    expect(markup).toContain('Thinking…')
+  })
+})
+
 // #177: the Run configuration host modal. StatusSheet is the pure, exported open-state chrome (the
 // MessageThread pattern) — server-render it directly to prove the handle/title/close/empty-body
 // shell. The open/dismiss toggle in ConversationScreen is trivial useState glue, unreachable under
@@ -235,6 +258,16 @@ describe('ConversationScreen — store binding', () => {
   it('mounts the empty timeline with no streaming cursor (the inert render slice, AC4)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('bubble__cursor')
+  })
+
+  // #215: the thinking indicator mounts against the idle timeline store (getInitialState phase:
+  // 'idle'), so isThinking is false and it renders nothing — the inert render slice, layout unchanged
+  // until #179 flips `interactive` (AC4). The analog of the "no bubble__cursor" smoke above; the
+  // showing path is proven on the pure ThinkingIndicator describe.
+  it('mounts the idle timeline with no thinking indicator (the inert render slice, AC4)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('conversation__thinking')
+    expect(markup).not.toContain('Thinking…')
   })
 
   it('renders the composer with a text input and an accessible send control', () => {

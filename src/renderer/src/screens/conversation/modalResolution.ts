@@ -5,7 +5,7 @@
 // these. This is where the AC4 guarded-send + unconditional-clear logic lives so it is unit-testable
 // under the `node` test environment (the view cannot be — no DOM to fire clicks).
 import { answerModalCommand, cancelModalCommand, type RendererCommand } from '@shared/ipc/commands'
-import type { ModalEvent } from '../../store/modalPrompts'
+import type { ModalEvent, ModalPrompt } from '../../store/modalPrompts'
 
 /**
  * The `outcome` a cancel records on the local `dismissed` event. The reduce ignores `outcome` (it
@@ -44,6 +44,41 @@ export function answerPrompt(modalId: string, optionId: string, deps: ModalResol
   }
 
   deps.dispatch({ type: 'dismissed', modalId, outcome: optionId, source: 'local' })
+}
+
+/**
+ * The two branches selectOption routes a just-clicked option to, injected so the gate stays pure and
+ * React-free (plain-spy tested, #226 AC3). The container binds `answer` to answerPrompt (the ungated
+ * straight-through send) and `requestConfirm` to the transient confirm state (hold pending a second
+ * confirm). selectOption itself sends and dispatches nothing.
+ */
+export interface SelectOptionDeps {
+  /** The default (fail-safe deny) path — resolve immediately, exactly as #237 did. */
+  answer: (optionId: string) => void
+  /** The deliberate-move-away path — hold the option pending a second confirm. */
+  requestConfirm: (optionId: string) => void
+}
+
+/**
+ * The client-side second-confirm gate (#226). There is NO machine-readable `destructive` signal on the
+ * wire (`class` is `permission | trust` only, ADR 0009), so "an allow answer needs a second confirm" is
+ * a pure UX policy on the answer path. The only signal available to classify "allow" is
+ * `prompt.defaultOptionId` (the fail-safe deny default): any deliberate move away from it — selecting a
+ * non-default option — is held pending confirm; the default resolves straight through, ungated. The
+ * degenerate single-option-is-default prompt (e.g. a single-option trust prompt) routes to `answer`,
+ * which is correct — the only choice IS the safe default, so nothing is gated. Sends/dispatches nothing
+ * itself; it only routes to one of the two injected effects.
+ */
+export function selectOption(
+  prompt: ModalPrompt,
+  optionId: string,
+  deps: SelectOptionDeps
+): void {
+  if (optionId === prompt.defaultOptionId) {
+    deps.answer(optionId)
+  } else {
+    deps.requestConfirm(optionId)
+  }
 }
 
 /**

@@ -580,10 +580,13 @@
 }
 
 /* An action-row text button — the Dialogs text-button treatment: pill, transparent fill,
-   --color-primary label, label-large. Shared by each daemon option and the client-owned cancel
-   affordance (#237). focus-visible keeps it keyboard-reachable, the file's button convention. */
+   --color-primary label, label-large. Shared by each daemon option, the client-owned cancel affordance
+   (#237), and the confirm sub-step's Back / Confirm actions (#226). focus-visible keeps it
+   keyboard-reachable, the file's button convention. */
 .permission-modal__option,
-.permission-modal__cancel {
+.permission-modal__cancel,
+.permission-modal__back,
+.permission-modal__confirm {
   padding: var(--space-2) var(--space-3);
   border: none;
   border-radius: var(--radius-full);
@@ -598,14 +601,17 @@
 }
 
 .permission-modal__option:focus-visible,
-.permission-modal__cancel:focus-visible {
+.permission-modal__cancel:focus-visible,
+.permission-modal__back:focus-visible,
+.permission-modal__confirm:focus-visible {
   outline: 1px solid var(--color-outline);
 }
 
-/* The cancel affordance (#237) is the leading-dismissive M3 action: it stays left-aligned in the
-   flex-end action row (margin-right: auto pushes the daemon options to the right) while sharing the
-   text-button treatment above. */
-.permission-modal__cancel {
+/* The leading-dismissive M3 action stays left-aligned in the flex-end action row (margin-right: auto
+   pushes the trailing action(s) to the right) while sharing the text-button treatment above: the
+   list-mode Cancel (#237) and the confirm-mode Back (#226). */
+.permission-modal__cancel,
+.permission-modal__back {
   margin-right: auto;
 }
 

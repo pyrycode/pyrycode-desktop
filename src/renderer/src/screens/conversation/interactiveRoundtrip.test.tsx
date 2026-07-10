@@ -87,7 +87,14 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
     expect(outstanding).toHaveLength(1)
 
     const markup = renderToStaticMarkup(
-      <PermissionModalView prompt={outstanding[0]} onAnswer={() => {}} onCancel={() => {}} />
+      <PermissionModalView
+        prompt={outstanding[0]}
+        pendingOption={null}
+        onSelect={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+        onCancel={() => {}}
+      />
     )
 
     // Answerable: the dialog chrome, the prompt text, one option button per option (the default

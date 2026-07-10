@@ -26,7 +26,7 @@ A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `
 
 This screen is now the **thread view** of the [paired shell](paired-shell.md), landed in [#140](../codebase/140.md): the paired region enters at a list first, and opening a conversation mounts this screen, which gained a leading back affordance to return to the list. See [Back control](#back-control-140) below.
 
-The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237) below.
+The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226) below.
 
 ## How it works
 
@@ -537,53 +537,77 @@ Was dormant until [#179](../codebase/179.md) flipped `interactive`, the same pos
 structured-stream render slice; now live. See [#230 codebase notes](../codebase/230.md) for the full
 design, the token-provenance rationale, and patterns established.
 
-### Permission modal (#224, answerable since #237)
+### Permission modal (#224, answerable since #237, second-confirm since #226)
 
 The render half of the modal vertical (ADR [0009](../decisions/0009-modal-prompt-model.md)):
 [#223](../codebase/223.md) shipped the store + bridge but left `useModalBridge` dormant, so
 `modalStore` never populated. #224 closed that loop — it mounts the bridge at App level (beside
 `useDaemonEventBridge`/`useTimelineBridge` in `App.tsx`) and renders the store's outstanding prompt.
 [#237](../codebase/237.md) then made the rendered prompt **answerable**, closing the modal vertical.
+[#226](../codebase/226.md) then inserted a **client-side second-confirm gate** in front of an allow
+answer: there is no machine-readable `destructive` class on the wire (ADR 0009), so "a consequential
+action needs a second confirm" can only be a renderer UX policy, gated on the one signal available —
+`prompt.defaultOptionId`.
 
 `PermissionModal.tsx`, mirroring `RepairPrompt`/`RepairControl`:
 
-- **`PermissionModalView({ prompt, onAnswer, onCancel })`** — pure, exported. Renders a centered M3
-  dialog (Figma "Dialogs", node `22-3`) reusing `StatusSheet`'s overlay+scrim *structure*
-  (`role="dialog"`, `aria-modal="true"`, a dedicated scrim, an opaque panel, absolutely positioned
-  inside `.conversation`, no portal) but centers the panel instead of bottom-anchoring it, and uses a
-  distinct class set (`.permission-modal-overlay`/`.permission-modal`/…) rather than the status-sheet
-  classes — the two modals share a chrome pattern, not a stylesheet. `title`/`prompt`/`options[].label`
-  render as React children (auto-escaped, never `dangerouslySetInnerHTML`); `options` map 1:1 to
-  `<button type="button">`s in array order, keyed by `option.id`, each now `onClick={() =>
-  onAnswer(prompt.modalId, option.id)}` (#237). The option whose `id` matches `defaultOptionId` carries
-  an added `permission-modal__option--default` modifier — a filled-tonal pill
-  (`--color-secondary-container`) against the plain `--color-primary` text-button treatment of the
-  others — the assertable visual distinction AC3 asks for. A **new leading cancel button** (#237),
-  `.permission-modal__cancel` (its own class, not `.permission-modal__option`), is prepended to the
-  action row with `onClick={() => onCancel(prompt.modalId)}` and the client-owned label `Cancel`; CSS
-  gives it `margin-right: auto` so it sits at the row's far left while the daemon options stay
-  right-aligned — a code-review SHOULD-FIX flagged this as diverging from the Figma Dialogs reference
-  (which clusters Cancel at the trailing/right edge next to the confirm action) and asked the PO/
-  architect to confirm the placement before the modal went live; **still unresolved** now that
-  [#179](../codebase/179.md) made it live, see [#237 codebase notes](../codebase/237.md).
-- **`PermissionModal()`** — the store-bound container: `useModalStore(selectOutstanding)` plus (#237)
-  `useModalStore(s => s.dispatch)`, renders `outstanding[0]` via `PermissionModalView`, or `null` when
-  nothing is outstanding. One dialog at a time, oldest-first FIFO; no `selectCurrentModal` selector
-  (ADR 0009 defers it — the container derives `[0]` locally). Wires `onAnswer`/`onCancel` to the new
-  `modalResolution.ts` helpers (`answerPrompt`/`cancelPrompt`), dereferencing `window.pyry.sendCommand`
-  only inside the handler closures (#237).
+- **`PermissionModalView({ prompt, pendingOption, onSelect, onConfirm, onBack, onCancel })`** — pure,
+  exported. Renders a centered M3 dialog (Figma "Dialogs", node `22-3`) reusing `StatusSheet`'s
+  overlay+scrim *structure* (`role="dialog"`, `aria-modal="true"`, a dedicated scrim, an opaque panel,
+  absolutely positioned inside `.conversation`, no portal) but centers the panel instead of
+  bottom-anchoring it, and uses a distinct class set (`.permission-modal-overlay`/`.permission-modal`/…)
+  rather than the status-sheet classes — the two modals share a chrome pattern, not a stylesheet.
+  `title`/`prompt`/`options[].label` render as React children (auto-escaped, never
+  `dangerouslySetInnerHTML`). The `pendingOption: ModalOption | null` prop (#226) selects one of two
+  render modes — a **prop**, not internal `useState`, so both modes stay SSR-testable:
+  - **List mode** (`pendingOption === null`) — one `<button type="button">` per option in array order,
+    keyed by `option.id`, each `onClick={() => onSelect(prompt.modalId, option.id)}` (renamed from
+    #237's `onAnswer` — every click now routes through the container's gate rather than answering
+    directly). The option whose `id` matches `defaultOptionId` carries the
+    `permission-modal__option--default` modifier — a filled-tonal pill (`--color-secondary-container`)
+    against the plain `--color-primary` text-button treatment of the others. A leading cancel button,
+    `.permission-modal__cancel` (its own class, not `.permission-modal__option`), is prepended to the
+    action row with `onClick={() => onCancel(prompt.modalId)}` and the client-owned label `Cancel`; CSS
+    gives it `margin-right: auto` so it sits at the row's far left while the daemon options stay
+    right-aligned — a code-review SHOULD-FIX from #237 flagged this as diverging from the Figma Dialogs
+    reference (which clusters Cancel at the trailing/right edge next to the confirm action) and asked
+    the PO/architect to confirm the placement; **still unresolved**, see [#237 codebase
+    notes](../codebase/237.md).
+  - **Confirm mode** (`pendingOption` set, #226) — the same chrome, title still shown, a client-owned
+    confirm sentence naming `pendingOption.label` (auto-escaped, since the held option's label is still
+    untrusted daemon text even quoted back to the user), and a two-button row: leading `Back`
+    (`.permission-modal__back`, `onClick={() => onBack()}`) / trailing `Confirm`
+    (`.permission-modal__confirm`, `onClick={() => onConfirm(prompt.modalId, pendingOption.id)}`). The
+    daemon option list is **not** rendered in this mode.
+- **`PermissionModal()`** — the store-bound container: `useModalStore(selectOutstanding)` plus
+  `useModalStore(s => s.dispatch)` (#237), renders `outstanding[0]` via `PermissionModalView`, or `null`
+  when nothing is outstanding. One dialog at a time, oldest-first FIFO; no `selectCurrentModal` selector
+  (ADR 0009 defers it — the container derives `[0]` locally). Gained one `useState<string |
+  null>` (#226), `pendingOptionId` — declared **before** the `if (!prompt) return null` early return
+  (rules-of-hooks) — and derives `pendingOption = prompt.options.find(o => o.id === pendingOptionId) ??
+  null` against the **current** prompt's options every render, not a cached snapshot: a deterministic
+  safety net so a stale pending id against a swapped-out prompt degrades to list mode rather than
+  confirming the wrong prompt (a known, currently-unreachable staleness gap remains when the swapped-in
+  prompt reuses the same option id — see [#226 codebase notes](../codebase/226.md)). `onSelect` routes
+  through the pure `selectOption` gate in `modalResolution.ts`: the default option answers straight
+  through (`answerPrompt`, unchanged from #237); any other option calls `setPendingOptionId` and holds.
+  `onConfirm` calls `answerPrompt` then clears the pending marker; `onBack` just clears it (no send).
+  `onCancel` is unchanged from #237 (`cancelPrompt`, never gated). All handlers dereference
+  `window.pyry.sendCommand` only inside the closures (#237's discipline).
 
 Mounted as the **last child** of `.conversation` in `ConversationScreen.tsx`, after the conditional
-`StatusSheet`, so it overlays the whole conversation surface. Clicking an option dispatches
-`answerModalCommand({ modal_id, option_id })` (#236) and clicking Cancel dispatches
-`cancelModalCommand({ modal_id })`, both through a guarded `window.pyry.sendCommand` (a bridge failure
-is swallowed, never crashes the window); either way the prompt clears **locally and optimistically** via
-the existing `dismissed` reducer arm — no new store representation, no new event arm. Was inert in
-production until [#179](../codebase/179.md) flipped the `interactive` capability (previously no
-`modal_shown` frame arrived, so nothing to answer); now live. See [#224 codebase notes](../codebase/224.md)
-for the original render design and [#237 codebase notes](../codebase/237.md) for the answer-path
-design, the `modalResolution.ts` helper, and the still-open code-review items (Cancel placement, focus
-trap/`Escape`, programmatic default-option cue).
+`StatusSheet`, so it overlays the whole conversation surface. Selecting the default option or clicking
+Cancel dispatches `answerModalCommand`/`cancelModalCommand` (#236) immediately, exactly as #237 shipped
+it; selecting any other option now holds (#226) until `Confirm` dispatches the same
+`answerModalCommand` or `Back` returns to the list with no send. Either terminal path (answer or
+cancel) clears the prompt **locally and optimistically** via the existing `dismissed` reducer arm — no
+new store representation, no new event arm, no wire change for #226. Was inert in production until
+[#179](../codebase/179.md) flipped the `interactive` capability (previously no `modal_shown` frame
+arrived, so nothing to answer); now live. See [#224 codebase notes](../codebase/224.md) for the
+original render design, [#237 codebase notes](../codebase/237.md) for the answer-path design and the
+still-open code-review items (Cancel placement, focus trap/`Escape`, programmatic default-option cue),
+and [#226 codebase notes](../codebase/226.md) for the second-confirm gate design and its own
+still-open code-review NIT (the pending-marker staleness gap).
 
 ### The interactive flip + thread cutover (#179)
 
@@ -633,7 +657,7 @@ learned.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md).** Reads the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply. See [Structured-stream timeline render](#structured-stream-timeline-render-203) and [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
 - **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. See [Thinking indicator](#thinking-indicator-215) above.
-- **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding` and `dispatch`, mounted as the last child of `.conversation`. `null` when nothing is outstanding; each option and the new Cancel button dispatch a command and clear the prompt locally. See [Permission modal](#permission-modal-224-answerable-since-237) above.
+- **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding` and `dispatch`, mounted as the last child of `.conversation`. `null` when nothing is outstanding; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226) above.
 
 ## Edge cases and limitations
 
@@ -655,9 +679,10 @@ learned.
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`
 - [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` now also writes to this store's `dispatch` as the `userText` producer, and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece
 - [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224) and now also `dispatch` (#237); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, live since [#179](../codebase/179.md) flipped `interactive` (dormant #223–#178)
-- [Modal resolution envelope](modal-resolution-envelope.md) / [Command channel](command-channel.md) — the `answerModalCommand`/`cancelModalCommand` this screen's `PermissionModal` now dispatches through `modalResolution.ts` (#237), routed main-side by [Daemon connection](daemon-connection.md)'s `answerModal`/`cancelModal` (#236)
+- [Modal resolution envelope](modal-resolution-envelope.md) / [Command channel](command-channel.md) — the `answerModalCommand`/`cancelModalCommand` this screen's `PermissionModal` now dispatches through `modalResolution.ts` (#237), routed main-side by [Daemon connection](daemon-connection.md)'s `answerModal`/`cancelModal` (#236); gated behind a `selectOption` client-side second-confirm on `defaultOptionId` for any non-default answer (#226) — no wire/envelope change, the gate lives entirely in `modalResolution.ts`/`PermissionModal.tsx`
+- [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — `class` is `permission | trust` only, no `destructive` wire class; the premise #226's second-confirm gate is a client-side stand-in for
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

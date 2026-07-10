@@ -43,6 +43,7 @@ export interface DaemonConnection {
   requestSnapshot(payload: RequestSnapshotPayload): void  // #180: encrypt a request_snapshot onto the live session
   requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
+  setSessionSettings(payload: SetSessionSettingsPayload): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
@@ -91,6 +92,24 @@ emitting `conversationCreated` as a verbatim passthrough — nothing to drop, li
 caller is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242), blocked
 on this ticket. See the [conversation create](conversation-create.md) feature doc for the full
 contract.
+
+**`setSessionSettings(payload)` was added in [#263](../codebase/263.md)** — the outbound send half of a
+per-session model/reasoning-effort/YOLO change (pyrycode #844/#845), the write-side counterpart of
+`requestSnapshot`. Another **`send` twin** (inert no-op when `driver === null`, no consumer to fail),
+sharing the one `nextEnvelopeId` counter, never throws (parity #490). Unlike `createConversation`'s
+fresh-literal-in-the-method pattern, this method passes `payload` straight through — the fresh literal
+**and** the omitempty presence contract (an absent field means "leave unchanged," a field present at its
+zero value `''`/`false` means "set to this value") both live in `buildSetSessionSettings`
+(`setSessionSettingsEnvelope.ts`) instead, since the golden test targets the builder and the
+conditional-key construction *is* the presence contract — co-locating both keeps the method a faithful
+`requestSnapshot` clone. No empty-`session_id` guard (Evidence-Based Fix Selection — an empty/unknown id
+is the daemon's `session.not_found` to reject, mirroring `requestSnapshot`'s `conversation_id`). Ships
+**dormant**: no `case 'session_settings_updated'` consumer arm yet — decoding the reply is
+[#264](https://github.com/pyrycode/pyrycode-desktop/issues/264), blocked by this ticket via file overlap;
+correlating reply↔request is [#261](https://github.com/pyrycode/pyrycode-desktop/issues/261); the caller
+is the interactive Run-config controls
+([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257)). See [session settings
+send](session-settings-send.md) for the full contract.
 
 **`case 'session-transition'` was added in [#254](../codebase/254.md)** — no new outbound method;
 `session_transition` is inbound-only, the daemon-initiated session-boundary marker. Unlike
@@ -257,6 +276,7 @@ The classification the module *already computes* now also lands in the [#126 con
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `tool-result` inbound kind + the new `case 'tool-result'` consumer emit (`conversation_id` dropped, `turnId`/`toolUseId`/`isError`/`resultSummary` carried), feeding the timeline bridge's fifth owned arm — the first to **resolve** an existing `toolCall` item's `result` rather than append a new item. The vertical's last transport slice. No new method on this factory — `tool_result` is inbound-only.
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `createConversation(payload)` method added to this factory (the write-side twin of `requestConversations`, with a fresh-literal security net bounding the outbound wire to exactly three fields), the payload-carrying `buildCreateConversation` builder it drives, and the `conversation-created` inbound kind + verbatim (no-drop) emit in the `case 'message'` consumer arm.
 - [#254 codebase notes](../codebase/254.md) — the `session-transition` inbound kind + the new `case 'session-transition'` consumer emit (a fresh literal carrying only `newSessionId`, the #180 content-drop model's second application). No new method on this factory — `session_transition` is inbound-only, daemon-initiated.
+- [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the `setSessionSettings(payload)` method added to this factory (a faithful `requestSnapshot` twin whose builder owns the omitempty presence contract), the payload-carrying `buildSetSessionSettings` builder it drives, and the dormant status pending #264's decode arm + #261's correlation + #257's render consumer.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello` builds the injected `session.hello`; `parseHelloAck` narrows the `handshake-complete{helloAck}` bytes into the `HelloAckPayload` this emits.

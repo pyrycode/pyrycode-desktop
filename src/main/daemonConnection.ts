@@ -33,6 +33,7 @@ import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
+import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
@@ -52,6 +53,7 @@ import {
   type SendMessagePayload,
   type RequestSnapshotPayload,
   type CreateConversationPayload,
+  type SetSessionSettingsPayload,
   type ModalAnswerPayload,
   type ModalCancelPayload
 } from '../shared/wire/types'
@@ -146,6 +148,19 @@ export interface DaemonConnection {
    * caller is #242; this ticket only wires the round-trip. NEVER throws out of the module (parity #490).
    */
   createConversation(payload: CreateConversationPayload): void
+  /**
+   * Encrypt a payload-carrying `set_session_settings` control envelope onto the live session — asks the
+   * daemon to change one session's model / reasoning effort / YOLO (pyrycode #844/#845). Honors the
+   * omitempty PRESENCE CONTRACT via the builder: an unset field is absent ("leave unchanged"), a field
+   * present at its zero value (`''` / `false`) is sent ("set to this value"). The `send` TWIN, not
+   * `requestDebugBundle`: a settings change has no consumer to fail, so it is an inert no-op when not
+   * connected (`driver === null` → return). The reply arrives asynchronously as one
+   * `session_settings_updated` frame, decoded by #264 (NOT this ticket) and correlated by #261; an
+   * empty/unknown `session_id` is the daemon's `session.not_found` to reject (no main-side guard, like
+   * `requestSnapshot`). Its caller is the interactive Run-config controls (#257); ships dormant. NEVER
+   * throws out of the module (parity #490).
+   */
+  setSessionSettings(payload: SetSessionSettingsPayload): void
   /**
    * Resolve an outstanding permission/trust modal with the user's answer (#236): MINT a fresh
    * client-side idempotency `answer_token` (main-side — the renderer never mints), fold it into a
@@ -648,6 +663,27 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function setSessionSettings(payload: SetSessionSettingsPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A settings change has no consumer to fail; a request sent
+    // while disconnected simply produces no reply. No empty-session_id guard: an empty/unknown id is
+    // the daemon's `session.not_found` to reject (mirrors requestSnapshot's empty conversation_id).
+    if (driver === null) return
+    try {
+      // Pass `payload` straight through — the builder owns the FRESH literal + the omitempty presence
+      // contract (conditional key assignment), which doubles as the anti-smuggling net. Shares the one
+      // monotonic nextEnvelopeId with send / requestSnapshot — no second counter — so ids stay unique
+      // across interleaved calls (the daemon correlates replies by id; correlation itself is #261).
+      const bytes = buildSetSessionSettings({ id: nextEnvelopeId, ts: now(), payload })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
+      // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
   function answerModal(payload: Omit<ModalAnswerPayload, 'answer_token'>): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A modal resolution has no consumer to fail.
@@ -768,6 +804,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestSnapshot,
     requestConversations,
     createConversation,
+    setSessionSettings,
     answerModal,
     cancelModal,
     requestDebugBundle

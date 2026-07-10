@@ -11,7 +11,8 @@ import {
 import type {
   SendMessagePayload,
   ModalCancelPayload,
-  CreateConversationPayload
+  CreateConversationPayload,
+  SetSessionSettingsPayload
 } from '../wire/types'
 
 describe('command channel', () => {
@@ -272,5 +273,53 @@ describe('isRendererCommand', () => {
     // A missing key (undefined, not a literal null) is rejected — null is present, undefined is absent.
     expect(isRendererCommand({ type: t, payload: { is_promoted: null, name: null } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { name: null, cwd: null } })).toBe(false)
+  })
+
+  it('accepts a setSessionSettings command with only session_id (all optionals omitted) (#263)', () => {
+    // The guard is a structural minimum on optional-ABSENT fields: session_id present-and-string, each
+    // optional accepted when absent. A missing/undefined optional is fine ("leave unchanged").
+    const payload: SetSessionSettingsPayload = { session_id: 'sess-a' }
+    const command: RendererCommand = { type: 'setSessionSettings', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum); the builder's fresh literal drops it.
+    expect(isRendererCommand({ type: 'setSessionSettings', payload, extra: 1 })).toBe(true)
+  })
+
+  it('accepts present zero-value optionals — model:"" and yolo:false (#263)', () => {
+    // Present-at-zero is a valid "set" instruction the guard must NOT reject (that distinction is the
+    // whole point of the presence contract). A truthiness-based guard would wrongly drop these.
+    expect(
+      isRendererCommand({ type: 'setSessionSettings', payload: { session_id: 'sess-a', model: '' } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({ type: 'setSessionSettings', payload: { session_id: 'sess-a', yolo: false } })
+    ).toBe(true)
+  })
+
+  it('accepts a fully-populated setSessionSettings command (#263)', () => {
+    const payload: SetSessionSettingsPayload = {
+      session_id: 'sess-a',
+      model: 'opus',
+      effort: 'high',
+      yolo: true
+    }
+    expect(isRendererCommand({ type: 'setSessionSettings', payload })).toBe(true)
+  })
+
+  it('rejects a setSessionSettings with a missing/null payload (#263)', () => {
+    expect(isRendererCommand({ type: 'setSessionSettings' })).toBe(false)
+    expect(isRendererCommand({ type: 'setSessionSettings', payload: null })).toBe(false)
+  })
+
+  it('rejects a setSessionSettings missing session_id or with a wrong-typed field (#263)', () => {
+    const t = 'setSessionSettings'
+    // session_id is required-and-string.
+    expect(isRendererCommand({ type: t, payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { session_id: 42 } })).toBe(false)
+    // A PRESENT optional must be its type — a wrong-typed present optional is rejected (a truthy
+    // non-string model, a non-boolean yolo). An absent optional is accepted (covered above).
+    expect(isRendererCommand({ type: t, payload: { session_id: 'sess-a', model: 1 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { session_id: 'sess-a', effort: true } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { session_id: 'sess-a', yolo: 'nope' } })).toBe(false)
   })
 })

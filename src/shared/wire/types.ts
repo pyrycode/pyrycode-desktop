@@ -48,6 +48,7 @@ export type EnvelopeType =
   | 'debug_bundle_chunk'
   | 'debug_bundle_done'
   | 'request_snapshot'
+  | 'set_session_settings'
   | 'screen_snapshot'
   | 'assistant_delta'
   | 'turn_end'
@@ -128,6 +129,30 @@ export interface SendMessagePayload {
  */
 export interface RequestSnapshotPayload {
   conversation_id: string
+}
+
+/**
+ * Outbound `set_session_settings` payload (client → daemon). Mirrors the daemon's
+ * SetSessionSettingsPayload{SessionID string; Model, Effort *string; YOLO *bool} field-for-field
+ * (pyrycode #844 wire vocab, #845 handler, both on `main`): changes one session's model / reasoning
+ * effort / YOLO.
+ *
+ * The optional `?` fields mirror the daemon's `*T ...,omitempty` nil-pointer omission and carry a
+ * PRESENCE CONTRACT: an ABSENT key means "leave unchanged"; a key PRESENT at its zero value (`''` /
+ * `false`) means "set to this value" (an empty-string clear, or permissions-enforced). On the wire
+ * this distinction is an absent key (omitempty) vs a present key — NEVER a literal `null`. TS has no
+ * `omitempty`, so this type merely PERMITS absence; the contract is ENFORCED by the builder
+ * (setSessionSettingsEnvelope.ts), which assigns a key only when its field `!== undefined`. `session_id`
+ * is the addressing key (matches the daemon's Pool.UpdateSettings id), never a secret — always required.
+ */
+export interface SetSessionSettingsPayload {
+  session_id: string
+  /** *string omitempty — absent = leave unchanged; '' = clear to the daemon default. */
+  model?: string
+  /** *string omitempty — absent = leave unchanged; '' = clear to the daemon default. */
+  effort?: string
+  /** *bool omitempty — absent = leave unchanged; false = permissions enforced (never omitted-as-false). */
+  yolo?: boolean
 }
 
 /**

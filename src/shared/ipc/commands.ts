@@ -20,7 +20,8 @@ import type {
   RequestSnapshotPayload,
   ModalAnswerPayload,
   ModalCancelPayload,
-  CreateConversationPayload
+  CreateConversationPayload,
+  SetSessionSettingsPayload
 } from '../wire/types'
 
 /**
@@ -40,7 +41,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 
 /**
  * A single typed command from the renderer window to the background process. Sealed
- * discriminated union on `type`. Seven members today: `sendMessage`, whose `payload` reuses the
+ * discriminated union on `type`. Eight members today: `sendMessage`, whose `payload` reuses the
  * wire SendMessagePayload verbatim so no field is remapped between layers; the bare
  * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global;
  * `requestSnapshot` (#180), whose `payload` reuses the wire RequestSnapshotPayload (a
@@ -50,9 +51,11 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * `option_id`, the token Omit-excluded — minted main-side); `cancelModal` (#236), whose
  * `payload` reuses the wire ModalCancelPayload (`modal_id` only); and `createConversation` (#241),
  * whose `payload` reuses the wire CreateConversationPayload (three nullable-and-present fields, all
- * server-defaultable — no secret). No member exposes a field that could hold a token, key, or raw
- * frame (AC5) — the payload-bearing ones reuse only wire types (or a token-excluded derivative), the
- * bare ones carry nothing.
+ * server-defaultable — no secret); and `setSessionSettings` (#263), whose `payload` reuses the wire
+ * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
+ * presence contract is applied main-side by the builder, not carried here). No member exposes a field
+ * that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only wire types (or
+ * a token-excluded derivative), the bare ones carry nothing.
  *
  * Extend additively (connect/disconnect) when their transport tickets land — and add a
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
@@ -66,6 +69,7 @@ export type RendererCommand =
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
   | { type: 'cancelModal'; payload: ModalCancelPayload }
   | { type: 'createConversation'; payload: CreateConversationPayload }
+  | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -122,6 +126,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isCancelModalPayload(value.payload)
     case 'createConversation':
       return 'payload' in value && isCreateConversationPayload(value.payload)
+    case 'setSessionSettings':
+      return 'payload' in value && isSetSessionSettingsPayload(value.payload)
     default:
       return false
   }
@@ -186,4 +192,22 @@ function isCreateConversationPayload(value: unknown): value is CreateConversatio
     'cwd' in value &&
     (typeof value.cwd === 'string' || value.cwd === null)
   )
+}
+
+/** The untrusted renderer→main boundary guard for the setSessionSettings payload (#263) — the reason
+ *  the command half is security-sensitive. Validates SHAPE, mirroring isCreateConversationPayload's
+ *  per-field type checks but for OPTIONAL-ABSENT rather than nullable-present fields: `session_id` must
+ *  be present-and-string; each of `model` / `effort` / `yolo`, WHEN PRESENT (`in` check), must be the
+ *  right type (`string` / `string` / `boolean`) — a present zero value (`''` / `false`) passes, an
+ *  ABSENT optional is accepted ("leave unchanged"). The omitempty presence contract itself lives in the
+ *  main-side builder, not here; this guard only bounds the shape. Structural minimum — a smuggled extra
+ *  field is not rejected here (the builder's fresh literal bounds the wire to the four modeled keys).
+ *  Pure; never throws. */
+function isSetSessionSettingsPayload(value: unknown): value is SetSessionSettingsPayload {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('session_id' in value) || typeof value.session_id !== 'string') return false
+  if ('model' in value && typeof value.model !== 'string') return false
+  if ('effort' in value && typeof value.effort !== 'string') return false
+  if ('yolo' in value && typeof value.yolo !== 'boolean') return false
+  return true
 }

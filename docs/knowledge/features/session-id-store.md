@@ -116,3 +116,6 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   store's selector into.
 - [#254 codebase notes](../codebase/254.md) — the transport decode arm this store consumes.
 - [#259 codebase notes](../codebase/259.md) — implementation summary and patterns established.
+- [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the outbound
+  `setSessionSettings` command + connection method this store's held `session_id` will address, once
+  #257 wires the two together; ships dormant until then, same as this store.

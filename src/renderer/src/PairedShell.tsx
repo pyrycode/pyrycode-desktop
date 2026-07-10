@@ -1,5 +1,6 @@
 import { useReducer } from 'react'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
+import { ChannelList } from './screens/channels/ChannelList'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
@@ -9,7 +10,7 @@ function assertNever(route: never): never {
 
 /**
  * The pure route→view of the paired region — no hooks, no effects — mirroring how AppView lives beside
- * App. `list` shows the throwaway placeholder home; `thread` shows the existing store-backed
+ * App. `list` shows the Channel List home screen (#141); `thread` shows the existing store-backed
  * ConversationScreen with a back affordance. Both routes render, so there is no null arm. Adding a
  * future `settings` / `archive` view is one new case, forced by the assertNever default (AC1: an added
  * arm, not a rewrite).
@@ -22,26 +23,12 @@ export function PairedShellView(props: {
 }): JSX.Element {
   switch (props.route) {
     case 'list':
-      return <PlaceholderList onOpen={props.onOpen} />
+      return <ChannelList onOpen={props.onOpen} />
     case 'thread':
       return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
     default:
       return assertNever(props.route)
   }
-}
-
-// A throwaway stand-in for the real Channel List — #141 replaces this whole list view. Its one
-// affordance opens the single active conversation (already held in sessionStore) into the thread, so
-// today's send/stream round-trip stays reachable (AC2: no regression from the direct-to-thread
-// landing). Per the ticket scope, build no list visuals here.
-function PlaceholderList({ onOpen }: { onOpen: () => void }): JSX.Element {
-  return (
-    <div className="paired-list-placeholder">
-      <button type="button" onClick={onOpen}>
-        Open conversation
-      </button>
-    </div>
-  )
 }
 
 /**

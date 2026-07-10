@@ -1,0 +1,109 @@
+/*
+ * Channel List home screen styles (#141), mirrored from the mobile Figma node 15-8 body. Every
+ * color / type / spacing value references a theme token from theme/tokens.css — no literal lives here;
+ * opacity is a de-emphasis device (the #218 precedent), not a color literal. The Figma's avatars,
+ * body-preview text, top app bar, "See all" link, and FAB are deferred to other tickets, so this
+ * stylesheet covers only the two-section list of title + last-activity-time rows, the divider, and the
+ * empty state.
+ */
+
+/* The scroll column. PairedShellView returns this <section> directly, so — like .conversation — it is
+   a direct child of the block-level #root (height:100%), NOT a flex item of a paired-shell area. So it
+   fills the window with height:100% (mirroring .conversation), not the spec's inert `flex:1 1 auto`;
+   box-sizing:border-box keeps the vertical padding inside that 100% so the surface fills edge-to-edge
+   (Figma 15-8) and long lists scroll inside this column rather than the window. */
+.channel-list {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: var(--space-1) 0 var(--space-6);
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* Section header (Figma 15:58) — muted label-large at 85% (opacity, not a color literal). */
+.channel-list__section-header {
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  color: var(--color-on-surface-variant);
+  opacity: 0.85;
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+/* One row (Figma 15:59) — a full-width text button, reset then laid out as title · time. */
+.channel-list__row {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  font-family: var(--font-sans);
+}
+
+.channel-list__row:hover {
+  background: var(--color-surface-container);
+}
+
+.channel-list__row:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* The title run (Figma 15:63) — title-medium, on-surface. Ellipsizes so an arbitrarily long untrusted
+   name is bounded rather than blowing out the row. */
+.channel-list__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface);
+  font-size: var(--text-title-medium-size);
+  line-height: var(--text-title-medium-line);
+  letter-spacing: var(--text-title-medium-tracking);
+  font-weight: var(--text-title-medium-weight);
+}
+
+/* The right-aligned last-activity time (Figma 15:64) — muted body-small at 75% (opacity). Never
+   shrinks or wraps. */
+.channel-list__time {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--color-on-surface-variant);
+  opacity: 0.75;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The section divider (Figma 15:85) — 1px outline-variant at 60% (opacity), between the two sections
+   only. 1px is structural geometry (the .tool-row__chip border precedent). */
+.channel-list__divider {
+  height: 1px;
+  background: var(--color-outline-variant);
+  opacity: 0.6;
+  margin: var(--space-3) var(--space-4) 0;
+}
+
+/* The loaded-but-empty state (no Figma node — mirrors mobile #312's empty state). A centered neutral
+   body-medium message. */
+.channel-list__empty {
+  margin: 0;
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}

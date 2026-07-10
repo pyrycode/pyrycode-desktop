@@ -53,11 +53,13 @@ describe('AppView', () => {
 
     it('enters the paired shell at the list view, never straight into the thread (#140)', () => {
       // #140 put the inner list ⇄ thread shell under the conversation route: it now enters at the
-      // list placeholder, not directly on the ConversationScreen thread.
+      // Channel List home screen (#141), not directly on the ConversationScreen thread. The server
+      // render seeds no store, so the always-present list wrapper is empty inside — asserting the
+      // wrapper marker is sufficient and stable.
       const markup = renderToStaticMarkup(
         <AppView route="conversation" onPaired={noop} onUnpaired={noop} />
       )
-      expect(markup).toContain('Open conversation')
+      expect(markup).toContain('aria-label="Conversations"')
       expect(markup).not.toContain(CONVERSATION_MARKER)
       expect(markup).not.toContain(PAIRING_MARKER)
     })

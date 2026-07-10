@@ -24,6 +24,16 @@ the [conversation create](conversation-create.md) feature. Its guard, `isCreateC
 is the first to check each field's *presence* (`'field' in value`) as well as type, since all three
 fields are nullable-and-present (`T | null`, never `undefined`) rather than optional.
 
+The union grew an eighth member in [#263](../codebase/263.md): a **payload-carrying**
+`setSessionSettings` command (`SetSessionSettingsPayload{session_id, model?, effort?, yolo?}`, reused
+verbatim from the wire types — the write-side twin of `requestSnapshot`, mirroring `createConversation`
+in shape) — the renderer-invokable trigger for the [session settings send](session-settings-send.md)
+feature. Its guard, `isSetSessionSettingsPayload`, is the **first optional-absent** (rather than
+nullable-present) presence check: each of `model`/`effort`/`yolo`, *when present* (`'field' in value`),
+must be correctly typed; an *absent* optional is accepted outright — the mirror image of
+`isCreateConversationPayload`'s nullable-present checks. Ships dormant — #257 is the not-yet-built
+consumer.
+
 ## What it does
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge. `ipcRenderer` itself never crosses to the window.
@@ -176,5 +186,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the payload-carrying `requestSnapshot` member + `isRequestSnapshotPayload` guard this channel's union gained, and the `snapshotReceived` [daemon-event channel](daemon-event-channel.md) member that reports the reply
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the bare `requestConversations` member this channel's union gained, and the `conversationsReceived` [daemon-event channel](daemon-event-channel.md) member that reports the reply
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the payload-carrying `createConversation` member + `isCreateConversationPayload` guard this channel's union gained, and the `conversationCreated` [daemon-event channel](daemon-event-channel.md) member that reports the reply
+- [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the payload-carrying `setSessionSettings` member + `isSetSessionSettingsPayload` guard (the first optional-absent, rather than nullable-present, presence check) this channel's union gained; ships dormant, no `DaemonEvent` reply member yet (decoding `session_settings_updated` is #264)
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

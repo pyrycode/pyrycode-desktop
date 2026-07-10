@@ -189,6 +189,23 @@
   }
 }
 
+/* #215 — the thinking-indicator wrapper. flex: 0 0 auto (NOT the thread's 1 1 auto) so it never
+   claims a competing flex region beside the timeline/thread; the thread's horizontal padding keeps
+   the bubble left-aligned and thread-consistent. Interim treatment for the absent Figma node. */
+.conversation__thinking {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-start;
+  padding: var(--space-2) var(--space-4);
+}
+
+/* The transient "Thinking…" affordance reuses the daemon bubble's fill / radius / measure and mutes
+   only the text to --color-on-surface-variant, so it reads as a fleeting working state rather than a
+   settled reply. Token name only — no color literal. */
+.bubble--thinking {
+  color: var(--color-on-surface-variant);
+}
+
 /* Pinned composer — never grows or shrinks. A vertical stack so the status hint (#31) can sit
    above the input/button row without disturbing that row's flex layout. */
 .composer {

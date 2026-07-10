@@ -24,6 +24,8 @@ A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `
 
 This screen is now the **thread view** of the [paired shell](paired-shell.md), landed in [#140](../codebase/140.md): the paired region enters at a list first, and opening a conversation mounts this screen, which gained a leading back affordance to return to the list. See [Back control](#back-control-140) below.
 
+The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Read-only (the buttons are inert); mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Inert in production until #179 flips the `interactive` capability. See [Permission modal](#permission-modal-224) below.
+
 ## How it works
 
 ### Structure
@@ -43,10 +45,11 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
 ├── Composer                  .composer            (pinned)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
-└── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, last child, #177)
+├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
+└── PermissionModal (if any)  .permission-modal-overlay (absolute overlay, last child, null when no outstanding prompt, #224)
 ```
 
-`MessageBubble`, `Composer`, `UnpairControl`, `StatusRow`, and `RepairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread`, `StatusSheet`, and `RepairPrompt` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md), [#167](../codebase/167.md)), so tests server-render them as pure views. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`RepairPrompt` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
+`MessageBubble`, `Composer`, `UnpairControl`, `StatusRow`, and `RepairControl` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. `MessageThread`, `StatusSheet`, and `RepairPrompt` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md), [#167](../codebase/167.md)), so tests server-render them as pure views. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`RepairPrompt`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
 
 ### Data shape
 
@@ -487,6 +490,39 @@ the three new `.tool-row*` CSS rules is a token (`--font-mono`, `--color-tertiar
 `Timeline`/`ThinkingIndicator`. See [#218 codebase notes](../codebase/218.md) for the full design and
 patterns established.
 
+### Permission modal (#224)
+
+The render half of the modal vertical (ADR [0009](../decisions/0009-modal-prompt-model.md)):
+[#223](../codebase/223.md) shipped the store + bridge but left `useModalBridge` dormant, so
+`modalStore` never populated. This ticket closes the loop — it mounts the bridge at App level (beside
+`useDaemonEventBridge`/`useTimelineBridge` in `App.tsx`) and renders the store's outstanding prompt.
+
+New file `PermissionModal.tsx`, mirroring `RepairPrompt`/`RepairControl`:
+
+- **`PermissionModalView({ prompt })`** — pure, exported. Renders a centered M3 dialog (Figma "Dialogs",
+  node `22-3`) reusing `StatusSheet`'s overlay+scrim *structure* (`role="dialog"`, `aria-modal="true"`,
+  a dedicated scrim, an opaque panel, absolutely positioned inside `.conversation`, no portal) but
+  centers the panel instead of bottom-anchoring it, and uses a distinct class set
+  (`.permission-modal-overlay`/`.permission-modal`/…) rather than the status-sheet classes — the two
+  modals share a chrome pattern, not a stylesheet. `title`/`prompt`/`options[].label` render as React
+  children (auto-escaped, never `dangerouslySetInnerHTML`); `options` map 1:1 to inert
+  `<button type="button">`s in array order, keyed by `option.id`. The option whose `id` matches
+  `defaultOptionId` carries an added `permission-modal__option--default` modifier — a filled-tonal pill
+  (`--color-secondary-container`) against the plain `--color-primary` text-button treatment of the
+  others — the assertable visual distinction AC3 asks for.
+- **`PermissionModal()`** — the store-bound container: `useModalStore(selectOutstanding)`, renders
+  `outstanding[0]` via `PermissionModalView`, or `null` when nothing is outstanding. One dialog at a
+  time, oldest-first FIFO; no `selectCurrentModal` selector (ADR 0009 defers it — the container derives
+  `[0]` locally).
+
+Mounted as the **last child** of `.conversation` in `ConversationScreen.tsx`, after the conditional
+`StatusSheet`, so it overlays the whole conversation surface. **Read-only**: the option buttons render
+but have no `onClick` — answering the daemon (and dismissing the modal on resolution) is a downstream
+slice, landing this render surface stably first (the #203-before-#218 discipline). Inert in production
+until #179 flips the `interactive` capability (no `modal_shown` frame arrives). See [#224 codebase
+notes](../codebase/224.md) for the full design, patterns established, and the code-review NITs deferred
+to the answer-path slice (focus trap/`Escape`, programmatic default-option cue).
+
 ## Seams (bound + still open)
 
 - **`onBack?: () => void`** — **bound in [#140](../codebase/140.md).** Optional, gated exactly like `onUnpaired?`; wired by the [paired shell](paired-shell.md) when this screen is mounted as its `thread` view, absent for a bare `<ConversationScreen />`. See [Back control](#back-control-140) above.
@@ -497,6 +533,7 @@ patterns established.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md).** A second, independent thread beside `MessageThread`, reading the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Inert (empty, `null`) in production until #179 flips `interactive`. See [Structured-stream timeline render](#structured-stream-timeline-render-203) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above.
 - **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. Inert (`null`) in production until #179 flips `interactive`. See [Thinking indicator](#thinking-indicator-215) above.
+- **`PermissionModal()`** — **bound in [#224](../codebase/224.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, mounted as the last child of `.conversation`. `null` when nothing is outstanding; read-only (inert option buttons) until the answer-path slice wires them. See [Permission modal](#permission-modal-224) above.
 
 ## Edge cases and limitations
 
@@ -516,6 +553,7 @@ patterns established.
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`
 - [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip now renders (#218, transport #217)
+- [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, dormant since #223
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)

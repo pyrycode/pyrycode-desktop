@@ -3,8 +3,8 @@
 The renderer's read/write surface over the [modal-prompt model](modal-prompt-model.md): a dedicated,
 unidirectional Zustand store wrapping the pure `reduceModal` reducer, plus a translator + React
 binding that feeds it from the two `modalShown`/`modalDismissed` `DaemonEvent` arms. Together, the
-store and bridge are what a future interactive render slice
-([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)) mounts and reads — the modal analog
+store and bridge are what the interactive render slice
+([#224](../codebase/224.md)) mounts and reads — the modal analog
 of the [conversation timeline store](conversation-timeline-store.md).
 
 Introduced in [#223](../codebase/223.md), the fourth slice of the modal vertical (ADR
@@ -98,10 +98,12 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
 
 ## Configuration and usage
 
-- **`useModalBridge()` is exported but not mounted anywhere in this slice** — headless, dormant until
-  [#224](https://github.com/pyrycode/pyrycode-desktop/issues/224) mounts it, mirroring how #202
-  shipped `useTimelineBridge` before #203 mounted it in `App.tsx`. **Do not edit `App.tsx` for this
-  ticket** — that is #224's.
+- **`useModalBridge()` is mounted at App level, in [#224](../codebase/224.md)** — beside
+  `useDaemonEventBridge()`/`useTimelineBridge()` in `App.tsx`, the third independent subscriber on the
+  channel, mirroring how #202 shipped `useTimelineBridge` before #203 mounted it. From #224 onward, a
+  live `modalShown`/`modalDismissed` frame reaches `modalStore`, and [`PermissionModal`](conversation-shell.md#permission-modal-224)
+  reads `selectOutstanding` to render it (still gated behind #179's `interactive` capability flip in
+  production).
 - Import surface: `import { useModalStore, selectOutstanding } from '@renderer/store/modalStore'` and
   `import { useModalBridge } from '@renderer/store/modalBridge'`.
 - No conversation-id scoping — a modal carries no `conversation_id` on the wire at all (ADR 0009); the
@@ -116,9 +118,9 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
 - **`dismissed` for an unknown/already-dismissed `modalId` is a same-reference no-op**, not a surfaced
   error — inherited from `reduceModal`; this store and bridge do not re-handle it.
 - **`title`/`prompt`/`options[].label` are untrusted `claude` free text, carried opaquely.** Neither
-  the store nor the bridge escapes or sanitizes them — the render slice (#224) owns rendering them as
-  plain text, never HTML, the same discipline `assistant_delta`/#203 and `tool_use`/#218 already
-  established.
+  the store nor the bridge escapes or sanitizes them — [`PermissionModalView`](conversation-shell.md#permission-modal-224)
+  (#224) renders them as plain React children, never HTML, the same discipline `assistant_delta`/#203
+  and `tool_use`/#218 already established.
 - **No dedicated test for `useModalBridge`.** A bare hook is untestable without a React renderer (none
   in this repo), exactly as `useDaemonEventBridge` and `useTimelineBridge` have none — its behavior is
   fully carried by the pure `subscribeModal` tests. See [#202 codebase notes](../codebase/202.md) §
@@ -145,6 +147,6 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative reducer
   contract this store wraps without altering; reserves the `modalStore.ts` name for exactly this
   container.
-- Unblocks [#224](https://github.com/pyrycode/pyrycode-desktop/issues/224) (interactive render — mounts
-  `useModalBridge`, reads `selectOutstanding`), which unblocks #225 (answer path) and #226/#227
-  (destructive second-confirm / surface rejection).
+- [#224 codebase notes](../codebase/224.md) — the interactive render slice: mounts `useModalBridge`,
+  reads `selectOutstanding` via the new `PermissionModal`/`PermissionModalView`. Unblocks #225 (answer
+  path) and #226/#227 (destructive second-confirm / surface rejection).

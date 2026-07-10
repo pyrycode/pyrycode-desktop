@@ -52,6 +52,13 @@ prior kind, the consumer arm (`daemonConnection.ts`) drops **four** of the five 
 emit — only `new_session_id` crosses IPC, the #180 content-drop model applied to a second wire type —
 see [daemon connection](daemon-connection.md).
 
+[#264](../codebase/264.md) extended it a twelfth time, additively, with a `session_settings_updated` →
+`session-settings-updated` kind — the `set_session_settings` (#263) confirmation reply,
+`SessionSettingsUpdatedPayload`. A single `requireString` field (`session_id`) — no enum, no nullable, no
+cross-field validation: `parseSessionTransitionPayload` scaled to its minimum, since the reply has only
+one field to begin with. Unlike `session_transition`, the consumer arm drops **nothing** at the emit —
+there is nothing else on the reply to strip.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -80,12 +87,13 @@ export type InboundDaemonMessage =
   | { kind: 'tool-result'; toolResult: ToolResultPayload }      // #229, additive
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }  // #241, additive
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }  // #254, additive
+  | { kind: 'session-settings-updated'; sessionSettingsUpdated: SessionSettingsUpdatedPayload }  // #264, additive
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`tool_use`/
 //                            `modal_shown`/`modal_dismissed`/`tool_result`/`conversation_created`/
-//                            `session_transition`
+//                            `session_transition`/`session_settings_updated`
 //                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
@@ -197,6 +205,7 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
    - `'tool_use'` → `{ kind: 'tool-use', toolUse }` ([#217](../codebase/217.md)) — narrowed via `parseToolUsePayload` (five `requireString` calls, no enum), content-free-logged as `inbound-decoded(code: 'tool_use')` before the `default` branch. The fourth v2 interactive-stream kind to graduate out of `inbound-unmodeled`.
    - `'modal_shown'` → `{ kind: 'modal-shown', modalShown }` / `'modal_dismissed'` → `{ kind: 'modal-dismissed', modalDismissed }` ([#201](../codebase/201.md)) — narrowed via `parseModalShownPayload` (the `class` closed-enum check + the `parseModalOption`-mapped `options` array) / `parseModalDismissedPayload` (the `source` closed-enum check), each content-free-logged as `inbound-decoded(code: 'modal_shown' | 'modal_dismissed')` before the `default` branch. Not part of the same v2 interactive-stream family as `assistant_delta`/`turn_state`/`tool_use` — a modal is the permission/trust prompt `claude` raises, gated behind the same `interactive` capability but carrying no `conversation_id`.
    - `'tool_result'` → `{ kind: 'tool-result', toolResult }` ([#229](../codebase/229.md)) — narrowed via `parseToolResultPayload` (four `requireString` calls plus one `requireBoolean` call on `is_error`), content-free-logged as `inbound-decoded(code: 'tool_result')` before the `default` branch. The fifth and last v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`/`turn_state`/`tool_use`.
+   - `'session_settings_updated'` → `{ kind: 'session-settings-updated', sessionSettingsUpdated }` ([#264](../codebase/264.md)) — narrowed via `parseSessionSettingsUpdatedPayload` (a single `requireString` call, no enum), content-free-logged as `inbound-decoded(code: 'session_settings_updated')` before the `default` branch. The `set_session_settings` (#263) confirmation reply.
    - anything else → `return null` — a well-formed `ack` / `hello_ack` / `backfill_since` / etc. is **not an error**, it is simply not modeled here. Since [#130](../codebase/130.md) it is also **logged content-free** (`inbound-unmodeled`, § *Diagnostic logging*) before the `return null`, so an unforeseen envelope kind leaves a footprint instead of vanishing; the return value and the "not surfaced to the UI" behavior are unchanged. (`error` was in this bucket until [#116](../codebase/116.md) promoted it to modeled — see above.)
 
 ### Payload narrowing
@@ -226,6 +235,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `tool_use` ([#217](../codebase/217.md)) | `inbound-decoded` | `code: 'tool_use'`, `bytes`, `hash` — never `name`/`input_summary`/`tool_use_id`/`turn_id`/`conversation_id` |
 | modeled `modal_shown` / `modal_dismissed` ([#201](../codebase/201.md)) | `inbound-decoded` | `code: 'modal_shown' \| 'modal_dismissed'`, `bytes`, `hash` — never `modal_id`/`class`/`title`/`prompt`/any `options[].label`/`default_option_id`/`outcome`/`source` |
 | modeled `tool_result` ([#229](../codebase/229.md)) | `inbound-decoded` | `code: 'tool_result'`, `bytes`, `hash` — never `result_summary`/`is_error`/`tool_use_id`/`turn_id`/`conversation_id` |
+| modeled `session_settings_updated` ([#264](../codebase/264.md)) | `inbound-decoded` | `code: 'session_settings_updated'`, `bytes`, `hash` — never `session_id` |
 | unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
 
 Load-bearing details:
@@ -396,6 +406,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **`modal_shown`/`modal_dismissed` were received by nobody through #178, same capability gate.** [#201](../codebase/201.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). The session and timeline bridges still discard the resulting `DaemonEvent` arms as `null` — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) ([#223](../codebase/223.md), shipped), with `useModalBridge` mounted since [#224](../codebase/224.md). `title`/`prompt`/each `options[].label` are untrusted `claude`-surfaced free text the render slice (#224) renders as plain text, the same constraint `tool_use` forwards.
 - **`default_option_id ∈ options[].id` is not cross-checked at this boundary.** `ModalShownPayload.default_option_id` decodes as a required string with no structural relationship enforced to `options`. A daemon sending a mismatched default is not rejected here — the cross-field invariant is deferred to the render slice ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)), where a mismatch just means nothing pre-highlights (harmless; answering still needs an explicit user action).
 - **`tool_result` was received by nobody through #178, same capability gate — it was the vertical's last kind to graduate.** [#229](../codebase/229.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). Like `tool_use`, `result_summary` is opaque daemon-supplied text that reaches the render slice ([#230](../codebase/230.md)) as free text — rendered as plain text, never `dangerouslySetInnerHTML`. Unlike every prior kind, one field (`is_error`) is a **boolean**, decoded via `requireBoolean` rather than `requireString` or a closed-enum `!==` chain — the type check alone distinguishes a smuggled non-boolean from the valid value `false`.
+- **`session_settings_updated` is the simplest kind in the file — one required string, nothing else.** [#264](../codebase/264.md) is the write-confirmation counterpart of `set_session_settings` (#263): the reply echoes no applied settings, so there is no enum, no nullable, and (unlike `session_transition`) nothing for the consumer arm to drop at the emit — the decoded payload and the emitted event carry the identical one field. Ships dormant; its consumer is #261/#256, not yet built.
 
 ### Why the explicit size guard, given the transport already bounds the plaintext
 
@@ -415,6 +426,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [Conversation timeline store](conversation-timeline-store.md) / [#229 codebase notes](../codebase/229.md) — the ninth and last additive extension of the v2 interactive-stream family: the `tool_result` kind, `parseToolResultPayload`, and `requireBoolean`'s second use (`is_error`, after `yolo` #180) alongside four `requireString` calls.
 - [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the tenth additive extension, the write-side twin of #139: the `conversation_created` kind, `parseConversationCreatedPayload`, and `requireStringOrNull`'s second use (`name`) alongside `requireBoolean` (`is_promoted`) and four `requireString` calls.
 - [#254 codebase notes](../codebase/254.md) — the eleventh additive extension: the `session_transition` kind, `parseSessionTransitionPayload`, the closed-enum idiom's third instance (`reason`, after `state` #214 and `class`/`source` #201), and `requireStringOrNull`'s third use (`workspace_cwd`). The consumer arm ([daemon connection](daemon-connection.md)) drops four of the five decoded fields at the emit — the #180 content-drop model's second application.
+- [Session settings send](session-settings-send.md) / [#264 codebase notes](../codebase/264.md) — the twelfth and simplest additive extension: the `session_settings_updated` kind, `parseSessionSettingsUpdatedPayload` (a single `requireString`, no enum, no nullable), and the write-confirmation twin of `session_transition` — the consumer arm drops nothing at the emit, since the reply has only the one field to begin with.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

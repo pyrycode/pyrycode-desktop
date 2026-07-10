@@ -579,10 +579,11 @@
   justify-content: flex-end;
 }
 
-/* One option — the Dialogs text-button treatment: pill, transparent fill, --color-primary label,
-   label-large. Inert this slice (no hover state, mirroring .log-data__download); the answer path wires
-   interaction later. focus-visible keeps it keyboard-reachable, the file's button convention. */
-.permission-modal__option {
+/* An action-row text button — the Dialogs text-button treatment: pill, transparent fill,
+   --color-primary label, label-large. Shared by each daemon option and the client-owned cancel
+   affordance (#237). focus-visible keeps it keyboard-reachable, the file's button convention. */
+.permission-modal__option,
+.permission-modal__cancel {
   padding: var(--space-2) var(--space-3);
   border: none;
   border-radius: var(--radius-full);
@@ -596,8 +597,16 @@
   font-weight: var(--text-label-large-weight);
 }
 
-.permission-modal__option:focus-visible {
+.permission-modal__option:focus-visible,
+.permission-modal__cancel:focus-visible {
   outline: 1px solid var(--color-outline);
+}
+
+/* The cancel affordance (#237) is the leading-dismissive M3 action: it stays left-aligned in the
+   flex-end action row (margin-right: auto pushes the daemon options to the right) while sharing the
+   text-button treatment above. */
+.permission-modal__cancel {
+  margin-right: auto;
 }
 
 /* The fail-safe default (the safe deny) is the emphasized, filled-tonal choice: --color-secondary-container

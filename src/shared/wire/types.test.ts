@@ -9,6 +9,7 @@ import type {
   TurnStatePayload,
   WireTurnState,
   ToolUsePayload,
+  ToolResultPayload,
   WireModalClass,
   WireModalSource,
   WireModalOption,
@@ -121,6 +122,34 @@ describe('tool-use wire vocabulary (#217)', () => {
       name: 'Read',
       input_summary: 'reads /etc/hosts'
     })
+  })
+})
+
+describe('tool-result wire vocabulary (#229)', () => {
+  it('admits the tool_result inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const toolResult: EnvelopeType = 'tool_result'
+    expect(toolResult).toBe('tool_result')
+  })
+
+  it('shapes ToolResultPayload as { conversation_id, turn_id, tool_use_id, is_error, result_summary } — is_error a boolean', () => {
+    const payload: ToolResultPayload = {
+      conversation_id: 'conv-1',
+      turn_id: 'turn-1',
+      tool_use_id: 'tu-1',
+      is_error: false,
+      result_summary: 'read 12 lines'
+    }
+    expect(payload).toEqual({
+      conversation_id: 'conv-1',
+      turn_id: 'turn-1',
+      tool_use_id: 'tu-1',
+      is_error: false,
+      result_summary: 'read 12 lines'
+    })
+    // is_error is a boolean whose false is a value (success), not an absence (the yolo #180 idiom).
+    const failed: ToolResultPayload = { ...payload, is_error: true }
+    expect(failed.is_error).toBe(true)
   })
 })
 

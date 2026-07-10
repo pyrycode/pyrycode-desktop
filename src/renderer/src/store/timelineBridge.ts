@@ -20,8 +20,8 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the four v2 stream arms (`assistantDelta` / `turnEnd` / `turnState` /
- * `toolUse`, #217); each is reconstructed as a fresh literal with named fields — not `return event`, not a spread
+ * timeline state. Owns exactly the five v2 stream arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * `toolUse` #217 / `toolResult` #229); each is reconstructed as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
  * rename: the owned arms are field-for-field identical to their `ThreadEvent` counterparts, so there
@@ -52,6 +52,18 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
         toolUseId: event.toolUseId,
         name: event.name,
         inputSummary: event.inputSummary
+      }
+    case 'toolResult':
+      // The tool-result arm (#229). Field-for-field identical to its ThreadEvent counterpart, so this is
+      // a filter + fresh copy (arm selection), not a field remap. reduceTimeline folds it through
+      // `fillResult`, RESOLVING the correlated `toolCall`'s result in place (by toolUseId); an orphan or
+      // duplicate is a deterministic same-reference no-op (#121).
+      return {
+        type: 'toolResult',
+        turnId: event.turnId,
+        toolUseId: event.toolUseId,
+        isError: event.isError,
+        resultSummary: event.resultSummary
       }
     case 'connecting':
     case 'connected':

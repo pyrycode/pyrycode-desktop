@@ -229,6 +229,11 @@ function toolUsePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'tool_use', ts: FIXED_TS, payload })
 }
 
+/** A `tool_result` plaintext, wrapping an arbitrary payload (#229). */
+function toolResultPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'tool_result', ts: FIXED_TS, payload })
+}
+
 /** A `modal_shown` plaintext, wrapping an arbitrary payload (#201). */
 function modalShownPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'modal_shown', ts: FIXED_TS, payload })
@@ -1217,6 +1222,91 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
           tool_use_id: 'tu-1',
           name: 'Read'
           // input_summary missing → fail closed
+        })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — tool_result stream (#229)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound tool_result into one toolResult carrying the four camelCase fields (conversation_id dropped)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: toolResultPlaintext({
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        tool_use_id: 'tu-1',
+        is_error: false,
+        result_summary: 'read 12 lines'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([
+      {
+        type: 'toolResult',
+        turnId: 'turn-1',
+        toolUseId: 'tu-1',
+        isError: false,
+        resultSummary: 'read 12 lines'
+      }
+    ])
+    // conversation_id is dropped at the choke point (single active conversation; #202 scopes it).
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('carries isError:true through as that value (an errored tool)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: toolResultPlaintext({
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        tool_use_id: 'tu-1',
+        is_error: true,
+        result_summary: 'permission denied'
+      })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'toolResult',
+        turnId: 'turn-1',
+        toolUseId: 'tu-1',
+        isError: true,
+        resultSummary: 'permission denied'
+      }
+    ])
+  })
+
+  it('drops a malformed tool_result without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: toolResultPlaintext({
+          conversation_id: 'conv-1',
+          turn_id: 'turn-1',
+          tool_use_id: 'tu-1',
+          is_error: 'nope', // non-boolean → fail closed
+          result_summary: 'x'
         })
       })
     ).not.toThrow()

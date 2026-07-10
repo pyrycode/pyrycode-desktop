@@ -70,7 +70,7 @@ describe('translateModalEvent — the two owned arms', () => {
 })
 
 describe('translateModalEvent — every other arm returns null (the inverse filter)', () => {
-  it('returns null for all 15 non-modal DaemonEvent arms', () => {
+  it('returns null for all 16 non-modal DaemonEvent arms', () => {
     const others: DaemonEvent[] = [
       { type: 'connecting' },
       { type: 'connected', ack },
@@ -103,11 +103,18 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
           }
         ]
       },
-      // The four arms timelineBridge OWNS but this bridge must null — the mirror-image proof.
+      // The five arms timelineBridge OWNS but this bridge must null — the mirror-image proof.
       { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi' },
       { type: 'turnEnd', turnId: 'A', stopReason: 'end_turn' },
       { type: 'turnState', state: 'thinking' },
-      { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' }
+      { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' },
+      {
+        type: 'toolResult',
+        turnId: 'A',
+        toolUseId: 'tu-1',
+        isError: false,
+        resultSummary: 'read 12 lines'
+      }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()
   })

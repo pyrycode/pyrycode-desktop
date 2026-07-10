@@ -66,6 +66,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'turnEnd':
     case 'turnState':
     case 'toolUse':
+    case 'toolResult':
     case 'conversationsReceived':
       // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
       // conversation-list store (#208), and timeline store (#202) consume these — not the modal store.

@@ -33,6 +33,7 @@ import type {
   TurnEndPayload,
   TurnStatePayload,
   ToolUsePayload,
+  ToolResultPayload,
   ConversationSummary,
   ModalShownPayload,
   ModalDismissedPayload,
@@ -85,6 +86,12 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * (dropping `conversation_id`); the fail-closed required-string presence here (five strings, no enum)
  * is the boundary this slice defends. `name` / `input_summary` are opaque display text (like `stop_reason`).
  *
+ * The `tool-result` kind (#229) carries the decoded ToolResultPayload — the outcome half that RESOLVES an
+ * existing `toolCall` in place (correlated by `tool_use_id`, #121's `fillResult`), NOT a new row. The
+ * consumer carries the four render fields onward (dropping `conversation_id`); the fail-closed defence is
+ * four required strings PLUS one required boolean (`is_error`, whose `false` is a value, not an absence).
+ * `result_summary` is opaque display text carried onward, its DOM sink being the render slice #230.
+ *
  * The `conversations` kind (#139) carries the decoded ConversationSummary[] (order preserved from the
  * wire). Like `chunk`, a single reply narrows to a whole list; the consumer forwards it verbatim as
  * one `conversationsReceived` event — no field is a secret, so nothing is dropped.
@@ -107,6 +114,7 @@ export type InboundDaemonMessage =
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
   | { kind: 'tool-use'; toolUse: ToolUsePayload }
+  | { kind: 'tool-result'; toolResult: ToolResultPayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
@@ -324,6 +332,27 @@ function parseToolUsePayload(payload: unknown): ToolUsePayload {
   const name = requireString(payload, 'name')
   const input_summary = requireString(payload, 'input_summary')
   return { conversation_id, turn_id, tool_use_id, name, input_summary }
+}
+
+/**
+ * Narrow an opaque payload into a ToolResultPayload (#229). Fail-closed like parseToolUsePayload: four
+ * required strings (`conversation_id` / `turn_id` / `tool_use_id` / `result_summary`) PLUS one required
+ * boolean `is_error` via requireBoolean (the `yolo` #180 idiom — the check is on the TYPE, so `false`
+ * decodes as the value `false`, never treated as an absence, and a non-boolean like the string `'true'`
+ * throws rather than being silently accepted by a truthiness check). Unknown keys tolerated but not
+ * copied, category-only error messages (no field value interpolated — `result_summary` could echo tool
+ * content). `result_summary` is carried through as opaque display text, never interpreted here.
+ */
+function parseToolResultPayload(payload: unknown): ToolResultPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed tool_result payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const turn_id = requireString(payload, 'turn_id')
+  const tool_use_id = requireString(payload, 'tool_use_id')
+  const is_error = requireBoolean(payload, 'is_error')
+  const result_summary = requireString(payload, 'result_summary')
+  return { conversation_id, turn_id, tool_use_id, is_error, result_summary }
 }
 
 /**
@@ -569,6 +598,21 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'tool-use', toolUse }
+    }
+    case 'tool_result': {
+      // Narrow BEFORE logging so a malformed frame (a missing / non-string field, or a non-boolean
+      // is_error) throws first and leaves no record. No decoded field (result_summary / is_error /
+      // tool_use_id / turn_id / conversation_id) is logged — only the frame's byte length + one-way
+      // hash, reusing the existing content-free field set. `result_summary` is carried onward by the
+      // consumer (the render payload, #230), but it never enters the diagnostic log.
+      const toolResult = parseToolResultPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'tool_result',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'tool-result', toolResult }
     }
     case 'conversations': {
       // Narrow BEFORE logging so a malformed reply (a bad row, a non-array) throws first and leaves no

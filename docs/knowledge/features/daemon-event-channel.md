@@ -45,8 +45,8 @@ or a scalar. `name`/`inputSummary` are opaque daemon display text the render sli
 [#201](../codebase/201.md) added a tenth and eleventh no-`SessionAction` member, `modalShown` /
 `modalDismissed` — the transport slice of the modal vertical ([ADR
 0009](../decisions/0009-modal-prompt-model.md)), consumed by **neither** existing bridge; the real
-consumer is a third bridge + [modal store](modal-prompt-model.md) landing in
-[#223](https://github.com/pyrycode/pyrycode-desktop/issues/223). `modalShown` carries `class` (a closed
+consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in
+[#223](../codebase/223.md). `modalShown` carries `class` (a closed
 `WireModalClass`), `title`/`prompt` (untrusted `claude`-surfaced free text), an ordered
 `options: readonly WireModalOption[]`, and `defaultOptionId`; `modalDismissed` carries `outcome`
 (opaque) and `source` (a closed `WireModalSource`). **Neither arm drops a `conversation_id`** — unlike
@@ -142,14 +142,16 @@ export type DaemonEvent =
   daemon-supplied strings (the `stop_reason` #199 / `cwd` #139 posture); `conversation_id` is the one
   field dropped.
 - **`modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,
-  source}`** ([#201](../codebase/201.md)) also map to *no* `SessionAction`, consumed instead by a
-  **third** bridge + [modal store](modal-prompt-model.md) landing in
-  [#223](https://github.com/pyrycode/pyrycode-desktop/issues/223) — the existing session bridge and
+  source}`** ([#201](../codebase/201.md)) also map to *no* `SessionAction`, consumed instead by the
+  **third**, independent [modal store + bridge](modal-store-bridge.md), shipped in
+  [#223](../codebase/223.md) — the existing session bridge and
   [conversation timeline store](conversation-timeline-store.md) bridge both map these to `null`. Field
-  names/types mirror `ModalEvent` ([#122](../codebase/122.md)) so the #223 bridge is a thin
-  snake→camel rename. Unlike every arm above, **neither carries a `conversation_id`** to drop — the
-  wire payload never has one; `modalId` is the sole correlation key. `title`/`prompt`/
-  `options[].label` are untrusted `claude`-surfaced free text the render slice
+  names/types mirror `ModalEvent` ([#122](../codebase/122.md)) field-for-field (the snake→camel decode
+  already happened here, at the transport) — so the #223 bridge is a filter + fresh-literal copy, not
+  a rename, except for the discriminant tag itself (`modalShown`→`type: 'shown'`,
+  `modalDismissed`→`type: 'dismissed'`), which does change. Unlike every arm above, **neither carries a
+  `conversation_id`** to drop — the wire payload never has one; `modalId` is the sole correlation key.
+  `title`/`prompt`/`options[].label` are untrusted `claude`-surfaced free text the render slice
   ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)) must render as plain text, never
   HTML.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
@@ -218,7 +220,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **`conversationsReceived` has a real producer, but no request trigger yet in this ticket.** [#139](../codebase/139.md) wires `emitDaemonEvent` for it from the same `case 'message'` choke point, and also adds the outbound `requestConversations` [command](command-channel.md) — but nothing calls `sendCommand({type:'requestConversations'})` until [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)'s store fires it on connect. Unlike `assistantDelta`/`turnEnd` (blocked on a daemon capability flip), this is blocked only on the sibling ticket landing.
 - **`turnState` has a real producer, but the daemon sends nothing yet — same capability gate as `assistantDelta`/`turnEnd`.** [#214](../codebase/214.md) wires `emitDaemonEvent` for it from the same `case 'message'` choke point, and `selectPhase` now has a real source for the first time — but no `turn_state` frame reaches it until [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) flips `interactive`. Proven only by unit tests driving `daemonConnection` and `timelineBridge` directly, and by the timeline store's own no-churn round-trip test.
 - **`toolUse` has a real producer, but the daemon sends nothing yet — same capability gate.** [#217](../codebase/217.md) wires `emitDaemonEvent` for it from the same `case 'message'` choke point, and `selectItems` gains a real `toolCall` source for the first time — but no `tool_use` frame reaches it until [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) flips `interactive`. Proven only by unit tests driving `daemonConnection` and `timelineBridge` directly, and by the reducer's existing text/tool/text split test.
-- **`modalShown`/`modalDismissed` have real producers, but the daemon sends nothing yet — same capability gate, and no consumer either way.** [#201](../codebase/201.md) wires `emitDaemonEvent` for both from the same `case 'message'` choke point, but no `modal_shown`/`modal_dismissed` frame reaches it until [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) flips `interactive` — **and** even once it does, both existing bridges discard the arms as `null` until [#223](https://github.com/pyrycode/pyrycode-desktop/issues/223) lands the modal store + bridge. Proven only by unit tests driving `daemonConnection` and both bridges directly.
+- **`modalShown`/`modalDismissed` have real producers, but the daemon sends nothing yet — same capability gate.** [#201](../codebase/201.md) wires `emitDaemonEvent` for both from the same `case 'message'` choke point, but no `modal_shown`/`modal_dismissed` frame reaches it until [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) flips `interactive`. Both existing bridges (session, timeline) still discard the arms as `null`; the third, independent [modal store + bridge](modal-store-bridge.md) ([#223](../codebase/223.md), shipped) is now the real consumer, but its `useModalBridge` isn't mounted until [#224](https://github.com/pyrycode/pyrycode-desktop/issues/224) — so no live frame reaches any consumer in production yet. Proven only by unit tests driving `daemonConnection` and all three bridges directly.
 
 ## Security posture
 
@@ -239,7 +241,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `conversationsReceived` member, its `requestConversations` [command channel](command-channel.md) mirror, and why it reuses the wire row type verbatim instead of a hand-built minimal shape
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turnState` member, the third arm the `timelineBridge` owns, and the closed-enum decode idiom cloned from `role`
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member, the fourth arm the `timelineBridge` owns, and the first to drive a durable `toolCall` item rather than text or a scalar
-- [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer (a third bridge + modal store) is [#223](https://github.com/pyrycode/pyrycode-desktop/issues/223)
+- [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

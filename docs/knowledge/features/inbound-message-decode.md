@@ -30,6 +30,11 @@ model](modal-prompt-model.md) vertical (ADR 0009). Two closed-enum checks (`clas
 `role`/`state` idiom's third and fourth instances) plus a new per-element narrower mapped over an
 ordered nested array (`options`) — see below.
 
+[#229](../codebase/229.md) extended it a ninth time, additively, with a `tool_result` → `tool-result`
+kind — the outcome half of `tool_use` (#217) and the vertical's last transport slice. Four
+`requireString` fields plus **one `requireBoolean` field** (`is_error` — the `yolo` #180 idiom, `false`
+decodes as a value, never an absence) — see below.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -55,11 +60,12 @@ export type InboundDaemonMessage =
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
+  | { kind: 'tool-result'; toolResult: ToolResultPayload }      // #229, additive
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`tool_use`/
-//                            `modal_shown`/`modal_dismissed` envelope, fully narrowed
+//                            `modal_shown`/`modal_dismissed`/`tool_result` envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
 export function parseInboundMessage(
@@ -138,6 +144,17 @@ ever decoded. `title`/`prompt`/each `options[].label` are untrusted `claude`-sur
 onward unminimised (the `assistant_delta`/`tool_use` posture, not `screen_snapshot`'s) — the render
 slice ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)) must render them as plain text.
 
+**Extended a ninth time by [#229](../codebase/229.md), additively.** `tool_result` → `{ kind:
+'tool-result', toolResult: ToolResultPayload }` via `parseToolResultPayload`, the outcome half of
+`tool_use` (#217) and the vertical's last transport slice. `ToolResultPayload{conversation_id, turn_id,
+tool_use_id, is_error, result_summary}` is four strings plus one boolean, all always present — narrowed
+with **four `requireString` calls plus one `requireBoolean` call** on `is_error` (the `yolo` #180 idiom:
+the check is on the *type*, so `is_error: false` decodes as the value `false`, never treated as an
+absence — the one delta from `parseToolUsePayload`'s all-string shape). The consumer arm drops only
+`conversation_id`; `result_summary` is opaque daemon display text (the `input_summary` #217 posture)
+carried onward to the render slice ([#230](https://github.com/pyrycode/pyrycode-desktop/issues/230))
+verbatim, never interpreted here. `is_error` is a decoded boolean, not attacker text.
+
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 
 A **single throw type** (`WireDecodeError`) covers every failure, so the consumer's one `catch` handles oversized, malformed, unparseable, and mistyped alike — exactly the shape `parseHelloAck` uses for the `hello_ack` boundary.
@@ -158,6 +175,7 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
    - `'turn_state'` → `{ kind: 'turn-state', turnState }` ([#214](../codebase/214.md)) — narrowed via `parseTurnStatePayload` (the `role`-style closed-enum check on `state`), content-free-logged as `inbound-decoded(code: 'turn_state')` before the `default` branch. The third v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`.
    - `'tool_use'` → `{ kind: 'tool-use', toolUse }` ([#217](../codebase/217.md)) — narrowed via `parseToolUsePayload` (five `requireString` calls, no enum), content-free-logged as `inbound-decoded(code: 'tool_use')` before the `default` branch. The fourth v2 interactive-stream kind to graduate out of `inbound-unmodeled`.
    - `'modal_shown'` → `{ kind: 'modal-shown', modalShown }` / `'modal_dismissed'` → `{ kind: 'modal-dismissed', modalDismissed }` ([#201](../codebase/201.md)) — narrowed via `parseModalShownPayload` (the `class` closed-enum check + the `parseModalOption`-mapped `options` array) / `parseModalDismissedPayload` (the `source` closed-enum check), each content-free-logged as `inbound-decoded(code: 'modal_shown' | 'modal_dismissed')` before the `default` branch. Not part of the same v2 interactive-stream family as `assistant_delta`/`turn_state`/`tool_use` — a modal is the permission/trust prompt `claude` raises, gated behind the same `interactive` capability but carrying no `conversation_id`.
+   - `'tool_result'` → `{ kind: 'tool-result', toolResult }` ([#229](../codebase/229.md)) — narrowed via `parseToolResultPayload` (four `requireString` calls plus one `requireBoolean` call on `is_error`), content-free-logged as `inbound-decoded(code: 'tool_result')` before the `default` branch. The fifth and last v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`/`turn_state`/`tool_use`.
    - anything else → `return null` — a well-formed `ack` / `hello_ack` / `backfill_since` / etc. is **not an error**, it is simply not modeled here. Since [#130](../codebase/130.md) it is also **logged content-free** (`inbound-unmodeled`, § *Diagnostic logging*) before the `return null`, so an unforeseen envelope kind leaves a footprint instead of vanishing; the return value and the "not surfaced to the UI" behavior are unchanged. (`error` was in this bucket until [#116](../codebase/116.md) promoted it to modeled — see above.)
 
 ### Payload narrowing
@@ -186,6 +204,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `turn_state` ([#214](../codebase/214.md)) | `inbound-decoded` | `code: 'turn_state'`, `bytes`, `hash` — never `state`/`conversation_id` |
 | modeled `tool_use` ([#217](../codebase/217.md)) | `inbound-decoded` | `code: 'tool_use'`, `bytes`, `hash` — never `name`/`input_summary`/`tool_use_id`/`turn_id`/`conversation_id` |
 | modeled `modal_shown` / `modal_dismissed` ([#201](../codebase/201.md)) | `inbound-decoded` | `code: 'modal_shown' \| 'modal_dismissed'`, `bytes`, `hash` — never `modal_id`/`class`/`title`/`prompt`/any `options[].label`/`default_option_id`/`outcome`/`source` |
+| modeled `tool_result` ([#229](../codebase/229.md)) | `inbound-decoded` | `code: 'tool_result'`, `bytes`, `hash` — never `result_summary`/`is_error`/`tool_use_id`/`turn_id`/`conversation_id` |
 | unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
 
 Load-bearing details:
@@ -355,6 +374,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **`tool_use` is received by nobody yet, same capability gate — and its two untrusted strings forward a render constraint.** [#217](../codebase/217.md) sits on the same `interactive`-capability gate ([#179](https://github.com/pyrycode/pyrycode-desktop/issues/179)) — exercised only by direct unit tests today. Like `assistant_delta`/`turn_end` (and unlike `turn_state`), the consumer arm carries content onward rather than minimising it: `name`/`input_summary` are opaque daemon-supplied strings that reach the render slice ([#218](https://github.com/pyrycode/pyrycode-desktop/issues/218)) as free text — that sibling ticket must render them as plain text, never `dangerouslySetInnerHTML`, and must not re-parse `input_summary`.
 - **`modal_shown`/`modal_dismissed` are received by nobody yet, same capability gate.** [#201](../codebase/201.md) sits on the same `interactive`-capability gate ([#179](https://github.com/pyrycode/pyrycode-desktop/issues/179)), exercised only by direct unit tests today. Unlike `assistant_delta`/`turn_end`/`turn_state`/`tool_use`, even once a live frame arrives, the session and timeline bridges still discard the resulting `DaemonEvent` arms as `null` — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) ([#223](../codebase/223.md), shipped), but its `useModalBridge` isn't mounted until [#224](https://github.com/pyrycode/pyrycode-desktop/issues/224), so no live frame reaches it in production yet. `title`/`prompt`/each `options[].label` are untrusted `claude`-surfaced free text the eventual render slice (#224) must render as plain text, the same constraint `tool_use` forwards.
 - **`default_option_id ∈ options[].id` is not cross-checked at this boundary.** `ModalShownPayload.default_option_id` decodes as a required string with no structural relationship enforced to `options`. A daemon sending a mismatched default is not rejected here — the cross-field invariant is deferred to the render slice ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)), where a mismatch just means nothing pre-highlights (harmless; answering still needs an explicit user action).
+- **`tool_result` is received by nobody yet, same capability gate — and it is the vertical's last kind to graduate.** [#229](../codebase/229.md) sits on the same `interactive`-capability gate ([#179](https://github.com/pyrycode/pyrycode-desktop/issues/179)) — exercised only by direct unit tests today. Like `tool_use`, `result_summary` is opaque daemon-supplied text that reaches the render slice ([#230](https://github.com/pyrycode/pyrycode-desktop/issues/230)) as free text — that sibling ticket must render it as plain text, never `dangerouslySetInnerHTML`. Unlike every prior kind, one field (`is_error`) is a **boolean**, decoded via `requireBoolean` rather than `requireString` or a closed-enum `!==` chain — the type check alone distinguishes a smuggled non-boolean from the valid value `false`.
 
 ### Why the explicit size guard, given the transport already bounds the plaintext
 
@@ -371,6 +391,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [Conversation timeline store](conversation-timeline-store.md) / [#214 codebase notes](../codebase/214.md) — the sixth additive extension: the `turn_state` kind, `parseTurnStatePayload`, and the closed-enum idiom's second instance (cloned from `role`, not `requireString`).
 - [Conversation timeline store](conversation-timeline-store.md) / [#217 codebase notes](../codebase/217.md) — the seventh additive extension: the `tool_use` kind, `parseToolUsePayload`, and the required-string-presence idiom scaled to five fields with no enum.
 - [Modal-prompt model](modal-prompt-model.md) / [#201 codebase notes](../codebase/201.md) — the eighth additive extension: the `modal_shown`/`modal_dismissed` kinds, `parseModalShownPayload`/`parseModalDismissedPayload`/`parseModalOption`, the closed-enum idiom's third and fourth instances (`class`/`source`), and the array-of-structs narrower's second use (`options`).
+- [Conversation timeline store](conversation-timeline-store.md) / [#229 codebase notes](../codebase/229.md) — the ninth and last additive extension of the v2 interactive-stream family: the `tool_result` kind, `parseToolResultPayload`, and `requireBoolean`'s second use (`is_error`, after `yolo` #180) alongside four `requireString` calls.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

@@ -35,12 +35,24 @@ bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md).
 This forced a matching `null` case in `daemonEventBridge.ts` at the same time — the third pair of arms
 to force both `assertNever`-guarded switches at once (after `turnState` #214 and `toolUse` #217).
 
+[#229](../codebase/229.md) added a fifth owned arm, `toolResult` — the outcome half of the `tool_use`
+enrichment (#217), the last transport slice of the vertical. Unlike every prior owned arm, this one
+**resolves** an existing `ThreadItem` rather than appending or setting a scalar: `reduceTimeline`'s
+pre-existing `toolResult` arm folds it through `fillResult` (#121), correlating by `toolUseId` and filling
+the matching `toolCall`'s `result` in place; an orphan or duplicate is a deterministic same-reference
+no-op. `DaemonEvent.toolResult` and `ThreadEvent.toolResult` are field-for-field identical, so the mapping
+is again a pure filter-and-copy. This also forced a case in a **third** exhaustive `DaemonEvent` switch —
+[modal store + bridge](modal-store-bridge.md)'s `modalBridge.ts` (#223) — a cost the #229 spec's own scope
+self-check (written before #223 merged) undercounted by one file; see [#229 codebase
+notes](../codebase/229.md) § Lessons learned. `selectItems` now exposes a `toolCall`'s resolved outcome;
+no render yet — that's the sibling slice [#230](https://github.com/pyrycode/pyrycode-desktop/issues/230).
+
 ## What it does
 
-Turns the four owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
+Turns the five owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
 via `reduceTimeline`, exposing `selectItems`/`selectPhase` as the only read surface. A stream arrival
-(an `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call) re-renders only components
-selecting a timeline slice — orthogonal to `sessionStore` and `runConfigStore`.
+(an `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result` outcome) re-renders
+only components selecting a timeline slice — orthogonal to `sessionStore` and `runConfigStore`.
 
 ## How it works
 
@@ -65,8 +77,8 @@ speculative observer here would defend an unobserved need.
 
 ```ts
 translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
-// Owns exactly assistantDelta / turnEnd / turnState / toolUse (#217), each rebuilt as a fresh
-// named-field literal (never `return event`, never a spread). Every other arm -> null via explicit
+// Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229), each rebuilt as a
+// fresh named-field literal (never `return event`, never a spread). Every other arm -> null via explicit
 // fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
@@ -79,35 +91,43 @@ useTimelineBridge(): void
 ```
 
 This is the deliberate mirror image of [`daemonEventBridge`](daemon-event-bridge.md): that bridge's
-`assertNever`-guarded switch returns `null` for these same four arms and owns the rest; this bridge
-owns exactly these four and returns `null` for the rest. Two independent subscribers on the same
-`window.pyry.onDaemonEvent` channel, each with its own hard exhaustiveness guard — so a future
-`DaemonEvent` member is a compile error in *both* files until each decides its mapping. [#214](../codebase/214.md)
-was the first ticket to pay that doubled cost: adding `turnState` forced a new case in both this file
-and `daemonEventBridge.ts` at once. [#217](../codebase/217.md) paid it a second time for `toolUse`.
+`assertNever`-guarded switch returns `null` for these same five arms and owns the rest; this bridge
+owns exactly these five and returns `null` for the rest — and, since [#223](../codebase/223.md), a
+**third** independent exhaustive switch, [modal store + bridge](modal-store-bridge.md)'s `modalBridge.ts`,
+returns `null` for them too. Three independent subscribers on the same `window.pyry.onDaemonEvent`
+channel, each with its own hard exhaustiveness guard — so a future `DaemonEvent` member is a compile
+error in *all three* files until each decides its mapping. [#214](../codebase/214.md) was the first
+ticket to pay that doubled cost: adding `turnState` forced a new case in both this file and
+`daemonEventBridge.ts` at once. [#217](../codebase/217.md) paid it a second time for `toolUse`.
+[#229](../codebase/229.md) paid the now-**tripled** cost for `toolResult` — `modalBridge.ts` existed by
+then, so the touchpoint floor for any new arm is 3 bridges, not 2 (see [#229 codebase
+notes](../codebase/229.md) § Lessons learned).
 
 The `assistantDelta`/`turnEnd` arms are field-for-field identical between `DaemonEvent` and
 `ThreadEvent` (`turnId`/`seq`/`text`, `turnId`/`stopReason`), so mapping them is a **filter, not a
 rename** — arm selection plus a fresh copy, no field mapping. `turnState` is the same shape of
 filter-not-rename: `event.state` (`WireTurnState`) assigns to the `ThreadEvent` arm's `state`
 (`TurnPhase`) with no cast, because the two are the same literal union declared on either side of the
-shared/renderer boundary (see [#214](../codebase/214.md)). `toolUse` ([#217](../codebase/217.md)) is
-likewise a pure filter-and-copy — `DaemonEvent.toolUse` and `ThreadEvent.toolUse` are field-for-field
-identical (`turnId`/`toolUseId`/`name`/`inputSummary`), a deliberate lockstep design from ADR 0008 — but
-it is the first owned arm whose `ThreadEvent` counterpart `reduceTimeline` folds into an **appended
-`ThreadItem`** (a `toolCall`) rather than a text delta or a scalar.
+shared/renderer boundary (see [#214](../codebase/214.md)). `toolUse` ([#217](../codebase/217.md)) and
+`toolResult` ([#229](../codebase/229.md)) are likewise pure filter-and-copy — `DaemonEvent.toolUse`/
+`toolResult` and their `ThreadEvent` counterparts are field-for-field identical, a deliberate lockstep
+design from ADR 0008. `toolUse` is the first owned arm whose `ThreadEvent` counterpart `reduceTimeline`
+folds into an **appended `ThreadItem`** (a `toolCall`) rather than a text delta or a scalar; `toolResult`
+is the first to **resolve** one already appended — `reduceTimeline`'s `fillResult` (#121) correlates it to
+the pending `toolCall` by `toolUseId` and fills `result` in place, a same-reference no-op on an orphan or
+duplicate.
 
 ### Data flow
 
 ```
-daemon frame ─(#199/#214/#217 transport, snake→camel, conversation_id dropped)→
-   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse}
+daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id dropped)→
+   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
    → timelineStore.dispatch → reduceTimeline → TimelineState
    → selectItems / selectPhase   (selectItems read by #203's Timeline view, now also carrying
-                                   pending toolCall items from #217; selectPhase read by
-                                   #215's ThinkingIndicator view)
+                                   pending toolCall items from #217 with results resolved by
+                                   #229; selectPhase read by #215's ThinkingIndicator view)
 ```
 
 ## Configuration and usage
@@ -138,13 +158,13 @@ daemon frame ─(#199/#214/#217 transport, snake→camel, conversation_id droppe
   (none in this repo), exactly as `useDaemonEventBridge` has none — its behavior is fully carried by
   the pure `subscribeTimeline` tests. See [#202 codebase notes](../codebase/202.md) § Lessons learned.
 - **Zero live traffic until #179.** Desktop withholds the `interactive` capability, so no
-  `assistant_delta`/`turn_end`/`turn_state`/`tool_use` frame reaches this bridge in production yet — the
-  store, bridge, #203's `Timeline` view, and #215's `ThinkingIndicator` view are built and tested against
-  injected `DaemonEvent`s/`ThreadItem[]`/booleans only.
-- **The `toolCall` item's `result` is permanently `null` in this slice.** Correlating a later
-  `tool_result` into the field by `toolUseId` is [#206](https://github.com/pyrycode/pyrycode-desktop/issues/206),
-  a separate still-open ticket — `reduceTimeline`'s `toolResult` arm already exists (#121) but nothing
-  feeds it yet.
+  `assistant_delta`/`turn_end`/`turn_state`/`tool_use`/`tool_result` frame reaches this bridge in
+  production yet — the store, bridge, #203's `Timeline` view, and #215's `ThinkingIndicator` view are
+  built and tested against injected `DaemonEvent`s/`ThreadItem[]`/booleans only.
+- **The `toolCall` item's `result` now fills as of [#229](../codebase/229.md), but nothing renders it
+  yet.** The transport-to-reducer chain is complete — a `tool_result` frame resolves its correlated
+  `toolCall`'s `result` in place, visible via `selectItems` — but the success/error visual is the still-open
+  sibling slice [#230](https://github.com/pyrycode/pyrycode-desktop/issues/230).
 
 ## Related
 
@@ -167,7 +187,12 @@ daemon frame ─(#199/#214/#217 transport, snake→camel, conversation_id droppe
 - [#217 codebase notes](../codebase/217.md) — the `toolUse` transport slice: wire types, decode, and
   the fourth arm this bridge's `translateTimelineEvent` owns, the first to drive a durable `toolCall`
   item; unblocks the render slice [#218](https://github.com/pyrycode/pyrycode-desktop/issues/218) and
-  feeds the still-open correlation ticket [#206](https://github.com/pyrycode/pyrycode-desktop/issues/206).
+  feeds the correlation ticket [#229](../codebase/229.md).
+- [#229 codebase notes](../codebase/229.md) — the `toolResult` transport slice, the last of the vertical:
+  wire types, decode, and the fifth arm this bridge's `translateTimelineEvent` owns, the first to
+  **resolve** a durable `ThreadItem` in place (via `fillResult`, #121) rather than append one or set a
+  scalar; also the ticket that surfaced the third-bridge (`modalBridge.ts`) touchpoint cost. Unblocks the
+  render slice [#230](https://github.com/pyrycode/pyrycode-desktop/issues/230).
 - [Modal-prompt model](modal-prompt-model.md) / [#201 codebase notes](../codebase/201.md) — the
   `modalShown`/`modalDismissed` transport slice: the first `DaemonEvent` pair this bridge does **not**
   own, added to the inverse-filter `null` list instead; the real consumer is the third, independent

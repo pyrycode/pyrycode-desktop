@@ -56,6 +56,8 @@ export type EnvelopeType =
   | 'tool_result'
   | 'modal_shown'
   | 'modal_dismissed'
+  | 'modal_answer'
+  | 'modal_cancel'
   | 'list_conversations'
   | 'conversations'
   | 'ack'
@@ -304,6 +306,37 @@ export interface ModalDismissedPayload {
   modal_id: string
   outcome: string
   source: WireModalSource
+}
+
+/**
+ * Outbound `modal_answer` request body (client → daemon) — the user's choice resolving an outstanding
+ * modal. Mirrors the daemon's ModalAnswerPayload field-for-field (SSOT protocol-mobile.md § Modal (v2),
+ * #701, ADR 0009), wire order `modal_id, option_id, answer_token` — all always present (no `omitempty`).
+ * The OUTBOUND counterpart to the inbound `modal_shown`/`modal_dismissed` above (this is the frame the
+ * desktop sends back). **`modal_id` is the sole correlation key — NO `conversation_id` rides a modal**
+ * (the daemon hosts one active conversation and resolves `modal_id` against its own outstanding-modal
+ * state, ADR 0009). `option_id` is a SINGLE string referencing a `WireModalOption.id` from the inbound
+ * `modal_shown.options[].id` — NOT the stale ADR-025 multi-select `option_ids[]`. `answer_token` is a
+ * client-minted idempotency key tying the answer to the one-time `modal_id` so a replayed / reordered
+ * answer is inert (first-answer-wins, daemon-side): its uniqueness and stability matter, but its
+ * secrecy does NOT — it is an anti-replay key, not a credential, and is minted main-side by #236 (not
+ * here). See #235.
+ */
+export interface ModalAnswerPayload {
+  modal_id: string
+  option_id: string
+  answer_token: string
+}
+
+/**
+ * Outbound `modal_cancel` request body (client → daemon) — dismiss an outstanding modal from the
+ * desktop. Mirrors the daemon's ModalCancelPayload field-for-field (SSOT protocol-mobile.md § Modal (v2),
+ * #701, ADR 0009): `modal_id` only, always present (no `omitempty`). The OUTBOUND counterpart to the
+ * inbound modal frames above. **`modal_id` is the sole correlation key — NO `conversation_id`** (ADR
+ * 0009). See #235.
+ */
+export interface ModalCancelPayload {
+  modal_id: string
 }
 
 /**

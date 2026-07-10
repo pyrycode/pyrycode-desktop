@@ -14,7 +14,9 @@ import type {
   WireModalSource,
   WireModalOption,
   ModalShownPayload,
-  ModalDismissedPayload
+  ModalDismissedPayload,
+  ModalAnswerPayload,
+  ModalCancelPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -211,5 +213,39 @@ describe('modal wire vocabulary (#201)', () => {
       source: 'remote'
     }
     expect(payload).toEqual({ modal_id: 'mdl-7f3a', outcome: 'allow', source: 'remote' })
+  })
+})
+
+describe('outbound modal wire vocabulary (#235)', () => {
+  it('admits the two outbound modal envelope types', () => {
+    // Compile-time membership: these assign only if the members are part of EnvelopeType.
+    const answer: EnvelopeType = 'modal_answer'
+    const cancel: EnvelopeType = 'modal_cancel'
+    expect(answer).toBe('modal_answer')
+    expect(cancel).toBe('modal_cancel')
+  })
+
+  it('shapes ModalAnswerPayload as { modal_id, option_id, answer_token } — single option_id', () => {
+    const payload: ModalAnswerPayload = {
+      modal_id: 'mdl-7f3a',
+      option_id: 'allow',
+      answer_token: 'tok-9c2e'
+    }
+    expect(payload).toEqual({
+      modal_id: 'mdl-7f3a',
+      option_id: 'allow',
+      answer_token: 'tok-9c2e'
+    })
+    // A single option_id — NOT the stale ADR-025 multi-select option_ids[].
+    expect(payload).not.toHaveProperty('option_ids')
+    // No conversation_id — modal_id is the sole correlation key (ADR 0009).
+    expect(payload).not.toHaveProperty('conversation_id')
+  })
+
+  it('shapes ModalCancelPayload as { modal_id } — the sole correlation key', () => {
+    const payload: ModalCancelPayload = { modal_id: 'mdl-7f3a' }
+    expect(payload).toEqual({ modal_id: 'mdl-7f3a' })
+    // No conversation_id — modal_id is the sole correlation key (ADR 0009).
+    expect(payload).not.toHaveProperty('conversation_id')
   })
 })

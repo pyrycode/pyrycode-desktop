@@ -4,7 +4,8 @@
 // The React container (ConversationScreen's Composer) is thin glue over this.
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { SendMessagePayload } from '@shared/wire/types'
-import type { ConnectionStatus, SessionAction } from '../../store/sessionStore'
+import type { ConnectionStatus } from '../../store/sessionStore'
+import type { ThreadEvent } from '../../store/threadTimeline'
 
 /**
  * The single active conversation for this milestone. There is no conversation-selection surface
@@ -17,11 +18,13 @@ export const MILESTONE_CONVERSATION_ID = 'default'
 
 /**
  * The three effects submitMessage performs, injected so the helper stays pure and deterministic in
- * tests. `newMessageId` is `crypto.randomUUID()` in the container; tests inject a stub.
+ * tests. `newMessageId` is `crypto.randomUUID()` in the container; tests inject a stub. `dispatch`
+ * writes a `ThreadEvent` into `timelineStore` (#179): the user's message and the daemon's structured
+ * reply now share the one ordered timeline surface.
  */
 export interface ComposerSendDeps {
   sendCommand: (command: RendererCommand) => void
-  dispatch: (action: SessionAction) => void
+  dispatch: (event: ThreadEvent) => void
   newMessageId: () => string
 }
 
@@ -29,11 +32,13 @@ export interface ComposerSendDeps {
  * Submit the composer's current text. Returns `true` when a message was sent (the container clears
  * the input on `true`), `false` for whitespace-only input (no effect).
  *
- * One `message_id` is minted here and reused for both the wire command and the store echo, so the
- * daemon's later echo of the same id dedupes against the optimistic copy (AC3). The send is guarded
- * (AC4): a bridge failure is swallowed, never propagated. The optimistic echo is dispatched
- * regardless of the send outcome — "optimistic" means show-immediately, and this milestone has no
- * send-failure UI surface.
+ * The `message_id` is minted for the WIRE command only. The old "reuse the id for wire + echo so the
+ * daemon's re-echo dedupes" rationale is retired (#179): in interactive mode the daemon streams no
+ * user-message event (the `DaemonEvent` union has no such arm, and the coarse `message` fan-out is
+ * off), so the optimistic `userText` echo is the sole source of the user message and needs no dedup
+ * key. The send is guarded (AC4): a bridge failure is swallowed, never propagated. The echo is
+ * dispatched regardless of the send outcome — "optimistic" means show-immediately, and this
+ * milestone has no send-failure UI surface.
  */
 export function submitMessage(text: string, deps: ComposerSendDeps): boolean {
   const trimmed = text.trim()
@@ -54,15 +59,9 @@ export function submitMessage(text: string, deps: ComposerSendDeps): boolean {
     console.error('composer send failed', error)
   }
 
-  deps.dispatch({
-    type: 'messageSent',
-    message: {
-      conversation_id: MILESTONE_CONVERSATION_ID,
-      message_id,
-      role: 'user',
-      text: trimmed
-    }
-  })
+  // Route the optimistic echo into the timeline as the `userText` item (#245). The timeline reducer
+  // tail-appends it, so it renders in arrival order beside the daemon's structured reply.
+  deps.dispatch({ type: 'userText', text: trimmed })
 
   return true
 }

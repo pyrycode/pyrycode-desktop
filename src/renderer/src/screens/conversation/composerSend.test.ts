@@ -6,7 +6,7 @@ import {
   MILESTONE_CONVERSATION_ID
 } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
-import type { SessionAction } from '../../store/sessionStore'
+import type { ThreadEvent } from '../../store/threadTimeline'
 import type { HelloAckPayload } from '@shared/wire/types'
 
 // submitMessage is a pure, React-free function (the pairingState precedent): its three effects
@@ -34,8 +34,10 @@ describe('submitMessage', () => {
     const result = submitMessage('hello', { sendCommand, dispatch, newMessageId })
 
     expect(result).toBe(true)
+    expect(newMessageId).toHaveBeenCalledTimes(1)
     expect(sendCommand).toHaveBeenCalledTimes(1)
-    // The wire payload has NO role field (SendMessagePayload), unlike the store echo.
+    // The wire payload still mints and carries a message_id (SendMessagePayload), unlike the
+    // timeline echo below, which carries only text.
     expect(sendCommand).toHaveBeenCalledWith(
       sendMessageCommand({
         conversation_id: MILESTONE_CONVERSATION_ID,
@@ -45,7 +47,7 @@ describe('submitMessage', () => {
     )
   })
 
-  it('dispatches a messageSent optimistic echo as a user-role MessagePayload with trimmed text', () => {
+  it('dispatches exactly one userText timeline echo carrying the trimmed text (#179 AC3)', () => {
     const dispatch = vi.fn()
 
     submitMessage('  hey there  ', {
@@ -54,35 +56,14 @@ describe('submitMessage', () => {
       newMessageId: () => 'echo-1'
     })
 
+    // The echo now routes into timelineStore as a userText ThreadEvent — no message_id,
+    // conversation_id, or role (the userText model carries only text). The daemon re-echo dedup
+    // is retired: interactive mode has no user-message DaemonEvent arm, so this is the sole source.
     expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(dispatch).toHaveBeenCalledWith({
-      type: 'messageSent',
-      message: {
-        conversation_id: MILESTONE_CONVERSATION_ID,
-        message_id: 'echo-1',
-        role: 'user',
-        text: 'hey there'
-      }
-    })
+    expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'hey there' })
   })
 
-  it('mints one message_id and reuses it for both the wire command and the store echo', () => {
-    const sendCommand = vi.fn()
-    const dispatch = vi.fn()
-    const newMessageId = vi.fn(() => 'shared-id')
-
-    submitMessage('hi', { sendCommand, dispatch, newMessageId })
-
-    expect(newMessageId).toHaveBeenCalledTimes(1)
-    const command = sendCommand.mock.calls[0][0] as RendererCommand
-    const wireId = command.type === 'sendMessage' ? command.payload.message_id : undefined
-    const action = dispatch.mock.calls[0][0] as SessionAction
-    const echoId = action.type === 'messageSent' ? action.message.message_id : undefined
-    expect(wireId).toBe('shared-id')
-    expect(echoId).toBe('shared-id')
-  })
-
-  it('trims leading/trailing whitespace before both the send payload and the echo', () => {
+  it('trims leading/trailing whitespace before both the send payload and the timeline echo', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()
 
@@ -90,8 +71,8 @@ describe('submitMessage', () => {
 
     const command = sendCommand.mock.calls[0][0] as RendererCommand
     const sentText = command.type === 'sendMessage' ? command.payload.text : undefined
-    const action = dispatch.mock.calls[0][0] as SessionAction
-    const echoText = action.type === 'messageSent' ? action.message.text : undefined
+    const event = dispatch.mock.calls[0][0] as ThreadEvent
+    const echoText = event.type === 'userText' ? event.text : undefined
     expect(sentText).toBe('spaced')
     expect(echoText).toBe('spaced')
   })

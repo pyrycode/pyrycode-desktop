@@ -350,6 +350,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // The timeline bridge (#202), not the session store, maps this onto the reducer's `phase`.
             emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
             return
+          case 'session-transition':
+            // The session-boundary data path (#254). The #180 content-drop model: emit a fresh literal
+            // carrying ONLY `newSessionId` (= new_session_id). `previous_session_id` / `reason` /
+            // `occurred_at` / `workspace_cwd` are decoded and validated (so a malformed marker still fails
+            // closed) but DROPPED here — #259's holder retains only the current session id, so the other
+            // four have no built consumer. Never a spread of the decoded payload, so only the narrowed id
+            // crosses IPC. A session_id is a routing id, not a secret (the conversation_id convention).
+            emitDaemonEvent(sink, {
+              type: 'sessionTransition',
+              newSessionId: inbound.sessionTransition.new_session_id
+            })
+            return
           case 'tool-use':
             // The tool-call data path (#217). snake→camel here; `conversation_id` is DROPPED (single
             // active conversation; #202's bridge scopes identity). A fresh literal with the four named

@@ -70,7 +70,7 @@ describe('translateModalEvent — the two owned arms', () => {
 })
 
 describe('translateModalEvent — every other arm returns null (the inverse filter)', () => {
-  it('returns null for all 16 non-modal DaemonEvent arms', () => {
+  it('returns null for all 17 non-modal DaemonEvent arms', () => {
     const others: DaemonEvent[] = [
       { type: 'connecting' },
       { type: 'connected', ack },
@@ -114,7 +114,8 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         toolUseId: 'tu-1',
         isError: false,
         resultSummary: 'read 12 lines'
-      }
+      },
+      { type: 'sessionTransition', newSessionId: 'sess-2' }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()
   })

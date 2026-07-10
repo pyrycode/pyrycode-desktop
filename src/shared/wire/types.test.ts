@@ -8,6 +8,8 @@ import type {
   TurnEndPayload,
   TurnStatePayload,
   WireTurnState,
+  WireSessionTransitionReason,
+  SessionTransitionPayload,
   ToolUsePayload,
   ToolResultPayload,
   WireModalClass,
@@ -101,6 +103,47 @@ describe('turn-state wire vocabulary (#214)', () => {
   it('admits exactly the three WireTurnState values (mobile field-for-field, no named enum)', () => {
     const states: WireTurnState[] = ['thinking', 'responding', 'idle']
     expect(states).toEqual(['thinking', 'responding', 'idle'])
+  })
+})
+
+describe('session-transition wire vocabulary (#254)', () => {
+  it('admits the session_transition inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const transition: EnvelopeType = 'session_transition'
+    expect(transition).toBe('session_transition')
+  })
+
+  it('admits exactly the three WireSessionTransitionReason values (closed set incl. workspace_change)', () => {
+    // The set stays exhaustive over workspace_change even though the producer (#657) emits only the
+    // first two today — the consumer enum may admit a value the producer cannot yet emit (SSOT #656).
+    const reasons: WireSessionTransitionReason[] = ['clear', 'idle_evict', 'workspace_change']
+    expect(reasons).toEqual(['clear', 'idle_evict', 'workspace_change'])
+  })
+
+  it('shapes SessionTransitionPayload as its five fields with workspace_cwd nullable, no conversation_id', () => {
+    const payload: SessionTransitionPayload = {
+      previous_session_id: 'sess-1',
+      new_session_id: 'sess-2',
+      reason: 'clear',
+      occurred_at: '2026-07-10T00:00:00.000000000Z',
+      workspace_cwd: null
+    }
+    expect(payload).toEqual({
+      previous_session_id: 'sess-1',
+      new_session_id: 'sess-2',
+      reason: 'clear',
+      occurred_at: '2026-07-10T00:00:00.000000000Z',
+      workspace_cwd: null
+    })
+    // No conversation_id — a session boundary is attributed by the connection it arrives on (SSOT #656).
+    expect(payload).not.toHaveProperty('conversation_id')
+    // workspace_cwd is a valid non-null path only for workspace_change.
+    const moved: SessionTransitionPayload = {
+      ...payload,
+      reason: 'workspace_change',
+      workspace_cwd: '/home/user/other'
+    }
+    expect(moved.workspace_cwd).toBe('/home/user/other')
   })
 })
 

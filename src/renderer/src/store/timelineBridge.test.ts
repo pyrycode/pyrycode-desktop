@@ -139,7 +139,8 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         ],
         defaultOptionId: 'deny'
       },
-      { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' }
+      { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' },
+      { type: 'sessionTransition', newSessionId: 'sess-2' }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })

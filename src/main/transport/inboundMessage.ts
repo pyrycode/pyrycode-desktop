@@ -32,6 +32,7 @@ import type {
   AssistantDeltaPayload,
   TurnEndPayload,
   TurnStatePayload,
+  SessionTransitionPayload,
   ToolUsePayload,
   ToolResultPayload,
   ConversationSummary,
@@ -82,6 +83,12 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * drives the timeline `phase` (#202). The consumer carries only `state` onward (dropping
  * `conversation_id`); the fail-closed `state` enum check here is the boundary this slice defends.
  *
+ * The `session-transition` kind (#254) carries the decoded SessionTransitionPayload — the session-boundary
+ * marker whose `new_session_id` is the addressing key the #259 holder will retain. The consumer carries
+ * ONLY `new_session_id` onward (dropping the other four decoded fields — the #180 content-drop model); the
+ * fail-closed `reason` closed-enum check plus the nullable `workspace_cwd` here are the boundary this slice
+ * defends. `workspace_cwd` is opaque workspace display text (like `cwd` #139), decoded but dropped at the emit.
+ *
  * The `tool-use` kind (#217) carries the decoded ToolUsePayload — the tool-call enrichment that drives
  * a durable `toolCall` timeline item (#202 / #121). The consumer carries the four render fields onward
  * (dropping `conversation_id`); the fail-closed required-string presence here (five strings, no enum)
@@ -120,6 +127,7 @@ export type InboundDaemonMessage =
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
+  | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
   | { kind: 'tool-use'; toolUse: ToolUsePayload }
   | { kind: 'tool-result'; toolResult: ToolResultPayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
@@ -320,6 +328,36 @@ function parseTurnStatePayload(payload: unknown): TurnStatePayload {
     throw new WireDecodeError('missing required field: state')
   }
   return { conversation_id, state }
+}
+
+/**
+ * Narrow an opaque payload into a SessionTransitionPayload (#254). Fail-closed like parseTurnStatePayload,
+ * scaled to five fields: three required strings (`previous_session_id` / `new_session_id` / `occurred_at`),
+ * a required nullable `workspace_cwd` via requireStringOrNull (the `ConversationSummary.name` #139 idiom — a
+ * literal `null` is a valid value for `clear` / `idle_evict`, but absent/`undefined` or a non-string-non-null
+ * throws), and a `reason` closed-enum check cloned from parseTurnStatePayload's `state` check (covers
+ * non-string and unknown-string alike, narrowing to WireSessionTransitionReason without a cast — a bare
+ * requireString would accept any string and defeat the closed-enum boundary this slice exists to defend). The
+ * check stays exhaustive over the full closed set INCLUDING `workspace_change`, even though the producer
+ * (#657) emits only `clear` / `idle_evict` today. The decoder does NOT cross-validate the
+ * `workspace_cwd`-non-null-⟺-`workspace_change` invariant (daemon-guaranteed on the wire; enforcing it here
+ * would defend an unobserved failure). Returns exactly the five known fields; unknown keys (e.g. a spurious
+ * `conversation_id`) are tolerated but not copied. Its messages name the failure CATEGORY only — never
+ * interpolating a `workspace_cwd` path or a session-correlating id.
+ */
+function parseSessionTransitionPayload(payload: unknown): SessionTransitionPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed session_transition payload')
+  }
+  const previous_session_id = requireString(payload, 'previous_session_id')
+  const new_session_id = requireString(payload, 'new_session_id')
+  const occurred_at = requireString(payload, 'occurred_at')
+  const workspace_cwd = requireStringOrNull(payload, 'workspace_cwd')
+  const reason = payload.reason
+  if (reason !== 'clear' && reason !== 'idle_evict' && reason !== 'workspace_change') {
+    throw new WireDecodeError('missing required field: reason')
+  }
+  return { previous_session_id, new_session_id, reason, occurred_at, workspace_cwd }
 }
 
 /**
@@ -614,6 +652,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'turn-state', turnState }
+    }
+    case 'session_transition': {
+      // Narrow BEFORE logging so a malformed frame (a `reason` outside the closed enum, an
+      // absent/non-string-non-null `workspace_cwd`) throws first and leaves no record. No decoded field
+      // (session ids / reason / occurred_at / workspace_cwd) is logged — only the frame's byte length +
+      // one-way hash, reusing the existing content-free field set.
+      const sessionTransition = parseSessionTransitionPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'session_transition',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'session-transition', sessionTransition }
     }
     case 'tool_use': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field) throws first and

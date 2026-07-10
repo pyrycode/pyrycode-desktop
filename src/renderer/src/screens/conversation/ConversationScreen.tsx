@@ -138,9 +138,9 @@ export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Eleme
 }
 
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
-// over today's three kinds (two of them null), so a future fourth ThreadItem kind makes it
+// over today's three kinds (only turnBoundary null), so a future fourth ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
-// while an unsourced-today kind (toolCall) still degrades to nothing rather than throwing.
+// while a structural-only kind (turnBoundary) still degrades to nothing rather than throwing.
 function TimelineRow({
   item,
   inProgress
@@ -169,8 +169,21 @@ function TimelineRow({
         </div>
       )
     case 'toolCall':
-      // Deferred: #205 / #206 own the tool render. A legitimate union member with no source yet.
-      return null
+      // #218: the pending tool row (Figma node 16-28) — a compact chip, not a message bubble, so
+      // data-thread-role="tool" (not "assistant") keeps it out of the daemon bubble count. `name` and
+      // `inputSummary` are untrusted daemon strings rendered as inert React children (auto-escaped) —
+      // never dangerouslySetInnerHTML, no markup/path interpretation — the assistantText posture above.
+      // This slice draws only the pending (`result: null`) state; #206 fills `result` and owns whether
+      // the .tool-row pending dimming lifts. `toolUseId` stays on the item as #206's correlation key,
+      // never a React key here (Timeline keys by array index — AC2).
+      return (
+        <div className="tool-row">
+          <div className="tool-row__chip" data-thread-role="tool">
+            <span className="tool-row__name">{item.name}</span>
+            <span className="tool-row__summary">{item.inputSummary}</span>
+          </div>
+        </div>
+      )
     case 'turnBoundary':
       // Structural marker only — no drawn element (Figma has no per-turn divider). Its sole
       // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.

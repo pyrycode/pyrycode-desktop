@@ -206,6 +206,65 @@
   color: var(--color-on-surface-variant);
 }
 
+/* #218 — the pending tool row (Figma node 16-28): a compact bordered chip, not a message bubble,
+   left-aligned in the thread, carrying the tool name and its one-line input summary. Every value is a
+   token; the two off-grid Figma values are tokenized per the file's established ±2px/±1px convention
+   (see the .status-row / .run-config__* comments). The whole row sits at 50% opacity — the
+   pending/unresolved dimming (opacity is a de-emphasis device here, not a color literal, like the
+   .status-sheet-overlay__scrim / .status-sheet__handle precedent); #206 fills the result and owns
+   whether that dimming lifts. A child of .conversation__thread's flex column, so it inherits the
+   column's gap; no flex/margin of its own. */
+.tool-row {
+  display: flex;
+  justify-content: flex-start;
+  opacity: 0.5;
+}
+
+/* The chip (Figma node 16-29): surface-container fill, 1px outline-variant border, 12px radius. gap 8
+   → --space-2; py 8 / px 12 → --space-2 / --space-3. max-width/min-width/overflow bound the chip so an
+   arbitrarily long untrusted summary can't blow out the layout. */
+.tool-row__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-container);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius-sm);
+}
+
+/* The tool-name run (Figma 16-30): monospace tertiary — the tool's identity, never shrinks or
+   truncates. Figma is a raw 13px (not a named M3 style) → --text-body-small-size (12px) per the ±2px
+   convention: mono at 12px reads consistent beside the 12px sans summary and adds zero type literals. */
+.tool-row__name {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--color-tertiary);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The input-summary run (Figma 16-31): muted body-small, inheriting --font-sans from .conversation.
+   min-width: 0 + ellipsis so a long untrusted summary ellipsizes rather than overflowing (Figma models
+   a hard overflow-clip; ellipsis is the friendlier desktop degrade for an unbounded string). */
+.tool-row__summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
 /* Pinned composer — never grows or shrinks. A vertical stack so the status hint (#31) can sit
    above the input/button row without disturbing that row's flex layout. */
 .composer {

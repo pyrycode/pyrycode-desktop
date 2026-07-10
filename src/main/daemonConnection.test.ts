@@ -219,6 +219,11 @@ function conversationsPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversations', ts: FIXED_TS, payload })
 }
 
+/** A `turn_state` plaintext, wrapping an arbitrary payload (#214). */
+function turnStatePlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'turn_state', ts: FIXED_TS, payload })
+}
+
 /** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
 function errorPlaintext(): Uint8Array {
   return encodeEnvelope({
@@ -1101,6 +1106,47 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
       { type: 'messageReceived', message },
       { type: 'messagesReceived', messages: [a] }
     ])
+  })
+})
+
+describe('createDaemonConnection — turn_state stream (#214)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound turn_state into one turnState carrying only state (conversation_id dropped)', async () => {
+    for (const state of ['thinking', 'responding', 'idle'] as const) {
+      const { sink, drivers } = await connected()
+      const before = emitted(sink).length
+
+      drivers[0].emit({
+        type: 'message',
+        plaintext: turnStatePlaintext({ conversation_id: 'conv-1', state })
+      })
+
+      const events = emitted(sink).slice(before)
+      expect(events).toEqual([{ type: 'turnState', state }])
+      // conversation_id is dropped at the choke point (single active conversation; #202 scopes it).
+      expect(JSON.stringify(events)).not.toContain('conv-1')
+    }
+  })
+
+  it('drops a malformed turn_state without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: turnStatePlaintext({ conversation_id: 'conv-1', state: 'done' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 })
 

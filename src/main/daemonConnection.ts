@@ -300,6 +300,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               stopReason: inbound.turnEnd.stop_reason
             })
             return
+          case 'turn-state':
+            // The coarse-phase data path (#214). Emit a fresh literal carrying only `state`;
+            // `conversation_id` is DROPPED (single active conversation; #202's bridge scopes identity).
+            // The timeline bridge (#202), not the session store, maps this onto the reducer's `phase`.
+            emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
+            return
           case 'conversations':
             // The conversation-list data path (#139). Emit a fresh literal reusing the already-minimal
             // decoded array — mirror messagesReceived, NOT the snapshot content-drop: there is nothing

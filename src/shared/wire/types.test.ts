@@ -5,7 +5,9 @@ import type {
   DebugBundleChunkPayload,
   DebugBundleDonePayload,
   AssistantDeltaPayload,
-  TurnEndPayload
+  TurnEndPayload,
+  TurnStatePayload,
+  WireTurnState
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -70,5 +72,23 @@ describe('structured-stream wire vocabulary (#199)', () => {
       stop_reason: 'end_turn'
     }
     expect(payload).toEqual({ conversation_id: 'conv-1', turn_id: 'turn-1', stop_reason: 'end_turn' })
+  })
+})
+
+describe('turn-state wire vocabulary (#214)', () => {
+  it('admits the turn_state inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const state: EnvelopeType = 'turn_state'
+    expect(state).toBe('turn_state')
+  })
+
+  it('shapes TurnStatePayload as { conversation_id, state } with state a closed wire enum', () => {
+    const payload: TurnStatePayload = { conversation_id: 'conv-1', state: 'thinking' }
+    expect(payload).toEqual({ conversation_id: 'conv-1', state: 'thinking' })
+  })
+
+  it('admits exactly the three WireTurnState values (mobile field-for-field, no named enum)', () => {
+    const states: WireTurnState[] = ['thinking', 'responding', 'idle']
+    expect(states).toEqual(['thinking', 'responding', 'idle'])
   })
 })

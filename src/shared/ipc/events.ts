@@ -15,7 +15,8 @@ import type {
   HelloAckPayload,
   MessagePayload,
   ErrorPayload,
-  ConversationSummary
+  ConversationSummary,
+  WireTurnState
 } from '../wire/types'
 
 /** The IPC channel every typed daemon event travels on, main → renderer.
@@ -76,6 +77,10 @@ export type DaemonEvent =
   // camelCase per AC3; carry only turnId / seq / text / stopReason — no token, key, or raw frame.
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
+  // The coarse turn-lifecycle arm (#214). Carries only `state` (a closed 3-value wire enum);
+  // `conversation_id` is dropped at the emit (single active conversation). Consumed by the renderer
+  // timeline bridge (#202) → `phase`, not the session store. No token, key, or raw frame.
+  | { type: 'turnState'; state: WireTurnState }
   // The conversation-list arm (#139). Reuses the wire ConversationSummary row type verbatim (the
   // messagesReceived precedent) — snake_case, order preserved from the wire. Consumed by the
   // conversation-list store (#208), not the session store, so the session bridge maps it to `null`.

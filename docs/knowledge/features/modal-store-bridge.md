@@ -150,3 +150,6 @@ daemon frame ─(#201 transport, snake→camel, no conversation_id on a modal)�
 - [#224 codebase notes](../codebase/224.md) — the interactive render slice: mounts `useModalBridge`,
   reads `selectOutstanding` via the new `PermissionModal`/`PermissionModalView`. Unblocks #225 (answer
   path) and #226/#227 (destructive second-confirm / surface rejection).
+- [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the
+  `conversationCreated` arm that folds into this bridge's no-op case alongside `toolResult`; the real
+  consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242).

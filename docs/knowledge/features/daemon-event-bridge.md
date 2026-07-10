@@ -58,6 +58,14 @@ also existed, so this is the first arm to force a case in **three** independent 
 switches at once, not two — a cost the #229 spec's scope self-check (written before #223 merged)
 undercounted by one file; see [#229 codebase notes](../codebase/229.md) § Lessons learned.
 
+[#241](../codebase/241.md) added a thirteenth no-store-action member, `conversationCreated` — the
+[conversation create](conversation-create.md) feature's reply, the write-side twin of
+`conversationsReceived` (#139). Consumed by **neither** existing bridge; the real consumer is the
+render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242) (blocked on this
+ticket), not the session store, the timeline store, or the modal store. The second arm (after
+`toolResult`) to force a case in all three exhaustive `assertNever`-guarded switches at once — now the
+steady-state cost of any new `DaemonEvent` member.
+
 ## What it does
 
 Turns each `DaemonEvent` arriving from the background process into the matching `SessionAction` (or `null`, for events the session store doesn't model) and dispatches non-null results into the one store the UI reads. Two exported symbols:
@@ -69,7 +77,7 @@ Turns each `DaemonEvent` arriving from the background process into the matching 
 
 ### 1. The pure translation (`translateDaemonEvent`)
 
-A `switch (event.type)` over all eighteen `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
+A `switch (event.type)` over all nineteen `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
 
 | `DaemonEvent` arm | `SessionAction` produced | conversion |
 |---|---|---|
@@ -91,6 +99,7 @@ A `switch (event.type)` over all eighteen `DaemonEvent` arms with a `default: re
 | `modalShown` | `null` | consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) (#223, shipped) — present only for exhaustiveness (#201) |
 | `modalDismissed` | `null` | consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) (#223, shipped) — present only for exhaustiveness (#201) |
 | `toolResult` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#229) |
+| `conversationCreated` | `null` | consumed by neither existing bridge; the real consumer is the render sibling #242 — present only for exhaustiveness (#241) |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 
@@ -175,5 +184,6 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member this bridge tolerates as a ninth `null`-returning case; the fourth arm the timeline bridge owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members this bridge tolerates as a tenth and eleventh `null`-returning case; unlike every prior member, the timeline bridge ALSO returns `null` for these — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member this bridge tolerates as a twelfth `null`-returning case; the fifth arm the timeline bridge owns and the first to **resolve** an existing `ThreadItem` rather than append one or set a scalar; the first arm to force a case in three exhaustive `DaemonEvent` switches at once (session, timeline, and [modal store + bridge](modal-store-bridge.md))
+- [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `conversationCreated` member this bridge tolerates as a thirteenth `null`-returning case; consumed by neither existing bridge, the real consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242)
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [#19 codebase notes](../codebase/19.md) · Spec: `docs/specs/architecture/19-translate-daemon-events-to-session-actions.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

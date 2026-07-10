@@ -255,6 +255,12 @@ app.whenReady().then(() => {
         // Direct to the connection method, sends modal_cancel. Inert no-op when not connected (#236).
         connection.cancelModal(command.payload)
         return
+      case 'createConversation':
+        // Direct to the connection method (mirrors requestSnapshot), no orchestrator — a create request
+        // has no consumer/reassembler. Sends create_conversation; the daemon replies with one
+        // conversation_created → conversationCreated event. Inert no-op when not connected (#241).
+        connection.createConversation(command.payload)
+        return
       case 'requestDebugBundle':
         downloader.request()
         return

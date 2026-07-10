@@ -32,6 +32,7 @@ import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
+import { buildCreateConversation } from './transport/createConversationEnvelope'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
@@ -49,6 +50,7 @@ import {
   type HelloAckPayload,
   type SendMessagePayload,
   type RequestSnapshotPayload,
+  type CreateConversationPayload,
   type ModalAnswerPayload,
   type ModalCancelPayload
 } from '../shared/wire/types'
@@ -134,6 +136,15 @@ export interface DaemonConnection {
    * `requestSnapshot`). NEVER throws out of the module (parity #490).
    */
   requestConversations(): void
+  /**
+   * Encrypt a payload-carrying `create_conversation` control envelope onto the live session — asks the
+   * daemon to create a fresh conversation (all three fields nullable; `null` = let the daemon choose).
+   * The `send` TWIN, not `requestDebugBundle`: a create request has no consumer to fail, so it is an
+   * inert no-op when not connected (`driver === null` → return). The reply arrives asynchronously as one
+   * `conversationCreated` DaemonEvent, consumed by the render slice (#242), not the session store. Its
+   * caller is #242; this ticket only wires the round-trip. NEVER throws out of the module (parity #490).
+   */
+  createConversation(payload: CreateConversationPayload): void
   /**
    * Resolve an outstanding permission/trust modal with the user's answer (#236): MINT a fresh
    * client-side idempotency `answer_token` (main-side — the renderer never mints), fold it into a
@@ -376,6 +387,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversations: inbound.conversations
             })
             return
+          case 'conversation-created':
+            // The conversation-created data path (#241). Verbatim passthrough (the `conversations`
+            // precedent): parseConversationCreatedPayload already returned a fresh 5-field object with
+            // nothing to drop (no secret field), so the reference passes through — no re-construction.
+            // Field names stay snake_case (the event reuses the wire type). The render slice (#242),
+            // not the session store, opens the new thread. `name` / `cwd` are untrusted display text.
+            emitDaemonEvent(sink, {
+              type: 'conversationCreated',
+              conversation: inbound.conversationCreated
+            })
+            return
           case 'modal-shown':
             // The modal data path (#201). snake→camel here (`modal_id`→`modalId`,
             // `default_option_id`→`defaultOptionId`); `options` is reused verbatim (the `conversations`
@@ -578,6 +600,35 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function createConversation(payload: CreateConversationPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A create request has no consumer to fail; a request sent
+    // while disconnected simply produces no reply.
+    if (driver === null) return
+    try {
+      // Build a FRESH literal naming exactly the three modeled fields — never a spread of `payload`.
+      // This is the deterministic net that bounds the wire to exactly is_promoted / name / cwd,
+      // ignoring any renderer-smuggled extra field the structural-minimum guard let through (#236's
+      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / requestSnapshot /
+      // requestConversations — no second counter — so ids stay unique across interleaved calls.
+      const bytes = buildCreateConversation({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          is_promoted: payload.is_promoted,
+          name: payload.name,
+          cwd: payload.cwd
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
+      // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
   function answerModal(payload: Omit<ModalAnswerPayload, 'answer_token'>): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A modal resolution has no consumer to fail.
@@ -697,6 +748,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     send,
     requestSnapshot,
     requestConversations,
+    createConversation,
     answerModal,
     cancelModal,
     requestDebugBundle

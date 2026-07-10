@@ -68,8 +68,10 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'toolUse':
     case 'toolResult':
     case 'conversationsReceived':
+    case 'conversationCreated':
       // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
-      // conversation-list store (#208), and timeline store (#202) consume these — not the modal store.
+      // conversation-list store (#208), timeline store (#202), and create render slice (#242) consume
+      // these — not the modal store.
       return null
     default:
       return assertNever(event)

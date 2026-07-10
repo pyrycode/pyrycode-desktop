@@ -19,7 +19,8 @@ import type {
   SendMessagePayload,
   RequestSnapshotPayload,
   ModalAnswerPayload,
-  ModalCancelPayload
+  ModalCancelPayload,
+  CreateConversationPayload
 } from '../wire/types'
 
 /**
@@ -39,17 +40,19 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 
 /**
  * A single typed command from the renderer window to the background process. Sealed
- * discriminated union on `type`. Six members today: `sendMessage`, whose `payload` reuses the
+ * discriminated union on `type`. Seven members today: `sendMessage`, whose `payload` reuses the
  * wire SendMessagePayload verbatim so no field is remapped between layers; the bare
  * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global;
  * `requestSnapshot` (#180), whose `payload` reuses the wire RequestSnapshotPayload (a
  * `conversation_id` routing id, not a secret) to ask the daemon for the current screen_snapshot;
  * the bare `requestConversations` (#139), which carries NO payload — the daemon returns every
  * conversation; `answerModal` (#236), whose `payload` is AnswerModalCommandPayload (`modal_id` +
- * `option_id`, the token Omit-excluded — minted main-side); and `cancelModal` (#236), whose
- * `payload` reuses the wire ModalCancelPayload (`modal_id` only). No member exposes a field that
- * could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only wire types (or
- * a token-excluded derivative), the bare ones carry nothing.
+ * `option_id`, the token Omit-excluded — minted main-side); `cancelModal` (#236), whose
+ * `payload` reuses the wire ModalCancelPayload (`modal_id` only); and `createConversation` (#241),
+ * whose `payload` reuses the wire CreateConversationPayload (three nullable-and-present fields, all
+ * server-defaultable — no secret). No member exposes a field that could hold a token, key, or raw
+ * frame (AC5) — the payload-bearing ones reuse only wire types (or a token-excluded derivative), the
+ * bare ones carry nothing.
  *
  * Extend additively (connect/disconnect) when their transport tickets land — and add a
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
@@ -62,6 +65,7 @@ export type RendererCommand =
   | { type: 'requestConversations' }
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
   | { type: 'cancelModal'; payload: ModalCancelPayload }
+  | { type: 'createConversation'; payload: CreateConversationPayload }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -116,6 +120,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isAnswerModalPayload(value.payload)
     case 'cancelModal':
       return 'payload' in value && isCancelModalPayload(value.payload)
+    case 'createConversation':
+      return 'payload' in value && isCreateConversationPayload(value.payload)
     default:
       return false
   }
@@ -162,4 +168,22 @@ function isAnswerModalPayload(value: unknown): value is AnswerModalCommandPayloa
 function isCancelModalPayload(value: unknown): value is ModalCancelPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'modal_id' in value && typeof value.modal_id === 'string'
+}
+
+/** The untrusted renderer→main boundary guard for the createConversation payload (#241) — the reason
+ *  the command half is security-sensitive. All three fields are nullable-and-PRESENT: the check is on
+ *  TYPE, so a literal `null` is accepted (the daemon-default signal) while a missing/`undefined` key is
+ *  rejected (the `in` check makes "present" explicit and narrows for TS). Structural minimum — a
+ *  smuggled extra field is not rejected here; the main-side sender's fresh-literal construction bounds
+ *  the wire to exactly these three fields. Pure; never throws. */
+function isCreateConversationPayload(value: unknown): value is CreateConversationPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'is_promoted' in value &&
+    (typeof value.is_promoted === 'boolean' || value.is_promoted === null) &&
+    'name' in value &&
+    (typeof value.name === 'string' || value.name === null) &&
+    'cwd' in value &&
+    (typeof value.cwd === 'string' || value.cwd === null)
+  )
 }

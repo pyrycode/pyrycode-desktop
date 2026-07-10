@@ -202,3 +202,7 @@ daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id d
 - [#203 codebase notes](../codebase/203.md) — mounts `useTimelineBridge`, reads
   `selectItems`, and paints the streamed assistant text — the blank-thread-critical slice that gates
   #179.
+- [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the
+  `conversationCreated` transport slice: another `DaemonEvent` arm this bridge does **not** own,
+  folded into the inverse-filter `null` list alongside `modalShown`/`modalDismissed`; the real
+  consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242).

@@ -42,6 +42,7 @@ export interface DaemonConnection {
   requestDebugBundle(): void  // #115: encrypt a bare request_debug_bundle control frame onto the live session
   requestSnapshot(payload: RequestSnapshotPayload): void  // #180: encrypt a request_snapshot onto the live session
   requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
+  createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
@@ -74,6 +75,22 @@ this ticket — [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208) 
 `sendCommand` on connect. The reply is routed through the same `case 'message'` seam and emits a
 fresh `conversationsReceived` literal reusing the decoded array **verbatim** — unlike
 `snapshotReceived`, there is no sensitive field to drop.
+
+**`createConversation(payload)` was added in [#241](../codebase/241.md)** — the write-side twin of
+`requestConversations`, asking the daemon to create a fresh conversation (all three fields nullable,
+`null` = "let the daemon choose"). Also the **`send` twin, not a consumer-failing twin** — inert
+no-op when `driver === null`, shares the one `nextEnvelopeId` counter, never throws (parity #490).
+Unlike `requestSnapshot`/`requestConversations`, it builds a **fresh literal** naming exactly the
+three modeled fields (`{ is_promoted: payload.is_promoted, name: payload.name, cwd: payload.cwd }`)
+before calling `buildCreateConversation` — never a spread of the caller's `payload` — the
+deterministic net that bounds the outbound wire to exactly those three fields regardless of what the
+structural-minimum `isCreateConversationPayload` guard let through (the [#236](../codebase/236.md)
+fresh-literal posture, reused here for the first `send`-family method carrying more than one field).
+The reply is routed through the same `case 'message'` seam as a new `case 'conversation-created':`,
+emitting `conversationCreated` as a verbatim passthrough — nothing to drop, like `conversations`. Its
+caller is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242), blocked
+on this ticket. See the [conversation create](conversation-create.md) feature doc for the full
+contract.
 
 ## Connect-on-pair (`reconnect()`, [#82](../codebase/82.md))
 
@@ -156,7 +173,7 @@ The single choke point. Nothing else emits.
 | `RelaySessionEvent` | Action |
 |---|---|
 | `handshake-complete{helloAck}` | `parseHelloAck` → `connected{ack}`; a `parseHelloAck` throw → `failed('malformed-hello-ack')` (the caught `WireDecodeError` is dropped — its message could echo the ack bytes) |
-| `message{plaintext}` | [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}` / `snapshotReceived{model,effort,yolo,used_tokens,window_tokens}` (#180, extended with the two usage ints by #191; `text`/`ts`/`conversation_id` dropped here) / `conversationsReceived{conversations}` (#139, no field dropped) / `turnState{state}` (#214, only `conversation_id` dropped) / `toolUse{turnId,toolUseId,name,inputSummary}` (#217, only `conversation_id` dropped) / `modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,source}` (#201, **nothing dropped — a modal carries no `conversation_id`**) / `toolResult{turnId,toolUseId,isError,resultSummary}` (#229, only `conversation_id` dropped); a throw (oversized/malformed/mistyped) → **drop** (no event, the caught `WireDecodeError` is dropped — its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)**, extended with the `snapshot` kind in [#180](../codebase/180.md), again with `used_tokens`/`window_tokens` in [#191](../codebase/191.md), again with the `conversations` kind in [#139](../codebase/139.md), again with the `turnState` kind in [#214](../codebase/214.md), again with the `toolUse` kind in [#217](../codebase/217.md), again with the `modalShown`/`modalDismissed` kinds in [#201](../codebase/201.md), and again with the `toolResult` kind in [#229](../codebase/229.md) |
+| `message{plaintext}` | [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}` / `snapshotReceived{model,effort,yolo,used_tokens,window_tokens}` (#180, extended with the two usage ints by #191; `text`/`ts`/`conversation_id` dropped here) / `conversationsReceived{conversations}` (#139, no field dropped) / `turnState{state}` (#214, only `conversation_id` dropped) / `toolUse{turnId,toolUseId,name,inputSummary}` (#217, only `conversation_id` dropped) / `modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,source}` (#201, **nothing dropped — a modal carries no `conversation_id`**) / `toolResult{turnId,toolUseId,isError,resultSummary}` (#229, only `conversation_id` dropped) / `conversationCreated{conversation}` (#241, verbatim passthrough — nothing dropped, like `conversations`); a throw (oversized/malformed/mistyped) → **drop** (no event, the caught `WireDecodeError` is dropped — its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)**, extended with the `snapshot` kind in [#180](../codebase/180.md), again with `used_tokens`/`window_tokens` in [#191](../codebase/191.md), again with the `conversations` kind in [#139](../codebase/139.md), again with the `turnState` kind in [#214](../codebase/214.md), again with the `toolUse` kind in [#217](../codebase/217.md), again with the `modalShown`/`modalDismissed` kinds in [#201](../codebase/201.md), again with the `toolResult` kind in [#229](../codebase/229.md), and again with the `conversation-created` kind in [#241](../codebase/241.md) |
 | `terminal{code, reason}` | if `stopped` → **suppress** (clean local teardown); else `failed('connection-closed', "…code ${code}")`. The supervisor `reason` string is **not** forwarded (conservative) |
 | `error{reason}` | `failed(reason)` — the driver's reason is a static enum string, safe as the category `code` |
 
@@ -230,6 +247,7 @@ The classification the module *already computes* now also lands in the [#126 con
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `tool-use` inbound kind + the new `case 'tool-use'` consumer emit (`conversation_id` dropped, `turnId`/`toolUseId`/`name`/`inputSummary` carried), feeding the timeline bridge's fourth owned arm — the first to drive a durable `toolCall` item. No new method on this factory — `tool_use` is inbound-only.
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modal-shown`/`modal-dismissed` inbound kinds + the two new consumer emit cases; the first pair in this stream to drop **no** `conversation_id` (the wire carries none on a modal). Consumed by neither existing bridge — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md). No new method on this factory — both kinds are inbound-only.
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `tool-result` inbound kind + the new `case 'tool-result'` consumer emit (`conversation_id` dropped, `turnId`/`toolUseId`/`isError`/`resultSummary` carried), feeding the timeline bridge's fifth owned arm — the first to **resolve** an existing `toolCall` item's `result` rather than append a new item. The vertical's last transport slice. No new method on this factory — `tool_result` is inbound-only.
+- [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `createConversation(payload)` method added to this factory (the write-side twin of `requestConversations`, with a fresh-literal security net bounding the outbound wire to exactly three fields), the payload-carrying `buildCreateConversation` builder it drives, and the `conversation-created` inbound kind + verbatim (no-drop) emit in the `case 'message'` consumer arm.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello` builds the injected `session.hello`; `parseHelloAck` narrows the `handshake-complete{helloAck}` bytes into the `HelloAckPayload` this emits.

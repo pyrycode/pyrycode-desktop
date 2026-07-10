@@ -60,6 +60,8 @@ export type EnvelopeType =
   | 'modal_cancel'
   | 'list_conversations'
   | 'conversations'
+  | 'create_conversation'
+  | 'conversation_created'
   | 'ack'
   | 'error'
 
@@ -373,6 +375,44 @@ export interface ConversationSummary {
  *  is the source of truth for ordering (e.g. most-recently-used first). See #139. */
 export interface ConversationsPayload {
   conversations: ConversationSummary[]
+}
+
+/**
+ * Outbound `create_conversation` request body (client → daemon). Mirrors the daemon's
+ * CreateConversationPayload field-for-field (internal/protocol/conversations_write.go, spec #274),
+ * wire order `is_promoted, name, cwd` — all three server-defaultable.
+ *
+ * **Nullable-and-PRESENT, not optional.** The daemon's struct uses `*T` WITHOUT `omitempty`, so each
+ * key is always on the wire with an explicit `null` (its "take the server default — let the daemon
+ * choose" signal). These fields are therefore `T | null` (present, nullable), NOT `T | undefined`
+ * (optional/omitted). This is the deliberate OPPOSITE of the `Envelope.in_reply_to?` convention above
+ * ("never emit null"): here the daemon contract REQUIRES `null` on the wire, and CLAUDE.md no-drift
+ * wins. Do NOT "fix" these to `?:` — an omission would drop the key and change the wire meaning.
+ */
+export interface CreateConversationPayload {
+  is_promoted: boolean | null
+  name: string | null
+  cwd: string | null
+}
+
+/**
+ * Inbound `conversation_created` reply body (daemon → client). Mirrors the daemon's
+ * ConversationCreatedPayload field-for-field (conversations_write.go, spec #274), wire order
+ * `id, is_promoted, cwd, name, last_used_at` — all always present (no `omitempty`).
+ *
+ * Its OWN 5-field shape — deliberately NOT `ConversationSummary` (7 fields): the daemon does NOT send
+ * `is_archived` or `last_message_ts` on a create reply (spec #274 excludes the reuse). `name` is
+ * `string | null` exactly like `ConversationSummary.name`: a literal `null` (never absent) is a distinct
+ * "unnamed scratch conversation", NOT an empty string. `is_promoted` is a boolean (`false` = an ad-hoc
+ * discussion, a value, not an absence). `cwd` is an untrusted daemon-supplied string carried as opaque
+ * display text; this ticket never resolves it into a filesystem path. `last_used_at` is RFC3339. See #241.
+ */
+export interface ConversationCreatedPayload {
+  id: string
+  is_promoted: boolean
+  cwd: string
+  name: string | null
+  last_used_at: string
 }
 
 /**

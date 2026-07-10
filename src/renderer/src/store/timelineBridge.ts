@@ -76,11 +76,12 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'debugBundleFailed':
     case 'snapshotReceived':
     case 'conversationsReceived':
+    case 'conversationCreated':
     case 'modalShown':
     case 'modalDismissed':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
-      // (#181), conversation-list store (#208), and modal store + bridge (#223) consume these — not
-      // the timeline store.
+      // (#181), conversation-list store (#208), modal store + bridge (#223), and the create render
+      // slice (#242) consume these — not the timeline store.
       return null
     default:
       return assertNever(event)

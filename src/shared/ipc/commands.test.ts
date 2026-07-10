@@ -8,7 +8,11 @@ import {
   type RendererCommand,
   type AnswerModalCommandPayload
 } from './commands'
-import type { SendMessagePayload, ModalCancelPayload } from '../wire/types'
+import type {
+  SendMessagePayload,
+  ModalCancelPayload,
+  CreateConversationPayload
+} from '../wire/types'
 
 describe('command channel', () => {
   it('pins the IPC channel string both process sides depend on', () => {
@@ -226,5 +230,47 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: 'cancelModal', payload: null })).toBe(false)
     expect(isRendererCommand({ type: 'cancelModal', payload: {} })).toBe(false)
     expect(isRendererCommand({ type: 'cancelModal', payload: { modal_id: 42 } })).toBe(false)
+  })
+
+  it('accepts a well-formed createConversation command with all-null fields (daemon defaults) (#241)', () => {
+    // The guard checks the TYPE, so a literal null is an accepted value ("let the daemon choose"),
+    // while a missing/undefined key is rejected. No constructor exists (requestSnapshot precedent):
+    // #242 builds the literal inline, so this is proven through an inline literal typed as the union.
+    const allNull: CreateConversationPayload = { is_promoted: null, name: null, cwd: null }
+    const command: RendererCommand = { type: 'createConversation', payload: allNull }
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum), like sendMessage.
+    expect(isRendererCommand({ type: 'createConversation', payload: allNull, extra: 1 })).toBe(true)
+  })
+
+  it('accepts a fully-populated createConversation command (#241)', () => {
+    const populated: CreateConversationPayload = {
+      is_promoted: true,
+      name: 'design review',
+      cwd: '/home/user/project'
+    }
+    expect(isRendererCommand({ type: 'createConversation', payload: populated })).toBe(true)
+  })
+
+  it('rejects a createConversation with a missing/null payload (#241)', () => {
+    expect(isRendererCommand({ type: 'createConversation' })).toBe(false)
+    expect(isRendererCommand({ type: 'createConversation', payload: null })).toBe(false)
+  })
+
+  it('rejects a createConversation whose fields are wrong-typed or a key is missing (#241)', () => {
+    const t = 'createConversation'
+    // Each field must be its type OR null — a wrong non-null type is rejected.
+    expect(isRendererCommand({ type: t, payload: { is_promoted: 'yes', name: null, cwd: null } })).toBe(
+      false
+    )
+    expect(isRendererCommand({ type: t, payload: { is_promoted: null, name: 3, cwd: null } })).toBe(
+      false
+    )
+    expect(isRendererCommand({ type: t, payload: { is_promoted: null, name: null, cwd: 42 } })).toBe(
+      false
+    )
+    // A missing key (undefined, not a literal null) is rejected — null is present, undefined is absent.
+    expect(isRendererCommand({ type: t, payload: { is_promoted: null, name: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { name: null, cwd: null } })).toBe(false)
   })
 })

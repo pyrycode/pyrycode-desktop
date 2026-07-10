@@ -35,6 +35,7 @@ import type {
   ToolUsePayload,
   ToolResultPayload,
   ConversationSummary,
+  ConversationCreatedPayload,
   ModalShownPayload,
   ModalDismissedPayload,
   WireModalOption
@@ -96,6 +97,12 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * wire). Like `chunk`, a single reply narrows to a whole list; the consumer forwards it verbatim as
  * one `conversationsReceived` event — no field is a secret, so nothing is dropped.
  *
+ * The `conversation-created` kind (#241) carries the decoded ConversationCreatedPayload — its OWN
+ * 5-field shape (NOT ConversationSummary; the daemon excludes is_archived/last_message_ts on a create
+ * reply, spec #274). The fail-closed decode here (four required strings + one required boolean, `name`
+ * nullable) is the boundary this slice defends; the consumer forwards it verbatim as one
+ * `conversationCreated` event — nothing to drop. `name` / `cwd` are untrusted display text.
+ *
  * The two modal kinds (#201) carry the decoded ModalShownPayload / ModalDismissedPayload — the
  * permission/trust prompt `claude` blocks on. The fail-closed decode here (two closed-enum checks on
  * `class` / `source` + a per-option narrower over the ordered `options` array) is the boundary this
@@ -116,6 +123,7 @@ export type InboundDaemonMessage =
   | { kind: 'tool-use'; toolUse: ToolUsePayload }
   | { kind: 'tool-result'; toolResult: ToolResultPayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
+  | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
 
@@ -396,6 +404,29 @@ function parseConversationsPayload(payload: unknown): ConversationSummary[] {
 }
 
 /**
+ * Narrow an opaque payload into a ConversationCreatedPayload (#241). Fail-closed like
+ * parseConversationSummary, scaled to the create reply's OWN 5-field shape — `id` / `cwd` /
+ * `last_used_at` required strings, `is_promoted` a required boolean (the `yolo` #180 idiom — the check
+ * is on the TYPE, so `false` decodes as the value `false`, never an absence, and a non-boolean throws),
+ * and `name` a required, nullable string (`null` is a valid value — an unnamed scratch conversation,
+ * AC5 — but a missing/`undefined` field throws). Returns only the five known fields; unknown
+ * server-added keys (e.g. a spurious is_archived/last_message_ts) are tolerated (forward-compat) but
+ * NOT copied through. Its messages name the failure category only — a `name` / `cwd` could echo a title
+ * or workspace path.
+ */
+function parseConversationCreatedPayload(payload: unknown): ConversationCreatedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed conversation_created payload')
+  }
+  const id = requireString(payload, 'id')
+  const is_promoted = requireBoolean(payload, 'is_promoted')
+  const cwd = requireString(payload, 'cwd')
+  const name = requireStringOrNull(payload, 'name')
+  const last_used_at = requireString(payload, 'last_used_at')
+  return { id, is_promoted, cwd, name, last_used_at }
+}
+
+/**
  * Narrow one opaque option into a WireModalOption (#201). Fail-closed like parseConversationSummary:
  * two required strings (`id` / `label`), unknown keys tolerated but not copied. Its message names the
  * category only — an option `label` is untrusted `claude`-surfaced display text.
@@ -627,6 +658,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'conversations', conversations }
+    }
+    case 'conversation_created': {
+      // Narrow BEFORE logging so a malformed reply (a missing / mistyped field) throws first and leaves
+      // no record. No decoded field (id / name / cwd / last_used_at / is_promoted) is logged — only the
+      // frame's byte length + one-way hash, reusing the existing content-free field set. Deliberately NO
+      // `count` field (the conversations #139 posture): the set stays type/bytes/hash.
+      const conversationCreated = parseConversationCreatedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'conversation_created',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'conversation-created', conversationCreated }
     }
     case 'modal_shown': {
       // Narrow BEFORE logging so a malformed frame (a `class` outside the closed enum, a bad option)

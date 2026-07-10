@@ -189,6 +189,88 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('after tool'))
   })
 
+  // #230: the resolved tool row. When #121's reducer fills a toolCall's `result` in place (matched by
+  // toolUseId, replacing the item at its own index), the row resolves where it sits — the pending
+  // dimming lifts and `result.isError` selects a success vs error treatment. The className is the
+  // load-bearing seam: `tool-row--resolved` iff `result !== null`, `tool-row--error` on top iff isError.
+  it('resolves a successful tool row in place — lifts the pending dimming, no error accent (AC2)', () => {
+    const items: ThreadItem[] = [
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'read_file',
+        inputSummary: 'schema.ts',
+        result: { isError: false, resultSummary: '184 lines' }
+      }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    // The wrapper carries the resolved modifier (dimming lifted) but NOT the error modifier.
+    expect(markup).toContain('tool-row--resolved')
+    expect(markup).not.toContain('tool-row--error')
+    // The chip's inner markup is unchanged — same role, same daemon-supplied runs, still no bubble.
+    expect(markup).toContain('tool-row__chip')
+    expect(markup).toContain('data-thread-role="tool"')
+    expect(markup).toContain('read_file')
+    expect(markup).toContain('schema.ts')
+    expect(threadBubbleCount(markup)).toBe(0)
+    expect(markup).not.toContain(CURSOR)
+  })
+
+  it('resolves a failed tool row in place — carries both the resolved and error modifiers (AC3)', () => {
+    const items: ThreadItem[] = [
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'read_file',
+        inputSummary: 'missing.ts',
+        result: { isError: true, resultSummary: 'ENOENT' }
+      }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    // Error is driven by result.isError: both modifiers present (resolved lifts dimming, error accents).
+    expect(markup).toContain('tool-row--resolved')
+    expect(markup).toContain('tool-row--error')
+  })
+
+  // #230/AC1: the pending path is untouched — a `result: null` toolCall carries the bare `tool-row`
+  // class and neither resolved modifier. Pins that this slice adds treatment only when a result fills.
+  it('leaves a pending tool row (result: null) undimmed-modifier-free — no resolved modifier (AC1)', () => {
+    const items: ThreadItem[] = [
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'read_file',
+        inputSummary: 'schema.ts',
+        result: null
+      }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('class="tool-row"')
+    expect(markup).not.toContain('tool-row--resolved')
+    expect(markup).not.toContain('tool-row--error')
+  })
+
+  // #230/AC4: the resolved chip surfaces only `name` + `inputSummary` (the architect call against the
+  // Figma mock, which has no result-text slot). `resultSummary` is untrusted daemon text and is NOT
+  // rendered — a distinctive sentinel must not leak into the markup, so there's no new untrusted surface.
+  it('does not surface result.resultSummary in the resolved chip (AC4)', () => {
+    const items: ThreadItem[] = [
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'read_file',
+        inputSummary: 'missing.ts',
+        result: { isError: true, resultSummary: 'RESULT_SUMMARY_SENTINEL_zzz' }
+      }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).not.toContain('RESULT_SUMMARY_SENTINEL_zzz')
+  })
+
   it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {
     const items: ThreadItem[] = [{ kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }]
     let markup = ''

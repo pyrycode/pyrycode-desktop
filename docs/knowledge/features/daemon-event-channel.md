@@ -28,6 +28,12 @@ it's a fire-and-forget request/reply, not a streamed delta. Consumed by the conv
 [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208) (blocked on this), not the session
 store.
 
+[#214](../codebase/214.md) added an eighth no-`SessionAction` member, `turnState` — the coarse
+turn-lifecycle scalar of the same v2 interactive stream `assistantDelta`/`turnEnd` belong to. Carries
+only `state` (a closed 3-value `WireTurnState`); `conversation_id` is dropped at the emit. Consumed by
+the [conversation timeline store](conversation-timeline-store.md)'s bridge — the third arm that bridge
+owns — driving `phase`, not `items`; the session bridge still maps it to `null`.
+
 ## What it does
 
 Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge.
@@ -66,6 +72,7 @@ export type DaemonEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
+  | { type: 'turnState'; state: WireTurnState }
 ```
 
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
@@ -97,6 +104,13 @@ export type DaemonEvent =
   rather than a hand-built minimal shape — there is no sensitive field to strip, so
   `parseConversationSummary`'s own decode-only-known-fields narrowing is the sole minimisation
   control. See [conversation list fetch](conversation-list-fetch.md).
+- **`turnState{state}`** ([#214](../codebase/214.md)) also maps to *no* `SessionAction`, consumed
+  instead by the [conversation timeline store](conversation-timeline-store.md)'s bridge — the
+  `timelineBridge`'s third owned arm, alongside `assistantDelta`/`turnEnd`. `state` reuses
+  `WireTurnState` verbatim (the wire's own closed enum, no re-declaration); `conversation_id` is the
+  one field dropped, same reasoning as `assistantDelta`/`turnEnd`. Unlike those two, this member
+  drives the timeline's scalar `phase`, not an appended `ThreadItem` — see [ADR
+  0008](../decisions/0008-thread-timeline-model.md).
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -161,6 +175,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **`snapshotReceived` has a real producer from the start.** [#180](../codebase/180.md) wires `emitDaemonEvent` for it directly from `daemonConnection.ts`'s inbound `case 'message'` arm, the same choke point as `messageReceived`/`messagesReceived` — no separate orchestrator, unlike the debug-bundle members (a snapshot has no multi-step progress to coordinate).
 - **`assistantDelta`/`turnEnd` have a real producer, but no traffic yet.** [#199](../codebase/199.md) wires `emitDaemonEvent` for both from the same `case 'message'` choke point, but the daemon never actually sends `assistant_delta`/`turn_end` until [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) advertises the `interactive` capability — a Strangler-Fig decode path with a real emitter and zero live callers today, proven only by unit tests driving `daemonConnection` directly.
 - **`conversationsReceived` has a real producer, but no request trigger yet in this ticket.** [#139](../codebase/139.md) wires `emitDaemonEvent` for it from the same `case 'message'` choke point, and also adds the outbound `requestConversations` [command](command-channel.md) — but nothing calls `sendCommand({type:'requestConversations'})` until [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)'s store fires it on connect. Unlike `assistantDelta`/`turnEnd` (blocked on a daemon capability flip), this is blocked only on the sibling ticket landing.
+- **`turnState` has a real producer, but the daemon sends nothing yet — same capability gate as `assistantDelta`/`turnEnd`.** [#214](../codebase/214.md) wires `emitDaemonEvent` for it from the same `case 'message'` choke point, and `selectPhase` now has a real source for the first time — but no `turn_state` frame reaches it until [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) flips `interactive`. Proven only by unit tests driving `daemonConnection` and `timelineBridge` directly, and by the timeline store's own no-churn round-trip test.
 
 ## Security posture
 
@@ -179,6 +194,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Thread timeline (conversation model)](thread-timeline.md) / [#199](../codebase/199.md) — the `assistantDelta`/`turnEnd` members, the transport slice of the structured-stream render vertical, and the deliberate content-carrying divergence from `snapshotReceived`'s minimisation pattern
 - [Inbound message decode](inbound-message-decode.md) / [#199](../codebase/199.md) — the `assistant_delta`/`turn_end` decode this channel's two new members are constructed from
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `conversationsReceived` member, its `requestConversations` [command channel](command-channel.md) mirror, and why it reuses the wire row type verbatim instead of a hand-built minimal shape
+- [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turnState` member, the third arm the `timelineBridge` owns, and the closed-enum decode idiom cloned from `role`
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#18 codebase notes](../codebase/18.md) · Spec: `docs/specs/architecture/18-typed-daemon-event-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

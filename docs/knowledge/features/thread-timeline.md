@@ -11,8 +11,10 @@ fetch](screen-snapshot-fetch.md) vertical (#180 → #187/#188) proved: [#199](..
 this module's `ThreadEvent` union is the eventual target of; [#202](../codebase/202.md) (shipped)
 added the [Zustand store + the `DaemonEvent → ThreadEvent` bridge](conversation-timeline-store.md)
 over `reduceTimeline`; [#203](../codebase/203.md) (shipped) renders the streamed text — the
-blank-thread-critical slice that gates #179 (advertising the `interactive` capability). #204/#205/#206
-add `turn_state`/`tool_use`/`tool_result` render afterward.
+blank-thread-critical slice that gates #179 (advertising the `interactive` capability). [#214](../codebase/214.md)
+(shipped) wired the `turn_state` transport → bridge chain, giving `selectPhase` its first real source
+(no render yet — the thinking indicator is a still-open sibling slice). `tool_use`/`tool_result`
+transport + render trail after.
 
 Introduced in [#121](../codebase/121.md). Lives at
 `src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
@@ -93,8 +95,8 @@ Nothing imports this module yet.
   (`AssistantDeltaPayload`/`TurnEndPayload`, `assistant_delta`/`turn_end` on `EnvelopeType`), the
   transport decode (`inboundMessage.ts`), and the `assistantDelta`/`turnEnd` `DaemonEvent` arms
   (`src/shared/ipc/events.ts`) — see [inbound message decode](inbound-message-decode.md) and
-  [daemon-event channel](daemon-event-channel.md). `turn_state`/`tool_use`/`tool_result` are not yet
-  decoded (still fall to `inbound-unmodeled → null`) — that's #204/#205/#206.
+  [daemon-event channel](daemon-event-channel.md). At the time, `turn_state`/`tool_use`/`tool_result`
+  were not yet decoded (still fell to `inbound-unmodeled → null`).
 - **[#202](../codebase/202.md) (shipped)** added the `daemonEventBridge`-shaped translator mapping
   `DaemonEvent`'s wire-derived snake→camel fields onto this module's `ThreadEvent` — a filter, not a
   reshape, since the two owned arms are field-for-field identical (`turnId`/`seq`/`text`,
@@ -104,6 +106,11 @@ Nothing imports this module yet.
 - **[#203](../codebase/203.md) (shipped)** added the first render slice: the streamed assistant text
   + a streaming cursor on the timeline (`Timeline`, in `ConversationScreen.tsx`) — the
   blank-thread-critical render that gates #179. Resolved the React-key question below as array index.
+- **[#214](../codebase/214.md) (shipped)** added the `turn_state` wire type, transport decode, and the
+  `turnState` `DaemonEvent`/`ThreadEvent` arms — the fail-closed decode uses the `role`-style
+  closed-enum idiom instead of `requireString`. `reduceTimeline`'s pre-existing `turnState` arm and
+  `selectPhase` are unmodified by this ticket; it only wires up a real feed. No render — the thinking
+  indicator is a still-open sibling slice.
 
 ## Edge cases and limitations
 
@@ -148,6 +155,9 @@ Nothing imports this module yet.
 - [#203 codebase notes](../codebase/203.md) — the render slice; resolved the React-key question (array
   index) and derived the streaming cursor structurally from the reducer's append-only/tail-mutation
   invariant.
+- [#214 codebase notes](../codebase/214.md) — the `turn_state` transport slice: wire types, decode
+  (closed-enum idiom), and the `turnState` `DaemonEvent`/`ThreadEvent` arms; gave `selectPhase` its
+  first real source.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

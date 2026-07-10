@@ -63,6 +63,11 @@ function encodeConversations(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 12, type: 'conversations', ts: FIXED_TS, payload })
 }
 
+/** A `turn_state` envelope's plaintext bytes, wrapping an arbitrary payload (#214). */
+function encodeTurnState(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 13, type: 'turn_state', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -88,6 +93,12 @@ const TURN_END = {
   conversation_id: 'conv-1',
   turn_id: 'turn-1',
   stop_reason: 'end_turn'
+}
+
+/** A fully-populated, well-formed turn_state payload (#214). */
+const TURN_STATE = {
+  conversation_id: 'conv-1',
+  state: 'thinking'
 }
 
 /** A well-formed conversation summary with a string name — a saved channel (#139). */
@@ -538,6 +549,62 @@ describe('parseInboundMessage — conversations fail-closed (#139, AC2/AC4)', ()
   })
 })
 
+describe('parseInboundMessage — turn_state recognition (#214, additive)', () => {
+  it('narrows a full turn_state into { kind: turn-state } for each of the three states', () => {
+    for (const state of ['thinking', 'responding', 'idle'] as const) {
+      const payload = { conversation_id: 'conv-1', state }
+      expect(parseInboundMessage(encodeTurnState(payload))).toEqual({
+        kind: 'turn-state',
+        turnState: payload
+      })
+    }
+  })
+
+  it('drops unknown server keys, keeping only the two known turn_state fields (forward-compat)', () => {
+    const withExtras = { ...TURN_STATE, phase: 'legacy', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeTurnState(withExtras))).toEqual({
+      kind: 'turn-state',
+      turnState: TURN_STATE
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — turn_state fail-closed (#214)', () => {
+  it('throws when state is absent, a non-string, or a string outside the closed enum', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'conv-1' }, // state absent
+      { ...TURN_STATE, state: 42 }, // non-string
+      { ...TURN_STATE, state: null },
+      { ...TURN_STATE, state: {} },
+      { ...TURN_STATE, state: 'done' }, // a string outside the closed enum
+      { ...TURN_STATE, state: '' } // empty string is still outside the enum
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeTurnState(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when conversation_id is absent or a non-string', () => {
+    const bad: unknown[] = [
+      { state: 'thinking' }, // conversation_id absent
+      { ...TURN_STATE, conversation_id: 42 },
+      { ...TURN_STATE, conversation_id: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeTurnState(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a turn_state payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeTurnState('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeTurnState(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -799,6 +866,33 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() =>
       parseInboundMessage(encodeTurnEnd({ ...TURN_END, stop_reason: 42 }), log)
     ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a turn_state content-free, never the state / conversation_id (#214)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const plaintext = encodeTurnState({ conversation_id: SECRET_CONV, state: 'responding' })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('turn_state')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field (state / conversation_id) reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    expect(lines[0]).not.toContain('responding')
+  })
+
+  it('does NOT log on a malformed turn_state throw path (#214)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeTurnState({ ...TURN_STATE, state: 'done' }), log)).toThrow(
+      WireDecodeError
+    )
     expect(lines).toHaveLength(0)
   })
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { HelloAckPayload, MessagePayload, ErrorPayload } from '@shared/wire/types'
 import { translateTimelineEvent, subscribeTimeline } from './timelineBridge'
-import { createTimelineStore, selectItems } from './timelineStore'
+import { createTimelineStore, selectItems, selectPhase } from './timelineStore'
 import type { ThreadItem } from './threadTimeline'
 
 // Fixtures — plain wire-shaped data, mirroring daemonEventBridge.test.ts. No transport involved.
@@ -40,6 +40,16 @@ describe('translateTimelineEvent — the two owned arms', () => {
     const translated = translateTimelineEvent(event)
     expect(translated).toEqual({ type: 'turnEnd', turnId: 'A', stopReason: 'max_tokens' })
     expect(translated).not.toBe(event)
+  })
+
+  it('turnState → a ThreadEvent turnState with the same state, a fresh object, for each phase', () => {
+    for (const state of ['thinking', 'responding', 'idle'] as const) {
+      const event: DaemonEvent = { type: 'turnState', state }
+      const translated = translateTimelineEvent(event)
+      expect(translated).toEqual({ type: 'turnState', state })
+      // A fresh literal, not a pass-through of the DaemonEvent object.
+      expect(translated).not.toBe(event)
+    }
   })
 })
 
@@ -153,5 +163,30 @@ describe('subscribeTimeline', () => {
     const item = items[0] as Extract<ThreadItem, { kind: 'assistantText' }>
     expect(item.kind).toBe('assistantText')
     expect(item.text).toBe('Hello')
+  })
+
+  it('AC5: a turnState event drives the store phase; all three states round-trip, no React', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    for (const state of ['thinking', 'responding', 'idle'] as const) {
+      bridge.emit({ type: 'turnState', state })
+      expect(selectPhase(store.getState())).toBe(state)
+    }
+  })
+
+  it('AC5: re-emitting the current state is a no-churn no-op (same state reference)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    bridge.emit({ type: 'turnState', state: 'thinking' })
+    const afterFirst = store.getState()
+    expect(selectPhase(afterFirst)).toBe('thinking')
+
+    // Same state again — the reducer returns the same state object, so the store does not churn.
+    bridge.emit({ type: 'turnState', state: 'thinking' })
+    expect(store.getState()).toBe(afterFirst)
   })
 })

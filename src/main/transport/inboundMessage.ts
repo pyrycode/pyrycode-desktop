@@ -31,6 +31,7 @@ import type {
   ScreenSnapshotPayload,
   AssistantDeltaPayload,
   TurnEndPayload,
+  TurnStatePayload,
   ConversationSummary
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
@@ -71,6 +72,10 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * Unlike `snapshot`, the assistant delta `text` IS the render payload — the consumer carries it onward
  * (dropping only `conversation_id`); the fail-closed decode here is the boundary this slice defends.
  *
+ * The `turn-state` kind (#214) carries the decoded TurnStatePayload — the coarse lifecycle scalar that
+ * drives the timeline `phase` (#202). The consumer carries only `state` onward (dropping
+ * `conversation_id`); the fail-closed `state` enum check here is the boundary this slice defends.
+ *
  * The `conversations` kind (#139) carries the decoded ConversationSummary[] (order preserved from the
  * wire). Like `chunk`, a single reply narrows to a whole list; the consumer forwards it verbatim as
  * one `conversationsReceived` event — no field is a secret, so nothing is dropped.
@@ -84,6 +89,7 @@ export type InboundDaemonMessage =
   | { kind: 'snapshot'; snapshot: ScreenSnapshotPayload }
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
+  | { kind: 'turn-state'; turnState: TurnStatePayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
@@ -261,6 +267,27 @@ function parseTurnEndPayload(payload: unknown): TurnEndPayload {
 }
 
 /**
+ * Narrow an opaque payload into a TurnStatePayload (#214). Fail-closed like parseMessagePayload. The
+ * single `state` enum check is cloned from parseMessagePayload's `role` check: it covers non-string and
+ * unknown-string alike, narrowing to WireTurnState without a cast — a bare requireString would accept
+ * any string and defeat the closed-enum boundary this slice exists to defend. Its message names the
+ * failure CATEGORY only (never interpolating `state` or the conversation-correlating `conversation_id`),
+ * matching the uniform no-echo discipline of the decoder. Returns only the two known fields; unknown
+ * server-added keys are tolerated (forward-compat) but not copied through.
+ */
+function parseTurnStatePayload(payload: unknown): TurnStatePayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed turn_state payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const state = payload.state
+  if (state !== 'thinking' && state !== 'responding' && state !== 'idle') {
+    throw new WireDecodeError('missing required field: state')
+  }
+  return { conversation_id, state }
+}
+
+/**
  * Narrow an opaque payload into one ConversationSummary (#139). Fail-closed like parseMessagePayload:
  * every field is required-present — `name: null` is a valid VALUE (a distinct unnamed conversation,
  * AC2), and `is_promoted: false` / `is_archived: false` are valid values (an ad-hoc discussion /
@@ -409,6 +436,19 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'turn-end', turnEnd }
+    }
+    case 'turn_state': {
+      // Narrow BEFORE logging so a malformed frame (a `state` outside the closed enum) throws first
+      // and leaves no record. No decoded field (state / conversation_id) is logged — only the frame's
+      // byte length + one-way hash, reusing the existing content-free field set.
+      const turnState = parseTurnStatePayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'turn_state',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'turn-state', turnState }
     }
     case 'conversations': {
       // Narrow BEFORE logging so a malformed reply (a bad row, a non-array) throws first and leaves no

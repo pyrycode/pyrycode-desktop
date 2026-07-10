@@ -20,12 +20,12 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the two v2 stream arms (`assistantDelta` / `turnEnd`); each is
- * reconstructed as a fresh literal with named fields — not `return event`, not a spread — so the
- * translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching the
- * transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
- * rename: the two owned arms are field-for-field identical to their `ThreadEvent` counterparts, so
- * there is no field-mapping — just arm selection + fresh copy.
+ * timeline state. Owns exactly the three v2 stream arms (`assistantDelta` / `turnEnd` / `turnState`,
+ * #214); each is reconstructed as a fresh literal with named fields — not `return event`, not a spread
+ * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
+ * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
+ * rename: the owned arms are field-for-field identical to their `ThreadEvent` counterparts, so there
+ * is no field-mapping — just arm selection + fresh copy.
  *
  * Every other arm returns `null` via explicit fall-through cases, then `assertNever` — deliberately
  * NOT a catch-all `default: return null`, which would silently swallow a future arm. The guard is
@@ -38,6 +38,10 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       return { type: 'assistantDelta', turnId: event.turnId, seq: event.seq, text: event.text }
     case 'turnEnd':
       return { type: 'turnEnd', turnId: event.turnId, stopReason: event.stopReason }
+    case 'turnState':
+      // `event.state` is WireTurnState; the ThreadEvent arm expects TurnPhase — the same literal union,
+      // so this assigns with no cast and no import of TurnPhase (a rename, not a re-validation).
+      return { type: 'turnState', state: event.state }
     case 'connecting':
     case 'connected':
     case 'disconnected':

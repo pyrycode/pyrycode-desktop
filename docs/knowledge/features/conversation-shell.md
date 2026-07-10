@@ -383,8 +383,9 @@ bridges' hard `assertNever`, see [#203 codebase notes § Patterns established](.
 
 **Streaming cursor** (Figma `16:56`, glyph `▎` U+258E): a trailing `<span class="bubble__cursor"
 aria-hidden="true">` inside the in-progress bubble, rendered only on the tail item when
-`item.kind === 'assistantText'` — derived from array position, never from `selectPhase` (which has no
-source until #204, so it's always `idle` in this slice). CSS blink guarded by
+`item.kind === 'assistantText'` — derived from array position, never from `selectPhase` (which had no
+source at the time; [#214](../codebase/214.md) later wired one up, but this render still doesn't read
+it — the thinking indicator is a separate, still-open slice). CSS blink guarded by
 `@media (prefers-reduced-motion: reduce)`.
 
 **React key = array index**, deliberately: the reducer's `appendDelta`/`fillResult` invariants

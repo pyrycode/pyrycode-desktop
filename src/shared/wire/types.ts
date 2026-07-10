@@ -51,6 +51,7 @@ export type EnvelopeType =
   | 'screen_snapshot'
   | 'assistant_delta'
   | 'turn_end'
+  | 'turn_state'
   | 'list_conversations'
   | 'conversations'
   | 'ack'
@@ -173,6 +174,27 @@ export interface TurnEndPayload {
   conversation_id: string
   turn_id: string
   stop_reason: string
+}
+
+/**
+ * The coarse turn lifecycle scalar on the wire. Mirrors WireRole: a plain string on the daemon side
+ * (no named enum), exactly like MessagePayload.role. Structurally identical to the renderer-side
+ * TurnPhase (threadTimeline.ts) — declared separately because shared code cannot import a renderer
+ * type; the timeline bridge (#202) assigns one to the other with no cast.
+ */
+export type WireTurnState = 'thinking' | 'responding' | 'idle'
+
+/**
+ * Inbound `turn_state` event (daemon → client). Mirrors the daemon's TurnStatePayload field-for-field
+ * (pyrycode #607 / #794, protocol-mobile.md), wire order `conversation_id, state` — both always present
+ * (no `omitempty`). The coarse lifecycle scalar of the v2 interactive stream (ADR 0008): a `phase`, NOT
+ * a timeline item. `state` is a plain wire string exactly like `MessagePayload.role`, closed to the
+ * three WireTurnState values; the daemon emits `turn_state{thinking}` on the rising edge of a turn,
+ * before any `assistant_delta` (pyrycode #632). See #214.
+ */
+export interface TurnStatePayload {
+  conversation_id: string
+  state: WireTurnState
 }
 
 /**

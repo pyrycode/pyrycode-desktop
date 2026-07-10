@@ -43,7 +43,7 @@ export interface DaemonConnection {
   requestSnapshot(payload: RequestSnapshotPayload): void  // #180: encrypt a request_snapshot onto the live session
   requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
-  setSessionSettings(payload: SetSessionSettingsPayload): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder
+  setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
 }
 
 export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnection
@@ -93,23 +93,26 @@ caller is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop
 on this ticket. See the [conversation create](conversation-create.md) feature doc for the full
 contract.
 
-**`setSessionSettings(payload)` was added in [#263](../codebase/263.md)** — the outbound send half of a
-per-session model/reasoning-effort/YOLO change (pyrycode #844/#845), the write-side counterpart of
-`requestSnapshot`. Another **`send` twin** (inert no-op when `driver === null`, no consumer to fail),
-sharing the one `nextEnvelopeId` counter, never throws (parity #490). Unlike `createConversation`'s
+**`setSessionSettings(payload, changeId)` was added in [#263](../codebase/263.md)** (send) and widened
+with `changeId` in [#261](../codebase/261.md) (correlation) — the outbound send half of a per-session
+model/reasoning-effort/YOLO change (pyrycode #844/#845), the write-side counterpart of `requestSnapshot`.
+Another **`send` twin** (inert no-op when `driver === null`, no consumer to fail), sharing the one
+`nextEnvelopeId` counter, never throws (parity #490). Unlike `createConversation`'s
 fresh-literal-in-the-method pattern, this method passes `payload` straight through — the fresh literal
 **and** the omitempty presence contract (an absent field means "leave unchanged," a field present at its
 zero value `''`/`false` means "set to this value") both live in `buildSetSessionSettings`
 (`setSessionSettingsEnvelope.ts`) instead, since the golden test targets the builder and the
 conditional-key construction *is* the presence contract — co-locating both keeps the method a faithful
 `requestSnapshot` clone. No empty-`session_id` guard (Evidence-Based Fix Selection — an empty/unknown id
-is the daemon's `session.not_found` to reject, mirroring `requestSnapshot`'s `conversation_id`). Ships
-**dormant**: no `case 'session_settings_updated'` consumer arm yet — decoding the reply is
-[#264](https://github.com/pyrycode/pyrycode-desktop/issues/264), blocked by this ticket via file overlap;
-correlating reply↔request is [#261](https://github.com/pyrycode/pyrycode-desktop/issues/261); the caller
-is the interactive Run-config controls
-([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257)). See [session settings
-send](session-settings-send.md) for the full contract.
+is the daemon's `session.not_found` to reject, mirroring `requestSnapshot`'s `conversation_id`).
+
+**#261** added the correlation half: the method now captures `envelopeId = nextEnvelopeId` before the
+build and, only after a successful `driver.sendMessage`, records `pendingSettings.set(envelopeId,
+changeId)` in a new module-local `Map<number, string>` sited beside `outstandingAnswers` (same
+single-writer, push-after-send discipline). `changeId` is renderer-minted and **never** passed to
+`buildSetSessionSettings` — it stays off the wire. Ships **dormant**: the caller is the interactive
+Run-config controls ([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257)). See [session
+settings send](session-settings-send.md) for the full contract.
 
 **`case 'session-transition'` was added in [#254](../codebase/254.md)** — no new outbound method;
 `session_transition` is inbound-only, the daemon-initiated session-boundary marker. Unlike
@@ -119,12 +122,16 @@ send](session-settings-send.md) for the full contract.
 and validated one layer down but dropped here, since the not-yet-built renderer holder
 ([#259](https://github.com/pyrycode/pyrycode-desktop/issues/259)) retains only the current session id.
 
-**`case 'session-settings-updated'` was added in [#264](../codebase/264.md)** — no new outbound method;
+**`case 'session-settings-updated'` was added in [#264](../codebase/264.md)** and made
+**correlation-gated, fail-closed** in **[#261](../codebase/261.md)** — no new outbound method;
 `session_settings_updated` is inbound-only, the daemon's confirmation that a `set_session_settings`
-(#263) request landed. Emits a **fresh literal carrying only `sessionId`** — unlike `session-transition`
-there is nothing else decoded to drop; the reply's one field crosses IPC verbatim. Explicitly no
-`inReplyTo` — the request↔reply correlation key lives on the `Envelope`, not this payload, and #261
-(blocked by this ticket) widens the arm to carry it once its consumer exists.
+(#263) request landed. #264 shipped it as an unconditional emit; #261 rewrote the case to read
+`inbound.inReplyTo` (propagated by [inbound message decode](inbound-message-decode.md) from the
+already-decoded `Envelope.in_reply_to`), short-circuit (no event) when it is `undefined` or matches no
+`pendingSettings` entry (AC3 — covers a stale reply and a hostile daemon forging a confirmation for an
+id the client never sent), and otherwise `delete` the entry and emit a **fresh literal carrying
+`sessionId` + `changeId`** — the map's client-minted value, never the wire `in_reply_to` itself, which
+never crosses to the renderer.
 
 ## Connect-on-pair (`reconnect()`, [#82](../codebase/82.md))
 
@@ -275,6 +282,30 @@ A small correlation state machine now lives here too, module-local alongside `ne
 - **Drain** — `case 'modal-dismissed':` removes the matching id, so an accepted answer can't later mis-attribute an unrelated `error`.
 - **Reset** — `dial()` clears the queue next to `nextEnvelopeId = 2`; a fresh connection starts with no correlation window. The supervisor's own *automatic* transient-drop reconnect (§ Reload-per-dial) does **not** call `dial()`, so it does not clear it — a stale entry ages out via the next real reply/dial, a bounded single false-attribution, deliberately left open (see [#248 codebase notes](../codebase/248.md) § Open questions).
 
+## Set-session-settings confirmed-round-trip correlation ([#261](../codebase/261.md))
+
+A second, parallel correlation store lives here, module-local alongside `outstandingAnswers`:
+`pendingSettings: Map<number, string>`, mapping a sent request's `envelopeId` to the renderer-minted
+`changeId` it carried. It exists because a `session_settings_updated` reply carries only `session_id`,
+not which pending change it confirms — the daemon's `Envelope.in_reply_to = request.id` is the only
+routing hook, and correlation must be looked up, not scanned FIFO (unlike modal answers, two outstanding
+changes can target the **same** `session_id`, so shift-oldest would misattribute).
+
+- **Set** — `setSessionSettings` captures `envelopeId = nextEnvelopeId` before building, and only *after*
+  a successful `driver.sendMessage` calls `pendingSettings.set(envelopeId, changeId)` — the
+  `outstandingAnswers.push`-after-send order, so a build/send throw leaves no phantom entry.
+- **Match + delete** — `case 'session-settings-updated':` reads `inbound.inReplyTo`; `undefined` or a
+  `pendingSettings.get` miss short-circuits with **no event** (fail-closed, AC3); a hit `delete`s the
+  entry and emits `{ type: 'sessionSettingsUpdated', sessionId, changeId }`.
+- **Reset** — `dial()` clears the map next to `outstandingAnswers.length = 0` (AC5): a reconnect abandons
+  every outstanding change, so a stale reply from a dead session can never correlate on the reconnected
+  one — this is what makes `nextEnvelopeId`'s restart-at-2 recycling safe.
+- **Orphans (accepted, bounded)** — a **rejected** change produces a `daemon-error`, not a
+  `session_settings_updated`; under #261 alone its `pendingSettings` entry is not removed until `dial()`.
+  [#269](https://github.com/pyrycode/pyrycode-desktop/issues/269) (blocked by #261) removes it via the
+  error path's own `in_reply_to`. No cap, mirroring `outstandingAnswers` (#248) — evidence-based, no
+  observed unbounded-growth failure.
+
 ## Related
 
 - [#62 codebase notes](../codebase/62.md) — implementation summary, patterns, lessons.
@@ -292,8 +323,9 @@ A small correlation state machine now lives here too, module-local alongside `ne
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `tool-result` inbound kind + the new `case 'tool-result'` consumer emit (`conversation_id` dropped, `turnId`/`toolUseId`/`isError`/`resultSummary` carried), feeding the timeline bridge's fifth owned arm — the first to **resolve** an existing `toolCall` item's `result` rather than append a new item. The vertical's last transport slice. No new method on this factory — `tool_result` is inbound-only.
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `createConversation(payload)` method added to this factory (the write-side twin of `requestConversations`, with a fresh-literal security net bounding the outbound wire to exactly three fields), the payload-carrying `buildCreateConversation` builder it drives, and the `conversation-created` inbound kind + verbatim (no-drop) emit in the `case 'message'` consumer arm.
 - [#254 codebase notes](../codebase/254.md) — the `session-transition` inbound kind + the new `case 'session-transition'` consumer emit (a fresh literal carrying only `newSessionId`, the #180 content-drop model's second application). No new method on this factory — `session_transition` is inbound-only, daemon-initiated.
-- [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the `setSessionSettings(payload)` method added to this factory (a faithful `requestSnapshot` twin whose builder owns the omitempty presence contract), the payload-carrying `buildSetSessionSettings` builder it drives, and the dormant status pending #264's decode arm (now shipped) + #261's correlation + #257's render consumer.
-- [#264 codebase notes](../codebase/264.md) — the `session-settings-updated` inbound kind + the new `case 'session-settings-updated'` consumer emit (a fresh literal carrying only `sessionId` — nothing else decoded to drop, unlike `session-transition`). No new method on this factory — `session_settings_updated` is inbound-only, the `set_session_settings` (#263) confirmation.
+- [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the `setSessionSettings(payload, changeId)` method added to this factory (a faithful `requestSnapshot` twin whose builder owns the omitempty presence contract; `changeId` + `pendingSettings` added by #261), the payload-carrying `buildSetSessionSettings` builder it drives, and the dormant status pending #256's render consumer.
+- [#264 codebase notes](../codebase/264.md) — the `session-settings-updated` inbound kind + the original unconditional `case 'session-settings-updated'` consumer emit, since rewritten correlation-gated by #261 (see § Set-session-settings confirmed-round-trip correlation above).
+- [#261 codebase notes](../codebase/261.md) — the `pendingSettings` correlation map, the rewritten `case 'session-settings-updated'`, and the `dial()` reset (see § Set-session-settings confirmed-round-trip correlation above). No new method on this factory — widens `setSessionSettings`'s signature and rewrites one existing case.
 - [#248 codebase notes](../codebase/248.md) — the `outstandingAnswers` FIFO correlation window added to this factory (see § Modal-answer rejection correlation above), the new `modalAnswerRejected` emit from the existing `case 'daemon-error':` arm, and the drain hooked into the existing `case 'modal-dismissed':` arm. No new method on this factory — the correlation rides the two pre-existing `answerModal`/inbound-message seams.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.

@@ -71,11 +71,25 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Automated coverage is deferred
 
-There is **no automated live e2e**, by design — the live relay + real-daemon stack runs only on an operator machine, never under CI (consistent with the Phase-1/Phase-2 split and the mobile precedent). The current coverage is the automated fake-transport [e2e harness](e2e-harness.md) ([#40](https://github.com/pyrycode/pyrycode-desktop/issues/40)) **plus** the per-slice unit suites (#52/#53/#55/#62/#65/#66/#68/#69), which already prove pair/connect/send/stream against fakes, **plus** this runbook as the live-stack operator confirmation. The automated transport round-trip (#39) and UI-driven e2e (#41) encode this milestone as regression coverage and are sequenced *after* this gate — adding a live-relay e2e here is out of scope.
+There is **no automated live-*relay* e2e**, by design — pairing against the actual
+`pyrycode-relay.pyryco.de` relay needs operator credentials and network access the pipeline agents
+do not have, so that half stays manual, never under CI (consistent with the Phase-1/Phase-2 split
+and the mobile precedent). The current coverage is the automated fake-transport
+[e2e harness](e2e-harness.md) ([#40](https://github.com/pyrycode/pyrycode-desktop/issues/40)) **plus**
+the per-slice unit suites (#52/#53/#55/#62/#65/#66/#68/#69), which already prove pair/connect/send/
+stream against fakes, **plus** this runbook as the live-stack operator confirmation.
+
+[#252](../codebase/252.md)'s [real-claude liveness e2e](real-claude-liveness-e2e.md) automated the
+other half this runbook used to be the *only* check for: whether a real `pyry` daemon running real
+claude actually replies (as opposed to a fake daemon that always answers). It still dials a **local**
+fake relay, not the live one, so it does not verify the live-relay allowlist/network path — this
+runbook remains the only check for that. Run it via `npm run e2e:real-claude` as part of the
+operator's pre-ship gate (`README.md`), separately from this manual live-relay runbook.
 
 ## Cross-references
 
 - [E2E harness](e2e-harness.md) / [#40](https://github.com/pyrycode/pyrycode-desktop/issues/40) — the automated fake-transport sibling this runbook is the manual counterpart of.
+- [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#252](../codebase/252.md) — automates the real-daemon+real-claude half of this runbook (still a local relay, not the live one).
 - [App shell](app-shell.md) / [#80](https://github.com/pyrycode/pyrycode-desktop/issues/80) — the launch router: fresh install → pairing screen; `onPaired` → conversation, no restart (steps 1–2).
 - [Pairing input screen](pairing-input-screen.md) / [#55](https://github.com/pyrycode/pyrycode-desktop/issues/55) + [Daemon connection](daemon-connection.md) / [#82](https://github.com/pyrycode/pyrycode-desktop/issues/82) — the pair → connect path: paste → fingerprint-verify → confirm → connect-on-pair dials the live relay.
 - [Composer send](composer-send.md) / [#31](https://github.com/pyrycode/pyrycode-desktop/issues/31) + [#66](https://github.com/pyrycode/pyrycode-desktop/issues/66) and [Conversation shell](conversation-shell.md) / [#69](https://github.com/pyrycode/pyrycode-desktop/issues/69) — the send → stream path: the connection-status gate (the `connected` observable) and the thread render.

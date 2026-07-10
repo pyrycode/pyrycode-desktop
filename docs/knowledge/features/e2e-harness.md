@@ -62,6 +62,12 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - **No CI today.** Electron e2e on headless Linux will need `xvfb-run`; macOS (current dev env) runs headful with no extra setup. The `forbidOnly`/`retries` knobs are CI-gated and harmless until then.
 - **Two UI scenarios have landed.** [#93](../codebase/93.md) (`e2e/pair-to-conversation.spec.ts`) drives the real pairing UI through to the conversation screen against the in-process [fake relay forwarder](fake-relay-forwarder.md) + [fake daemon](fake-daemon.md); [#94](../codebase/94.md) (`e2e/send-and-stream.spec.ts`) picks up from that `connected` end-state, sends a message, and asserts the streamed daemon reply renders — together closing the automated side of the Phase-1 milestone. Both fork a **local** `test.extend` for their per-run env + isolated `--user-data-dir` while the shared fixture stays scenario-agnostic. Two harness lessons from the first real scenario: (1) an e2e run is what catches main-process-runtime-only bugs (BoringSSL, `isPackaged`, native modules) that pass every vitest unit test — it surfaced [#101](../codebase/101.md); (2) `npm run e2e` runs **all** of `e2e/`, so a non-hermetic sibling spec fails the whole run — this is exactly what exposed the `.conversation`-at-boot `smoke.spec.ts` assertion as non-hermetic (it predated the [#80 router](app-shell.md); it only passed on the shared, pre-seeded userData), fixed in [#105](../codebase/105.md) by forking the same isolated-launch shape and retargeting the assertion to `.pairing`. New scenarios must launch with an isolated `--user-data-dir` for a hermetic start.
 - **No `e2e:fast` variant.** Re-building on every run is accepted; a build-skipping variant is deferred until iteration pain is actually observed.
+- **A fourth scenario, gated out of the default run.** [#252](../codebase/252.md)'s
+  [real-claude liveness e2e](real-claude-liveness-e2e.md) (`e2e/real-claude.spec.ts`) drives a real
+  `pyry` + real `claude` instead of the fake relay/daemon pair. It is excluded from `npm run e2e` via
+  a `testIgnore` in `playwright.config.ts` and runs only under its own
+  `playwright.real-claude.config.ts` via `npm run e2e:real-claude` — the first scenario to need a
+  second config rather than fitting inside the shared one.
 
 ## Related
 

@@ -8,9 +8,10 @@ driven end-to-end through the built UI. It is the routing-aware counterpart to t
 that fake also speaks raw frames; a real daemon speaks routing envelopes on its relay leg, which the
 raw forwarder cannot bridge.
 
-Introduced in [#251](../codebase/251.md), split from [#178](../codebase/178.md). It ships alone, with
-no production consumer — the consumer is [#252](../codebase/252.md) (the real-daemon UI round-trip),
-the same "module before its first consumer" phasing the forwarder used at #90/#91/#89.
+Introduced in [#251](../codebase/251.md), split from [#178](../codebase/178.md). It shipped alone,
+with no consumer at the time — the consumer, [#252](../codebase/252.md)'s
+[real-claude liveness e2e](real-claude-liveness-e2e.md), landed afterward, the same "module before
+its first consumer" phasing the forwarder used at #90/#91/#89.
 
 ## What it does
 
@@ -107,7 +108,8 @@ close-before-ready-rejects contract as the forwarder.
   accepts key reorder) — a raw-slice fallback is deferred unless a future frame needs byte-exact
   preservation.
 - **`x-pyrycode-server` header** is captured but unvalidated (the fake is single-server; leg identity
-  is by path, not header content). Tighten only if #252 needs multi-server routing.
+  is by path, not header content). [#252](../codebase/252.md)'s single real daemon didn't need
+  multi-server routing; tighten only if a future consumer does.
 
 ## Related
 
@@ -118,8 +120,10 @@ close-before-ready-rejects contract as the forwarder.
 - [#251 codebase notes](../codebase/251.md) · Spec: `docs/specs/architecture/251-routing-aware-fake-relay.md`
   · PR [#253](https://github.com/pyrycode/pyrycode-desktop/pull/253). Split from
   [#178](../codebase/178.md).
-- [E2E test harness](e2e-harness.md) — the Playwright layer; #252 (the consumer of this relay) will
-  be a UI-level scenario in that harness, one level up from this transport-level round-trip plumbing.
+- [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#252](../codebase/252.md) — the
+  consumer: a UI-level Playwright scenario one level up from this transport-level round-trip
+  plumbing, with a real `pyry` daemon on the `/v1/server` leg.
+- [E2E test harness](e2e-harness.md) — the Playwright layer #252's scenario runs under.
 - Cross-project prior art: pyrycode's `internal/e2e/internal/fakerelay/fakerelay.go` (Go) — the
   reference implementation this module ports; `internal/protocol/envelope.go:42-77` for the wire
   shape.

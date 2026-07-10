@@ -7,6 +7,10 @@ import { defineConfig } from '@playwright/test'
 // and no `npx playwright install` step.
 export default defineConfig({
   testDir: './e2e',
+  // The real-claude spec (#252) needs a real pyry daemon + real claude + credentials the agent
+  // pipeline lacks; it runs only under playwright.real-claude.config.ts (`npm run e2e:real-claude`).
+  // A filename testIgnore is structural — it can't be forgotten the way a per-test grep tag can.
+  testIgnore: /real-claude\.spec\.ts$/,
   // One Electron app process at a time: launches are serialized, so future
   // multi-file scenarios never contend for the same window or port.
   fullyParallel: false,

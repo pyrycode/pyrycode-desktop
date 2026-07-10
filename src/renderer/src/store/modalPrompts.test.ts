@@ -3,6 +3,7 @@ import {
   reduceModal,
   initialModalState,
   selectOutstanding,
+  selectRejections,
   type ModalEvent,
   type ModalPrompt,
   type ModalState
@@ -35,6 +36,16 @@ function dismissed(
   source: 'remote' | 'local' | 'timeout' = 'remote'
 ): ModalEvent {
   return { type: 'dismissed', modalId, outcome, source }
+}
+
+// #249: a round-tripped rejection (from the bridge) and its local dismissal. Both carry only `modalId`
+// — the event is content-free (no daemon error text ever reaches the renderer, AC3).
+function rejected(modalId: string): ModalEvent {
+  return { type: 'rejected', modalId }
+}
+
+function rejectionDismissed(modalId: string): ModalEvent {
+  return { type: 'rejectionDismissed', modalId }
 }
 
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
@@ -146,13 +157,79 @@ describe('reduceModal — purity', () => {
   })
 })
 
+describe('reduceModal — rejection surface (#249)', () => {
+  it('rejected appends the modalId to rejections, leaving outstanding untouched', () => {
+    const state = run([shown('m1'), rejected('m2')])
+    expect(state.rejections).toEqual(['m2'])
+    expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1'])
+  })
+
+  it('records a rejection even though the answered prompt is already gone (AC2)', () => {
+    // The answer path clears the modal optimistically (#237), so the prompt is gone before the
+    // rejection round-trips back. The surface must not depend on `outstanding`.
+    const state = run([shown('m1'), dismissed('m1'), rejected('m1')])
+    expect(state.outstanding).toEqual([])
+    expect(state.rejections).toEqual(['m1'])
+  })
+
+  it('stacks multiple rejections in arrival (FIFO) order', () => {
+    const state = run([rejected('m1'), rejected('m2')])
+    expect(state.rejections).toEqual(['m1', 'm2'])
+  })
+
+  it('dedups a repeated rejection and returns the same state reference (no churn)', () => {
+    const before = run([rejected('m1')])
+    const after = reduceModal(before, rejected('m1'))
+    expect(after).toBe(before)
+    expect(after.rejections).toEqual(['m1'])
+  })
+
+  it('rejectionDismissed removes exactly the matching rejection (AC5)', () => {
+    const state = run([rejected('m1'), rejected('m2'), rejectionDismissed('m1')])
+    expect(state.rejections).toEqual(['m2'])
+  })
+
+  it('rejectionDismissed against an absent id is a same-reference no-op, never throws', () => {
+    const before = run([rejected('m1')])
+    const after = reduceModal(before, rejectionDismissed('nope'))
+    expect(after).toBe(before)
+    expect(after.rejections).toBe(before.rejections)
+    expect(() => reduceModal(before, rejectionDismissed('nope'))).not.toThrow()
+  })
+})
+
+describe('reduceModal — the two surfaces are orthogonal', () => {
+  it('a shown after a rejected preserves rejections by reference (outstanding grows only)', () => {
+    const before = run([rejected('m1')])
+    const after = reduceModal(before, shown('m2'))
+    expect(after.rejections).toBe(before.rejections)
+    expect(after.outstanding.map((p) => p.modalId)).toEqual(['m2'])
+  })
+
+  it('a rejected after a shown preserves outstanding by reference (rejections grows only)', () => {
+    const before = run([shown('m1')])
+    const after = reduceModal(before, rejected('m2'))
+    expect(after.outstanding).toBe(before.outstanding)
+    expect(after.rejections).toEqual(['m2'])
+  })
+})
+
 describe('initial state + selector', () => {
   it('initialModalState is an empty outstanding set', () => {
     expect(initialModalState.outstanding).toEqual([])
   })
 
+  it('initialModalState is an empty rejection set', () => {
+    expect(initialModalState.rejections).toEqual([])
+  })
+
   it('selectOutstanding returns the current slice by reference', () => {
     const state = run([shown('m1')])
     expect(selectOutstanding(state)).toBe(state.outstanding)
+  })
+
+  it('selectRejections returns the current slice by reference', () => {
+    const state = run([rejected('m1')])
+    expect(selectRejections(state)).toBe(state.rejections)
   })
 })

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { HelloAckPayload, MessagePayload, ErrorPayload } from '@shared/wire/types'
 import { translateModalEvent, subscribeModal } from './modalBridge'
-import { createModalStore, selectOutstanding } from './modalStore'
+import { createModalStore, selectOutstanding, selectRejections } from './modalStore'
 
 // Fixtures — plain wire-shaped data, mirroring timelineBridge.test.ts. No transport involved.
 const ack: HelloAckPayload = {
@@ -38,7 +38,7 @@ const modalShown: DaemonEvent = {
   defaultOptionId: 'deny'
 }
 
-describe('translateModalEvent — the two owned arms', () => {
+describe('translateModalEvent — the owned arms', () => {
   it('modalShown → a ModalEvent shown with the same fields, a fresh object', () => {
     const translated = translateModalEvent(modalShown)
     expect(translated).toEqual({
@@ -67,10 +67,21 @@ describe('translateModalEvent — the two owned arms', () => {
     expect(translated?.type).toBe('dismissed')
     expect(translated).not.toBe(event)
   })
+
+  it('modalAnswerRejected → a ModalEvent rejected carrying only the modalId, a fresh object (#249)', () => {
+    const event: DaemonEvent = { type: 'modalAnswerRejected', modalId: 'mdl-9' }
+    const translated = translateModalEvent(event)
+    // Content-free: the translated event carries ONLY the correlation nonce — no daemon error text (AC3).
+    expect(translated).toEqual({ type: 'rejected', modalId: 'mdl-9' })
+    // The discriminant is renamed across the boundary: modalAnswerRejected → 'rejected'.
+    expect(translated?.type).toBe('rejected')
+    // A fresh named-field literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
 })
 
 describe('translateModalEvent — every other arm returns null (the inverse filter)', () => {
-  it('returns null for all 18 arms that translate to no ModalEvent this slice', () => {
+  it('returns null for every arm that translates to no ModalEvent (the inverse filter)', () => {
     const others: DaemonEvent[] = [
       { type: 'connecting' },
       { type: 'connected', ack },
@@ -116,10 +127,8 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         resultSummary: 'read 12 lines'
       },
       { type: 'sessionTransition', newSessionId: 'sess-2' },
-      { type: 'sessionSettingsUpdated', sessionId: 'sess-2' },
-      // Dormant this slice (#248): the modal bridge OWNS modalAnswerRejected as a distinct case but
-      // returns null until #249 flips it to a rejection ModalEvent — so it belongs in the null table now.
-      { type: 'modalAnswerRejected', modalId: 'mdl-1' }
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-2' }
+      // modalAnswerRejected is no longer here — #249 flips it to a `rejected` ModalEvent (asserted above).
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()
   })
@@ -213,5 +222,16 @@ describe('subscribeModal', () => {
 
     bridge.emit({ type: 'modalDismissed', modalId: 'unknown', outcome: 'allow', source: 'remote' })
     expect(store.getState()).toBe(afterShown)
+  })
+
+  it('a modalAnswerRejected drives rejections [] → [1] via the translated rejected event, no React (#249)', () => {
+    const bridge = fakeBridge()
+    const store = createModalStore()
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    bridge.emit({ type: 'modalAnswerRejected', modalId: 'mdl-9' })
+    expect(selectRejections(store.getState())).toEqual(['mdl-9'])
+    // The rejection surface is orthogonal to the prompt set — no outstanding prompt was involved.
+    expect(selectOutstanding(store.getState())).toEqual([])
   })
 })

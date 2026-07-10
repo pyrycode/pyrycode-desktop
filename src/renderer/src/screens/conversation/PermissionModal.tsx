@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useModalStore, selectOutstanding } from '../../store/modalStore'
+import { useModalStore, selectOutstanding, selectRejections } from '../../store/modalStore'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 import { answerPrompt, cancelPrompt, selectOption } from './modalResolution'
 
@@ -129,17 +129,62 @@ export function PermissionModalView({
   )
 }
 
+// #249: the modal-answer rejection surface — a pure, exported, SSR-testable view mirroring
+// PermissionModalView. When a modal answer round-trips to a daemon `error` (#248), the answer path has
+// already cleared the prompt optimistically (#237), so this transient banner stack is the ONLY thing
+// telling the user the answer did not go through. It reads ONLY `rejections` (bare modalIds), never the
+// outstanding prompt — so it structurally cannot depend on it (AC2, the ThinkingIndicator posture).
+//
+// Content-free (AC3): the copy is a client-owned category constant; no daemon `code`/`message`/nonce
+// reaches the DOM. `modalId` is used ONLY as the stable React key and the `onDismiss` argument, never
+// rendered as visible text (AC4 — the nonce is meaningless to a human and the prompt title is gone).
+// `onDismiss` is a REQUIRED injected effect (the PermissionModalView "a view that cannot answer is a
+// bug" rule). Returns null on an empty list — zero layout footprint (the Timeline/ThinkingIndicator idiom).
+const REJECTION_COPY = 'Your answer was rejected.'
+
+export function RejectionSurfaceView({
+  rejections,
+  onDismiss
+}: {
+  rejections: readonly string[]
+  onDismiss: (modalId: string) => void
+}): JSX.Element | null {
+  if (rejections.length === 0) return null
+  return (
+    <div className="modal-rejections">
+      {rejections.map((modalId) => (
+        // role="alert" makes each banner a live region so a screen reader announces the failure on
+        // arrival. Keyed by modalId — the stable identity across a stack (AC4).
+        <div key={modalId} className="modal-rejection" role="alert">
+          <p className="modal-rejection__copy">{REJECTION_COPY}</p>
+          <button
+            type="button"
+            className="modal-rejection__dismiss"
+            onClick={() => onDismiss(modalId)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // The store-bound container. Reads the outstanding slice and renders the oldest prompt only (a
 // permission/trust prompt is a blocking decision → single-dialog FIFO); when the oldest is
 // answered/dismissed, the local `dismissed` dispatch removes it via reduceModal and the next [0]
 // renders. No selectCurrentModal selector — the container derives [0] locally, honoring ADR 0009's
-// deferral. Returns null when nothing is outstanding.
+// deferral. It also reads the orthogonal `rejections` slice (#249) and renders the rejection surface
+// alongside the prompt; either surface may show independently. Returns null when BOTH are empty.
 //
 // The effects wire the modalResolution helpers, dereferencing `window.pyry` ONLY inside the handler
 // closures (interaction time — the Composer.handleSubmit discipline), so the empty-case server-render
-// test never touches the bridge. The camelCase → snake_case rename lives in the helpers.
+// test never touches the bridge. The camelCase → snake_case rename lives in the helpers. The rejection
+// dismiss is a trivial inline `dispatch` — no modalResolution helper (it neither sends a command nor
+// renames to the wire): the reduce arm is unit-tested and the button is structurally tested.
 export function PermissionModal(): JSX.Element | null {
   const outstanding = useModalStore(selectOutstanding)
+  const rejections = useModalStore(selectRejections)
   const dispatch = useModalStore((s) => s.dispatch)
   // #226: the transient second-confirm marker — the id of the option held pending a confirm, or null in
   // list mode. useState (not a store slice): the lowest scope that survives re-render, cleared on confirm
@@ -147,31 +192,42 @@ export function PermissionModal(): JSX.Element | null {
   // still returns null because the guard fires after the hook runs.
   const [pendingOptionId, setPendingOptionId] = useState<string | null>(null)
   const prompt = outstanding[0]
-  if (!prompt) return null
+  // Fire only when BOTH surfaces are empty: a rejection can show with no outstanding prompt (the prompt
+  // was optimistically cleared, #237), so a lone `rejections` entry must still render.
+  if (!prompt && rejections.length === 0) return null
   // Derive the pending option from the CURRENT prompt's options — a deterministic safety net: if
   // outstanding[0] is swapped out (a remote/timeout dismissed clears the current prompt, the next
   // renders) while a confirm is pending, a stale id no longer matches and the view falls back to list
-  // mode rather than confirming against the wrong prompt.
-  const pendingOption = prompt.options.find((o) => o.id === pendingOptionId) ?? null
+  // mode rather than confirming against the wrong prompt. Guarded on `prompt` (it can be undefined while
+  // a rejection shows alone).
+  const pendingOption = prompt ? (prompt.options.find((o) => o.id === pendingOptionId) ?? null) : null
   return (
-    <PermissionModalView
-      prompt={prompt}
-      pendingOption={pendingOption}
-      onSelect={(modalId, optionId) =>
-        selectOption(prompt, optionId, {
-          answer: (id) =>
-            answerPrompt(modalId, id, { sendCommand: window.pyry.sendCommand, dispatch }),
-          requestConfirm: setPendingOptionId
-        })
-      }
-      onConfirm={(modalId, optionId) => {
-        answerPrompt(modalId, optionId, { sendCommand: window.pyry.sendCommand, dispatch })
-        setPendingOptionId(null)
-      }}
-      onBack={() => setPendingOptionId(null)}
-      onCancel={(modalId) =>
-        cancelPrompt(modalId, { sendCommand: window.pyry.sendCommand, dispatch })
-      }
-    />
+    <>
+      {prompt && (
+        <PermissionModalView
+          prompt={prompt}
+          pendingOption={pendingOption}
+          onSelect={(modalId, optionId) =>
+            selectOption(prompt, optionId, {
+              answer: (id) =>
+                answerPrompt(modalId, id, { sendCommand: window.pyry.sendCommand, dispatch }),
+              requestConfirm: setPendingOptionId
+            })
+          }
+          onConfirm={(modalId, optionId) => {
+            answerPrompt(modalId, optionId, { sendCommand: window.pyry.sendCommand, dispatch })
+            setPendingOptionId(null)
+          }}
+          onBack={() => setPendingOptionId(null)}
+          onCancel={(modalId) =>
+            cancelPrompt(modalId, { sendCommand: window.pyry.sendCommand, dispatch })
+          }
+        />
+      )}
+      <RejectionSurfaceView
+        rejections={rejections}
+        onDismiss={(modalId) => dispatch({ type: 'rejectionDismissed', modalId })}
+      />
+    </>
   )
 }

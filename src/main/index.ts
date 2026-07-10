@@ -261,6 +261,12 @@ app.whenReady().then(() => {
         // conversation_created → conversationCreated event. Inert no-op when not connected (#241).
         connection.createConversation(command.payload)
         return
+      case 'setSessionSettings':
+        // Direct to the connection method (mirrors requestSnapshot), no orchestrator. Sends
+        // set_session_settings; the daemon replies with one session_settings_updated (decoded by #264).
+        // Inert no-op when not connected (#263).
+        connection.setSessionSettings(command.payload)
+        return
       case 'requestDebugBundle':
         downloader.request()
         return

@@ -22,7 +22,8 @@ import {
   type SendMessagePayload,
   type RequestSnapshotPayload,
   type ScreenSnapshotPayload,
-  type CreateConversationPayload
+  type CreateConversationPayload,
+  type SetSessionSettingsPayload
 } from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
@@ -1799,6 +1800,74 @@ describe('createDaemonConnection — createConversation (create_conversation req
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — setSessionSettings (outbound set_session_settings, #263)', () => {
+  const PARTIAL: SetSessionSettingsPayload = { session_id: 'sess-a', yolo: false }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.setSessionSettings(PARTIAL)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one set_session_settings envelope with id 2, ts, and the payload', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.setSessionSettings(PARTIAL)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('set_session_settings')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    // The present zero-value (yolo:false) crosses; the unset optionals are absent (builder contract).
+    expect(envelope.payload).toEqual({ session_id: 'sess-a', yolo: false })
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.setSessionSettings(PARTIAL)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.setSessionSettings(PARTIAL)).not.toThrow()
+  })
+
+  it('drops an over-cap payload: no throw, no frame, and the id is not consumed', async () => {
+    const { connection, drivers } = await connected()
+
+    // A payload whose serialized envelope exceeds MAX_PLAINTEXT_BYTES makes the builder throw
+    // WireEncodeError; the method catches it (parity #490) and advances no id.
+    expect(() =>
+      connection.setSessionSettings({ session_id: 'x'.repeat(MAX_PLAINTEXT_BYTES + 1) })
+    ).not.toThrow()
+    expect(drivers[0].sent).toHaveLength(0)
+
+    // The next successful send still gets id 2 — the dropped over-cap build consumed nothing.
+    connection.setSessionSettings(PARTIAL)
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
   })
 })
 

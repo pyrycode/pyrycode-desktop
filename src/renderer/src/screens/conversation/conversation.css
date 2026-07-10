@@ -30,6 +30,40 @@
   padding: var(--space-2) var(--space-3);
 }
 
+/* #140 — the leading back affordance (Figma node 16-9's arrow_back inside a 48px frame): the seed of
+   the thread's top app bar, rendered as the first child of .conversation, before the unpair header. A
+   48px touch target wrapping the 24px glyph, left-aligned, on-surface content that gains a surface tint
+   on hover (the .status-sheet__close / composer__send treatment). Never grows or shrinks. 48px is
+   structural component geometry (the send-square convention). */
+.conversation__back {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: var(--space-1);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface);
+  cursor: pointer;
+}
+
+.conversation__back:hover {
+  background: var(--color-surface-container-high);
+}
+
+.conversation__back:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.conversation__back-icon {
+  display: block;
+}
+
 /* The AC3 confirm-guard question. Muted, so the row reads as a quiet escape hatch, not a destructive
    banner — there is no --color-error token on desktop and a minimal control needs none. */
 .conversation__unpair-prompt {

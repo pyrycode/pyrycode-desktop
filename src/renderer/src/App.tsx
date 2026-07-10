@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { PairingScreen } from './screens/pairing/PairingScreen'
 import { useDaemonEventBridge } from './store/daemonEventBridge'
+import { useTimelineBridge } from './store/timelineBridge'
 import { ConversationListData } from './store/conversationListBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
@@ -42,6 +43,11 @@ export function AppView(props: {
  */
 function App(): JSX.Element {
   useDaemonEventBridge()
+  // #203: the timeline bridge is useDaemonEventBridge's twin — a second independent subscriber on the
+  // one daemon-event channel (#202), folding the v2 structured stream into timelineStore. App-lifetime
+  // and unconditional, matching the coarse bridge; both deref window.pyry only inside their effect, so
+  // the <App/> server-render test stays ''. Inert until #179 flips `interactive` (no stream arrives).
+  useTimelineBridge()
   const [route, setRoute] = useState<AppRoute>('pending')
 
   useEffect(() => {

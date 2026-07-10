@@ -10,9 +10,9 @@ fetch](screen-snapshot-fetch.md) vertical (#180 → #187/#188) proved: [#199](..
 (shipped) built the wire types, transport decode, and `DaemonEvent` arms (`assistantDelta`/`turnEnd`)
 this module's `ThreadEvent` union is the eventual target of; [#202](../codebase/202.md) (shipped)
 added the [Zustand store + the `DaemonEvent → ThreadEvent` bridge](conversation-timeline-store.md)
-over `reduceTimeline`; #203 (blocked-by #202) renders the streamed text — the blank-thread-critical
-slice that gates #179 (advertising the `interactive` capability). #204/#205/#206 add
-`turn_state`/`tool_use`/`tool_result` render afterward.
+over `reduceTimeline`; [#203](../codebase/203.md) (shipped) renders the streamed text — the
+blank-thread-critical slice that gates #179 (advertising the `interactive` capability). #204/#205/#206
+add `turn_state`/`tool_use`/`tool_result` render afterward.
 
 Introduced in [#121](../codebase/121.md). Lives at
 `src/renderer/src/store/threadTimeline.ts`. Pure renderer state — no IPC, no preload bridge, no
@@ -101,8 +101,9 @@ Nothing imports this module yet.
   `turnId`/`stopReason`) — plus the Zustand store, singleton, and React hook, the same factory
   pattern `sessionStore` uses (ADR 0004), applied to `TimelineState`/`reduceTimeline`. See
   [conversation timeline store](conversation-timeline-store.md).
-- **#203 (blocked-by #202)** adds the first render slice: the streamed assistant text + a streaming
-  cursor on the timeline — the blank-thread-critical render that gates #179.
+- **[#203](../codebase/203.md) (shipped)** added the first render slice: the streamed assistant text
+  + a streaming cursor on the timeline (`Timeline`, in `ConversationScreen.tsx`) — the
+  blank-thread-critical render that gates #179. Resolved the React-key question below as array index.
 
 ## Edge cases and limitations
 
@@ -121,7 +122,11 @@ Nothing imports this module yet.
   drops it at the `DaemonEvent` construction step (`daemonConnection.ts`), one layer below this
   module — #202's bridge inherits an event that has no `conversation_id` to further scope.
 - **No stable per-item `id`.** `turnId` alone isn't unique (a tool call can split one turn into
-  two `assistantText` items) — React keys are a #203 render-time concern, deliberately deferred.
+  two `assistantText` items) — [#203](../codebase/203.md) resolved the React-key question at
+  render time by keying on array index instead: the list is append-only with tail-mutation and never
+  reorders or inserts mid-list (`appendDelta` grows the tail in place, every other arm appends a new
+  tail, `fillResult` replaces a `toolCall` at its own index), so index identity is stable per logical
+  item without needing a dedicated `id` field on `ThreadItem`.
 - **Strangler Fig, not a migration.** `sessionStore`, `messageViewModel.ts`, and the coarse
   `message`/`message_chunk` path are completely untouched by this module's existence. The cutover
   decision (does the coarse path retire once `interactive` is on?) belongs to #179/#203.
@@ -140,6 +145,9 @@ Nothing imports this module yet.
 - [#199 codebase notes](../codebase/199.md) — the transport slice: wire types, decode, and the
   `assistantDelta`/`turnEnd` `DaemonEvent` arms this module's `ThreadEvent` union targets.
 - [#202 codebase notes](../codebase/202.md) — the store + bridge slice built on this module.
+- [#203 codebase notes](../codebase/203.md) — the render slice; resolved the React-key question (array
+  index) and derived the streaming cursor structurally from the reducer's append-only/tail-mutation
+  invariant.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

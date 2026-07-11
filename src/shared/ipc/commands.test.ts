@@ -12,6 +12,7 @@ import type {
   SendMessagePayload,
   ModalCancelPayload,
   CreateConversationPayload,
+  PromoteConversationPayload,
   SetSessionSettingsPayload
 } from '../wire/types'
 
@@ -273,6 +274,39 @@ describe('isRendererCommand', () => {
     // A missing key (undefined, not a literal null) is rejected — null is present, undefined is absent.
     expect(isRendererCommand({ type: t, payload: { is_promoted: null, name: null } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { name: null, cwd: null } })).toBe(false)
+  })
+
+  it('accepts a well-formed promoteConversation command with all three string fields (#273)', () => {
+    // The deliberate OPPOSITE of createConversation: all three fields are REQUIRED strings (a promoted
+    // conversation must carry a name + cwd, and the id must resolve). No constructor exists (the
+    // createConversation precedent): #274 builds the literal inline, proven here through an inline literal.
+    const payload: PromoteConversationPayload = { conversation_id: 'c1', name: 'weekly', cwd: '/w' }
+    const command: RendererCommand = { type: 'promoteConversation', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum); the main-side fresh literal drops it.
+    expect(isRendererCommand({ type: 'promoteConversation', payload, extra: 1 })).toBe(true)
+  })
+
+  it('rejects a promoteConversation with a missing/null payload (#273)', () => {
+    expect(isRendererCommand({ type: 'promoteConversation' })).toBe(false)
+    expect(isRendererCommand({ type: 'promoteConversation', payload: null })).toBe(false)
+  })
+
+  it('rejects a promoteConversation whose fields are wrong-typed, a literal null, or missing (#273)', () => {
+    const t = 'promoteConversation'
+    // Unlike the create guard, a literal null is REJECTED — every field must be present-and-string.
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', name: 3, cwd: '/w' } })).toBe(
+      false
+    )
+    expect(
+      isRendererCommand({ type: t, payload: { conversation_id: 'c1', name: 'weekly', cwd: null } })
+    ).toBe(false)
+    expect(
+      isRendererCommand({ type: t, payload: { conversation_id: null, name: 'weekly', cwd: '/w' } })
+    ).toBe(false)
+    // A missing key is rejected.
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', name: 'weekly' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { name: 'weekly', cwd: '/w' } })).toBe(false)
   })
 
   it('accepts a setSessionSettings command with only session_id (all optionals omitted) (#263)', () => {

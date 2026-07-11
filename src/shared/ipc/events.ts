@@ -17,6 +17,7 @@ import type {
   ErrorPayload,
   ConversationSummary,
   ConversationCreatedPayload,
+  ConversationUpdatedPayload,
   WireTurnState,
   WireModalClass,
   WireModalSource,
@@ -139,6 +140,15 @@ export type DaemonEvent =
   // plain text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML). This ticket has no DOM sink, but
   // the constraint is inherited here — do not drop this warning.
   | { type: 'conversationCreated'; conversation: ConversationCreatedPayload }
+  // The conversation-updated arm (#273). Reuses the wire ConversationUpdatedPayload verbatim (the
+  // conversationCreated precedent) — nothing to drop, no secret field: it carries an id, a flag, a
+  // nullable title, a workspace path, and a timestamp. Emitted from an UNSOLICITED daemon BROADCAST
+  // (not correlated by in_reply_to). Consumed by the list-reflect slice (#275, which flips the row from
+  // discussion to channel), not the session store, so every exhaustive consumer no-ops it. `name` and
+  // `cwd` are UNTRUSTED daemon-supplied strings: the render/store slice #275 must render them as plain
+  // text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML). This ticket has no DOM sink, but the
+  // constraint is inherited here — do not drop this warning.
+  | { type: 'conversationUpdated'; conversation: ConversationUpdatedPayload }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
   // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is

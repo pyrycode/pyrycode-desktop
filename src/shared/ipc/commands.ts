@@ -21,6 +21,7 @@ import type {
   ModalAnswerPayload,
   ModalCancelPayload,
   CreateConversationPayload,
+  PromoteConversationPayload,
   SetSessionSettingsPayload
 } from '../wire/types'
 
@@ -41,7 +42,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 
 /**
  * A single typed command from the renderer window to the background process. Sealed
- * discriminated union on `type`. Eight members today: `sendMessage`, whose `payload` reuses the
+ * discriminated union on `type`. Nine members today: `sendMessage`, whose `payload` reuses the
  * wire SendMessagePayload verbatim so no field is remapped between layers; the bare
  * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global;
  * `requestSnapshot` (#180), whose `payload` reuses the wire RequestSnapshotPayload (a
@@ -51,7 +52,9 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * `option_id`, the token Omit-excluded — minted main-side); `cancelModal` (#236), whose
  * `payload` reuses the wire ModalCancelPayload (`modal_id` only); and `createConversation` (#241),
  * whose `payload` reuses the wire CreateConversationPayload (three nullable-and-present fields, all
- * server-defaultable — no secret); and `setSessionSettings` (#263), whose `payload` reuses the wire
+ * server-defaultable — no secret); `promoteConversation` (#273), whose `payload` reuses the wire
+ * PromoteConversationPayload (three REQUIRED strings — the deliberate opposite of create's nullable
+ * fields — `conversation_id` / `name` / `cwd`, no secret); and `setSessionSettings` (#263), whose `payload` reuses the wire
  * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
  * presence contract is applied main-side by the builder, not carried here) and additionally carries a
  * `changeId` (#261): a renderer-minted, client-internal correlation string riding ALONGSIDE `payload` (a
@@ -73,6 +76,7 @@ export type RendererCommand =
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
   | { type: 'cancelModal'; payload: ModalCancelPayload }
   | { type: 'createConversation'; payload: CreateConversationPayload }
+  | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
 
 /**
@@ -130,6 +134,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isCancelModalPayload(value.payload)
     case 'createConversation':
       return 'payload' in value && isCreateConversationPayload(value.payload)
+    case 'promoteConversation':
+      return 'payload' in value && isPromoteConversationPayload(value.payload)
     case 'setSessionSettings':
       // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
       // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.
@@ -202,6 +208,25 @@ function isCreateConversationPayload(value: unknown): value is CreateConversatio
     (typeof value.name === 'string' || value.name === null) &&
     'cwd' in value &&
     (typeof value.cwd === 'string' || value.cwd === null)
+  )
+}
+
+/** The untrusted renderer→main boundary guard for the promoteConversation payload (#273) — the reason
+ *  the command half is security-sensitive. The deliberate OPPOSITE of isCreateConversationPayload: all
+ *  three fields are REQUIRED strings (a promoted conversation must carry a name + cwd, and the id must
+ *  resolve), so this clones isSendMessagePayload's present-and-string checks — a literal `null`, a
+ *  missing key, and a non-string are all rejected (unlike the create guard, which accepts null).
+ *  Structural minimum — a smuggled extra field is not rejected here; the main-side sender's fresh-literal
+ *  construction bounds the wire to exactly these three fields. Pure; never throws. */
+function isPromoteConversationPayload(value: unknown): value is PromoteConversationPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    'name' in value &&
+    typeof value.name === 'string' &&
+    'cwd' in value &&
+    typeof value.cwd === 'string'
   )
 }
 

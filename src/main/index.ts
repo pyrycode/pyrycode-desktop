@@ -261,6 +261,13 @@ app.whenReady().then(() => {
         // conversation_created → conversationCreated event. Inert no-op when not connected (#241).
         connection.createConversation(command.payload)
         return
+      case 'promoteConversation':
+        // Direct to the connection method (mirrors createConversation), no orchestrator — a promote
+        // request has no consumer/reassembler. Sends promote_conversation; the daemon confirms with one
+        // unsolicited conversation_updated broadcast → conversationUpdated event (consumed by #275).
+        // Inert no-op when not connected (#273).
+        connection.promoteConversation(command.payload)
+        return
       case 'setSessionSettings':
         // Direct to the connection method (mirrors requestSnapshot), no orchestrator. Sends
         // set_session_settings; the daemon replies with one session_settings_updated (decoded by #264,

@@ -75,6 +75,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'toolResult':
     case 'conversationsReceived':
     case 'conversationCreated':
+    case 'conversationUpdated':
     case 'sessionTransition':
     case 'sessionSettingsUpdated':
     case 'sessionSettingsRejected':

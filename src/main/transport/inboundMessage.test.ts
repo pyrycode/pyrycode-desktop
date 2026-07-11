@@ -93,6 +93,11 @@ function encodeConversationCreated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 18, type: 'conversation_created', ts: FIXED_TS, payload })
 }
 
+/** A `conversation_updated` envelope's plaintext bytes, wrapping an arbitrary payload (#273). */
+function encodeConversationUpdated(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 19, type: 'conversation_updated', ts: FIXED_TS, payload })
+}
+
 /** A `session_transition` envelope's plaintext bytes, wrapping an arbitrary payload (#254). */
 function encodeSessionTransition(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 19, type: 'session_transition', ts: FIXED_TS, payload })
@@ -219,6 +224,24 @@ const CREATED_UNNAMED = {
   cwd: '/tmp/scratch',
   name: null,
   last_used_at: '2026-07-10T01:00:00Z'
+}
+
+/** A well-formed conversation_updated reply with a string name — a promoted channel, name before cwd (#273). */
+const UPDATED_NAMED = {
+  id: 'conv-9',
+  is_promoted: true,
+  name: 'weekly sync',
+  cwd: '/home/user/project',
+  last_used_at: '2026-07-12T00:00:00Z'
+}
+
+/** A well-formed conversation_updated reply with a null name — an update that left the name unset (#273). */
+const UPDATED_UNNAMED = {
+  id: 'conv-10',
+  is_promoted: true,
+  name: null,
+  cwd: '/tmp/scratch',
+  last_used_at: '2026-07-12T01:00:00Z'
 }
 
 /** A fully-populated, well-formed session_transition payload — a /clear rotation, workspace_cwd null (#254). */
@@ -775,6 +798,100 @@ describe('parseInboundMessage — conversation_created fail-closed (#241, AC5)',
         type: 'conversation_created',
         ts: FIXED_TS,
         payload: { ...CREATED_NAMED, name: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — conversation_updated recognition (#273, additive)', () => {
+  it('narrows a conversation_updated reply into { kind: conversation-updated } with the five fields', () => {
+    expect(parseInboundMessage(encodeConversationUpdated(UPDATED_NAMED))).toEqual({
+      kind: 'conversation-updated',
+      conversationUpdated: UPDATED_NAMED
+    })
+  })
+
+  it('decodes a null name as null (a distinct unset value, never "" or absent — AC)', () => {
+    const result = parseInboundMessage(encodeConversationUpdated(UPDATED_UNNAMED))
+    expect(result).toEqual({ kind: 'conversation-updated', conversationUpdated: UPDATED_UNNAMED })
+    // Pin the null specifically: an unset name stays distinguishable downstream (#275).
+    if (result?.kind === 'conversation-updated') {
+      expect(result.conversationUpdated.name).toBeNull()
+    }
+  })
+
+  it('decodes is_promoted true as the value true, never as absent', () => {
+    const result = parseInboundMessage(encodeConversationUpdated(UPDATED_NAMED))
+    if (result?.kind === 'conversation-updated') {
+      expect(result.conversationUpdated.is_promoted).toBe(true)
+    }
+  })
+
+  it('drops unknown server keys, keeping only the five known fields (forward-compat)', () => {
+    const withExtras = { ...UPDATED_NAMED, is_archived: false, last_message_ts: 'x', preview: 'ignore' }
+    expect(parseInboundMessage(encodeConversationUpdated(withExtras))).toEqual({
+      kind: 'conversation-updated',
+      conversationUpdated: UPDATED_NAMED
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — conversation_updated fail-closed (#273, AC)', () => {
+  it('throws when the payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeConversationUpdated('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeConversationUpdated(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws when any string field is missing or non-string', () => {
+    const bad: unknown[] = [
+      { ...UPDATED_NAMED, id: undefined },
+      { ...UPDATED_NAMED, id: 42 },
+      { ...UPDATED_NAMED, cwd: undefined },
+      { ...UPDATED_NAMED, cwd: 42 },
+      { ...UPDATED_NAMED, last_used_at: undefined },
+      { ...UPDATED_NAMED, last_used_at: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeConversationUpdated(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when name is absent/undefined (never omitted) or a non-string non-null', () => {
+    const bad: unknown[] = [
+      { id: 'c', is_promoted: true, cwd: '/', last_used_at: 'u' }, // name absent
+      { ...UPDATED_NAMED, name: 42 },
+      { ...UPDATED_NAMED, name: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeConversationUpdated(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when is_promoted is missing or non-boolean', () => {
+    const bad: unknown[] = [
+      { ...UPDATED_NAMED, is_promoted: 'true' },
+      { ...UPDATED_NAMED, is_promoted: 1 },
+      { ...UPDATED_NAMED, is_promoted: undefined },
+      { ...UPDATED_NAMED, is_promoted: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeConversationUpdated(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an oversized conversation_updated plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 19,
+        type: 'conversation_updated',
+        ts: FIXED_TS,
+        payload: { ...UPDATED_NAMED, name: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
       })
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
@@ -1868,6 +1985,40 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeConversationCreated({ ...CREATED_NAMED, is_promoted: 'nope' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a conversation_updated reply content-free, never a name / cwd / id, and no count (#273)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_NAME = 'secret-channel-title'
+    const SECRET_CWD = '/home/secret/workspace'
+    const plaintext = encodeConversationUpdated({
+      ...UPDATED_NAMED,
+      id: 'secret-conv-id',
+      name: SECRET_NAME,
+      cwd: SECRET_CWD
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('conversation_updated')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no row field, and NO `count` (the conversation_created posture).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_NAME)
+    expect(lines[0]).not.toContain(SECRET_CWD)
+    expect(lines[0]).not.toContain('secret-conv-id')
+  })
+
+  it('does NOT log on a malformed conversation_updated throw path (#273)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeConversationUpdated({ ...UPDATED_NAMED, is_promoted: 'nope' }), log)
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

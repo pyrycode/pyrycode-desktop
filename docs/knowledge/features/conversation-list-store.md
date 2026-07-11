@@ -160,5 +160,6 @@ daemon → conversations frame → parseInboundMessage → conversationsReceived
 - [Session store](session-store.md) / [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)
   — the store this one deliberately stays orthogonal to (no connection/messages state crosses over).
 - [#208 codebase notes](../codebase/208.md) — implementation summary and patterns established.
-- #141 (Channel List screen) / #142 (create-discussion affordance) — the first consumers of
-  `useConversationListStore`/`selectConversations`.
+- [Channel List home screen](channel-list.md) (#141) — the first consumer of
+  `useConversationListStore`/`selectConversations`. The [new-discussion FAB](new-discussion-fab.md)
+  (#242) reads the daemon's `conversationCreated` event through its own bridge, not this store.

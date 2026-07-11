@@ -20,6 +20,10 @@ or frames, so not security-sensitive.
   is deferred — see the [Channel List doc](channel-list.md).)
 - The thread view shows a leading back affordance (Figma node 16-9's `arrow_back`) that returns to the list.
 - Navigation is a two-state spine (`list ⇄ thread`) today; a future `settings`/`archive` view is an added `PairedRoute` member and an added `PairedShellView` case, not a rewrite (the ticket's extensibility requirement).
+- The `open` transition has a second trigger besides a list row click: the [new-discussion
+  FAB](new-discussion-fab.md) (#242) fires it asynchronously when the daemon confirms a
+  `conversationCreated` event, via `useConversationCreatedNav` mounted in the `PairedShell`
+  container. No new route or nav arm — the existing `open` transition is reused as-is.
 
 ## How it works
 
@@ -92,6 +96,7 @@ affordance, preserved), since per-conversation selection needs a transport path 
 ```ts
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
+  useConversationCreatedNav(() => dispatch({ type: 'open' }))   // #242
   return (
     <PairedShellView
       route={route}
@@ -106,9 +111,14 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
 `useReducer(nextPairedRoute, 'list')` is screen-local ephemeral state per
 [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — resets on remount, never
 the session store (AC5). Enters at `'list'` (AC2). `onUnpaired` threads straight through to
-`ConversationScreen` unchanged ([#166](../codebase/166.md)); `PairedShell` does not intercept it. No
-effects, no `window` deref — server-renderable, so `App`'s `pending`/`pairing` neutral-first-paint
-invariant is untouched (`PairedShell` only mounts once the app-level route is `conversation`).
+`ConversationScreen` unchanged ([#166](../codebase/166.md)); `PairedShell` does not intercept it.
+[`useConversationCreatedNav`](new-discussion-fab.md) (#242) is the one added line: it subscribes to
+the daemon's `conversationCreated` event and dispatches the same `open` transition the list rows
+use, so a FAB-initiated create eventually opens the thread with no new route. `PairedShell` itself
+still has no effects and no `window` deref — the hook's own effect is where `window.pyry` is
+dereferenced — so the container stays server-renderable and `App`'s `pending`/`pairing`
+neutral-first-paint invariant is untouched (`PairedShell` only mounts once the app-level route is
+`conversation`).
 
 ### The app-shell seam (`App.tsx`)
 
@@ -136,9 +146,14 @@ interim, not an oversight.
 ```
 AppView (route='conversation')
   └─ PairedShell            useReducer(nextPairedRoute, 'list')  ← nav state (ADR 0006)
+       │                    useConversationCreatedNav(() => dispatch({type:'open'}))  ← #242
        └─ PairedShellView   route='list'   → ChannelList (store-backed) — any row → dispatch{open}
+                                              new-discussion FAB → createConversation command (#242)
                             route='thread' → ConversationScreen (store-backed) + BackControl — [←] → dispatch{back}
 ```
+
+A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row
+click — see [the new-discussion FAB](new-discussion-fab.md) for the bridge that fires it.
 
 `sessionStore` (module-singleton, app-lifetime) holds the messages, independent of this nav state.
 Navigating list→thread→list→thread unmounts/remounts `ConversationScreen`, which re-reads the store on
@@ -165,6 +180,7 @@ navigation, and hence no remount, before this ticket).
 
 - [App shell](app-shell.md) / [#80](../codebase/80.md) — the outer router; `PairedShell` mounts under its `conversation` route
 - [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — the real `list` view, replacing the placeholder described above
+- [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the second `open` trigger, fired by a daemon-confirmed conversation create rather than a row click
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
 - [Session store](session-store.md) — untouched by this ticket; the store-backed messages that survive navigation
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the ephemeral-state rule `PairedShell`'s `useReducer` follows

@@ -9,12 +9,43 @@ shape, opposite direction.
 
 Ships **dormant**: no renderer surface dispatches this command yet. Its caller is the interactive
 Run-configuration controls ([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257)), exactly as
-[#236](modal-resolution-envelope.md)'s `answerModal` shipped ahead of its render consumer. This ticket
-does **not** decode the `session_settings_updated` reply, correlate reply↔request, or build the
-store/controls. The sibling decode-arm slice, [#264](../codebase/264.md), has since shipped — it decodes
-the reply into a dormant `sessionSettingsUpdated` `DaemonEvent`, still uncorrelated. Correlation is
-[#261](https://github.com/pyrycode/pyrycode-desktop/issues/261) (blocked by #264); the store/controls are
-[#256](https://github.com/pyrycode/pyrycode-desktop/issues/256)/#257.
+[#236](modal-resolution-envelope.md)'s `answerModal` shipped ahead of its render consumer. The sibling
+decode-arm slice, [#264](../codebase/264.md), decodes the reply into a `sessionSettingsUpdated`
+`DaemonEvent`; the confirmed-round-trip correlation is [#261](../codebase/261.md) (below) — both have
+since shipped. The store/controls are
+[#256](https://github.com/pyrycode/pyrycode-desktop/issues/256)/#257, not yet built.
+
+## Correlation (#261) — the confirmed round-trip
+
+`session_settings_updated` carries only `session_id`, so it cannot say *which* pending change it
+confirms. [#261](../codebase/261.md) closes that gap with a **client-internal correlation key** that
+never touches the wire:
+
+1. The renderer mints a `changeId` (opaque, client-internal) and passes it as a **top-level sibling of
+   `payload`** on the `setSessionSettings` command — never nested inside `payload`, so the builder (which
+   consumes only `payload`) structurally cannot put it on the wire.
+2. `daemonConnection`'s `setSessionSettings` captures the request's `nextEnvelopeId`-minted envelope id
+   **before** building, sends, and — only on a successful send — records `pendingSettings.set(envelopeId,
+   changeId)` in a module-local `Map<number, string>` (sited beside `outstandingAnswers`, same
+   single-writer, push-after-send discipline).
+3. `parseInboundMessage` propagates the **already-decoded** `Envelope.in_reply_to` (codec.ts's
+   `decodeEnvelope` always decoded it; this is the first consumer) onto the `session-settings-updated`
+   kind as `inReplyTo?: number`.
+4. `daemonConnection`'s inbound switch is now **correlation-gated and fail-closed**: an absent
+   `inReplyTo`, or one matching no entry in `pendingSettings` (a stale reply, or a hostile daemon forging
+   a confirmation for an id the client never sent), is silently ignored — no event. A match deletes the
+   entry and emits a fresh literal `{ type: 'sessionSettingsUpdated', sessionId, changeId }` — the
+   numeric `in_reply_to` never crosses to the renderer, only the renderer's own `changeId` does.
+5. `dial()` clears `pendingSettings` — a reconnect abandons every outstanding change, so a stale reply
+   can never correlate on the reconnected session (this is what makes `nextEnvelopeId`'s restart-at-2
+   recycling safe).
+
+This is the **match-key mechanism**: mint client-side, remember main-process-side, correlate by
+`in_reply_to`, never echo the wire routing id back. It's necessary because the command is fire-and-forget
+— the renderer never learns the minted envelope id, so a main-minted-then-echoed id couldn't tell two
+same-`session_id` changes apart. [#269](https://github.com/pyrycode/pyrycode-desktop/issues/269) (blocked
+by #261) reuses this exact map and key to correlate the **rejected** path (a `daemon-error` reply) and
+clean up the orphaned entry a rejection currently leaves until `dial()`.
 
 ## The omitempty presence contract — the crux of this slice
 
@@ -90,23 +121,27 @@ through a renderer barrel. MAY throw `WireEncodeError` over `MAX_PLAINTEXT_BYTES
 ### 3. The connection method (`daemonConnection.ts`)
 
 ```ts
-function setSessionSettings(payload: SetSessionSettingsPayload): void {
+function setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void {
   if (driver === null) return              // inert no-op — a settings change has no consumer to fail
+  const envelopeId = nextEnvelopeId         // captured before build — the id the reply's in_reply_to echoes
   try {
     const bytes = buildSetSessionSettings({ id: nextEnvelopeId, ts: now(), payload })
     nextEnvelopeId += 1                     // shares the one counter with send/requestSnapshot/...
     driver.sendMessage(bytes)
+    pendingSettings.set(envelopeId, changeId) // #261 — recorded only after a successful send
   } catch {
     // Never throw out of the module (parity #490). Dropped, no log, no event.
   }
 }
 ```
 
-A **faithful `requestSnapshot` twin** — unlike the builder, this method holds no novel logic. It passes
-`payload` straight through (the builder owns the fresh literal + presence contract), shares the single
-module-local `nextEnvelopeId` counter (no second counter — ids stay unique across interleaved
-`send`/`requestSnapshot`/`setSessionSettings` calls; the daemon correlates replies by id, not sequence),
-and never throws (parity mobile #490).
+A **faithful `requestSnapshot` twin** for the send mechanics — unlike the builder, this method holds no
+novel encode logic. It passes `payload` straight through (the builder owns the fresh literal + presence
+contract), shares the single module-local `nextEnvelopeId` counter (no second counter — ids stay unique
+across interleaved `send`/`requestSnapshot`/`setSessionSettings` calls; the daemon correlates replies by
+id, not sequence), and never throws (parity mobile #490). [#261](../codebase/261.md) added the
+`changeId` param and the `pendingSettings` bookkeeping (see § Correlation above); `changeId` is **never**
+passed to the builder, so it stays off the wire.
 
 **No empty-`session_id` guard** (Evidence-Based Fix Selection): an empty/unknown id is the daemon's
 `session.not_found` to reject, mirroring how `requestSnapshot` leaves an empty `conversation_id` to
@@ -117,7 +152,7 @@ exist in the code — this slice does not add a speculative one either.
 
 ```ts
 // RendererCommand
-| { type: 'setSessionSettings'; payload: SetSessionSettingsPayload }
+| { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
 
 function isSetSessionSettingsPayload(value: unknown): value is SetSessionSettingsPayload {
   if (typeof value !== 'object' || value === null) return false
@@ -144,7 +179,7 @@ one); #257 constructs the command inline.
 
 ```ts
 case 'setSessionSettings':
-  connection.setSessionSettings(command.payload)
+  connection.setSessionSettings(command.payload, command.changeId)
   return
 ```
 
@@ -154,27 +189,32 @@ change has no download-progress state to coordinate.
 ## Data flow
 
 ```
-window → sendCommand({type:'setSessionSettings', payload:{session_id, model?, effort?, yolo?}})
-      → COMMAND_CHANNEL → onCommand (isRendererCommand → isSetSessionSettingsPayload guard)
-      → connection.setSessionSettings(payload)
+window → sendCommand({type:'setSessionSettings', payload:{session_id, model?, effort?, yolo?}, changeId})
+      → COMMAND_CHANNEL → onCommand (isRendererCommand → isSetSessionSettingsPayload + changeId guard)
+      → connection.setSessionSettings(payload, changeId)
       → buildSetSessionSettings (presence contract + fresh literal) → driver.sendMessage
-        [inert no-op if not connected]
+        → pendingSettings.set(envelopeId, changeId)   [inert no-op if not connected, no map entry]
 
-(reply — NOT this ticket)
-daemon → session_settings_updated frame → decoded by #264 → correlated by #261
+daemon → session_settings_updated frame → decoded by #264 (carries in_reply_to)
+      → daemonConnection matches in_reply_to against pendingSettings (#261)
+      → match: DaemonEvent{ type: 'sessionSettingsUpdated', sessionId, changeId }  [renderer, not yet consumed — #256]
+      → no match (unmatched / absent in_reply_to): ignored, no event (AC3, fail-closed)
 ```
 
 ## Error handling
 
 | Failure | Layer | Behaviour |
 |---|---|---|
-| Renderer sends malformed `setSessionSettings` | `isRendererCommand`/`isSetSessionSettingsPayload` | dropped at the boundary |
-| Not connected when `setSessionSettings` called | `daemonConnection` | inert no-op; no throw, no event |
-| Over-cap / driver throw on send | try/catch in the connection method | caught, dropped — no log, no event (the caught object could echo the payload) |
+| Renderer sends malformed `setSessionSettings` (incl. missing/non-string `changeId`) | `isRendererCommand`/`isSetSessionSettingsPayload` | dropped at the boundary |
+| Not connected when `setSessionSettings` called | `daemonConnection` | inert no-op; no throw, no event, no pending-map entry |
+| Over-cap / driver throw on send | try/catch in the connection method | caught, dropped — no log, no event, no pending-map entry (recorded only after a successful send, #261) |
 | Empty/unknown `session_id` | daemon | `session.not_found` — no client-side guard, by design (Evidence-Based Fix Selection) |
+| Reply's `in_reply_to` absent or matches no pending entry | `daemonConnection` (#261) | ignored — no event, fail-closed (AC3); covers a hostile daemon forging a confirmation for an id the client never sent |
+| Reply confirms a change whose entry was abandoned by a `dial()` reset | `daemonConnection` (#261) | ignored — no event (AC5) |
 
-No UI surfaces this slice (dormant, no renderer dispatch site). The daemon's `session.not_found` /
-`session_settings_updated` reply handling is [#264](https://github.com/pyrycode/pyrycode-desktop/issues/264)/[#261](https://github.com/pyrycode/pyrycode-desktop/issues/261).
+No UI surfaces this slice (dormant, no renderer dispatch site). The **rejected** path — correlating a
+`daemon-error` reply back to a pending entry — is
+[#269](https://github.com/pyrycode/pyrycode-desktop/issues/269), blocked by #261.
 
 ## Security properties
 
@@ -194,11 +234,18 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
   `nextEnvelopeId` is a monotonic application id, not a Noise nonce.
 - **Threat model.** A compromised renderer can request a settings change only for a `session_id` it
   already knows — the command's legitimate capability, gated daemon-side on the negotiated `interactive`
-  capability and rejected `session.not_found` for an unknown id. Defensively parsing the daemon's reply
-  (hostile-daemon-response defense) is out of scope here — see #264.
+  capability and rejected `session.not_found` for an unknown id.
+- **(#261) The renderer-minted `changeId` and the fail-closed correlation lookup are what defend against
+  a hostile daemon forging a confirmation.** A forged `in_reply_to` for an id the client never dispatched
+  finds no `pendingSettings` entry and is silently dropped — the daemon cannot fabricate a confirmed
+  change the client didn't request. The numeric `in_reply_to` itself never crosses to the renderer (only
+  `changeId` does), and `changeId` is client-minted, non-secret, never used for authz. Ticket #261 carries
+  `security-sensitive`; architect self-review + code review both **PASS** (no findings).
 
 ## Related
 
+- [#261 codebase notes](../codebase/261.md) — the confirmed-round-trip correlation slice: implementation
+  summary, the match-key pattern, lessons.
 - [#263 codebase notes](../codebase/263.md) — implementation summary, patterns, lessons.
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the read-only
   counterpart this slice mirrors structurally (`send`-twin connection method, payload-carrying builder);
@@ -216,5 +263,7 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
 - [Run configuration store](run-config-store.md) / [#187](../codebase/187.md) — the read half this
   write path is the eventual write-side twin of; #256/#257 join them.
 - [#264 codebase notes](../codebase/264.md) — the decode arm for this ticket's `session_settings_updated`
-  reply: wire type, fail-closed parse, and a dormant `sessionSettingsUpdated` `DaemonEvent`, no-op in
-  every bridge until #261/#256 exist.
+  reply: wire type, fail-closed parse, and the `sessionSettingsUpdated` `DaemonEvent` arm #261 widened;
+  still a no-op in every bridge until #256 exists.
+- [#269](https://github.com/pyrycode/pyrycode-desktop/issues/269) — the rejected-path follow-up, blocked
+  by #261, reusing `pendingSettings` + `changeId` to correlate a `daemon-error` reply.

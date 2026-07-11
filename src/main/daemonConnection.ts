@@ -155,12 +155,15 @@ export interface DaemonConnection {
    * present at its zero value (`''` / `false`) is sent ("set to this value"). The `send` TWIN, not
    * `requestDebugBundle`: a settings change has no consumer to fail, so it is an inert no-op when not
    * connected (`driver === null` → return). The reply arrives asynchronously as one
-   * `session_settings_updated` frame, decoded by #264 (NOT this ticket) and correlated by #261; an
-   * empty/unknown `session_id` is the daemon's `session.not_found` to reject (no main-side guard, like
-   * `requestSnapshot`). Its caller is the interactive Run-config controls (#257); ships dormant. NEVER
-   * throws out of the module (parity #490).
+   * `session_settings_updated` frame, decoded by #264 and correlated HERE (#261) back to the originating
+   * request by `Envelope.in_reply_to`: `changeId` is a renderer-minted, client-internal correlation key
+   * remembered against the request's envelope id and echoed onto the confirmed event so the renderer can
+   * tell two same-`session_id` changes apart. `changeId` NEVER rides the wire (the builder consumes only
+   * `payload`). An empty/unknown `session_id` is the daemon's `session.not_found` to reject (no main-side
+   * guard, like `requestSnapshot`). Its caller is the interactive Run-config controls (#257); ships
+   * dormant. NEVER throws out of the module (parity #490).
    */
-  setSessionSettings(payload: SetSessionSettingsPayload): void
+  setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void
   /**
    * Resolve an outstanding permission/trust modal with the user's answer (#236): MINT a fresh
    * client-side idempotency `answer_token` (main-side — the renderer never mints), fold it into a
@@ -271,6 +274,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // writer — every mutation runs to completion inside a synchronous answerModal / onDriverEvent body,
   // no await between a read and a write (the nextEnvelopeId single-writer rationale above).
   const outstandingAnswers: string[] = []
+  // envelopeId → renderer-minted changeId, for the set_session_settings confirmed round-trip (#261). A
+  // per-connection correlation store: set after a successful send in setSessionSettings, matched by the
+  // reply's Envelope.in_reply_to and deleted in onDriverEvent, and cleared on each dial(). Single-writer
+  // — every mutation runs to completion inside a synchronous setSessionSettings / onDriverEvent body, no
+  // await between a read and a write (the nextEnvelopeId / outstandingAnswers single-writer rationale).
+  const pendingSettings = new Map<number, string>()
 
   function emitFailed(code: string, message = messageFor(code)): void {
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
@@ -396,18 +405,28 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               newSessionId: inbound.sessionTransition.new_session_id
             })
             return
-          case 'session-settings-updated':
-            // The set_session_settings confirmation data path (#264). Emit a fresh literal carrying ONLY
-            // `sessionId` (= session_id) — the reply's one field. Never a spread of the decoded payload,
-            // so a spurious echoed key (a `model` / `reason`, or an `in_reply_to` on the payload) cannot
-            // ride the arm to the renderer. Do NOT add `inReplyTo` — #261 widens this arm to carry the
-            // Envelope.in_reply_to correlation key when its consumer exists. A session_id is a routing id,
-            // not a secret (the conversation_id convention). Consumed by #261 / #256 (not yet built).
+          case 'session-settings-updated': {
+            // The set_session_settings confirmed round-trip (#261). Correlation-gated, fail-closed: match
+            // the reply to its originating request by Envelope.in_reply_to, then emit the client-minted
+            // changeId so the renderer can tell two same-session_id changes apart. A reply with an absent
+            // in_reply_to short-circuits BEFORE the map lookup; a reply matching no pending entry (a stale
+            // reply, or a hostile daemon forging a confirmation for a change the client never dispatched)
+            // is ignored — no coercion (AC3). The emitted event carries `sessionId` (the reply's field) +
+            // `changeId` (the map value) in a FRESH literal — never a spread of the decoded payload, and
+            // the numeric in_reply_to is NEVER placed on the event (the renderer receives its own changeId,
+            // not the wire routing id). A session_id is a routing id, not a secret. Consumed by #256.
+            const inReplyTo = inbound.inReplyTo
+            if (inReplyTo === undefined) return
+            const changeId = pendingSettings.get(inReplyTo)
+            if (changeId === undefined) return
+            pendingSettings.delete(inReplyTo)
             emitDaemonEvent(sink, {
               type: 'sessionSettingsUpdated',
-              sessionId: inbound.sessionSettingsUpdated.session_id
+              sessionId: inbound.sessionSettingsUpdated.session_id,
+              changeId
             })
             return
+          }
           case 'tool-use':
             // The tool-call data path (#217). snake→camel here; `conversation_id` is DROPPED (single
             // active conversation; #202's bridge scopes identity). A fresh literal with the four named
@@ -701,20 +720,27 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
-  function setSessionSettings(payload: SetSessionSettingsPayload): void {
+  function setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A settings change has no consumer to fail; a request sent
     // while disconnected simply produces no reply. No empty-session_id guard: an empty/unknown id is
     // the daemon's `session.not_found` to reject (mirrors requestSnapshot's empty conversation_id).
     if (driver === null) return
+    // Capture the id BEFORE the build increments it, so the pending entry is keyed by this request's
+    // envelope id — the value the daemon echoes as in_reply_to on the confirming reply (#261).
+    const envelopeId = nextEnvelopeId
     try {
       // Pass `payload` straight through — the builder owns the FRESH literal + the omitempty presence
-      // contract (conditional key assignment), which doubles as the anti-smuggling net. Shares the one
-      // monotonic nextEnvelopeId with send / requestSnapshot — no second counter — so ids stay unique
-      // across interleaved calls (the daemon correlates replies by id; correlation itself is #261).
+      // contract (conditional key assignment), which doubles as the anti-smuggling net. `changeId` is
+      // NEVER passed to the builder — it stays off the wire. Shares the one monotonic nextEnvelopeId
+      // with send / requestSnapshot — no second counter — so ids stay unique across interleaved calls.
       const bytes = buildSetSessionSettings({ id: nextEnvelopeId, ts: now(), payload })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
+      // Record the pending change AFTER a successful send (the answerModal order, #248): a build/send
+      // throw skips this (caught below), so no phantom entry is left for a reply that will never come.
+      // Removed by the correlated reply in onDriverEvent, or abandoned on the next dial().
+      pendingSettings.set(envelopeId, changeId)
     } catch {
       // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
       // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
@@ -815,6 +841,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // answer, so a stale answer from a dead session can never correlate an `error` on the reconnected
     // one. Holds only strings — nothing to abort, just clear the array in place.
     outstandingAnswers.length = 0
+    // Reset the set_session_settings pending map (#261, AC5): a reconnect abandons outstanding changes,
+    // so a stale reply from a dead session can never correlate on the reconnected one. This is what makes
+    // the recycled envelope ids (nextEnvelopeId restarts at 2 above) safe.
+    pendingSettings.clear()
     // Emitted synchronously, before any await, so status leaves "connecting" the moment the connect
     // begins (AC2). On the first start() the driver is null so the stop above is a no-op — no
     // behavior change from the original once-only start.

@@ -92,14 +92,16 @@ export type DaemonEvent =
   // can ride this arm. Consumed by the renderer holder (#259, not yet built), so all three exhaustive
   // bridges no-op it for now — matching how snapshotReceived was a no-op in daemonEventBridge until #187.
   | { type: 'sessionTransition'; newSessionId: string }
-  // The set_session_settings confirmation arm (#264). Carries ONLY `sessionId` — the reply's one field
-  // (a routing id, not a secret, the conversation_id / sessionTransition convention). It confirms a
-  // `set_session_settings` (#263) request landed and echoes NO settings; no token, key, or raw frame can
-  // ride this arm (AC3-by-construction). Explicitly NO `inReplyTo` — the request↔reply correlation key
-  // lives on the Envelope, not the payload, and #261 widens this arm to carry it when its consumer exists.
-  // Consumed by #261 / #256 (correlation / store, not yet built), so all three exhaustive bridges no-op it
-  // for now — the sessionTransition-was-a-no-op-until-#259 precedent.
-  | { type: 'sessionSettingsUpdated'; sessionId: string }
+  // The set_session_settings confirmation arm (#264, correlated by #261). Carries `sessionId` — the
+  // reply's one wire field (a routing id, not a secret, the conversation_id / sessionTransition
+  // convention) — plus `changeId`, the RENDERER-MINTED correlation key (#261) that main matched the
+  // reply to by `Envelope.in_reply_to` and echoed back so the renderer can tell two same-`sessionId`
+  // changes apart. `changeId` is client-minted, non-secret, and IPC-internal; it is NOT the wire
+  // `in_reply_to` — that numeric routing id stays main-internal and never rides this arm. No token,
+  // key, or raw frame can ride it (AC3-by-construction). Consumed by #256 (pending→confirm/reject
+  // store, not yet built), so all three exhaustive bridges no-op it for now — the
+  // sessionTransition-was-a-no-op-until-#259 precedent.
+  | { type: 'sessionSettingsUpdated'; sessionId: string; changeId: string }
   // The tool-call arm (#217). Carries the four render fields (`conversation_id` dropped at the emit,
   // single active conversation). Consumed by the renderer timeline bridge (#202) → a `toolCall` item,
   // not the session store. `name` / `inputSummary` are opaque daemon display text the render slice

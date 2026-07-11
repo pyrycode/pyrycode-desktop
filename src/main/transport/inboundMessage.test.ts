@@ -98,9 +98,16 @@ function encodeSessionTransition(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 19, type: 'session_transition', ts: FIXED_TS, payload })
 }
 
-/** A `session_settings_updated` envelope's plaintext bytes, wrapping an arbitrary payload (#264). */
-function encodeSessionSettingsUpdated(payload: unknown): Uint8Array {
-  return encodeEnvelope({ id: 20, type: 'session_settings_updated', ts: FIXED_TS, payload })
+/** A `session_settings_updated` envelope's plaintext bytes, wrapping an arbitrary payload (#264). The
+ *  optional `inReplyTo` rides the ENVELOPE (not the payload) — the #261 request↔reply correlation id. */
+function encodeSessionSettingsUpdated(payload: unknown, inReplyTo?: number): Uint8Array {
+  return encodeEnvelope({
+    id: 20,
+    type: 'session_settings_updated',
+    ts: FIXED_TS,
+    payload,
+    ...(inReplyTo !== undefined ? { in_reply_to: inReplyTo } : {})
+  })
 }
 
 /** A fully-populated, well-formed screen_snapshot payload. */
@@ -885,6 +892,24 @@ describe('parseInboundMessage — session_settings_updated recognition (#264, ad
       kind: 'session-settings-updated',
       sessionSettingsUpdated: SESSION_SETTINGS_UPDATED
     })
+  })
+
+  it('carries the Envelope in_reply_to onto the kind as inReplyTo (#261 correlation id)', () => {
+    expect(parseInboundMessage(encodeSessionSettingsUpdated(SESSION_SETTINGS_UPDATED, 7))).toEqual({
+      kind: 'session-settings-updated',
+      sessionSettingsUpdated: SESSION_SETTINGS_UPDATED,
+      inReplyTo: 7
+    })
+  })
+
+  it('leaves inReplyTo undefined when the frame omits in_reply_to (correlation fails closed downstream)', () => {
+    const result = parseInboundMessage(encodeSessionSettingsUpdated(SESSION_SETTINGS_UPDATED))
+    expect(result).toEqual({
+      kind: 'session-settings-updated',
+      sessionSettingsUpdated: SESSION_SETTINGS_UPDATED
+    })
+    // Explicit: the carrier is present-but-undefined, so daemonConnection's lookup short-circuits.
+    expect(result?.kind === 'session-settings-updated' && result.inReplyTo).toBeUndefined()
   })
 
   it('still routes a message to its existing kind (additive, unchanged)', () => {

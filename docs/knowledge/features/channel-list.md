@@ -25,6 +25,9 @@ transport, or new store/wire code, so not security-sensitive.
   conversation. See § Edge cases.
 - A [new-discussion FAB](new-discussion-fab.md) floats bottom-right over the list, present in all
   three states — a sibling of the section/row rendering described above, added by [#242](../codebase/242.md).
+- Each Recent (unpromoted) row carries a trailing [Save-as-channel](save-as-channel-dialog.md)
+  affordance; saved Channel rows carry none. Added by [#274](../codebase/274.md) — see § The row's
+  save affordance below.
 
 ## Why last-activity time, not a message preview
 
@@ -88,6 +91,18 @@ auto-escaped React children (never `dangerouslySetInnerHTML`), the #203/#218 unt
 React key is `row.id` — a real stable per-conversation identity (unlike the timeline's array-index
 keying).
 
+### The row's save affordance (`ChannelList.tsx`, added by #274)
+
+An interactive control cannot nest inside a `<button>`, so `Row` is no longer a single button: it's
+now a `.channel-list__row` flex wrapper around two sibling children — `.channel-list__row-open` (the
+original button, `onClick={onOpen}`, `flex: 1 1 auto; min-width: 0` so the title still ellipsizes)
+and an optional trailing icon-only `.channel-list__save` (`aria-label="Save as channel"`). `Row`
+gained `onSaveAsChannel?: () => void`; the Recent `.map` passes it per-row, the Channels `.map`
+passes none — so the affordance is structurally absent on saved rows, not merely hidden by CSS. The
+container owns the resulting [Save-as-channel dialog](save-as-channel-dialog.md)'s open/name state
+as local `useState`, rendered as a sibling of `ChannelListView`. See its feature doc for the dialog
+itself and [#274 codebase notes](../codebase/274.md) for the restructure's lessons learned.
+
 ### CSS (`channels.css`)
 
 Token-only: every color/type/spacing value is a `var(--…)` token; opacity is the de-emphasis device
@@ -131,6 +146,9 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
 - [Conversation shell](conversation-shell.md) — the thread view every row opens into via `onOpen`.
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the floating `+`
   affordance rendered as a sibling of this screen's rows.
+- [Save-as-channel dialog](save-as-channel-dialog.md) / [#274](../codebase/274.md) — the per-row
+  save affordance and naming dialog; restructured `Row` into the open-action + save-affordance
+  sibling shape described above.
 - [#141 codebase notes](../codebase/141.md) · Spec: `docs/specs/architecture/141-channel-list-screen.md`
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open).

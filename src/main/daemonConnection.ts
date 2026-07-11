@@ -338,6 +338,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             reassembler?.done(inbound.total)
             return
           case 'daemon-error': {
+            // Settings-rejection correlation takes PRECEDENCE over both co-consumers (#269). Correlate
+            // the error to a pending set_session_settings request by Envelope.in_reply_to FIRST — the
+            // confirmed-reply shape (#261) keyed off `daemon-error` instead of `session-settings-updated`.
+            // A match consumes the frame ENTIRELY: emit the client-minted changeId as a rejection, drop
+            // the pending entry (AC5), and skip BOTH the reassembler.fail and the modal-FIFO shift below
+            // (AC2). An error correlated by a UNIQUE per-request envelope id is unambiguously the reply to
+            // THAT request — neither a bundle error nor a modal-answer rejection — so failing a healthy
+            // in-flight bundle on it would be a bug. An absent in_reply_to short-circuits before the map
+            // lookup; a no-match (stale id, or a hostile daemon forging a rejection for a change the
+            // client never dispatched) falls through unchanged (AC3). The emitted event carries ONLY the
+            // client's OWN changeId, never a field read from the untrusted error payload (AC1/AC4 no-echo).
+            const inReplyTo = inbound.inReplyTo
+            if (inReplyTo !== undefined) {
+              const changeId = pendingSettings.get(inReplyTo)
+              if (changeId !== undefined) {
+                pendingSettings.delete(inReplyTo)
+                emitDaemonEvent(sink, { type: 'sessionSettingsRejected', changeId })
+                return
+              }
+            }
             reassembler?.fail('daemon-error')
             // Correlate the content-free error against the oldest outstanding modal_answer (#248). The
             // wire `error` carries no modal_id (ADR 0009), so a rejection dequeues in send order. An

@@ -102,6 +102,18 @@ export type DaemonEvent =
   // store, not yet built), so all three exhaustive bridges no-op it for now — the
   // sessionTransition-was-a-no-op-until-#259 precedent.
   | { type: 'sessionSettingsUpdated'; sessionId: string; changeId: string }
+  // The set_session_settings REJECTION arm (#269), the rejected twin of sessionSettingsUpdated. Emitted
+  // by the MAIN-side correlation gate (daemonConnection.ts) when a content-free daemon `error` (#116)
+  // arrives whose `Envelope.in_reply_to` matches a pending set_session_settings request — the client
+  // learns its model / effort / YOLO change was rejected so #256 can roll back. Carries ONLY `changeId`,
+  // the RENDERER-MINTED correlation key (#261) that main matched the error to; it disambiguates two
+  // outstanding changes to the same session (AC4). Deliberately NO `sessionId` (the wire `error` frame
+  // is content-free — carries no session_id — and `changeId` alone disambiguates), NO `in_reply_to`
+  // (that numeric wire routing id stays main-internal), and NO error code / message (attacker-influenceable
+  // bytes; no consumer needs them). No token, key, or raw frame can ride it (AC1/AC4-by-construction).
+  // Consumed by #256 (pending→confirm/reject store, not yet built), so all three exhaustive bridges no-op
+  // it for now — the sessionSettingsUpdated-was-a-no-op precedent.
+  | { type: 'sessionSettingsRejected'; changeId: string }
   // The tool-call arm (#217). Carries the four render fields (`conversation_id` dropped at the emit,
   // single active conversation). Consumed by the renderer timeline bridge (#202) → a `toolCall` item,
   // not the session store. `name` / `inputSummary` are opaque daemon display text the render slice

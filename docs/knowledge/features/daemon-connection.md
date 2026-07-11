@@ -300,11 +300,37 @@ changes can target the **same** `session_id`, so shift-oldest would misattribute
 - **Reset** — `dial()` clears the map next to `outstandingAnswers.length = 0` (AC5): a reconnect abandons
   every outstanding change, so a stale reply from a dead session can never correlate on the reconnected
   one — this is what makes `nextEnvelopeId`'s restart-at-2 recycling safe.
-- **Orphans (accepted, bounded)** — a **rejected** change produces a `daemon-error`, not a
-  `session_settings_updated`; under #261 alone its `pendingSettings` entry is not removed until `dial()`.
-  [#269](https://github.com/pyrycode/pyrycode-desktop/issues/269) (blocked by #261) removes it via the
-  error path's own `in_reply_to`. No cap, mirroring `outstandingAnswers` (#248) — evidence-based, no
-  observed unbounded-growth failure.
+- **Orphans (closed by [#269](../codebase/269.md))** — a **rejected** change produces a `daemon-error`,
+  not a `session_settings_updated`; under #261 alone its `pendingSettings` entry was not removed until
+  `dial()`. #269 (below) removes it via the error path's own `in_reply_to`, so the map now has no orphan
+  window at all. No cap, mirroring `outstandingAnswers` (#248) — evidence-based, no observed
+  unbounded-growth failure.
+
+## Set-session-settings rejected correlation ([#269](../codebase/269.md))
+
+The rejected half on the **same** `pendingSettings` map + `changeId` key, keyed off `case 'daemon-error':`
+instead of `case 'session-settings-updated':`. Before this ticket that case had two unconditional
+consumers — the bundle [reassembler](debug-bundle-reassembly.md)'s `fail('daemon-error')` and the #248
+modal-answer FIFO's `outstandingAnswers.shift()`. This ticket inserts a **precedence gate in front of
+both**:
+
+- **Correlate first.** `inbound.inReplyTo` (widened onto the `daemon-error` kind by this ticket, see
+  [inbound message decode](inbound-message-decode.md)) is looked up in `pendingSettings` before either
+  existing consumer runs.
+- **Match — consume the frame entirely.** `pendingSettings.delete(inReplyTo)` (closing the orphan #261
+  left open, see above), emit `{ type: 'sessionSettingsRejected', changeId }`, then `return` — **both**
+  `reassembler?.fail` and the modal FIFO `shift` are skipped. An error correlated by a unique per-request
+  envelope id is unambiguously the reply to *that* request, so it can be neither a bundle error nor a
+  modal-answer rejection; skipping both is correctness, not a tradeoff (unlike the #248 bundle+answer
+  double-fire, which *is* an accepted tradeoff because the content-free error there truly cannot
+  disambiguate).
+- **No match — unchanged fall-through.** An absent `inReplyTo`, a stale id, or a hostile daemon forging a
+  rejection for a change never dispatched falls through to the two existing consumers exactly as before
+  this ticket — a bundle in flight still fails, an outstanding modal answer is still rejected.
+
+The emitted event carries **only** the client's own `changeId` — never a field read from the untrusted
+`error` payload (no code, no message, no `in_reply_to`). `security-sensitive`, code review **PASS**, no
+findings.
 
 ## Related
 
@@ -326,6 +352,7 @@ changes can target the **same** `session_id`, so shift-oldest would misattribute
 - [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the `setSessionSettings(payload, changeId)` method added to this factory (a faithful `requestSnapshot` twin whose builder owns the omitempty presence contract; `changeId` + `pendingSettings` added by #261), the payload-carrying `buildSetSessionSettings` builder it drives, and the dormant status pending #256's render consumer.
 - [#264 codebase notes](../codebase/264.md) — the `session-settings-updated` inbound kind + the original unconditional `case 'session-settings-updated'` consumer emit, since rewritten correlation-gated by #261 (see § Set-session-settings confirmed-round-trip correlation above).
 - [#261 codebase notes](../codebase/261.md) — the `pendingSettings` correlation map, the rewritten `case 'session-settings-updated'`, and the `dial()` reset (see § Set-session-settings confirmed-round-trip correlation above). No new method on this factory — widens `setSessionSettings`'s signature and rewrites one existing case.
+- [#269 codebase notes](../codebase/269.md) — the rewritten `case 'daemon-error':` precedence gate (see § Set-session-settings rejected correlation above): correlates against the same `pendingSettings` map first, closing the orphan #261 left open, and skips both the reassembler `fail` and the #248 modal FIFO `shift` on a match. No new method on this factory — rewrites one existing case.
 - [#248 codebase notes](../codebase/248.md) — the `outstandingAnswers` FIFO correlation window added to this factory (see § Modal-answer rejection correlation above), the new `modalAnswerRejected` emit from the existing `case 'daemon-error':` arm, and the drain hooked into the existing `case 'modal-dismissed':` arm. No new method on this factory — the correlation rides the two pre-existing `answerModal`/inbound-message seams.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.

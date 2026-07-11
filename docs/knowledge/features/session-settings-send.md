@@ -11,9 +11,10 @@ Ships **dormant**: no renderer surface dispatches this command yet. Its caller i
 Run-configuration controls ([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257)), exactly as
 [#236](modal-resolution-envelope.md)'s `answerModal` shipped ahead of its render consumer. The sibling
 decode-arm slice, [#264](../codebase/264.md), decodes the reply into a `sessionSettingsUpdated`
-`DaemonEvent`; the confirmed-round-trip correlation is [#261](../codebase/261.md) (below) — both have
-since shipped. The store/controls are
-[#256](https://github.com/pyrycode/pyrycode-desktop/issues/256)/#257, not yet built.
+`DaemonEvent`; the confirmed-round-trip correlation is [#261](../codebase/261.md) (below), and the
+**rejected**-round-trip correlation is [#269](../codebase/269.md) (below) — all three have since shipped.
+The store/controls are [#256](https://github.com/pyrycode/pyrycode-desktop/issues/256)/#257, not yet
+built.
 
 ## Correlation (#261) — the confirmed round-trip
 
@@ -43,9 +44,41 @@ never touches the wire:
 This is the **match-key mechanism**: mint client-side, remember main-process-side, correlate by
 `in_reply_to`, never echo the wire routing id back. It's necessary because the command is fire-and-forget
 — the renderer never learns the minted envelope id, so a main-minted-then-echoed id couldn't tell two
-same-`session_id` changes apart. [#269](https://github.com/pyrycode/pyrycode-desktop/issues/269) (blocked
-by #261) reuses this exact map and key to correlate the **rejected** path (a `daemon-error` reply) and
-clean up the orphaned entry a rejection currently leaves until `dial()`.
+same-`session_id` changes apart.
+
+## Rejection ([#269](../codebase/269.md)) — the failed round-trip
+
+A rejected `set_session_settings` doesn't reply with `session_settings_updated` — the daemon rejects it
+with a content-free `error` frame (#116), carrying `Envelope.in_reply_to = request.id` and one of
+`session.not_found` / `protocol.malformed` / `server.binary_offline` (never surfaced past the decode
+boundary). [#269](../codebase/269.md) reuses the **exact same** `pendingSettings` map + `changeId` key
+#261 built, keyed off the `daemon-error` kind instead of `session-settings-updated`:
+
+1. `parseInboundMessage`'s `daemon-error` kind widens with the optional numeric `inReplyTo` — the same
+   already-decoded `Envelope.in_reply_to` propagation #261 used for `session-settings-updated`. No
+   `ErrorPayload` field is ever parsed; the widen carries **only** the routing id.
+2. `daemonConnection`'s `case 'daemon-error':` gates on this **first**, ahead of its two pre-existing
+   consumers: `pendingSettings.get(inReplyTo)` — a hit `delete`s the entry and emits `{ type:
+   'sessionSettingsRejected', changeId }`, then **returns**, consuming the frame entirely.
+3. On a match, **both** existing `daemon-error` consumers are skipped — the [#116](../codebase/116.md)
+   bundle reassembler's `fail('daemon-error')` and the [#248](../codebase/248.md) modal-answer FIFO's
+   `outstandingAnswers.shift()`. An error correlated by a unique per-request envelope id is unambiguously
+   the reply to *that* request, so it is provably neither a bundle error nor a modal-answer rejection —
+   failing a healthy in-flight bundle, or misattributing an unrelated modal rejection, on a settings error
+   would be a bug, not a documented tradeoff.
+4. On **no** match (absent `inReplyTo`, a stale id, or a hostile daemon forging a rejection for a change
+   the client never dispatched), the frame falls through to the two existing consumers **exactly**
+   unchanged — a bundle in flight still fails, an outstanding modal answer is still rejected.
+
+This is also the ticket that **closes the orphan** #261 left open: under the confirmed-only slice, a
+rejected change's `pendingSettings` entry survived until the next `dial()`. Now the `error` path's own
+`delete` removes it the moment the rejection is observed — `dial()`'s `pendingSettings.clear()` remains
+only the backstop for a reply that never arrives before a reconnect.
+
+The emitted `sessionSettingsRejected{changeId}` event carries **no** `sessionId` (the wire `error` frame
+has none — `changeId` alone disambiguates two outstanding changes to the same session), **no**
+`in_reply_to` (stays main-internal), and **no** error code or message (attacker-influenceable bytes that
+no consumer needs). `security-sensitive`, code review **PASS**, no findings.
 
 ## The omitempty presence contract — the crux of this slice
 
@@ -211,10 +244,13 @@ daemon → session_settings_updated frame → decoded by #264 (carries in_reply_
 | Empty/unknown `session_id` | daemon | `session.not_found` — no client-side guard, by design (Evidence-Based Fix Selection) |
 | Reply's `in_reply_to` absent or matches no pending entry | `daemonConnection` (#261) | ignored — no event, fail-closed (AC3); covers a hostile daemon forging a confirmation for an id the client never sent |
 | Reply confirms a change whose entry was abandoned by a `dial()` reset | `daemonConnection` (#261) | ignored — no event (AC5) |
+| Daemon rejects the change (`error` frame, `in_reply_to` matches a pending entry) | `daemonConnection` (#269) | correlated, entry deleted, `{ type: 'sessionSettingsRejected', changeId }` emitted; the #116 reassembler and #248 modal FIFO are both skipped on this match |
+| `error` frame whose `in_reply_to` is absent or matches no pending entry | `daemonConnection` (#269) | falls through unchanged to the pre-existing `daemon-error` consumers (bundle reassembler / modal FIFO) |
 
-No UI surfaces this slice (dormant, no renderer dispatch site). The **rejected** path — correlating a
-`daemon-error` reply back to a pending entry — is
-[#269](https://github.com/pyrycode/pyrycode-desktop/issues/269), blocked by #261.
+No UI surfaces this slice (dormant, no renderer dispatch site). Both the confirmed ([#261](../codebase/261.md))
+and rejected ([#269](../codebase/269.md)) correlation halves have shipped; the pending→confirm/reject
+store consuming either event is [#256](https://github.com/pyrycode/pyrycode-desktop/issues/256), not yet
+built.
 
 ## Security properties
 
@@ -241,6 +277,12 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
   change the client didn't request. The numeric `in_reply_to` itself never crosses to the renderer (only
   `changeId` does), and `changeId` is client-minted, non-secret, never used for authz. Ticket #261 carries
   `security-sensitive`; architect self-review + code review both **PASS** (no findings).
+- **(#269) The `daemon-error` widen carries only the numeric routing id, never `ErrorPayload` content.**
+  No `code`/`message`/payload byte is ever parsed in the `error` decode case — the same minimisation
+  discipline #261 applied to `session-settings-updated`. The emitted `sessionSettingsRejected` event
+  carries only the client's own `changeId`, never a field read from the untrusted error payload; a forged
+  or stale `in_reply_to` finds no `pendingSettings` entry and is silently dropped, identical to #261's
+  defense. Ticket #269 carries `security-sensitive`; code review **PASS** (no findings).
 
 ## Related
 
@@ -265,5 +307,7 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
 - [#264 codebase notes](../codebase/264.md) — the decode arm for this ticket's `session_settings_updated`
   reply: wire type, fail-closed parse, and the `sessionSettingsUpdated` `DaemonEvent` arm #261 widened;
   still a no-op in every bridge until #256 exists.
-- [#269](https://github.com/pyrycode/pyrycode-desktop/issues/269) — the rejected-path follow-up, blocked
-  by #261, reusing `pendingSettings` + `changeId` to correlate a `daemon-error` reply.
+- [#269 codebase notes](../codebase/269.md) — the rejected-path sibling: widens `daemon-error` with
+  `inReplyTo?: number`, correlates it against the same `pendingSettings` map + `changeId` key, and
+  introduces `sessionSettingsRejected` (see § Rejection above). Also the ticket that closes the
+  `pendingSettings` orphan #261 left open for a rejected change.

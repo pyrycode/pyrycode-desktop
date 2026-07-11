@@ -77,10 +77,11 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'conversationCreated':
     case 'sessionTransition':
     case 'sessionSettingsUpdated':
+    case 'sessionSettingsRejected':
       // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
       // conversation-list store (#208), timeline store (#202), create render slice (#242), the #259
-      // session-id holder, and the #261 / #256 session-settings consumers consume these — not the modal
-      // store.
+      // session-id holder, and the #261 / #256 session-settings consumers (confirmed + rejected #269)
+      // consume these — not the modal store.
       return null
     default:
       return assertNever(event)

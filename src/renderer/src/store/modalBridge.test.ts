@@ -127,7 +127,8 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         resultSummary: 'read 12 lines'
       },
       { type: 'sessionTransition', newSessionId: 'sess-2' },
-      { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-x' }
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-x' },
+      { type: 'sessionSettingsRejected', changeId: 'change-x' }
       // modalAnswerRejected is no longer here — #249 flips it to a `rejected` ModalEvent (asserted above).
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()

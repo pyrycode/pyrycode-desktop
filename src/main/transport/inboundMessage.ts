@@ -72,7 +72,12 @@ function hashPlaintext(plaintext: Uint8Array): string {
  *
  * The three debug-bundle kinds (#116) are recognised additively: the `message` / `message_chunk`
  * path is unchanged, and `daemon-error` is deliberately CONTENT-FREE — the daemon's ErrorPayload
- * text is never narrowed or surfaced, only "a terminal error arrived." The `snapshot` kind (#180)
+ * text (code / message) is never narrowed or surfaced, only "a terminal error arrived." It DOES
+ * carry the optional numeric `inReplyTo` — the `Envelope.in_reply_to` routing id already surfaced by
+ * decodeEnvelope (#269), propagated (not re-decoded, no ErrorPayload parsed) so the consumer can
+ * correlate the error back to a pending `set_session_settings` request and surface a rejection;
+ * `undefined` when the frame omits it (correlation fails closed). Still surfaces NO error content.
+ * The `snapshot` kind (#180)
  * carries the full decoded ScreenSnapshotPayload; the consumer (#62) drops all but model/effort/yolo
  * before emitting, so the sensitive `text` never crosses IPC.
  *
@@ -133,7 +138,7 @@ export type InboundDaemonMessage =
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
   | { kind: 'bundle-done'; total: number }
-  | { kind: 'daemon-error' }
+  | { kind: 'daemon-error'; inReplyTo?: number }
   | { kind: 'snapshot'; snapshot: ScreenSnapshotPayload }
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
@@ -805,17 +810,21 @@ export function parseInboundMessage(
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.
-      // CONTENT-FREE — no ErrorPayload field is narrowed or surfaced; the reassembler only needs
-      // "a terminal error arrived." It moves from inbound-unmodeled to inbound-decoded(error) now
-      // that it is recognised — a content-free, more-accurate log that applies to ALL `error`
-      // frames, bundle-related or not (intentional; see the #116 spec).
+      // CONTENT-FREE — no ErrorPayload field (code / message) is narrowed or surfaced; the reassembler
+      // only needs "a terminal error arrived." It moves from inbound-unmodeled to inbound-decoded(error)
+      // now that it is recognised — a content-free, more-accurate log that applies to ALL `error`
+      // frames, bundle-related or not (intentional; see the #116 spec). The numeric `in_reply_to` is a
+      // routing id, not logged (no new DiagnosticEvent field, so #131's renderer pin is untouched).
       diagnosticLog?.event({
         event: 'inbound-decoded',
         code: 'error',
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'daemon-error' }
+      // Propagate the ALREADY-decoded Envelope.in_reply_to (#269) — do not re-decode, parse no
+      // ErrorPayload. `undefined` when the frame omits it, which makes the consumer's correlation to a
+      // pending set_session_settings request fail closed. Carries ONLY the numeric id, never error content.
+      return { kind: 'daemon-error', inReplyTo: envelope.in_reply_to }
     default:
       // A well-formed `ack` / `error` / etc. is not an error — it is simply not modeled here. Log it
       // content-free (capped type + size + hash) so an unforeseen kind still leaves a footprint (#130

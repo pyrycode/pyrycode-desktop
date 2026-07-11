@@ -301,6 +301,31 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
     expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error' })
   })
 
+  it('carries the Envelope in_reply_to onto the daemon-error kind as inReplyTo (#269 correlation id)', () => {
+    // The numeric routing id crosses; the ErrorPayload code/message never do (content-free).
+    const bytes = encodeEnvelope({
+      id: 1,
+      type: 'error',
+      ts: FIXED_TS,
+      in_reply_to: 7,
+      payload: { code: 'protocol.malformed', message: 'secret daemon detail', retryable: false }
+    })
+    expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error', inReplyTo: 7 })
+  })
+
+  it('leaves inReplyTo undefined when a daemon error omits in_reply_to (correlation fails closed downstream)', () => {
+    const bytes = encodeEnvelope({
+      id: 1,
+      type: 'error',
+      ts: FIXED_TS,
+      payload: { code: 'session.not_found', message: 'secret daemon detail', retryable: false }
+    })
+    const result = parseInboundMessage(bytes)
+    expect(result).toEqual({ kind: 'daemon-error' })
+    // Explicit: the carrier is present-but-undefined, so daemonConnection's lookup short-circuits.
+    expect(result?.kind === 'daemon-error' && result.inReplyTo).toBeUndefined()
+  })
+
   it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
     expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
     expect(parseInboundMessage(encodeChunk({ messages: [MSG_A] }))).toEqual({

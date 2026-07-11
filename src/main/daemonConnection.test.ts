@@ -272,13 +272,15 @@ function sessionSettingsUpdatedPlaintext(payload: unknown, inReplyTo?: number): 
   })
 }
 
-/** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). */
-function errorPlaintext(): Uint8Array {
+/** A single daemon `error` reply plaintext — its ErrorPayload text must never surface (#116). The
+ *  optional `inReplyTo` rides the ENVELOPE (not the payload) — the #269 request↔reject correlation id. */
+function errorPlaintext(inReplyTo?: number): Uint8Array {
   return encodeEnvelope({
     id: 3,
     type: 'error',
     ts: FIXED_TS,
-    payload: { code: 'server.binary_offline', message: 'secret error detail', retryable: true }
+    payload: { code: 'server.binary_offline', message: 'secret error detail', retryable: true },
+    ...(inReplyTo !== undefined ? { in_reply_to: inReplyTo } : {})
   })
 }
 
@@ -2535,6 +2537,185 @@ describe('createDaemonConnection — modal-answer rejection correlation (#248)',
     drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
 
     expect(rejections(sink)).toEqual([])
+  })
+})
+
+describe('createDaemonConnection — set_session_settings rejection correlation (#269)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** The sessionSettingsRejected events emitted so far, in order. */
+  function settingsRejections(sink: ReturnType<typeof fakeSink>): DaemonEvent[] {
+    return emitted(sink).filter((e) => e.type === 'sessionSettingsRejected')
+  }
+  /** The modalAnswerRejected events emitted so far — used to prove the modal FIFO is untouched (AC2). */
+  function modalRejections(sink: ReturnType<typeof fakeSink>): DaemonEvent[] {
+    return emitted(sink).filter((e) => e.type === 'modalAnswerRejected')
+  }
+
+  it('correlates a request-error by in_reply_to to its pending change and emits sessionSettingsRejected with the changeId (AC1/AC4)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    // The daemon echoes the request envelope id as in_reply_to (pyrycode#845).
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id) })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([{ type: 'sessionSettingsRejected', changeId: 'change-1' }])
+    // Exactly two keys — no sessionId / in_reply_to / code / message. Load-bearing regression pin.
+    expect(Object.keys(events[0]).sort()).toEqual(['changeId', 'type'])
+  })
+
+  it('an error with an absent in_reply_to short-circuits before the map lookup, even with a change pending (fail-closed)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+
+    // No in_reply_to at all → undefined short-circuits before the pendingSettings.get.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(settingsRejections(sink)).toEqual([])
+  })
+
+  it('an error whose in_reply_to matches no pending change falls through to the modal FIFO unchanged (AC3)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+
+    // An error correlated to NO pending change (id 999) while a change is outstanding → no settings
+    // rejection; falls through to reject the oldest modal answer exactly as #248.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(999) })
+
+    expect(settingsRejections(sink)).toEqual([])
+    expect(modalRejections(sink)).toEqual([{ type: 'modalAnswerRejected', modalId: 'mdl-1' }])
+  })
+
+  it('does not shift the modal FIFO when the error correlates to a pending change; the modal stays outstanding (AC2)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const settingsId = decodeEnvelope(drivers[0].sent[1]).id
+
+    // A settings-correlated error: emit the rejection, DO NOT shift the modal FIFO.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(settingsId) })
+    expect(settingsRejections(sink)).toEqual([
+      { type: 'sessionSettingsRejected', changeId: 'change-1' }
+    ])
+    expect(modalRejections(sink)).toEqual([])
+
+    // Proof the answer is still outstanding: a later uncorrelated error rejects it exactly as #248.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+    expect(modalRejections(sink)).toEqual([{ type: 'modalAnswerRejected', modalId: 'mdl-1' }])
+  })
+
+  it('a settings-correlated error does not fail a healthy in-flight bundle (precedence)', async () => {
+    const { connection, sink, drivers } = await connected()
+    const { consumer, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const settingsId = decodeEnvelope(drivers[0].sent[1]).id
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(settingsId) })
+
+    expect(settingsRejections(sink)).toEqual([
+      { type: 'sessionSettingsRejected', changeId: 'change-1' }
+    ])
+    // A settings error is not a bundle error — the healthy bundle is NOT failed.
+    expect(failed).toEqual([])
+  })
+
+  it('an error with no matching change still fails a pending bundle reassembler (AC3)', async () => {
+    const { connection, sink, drivers } = await connected()
+    const { consumer, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(999) })
+
+    expect(failed).toEqual(['daemon-error'])
+    expect(settingsRejections(sink)).toEqual([])
+  })
+
+  it('distinguishes two changes to the same session by changeId, rejects in either order (AC4)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-x' }, 'change-1')
+    connection.setSessionSettings({ session_id: 'sess-x' }, 'change-2')
+    const id1 = decodeEnvelope(drivers[0].sent[0]).id
+    const id2 = decodeEnvelope(drivers[0].sent[1]).id
+    const before = emitted(sink).length
+
+    // Rejections arrive REVERSED; each still carries the exact matching changeId.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id2) })
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id1) })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'sessionSettingsRejected', changeId: 'change-2' },
+      { type: 'sessionSettingsRejected', changeId: 'change-1' }
+    ])
+  })
+
+  it('drops the pending entry on a rejection — a second error for the same id emits no further rejection (AC5)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id) })
+    const after = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id) })
+
+    expect(emitted(sink).slice(after)).toEqual([])
+  })
+
+  it('never echoes the daemon error content (message / code / in_reply_to) onto any emitted event (security no-echo)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id) })
+
+    const serialized = JSON.stringify(emitted(sink))
+    for (const dropped of [
+      'secret error detail',
+      'server.binary_offline',
+      'in_reply_to',
+      'inReplyTo'
+    ]) {
+      expect(serialized).not.toContain(dropped)
+    }
+  })
+
+  it('clears the pending map on reconnect — an error for an abandoned change emits nothing (AC5 backstop)', async () => {
+    const ctx = await connected()
+
+    ctx.connection.setSessionSettings({ session_id: 'sess-2' }, 'change-1')
+    const id = decodeEnvelope(ctx.drivers[0].sent[0]).id
+
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = emitted(ctx.sink).length
+
+    // dial() abandoned the outstanding change; an error echoing the old id (ids recycle from 2)
+    // correlates to nothing on the fresh connection.
+    ctx.drivers[1].emit({ type: 'message', plaintext: errorPlaintext(id) })
+
+    expect(emitted(ctx.sink).slice(before)).toEqual([])
   })
 })
 

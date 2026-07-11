@@ -82,8 +82,10 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // error (the snapshotReceived-was-a-no-op-until-#187 precedent).
       return null
     case 'sessionSettingsUpdated':
-      // No session-store action: #261 / #256 (correlation / store, not yet built) consume this, not the
-      // session store. Present only because the assertNever guard below makes a new arm a compile error.
+    case 'sessionSettingsRejected':
+      // No session-store action: #261 / #256 (correlation / store, not yet built) consume the confirmed
+      // and rejected (#269) settings arms, not the session store. Present only because the assertNever
+      // guard below makes a new arm a compile error.
       return null
     case 'modalAnswerRejected':
       // No session-store action: the modal bridge (#249, render) consumes this, not the session store.

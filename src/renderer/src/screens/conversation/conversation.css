@@ -133,6 +133,45 @@
   padding: var(--space-2) var(--space-4);
 }
 
+/* #277 — the pre-first-message empty-thread state, shown in place of the thread scroll region while a
+   fresh conversation has no items (replacing Timeline's former `return null`). Fills the flexible
+   middle region like .conversation__thread (flex: 1 1 auto; min-height: 0) but is a DISTINCT class —
+   never .conversation__thread, no data-thread-role — so the split-brain guard (AC4) holds. Centered on
+   both axes: that centering (vs the top-padded, icon-less .channel-list__empty) plus the glyph is the
+   visual axis of distinction from the channel-list empty state (AC4). Muted, token-only; no Figma node
+   (the mobile file draws only the populated thread). #278 pins its workspace chip to the top of this
+   surface. */
+.conversation__empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  color: var(--color-on-surface-variant);
+}
+
+/* The decorative chat glyph — the visual that distinguishes this state from the icon-less
+   channel-list empty (AC4). Sized 48px on the SVG element (the send-square structural convention);
+   inherits the wrapper's muted color via fill: currentColor. Purely decorative (aria-hidden) — the
+   copy carries the meaning. */
+.conversation__empty-icon {
+  display: block;
+}
+
+/* The guiding copy line — body-medium, centered, inheriting the wrapper's muted color. margin: 0
+   resets the <p> default. */
+.conversation__empty-copy {
+  margin: 0;
+  text-align: center;
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
 .message-row {
   display: flex;
 }

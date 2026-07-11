@@ -109,11 +109,11 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // into the tail assistantText, so the view never merges. Carries both the user's echo (userText) and
 // the daemon's structured reply, so arrival order interleaves them into one continuous thread.
 //
-// Empty items → null (not an empty <div>): the pre-first-message thread is absent — exactly as the
-// retired MessageThread's empty region was effectively zero-height (AC4). With MessageThread gone,
-// this is the only thread container, so an empty timeline means no thread region renders at all.
-export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Element | null {
-  if (items.length === 0) return null
+// Empty items → the pre-first-message empty state (#277), not null: a fresh thread now reads as a
+// purposeful invitation rather than a blank gap between the top bar and the composer. EmptyThread is a
+// distinct surface from the thread scroll region, so an empty timeline never renders a thread container.
+export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Element {
+  if (items.length === 0) return <EmptyThread />
   const lastIndex = items.length - 1
   return (
     <div className="conversation__thread">
@@ -211,6 +211,38 @@ function TimelineRow({
         </div>
       )
   }
+}
+
+// #277: the pre-first-message empty-thread copy. A module-level, client-owned constant — Timeline
+// receives only `items`, so the empty branch can render nothing but this literal, making AC3 ("no
+// daemon-supplied string is rendered in the empty state") a structural guarantee (the ThinkingIndicator
+// label idiom). Semantically an in-thread invitation, distinct from the channel-list "No conversations
+// yet" list-absence line (AC4).
+const EMPTY_THREAD_COPY = 'Send a message to get started'
+
+// #277: the empty-thread state Timeline renders when the item list is empty (replacing #203's `return
+// null`) — a fresh thread reads as a purposeful pre-first-message invitation, not a blank gap. A
+// DISTINCT class from .conversation__thread (never that substring, no data-thread-role) so the
+// split-brain guard (AC4) stays green; a decorative chat glyph (aria-hidden — the file's inline-SVG
+// idiom) plus the client-owned copy carry the state, visually distinct from the icon-less
+// .channel-list__empty (AC1/AC4). The icon+copy centre in the flexible middle region; #278 pins its
+// workspace chip to the top of this same surface (not built here).
+function EmptyThread(): JSX.Element {
+  return (
+    <div className="conversation__empty">
+      <svg
+        className="conversation__empty-icon"
+        viewBox="0 0 24 24"
+        width="48"
+        height="48"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z" />
+      </svg>
+      <p className="conversation__empty-copy">{EMPTY_THREAD_COPY}</p>
+    </div>
+  )
 }
 
 // #215: the thinking indicator — Timeline's twin over the coarse `phase` scalar rather than the

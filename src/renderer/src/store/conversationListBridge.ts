@@ -33,6 +33,19 @@ export function translateConversationsEvent(
 }
 
 /**
+ * The refresh trigger (#275): should this event re-request the list? True only for the unsolicited
+ * `conversationUpdated` broadcast. Deliberately a plain boolean, NOT a type guard that narrows to the
+ * payload — the event's `id` / `name` / `cwd` are never consulted (AC3). We react to the OCCURRENCE of
+ * a daemon-side conversation change, then let the daemon's authoritative reply land the new rows via
+ * the existing `conversationsReceived → setConversations` seam. Kept separate from
+ * `translateConversationsEvent` so that pure `event → rows | null` filter stays single-purpose (the
+ * ticket's "don't overload that filter"). Total over the sealed union — no failure mode.
+ */
+export function isConversationUpdated(event: DaemonEvent): boolean {
+  return event.type === 'conversationUpdated'
+}
+
+/**
  * Fire the existing bare `requestConversations` command (#139 wired the main side through to
  * `buildListConversations`; the daemon returns every conversation, so there is no payload). An inline
  * literal typed as RendererCommand — no constructor added, keeping the change renderer-contained.
@@ -43,20 +56,28 @@ export function requestConversationList(sendCommand: (command: RendererCommand) 
 }
 
 /**
- * Subscribe via the injected `onDaemonEvent`; each `conversationsReceived` writes its rows verbatim
- * into the store via `setConversations`; every unrelated event no-ops. Returns the unsubscribe handle
- * (the daemonEventBridge off-handle idiom) so the React binding can use it as its effect cleanup. The
- * `list !== null` guard (not `if (list)`) is deliberate: an empty array is truthy either way, but the
- * explicit `!== null` makes "an empty list still writes — loaded-zero, not not-loaded" unmistakable.
- * The listener only dispatches — it never throws into React.
+ * Subscribe via the injected `onDaemonEvent` with a SINGLE listener that has two independent reactions
+ * (a single event is never both a `conversationsReceived` and a `conversationUpdated`, so they never
+ * cross-fire): each `conversationsReceived` writes its rows verbatim into the store via
+ * `setConversations`; each `conversationUpdated` broadcast (#275) fires `refreshOnChange` to re-request
+ * the authoritative list, keeping the Channel List live on a promote/rename/archive without a
+ * reconnect. Every unrelated event no-ops. Still exactly one subscription (AC4). Returns the
+ * unsubscribe handle (the daemonEventBridge off-handle idiom) so the React binding can use it as its
+ * effect cleanup. The `list !== null` guard (not `if (list)`) is deliberate: an empty array is truthy
+ * either way, but the explicit `!== null` makes "an empty list still writes — loaded-zero, not
+ * not-loaded" unmistakable. `refreshOnChange` is required — the listener always needs to know what to
+ * do on an update, so the contract forces every call site to opt in explicitly. The listener only
+ * dispatches — it never throws into React.
  */
 export function subscribeConversations(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  setConversations: (conversations: readonly ConversationSummary[]) => void
+  setConversations: (conversations: readonly ConversationSummary[]) => void,
+  refreshOnChange: () => void
 ): () => void {
   return onDaemonEvent((event) => {
     const list = translateConversationsEvent(event)
     if (list !== null) setConversations(list)
+    if (isConversationUpdated(event)) refreshOnChange()
   })
 }
 
@@ -79,9 +100,14 @@ export function ConversationListData(): null {
     // Subscribe first (declared before the request effect, so it runs first on mount): the listener
     // is live before any request goes out. The returned off handle is the effect cleanup, so a
     // StrictMode double-mount nets exactly one live listener (the daemonEventBridge idiom). Each
-    // conversationsReceived writes its rows verbatim into the app-singleton store via its setter.
-    return subscribeConversations(window.pyry.onDaemonEvent, (list) =>
-      conversationListStore.getState().setConversations(list)
+    // conversationsReceived writes its rows verbatim into the app-singleton store via its setter; a
+    // conversationUpdated broadcast (#275) re-requests the list so the flipped row lands without a
+    // reconnect. `window.pyry.sendCommand` is dereferenced only when the arrow runs (an update fires),
+    // never during render — so the server-render-to-empty-markup invariant is unaffected.
+    return subscribeConversations(
+      window.pyry.onDaemonEvent,
+      (list) => conversationListStore.getState().setConversations(list),
+      () => requestConversationList(window.pyry.sendCommand)
     )
   }, [])
 

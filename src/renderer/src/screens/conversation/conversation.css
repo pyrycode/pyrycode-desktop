@@ -1013,6 +1013,35 @@
   background: var(--color-surface);
 }
 
+/* #257 — the operable affordance. The interactive controls share #188's classes; the operable ones are
+   distinguished by the attributes #257 adds (role="button" on rows/segments, the dropped aria-readonly
+   on the switch), so cursor/focus key off those attributes and the read-only markup is untouched. The
+   focus ring reuses the composer/status-row idiom (1px --color-outline). */
+.run-config__model-row[role='button'],
+.run-config__effort-segment[role='button'],
+.run-config__switch:not([aria-readonly]) {
+  cursor: pointer;
+}
+
+.run-config__model-row[role='button']:focus-visible,
+.run-config__effort-segment[role='button']:focus-visible,
+.run-config__switch:not([aria-readonly]):focus-visible {
+  outline: 1px solid var(--color-outline);
+  outline-offset: 2px;
+}
+
+/* #257 — the AC4 rejection line. Field-scoped, apostrophe-free copy in a leading --color-error accent
+   (the only error role token on desktop; no new theme token). body-small, padded to the section gutter. */
+.run-config__error {
+  margin: 0;
+  padding: var(--space-1) var(--space-4) 0;
+  color: var(--color-error);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
 /* #192 — the Context window usage gauge (Figma node 20:151 body). Reuses .status-sheet__section-header
    for the header above it. Fidelity note (mirrors the comment above): trust the token names over the
    Figma export's fallback hexes — the export writes the light-scheme --schemes/success /

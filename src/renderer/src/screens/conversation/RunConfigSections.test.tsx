@@ -196,6 +196,74 @@ describe('RunConfigView — Context window', () => {
   })
 })
 
+// #257: the interactive toggle — the SAME view is inert (#188's read-only markup) with no `onChange`
+// and operable with one. The `node` env cannot fire clicks, so these assert the operable AFFORDANCE in
+// the markup (role/tabindex, dropped aria-readonly); the click → submit behaviour is covered by
+// runSettingsControls.test.ts. Selection markers must still reflect the passed values either way.
+describe('RunConfigView — interactive toggle (#257)', () => {
+  const noop = (): void => undefined
+
+  it('makes rows/segments/switch operable when onChange is present (AC1/2/3)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView model="opus" effort="high" yolo={false} {...NO_USAGE} onChange={noop} />
+    )
+    // Model rows and effort segments gain the operable affordance.
+    expect(markup).toContain('role="button"')
+    expect(markup).toContain('tabindex="0"')
+    // The YOLO switch drops aria-readonly and becomes operable (AC3).
+    expect(markup).toContain('role="switch"')
+    expect(markup).not.toContain('aria-readonly')
+    // Selection still reflects the passed values exactly as #188.
+    expect(segmentFor(markup, 'run-config__model-row', 'Opus 4.7')).toContain('Current model')
+    expect(segmentFor(markup, 'run-config__effort-segment', '>high<')).toContain('aria-current="true"')
+  })
+
+  it('stays inert (identical to #188) when onChange is absent (AC5)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView model="opus" effort="high" yolo={true} {...NO_USAGE} />
+    )
+    // No handler ⇒ literally today's read-only markup: no operable affordance, switch reads-only.
+    expect(markup).not.toContain('role="button"')
+    expect(markup).not.toContain('tabindex')
+    expect(markup).toContain('aria-readonly="true"')
+    // Selection markers unchanged.
+    expect(segmentFor(markup, 'run-config__model-row', 'Opus 4.7')).toContain('Current model')
+    expect(markup).toContain('aria-checked="true"')
+  })
+})
+
+// #257: the AC4 error surface — a rejected change surfaces a field-scoped role="alert" line whose copy
+// is derived from the field (#269 strips the daemon message). At most one section shows an error at a
+// time (the store holds one `error` field). Design-doc-sourced: there is no Figma error frame.
+describe('RunConfigView — error surface (#257 AC4)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+
+  it('renders the field-scoped alert for the rejected field only', () => {
+    const cases: Array<[NonNullable<Parameters<typeof RunConfigView>[0]['errorField']>, string, string[]]> =
+      [
+        ['model', 'Could not change the model', ['Could not change the effort', 'Could not change auto-accept']],
+        ['effort', 'Could not change the effort', ['Could not change the model', 'Could not change auto-accept']],
+        ['yolo', 'Could not change auto-accept', ['Could not change the model', 'Could not change the effort']]
+      ]
+    for (const [field, expected, absent] of cases) {
+      const markup = renderToStaticMarkup(<RunConfigView {...base} errorField={field} />)
+      expect(markup).toContain('role="alert"')
+      expect(markup).toContain(expected)
+      for (const other of absent) expect(markup).not.toContain(other)
+    }
+  })
+
+  it('renders no error markup when errorField is null or omitted', () => {
+    for (const markup of [
+      renderToStaticMarkup(<RunConfigView {...base} errorField={null} />),
+      renderToStaticMarkup(<RunConfigView {...base} />)
+    ]) {
+      expect(markup).not.toContain('role="alert"')
+      expect(markup).not.toContain('Could not change')
+    }
+  })
+})
+
 describe('RunConfigSections (container)', () => {
   it('server-renders the AC4 default without touching window.pyry', () => {
     // useStore reads getInitialState() (snapshot:null) under server render, so the container always
@@ -209,6 +277,12 @@ describe('RunConfigSections (container)', () => {
     expect(markup).not.toContain('Current model')
     expect(markup).not.toContain('aria-current')
     expect(markup).toContain('aria-checked="false"')
+    // AC5: under SSR sessionId is null ⇒ no onChange ⇒ the controls are inert — the switch stays
+    // read-only and no operable affordance renders (identical to #188).
+    expect(markup).toContain('aria-readonly="true"')
+    expect(markup).not.toContain('role="button"')
+    // No standing rejection on the opening frame.
+    expect(markup).not.toContain('role="alert"')
     // The null-snapshot default (windowTokens: 0) collapses into the same unavailable branch as the
     // daemon's window_tokens == 0 signal — no % used, no NaN, no divide-by-zero (AC5).
     expect(markup).not.toContain('% used')

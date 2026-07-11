@@ -2,14 +2,14 @@
 
 The renderer's held copy of the open conversation's **current daemon `session_id`** — a dedicated,
 unidirectional Zustand store fed by the always-arriving `sessionTransition` marker, so the interactive
-[Run configuration](conversation-shell.md#run-configuration-sheet-177) controls (#257, later) can
-address a `set_session_settings` write to the session that is actually running.
+[Run configuration](conversation-shell.md#run-configuration-sheet-177) controls ([#257](../codebase/257.md))
+can address a `set_session_settings` write to the session that is actually running.
 
 Introduced in [#259](../codebase/259.md), the renderer-side retention half of #183's interactive
 Run-configuration write path, split alongside #254/#255/#256/#257. Consumes the transport
 [#254](../codebase/254.md) already shipped (`sessionTransition{newSessionId}` daemon event). This
-store itself delivers no visible surface — it is a dormant holder until #257 reads it, the same
-posture `runConfigStore` (#187) had before #188.
+store itself delivers no visible surface of its own — [#257](../codebase/257.md) (since shipped, PR
+#283) is its live reader, the same posture `runConfigStore` (#187) had before #188.
 
 ## What it does
 
@@ -78,12 +78,12 @@ daemon → transport (#254) → sessionTransition{newSessionId}
                                      → translateSessionTransition → setSessionId
                                      → sessionIdStore                                  [last marker wins]
 
-#257 (later): useSessionIdStore(selectSessionId)
+#257: useSessionIdStore(selectSessionId) → RunConfigSections' AC5 gate input
 ```
 
 ## Configuration and usage
 
-- **Import surface**, for the future #257 consumer:
+- **Import surface**, consumed by `RunConfigSections` (#257):
   `import { useSessionIdStore, selectSessionId } from '@renderer/store/sessionIdStore'`.
 - **Mount point:** `src/renderer/src/App.tsx`, `<SessionIdData />` next to `<ConversationListData />`.
 - **Single current id, not a per-conversation map** — the marker carries no `conversation_id`
@@ -92,9 +92,9 @@ daemon → transport (#254) → sessionTransition{newSessionId}
 
 ## Edge cases and limitations
 
-- **No consumer yet.** `useSessionIdStore`/`selectSessionId` are exported but unread until #257 —
-  flagged as a NIT (not blocking) in code review, the same dormant-holder posture
-  `useConversationListStore` had before #141 and `useModalBridge` had before #223.
+- **`sessionId !== null` is #257's AC5 gate**, both structurally (the container withholds `onChange`
+  from `RunConfigView` until a session id exists) and at runtime (`changeSetting`'s null guard in
+  `runSettingsControls.ts`) — see [#257 codebase notes](../codebase/257.md).
 - **Empty-string `session_id` is held, not dropped** — deliberate (see the store section); a product
   call to instead reject it would be a behavior change, not a bug fix.
 - **No correlation, no reset.** Nothing is requested, so there is nothing to time out or retry; the
@@ -112,10 +112,12 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   mirror.
 - [Run configuration store](run-config-store.md) — the sibling store this ticket deliberately did
   **not** fold `session_id` into (lifecycle mismatch: sheet-scoped vs. App-level always-listening).
-- [Conversation shell](conversation-shell.md) — the Run configuration sheet #257 will wire this
+- [Conversation shell](conversation-shell.md) — the Run configuration sheet #257 wired this
   store's selector into.
 - [#254 codebase notes](../codebase/254.md) — the transport decode arm this store consumes.
 - [#259 codebase notes](../codebase/259.md) — implementation summary and patterns established.
 - [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the outbound
-  `setSessionSettings` command + connection method this store's held `session_id` will address, once
-  #257 wires the two together; ships dormant until then, same as this store.
+  `setSessionSettings` command + connection method this store's held `session_id` now addresses,
+  via #257's `runSettingsControls.ts` gate.
+- [#257 codebase notes](../codebase/257.md) — the live consumer: gates `submitSettingsChange` on
+  `selectSessionId(s) !== null`.

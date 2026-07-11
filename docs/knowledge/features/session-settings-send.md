@@ -7,15 +7,14 @@ envelope on the live Noise session, asking the daemon to mutate one session's ru
 counterpart to the read-only [screen snapshot fetch](screen-snapshot-fetch.md) (#180) — same `send`-twin
 shape, opposite direction.
 
-Ships **dormant**: no renderer surface dispatches this command yet. Its caller is the interactive
-Run-configuration controls ([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257)), exactly as
+Shipped **dormant** and has since gained its live dispatch site. Its caller is the interactive
+Run-configuration controls ([#257](../codebase/257.md), shipped PR #283), exactly as
 [#236](modal-resolution-envelope.md)'s `answerModal` shipped ahead of its render consumer. The sibling
 decode-arm slice, [#264](../codebase/264.md), decodes the reply into a `sessionSettingsUpdated`
 `DaemonEvent`; the confirmed-round-trip correlation is [#261](../codebase/261.md) (below), and the
-**rejected**-round-trip correlation is [#269](../codebase/269.md) (below) — all three have since shipped.
-The pending-write **store**, [#256](../codebase/256.md), has since shipped too (see below); the
-interactive **controls**, [#257](https://github.com/pyrycode/pyrycode-desktop/issues/257), are not yet
-built.
+**rejected**-round-trip correlation is [#269](../codebase/269.md) (below). The pending-write **store**,
+[#256](../codebase/256.md) (below), and the interactive **controls**, [#257](../codebase/257.md), have
+both since shipped — #183's whole interactive Run-configuration write path is now complete end to end.
 
 ## Consumption (#256) — the pending-write store
 
@@ -245,6 +244,8 @@ daemon → session_settings_updated frame → decoded by #264 (carries in_reply_
       → match: DaemonEvent{ type: 'sessionSettingsUpdated', sessionId, changeId }
       → RunSettingsWriteData (#256) → translateWriteEvent → dispatch({settingsConfirmed, changeId})
       → no match (unmatched / absent in_reply_to): ignored, no event (AC3, fail-closed)
+
+window → #257 (RunConfigSections) → changeSetting (AC5 session-id gate) → the sendCommand call above
 ```
 
 ## Error handling
@@ -260,11 +261,11 @@ daemon → session_settings_updated frame → decoded by #264 (carries in_reply_
 | Daemon rejects the change (`error` frame, `in_reply_to` matches a pending entry) | `daemonConnection` (#269) | correlated, entry deleted, `{ type: 'sessionSettingsRejected', changeId }` emitted; the #116 reassembler and #248 modal FIFO are both skipped on this match |
 | `error` frame whose `in_reply_to` is absent or matches no pending entry | `daemonConnection` (#269) | falls through unchanged to the pre-existing `daemon-error` consumers (bundle reassembler / modal FIFO) |
 
-No UI surfaces this slice (dormant, no renderer dispatch site). Both the confirmed ([#261](../codebase/261.md))
-and rejected ([#269](../codebase/269.md)) correlation halves have shipped, and so has the
-pending→confirm/reject [store](run-settings-write-store.md) consuming both events
-([#256](../codebase/256.md)) — the interactive controls dispatching into it,
-[#257](https://github.com/pyrycode/pyrycode-desktop/issues/257), are not yet built.
+This slice's UI surface is [#257](../codebase/257.md)'s interactive Model/Effort/YOLO controls. Both the
+confirmed ([#261](../codebase/261.md)) and rejected ([#269](../codebase/269.md)) correlation halves
+shipped, then the pending→confirm/reject [store](run-settings-write-store.md) consuming both events
+([#256](../codebase/256.md)), then the controls dispatching into it ([#257](../codebase/257.md)) — the
+whole chain from #183 is now merged end to end.
 
 ## Security properties
 
@@ -315,9 +316,11 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
   the structural precedent for shipping a command-surface + connection-method pair dormant, ahead of its
   render consumer.
 - [Session-id store](session-id-store.md) / [#259](../codebase/259.md) — the renderer-side holder of the
-  `session_id` this command's payload will address, once #257 wires the two together.
+  `session_id` this command's payload addresses, wired together by [#257](../codebase/257.md).
 - [Run configuration store](run-config-store.md) / [#187](../codebase/187.md) — the read half this
-  write path is the eventual write-side twin of; [#256](../codebase/256.md)/#257 join them.
+  write path is the write-side twin of; [#256](../codebase/256.md)/[#257](../codebase/257.md) join them.
+- [#257 codebase notes](../codebase/257.md) — the interactive controls: the render-side dispatch site
+  this command shipped ahead of.
 - [#264 codebase notes](../codebase/264.md) — the decode arm for this ticket's `session_settings_updated`
   reply: wire type, fail-closed parse, and the `sessionSettingsUpdated` `DaemonEvent` arm #261 widened;
   consumed by [#256](../codebase/256.md)'s [write store](run-settings-write-store.md), still a no-op in

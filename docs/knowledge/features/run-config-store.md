@@ -161,3 +161,7 @@ daemon → screen_snapshot → snapshotReceived{model,effort,yolo,used_tokens,wi
   `window_tokens` to this store's input event.
 - [#192 codebase notes](../codebase/192.md) — widened this store by the two usage figures and added
   the fourth read-only section (Context window) that renders them.
+- [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md)
+  — the adjacent pending-write store whose `selectEffectiveSettings` composes over this store's
+  `snapshot` as its base value; deliberately not folded in as a facet (lifecycle mismatch: sheet-scoped
+  vs. App-level always-listening).

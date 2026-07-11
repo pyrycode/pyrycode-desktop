@@ -182,11 +182,12 @@ notes](../codebase/249.md) for the render design.
   `conversationCreated` arm that folds into this bridge's no-op case alongside `toolResult`; the real
   consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242).
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` arm that folds into this bridge's
-  no-op case alongside `toolResult`/`conversationCreated`; the real consumer is the not-yet-built
-  renderer holder [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259).
+  no-op case alongside `toolResult`/`conversationCreated`; the real consumer is the [session-id
+  store](session-id-store.md) ([#259](../codebase/259.md), shipped).
 - [Session settings send](session-settings-send.md) / [#264 codebase notes](../codebase/264.md) — the
-  `sessionSettingsUpdated` arm that folds into this bridge's no-op case alongside `sessionTransition`;
-  the real consumer is #261 / #256, not yet built.
+  `sessionSettingsUpdated`/`sessionSettingsRejected` arms that fold into this bridge's no-op case
+  alongside `sessionTransition`; the real consumer is the [Run configuration write
+  store](run-settings-write-store.md) ([#256](../codebase/256.md), shipped).
 - [#179 codebase notes](../codebase/179.md) — flips `interactive` live, so `modal_shown`/`modal_dismissed`
   carry real daemon traffic through this bridge in production for the first time.
 - [#248 codebase notes](../codebase/248.md) — adds the third owned arm, `modalAnswerRejected`, shipped

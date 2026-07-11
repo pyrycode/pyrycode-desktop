@@ -209,12 +209,13 @@ daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id d
   consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242).
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` transport slice: another
   `DaemonEvent` arm this bridge does **not** own, folded into the inverse-filter `null` list (not a
-  timeline item, unlike `turnState`); the real consumer is the not-yet-built renderer holder
-  [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259).
+  timeline item, unlike `turnState`); the real consumer is the [session-id store](session-id-store.md)
+  ([#259](../codebase/259.md), shipped).
 - [Session settings send](session-settings-send.md) / [#264 codebase notes](../codebase/264.md) — the
-  `sessionSettingsUpdated` transport slice: another `DaemonEvent` arm this bridge does **not** own,
-  folded into the inverse-filter `null` list alongside `sessionTransition`; the real consumer is
-  #261 / #256, not yet built.
+  `sessionSettingsUpdated`/`sessionSettingsRejected` transport slices: two more `DaemonEvent` arms this
+  bridge does **not** own, folded into the inverse-filter `null` list alongside `sessionTransition`;
+  the real consumer is the [Run configuration write store](run-settings-write-store.md)
+  ([#256](../codebase/256.md), shipped).
 - [#248 codebase notes](../codebase/248.md) — the `modalAnswerRejected` transport slice: another
   `DaemonEvent` arm this bridge does **not** own, folded into the inverse-filter `null` list alongside
   `modalShown`/`modalDismissed`/`sessionTransition`; the real, still-dormant owner is the

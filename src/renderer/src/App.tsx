@@ -6,6 +6,7 @@ import { useTimelineBridge } from './store/timelineBridge'
 import { useModalBridge } from './store/modalBridge'
 import { ConversationListData } from './store/conversationListBridge'
 import { SessionIdData } from './store/sessionIdBridge'
+import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -91,10 +92,15 @@ function App(): JSX.Element {
   // SessionIdData (#259) is a sibling headless leaf: it retains the current daemon session_id from
   // the always-arriving `sessionTransition` marker for #257, on the same App-level always-listening
   // rationale. Reactive-only (no request half), so it has no connected-gate read at all.
+  // RunSettingsWriteData (#256) is a third sibling headless leaf: it folds the correlated
+  // sessionSettingsUpdated / sessionSettingsRejected replies into the write store, on the same
+  // App-level always-listening rationale — a confirm/reject reply can arrive after the Run config
+  // sheet (#257) closes, so the listener must outlive the sheet.
   return (
     <>
       <ConversationListData />
       <SessionIdData />
+      <RunSettingsWriteData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

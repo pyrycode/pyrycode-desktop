@@ -6,8 +6,10 @@ import {
   Timeline,
   ThinkingIndicator,
   StatusSheet,
-  RepairPrompt
+  RepairPrompt,
+  ConnectionBanner
 } from './ConversationScreen'
+import { composerAvailability, CONNECTION_BANNER_COPY } from './composerSend'
 import type { Message } from './messageViewModel'
 import type { ThreadItem } from '../../store/threadTimeline'
 import { sessionStore } from '../../store/sessionStore'
@@ -421,6 +423,78 @@ describe('RepairPrompt — the proactive re-pair affordance', () => {
   })
 })
 
+// #279: the prominent, disconnected-only connection banner. ConnectionBanner is the pure, exported
+// view (the RepairPrompt pattern) — server-render it directly with each `status` prop to prove the
+// present/absent matrix without touching the store. The store-bound ConnectionBannerControl container
+// reads the same slice; its disconnected branch IS server-render-reachable (getInitialState =
+// disconnected is a VISIBLE branch here, unlike RepairControl), so the mounted-visible case is proven
+// in the ConversationScreen container block below.
+describe('ConnectionBanner — the disconnected-only connection band', () => {
+  const ack = {
+    protocol_version: '1',
+    server_id: 's',
+    conn_id: 'c',
+    capabilities: []
+  }
+
+  it('renders the client-owned copy while disconnected (AC1)', () => {
+    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'disconnected' }} />)
+    expect(markup).toContain('conversation__banner')
+    expect(markup).toContain(CONNECTION_BANNER_COPY)
+  })
+
+  it('renders the client-owned copy while connecting (AC1)', () => {
+    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'connecting' }} />)
+    expect(markup).toContain(CONNECTION_BANNER_COPY)
+  })
+
+  it('renders the client-owned copy while in a connection error (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionBanner
+        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+      />
+    )
+    expect(markup).toContain(CONNECTION_BANNER_COPY)
+  })
+
+  it('renders nothing when connected (AC2)', () => {
+    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'connected', ack }} />)
+    expect(markup).toBe('')
+  })
+
+  // AC3: the banner text is the client-owned constant only — never a daemon-supplied string. Given an
+  // error status carrying a secret in ConnectionError.message, the rendered band contains the copy and
+  // NOT the message, so no daemon string can reach the banner (a structural guarantee — the view
+  // renders CONNECTION_BANNER_COPY, nothing derived from `status`).
+  it('never renders ConnectionError.message — only the client-owned copy (AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionBanner
+        status={{
+          type: 'error',
+          error: { code: 'x', message: 'DAEMON_SECRET_DETAIL', retryable: false }
+        }}
+      />
+    )
+    expect(markup).toContain(CONNECTION_BANNER_COPY)
+    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
+  })
+
+  // AC5: the prominent banner copy reads distinctly from the terse composer hints, so the two surfaces
+  // never render as the same string stacked twice. Pinned against the actual composerAvailability
+  // outputs (not hardcoded strings) so a future hint tweak can't silently collide with the banner.
+  it('is lexically distinct from all three composer hints (AC5)', () => {
+    const composerHints = [
+      composerAvailability({ type: 'connecting' }).hint,
+      composerAvailability({ type: 'disconnected' }).hint,
+      composerAvailability({
+        type: 'error',
+        error: { code: 'x', message: 'm', retryable: false }
+      }).hint
+    ]
+    expect(composerHints).not.toContain(CONNECTION_BANNER_COPY)
+  })
+})
+
 describe('ConversationScreen — store binding', () => {
   beforeEach(() => {
     // setState shallow-merges (preserving dispatch); reset to a clean, empty session.
@@ -506,6 +580,28 @@ describe('ConversationScreen — store binding', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).toContain('class="composer__hint"')
     expect(markup).toContain('role="status"')
+  })
+
+  // #279: the connection banner mounts against the initial (disconnected) store — unlike the re-pair
+  // affordance, disconnected is a VISIBLE branch, so ConnectionBannerControl's visible path IS reachable
+  // under server render. It appears at the top of the thread and reads as distinct copy from the
+  // composer's terse hint; both remain visible while disconnected (AC1/AC4/AC5), and no daemon string
+  // reaches it (there is none at the initial disconnected status).
+  it('renders the connection banner while disconnected, distinct from the composer hint (AC1/AC4/AC5)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    // The prominent banner and its client-owned copy are present…
+    expect(markup).toContain('conversation__banner')
+    expect(markup).toContain(CONNECTION_BANNER_COPY)
+    // …alongside the terse composer hint, which reads as different copy (both visible, not duplicated).
+    expect(markup).toContain('Not connected')
+    expect(CONNECTION_BANNER_COPY).not.toContain('Not connected')
+  })
+
+  it('renders the banner above the message thread and below the header (top of the thread)', () => {
+    // The banner mounts between UnpairControl (the header row) and the timeline surface, so its markup
+    // precedes the thread's empty state.
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup.indexOf('conversation__banner')).toBeLessThan(markup.indexOf('conversation__empty'))
   })
 
   // #177: the status row between the thread and the composer is the trigger that opens the Run

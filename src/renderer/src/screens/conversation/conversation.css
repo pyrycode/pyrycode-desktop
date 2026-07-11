@@ -121,6 +121,29 @@
   padding: 0 var(--space-4) var(--space-2);
 }
 
+/* #279 — the prominent, disconnected-only connection banner across the top of the thread (below the
+   header row, above the message list). Distinct from the muted inline .composer__hint gate: it reads
+   as a prominent band, not a caption. Follows the .modal-rejection (#249) error-accent idiom — a
+   surface-container-high fill with a leading --color-error accent border (the only error role token on
+   desktop; no new theme tokens) — but sized up to body-medium on-surface text, a step above the hint's
+   body-small muted variant. flex: 0 0 auto so it pushes the thread down rather than overlaying it (the
+   header/composer convention, never growing or shrinking). --space-4 horizontal padding aligns it with
+   the thread. margin: 0 resets the <p> default. No Figma node (the mobile file draws only the connected
+   thread); sourced from the locked mobile design doc "Connection state banner (top, only when not
+   connected)". */
+.conversation__banner {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border-left: 4px solid var(--color-error);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
 /* Scrollable thread. min-height: 0 is load-bearing: without it the flex item
    refuses to shrink and the whole window scrolls instead of this region. */
 .conversation__thread {

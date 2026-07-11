@@ -117,6 +117,7 @@ export type DaemonEvent =
   | { type: 'conversationCreated'; conversation: ConversationCreatedPayload }
   | { type: 'sessionTransition'; newSessionId: string }
   | { type: 'sessionSettingsUpdated'; sessionId: string; changeId: string }
+  | { type: 'sessionSettingsRejected'; changeId: string }
 ```
 
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
@@ -203,6 +204,15 @@ export type DaemonEvent =
   deliberately still carries **no `inReplyTo`** — that numeric routing id stays main-internal; widening an
   existing arm's fields is transparent to all three exhaustive bridges (they switch on `type`, not
   fields), so none needed a code change, only a test-literal update for the now-required `changeId`.
+- **`sessionSettingsRejected{changeId}`** ([#269](../codebase/269.md)) is the rejected twin of
+  `sessionSettingsUpdated`, a **new** arm (not a field-widen, so it *does* force a compiler case in all
+  three exhaustive bridges — each a one-line no-op, same as every other atomic-`DaemonEvent`-arm ticket).
+  Maps to *no* `SessionAction`, consumed by **none** of the three existing bridges — its consumer is
+  #256, same as `sessionSettingsUpdated`. Emitted by [daemon connection](daemon-connection.md)'s
+  correlation gate when a content-free `daemon-error` (#116) arrives whose `Envelope.in_reply_to` matches
+  a pending `set_session_settings` request. Carries **only** `changeId` — deliberately no `sessionId`
+  (the wire `error` frame carries none, and `changeId` alone disambiguates two outstanding changes to the
+  same session), no `inReplyTo`, and no error code/message.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -272,6 +282,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **`modalShown`/`modalDismissed` had real producers but no traffic through #178 — same capability gate.** [#201](../codebase/201.md) wired `emitDaemonEvent` for both from the same `case 'message'` choke point; no `modal_shown`/`modal_dismissed` frame reached it until [#179](../codebase/179.md) flipped `interactive`. Both `daemonEventBridge`/`timelineBridge` still discard the arms as `null`; the third, independent [modal store + bridge](modal-store-bridge.md) ([#223](../codebase/223.md), shipped) is the real consumer, mounted since [#224](../codebase/224.md). Proven only by unit tests driving `daemonConnection` and all three bridges directly, until #179. Now live and answerable end to end.
 - **`toolResult` had a real producer but no traffic through #178 — same capability gate.** [#229](../codebase/229.md) wired `emitDaemonEvent` for it from the same `case 'message'` choke point, giving `selectItems` its first real *resolved* `toolCall`; no `tool_result` frame reached it until [#179](../codebase/179.md) flipped `interactive`. Proven only by unit tests driving `daemonConnection` and `timelineBridge` directly (the latter through a real `createTimelineStore()`), and by the reducer's existing `fillResult` correlation tests (#121), until then. Now live.
 - **`modalAnswerRejected` is correlated, not decoded.** [#248](../codebase/248.md) added a fifteenth member, `modalAnswerRejected{modalId}` — the only member built entirely from main-side memory rather than a wire field: the daemon `error` (#116) that follows a rejected `modal_answer` carries no `modal_id`, so `daemonConnection.ts` attributes it via a FIFO queue of its own outstanding answered ids (push-on-send, dequeue-on-error, drain-on-accept, reset-on-dial). Consumed by neither `daemonEventBridge` nor `timelineBridge` (both null it); the real, still-dormant owner is the [modal store + bridge](modal-store-bridge.md) — render lands in #249.
+- **`sessionSettingsRejected` is correlated by lookup, not by FIFO memory.** [#269](../codebase/269.md) added a seventeenth member, sharing the *same* `daemon-error` wire trigger as `modalAnswerRejected` above but a different attribution mechanism: unlike the FIFO (which cannot disambiguate two outstanding answers of the same kind and picks oldest-first), `daemon-error` here is looked up in `pendingSettings` by its own `Envelope.in_reply_to` — a precise per-request match, not a queue position. On a match this precedence gate **consumes the frame entirely**, skipping both the bundle reassembler and the `modalAnswerRejected` FIFO shift; on no match, both fire exactly as before #269. Consumed by none of the three existing bridges; the real consumer is #256, same as `sessionSettingsUpdated`.
 
 ## Security posture
 
@@ -299,6 +310,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#248 codebase notes](../codebase/248.md) — the `modalAnswerRejected` member, the fifteenth no-`SessionAction` arm and the first built entirely from main-side correlation memory rather than a decoded wire field (the daemon `error` it reports on carries no `modal_id`); owned by the [modal store + bridge](modal-store-bridge.md), dormant until the render slice #249
 - [#264 codebase notes](../codebase/264.md) — introduced the `sessionSettingsUpdated` member, the sixteenth no-`SessionAction` arm and, unlike every prior member, minimal not because a field was dropped at the emit but because the decoded wire payload itself has only one field
 - [#261 codebase notes](../codebase/261.md) — widened `sessionSettingsUpdated` with `changeId`, the renderer-minted correlation key matched against `Envelope.in_reply_to`; consumed by none of the three existing bridges, real consumer is #256
+- [#269 codebase notes](../codebase/269.md) — the `sessionSettingsRejected` member, the seventeenth no-`SessionAction` arm and the rejected twin of `sessionSettingsUpdated`; emitted by [daemon connection](daemon-connection.md)'s `pendingSettings`-lookup precedence gate on a correlated `daemon-error`, which on a match also suppresses that ticket's own `modalAnswerRejected` FIFO and the #116 bundle reassembler; consumed by none of the three existing bridges, real consumer is #256
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

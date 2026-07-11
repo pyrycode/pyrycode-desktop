@@ -2,16 +2,16 @@
 
 The renderer's **pending-write state machine** for a Model / Effort / YOLO change: it holds a requested
 change optimistically, then settles it to the daemon's confirmed result or rolls it back on rejection —
-the state the interactive Run configuration controls ([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257),
-not yet built) dispatch onto and read back.
+the state the interactive Run configuration controls ([#257](../codebase/257.md)) dispatch onto and read
+back.
 
 Introduced in [#256](../codebase/256.md), the last store-machine slice of #183's interactive
-Run-configuration write path before the render consumer #257. Consumes the two correlated daemon events
-[#261](../codebase/261.md) (`sessionSettingsUpdated`) and [#269](../codebase/269.md)
-(`sessionSettingsRejected`), and drives the outbound [session settings send](session-settings-send.md)
-(#263) command. This store itself delivers no visible surface — dormant until #257 wires a control to
-`submitSettingsChange` and reads `selectEffectiveSettings`, the same posture `sessionIdStore` (#259) had
-before #257 and `runConfigStore` (#187) had before #188.
+Run-configuration write path before the render consumer [#257](../codebase/257.md) (since shipped, PR
+#283). Consumes the two correlated daemon events [#261](../codebase/261.md) (`sessionSettingsUpdated`)
+and [#269](../codebase/269.md) (`sessionSettingsRejected`), and drives the outbound
+[session settings send](session-settings-send.md) (#263) command. This store itself delivers no visible
+surface of its own — #257 is now its live consumer, the same posture `sessionIdStore` (#259) had before
+#257 and `runConfigStore` (#187) had before #188.
 
 ## What it does
 
@@ -153,19 +153,23 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
 
 ## Configuration and usage
 
-- **Import surface**, for the future #257 consumer:
+- **Import surface**, consumed by `RunConfigSections` (#257):
   `import { useRunSettingsWriteStore, selectEffectiveSettings, selectError, selectPendingFields } from '@renderer/store/runSettingsWriteStore'`
-  and `import { submitSettingsChange } from '@renderer/store/runSettingsWriteBridge'`.
+  and `import { submitSettingsChange } from '@renderer/store/runSettingsWriteBridge'` (the latter via
+  #257's `runSettingsControls.ts` gate, `changeSetting`).
 - **Mount point:** `src/renderer/src/App.tsx`, `<RunSettingsWriteData />` alongside
   `<ConversationListData />` and `<SessionIdData />`.
 - **`selectEffectiveSettings` composes across two stores** — this store's pending/confirmed state and
-  `runConfigStore`'s snapshot base — but the composition call itself is #257's responsibility, kept out
-  of the store to avoid a cross-store import here.
+  `runConfigStore`'s snapshot base — but the composition call itself is #257's responsibility (the
+  container's render body), kept out of the store to avoid a cross-store import here. #257's container
+  selects the **raw** write state (`(s) => s`) rather than `selectEffectiveSettings` as the zustand
+  selector, since the latter returns a fresh object per call and would defeat `Object.is`.
 
 ## Edge cases and limitations
 
-- **No consumer yet.** Every export is unread until #257 — the same dormant-holder posture
-  `sessionIdStore` had before #257 and `useConversationListStore` had before #141.
+- **`selectPendingFields` is unread.** #257 wired `selectEffectiveSettings` and `selectError` but did
+  not build a per-field in-flight indicator — the ticket flagged it as available but not required by the
+  AC. Still exported for a future consumer.
 - **A stale or dropped reply leaves a pending change unresolved forever** — this slice adds no timeout.
   A dropped send or daemon silence leaves the optimistic value standing with no rollback path; deferred
   as an unobserved failure mode (Evidence-Based Fix Selection), to revisit only if it bites in practice.
@@ -175,8 +179,8 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
   wins, which can be the *earlier*-dispatched one. Benign under the single-client, sequential-daemon-reply
   model this app runs under (code review NIT on [#256](../codebase/256.md), non-blocking, no AC violated).
 - **`error` persists until the next `changeDispatched`.** A `settingsConfirmed` leaves `error` untouched,
-  so a stale rejection error can briefly outlive a later, unrelated success if #257 doesn't clear it on
-  its own signal.
+  so a stale rejection error can briefly outlive a later, unrelated success — #257 does not clear it on
+  its own signal either; the AC only requires a retry (which does dispatch) to clear it.
 - **No reset when a fresh snapshot arrives.** A `confirmed` override that matches the next spawn's
   snapshot becomes redundant but harmless (`override === snapshot`); no divergence occurs in the
   single-client model. Deferred — add clearing only if a real divergence surfaces.
@@ -187,15 +191,17 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
   store's bridge sends, and the two correlated daemon events (`sessionSettingsUpdated`/
   `sessionSettingsRejected`, #261/#269) it consumes.
 - [Session-id store](session-id-store.md) — the direct structural precedent (App-level always-listening
-  headless leaf) and the eventual source of `submitSettingsChange`'s `sessionId`, once #257 wires the two
-  together.
+  headless leaf) and the source of `submitSettingsChange`'s `sessionId`, wired together by #257.
 - [Run configuration store](run-config-store.md) — the daemon-live snapshot this store's
   `selectEffectiveSettings` composes *over*; deliberately not folded into as a facet.
 - [Daemon-event bridge](daemon-event-bridge.md) — the three existing bridges whose
   `sessionSettingsUpdated`/`sessionSettingsRejected` no-op arms this store's independent, fourth
   App-level subscriber sits beside without modifying.
-- [Conversation shell](conversation-shell.md) — the Run configuration sheet #257 will wire this store's
+- [Conversation shell](conversation-shell.md) — the Run configuration sheet #257 wired this store's
   selectors and `submitSettingsChange` into.
+- [#257 codebase notes](../codebase/257.md) — the interactive controls consuming this store: the
+  container reads raw write state + composes `selectEffectiveSettings`/`selectError` in the render body,
+  and `runSettingsControls.ts`'s `changeSetting` gates `submitSettingsChange` on a known session id.
 - [#256 codebase notes](../codebase/256.md) — implementation summary, patterns established, lessons
   learned, and the code-review NIT on same-field confirm ordering.
 - [#261 codebase notes](../codebase/261.md) / [#269 codebase notes](../codebase/269.md) — the confirmed/

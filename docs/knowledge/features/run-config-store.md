@@ -18,6 +18,13 @@ extension: it widens both the held `RunConfigSnapshot` and the `toRunConfigSnaps
 figures (`usedTokens`/`windowTokens`) and renders the fourth read-only section, **Context window**,
 from them — see below.
 
+[#257](../codebase/257.md) later made the Model/Effort/YOLO sections **interactive**: this store's
+`snapshot` remains the read-only daemon base, now composed *underneath* the adjacent
+[Run configuration write store](run-settings-write-store.md)'s optimistic pending/confirmed overlay
+(`selectEffectiveSettings`) rather than read directly by `RunConfigSections`. This store itself needed
+no change for that — see the `RunConfigSections`/`RunConfigView` section below for the interactive
+render.
+
 ## What it does
 
 Requests a fresh `screen_snapshot` every time the Run configuration sheet opens, and holds the
@@ -165,3 +172,6 @@ daemon → screen_snapshot → snapshotReceived{model,effort,yolo,used_tokens,wi
   — the adjacent pending-write store whose `selectEffectiveSettings` composes over this store's
   `snapshot` as its base value; deliberately not folded in as a facet (lifecycle mismatch: sheet-scoped
   vs. App-level always-listening).
+- [#257 codebase notes](../codebase/257.md) — made `RunConfigSections`/`RunConfigView` interactive:
+  selecting a model, picking an effort, or toggling YOLO now submits a change through the write store
+  above instead of the sections only ever reading this store's snapshot.

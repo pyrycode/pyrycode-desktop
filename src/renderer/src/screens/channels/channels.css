@@ -37,10 +37,20 @@
   font-weight: var(--text-label-large-weight);
 }
 
-/* One row (Figma 15:59) — a full-width text button, reset then laid out as title · time. */
+/* One row (Figma 15:59) — a flex wrapper holding the open action and the optional Save-as-channel
+   affordance as SIBLINGS (an interactive control cannot nest inside the open <button>, #274). It carries
+   no padding/hover itself; those live on the open action so the two children highlight independently. */
 .channel-list__row {
+  display: flex;
+  align-items: center;
+}
+
+/* The open action — the old full-width row button, reset then laid out as title · time. `flex: 1 1 auto`
+   + `min-width: 0` let it fill the row and let the title ellipsize (the min-width:0 flex-shrink idiom). */
+.channel-list__row-open {
   appearance: none;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   border: 0;
   background: none;
   cursor: pointer;
@@ -52,12 +62,41 @@
   font-family: var(--font-sans);
 }
 
-.channel-list__row:hover {
+.channel-list__row-open:hover {
   background: var(--color-surface-container);
 }
 
-.channel-list__row:focus-visible {
+.channel-list__row-open:focus-visible {
   outline: 1px solid var(--color-outline);
+}
+
+/* The Save-as-channel affordance (#274) — an icon-only trailing button on Recent rows. De-emphasized
+   vs the title (on-surface-variant); a round hover target; focus-visible outline (the file convention).
+   The icon is 24px; --space-2 padding makes a compact ~40px touch target. */
+.channel-list__save {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: var(--space-2);
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+}
+
+.channel-list__save:hover {
+  background: var(--color-surface-container);
+}
+
+.channel-list__save:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.channel-list__save-icon {
+  display: block;
 }
 
 /* The title run (Figma 15:63) — title-medium, on-surface. Ellipsizes so an arbitrarily long untrusted
@@ -166,4 +205,132 @@
   line-height: var(--text-body-medium-line);
   letter-spacing: var(--text-body-medium-tracking);
   font-weight: var(--text-body-medium-weight);
+}
+
+/* #274 — the Save-as-channel dialog (Figma 19:24, the naming half). Mirrors the conversation.css
+   permission-modal chrome (overlay + scrim + centered M3 panel), but the overlay is `position: fixed`
+   (not absolute): `.channel-list` is itself the `overflow-y: auto` scroll column, so an absolute overlay
+   would scroll with the rows; fixed escapes it and covers the window (no portal — the "overlay inside the
+   screen" precedent). z-index lifts it above the sticky FAB (which sits at z-index: 1). */
+.save-as-channel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+/* A dedicated scrim so the opaque panel sibling is never dimmed and no bare color literal is needed.
+   40% via opacity (not a color literal) — the permission-modal-overlay__scrim idiom. */
+.save-as-channel-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+
+/* The centered M3 dialog panel (Figma 19:24): surface-container-high, 28px radius, 24px padding, a column
+   with 16px gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows; max-height +
+   overflow keep a long untrusted name field scrolling inside the panel rather than overflowing. */
+.save-as-channel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 360px;
+  max-height: 90%;
+  overflow-y: auto;
+  padding: var(--space-6);
+  background: var(--color-surface-container-high);
+  border-radius: var(--radius-lg);
+  color: var(--color-on-surface);
+}
+
+/* The headline-small title (Figma 19:25). margin: 0 resets the heading default. */
+.save-as-channel__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-headline-small-size);
+  line-height: var(--text-headline-small-line);
+  letter-spacing: var(--text-headline-small-tracking);
+  font-weight: var(--text-headline-small-weight);
+}
+
+/* The outlined Name field (Figma 19:26) — a bordered frame stacking the label over the input value. The
+   wrapping <label> makes the whole frame focus the input. 1px border is structural geometry (the file's
+   carve-out). Figma's 4px corner maps to the nearest --radius-xs (6px, +2px) rather than a literal — the
+   .channel-list__fab token-mapping precedent. */
+.save-as-channel__field {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-outline);
+  border-radius: var(--radius-xs);
+}
+
+/* The field label (Figma 19:27) is M3 label-medium (12px); the theme has no label-medium token, so map
+   to the nearest --text-label-small (11px — a 1px delta), the architect-noted gap-map. */
+.save-as-channel__label {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+}
+
+/* The input value (Figma 19:28) — body-large, on-surface. Reset to a borderless field so the frame's
+   border is the only chrome; the label above supplies the field's meaning. */
+.save-as-channel__input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* The action row (Figma 19:39) — Cancel + Save both right-aligned (the node's justify-end), unlike the
+   permission-modal's leading-dismissive Cancel. 4px gap = --space-1. */
+.save-as-channel__actions {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* The two text-button actions (Figma 19:40/19:42) — the M3 dialog text-button treatment (pill,
+   transparent fill, --color-primary label, label-large), mirroring permission-modal__option. */
+.save-as-channel__cancel,
+.save-as-channel__save {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.save-as-channel__cancel:focus-visible,
+.save-as-channel__save:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* Save disabled while the name is blank (AC3) — the M3 38% disabled emphasis (opacity, not a color
+   literal — the #218 de-emphasis precedent) and a non-interactive cursor. */
+.save-as-channel__save:disabled {
+  opacity: 0.38;
+  cursor: default;
 }

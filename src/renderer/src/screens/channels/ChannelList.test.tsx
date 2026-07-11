@@ -31,11 +31,16 @@ const render = (conversations: readonly ConversationSummary[] | null): string =>
       now={NOW}
       onOpen={noop}
       onNewConversation={noop}
+      onSaveAsChannel={noop}
     />
   )
 
 // The new-discussion FAB's accessible name (#242) — present in every list state (AC1/AC4).
 const FAB_MARKER = 'aria-label="New discussion"'
+
+// The per-row Save-as-channel affordance's accessible name (#274) — present on Recent (unpromoted)
+// discussion rows, absent on saved Channel rows (AC1).
+const SAVE_MARKER = 'aria-label="Save as channel"'
 
 describe('ChannelListView', () => {
   it('not-yet-loaded (null): renders the wrapper but no header and no empty message (AC4)', () => {
@@ -101,6 +106,16 @@ describe('ChannelListView', () => {
     const markup = render([row({ id: 'd1', name: '<b>x</b>' })])
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
+  })
+
+  it('renders the Save-as-channel affordance on a Recent (unpromoted) discussion row (AC1)', () => {
+    const markup = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
+    expect(markup).toContain(SAVE_MARKER)
+  })
+
+  it('omits the Save-as-channel affordance on a saved (promoted) Channel row (AC1)', () => {
+    const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
+    expect(markup).not.toContain(SAVE_MARKER)
   })
 
   it('renders the new-discussion FAB with its accessible name in all three list states (AC1/AC4)', () => {

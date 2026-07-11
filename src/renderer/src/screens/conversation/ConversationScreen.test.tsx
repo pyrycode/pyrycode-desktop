@@ -68,8 +68,18 @@ function threadBubbleCount(markup: string): number {
 const CURSOR = 'bubble__cursor'
 
 describe('Timeline — the streamed assistant text', () => {
-  it('an empty timeline is inert — renders nothing (zero layout footprint, AC4)', () => {
-    expect(renderToStaticMarkup(<Timeline items={[]} />)).toBe('')
+  // #277: the empty branch is no longer inert. A fresh thread with no items renders the
+  // pre-first-message empty state (a client-owned copy line + its decorative glyph) instead of null,
+  // so the region reads as a purposeful invitation, not a blank gap. Still a distinct class from the
+  // thread scroll region (never .conversation__thread, no data-thread-role — the split-brain guard
+  // below) and no streaming cursor sneaks into the branch.
+  it('an empty timeline renders the pre-first-message empty state (AC1)', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[]} />)
+    expect(markup).toContain('conversation__empty')
+    // The client-owned copy constant (AC3) — no daemon string reaches this branch.
+    expect(markup).toContain('Send a message to get started')
+    expect(markup).not.toContain('data-thread-role')
+    expect(markup).not.toContain(CURSOR)
   })
 
   it('renders one assistant bubble per assistantText item, carrying its text and the daemon-bubble treatment', () => {
@@ -437,11 +447,12 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('conversation__thread')
   })
 
-  // #203: the timeline view mounts against the empty timeline store (getInitialState items: []), so
-  // it returns null and contributes no streaming cursor — the inert render slice, layout unchanged
-  // until #179 flips `interactive` (AC4). The populated path is proven on the pure Timeline above.
-  it('mounts the empty timeline with no streaming cursor (the inert render slice, AC4)', () => {
+  // #277: the timeline view mounts against the empty timeline store (getInitialState items: []), so
+  // it now renders the pre-first-message empty state (replacing #203's `return null`) at first paint —
+  // still contributing no streaming cursor. The populated path is proven on the pure Timeline above.
+  it('mounts the empty timeline as the empty state, with no streaming cursor', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('conversation__empty')
     expect(markup).not.toContain('bubble__cursor')
   })
 

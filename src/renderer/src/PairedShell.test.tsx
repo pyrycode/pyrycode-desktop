@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PairedShell, PairedShellView } from './PairedShell'
+import { nextPairedRoute } from './pairedRoute'
 import { sessionStore } from './store/sessionStore'
 
 // No DOM harness — mirrors App.test.tsx. PairedShellView is the pure route→view (props in, markup
@@ -50,5 +51,14 @@ describe('PairedShell', () => {
     const markup = renderToStaticMarkup(<PairedShell onUnpaired={noop} />)
     expect(markup).toContain(LIST_MARKER)
     expect(markup).not.toContain(CONVERSATION_MARKER)
+  })
+
+  // #242 nav is closed by composition, not a jsdom harness: the bridge test proves a conversationCreated
+  // event reaches the injected onCreated (which PairedShell wires to dispatch({ type: 'open' })), and
+  // PairedShellView route='thread' rendering the thread is covered above — so all that remains is that
+  // `open` from `list` lands on `thread`. That transition is already unit-proven in pairedRoute.test.ts;
+  // this one-line assertion documents the seam the created-event nav reuses (no new route or nav arm).
+  it('a created-event → open dispatch reuses the list→thread transition (AC3)', () => {
+    expect(nextPairedRoute('list', { type: 'open' })).toBe('thread')
   })
 })

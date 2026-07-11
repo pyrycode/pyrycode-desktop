@@ -1,10 +1,12 @@
 /*
  * Channel List home screen styles (#141), mirrored from the mobile Figma node 15-8 body. Every
- * color / type / spacing value references a theme token from theme/tokens.css — no literal lives here;
- * opacity is a de-emphasis device (the #218 precedent), not a color literal. The Figma's avatars,
- * body-preview text, top app bar, "See all" link, and FAB are deferred to other tickets, so this
- * stylesheet covers only the two-section list of title + last-activity-time rows, the divider, and the
- * empty state.
+ * color / type / spacing value references a theme token from theme/tokens.css — no color/type/spacing
+ * literal lives here; opacity is a de-emphasis device (the #218 precedent), not a color literal. The
+ * carve-outs are structural geometry (1px dividers, the FAB's fixed 56px square) and the FAB's M3
+ * elevation shadow, which has no token yet (#242, the first elevation consumer). The Figma's avatars,
+ * body-preview text, top app bar, and "See all" link are deferred to other tickets; this stylesheet
+ * covers the two-section list of title + last-activity-time rows, the divider, the empty state, and the
+ * new-discussion FAB (#242).
  */
 
 /* The scroll column. PairedShellView returns this <section> directly, so — like .conversation — it is
@@ -93,6 +95,64 @@
   background: var(--color-outline-variant);
   opacity: 0.6;
   margin: var(--space-3) var(--space-4) 0;
+}
+
+/* The new-discussion FAB (Figma 15-106) — a floating add affordance over the list, pinned bottom-right
+   in all three list states. `.channel-list` is itself the overflow-y:auto scroll column, so an ordinary
+   absolute child would scroll away with the rows; instead the FAB stays an in-flow flex item (no portal,
+   no DOM restructure — the #177 "overlay inside the screen container" precedent) positioned by two
+   composed rules:
+     - `margin-top: auto` + `align-self: flex-end` push it to the bottom-right when the content is short
+       (not-loaded / empty / a few rows) — sticky alone would leave it at its top-of-flow position there,
+       since sticky only offsets during scroll overflow.
+     - `position: sticky; bottom` floats it over the rows and keeps it visible once the list overflows
+       and scrolls (auto margins collapse to 0 under overflow, so it sits after the last row and sticks).
+   z-index lifts it above the rows; the corner offsets are spacing tokens (right --space-4, bottom
+   --space-6 — the container's matching padding-bottom gives the same gap in the short state). 56px is
+   structural component geometry (the .conversation__back 48px-square precedent). */
+.channel-list__fab {
+  position: sticky;
+  bottom: var(--space-6);
+  align-self: flex-end;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin: auto var(--space-4) 0 0;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  /* Figma specifies a 16px corner; the radius scale jumps 12→20 with no 16px slot, so map to the
+     nearest token --radius-md (20px) — a +4px delta (the pairing.css:55 ±token-mapping precedent). No
+     new shared radius token for a 4px delta. */
+  border-radius: var(--radius-md);
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+  cursor: pointer;
+  /* M3 level-3 elevation (Figma) — the FAB is the first elevation consumer, so the two-layer shadow is
+     inlined as a structural literal (like the header's opacity/1px carve-outs, not a scheme color).
+     Defer extracting an --elevation-* token until a second consumer appears. */
+  box-shadow:
+    0 4px 8px 3px rgba(0, 0, 0, 0.15),
+    0 1px 3px 0 rgba(0, 0, 0, 0.3);
+}
+
+/* Hover lifts the FAB to M3 level-4 elevation — the standard FAB raise, kept in the same structural
+   shadow-literal carve-out (there is no primary-container-hover token to swap to, unlike .composer__send's
+   adjacent surface-container swap). */
+.channel-list__fab:hover {
+  box-shadow:
+    0 6px 10px 4px rgba(0, 0, 0, 0.15),
+    0 2px 3px 0 rgba(0, 0, 0, 0.3);
+}
+
+.channel-list__fab:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.channel-list__fab-icon {
+  display: block;
 }
 
 /* The loaded-but-empty state (no Figma node — mirrors mobile #312's empty state). A centered neutral

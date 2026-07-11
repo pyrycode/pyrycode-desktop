@@ -4,6 +4,7 @@ import {
   useConversationListStore,
   selectConversations
 } from '../../store/conversationListStore'
+import { requestNewConversation } from '../../store/conversationCreatedBridge'
 import { titleFor, partitionByPromotion, formatLastActivity } from './channelListViewModel'
 
 // The Channel List home screen (#141) — the paired shell's `list` view, replacing the throwaway
@@ -13,17 +14,27 @@ import { titleFor, partitionByPromotion, formatLastActivity } from './channelLis
 //
 // The wire ConversationSummary carries no message text, so both Figma row shapes (avatar-bearing
 // channel rows, preview-bearing discussion rows) collapse to a single title + last-activity-time row;
-// the avatars, body previews, top app bar, "See all" link, and FAB are deferred to other tickets.
+// the avatars, body previews, top app bar, and "See all" link are deferred to other tickets. The
+// new-discussion FAB (#242) is added here — its click dispatches the createConversation command.
 
 /**
  * Store-bound container. The store read and `Date.now()` are its only impurities — both safe under
  * `renderToStaticMarkup` in Node, where the store yields its initial `null` (the #218 container
- * posture), so the pure view is what the tests server-render with injected props.
+ * posture), so the pure view is what the tests server-render with injected props. `onNewConversation`
+ * dereferences `window.pyry` only inside the click arrow (never during render), so the server-render
+ * smoke is untouched — the Composer.handleSubmit / UnpairControl discipline.
  */
 export function ChannelList({ onOpen }: { onOpen: () => void }): JSX.Element {
   const conversations = useConversationListStore(selectConversations)
   const now = Date.now()
-  return <ChannelListView conversations={conversations} now={now} onOpen={onOpen} />
+  return (
+    <ChannelListView
+      conversations={conversations}
+      now={now}
+      onOpen={onOpen}
+      onNewConversation={() => requestNewConversation(window.pyry.sendCommand)}
+    />
+  )
 }
 
 /**
@@ -38,16 +49,49 @@ export function ChannelList({ onOpen }: { onOpen: () => void }): JSX.Element {
 export function ChannelListView({
   conversations,
   now,
-  onOpen
+  onOpen,
+  onNewConversation
 }: {
   conversations: readonly ConversationSummary[] | null
   now: number
   onOpen: () => void
+  onNewConversation: () => void
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
       {renderBody(conversations, now, onOpen)}
+      <NewConversationFab onClick={onNewConversation} />
     </section>
+  )
+}
+
+// The new-discussion FAB (Figma 15-106) — a floating add affordance pinned bottom-right of the list
+// scroller. Rendered as a sibling of `renderBody`, so it is present in all three list states (AC1). An
+// icon-only `<button>`, mirroring #140's BackControl: a native button is keyboard-focusable (AC4) and
+// `aria-label` supplies the accessible name (the .composer__send / StatusRow pattern) since the glyph
+// alone carries no text. On click it dispatches the createConversation command (fire-and-forget) via the
+// injected handler; navigation to the new thread is decoupled and event-driven (useConversationCreatedNav
+// in PairedShell fires on the daemon's conversationCreated confirmation), never synchronous here. The
+// Material `add` glyph path is the 24px add icon.
+function NewConversationFab({ onClick }: { onClick: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="channel-list__fab"
+      aria-label="New discussion"
+      onClick={onClick}
+    >
+      <svg
+        className="channel-list__fab-icon"
+        viewBox="0 0 24 24"
+        width="24"
+        height="24"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+      </svg>
+    </button>
   )
 }
 

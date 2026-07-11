@@ -23,6 +23,8 @@ transport, or new store/wire code, so not security-sensitive.
   days ago", or a short UTC date past a week).
 - Every row's click opens the shell's single active conversation (`onOpen`) — not that specific row's
   conversation. See § Edge cases.
+- A [new-discussion FAB](new-discussion-fab.md) floats bottom-right over the list, present in all
+  three states — a sibling of the section/row rendering described above, added by [#242](../codebase/242.md).
 
 ## Why last-activity time, not a message preview
 
@@ -110,10 +112,11 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
 - **Relative times don't tick.** `now` is captured once per render at the container — a live-updating
   interval is a deferred enhancement.
 - **Deferred visual elements** (documented as intentionally absent, not missing): the top app bar
-  (logo/"Pyrycode" title/settings gear → a future Settings screen), monogram avatars, the "See all
-  discussions (N)" collapse, and the new-discussion FAB ([#142](https://github.com/pyrycode/pyrycode-desktop/issues/142)).
-  A screenshot of this screen will not match the full Figma frame 15-8 for this reason — fidelity is
-  scoped to the two-section list body only.
+  (logo/"Pyrycode" title/settings gear → a future Settings screen), monogram avatars, and the "See
+  all discussions (N)" collapse. (The new-discussion FAB, once deferred here, shipped in
+  [#242](../codebase/242.md) — see [its feature doc](new-discussion-fab.md).) A screenshot of this
+  screen will not match the full Figma frame 15-8 for this reason — fidelity is scoped to the
+  two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
 
@@ -126,6 +129,8 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the transport
   decode; documents the no-message-text wire gap this screen's row shape is scoped by.
 - [Conversation shell](conversation-shell.md) — the thread view every row opens into via `onOpen`.
+- [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the floating `+`
+  affordance rendered as a sibling of this screen's rows.
 - [#141 codebase notes](../codebase/141.md) · Spec: `docs/specs/architecture/141-channel-list-screen.md`
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), [#142](https://github.com/pyrycode/pyrycode-desktop/issues/142) (new-discussion FAB).
+  (per-row open).

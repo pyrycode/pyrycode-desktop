@@ -2,6 +2,7 @@ import { useReducer } from 'react'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { ChannelList } from './screens/channels/ChannelList'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
+import { useConversationCreatedNav } from './store/conversationCreatedBridge'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
 function assertNever(route: never): never {
@@ -35,12 +36,19 @@ export function PairedShellView(props: {
  * The paired region's inner router container. Owns the ephemeral nav state via useReducer over the
  * pure nextPairedRoute — ADR 0006 (screen-local, resets on remount, never the session store; AC5).
  * Enters at `list` (AC2); the view calls onOpen/onBack and this dispatches. onUnpaired threads
- * straight through to ConversationScreen unchanged (#166). No effects and no window deref, so it is
- * server-renderable and the pending/pairing neutral-first-paint invariant is untouched (PairedShell
- * only mounts on the `conversation` route).
+ * straight through to ConversationScreen unchanged (#166). The FAB's create is confirmed asynchronously:
+ * useConversationCreatedNav subscribes to the daemon's `conversationCreated` event (#242) and drives the
+ * same `open` transition, so a create the daemon never confirms simply does not navigate. The hook
+ * dereferences `window.pyry` only inside its effect, so this container stays server-renderable and the
+ * pending/pairing neutral-first-paint invariant is untouched (PairedShell only mounts on the
+ * `conversation` route).
  */
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
+  // The created-event → list→thread nav: the payload is ignored (navigation is conversation-agnostic
+  // today — it opens the single active conversation, the same interim as the row's onClick), reusing the
+  // existing `open` transition with no new route or nav arm.
+  useConversationCreatedNav(() => dispatch({ type: 'open' }))
   return (
     <PairedShellView
       route={route}

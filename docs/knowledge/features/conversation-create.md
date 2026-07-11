@@ -8,8 +8,9 @@ daemon choose"); the daemon answers `conversation_created` with the new conversa
 
 Introduced in [#241](../codebase/241.md). Transport data path only — command → reply → one typed
 event. The write-side twin of the [conversation list fetch](conversation-list-fetch.md) (#139). The
-renderer FAB that fires the command and opens the new thread is the sibling render ticket #242,
-blocked by this one.
+renderer FAB that fires the command and opens the new thread is
+[the new-discussion FAB](new-discussion-fab.md) (#242), which shipped after this ticket and
+consumes both pieces unchanged.
 
 ## The wire contract
 
@@ -163,12 +164,14 @@ By #241, three independent `assertNever`-guarded `DaemonEvent` switches exist
 (`daemonEventBridge.ts`, [`timelineBridge.ts`](conversation-timeline-store.md),
 [`modalBridge.ts`](modal-store-bridge.md)), so adding `conversationCreated` forced a one-line case in
 all three — `daemonEventBridge`/`timelineBridge` return `null`, `modalBridge` folds it into its
-existing null fall-through list. The real consumer is #242, not any of the three.
+existing null fall-through list. The real consumer is
+[the new-discussion FAB's bridge](new-discussion-fab.md) (#242), which subscribes directly via
+`window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges above.
 
 ## Data flow
 
 ```
-#242 FAB (later)
+new-discussion FAB (#242) → requestNewConversation(window.pyry.sendCommand)
   → sendCommand({type:'createConversation', payload:{is_promoted,name,cwd}})
   → COMMAND_CHANNEL → onCommand (isCreateConversationPayload ✓) → connection.createConversation(payload)
   → buildCreateConversation({id,ts,payload:{fresh literal}}) → driver.sendMessage  [inert no-op if not connected]
@@ -176,8 +179,8 @@ existing null fall-through list. The real consumer is #242, not any of the three
 daemon → conversation_created frame → onDriverEvent 'message' → parseInboundMessage
   → {kind:'conversation-created', conversationCreated} → emitDaemonEvent
     {type:'conversationCreated', conversation}
-  → DAEMON_EVENT_CHANNEL → all three bridges → null (no store consumer)
-  → #242's render slice consumes the event and opens the new thread
+  → DAEMON_EVENT_CHANNEL → all three assertNever bridges → null (no store consumer)
+                          → useConversationCreatedNav's own subscription (#242) → dispatch({type:'open'})
 ```
 
 ## Error handling
@@ -202,7 +205,6 @@ one.
 
 ## Out of scope
 
-- **Any UI** — #242 (the FAB that fires the command and opens the new thread).
 - **Reply correlation** (`in_reply_to`) — see § Correlation above; an additive read if a future
   multi-request world needs it, not a reshape of this slice.
 - **Resolving `cwd` into a real filesystem path** — untrusted daemon-supplied text, carried only as
@@ -210,6 +212,8 @@ one.
 
 ## Related
 
+- [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
+  renderer consumer: fires `createConversation`, navigates on `conversationCreated`.
 - [#241 codebase notes](../codebase/241.md) — implementation summary, patterns, lessons.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139 codebase notes](../codebase/139.md) —
   the read-side twin this transport slice mirrors (single-verb request/reply, both shared-file

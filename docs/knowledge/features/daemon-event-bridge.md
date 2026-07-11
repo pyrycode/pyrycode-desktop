@@ -74,10 +74,16 @@ the real consumer is a not-yet-built renderer holder,
 to force a case in all three exhaustive `assertNever`-guarded switches at once.
 
 [#264](../codebase/264.md) added a sixteenth no-store-action member, `sessionSettingsUpdated` — the
-`set_session_settings` (#263) confirmation reply's addressing id. Consumed by **none** of the three
-existing bridges; its real consumer is **#261 / #256** (correlation / store, not yet built). Unlike
-`sessionTransition`, which content-minimises a five-field decode, this member is minimal because the
-decoded wire payload itself has only one field — nothing is dropped anywhere in the chain.
+`set_session_settings` (#263) confirmation reply's addressing id, widened with a `changeId` correlation
+key by [#261](../codebase/261.md). [#269](../codebase/269.md) added a seventeenth,
+`sessionSettingsRejected{changeId}`, the rejected twin sharing the same `daemon-error` wire trigger as
+`modalAnswerRejected` but a different, precise per-request attribution (`pendingSettings` lookup by
+`Envelope.in_reply_to`, not a FIFO). Both are consumed by **none** of the three existing bridges; their
+real consumer, [#256](../codebase/256.md)'s [Run configuration write store](run-settings-write-store.md),
+has since shipped as a **fourth, independent** subscriber on this same channel — not a change to any of
+the three bridges below. Unlike `sessionTransition`, which content-minimises a five-field decode,
+`sessionSettingsUpdated` is minimal because the decoded wire payload itself has only one field — nothing
+is dropped anywhere in the chain.
 
 ## What it does
 
@@ -90,7 +96,7 @@ Turns each `DaemonEvent` arriving from the background process into the matching 
 
 ### 1. The pure translation (`translateDaemonEvent`)
 
-A `switch (event.type)` over all twenty-two `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
+A `switch (event.type)` over all twenty-three `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
 
 | `DaemonEvent` arm | `SessionAction` produced | conversion |
 |---|---|---|
@@ -114,7 +120,8 @@ A `switch (event.type)` over all twenty-two `DaemonEvent` arms with a `default: 
 | `toolResult` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#229) |
 | `conversationCreated` | `null` | consumed by neither existing bridge; the real consumer is the render sibling #242 — present only for exhaustiveness (#241) |
 | `sessionTransition` | `null` | consumed by none of the three existing bridges; the real consumer is the renderer holder #259 — present only for exhaustiveness (#254) |
-| `sessionSettingsUpdated` | `null` | consumed by none of the three existing bridges; the real consumer is #261 / #256 (correlation / store, not yet built) — present only for exhaustiveness (#264) |
+| `sessionSettingsUpdated` | `null` | consumed by none of the three existing bridges; the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md) (shipped) — present only for exhaustiveness (#264, correlation widened by #261) |
+| `sessionSettingsRejected` | `null` | consumed by none of the three existing bridges; the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md) (shipped) — present only for exhaustiveness (#269) |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 
@@ -202,6 +209,8 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `conversationCreated` member this bridge tolerates as a thirteenth `null`-returning case; consumed by neither existing bridge, the real consumer is the render sibling [#242](https://github.com/pyrycode/pyrycode-desktop/issues/242)
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` member this bridge tolerates as a fourteenth `null`-returning case; consumed by none of the three existing bridges, the real consumer is the renderer holder [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259)
 - [#248 codebase notes](../codebase/248.md) — the `modalAnswerRejected` member this bridge tolerates as a fifteenth `null`-returning case; owned by the [modal store + bridge](modal-store-bridge.md), dormant until the render slice #249
-- [Session settings send](session-settings-send.md) / [#264 codebase notes](../codebase/264.md) — the `sessionSettingsUpdated` member this bridge tolerates as a sixteenth `null`-returning case; consumed by none of the three existing bridges, the real consumer is #261 / #256, not yet built
+- [Session settings send](session-settings-send.md) / [#264 codebase notes](../codebase/264.md) — the `sessionSettingsUpdated` member this bridge tolerates as a sixteenth `null`-returning case, widened with a `changeId` correlation key by [#261](../codebase/261.md); consumed by none of the three existing bridges, the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md), shipped
+- [Session settings send](session-settings-send.md) / [#269 codebase notes](../codebase/269.md) — the `sessionSettingsRejected` member this bridge tolerates as a seventeenth `null`-returning case, the rejected twin of `sessionSettingsUpdated`; consumed by none of the three existing bridges, the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md), shipped
+- [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md) — the fourth independent App-level subscriber on this channel (alongside this bridge, the timeline bridge, and the modal bridge), consuming `sessionSettingsUpdated`/`sessionSettingsRejected` into the pending-write state machine; does not modify this bridge
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [#19 codebase notes](../codebase/19.md) · Spec: `docs/specs/architecture/19-translate-daemon-events-to-session-actions.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

@@ -13,8 +13,20 @@ Run-configuration controls ([#257](https://github.com/pyrycode/pyrycode-desktop/
 decode-arm slice, [#264](../codebase/264.md), decodes the reply into a `sessionSettingsUpdated`
 `DaemonEvent`; the confirmed-round-trip correlation is [#261](../codebase/261.md) (below), and the
 **rejected**-round-trip correlation is [#269](../codebase/269.md) (below) — all three have since shipped.
-The store/controls are [#256](https://github.com/pyrycode/pyrycode-desktop/issues/256)/#257, not yet
+The pending-write **store**, [#256](../codebase/256.md), has since shipped too (see below); the
+interactive **controls**, [#257](https://github.com/pyrycode/pyrycode-desktop/issues/257), are not yet
 built.
+
+## Consumption (#256) — the pending-write store
+
+[#256](../codebase/256.md) is the store consumer both correlation events were shipped dormant for: the
+[Run configuration write store](run-settings-write-store.md), an adjacent Zustand store holding pending
+changes keyed by the renderer-minted `changeId`, sparse client-confirmed overrides, and the last-rejected
+field. Its `runSettingsWriteBridge.ts` mints the `changeId` and sends the `setSessionSettings` command
+(`submitSettingsChange`), and its App-level `RunSettingsWriteData` leaf folds
+`sessionSettingsUpdated`/`sessionSettingsRejected` back into the store — the fourth independent
+subscriber on the daemon-event channel, alongside the three bridges this section describes. See that
+doc for the reducer/derivation detail; still dormant until #257 dispatches into it.
 
 ## Correlation (#261) — the confirmed round-trip
 
@@ -230,7 +242,8 @@ window → sendCommand({type:'setSessionSettings', payload:{session_id, model?, 
 
 daemon → session_settings_updated frame → decoded by #264 (carries in_reply_to)
       → daemonConnection matches in_reply_to against pendingSettings (#261)
-      → match: DaemonEvent{ type: 'sessionSettingsUpdated', sessionId, changeId }  [renderer, not yet consumed — #256]
+      → match: DaemonEvent{ type: 'sessionSettingsUpdated', sessionId, changeId }
+      → RunSettingsWriteData (#256) → translateWriteEvent → dispatch({settingsConfirmed, changeId})
       → no match (unmatched / absent in_reply_to): ignored, no event (AC3, fail-closed)
 ```
 
@@ -248,9 +261,10 @@ daemon → session_settings_updated frame → decoded by #264 (carries in_reply_
 | `error` frame whose `in_reply_to` is absent or matches no pending entry | `daemonConnection` (#269) | falls through unchanged to the pre-existing `daemon-error` consumers (bundle reassembler / modal FIFO) |
 
 No UI surfaces this slice (dormant, no renderer dispatch site). Both the confirmed ([#261](../codebase/261.md))
-and rejected ([#269](../codebase/269.md)) correlation halves have shipped; the pending→confirm/reject
-store consuming either event is [#256](https://github.com/pyrycode/pyrycode-desktop/issues/256), not yet
-built.
+and rejected ([#269](../codebase/269.md)) correlation halves have shipped, and so has the
+pending→confirm/reject [store](run-settings-write-store.md) consuming both events
+([#256](../codebase/256.md)) — the interactive controls dispatching into it,
+[#257](https://github.com/pyrycode/pyrycode-desktop/issues/257), are not yet built.
 
 ## Security properties
 
@@ -303,11 +317,15 @@ Ticket carries `security-sensitive`; architect self-review verdict **PASS** (no 
 - [Session-id store](session-id-store.md) / [#259](../codebase/259.md) — the renderer-side holder of the
   `session_id` this command's payload will address, once #257 wires the two together.
 - [Run configuration store](run-config-store.md) / [#187](../codebase/187.md) — the read half this
-  write path is the eventual write-side twin of; #256/#257 join them.
+  write path is the eventual write-side twin of; [#256](../codebase/256.md)/#257 join them.
 - [#264 codebase notes](../codebase/264.md) — the decode arm for this ticket's `session_settings_updated`
   reply: wire type, fail-closed parse, and the `sessionSettingsUpdated` `DaemonEvent` arm #261 widened;
-  still a no-op in every bridge until #256 exists.
+  consumed by [#256](../codebase/256.md)'s [write store](run-settings-write-store.md), still a no-op in
+  the three session/timeline/modal bridges.
 - [#269 codebase notes](../codebase/269.md) — the rejected-path sibling: widens `daemon-error` with
   `inReplyTo?: number`, correlates it against the same `pendingSettings` map + `changeId` key, and
   introduces `sessionSettingsRejected` (see § Rejection above). Also the ticket that closes the
   `pendingSettings` orphan #261 left open for a rejected change.
+- [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md)
+  — the pending-write store consuming both `sessionSettingsUpdated` and `sessionSettingsRejected`; see
+  § Consumption above.

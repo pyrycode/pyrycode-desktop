@@ -26,8 +26,16 @@ function row(over: Partial<ConversationSummary>): ConversationSummary {
 
 const render = (conversations: readonly ConversationSummary[] | null): string =>
   renderToStaticMarkup(
-    <ChannelListView conversations={conversations} now={NOW} onOpen={noop} />
+    <ChannelListView
+      conversations={conversations}
+      now={NOW}
+      onOpen={noop}
+      onNewConversation={noop}
+    />
   )
+
+// The new-discussion FAB's accessible name (#242) — present in every list state (AC1/AC4).
+const FAB_MARKER = 'aria-label="New discussion"'
 
 describe('ChannelListView', () => {
   it('not-yet-loaded (null): renders the wrapper but no header and no empty message (AC4)', () => {
@@ -93,5 +101,13 @@ describe('ChannelListView', () => {
     const markup = render([row({ id: 'd1', name: '<b>x</b>' })])
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
+  })
+
+  it('renders the new-discussion FAB with its accessible name in all three list states (AC1/AC4)', () => {
+    // The FAB is a sibling of the list body, so it is present whether the list is not-loaded, empty,
+    // or populated — the affordance to start a conversation must always be reachable.
+    expect(render(null)).toContain(FAB_MARKER)
+    expect(render([])).toContain(FAB_MARKER)
+    expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(FAB_MARKER)
   })
 })

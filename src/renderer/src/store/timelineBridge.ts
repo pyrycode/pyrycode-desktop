@@ -77,6 +77,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'snapshotReceived':
     case 'conversationsReceived':
     case 'conversationCreated':
+    case 'conversationUpdated':
     case 'modalShown':
     case 'modalDismissed':
     case 'sessionTransition':

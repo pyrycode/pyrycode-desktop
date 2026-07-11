@@ -65,6 +65,8 @@ export type EnvelopeType =
   | 'conversations'
   | 'create_conversation'
   | 'conversation_created'
+  | 'promote_conversation'
+  | 'conversation_updated'
   | 'ack'
   | 'error'
 
@@ -487,6 +489,47 @@ export interface ConversationCreatedPayload {
   is_promoted: boolean
   cwd: string
   name: string | null
+  last_used_at: string
+}
+
+/**
+ * Outbound `promote_conversation` request body (client → daemon). Mirrors the daemon's
+ * PromoteConversationPayload field-for-field (internal/protocol/conversations_write.go, spec #274),
+ * wire order `conversation_id, name, cwd`.
+ *
+ * **REQUIRED value-strings — the deliberate OPPOSITE of CreateConversationPayload.** Where create's
+ * three fields are `T | null` (nullable-and-present — "take the server default"), promote's three are
+ * plain `string`: a promoted conversation MUST carry a real name and an effective cwd, and the id MUST
+ * resolve to an existing row, so the daemon's struct uses value-strings (no pointers, no `omitempty`).
+ * Do NOT "helpfully" relax these to nullable — that would drift the wire from the daemon contract
+ * (CLAUDE.md no-drift). `cwd` is a renderer-supplied string that becomes a working directory
+ * SERVER-side; the desktop never resolves it into a filesystem path. See #273.
+ */
+export interface PromoteConversationPayload {
+  conversation_id: string
+  name: string
+  cwd: string
+}
+
+/**
+ * Inbound `conversation_updated` reply body (daemon → client, BROADCAST). Mirrors the daemon's
+ * ConversationUpdatedPayload field-for-field (conversations_write.go, spec #274), wire order
+ * `id, is_promoted, name, cwd, last_used_at` — note `name` comes BEFORE `cwd` here (the intentional
+ * reordering vs. ConversationCreatedPayload's `cwd, name`; spec #274 flags it — mirror it).
+ *
+ * NOT correlated to its `promote_conversation` via `in_reply_to`: the daemon fans this out to every
+ * client on the server-id (the `assistant_delta` pattern, an unsolicited event). `is_promoted` is
+ * `true` after a promote (a boolean value, never an absence). `name` is `string | null` (a literal
+ * `null`, never absent — the daemon uses `*string` WITHOUT `omitempty`), exactly like
+ * ConversationSummary.name — NOT `string | undefined`. `cwd` is an untrusted daemon-supplied string
+ * carried as opaque display text; this ticket never resolves it into a filesystem path. `last_used_at`
+ * is RFC3339. See #273.
+ */
+export interface ConversationUpdatedPayload {
+  id: string
+  is_promoted: boolean
+  name: string | null
+  cwd: string
   last_used_at: string
 }
 

@@ -23,6 +23,7 @@ import {
   type RequestSnapshotPayload,
   type ScreenSnapshotPayload,
   type CreateConversationPayload,
+  type PromoteConversationPayload,
   type SetSessionSettingsPayload
 } from '../shared/wire/types'
 
@@ -253,6 +254,11 @@ function modalDismissedPlaintext(payload: unknown): Uint8Array {
 /** A `conversation_created` plaintext, wrapping an arbitrary payload (#241). */
 function conversationCreatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversation_created', ts: FIXED_TS, payload })
+}
+
+/** A `conversation_updated` plaintext, wrapping an arbitrary payload (#273). */
+function conversationUpdatedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'conversation_updated', ts: FIXED_TS, payload })
 }
 
 /** A `session_transition` plaintext, wrapping an arbitrary payload (#254). */
@@ -1997,6 +2003,108 @@ describe('createDaemonConnection — createConversation (create_conversation req
       drivers[0].emit({
         type: 'message',
         plaintext: conversationCreatedPlaintext({ ...CREATED, is_promoted: 'nope' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — promoteConversation (promote_conversation request / conversation_updated broadcast, #273)', () => {
+  const PROMOTE: PromoteConversationPayload = {
+    conversation_id: 'conv-9',
+    name: 'weekly sync',
+    cwd: '/home/user/project'
+  }
+  const UPDATED = {
+    id: 'conv-9',
+    is_promoted: true,
+    name: null,
+    cwd: '/home/user/project',
+    last_used_at: '2026-07-12T00:00:00Z'
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.promoteConversation(PROMOTE)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one promote_conversation envelope with id 2, ts, and the three fields', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.promoteConversation(PROMOTE)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('promote_conversation')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual(PROMOTE)
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.promoteConversation(PROMOTE)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.promoteConversation(PROMOTE)).not.toThrow()
+  })
+
+  it('strips a smuggled extra field — the sent payload is exactly the three modeled fields (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an extra key past the structural-minimum guard. The
+    // fresh-literal construction in promoteConversation must bound the wire to exactly the three fields.
+    connection.promoteConversation({
+      conversation_id: 'conv-9',
+      name: 'weekly sync',
+      cwd: '/home/user/project',
+      is_promoted: true
+    } as unknown as PromoteConversationPayload)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual(PROMOTE)
+    expect(JSON.stringify(payload)).not.toContain('is_promoted')
+  })
+
+  it('decodes an inbound conversation_updated into one conversationUpdated carrying the payload (null name preserved)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: conversationUpdatedPlaintext(UPDATED) })
+
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'conversationUpdated', conversation: UPDATED }])
+  })
+
+  it('drops a malformed conversation_updated broadcast without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: conversationUpdatedPlaintext({ ...UPDATED, is_promoted: 'nope' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

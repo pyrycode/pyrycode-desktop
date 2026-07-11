@@ -33,6 +33,7 @@ import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
+import { buildPromoteConversation } from './transport/promoteConversationEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
@@ -53,6 +54,7 @@ import {
   type SendMessagePayload,
   type RequestSnapshotPayload,
   type CreateConversationPayload,
+  type PromoteConversationPayload,
   type SetSessionSettingsPayload,
   type ModalAnswerPayload,
   type ModalCancelPayload
@@ -148,6 +150,18 @@ export interface DaemonConnection {
    * caller is #242; this ticket only wires the round-trip. NEVER throws out of the module (parity #490).
    */
   createConversation(payload: CreateConversationPayload): void
+  /**
+   * Encrypt a payload-carrying `promote_conversation` control envelope onto the live session — asks the
+   * daemon to promote a discussion into a saved channel (all three fields required: the id must resolve,
+   * and the conversation must carry a name + cwd). The `send` TWIN, not `requestDebugBundle`: a promote
+   * request has no consumer to fail, so it is an inert no-op when not connected (`driver === null` →
+   * return). The reply is an UNSOLICITED `conversation_updated` BROADCAST (NOT correlated by
+   * `in_reply_to`) the daemon fans out to every client on the server-id, decoded into one
+   * `conversationUpdated` DaemonEvent — consumed by the list-reflect slice (#275), not the session store.
+   * Its caller is the Save-as-channel dialog (#274); this ticket only wires the round-trip. NEVER throws
+   * out of the module (parity #490).
+   */
+  promoteConversation(payload: PromoteConversationPayload): void
   /**
    * Encrypt a payload-carrying `set_session_settings` control envelope onto the live session — asks the
    * daemon to change one session's model / reasoning effort / YOLO (pyrycode #844/#845). Honors the
@@ -496,6 +510,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversation: inbound.conversationCreated
             })
             return
+          case 'conversation-updated':
+            // The conversation-updated data path (#273). An UNSOLICITED daemon BROADCAST (not correlated
+            // by in_reply_to), so it is emitted unconditionally on decode — no outstanding-request memory.
+            // Verbatim passthrough (the `conversation-created` precedent): parseConversationUpdatedPayload
+            // already returned a fresh 5-field object with nothing to drop (no secret field), so the
+            // reference passes through — no re-construction. Field names stay snake_case (the event reuses
+            // the wire type). The list-reflect slice (#275), not the session store, reconciles the row.
+            // `name` / `cwd` are untrusted display text.
+            emitDaemonEvent(sink, {
+              type: 'conversationUpdated',
+              conversation: inbound.conversationUpdated
+            })
+            return
           case 'modal-shown':
             // The modal data path (#201). snake→camel here (`modal_id`→`modalId`,
             // `default_option_id`→`defaultOptionId`); `options` is reused verbatim (the `conversations`
@@ -740,6 +767,36 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function promoteConversation(payload: PromoteConversationPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A promote request has no consumer to fail; a request sent
+    // while disconnected simply produces no reply (the daemon's `conversation_updated` broadcast never
+    // arrives, and there is no correlation memory to leave dangling).
+    if (driver === null) return
+    try {
+      // Build a FRESH literal naming exactly the three modeled fields — never a spread of `payload`.
+      // This is the deterministic net that bounds the wire to exactly conversation_id / name / cwd,
+      // ignoring any renderer-smuggled extra field the structural-minimum guard let through (#236's
+      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / createConversation /
+      // requestSnapshot — no second counter — so ids stay unique across interleaved calls.
+      const bytes = buildPromoteConversation({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          name: payload.name,
+          cwd: payload.cwd
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
+      // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
   function setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A settings change has no consumer to fail; a request sent
@@ -901,6 +958,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestSnapshot,
     requestConversations,
     createConversation,
+    promoteConversation,
     setSessionSettings,
     answerModal,
     cancelModal,

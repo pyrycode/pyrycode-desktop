@@ -20,7 +20,9 @@ import type {
   ModalAnswerPayload,
   ModalCancelPayload,
   CreateConversationPayload,
-  ConversationCreatedPayload
+  ConversationCreatedPayload,
+  PromoteConversationPayload,
+  ConversationUpdatedPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -347,5 +349,59 @@ describe('conversations-write wire vocabulary (#241)', () => {
     // A populated name is an equally valid value (a named conversation).
     const named: ConversationCreatedPayload = { ...payload, name: 'design review' }
     expect(named.name).toBe('design review')
+  })
+})
+
+describe('conversations-write promote/update wire vocabulary (#273)', () => {
+  it('admits the promote request + updated reply envelope types', () => {
+    // Compile-time membership: these assign only if the members are part of EnvelopeType.
+    const promote: EnvelopeType = 'promote_conversation'
+    const updated: EnvelopeType = 'conversation_updated'
+    expect(promote).toBe('promote_conversation')
+    expect(updated).toBe('conversation_updated')
+  })
+
+  it('shapes PromoteConversationPayload as { conversation_id, name, cwd } — all REQUIRED strings', () => {
+    // The deliberate OPPOSITE of CreateConversationPayload's nullable-and-present fields: a promoted
+    // conversation MUST carry a real name and cwd, and the id MUST resolve to an existing row, so the
+    // daemon struct uses value-strings (no pointers, no omitempty). All three are plain `string`.
+    const payload: PromoteConversationPayload = {
+      conversation_id: 'conv-9',
+      name: 'weekly sync',
+      cwd: '/home/user/project'
+    }
+    expect(payload).toEqual({
+      conversation_id: 'conv-9',
+      name: 'weekly sync',
+      cwd: '/home/user/project'
+    })
+    // Declared field order (no-drift): conversation_id, name, cwd.
+    expect(Object.keys(payload)).toEqual(['conversation_id', 'name', 'cwd'])
+  })
+
+  it('shapes ConversationUpdatedPayload as { id, is_promoted, name, cwd, last_used_at } — name BEFORE cwd', () => {
+    // The reply's own 5-field shape. `name` is `string | null` (a literal null, never absent — the
+    // daemon uses *string WITHOUT omitempty), exactly like ConversationSummary.name. Field order
+    // deliberately places `name` before `cwd` (spec #274), unlike ConversationCreatedPayload.
+    const payload: ConversationUpdatedPayload = {
+      id: 'conv-9',
+      is_promoted: true,
+      name: null,
+      cwd: '/home/user/project',
+      last_used_at: '2026-07-10T00:00:00Z'
+    }
+    expect(payload).toEqual({
+      id: 'conv-9',
+      is_promoted: true,
+      name: null,
+      cwd: '/home/user/project',
+      last_used_at: '2026-07-10T00:00:00Z'
+    })
+    // Pin the no-drift wire order: name comes before cwd (the intentional reordering vs. created).
+    expect(Object.keys(payload)).toEqual(['id', 'is_promoted', 'name', 'cwd', 'last_used_at'])
+
+    // A populated name is an equally valid value (a named channel).
+    const named: ConversationUpdatedPayload = { ...payload, name: 'weekly sync' }
+    expect(named.name).toBe('weekly sync')
   })
 })

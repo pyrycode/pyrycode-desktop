@@ -38,6 +38,7 @@ import type {
   ToolResultPayload,
   ConversationSummary,
   ConversationCreatedPayload,
+  ConversationUpdatedPayload,
   ModalShownPayload,
   ModalDismissedPayload,
   WireModalOption
@@ -153,6 +154,7 @@ export type InboundDaemonMessage =
   | { kind: 'tool-result'; toolResult: ToolResultPayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
+  | { kind: 'conversation-updated'; conversationUpdated: ConversationUpdatedPayload }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
 
@@ -504,6 +506,29 @@ function parseConversationCreatedPayload(payload: unknown): ConversationCreatedP
 }
 
 /**
+ * Narrow an opaque payload into a ConversationUpdatedPayload (#273). Fail-closed like
+ * parseConversationCreatedPayload, but in the reply's own field order — `name` BEFORE `cwd` (spec #274's
+ * intentional reordering vs. the create reply): `id` / `cwd` / `last_used_at` required strings,
+ * `is_promoted` a required boolean (the `yolo` #180 idiom — the check is on the TYPE, so `false` decodes
+ * as the value `false`, never an absence, and a non-boolean throws), and `name` a required, nullable
+ * string (`null` is a valid value — an update that left the name unset, AC — but a missing/`undefined`
+ * field throws). Returns only the five known fields; unknown server-added keys (e.g. a spurious
+ * is_archived/last_message_ts) are tolerated (forward-compat) but NOT copied through. Its messages name
+ * the failure category only — a `name` / `cwd` could echo a title or workspace path.
+ */
+function parseConversationUpdatedPayload(payload: unknown): ConversationUpdatedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed conversation_updated payload')
+  }
+  const id = requireString(payload, 'id')
+  const is_promoted = requireBoolean(payload, 'is_promoted')
+  const name = requireStringOrNull(payload, 'name')
+  const cwd = requireString(payload, 'cwd')
+  const last_used_at = requireString(payload, 'last_used_at')
+  return { id, is_promoted, name, cwd, last_used_at }
+}
+
+/**
  * Narrow one opaque option into a WireModalOption (#201). Fail-closed like parseConversationSummary:
  * two required strings (`id` / `label`), unknown keys tolerated but not copied. Its message names the
  * category only — an option `label` is untrusted `claude`-surfaced display text.
@@ -779,6 +804,21 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'conversation-created', conversationCreated }
+    }
+    case 'conversation_updated': {
+      // Narrow BEFORE logging so a malformed broadcast (a missing / mistyped field) throws first and
+      // leaves no record. No decoded field (id / name / cwd / last_used_at / is_promoted) is logged —
+      // only the frame's byte length + one-way hash, reusing the existing content-free field set.
+      // Deliberately NO `count` field (the conversation_created #241 posture): the set stays
+      // type/bytes/hash.
+      const conversationUpdated = parseConversationUpdatedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'conversation_updated',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'conversation-updated', conversationUpdated }
     }
     case 'modal_shown': {
       // Narrow BEFORE logging so a malformed frame (a `class` outside the closed enum, a bad option)

@@ -3,6 +3,7 @@ import {
   submitMessage,
   composerAvailability,
   shouldOfferRepair,
+  shouldShowBanner,
   MILESTONE_CONVERSATION_ID
 } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
@@ -205,5 +206,40 @@ describe('shouldOfferRepair', () => {
         error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
       })
     ).toBe(false)
+  })
+})
+
+// shouldShowBanner is the pure predicate (#279) deciding when the prominent, disconnected-only
+// connection banner shows: true for every non-connected arm, false only when connected. React-free
+// and store-free, the same discipline as composerAvailability / shouldOfferRepair, so the whole
+// truth table is unit-testable without a DOM. The `!== 'connected'` shape (not an exhaustive switch)
+// is deliberate: every non-connected arm maps to the SAME behavior (show the banner).
+describe('shouldShowBanner', () => {
+  const ack: HelloAckPayload = {
+    protocol_version: '1',
+    server_id: 's',
+    conn_id: 'c',
+    capabilities: []
+  }
+
+  it('false when connected — the banner is absent (AC2)', () => {
+    expect(shouldShowBanner({ type: 'connected', ack })).toBe(false)
+  })
+
+  it('true when disconnected (AC1)', () => {
+    expect(shouldShowBanner({ type: 'disconnected' })).toBe(true)
+  })
+
+  it('true when connecting (AC1)', () => {
+    expect(shouldShowBanner({ type: 'connecting' })).toBe(true)
+  })
+
+  it('true when in a connection error (AC1)', () => {
+    expect(
+      shouldShowBanner({
+        type: 'error',
+        error: { code: 'transport', message: 'gave up', retryable: false }
+      })
+    ).toBe(true)
   })
 })

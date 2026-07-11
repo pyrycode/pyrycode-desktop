@@ -14,6 +14,8 @@ A minimal seed of that future top app bar landed in [#166](../codebase/166.md): 
 
 A **proactive** twin of that escape hatch landed in [#167](../codebase/167.md): beneath the composer, a `Re-pair` button that appears only when the connection has hit a terminal failure or the daemon has rejected the pairing, instead of requiring the user to notice the manual header control. See [Re-pair control](#re-pair-control-167) below.
 
+A **third, prominent** read of the connection status landed in [#279](../codebase/279.md): a disconnected-only banner across the top of the thread, between the header row and the message list — distinct from both the composer's terse inline gate and the still-separate #149 two-dot indicator. See [Connection banner](#connection-banner-279) below.
+
 The status row and the "Run configuration" sheet it opens landed as a **chrome-only shell** in [#177](../codebase/177.md): a trigger row between the thread and the composer, and a host modal that renders no live data or sections yet. See [Run configuration sheet](#run-configuration-sheet-177) below.
 
 The sheet's first section, **Log data** (a Download button for the debug bundle), landed in [#72](../codebase/72.md): the last child in the sheet body, beneath where Model/Effort/YOLO/Context-window will mount. See [Log data section](#log-data-section-72) below.
@@ -38,6 +40,7 @@ The screen gained an interactive **permission/trust modal** in [#224](../codebas
 ConversationScreen            .conversation        (flex column, full height, position: relative)
 ├── BackControl                .conversation__back   (leading icon button, #140, null when onBack absent)
 ├── UnpairControl              .conversation__header (slim header row, #166)
+├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
@@ -166,6 +169,55 @@ self-hides on both outcomes (`ok` → store resets to `disconnected`, route unmo
 `error` → store lands on `code: 'unpair'`, which the predicate excludes). `runUnpair` never
 rejects, so `handleRepair` fires it as a bare `void` with no `.then`. See
 [#167 codebase notes](../codebase/167.md) for the full design, patterns, and code-review NITs.
+
+### Connection banner (#279)
+
+A third, independent read of the same `ConnectionStatus` slice `composerAvailability` and
+`shouldOfferRepair` already read (see [Composer send](composer-send.md)) — prominent and
+disconnected-only, distinct from both the composer's terse inline gate and the separate, always-on #149
+two-dot Relay/Pyrycode indicator (not built here). Closes the gap where the thread gave no prominent
+disconnected signal, only the composer's muted caption.
+
+Split from #148 alongside #276/#277/#278; no Figma frame exists (the mobile file draws only the
+connected thread), so the copy and accent are design-doc-sourced defaults, mirroring
+[#277](../codebase/277.md)'s "no Figma frame" justification shape.
+
+Mirrors the [Re-pair control](#re-pair-control-167) split exactly:
+
+- **`shouldShowBanner(status: ConnectionStatus): boolean`** — in `composerSend.ts`, beside
+  `composerAvailability`/`shouldOfferRepair`: `status.type !== 'connected'`. True for
+  `disconnected`/`connecting`/`error`; false only for `connected`. Unlike `composerAvailability`, this
+  is **not** an exhaustive per-arm switch — every non-connected arm maps to the same behavior (show the
+  banner), so "show unless connected" is the honest shape, and a hypothetical future 5th
+  `ConnectionStatus` arm defaults to *showing* the banner rather than silently hiding it.
+- **`CONNECTION_BANNER_COPY`** — also in `composerSend.ts`: a single client-owned string constant
+  (`'Cannot reach pyrybox — your messages will not send until the connection is back.'`), lexically
+  distinct from the three `composerAvailability` hints (`Connecting…` / `Not connected` / `Connection
+  error`) so the prominent banner and the terse composer gate never read as the same string stacked
+  twice. One constant, not a per-arm map — a second three-way copy split would be the duplication this
+  ticket's AC5 warns against; the composer already carries the per-arm nuance.
+- **`ConnectionBanner({ status })`** — exported pure view in `ConversationScreen.tsx`. Returns `null`
+  unless `shouldShowBanner(status)`, else a single `role="status"` `<p className="conversation__banner">`
+  holding only `CONNECTION_BANNER_COPY` — nothing derived from `status`, so no daemon-supplied string
+  (`ConnectionError.message`) can ever reach it, a structural guarantee (the `EMPTY_THREAD_COPY`/
+  `ThinkingIndicator` idiom) rather than a convention. `status` is a **prop**, so the shown/hidden matrix
+  server-renders directly, unlike `RepairPrompt`'s populated branch (which needs an `error` status not
+  reachable from the store's server-snapshot).
+- **`ConnectionBannerControl()`** — in-file, unexported container: `useSessionStore(selectStatus)` then
+  `<ConnectionBanner status={status} />`. Selecting only `status` re-renders it exactly on a connection
+  transition, never on a timeline delta — the same narrow-slice seam the composer gate and
+  `RepairControl` already use.
+
+Mounted between `<UnpairControl />` and `<Timeline />` — below the header row, above the message list,
+"the top of the thread." Styled `.conversation__banner` (`conversation.css`), token-only, following the
+`.modal-rejection` (#249) error-accent idiom: `--color-error` left border over
+`--color-surface-container-high`, sized to body-medium — a step up in prominence from
+`.composer__hint`'s muted body-small caption — `flex: 0 0 auto` so it pushes the thread down rather than
+overlaying it, never growing or shrinking.
+
+Not security-sensitive: a pure renderer read of already-store-held status, no transport/crypto/socket
+code touched. See [#279 codebase notes](../codebase/279.md) for the full design, the code-review record,
+and the apostrophe-escaping test lesson.
 
 ### Run configuration sheet (#177)
 
@@ -698,6 +750,7 @@ learned.
 - **`Composer`** — **bound in [#66](../codebase/66.md); echo retargeted in [#179](../codebase/179.md).** A thin controlled container: `useState` input, an `onChange`/`onKeyDown` on the `<textarea>`, and an `onClick` on the send button, all delegating to the pure `submitMessage` in `composerSend.ts` (submit mints a `message_id` for the wire command, and dispatches an optimistic `userText` echo into the timeline store since #179 — previously a `messageSent` action into the session store). The submit logic lives in its own `.ts` file (the pairing container/pure-logic split); `Composer` itself stayed in-file. Auto-grow was not built (cosmetic, no AC). See [Composer send](composer-send.md).
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
+- **`ConnectionBanner({ status })` / `ConnectionBannerControl`** — **bound in [#279](../codebase/279.md).** `ConnectionBanner` is the exported pure view (`status` as a prop, gated by `shouldShowBanner`); `ConnectionBannerControl` is the in-file container reading only `selectStatus`, mounted between `UnpairControl` and `Timeline`. See [Connection banner](#connection-banner-279) above.
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md).** Reads the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply. See [Structured-stream timeline render](#structured-stream-timeline-render-203) and [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
 - **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. See [Thinking indicator](#thinking-indicator-215) above.
@@ -709,6 +762,7 @@ learned.
 - Since [#179](../codebase/179.md), the timeline is the **only** thread surface — no split-brain, no empty second region. `MessageThread`/`selectMessages` are retained but unread residue.
 - The send button is **wired** ([#66](../codebase/66.md)): a click (or Enter) sends the composed message and appends an optimistic echo, now into the timeline ([#179](../codebase/179.md)). A whitespace-only input does nothing; a send-bridge failure is swallowed (no crash). See [Composer send](composer-send.md).
 - **Dark scheme only**; no responsive layout beyond flex reflow; no desktop-native layout (the plan defers that until the app is fully functioning).
+- **Connection banner** ([#279](../codebase/279.md)) — renders across the top of the thread whenever `selectStatus` is not `connected`, disappearing on reconnect with no reload; text is always the client-owned `CONNECTION_BANNER_COPY`, never `ConnectionError.message`. Coexists with the composer's own terse hint (#31) — both remain visible while disconnected, by design (distinct copy registers, not a duplicate).
 - No DOM interactivity is tested yet — the render test uses `renderToStaticMarkup`, not a DOM harness. Because zustand v5's `useStore` reads `getInitialState()` (not `getState()`) for its server snapshot, a *server*-rendered store-bound container always shows the store's **initial** state; #69 therefore proves ordering + role→type on the pure `MessageThread` view and smoke-tests the container against the empty store. Observing a *populated* container render needs a jsdom harness — still deferred. See [#69 codebase notes](../codebase/69.md).
 
 ## Related
@@ -716,7 +770,7 @@ learned.
 - [App shell](app-shell.md) — the router that mounts the `paired`/`conversation` route (#80); gains the `onUnpaired` reverse-flip seam this screen's unpair control fires (#166)
 - [Paired shell](paired-shell.md) — the second-level `list ⇄ thread` router now mounting this screen as its `thread` view (#140); source of the `onBack` seam this screen's back control fires
 - [Session store](session-store.md) — the state the coarse thread rendered through #69–#178; the `MessageThread`/status seams bound to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166); its `messages` slice is unread residue since [#179](../codebase/179.md) (status/`selectStatus` is still live, read by the composer's send gate)
-- [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66), retargeted from the session store into the timeline store since [#179](../codebase/179.md); the send half of this screen
+- [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66), retargeted from the session store into the timeline store since [#179](../codebase/179.md); the send half of this screen; also home of `shouldShowBanner`/`CONNECTION_BANNER_COPY` (#279), the connection banner's predicate + copy, co-located beside `composerAvailability`/`shouldOfferRepair` as a third read of `ConnectionStatus`
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
@@ -729,4 +783,4 @@ learned.
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

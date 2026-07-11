@@ -4,7 +4,13 @@ import type { Message } from './messageViewModel'
 import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
 import { useTimelineStore, selectItems, selectPhase } from '../../store/timelineStore'
 import type { ThreadItem } from '../../store/threadTimeline'
-import { submitMessage, composerAvailability, shouldOfferRepair } from './composerSend'
+import {
+  submitMessage,
+  composerAvailability,
+  shouldOfferRepair,
+  shouldShowBanner,
+  CONNECTION_BANNER_COPY
+} from './composerSend'
 import { runUnpair } from './unpairAction'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
@@ -56,6 +62,10 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
     <div className="conversation">
       <BackControl onBack={onBack} />
       <UnpairControl onUnpaired={onUnpaired} />
+      {/* #279: the prominent, disconnected-only connection banner — the top of the thread, below the
+          header row and above the message list. A third read of the connection status, distinct from
+          the composer's terse inline gate below. */}
+      <ConnectionBannerControl />
       <Timeline items={items} />
       <ThinkingIndicator isThinking={phase === 'thinking'} />
       <StatusRow onExpand={() => setSheetOpen(true)} />
@@ -480,6 +490,37 @@ function RepairControl({ onUnpaired }: { onUnpaired?: () => void }): JSX.Element
   }
 
   return <RepairPrompt status={status} onRepair={handleRepair} />
+}
+
+// #279: the prominent, disconnected-only connection banner's pure view — the third read of the
+// ConnectionStatus slice (beside the composer gate and the re-pair prompt), and the surface
+// composerSend's docstring already reserves ("the connection banner's surface"). Returns null unless
+// shouldShowBanner(status); when shown, renders a single band carrying CONNECTION_BANNER_COPY and
+// nothing derived from `status` — so no daemon-supplied string (ConnectionError.message) can reach it
+// (AC3, a structural guarantee, not a convention — the EMPTY_THREAD_COPY / ThinkingIndicator idiom).
+// Visibility is a `status` PROP (not a store read) so the present/absent matrix is proven by directly
+// server-rendering this view (the RepairPrompt discipline). role="status" makes it a polite live region
+// (the .composer__hint treatment): the band persists visually, so a polite announcement suffices and
+// avoids an assertive double-announce with the composer hint. The band is deliberately MORE prominent
+// copy than the composer's terse gate (AC5), and both remain visible while disconnected.
+export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.Element | null {
+  if (!shouldShowBanner(status)) return null
+  return (
+    <p className="conversation__banner" role="status">
+      {CONNECTION_BANNER_COPY}
+    </p>
+  )
+}
+
+// The store-bound container for the connection banner (#279). Selects only `status` (selectStatus) so
+// it re-renders exactly on a connection-status change and never on a timeline delta (AC4 reactivity —
+// the same narrow-slice seam the composer gate and RepairControl already use; no new store wiring, no
+// window.pyry dereference, no effects — a pure read). Unlike RepairControl, whose visible branch needs
+// `error`, the banner's disconnected branch is a VISIBLE state, so the initial (disconnected) store is
+// enough to server-render the container's shown path.
+function ConnectionBannerControl(): JSX.Element | null {
+  const status = useSessionStore(selectStatus)
+  return <ConnectionBanner status={status} />
 }
 
 // #140: the leading back affordance of the thread's top app bar (Figma node 16-9 → arrow_back 16-11):

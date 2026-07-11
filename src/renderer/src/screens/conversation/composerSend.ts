@@ -127,3 +127,39 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
 export function shouldOfferRepair(status: ConnectionStatus): boolean {
   return status.type === 'error' && !status.error.retryable && status.error.code !== 'unpair'
 }
+
+/**
+ * The connection banner's copy (#279) — a single, exported, module-level client-owned string. This is
+ * the banner's ENTIRE text; it is never derived from `status`, so AC3 ("no daemon-supplied string is
+ * rendered as the banner text") is a structural guarantee, not a convention (the EMPTY_THREAD_COPY /
+ * ThinkingIndicator label idiom). It is deliberately lexically distinct from all three
+ * `composerAvailability` hints (`Connecting…` / `Not connected` / `Connection error`) — it leads with
+ * "Cannot reach" and shares no leading words — so the prominent banner and the terse composer gate
+ * never read as the same string stacked twice (AC5). A single constant, not a per-arm map: every
+ * non-connected arm is a state where pyry is unreachable, so one sentence covers all three honestly (no
+ * "restored"/"lost" temporal claim); a second three-way copy split would be the duplication AC5 warns
+ * against — the composer already carries the per-arm nuance. It is a client-owned constant, so PO/design
+ * may tune the wording; the load-bearing contract is (a) one client-owned constant, (b) lexically
+ * distinct from the three composer hints, (c) zero daemon-supplied substring. Apostrophe-free by design
+ * — the EMPTY_THREAD_COPY / `Thinking…` convention — so a server-rendered `toContain` assertion matches
+ * it verbatim (renderToStaticMarkup escapes `'` → `&#x27;`).
+ */
+export const CONNECTION_BANNER_COPY =
+  'Cannot reach pyrybox — your messages will not send until the connection is back.'
+
+/**
+ * Whether the prominent, disconnected-only connection banner should show (#279) — the third,
+ * independent read of the single `ConnectionStatus` slice, beside `composerAvailability` (the terse
+ * inline composer gate) and `shouldOfferRepair` (the terminal-error escape hatch). True for every
+ * non-connected arm (`disconnected` | `connecting` | `error`), false only when `connected` (AC1/AC2).
+ *
+ * Expressed as `!== 'connected'` rather than an exhaustive switch/assertNever (composerAvailability's
+ * shape): unlike that gate — where each arm maps to different copy, so it must enumerate — every
+ * non-connected arm maps to the SAME behavior (show the banner), so "show unless connected" is the
+ * honest shape. Its fail-mode is correct too: a hypothetical future 5th `ConnectionStatus` arm would
+ * default to SHOWING the not-connected band — the safe direction (over-showing a "not connected" banner
+ * beats silently hiding it).
+ */
+export function shouldShowBanner(status: ConnectionStatus): boolean {
+  return status.type !== 'connected'
+}

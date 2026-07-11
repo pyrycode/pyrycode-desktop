@@ -95,7 +95,7 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
 | `disconnected` | `false` | `'Not connected'` |
 | `error` | `false` | `'Connection error'` |
 
-Both facts derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error. The `error` hint is a short generic label and deliberately does **not** surface `status.error.message` — that `ConnectionError.message` ("for the banner") is a distinct surface, out of scope.
+Both facts derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error. The `error` hint is a short generic label and deliberately does **not** surface `status.error.message` — that `ConnectionError.message` is [the connection banner's surface](conversation-shell.md#connection-banner-279) (#279), built beside this gate.
 
 In the container, `Composer` selects `status`, derives `{ canSend, hint }`, and:
 
@@ -126,6 +126,30 @@ re-dials it), so it is out of scope for this predicate by construction.
 
 The `<textarea>` stays **enabled** while not connected — the user may draft while `connecting`; only the send control is gated. Selecting `status` re-renders `Composer` when it changes, so the re-enable is reactive; the thread (which selects only `selectMessages`) doesn't re-render on status change.
 
+### 6. Connection banner gate — `shouldShowBanner` / `CONNECTION_BANNER_COPY` ([#279](../codebase/279.md))
+
+A third pure predicate beside `composerAvailability`/`shouldOfferRepair`, over the same
+`ConnectionStatus` — whether the conversation screen should render the prominent, disconnected-only
+banner across the top of the thread (see
+[Conversation shell → Connection banner](conversation-shell.md#connection-banner-279)).
+
+```ts
+export function shouldShowBanner(status: ConnectionStatus): boolean {
+  return status.type !== 'connected'
+}
+```
+
+Unlike `composerAvailability`, this is not an exhaustive per-arm switch: every non-connected arm
+(`disconnected`/`connecting`/`error`) maps to the identical behavior (show the banner), so `!==
+'connected'` is the honest shape — and its fail-mode is correct, since a hypothetical future 5th
+`ConnectionStatus` arm defaults to *showing* the not-connected banner rather than silently hiding it.
+
+`CONNECTION_BANNER_COPY` ships alongside it — a single client-owned string constant, lexically distinct
+from all three `composerAvailability` hints, so the banner and the composer's terse gate never read as
+the same string stacked twice even though both remain visible while disconnected. One constant, not a
+per-arm map: the composer already carries the per-arm nuance, so a second three-way split would
+duplicate it.
+
 ## Data flow
 
 ```
@@ -144,7 +168,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 
 ## Edge cases and limitations
 
-- **Not connected** ([#31](../codebase/31.md)) — while `selectStatus` is not `connected`, the send button is `disabled`, the `handleSubmit` early-return inerts the Enter path, and a `role="status"` caption names why (`Connecting…` / `Not connected` / `Connection error`). No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. The `error` hint never surfaces `ConnectionError.message` (banner's surface, out of scope).
+- **Not connected** ([#31](../codebase/31.md)) — while `selectStatus` is not `connected`, the send button is `disabled`, the `handleSubmit` early-return inerts the Enter path, and a `role="status"` caption names why (`Connecting…` / `Not connected` / `Connection error`). No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. The `error` hint never surfaces `ConnectionError.message` — that string stays server-side-only; the same non-connected state also shows the prominent [connection banner](conversation-shell.md#connection-banner-279) (#279), which renders its own client-owned copy, not the composer's hint text.
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone.
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
@@ -162,3 +186,4 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [#66 codebase notes](../codebase/66.md) — implementation summary, patterns, lessons.
 - [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control and inline "why" hint.
 - [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the `Re-pair` affordance it gates.
+- [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell.md#connection-banner-279) it gates.

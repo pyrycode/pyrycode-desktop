@@ -57,9 +57,16 @@ translateConversationsEvent(event: DaemonEvent): readonly ConversationSummary[] 
 requestConversationList(sendCommand: (c: RendererCommand) => void): void
 // sendCommand({ type: 'requestConversations' })  — bare, no new command/builder
 
-subscribeConversations(onDaemonEvent, setConversations): () => void
-// onDaemonEvent(event => { const list = translateConversationsEvent(event); if (list !== null) setConversations(list) })
+subscribeConversations(onDaemonEvent, setConversations, refreshOnChange): () => void
+// onDaemonEvent(event => {
+//   const list = translateConversationsEvent(event); if (list !== null) setConversations(list)
+//   if (isConversationUpdated(event)) refreshOnChange()   // #275
+// })
 // returns the off-handle (the subscribeRunConfig idiom)
+
+isConversationUpdated(event: DaemonEvent): boolean
+// event.type === 'conversationUpdated' — a plain boolean, not a type guard: the payload is never
+// consulted (#275)
 
 ConversationListData(): null
 // headless component, two effects: subscribe on mount ([]), request on the rising edge to `connected` ([isConnected])
@@ -81,8 +88,11 @@ not-loaded)" unmistakable to a reviewer.
 `ConversationListData` owns two effects:
 
 1. **Subscribe** (deps `[]`) — `subscribeConversations(window.pyry.onDaemonEvent, list =>
-   conversationListStore.getState().setConversations(list))`; the off-handle is the cleanup, so a
-   StrictMode double-mount nets exactly one live listener.
+   conversationListStore.getState().setConversations(list), () =>
+   requestConversationList(window.pyry.sendCommand))`; the off-handle is the cleanup, so a
+   StrictMode double-mount nets exactly one live listener. The third arg (#275) re-requests the list
+   on a `conversationUpdated` broadcast — `window.pyry.sendCommand` is dereferenced only when the
+   arrow runs, never during render, so the server-render-to-empty-markup invariant is unaffected.
 2. **Request on the rising edge to `connected`** (deps `[isConnected]`, `isConnected =
    useSessionStore(s => s.status.type === 'connected')`) — a `useRef(false)` guard fires exactly one
    request per connection episode: resets to `false` while disconnected (so a reconnect re-requests)
@@ -110,7 +120,13 @@ daemon → conversations frame → parseInboundMessage → conversationsReceived
   → DAEMON_EVENT_CHANNEL → subscribeConversations listener
     → translateConversationsEvent → rows (or null → skip)
     → conversationListStore.setConversations(rows)   [whole-list replace]
-  → selectConversations / useConversationListStore   (read by #141, not yet by anything)
+  → selectConversations / useConversationListStore   (read by #141)
+
+daemon → conversation_updated frame (BROADCAST, e.g. a promote #274) → conversationUpdated DaemonEvent [#273]
+  → DAEMON_EVENT_CHANNEL → subscribeConversations listener
+    → isConversationUpdated(event) → true → refreshOnChange()
+    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#275]
+    → … re-enters the flow above; the arriving conversationsReceived lands the flipped row
 ```
 
 ## Configuration and usage
@@ -129,9 +145,15 @@ daemon → conversations frame → parseInboundMessage → conversationsReceived
 - **Trigger is per-connection-episode, not fire-once-ever.** The minimal reading of AC4 ("issued at
   least once, without user action, after connected") plus natural robustness: a reconnect gets a
   fresh list, and a request lost to a mid-flight disconnect recovers on the next connect. This is
-  **not** the deferred "richer refresh policy" (intra-connection re-requests on archive change /
-  focus / a future `conversation_updated`) — it is simply the list following the connection
-  lifecycle. The whole-list-replace setter makes each re-request's arrival idempotent.
+  layered with the intra-connection reflection (below) — the two triggers are independent and never
+  conflict, since the whole-list-replace setter makes every arrival idempotent regardless of what
+  triggered the request.
+- **The once-deferred "richer refresh policy" — intra-connection re-requests on a
+  `conversation_updated` broadcast — landed in [#275](../codebase/275.md).** A promote (#274),
+  rename, or archive fans out `conversation_updated`; `subscribeConversations`'s third param,
+  `refreshOnChange`, re-requests the list on that event so the affected row's flip (e.g.
+  `is_promoted`) lands without a reconnect. No coalescing of rapid successive updates — each fires
+  its own re-request — deferred as an optimization, not required for correctness.
 - **No correlation, no request tracking.** Any `conversationsReceived` that arrives — solicited or
   not — is written unconditionally; safe because only the authenticated daemon can produce one (see
   [conversation list fetch § Correlation is deliberately absent](conversation-list-fetch.md#correlation-is-deliberately-absent)).
@@ -163,3 +185,7 @@ daemon → conversations frame → parseInboundMessage → conversationsReceived
 - [Channel List home screen](channel-list.md) (#141) — the first consumer of
   `useConversationListStore`/`selectConversations`. The [new-discussion FAB](new-discussion-fab.md)
   (#242) reads the daemon's `conversationCreated` event through its own bridge, not this store.
+- [Conversation promote (transport)](conversation-promote.md) / [#273 codebase
+  notes](../codebase/273.md) — the `conversationUpdated` broadcast this store's `refreshOnChange`
+  reacts to; [#275 codebase notes](../codebase/275.md) — implementation summary and patterns for the
+  re-request trigger.

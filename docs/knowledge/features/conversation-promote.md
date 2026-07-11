@@ -58,7 +58,7 @@ decoder, which is order-independent.
 | `parseConversationUpdatedPayload` + `conversation-updated` kind | `src/main/transport/inboundMessage.ts` | fail-closed inbound decode |
 | `conversationUpdated` event | `src/shared/ipc/events.ts` | the `DaemonEvent` arm |
 | `case 'promoteConversation':` | `src/main/index.ts` | `onCommand` dispatch |
-| `case 'conversationUpdated': return null` (×3) | `daemonEventBridge.ts` / `timelineBridge.ts` / `modalBridge.ts` | forced by `assertNever`; real consumer is #275 |
+| `case 'conversationUpdated': return null` (×3) | `daemonEventBridge.ts` / `timelineBridge.ts` / `modalBridge.ts` | forced by `assertNever`; real consumer is [#275](../codebase/275.md) |
 
 ### 1. The outbound builder (`promoteConversationEnvelope.ts`, new)
 
@@ -176,7 +176,7 @@ daemon → conversation_updated frame (BROADCAST, to every client on the server-
   → {kind:'conversation-updated', conversationUpdated} → emitDaemonEvent
     {type:'conversationUpdated', conversation}
   → DAEMON_EVENT_CHANNEL → all three assertNever bridges → null (no store consumer)
-                          → the list-reflect slice's own subscription (#275, not yet built)
+                          → the list-reflect slice's own subscription ([#275](../codebase/275.md))
 ```
 
 ## Error handling
@@ -200,12 +200,14 @@ client on the server-id (the `assistant_delta` pattern: an unsolicited event, no
 pair). This slice therefore adds **no** outstanding-request memory (unlike the correlated
 `set_session_settings` #261/#269 paths that keep a `pendingSettings` map keyed by `in_reply_to`).
 The promoting client also receives its own broadcast, and a broadcast could in principle name an id
-the local store has never seen — both are **#275's** concern; this slice emits the event faithfully
-and does not reconcile it.
+the local store has never seen — both were **#275's** concern, and both dissolved there by choosing
+a re-request over an in-place patch: the daemon's authoritative reply is idempotent regardless of
+who triggered it, so no dedup or id reconciliation was needed.
 
 ## Out of scope
 
-- **Self-broadcast dedup / spurious-id reconciliation** — #275's job (see above).
+- **Self-broadcast dedup / spurious-id reconciliation** — resolved by [#275](../codebase/275.md)'s
+  choice of re-request over an in-place store patch (see above); no code needed either concern.
 - **Resolving `cwd` into a real filesystem path** — untrusted daemon-supplied text, carried only as
   opaque display text; the daemon owns server-side `cwd` resolution.
 
@@ -218,8 +220,9 @@ and does not reconcile it.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139 codebase notes](../codebase/139.md) —
   the read-side origin of `requireStringOrNull`, reused here for the reply's `name`.
 - [Channel List home screen](channel-list.md) / [#141 codebase notes](../codebase/141.md) — the
-  render slice already partitioning rows by `is_promoted`, which #275 will keep in sync with this
-  transport's broadcast.
+  render slice already partitioning rows by `is_promoted`, kept in sync with this transport's
+  broadcast by [#275](../codebase/275.md)'s re-request trigger in
+  [conversation list store](conversation-list-store.md).
 - [Daemon connection](daemon-connection.md) — hosts `promoteConversation(payload)`, the `send` twin
   with the fresh-literal security net.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseConversationUpdatedPayload` and

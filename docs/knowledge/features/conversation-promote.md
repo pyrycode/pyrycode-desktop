@@ -1,8 +1,8 @@
 # Conversation promote (transport)
 
 The **transport data path** that lets the desktop client ask the pyry daemon to promote an
-existing discussion into a saved channel, so a future "save as channel" affordance can flip
-`ConversationSummary.is_promoted` on a row the [Channel List](channel-list.md)'s
+existing discussion into a saved channel, so the [Save-as-channel dialog](save-as-channel-dialog.md)
+can flip `ConversationSummary.is_promoted` on a row the [Channel List](channel-list.md)'s
 `partitionByPromotion` already reads. A client sends `promote_conversation{conversation_id, name,
 cwd}` (all three **required** strings); the daemon confirms by **broadcasting**
 `conversation_updated` to every client on the server-id — not a correlated reply.
@@ -10,9 +10,10 @@ cwd}` (all three **required** strings); the daemon confirms by **broadcasting**
 Introduced in [#273](../codebase/273.md), split from #143. Transport data path only — command →
 broadcast → one typed event. The direct twin of [conversation create](conversation-create.md)
 (#241), field-for-field in structure, with two deliberate divergences the daemon contract dictates
-(spec #274 in `pyrycode-docs`). The renderer-facing Save-as-channel dialog (#274) and the live-list
-reflection that flips a row from discussion to channel (#275) are separate tickets, both blocked by
-this one, that consume what this slice introduces.
+(spec #274 in `pyrycode-docs`). The renderer-facing [Save-as-channel dialog](save-as-channel-dialog.md)
+(desktop [#274](../codebase/274.md), shipped) and the live-list reflection that flips a row from
+discussion to channel ([#275](../codebase/275.md), shipped) are separate tickets that consume what
+this slice introduces.
 
 ## The wire contract
 
@@ -223,6 +224,8 @@ who triggered it, so no dedup or id reconciliation was needed.
   render slice already partitioning rows by `is_promoted`, kept in sync with this transport's
   broadcast by [#275](../codebase/275.md)'s re-request trigger in
   [conversation list store](conversation-list-store.md).
+- [Save-as-channel dialog](save-as-channel-dialog.md) / [#274 codebase notes](../codebase/274.md) —
+  the renderer UI that dispatches `promoteConversation`, the sole caller of this slice's command.
 - [Daemon connection](daemon-connection.md) — hosts `promoteConversation(payload)`, the `send` twin
   with the fresh-literal security net.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseConversationUpdatedPayload` and

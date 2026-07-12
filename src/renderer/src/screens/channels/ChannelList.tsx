@@ -1,10 +1,12 @@
 import './channels.css'
+import { useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   useConversationListStore,
   selectConversations
 } from '../../store/conversationListStore'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
+import { SaveAsChannelDialogView, requestPromoteConversation } from './SaveAsChannelDialog'
 import { titleFor, partitionByPromotion, formatLastActivity } from './channelListViewModel'
 
 // The Channel List home screen (#141) — the paired shell's `list` view, replacing the throwaway
@@ -27,13 +29,39 @@ import { titleFor, partitionByPromotion, formatLastActivity } from './channelLis
 export function ChannelList({ onOpen }: { onOpen: () => void }): JSX.Element {
   const conversations = useConversationListStore(selectConversations)
   const now = Date.now()
+  // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
+  // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
+  // dialog is open (or none); `name` is the controlled field value. Both reset on each open. The dialog
+  // is not rendered on first paint (`saveRow` starts null) and `window.pyry` is dereferenced only inside
+  // the click closures, so the container stays server-renderable (the onNewConversation discipline).
+  const [saveRow, setSaveRow] = useState<ConversationSummary | null>(null)
+  const [name, setName] = useState('')
   return (
-    <ChannelListView
-      conversations={conversations}
-      now={now}
-      onOpen={onOpen}
-      onNewConversation={() => requestNewConversation(window.pyry.sendCommand)}
-    />
+    <>
+      <ChannelListView
+        conversations={conversations}
+        now={now}
+        onOpen={onOpen}
+        onNewConversation={() => requestNewConversation(window.pyry.sendCommand)}
+        onSaveAsChannel={(row) => {
+          // Open the dialog and seed the field from the row's displayed title in one handler — no effect,
+          // no key-remount; re-seeding on each open replaces any prior value.
+          setSaveRow(row)
+          setName(titleFor(row.name))
+        }}
+      />
+      {saveRow && (
+        <SaveAsChannelDialogView
+          name={name}
+          onNameChange={setName}
+          onCancel={() => setSaveRow(null)}
+          onSave={() => {
+            requestPromoteConversation(window.pyry.sendCommand, saveRow, name)
+            setSaveRow(null)
+          }}
+        />
+      )}
+    </>
   )
 }
 
@@ -50,16 +78,18 @@ export function ChannelListView({
   conversations,
   now,
   onOpen,
-  onNewConversation
+  onNewConversation,
+  onSaveAsChannel
 }: {
   conversations: readonly ConversationSummary[] | null
   now: number
   onOpen: () => void
   onNewConversation: () => void
+  onSaveAsChannel: (row: ConversationSummary) => void
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
-      {renderBody(conversations, now, onOpen)}
+      {renderBody(conversations, now, onOpen, onSaveAsChannel)}
       <NewConversationFab onClick={onNewConversation} />
     </section>
   )
@@ -98,7 +128,8 @@ function NewConversationFab({ onClick }: { onClick: () => void }): JSX.Element {
 function renderBody(
   conversations: readonly ConversationSummary[] | null,
   now: number,
-  onOpen: () => void
+  onOpen: () => void,
+  onSaveAsChannel: (row: ConversationSummary) => void
 ): JSX.Element | null {
   // Not-yet-loaded: neither rows nor the empty state (distinct from loaded-zero, per #208).
   if (conversations === null) return null
@@ -113,6 +144,8 @@ function renderBody(
       {channels.length > 0 && (
         <>
           <header className="channel-list__section-header">Channels</header>
+          {/* Saved Channels are already promoted — they pass no onSaveAsChannel, so the affordance is
+              structurally absent on their rows (AC1). */}
           {channels.map((c) => (
             <Row key={c.id} row={c} now={now} onOpen={onOpen} />
           ))}
@@ -124,8 +157,15 @@ function renderBody(
       {discussions.length > 0 && (
         <>
           <header className="channel-list__section-header">Recent discussions</header>
+          {/* Recent discussions pass the affordance so each row can be saved as a channel (AC1). */}
           {discussions.map((d) => (
-            <Row key={d.id} row={d} now={now} onOpen={onOpen} />
+            <Row
+              key={d.id}
+              row={d}
+              now={now}
+              onOpen={onOpen}
+              onSaveAsChannel={() => onSaveAsChannel(d)}
+            />
           ))}
         </>
       )}
@@ -138,6 +178,11 @@ function renderBody(
 // untrusted daemon-derived strings rendered as auto-escaped React children (never
 // dangerouslySetInnerHTML) — displayed as opaque text.
 //
+// The open action is its own button; the optional Save-as-channel affordance (#274) is a SIBLING, not a
+// nested control — an interactive control cannot nest inside a <button>. `.channel-list__row` is a flex
+// wrapper; the old row button-reset/hover/focus rules now live on `.channel-list__row-open`. Recent rows
+// pass `onSaveAsChannel` → the affordance renders; saved Channel rows pass none → it is absent (AC1).
+//
 // `onClick={onOpen}` is deliberate and interim: per the ticket's Out of Scope, opening a *specific*
 // tapped conversation needs a select-and-load transport path that does not exist, so every row invokes
 // the shell's existing conversation-agnostic onOpen (which opens the single active conversation),
@@ -146,17 +191,43 @@ function renderBody(
 function Row({
   row,
   now,
-  onOpen
+  onOpen,
+  onSaveAsChannel
 }: {
   row: ConversationSummary
   now: number
   onOpen: () => void
+  onSaveAsChannel?: () => void
 }): JSX.Element {
   const time = formatLastActivity(row.last_message_ts, now)
   return (
-    <button type="button" className="channel-list__row" onClick={onOpen}>
-      <span className="channel-list__title">{titleFor(row.name)}</span>
-      <span className="channel-list__time">{time}</span>
-    </button>
+    <div className="channel-list__row">
+      <button type="button" className="channel-list__row-open" onClick={onOpen}>
+        <span className="channel-list__title">{titleFor(row.name)}</span>
+        <span className="channel-list__time">{time}</span>
+      </button>
+      {onSaveAsChannel && (
+        // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__fab pattern),
+        // since the glyph alone carries no text. The Material bookmark glyph is a reasonable stand-in: no
+        // Figma node pins this row-level control (19:24 is the dialog); a specific glyph is a small swap.
+        <button
+          type="button"
+          className="channel-list__save"
+          aria-label="Save as channel"
+          onClick={onSaveAsChannel}
+        >
+          <svg
+            className="channel-list__save-icon"
+            viewBox="0 0 24 24"
+            width="24"
+            height="24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z" />
+          </svg>
+        </button>
+      )}
+    </div>
   )
 }

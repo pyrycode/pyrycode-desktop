@@ -24,7 +24,8 @@ import {
   type ScreenSnapshotPayload,
   type CreateConversationPayload,
   type PromoteConversationPayload,
-  type SetSessionSettingsPayload
+  type SetSessionSettingsPayload,
+  type DequeueMessagePayload
 } from '../shared/wire/types'
 
 // This consumer is a pure in-process composition, so its tests inject fakes at the three seams
@@ -3052,5 +3053,74 @@ describe('createDaemonConnection — diagnostic logging (#128)', () => {
 
     expect(cap.records.filter((r) => r.event === 'daemon-dial')).toHaveLength(2)
     expect(cap.records.some((r) => r.event === 'daemon-failed')).toBe(false)
+  })
+})
+
+describe('createDaemonConnection — dequeueMessage (dequeue_message request, ungated fire-and-forget, #300)', () => {
+  const PAYLOAD: DequeueMessagePayload = { conversation_id: 'c1', queued_msg_id: 7 }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.dequeueMessage(PAYLOAD)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, sends exactly one dequeue_message envelope carrying the payload verbatim — no token, no nonce (AC5)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.dequeueMessage({ conversation_id: 'c1', queued_msg_id: 7 })
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('dequeue_message')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    // Exact toEqual: any answer-token or nonce would add a key and fail this match. Ungated → neither.
+    expect(envelope.payload).toEqual({ conversation_id: 'c1', queued_msg_id: 7 })
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.dequeueMessage(PAYLOAD)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('strips a smuggled extra field — the sent payload is exactly the two modeled fields (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an extra key past the structural-minimum guard. The
+    // fresh-literal construction in dequeueMessage must bound the wire to exactly the two fields.
+    connection.dequeueMessage({
+      conversation_id: 'c1',
+      queued_msg_id: 7,
+      answer_token: 'smuggled'
+    } as unknown as DequeueMessagePayload)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual({ conversation_id: 'c1', queued_msg_id: 7 })
+    expect(JSON.stringify(payload)).not.toContain('answer_token')
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.dequeueMessage(PAYLOAD)).not.toThrow()
   })
 })

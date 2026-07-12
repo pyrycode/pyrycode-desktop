@@ -35,6 +35,7 @@ import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
 import { buildPromoteConversation } from './transport/promoteConversationEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
+import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
@@ -57,7 +58,8 @@ import {
   type PromoteConversationPayload,
   type SetSessionSettingsPayload,
   type ModalAnswerPayload,
-  type ModalCancelPayload
+  type ModalCancelPayload,
+  type DequeueMessagePayload
 } from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
@@ -150,6 +152,16 @@ export interface DaemonConnection {
    * caller is #242; this ticket only wires the round-trip. NEVER throws out of the module (parity #490).
    */
   createConversation(payload: CreateConversationPayload): void
+  /**
+   * Encrypt a payload-carrying `dequeue_message` control envelope onto the live session — asks the
+   * daemon to drop one queued-but-not-yet-run message from a conversation's backlog. The `send` TWIN,
+   * not `requestDebugBundle`: an inert no-op when not connected (`driver === null` → return), never a
+   * `consumer.fail`. UNGATED (#720) and fire-and-forget — no answer token, and no reply is expected (no
+   * correlation memory to leave dangling); the daemon's re-broadcast `queue_state` snapshot (#292/#294)
+   * is the observable effect, existing machinery not part of this leg. Its caller is the drop affordance
+   * (#296); this slice only wires the command path. NEVER throws out of the module (parity #490).
+   */
+  dequeueMessage(payload: DequeueMessagePayload): void
   /**
    * Encrypt a payload-carrying `promote_conversation` control envelope onto the live session — asks the
    * daemon to promote a discussion into a saved channel (all three fields required: the id must resolve,
@@ -787,6 +799,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function dequeueMessage(payload: DequeueMessagePayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A dequeue is ungated fire-and-forget with no consumer to
+    // fail; a request sent while disconnected simply produces no effect (no reply is expected anyway).
+    if (driver === null) return
+    try {
+      // Build a FRESH literal naming exactly the two modeled fields — never a spread of `payload`.
+      // This is the deterministic net that bounds the wire to exactly conversation_id / queued_msg_id,
+      // ignoring any renderer-smuggled extra field the structural-minimum guard let through (#236's
+      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / requestSnapshot /
+      // createConversation — no second counter — so ids stay unique across interleaved calls.
+      const bytes = buildDequeueMessage({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          queued_msg_id: payload.queued_msg_id
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
+      // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
   function promoteConversation(payload: PromoteConversationPayload): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A promote request has no consumer to fail; a request sent
@@ -978,6 +1018,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestSnapshot,
     requestConversations,
     createConversation,
+    dequeueMessage,
     promoteConversation,
     setSessionSettings,
     answerModal,

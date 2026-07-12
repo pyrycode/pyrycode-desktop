@@ -5,6 +5,7 @@ import {
   sendMessageCommand,
   answerModalCommand,
   cancelModalCommand,
+  dequeueMessageCommand,
   type RendererCommand,
   type AnswerModalCommandPayload
 } from './commands'
@@ -13,7 +14,8 @@ import type {
   ModalCancelPayload,
   CreateConversationPayload,
   PromoteConversationPayload,
-  SetSessionSettingsPayload
+  SetSessionSettingsPayload,
+  DequeueMessagePayload
 } from '../wire/types'
 
 describe('command channel', () => {
@@ -75,6 +77,22 @@ describe('answerModalCommand / cancelModalCommand (#236)', () => {
     // enforces it, so this line must stay a compile error.
     // @ts-expect-error answer_token is not assignable to AnswerModalCommandPayload (Omit-excluded).
     answerModalCommand({ modal_id: 'md-1', option_id: 'opt-1', answer_token: 'nope' })
+  })
+})
+
+describe('dequeueMessageCommand (#300)', () => {
+  it('wraps a DequeueMessagePayload into a dequeueMessage command, fields unchanged (ungated, no token)', () => {
+    const fields: DequeueMessagePayload = { conversation_id: 'c1', queued_msg_id: 7 }
+
+    const command = dequeueMessageCommand(fields)
+
+    // Discriminant comes from the module, not a bare literal a rename could silently pass.
+    expect(command).toEqual({ type: 'dequeueMessage', payload: fields })
+    if (command.type === 'dequeueMessage') {
+      // Verbatim pass-through: no field remap, and no token — dropping a queued message is ungated
+      // (#720), so the payload reuses the wire type directly (unlike answerModal's Omit-derivative).
+      expect(command.payload).toBe(fields)
+    }
   })
 })
 
@@ -384,5 +402,38 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: 'setSessionSettings', payload })).toBe(false)
     expect(isRendererCommand({ type: 'setSessionSettings', payload, changeId: 42 })).toBe(false)
     expect(isRendererCommand({ type: 'setSessionSettings', payload, changeId: null })).toBe(false)
+  })
+
+  it('accepts a well-formed dequeueMessage command — string conversation_id + number queued_msg_id (#300)', () => {
+    const command: RendererCommand = dequeueMessageCommand({ conversation_id: 'c1', queued_msg_id: 7 })
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum); the main-side fresh literal drops it.
+    expect(
+      isRendererCommand({
+        type: 'dequeueMessage',
+        payload: { conversation_id: 'c1', queued_msg_id: 7 },
+        extra: 1
+      })
+    ).toBe(true)
+  })
+
+  it('rejects a dequeueMessage with a missing, null, or empty payload (#300)', () => {
+    expect(isRendererCommand({ type: 'dequeueMessage' })).toBe(false)
+    expect(isRendererCommand({ type: 'dequeueMessage', payload: null })).toBe(false)
+    expect(isRendererCommand({ type: 'dequeueMessage', payload: {} })).toBe(false)
+  })
+
+  it('rejects a dequeueMessage with a non-string conversation_id or non-number queued_msg_id (#300)', () => {
+    const t = 'dequeueMessage'
+    // conversation_id must be present-and-string.
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 42, queued_msg_id: 7 } })).toBe(false)
+    // queued_msg_id must be present-and-NUMBER — the typeof-number check is the point: a numeric string
+    // is rejected (no coercion), matching the requireNumber-alone posture of the #292 decode guard.
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', queued_msg_id: '7' } })).toBe(
+      false
+    )
+    // A missing key (either field) is rejected.
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { queued_msg_id: 7 } })).toBe(false)
   })
 })

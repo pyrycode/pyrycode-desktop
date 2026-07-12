@@ -22,7 +22,8 @@ import type {
   ModalCancelPayload,
   CreateConversationPayload,
   PromoteConversationPayload,
-  SetSessionSettingsPayload
+  SetSessionSettingsPayload,
+  DequeueMessagePayload
 } from '../wire/types'
 
 /**
@@ -42,7 +43,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 
 /**
  * A single typed command from the renderer window to the background process. Sealed
- * discriminated union on `type`. Nine members today: `sendMessage`, whose `payload` reuses the
+ * discriminated union on `type`. Ten members today: `sendMessage`, whose `payload` reuses the
  * wire SendMessagePayload verbatim so no field is remapped between layers; the bare
  * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global;
  * `requestSnapshot` (#180), whose `payload` reuses the wire RequestSnapshotPayload (a
@@ -60,7 +61,10 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * `changeId` (#261): a renderer-minted, client-internal correlation string riding ALONGSIDE `payload` (a
  * top-level sibling, NEVER a field inside the wire payload — the builder consumes only `payload`, so the
  * key stays off the wire, mirroring how the composer mints `message_id` main-side). `changeId` is an
- * opaque correlation key, never a token/key/raw frame and never serialized onto the wire. No member
+ * opaque correlation key, never a token/key/raw frame and never serialized onto the wire; and
+ * `dequeueMessage` (#300), whose `payload` reuses the wire DequeueMessagePayload verbatim
+ * (`conversation_id` + `queued_msg_id`) to ask the daemon to drop one queued message — ungated (#720),
+ * so the payload carries NO token (no `Omit`-derivative, unlike `answerModal`). No member
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
  *
@@ -78,6 +82,7 @@ export type RendererCommand =
   | { type: 'createConversation'; payload: CreateConversationPayload }
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
+  | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -107,6 +112,18 @@ export function answerModalCommand(fields: AnswerModalCommandPayload): RendererC
  */
 export function cancelModalCommand(fields: ModalCancelPayload): RendererCommand {
   return { type: 'cancelModal', payload: fields }
+}
+
+/**
+ * Wrap already-assembled dequeue fields (`conversation_id` + `queued_msg_id`) into a well-formed
+ * command (#300) — asks the daemon to drop one queued-but-not-yet-run message. Pure; reuses the wire
+ * DequeueMessagePayload verbatim (the sendMessage / requestSnapshot "reuse wire types, no remapping"
+ * convention). Dropping a queued message is UNGATED (#720): no token to mint, so — unlike
+ * answerModalCommand — the payload is the wire type directly, not an Omit-derivative. The
+ * RendererCommand return type is the compile-time guarantee (AC1).
+ */
+export function dequeueMessageCommand(fields: DequeueMessagePayload): RendererCommand {
+  return { type: 'dequeueMessage', payload: fields }
 }
 
 /**
@@ -145,6 +162,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
         'changeId' in value &&
         typeof value.changeId === 'string'
       )
+    case 'dequeueMessage':
+      return 'payload' in value && isDequeueMessagePayload(value.payload)
     default:
       return false
   }
@@ -246,4 +265,21 @@ function isSetSessionSettingsPayload(value: unknown): value is SetSessionSetting
   if ('effort' in value && typeof value.effort !== 'string') return false
   if ('yolo' in value && typeof value.yolo !== 'boolean') return false
   return true
+}
+
+/** The untrusted renderer→main boundary guard for the dequeueMessage payload (#300) — the reason the
+ *  command half is security-sensitive. Mirrors isSendMessagePayload's present-and-string idiom with a
+ *  present-and-NUMBER check for `queued_msg_id`: a `typeof` check only, NO integer/positive/range check,
+ *  matching the requireNumber-alone posture of the #292 decode guard (a plain per-conversation integer
+ *  no layer polices; an out-of-range id is a daemon-side no-op). Structural minimum — a smuggled extra
+ *  field is not rejected here; the main-side sender's fresh-literal construction bounds the wire to
+ *  exactly these two fields. Pure; never throws. */
+function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    'queued_msg_id' in value &&
+    typeof value.queued_msg_id === 'number'
+  )
 }

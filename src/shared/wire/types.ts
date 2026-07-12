@@ -59,6 +59,10 @@ export type EnvelopeType =
   | 'tool_result'
   | 'queue_state'
   | 'dequeue_message'
+  // v2-only bare phone→binary control frame — maps to a single claude Esc (stops the current
+  // turn). Carries NO conversation_id / nonce / answer_token / payload; daemon-gated on the
+  // `interactive` capability; fire-and-forget (no reply). SSOT pyrycode #707.
+  | 'interrupt'
   | 'modal_shown'
   | 'modal_dismissed'
   | 'modal_answer'

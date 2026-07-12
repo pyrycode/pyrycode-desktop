@@ -1,17 +1,17 @@
 # Interrupt envelope (outbound)
 
-The **outbound** half of the stop-a-running-turn path: the wire type, the pure fail-closed transport
-builder, and (as of #306) the full command pathway the desktop uses to send the daemon a single "stop
-the current turn" signal — the desktop equivalent of pressing Esc at the local terminal. Only the
-renderer-visible affordance is still missing.
+The stop-a-running-turn path, end to end: the wire type, the pure fail-closed transport builder, the
+full command pathway, and (as of #307) the on-thread render affordance the desktop user actually
+clicks — the desktop equivalent of pressing Esc at the local terminal.
 
 Introduced in [#305](../codebase/305.md), the wire+builder base slice split from
 [#146](https://github.com/pyrycode/pyrycode-desktop/issues/146) (interrupt-running-turn), slice 1 of
 3 — that slice shipped **only** the wire contract and the builder, no command wiring, no
 `daemonConnection` method, no renderer UI. [#306](../codebase/306.md), slice 2 of 3, wired the
 **command pathway** on top of it: a bare `interrupt` `RendererCommand` member, `daemonConnection.interrupt()`,
-and the main-side dispatcher arm. Blocks [#307](https://github.com/pyrycode/pyrycode-desktop/issues/307)
-— the composer stop-state render, the only remaining slice.
+and the main-side dispatcher arm. [#307](../codebase/307.md), slice 3 of 3 and the chain's last piece,
+added the **render affordance**: a standalone icon-only stop button on the conversation thread, shown
+only while a turn is running, that calls `interruptCommand()`. The #146 split is now complete.
 
 ## What it does
 
@@ -77,7 +77,7 @@ sibling builder. No barrel — never re-exported through the renderer; raw bytes
 
 ## Configuration and usage
 
-**Command path complete, no renderer trigger yet.** [#306](../codebase/306.md) added
+[#306](../codebase/306.md) added
 `daemonConnection.interrupt(): void` (no payload arg, since the frame is nullary — the `driver === null`
 inert-when-disconnected twin of `requestConversations`) plus a bare `{ type: 'interrupt' }`
 `RendererCommand` member and its `interruptCommand()` factory, routed through `main/index.ts`'s
@@ -86,11 +86,34 @@ liveness check of its own — `interrupt()` itself is the inert-when-disconnecte
 silently dropped rather than the connection ever asked to confirm liveness. No preload change: the
 generic `sendCommand(command: RendererCommand)` pipe already carries the new member.
 
-The renderer affordance — a composer stop-state control that calls `interruptCommand()` — lands
-further downstream in [#307](https://github.com/pyrycode/pyrycode-desktop/issues/307); the mobile
-Figma file draws only the steady-send composer state (16-61), so the stop-state visual is undrawn and
-#307 ships without a design reference (N/A + justification, per memory
-`ticket-146-interrupt-turn-split`).
+### The render affordance (#307)
+
+`InterruptControl`, in `src/renderer/src/screens/conversation/ConversationScreen.tsx`, mounted
+immediately before `<Composer />`. It reads the existing `useTimelineStore(selectPhase)` slice — no
+new subscription — and derives an exported gate predicate:
+
+```ts
+export function isTurnRunning(phase: TurnPhase): boolean {
+  return phase === 'thinking' || phase === 'responding'
+}
+```
+
+Deliberately **broader** than `ThinkingIndicator`'s gate (`phase === 'thinking'` only) — a turn is
+"running" in either phase, so the stop affordance must be available in both. `InterruptButton`
+(exported, pure) takes `isRunning: boolean`, never `phase`, and renders `null` at idle (zero layout
+footprint) or an icon-only `<button aria-label="Stop the running turn">` with an inline M3 `stop`
+glyph. Activation calls `sendInterrupt({ sendCommand: window.pyry.sendCommand })`
+(`src/renderer/src/screens/conversation/sendInterrupt.ts`, new) — a strict simplification of
+`dropQueuedMessage.ts`: guarded `sendCommand(interruptCommand())` in a `try/catch`, `console.error`
+and swallow on failure, **no local dispatch**. `window.pyry` is dereferenced only inside the click
+closure, never at render.
+
+No new client-side state represents "stopping": the control retracts when the daemon's next
+`turn_state{idle}` returns `phase` to idle through the existing store subscription. The mobile Figma
+file draws only the steady-send composer state (16-61) and has no stop/interrupt component in the
+design system, so the button is derived from `.composer__send` plus a generic M3 `stop` glyph, kept
+neutral-coloured on purpose (N/A + justification, per memory `ticket-146-interrupt-turn-split`; a
+bespoke stop/error visual is a deferred follow-up flagged to Juhana).
 
 ## Edge cases and limitations
 
@@ -126,8 +149,13 @@ Figma file draws only the steady-send composer state (16-61), so the stop-state 
 - [#306 codebase notes](../codebase/306.md) — the command-pathway implementation summary: the bare
   `interrupt` `RendererCommand` member, `daemonConnection.interrupt()`, and the `main/index.ts`
   dispatcher arm.
-- Blocks [#307](https://github.com/pyrycode/pyrycode-desktop/issues/307) — the composer stop-state
-  render, the only remaining slice; calls `interruptCommand()`.
+- [#307 codebase notes](../codebase/307.md) — the render-affordance implementation summary:
+  `isTurnRunning`, `InterruptButton`, `InterruptControl`, and `sendInterrupt.ts`. The chain's last
+  slice; the #146 split is now complete.
+- [Thread timeline](thread-timeline.md) — owns `TurnPhase`/`selectPhase` and the `turn_state{idle}`
+  reducer arm the render affordance's retraction depends on.
+- [Composer send](composer-send.md) — the sibling guarded-send/container idiom (`dropQueuedMessage`,
+  `Composer.handleSubmit`) `sendInterrupt`/`InterruptControl` (#307) clone.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § interrupt; pyrycode #707 (bare
   `interrupt` → single claude Esc, `interactive`-gated, fire-and-forget,
   `TestV2Session_Interrupt_RoutesEscByCapability`).

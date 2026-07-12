@@ -605,6 +605,49 @@
   display: block;
 }
 
+/* #307 — the running-turn interrupt control region: a standalone block immediately above the composer,
+   shown only while a turn is running. Mirrors .conversation__thinking (flex: 0 0 auto, so it never
+   competes with the timeline's flex region) but right-aligns the button (justify-content: flex-end) so it
+   sits over the composer's send side. The mobile Figma has no stop/interrupt affordance (the documented
+   design gap), so the button below is derived from .composer__send. */
+.conversation__interrupt {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2) var(--space-4);
+}
+
+/* #307 — the interrupt button: an icon-only round control cloning the .composer__send rule set (the 48px
+   M3 round icon button, --radius-full, --color-surface-container-high fill, --color-on-surface content,
+   --color-outline focus outline). Neutral colour per the Design source note — a distinct "stop"/error
+   colour would be a bespoke visual, deferred. Never disabled, so the hover has no :not(:disabled) guard. */
+.interrupt-button {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  cursor: pointer;
+}
+
+.interrupt-button:hover {
+  background: var(--color-surface-container);
+}
+
+.interrupt-button:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.interrupt-button-icon {
+  display: block;
+}
+
 /* The collapsed status row (#177) — the trigger that opens the Run configuration sheet. A slim
    full-width button between the thread and the composer, with a top border separating it from the
    thread. Never grows or shrinks. The top border is --color-outline-variant and the muted icon is

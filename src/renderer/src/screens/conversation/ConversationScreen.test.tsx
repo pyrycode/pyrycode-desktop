@@ -5,6 +5,7 @@ import {
   MessageThread,
   Timeline,
   ThinkingIndicator,
+  QueuedBacklog,
   StatusSheet,
   RepairPrompt,
   ConnectionBanner
@@ -12,6 +13,7 @@ import {
 import { composerAvailability, CONNECTION_BANNER_COPY } from './composerSend'
 import type { Message } from './messageViewModel'
 import type { ThreadItem } from '../../store/threadTimeline'
+import type { QueuedItem } from '@shared/wire/types'
 import { sessionStore } from '../../store/sessionStore'
 
 // No DOM harness (jsdom/Testing Library) — mirrors PairingScreen.test.tsx. MessageThread
@@ -408,6 +410,54 @@ describe('ThinkingIndicator — the pre-text working affordance', () => {
   })
 })
 
+// #294: the held queued backlog. QueuedBacklog is the pure, exported view (the ThinkingIndicator
+// pattern) — server-render it with an injected QueuedItem[] to prove the empty→null posture and the
+// populated rows without touching the queue store. The store-bound QueuedBacklogControl reads
+// selectBacklogFor(MILESTONE_CONVERSATION_ID); its populated branch is NOT server-render-reachable
+// (zustand v5's useStore reads getInitialState() = empty backlog), so the populated assertions live
+// here, exactly like Timeline / ThinkingIndicator; the empty container smoke lives in the block below.
+describe('QueuedBacklog — the held queued backlog (#294)', () => {
+  const item = (queued_msg_id: number, text: string): QueuedItem => ({
+    queued_msg_id,
+    text,
+    ts: '2026-07-12T00:00:00Z'
+  })
+
+  it('renders nothing for an empty backlog — no region, no chrome (AC4)', () => {
+    // Contrast the Timeline's empty-thread invitation: an empty backlog is silent, not an empty state.
+    expect(renderToStaticMarkup(<QueuedBacklog items={[]} />)).toBe('')
+  })
+
+  it('renders one row per queued item, in enqueue order, each showing its text (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <QueuedBacklog items={[item(1, 'first queued'), item(2, 'second queued')]} />
+    )
+    expect(markup).toContain('conversation__queued')
+    expect(markup).toContain('first queued')
+    expect(markup).toContain('second queued')
+    // Array position IS enqueue order: the first item precedes the second in the rendered markup.
+    expect(markup.indexOf('first queued')).toBeLessThan(markup.indexOf('second queued'))
+  })
+
+  it('is visually distinct from delivered messages — the queued role, reusing the user bubble (AC2)', () => {
+    const markup = renderToStaticMarkup(<QueuedBacklog items={[item(1, 'waiting to run')]} />)
+    // The dimmed region + the queued thread role are the distinctness seams…
+    expect(markup).toContain('conversation__queued')
+    expect(markup).toContain('data-thread-role="queued"')
+    // …reusing the right-aligned user-bubble treatment (queued messages are the user's own sends)…
+    expect(markup).toContain('bubble--user')
+    // …but never the delivered user role, so a queued row is never counted as a delivered message.
+    expect(markup).not.toContain('data-thread-role="user"')
+  })
+
+  it('renders untrusted text as plain text, never live markup (load-bearing)', () => {
+    // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (a prior desktop lesson).
+    const markup = renderToStaticMarkup(<QueuedBacklog items={[item(1, '<b>x</b>')]} />)
+    expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
+    expect(markup).not.toContain('<b>x</b>')
+  })
+})
+
 // #177: the Run configuration host modal. StatusSheet is the pure, exported open-state chrome (the
 // MessageThread pattern) — server-render it directly to prove the handle/title/close/empty-body
 // shell. The open/dismiss toggle in ConversationScreen is trivial useState glue, unreachable under
@@ -593,6 +643,16 @@ describe('ConversationScreen — store binding', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__thinking')
     expect(markup).not.toContain('Thinking…')
+  })
+
+  // #294: the queued-backlog control mounts against the empty queue store (getInitialState backlogs:
+  // empty Map → selectBacklogFor returns EMPTY_BACKLOG), so QueuedBacklog returns null and no queued
+  // region renders (AC4). This also keeps the #179 AC4 split-brain guard green — the region class is
+  // `conversation__queued`, never the `conversation__thread` substring, and it emits no data-thread-role
+  // when empty. The populated path is proven on the pure QueuedBacklog describe above.
+  it('mounts the empty queue store with no queued backlog region (the inert render slice, AC4)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('conversation__queued')
   })
 
   it('renders the composer with a text input and an accessible send control', () => {

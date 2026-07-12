@@ -1,15 +1,18 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import './conversation.css'
 import type { Message } from './messageViewModel'
+import type { QueuedItem } from '@shared/wire/types'
 import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
 import { useTimelineStore, selectItems, selectPhase } from '../../store/timelineStore'
+import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import type { ThreadItem } from '../../store/threadTimeline'
 import {
   submitMessage,
   composerAvailability,
   shouldOfferRepair,
   shouldShowBanner,
-  CONNECTION_BANNER_COPY
+  CONNECTION_BANNER_COPY,
+  MILESTONE_CONVERSATION_ID
 } from './composerSend'
 import { runUnpair } from './unpairAction'
 import { RunConfigData } from './RunConfigData'
@@ -73,6 +76,9 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
       <ConnectionBannerControl />
       <Timeline items={items} now={now} />
       <ThinkingIndicator isThinking={phase === 'thinking'} />
+      {/* #294: the held queued backlog — the not-yet-run tail below the delivered thread and the
+          working indicator, above the run-config row and composer. Renders nothing when empty. */}
+      <QueuedBacklogControl />
       <StatusRow onExpand={() => setSheetOpen(true)} />
       <Composer />
       <RepairControl onUnpaired={onUnpaired} />
@@ -315,6 +321,52 @@ export function ThinkingIndicator({ isThinking }: { isThinking: boolean }): JSX.
       <div className="bubble bubble--daemon bubble--thinking">Thinking…</div>
     </div>
   )
+}
+
+// #294: the held queued backlog view — the messages queued while the daemon is busy (#293's
+// replacement-truth queue store), rendered as the not-yet-run tail below the delivered thread. Pure
+// props-in/markup-out and exported so tests server-render an injected QueuedItem[] with no store (the
+// Timeline / ThinkingIndicator split). Reads `readonly QueuedItem[]` — the wire type held verbatim by
+// the store (snake_case, no camelCase remap), so `item.text` / `item.queued_msg_id` are read directly.
+//
+// items empty → null (the ThinkingIndicator posture): no region, no empty-state chrome (AC4), distinct
+// from the Timeline's empty-thread invitation. Live reactivity (AC3) is free from the store
+// subscription in the container: a fresh queue_state snapshot replaces the backlog and re-renders here.
+//
+// Queued messages are the user's own pending sends, so each row reuses the right-aligned user treatment
+// (.message-row--user / .bubble--user) unchanged, carrying its own thread role data-thread-role="queued"
+// — distinct from the delivered userText row's "user", the AC2 "distinct from delivered" seam. The
+// region's 50% dimming (the .tool-row pending precedent) is the within-token "waiting / not yet run"
+// signal. `text` is UNTRUSTED, client-originated transit content rendered as auto-escaped React children
+// — never dangerouslySetInnerHTML (the wire type's own comment mandates plain-text render; load-bearing
+// even though this slice is not security-sensitive). React key = queued_msg_id, a real per-conversation
+// unique integer (better than an array index).
+export function QueuedBacklog({ items }: { items: readonly QueuedItem[] }): JSX.Element | null {
+  if (items.length === 0) return null
+  return (
+    <div className="conversation__queued">
+      {items.map((item) => (
+        <div className="message-row message-row--user" key={item.queued_msg_id}>
+          <div className="bubble bubble--user" data-thread-role="queued">
+            {item.text}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// The store-bound container for the queued backlog (#294). Reads the single active conversation's
+// backlog under MILESTONE_CONVERSATION_ID (the constant the composer sends under; no nav plumbing to
+// thread a conversation id — that is a separate future concern). The selector is hoisted to module
+// scope so it is created once; because selectBacklogFor returns the same array reference (or the stable
+// EMPTY_BACKLOG) for a given id, a snapshot for a DIFFERENT conversation is Object.is-stable here → no
+// re-render churn (AC3 free-of-noise). A pure store read — no window.pyry, no IPC, no effects (AC5).
+const selectMilestoneBacklog = selectBacklogFor(MILESTONE_CONVERSATION_ID)
+
+function QueuedBacklogControl(): JSX.Element | null {
+  const items = useQueueStore(selectMilestoneBacklog)
+  return <QueuedBacklog items={items} />
 }
 
 // The collapsed status row between the thread and the composer (Figma node 16-57) — the trigger that

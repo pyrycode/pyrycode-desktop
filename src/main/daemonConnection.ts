@@ -67,6 +67,15 @@ import {
 const SERVER_KEY_LENGTH = 32
 
 /**
+ * The relay's "reachable, but no daemon registered behind it" close (#328). The wire spec treats it
+ * as RETRYABLE — which is why relaySupervisor's DEFAULT_FATAL_CLOSE_CODES excludes it — and it maps
+ * to the 'daemon-absent' relay-leg category (mobile shows this GREEN, "relay reachable"; the daemon
+ * leg's absence is the daemon dot's story, not a relay failure). Every other retryable close is an
+ * ordinary socket drop → 'offline'. Defined locally: this is its only consumer.
+ */
+const RELAY_NO_DAEMON_CLOSE_CODE = 4404
+
+/**
  * Injected dependencies. The stores + sink are constructed at the composition root; `deviceName`
  * and `clientVersion` are sourced there (os.hostname() / app.getVersion()); `now` and
  * `createDriver` are DI seams the tests override.
@@ -623,6 +632,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           }
         }
+        return
+      }
+      case 'relay-link-up':
+        // The relay-socket leg came up (#328) — a signal distinct from the session `connecting` /
+        // `connected` / `failed` arms. A fresh literal (the established emit discipline); the relay
+        // socket being up carries no data to classify.
+        emitDaemonEvent(sink, { type: 'relayLinkChanged', status: 'connected' })
+        return
+      case 'relay-link-down': {
+        // The relay socket dropped with a retryable close (#328). This is the single classification
+        // choke point (untrusted WS close code → closed RelayLinkStatus category): 4404 is the
+        // relay's "reachable, no daemon registered" close → 'daemon-absent'; every other retryable
+        // code is an ordinary drop → 'offline'. The raw code is DROPPED here — only the classified
+        // category crosses IPC (AC3, content-free). No log call: #127 already logs the close code
+        // content-free at relayConnection.ts, and this arm carries no secret.
+        const status = event.code === RELAY_NO_DAEMON_CLOSE_CODE ? 'daemon-absent' : 'offline'
+        emitDaemonEvent(sink, { type: 'relayLinkChanged', status })
         return
       }
       case 'terminal':

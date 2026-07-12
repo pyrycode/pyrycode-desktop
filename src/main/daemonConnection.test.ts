@@ -408,6 +408,48 @@ describe('createDaemonConnection', () => {
     })
   })
 
+  // #328 — the relay-socket leg surfaced to the renderer as its own DaemonEvent arm. This is the
+  // single classification choke point (raw WS close code → closed RelayLinkStatus category), so the
+  // raw code never crosses IPC. The events are content-free by construction (AC3).
+  describe('relay-link status mapping (#328)', () => {
+    /** Reach a live driver (start → resolve bootstrap) so RelaySessionEvents can be driven in. */
+    async function reachDriver(): Promise<ReturnType<typeof build>> {
+      const ctx = build()
+      ctx.connection.start()
+      await tick()
+      return ctx
+    }
+
+    it('maps relay-link-up to relayLinkChanged{connected}', async () => {
+      const { drivers, sink } = await reachDriver()
+      drivers[0].emit({ type: 'relay-link-up' })
+      expect(emitted(sink)).toContainEqual({ type: 'relayLinkChanged', status: 'connected' })
+    })
+
+    it('maps a relay-link-down with the daemon-absent close (4404) to relayLinkChanged{daemon-absent}', async () => {
+      const { drivers, sink } = await reachDriver()
+      drivers[0].emit({ type: 'relay-link-down', code: 4404 })
+      expect(emitted(sink)).toContainEqual({ type: 'relayLinkChanged', status: 'daemon-absent' })
+    })
+
+    it('maps an ordinary relay-link-down (1006 / 1000 / 1011) to relayLinkChanged{offline}', async () => {
+      for (const code of [1006, 1000, 1011]) {
+        const { drivers, sink } = await reachDriver()
+        drivers[0].emit({ type: 'relay-link-down', code })
+        expect(emitted(sink)).toContainEqual({ type: 'relayLinkChanged', status: 'offline' })
+      }
+    })
+
+    it('emits a content-free relayLinkChanged — only { type, status }, dropping the raw close code (AC3)', async () => {
+      const { drivers, sink } = await reachDriver()
+      drivers[0].emit({ type: 'relay-link-down', code: 4404 })
+      const relayEvent = emitted(sink).find((e) => e.type === 'relayLinkChanged')
+      expect(relayEvent).toEqual({ type: 'relayLinkChanged', status: 'daemon-absent' })
+      // The raw WS close code is classified and dropped at this choke point — it never crosses IPC.
+      expect(relayEvent && Object.keys(relayEvent)).toEqual(['type', 'status'])
+    })
+  })
+
   it('sources the hello early-data from the record token via buildClientHello', async () => {
     const { connection, drivers } = build()
     connection.start()

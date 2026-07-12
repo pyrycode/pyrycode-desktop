@@ -168,6 +168,10 @@ function makeSink(): { events: RelaySessionEvent[]; onEvent: (event: RelaySessio
 
 const errorsOf = (events: RelaySessionEvent[]) => events.filter((e) => e.type === 'error')
 const terminalsOf = (events: RelaySessionEvent[]) => events.filter((e) => e.type === 'terminal')
+const linkDownsOf = (events: RelaySessionEvent[]) =>
+  events.filter(
+    (e): e is Extract<RelaySessionEvent, { type: 'relay-link-down' }> => e.type === 'relay-link-down'
+  )
 
 const SESSION_MATERIAL: SessionMaterial = {
   staticPrivateKey: new Uint8Array(32).fill(0xaa),
@@ -269,6 +273,43 @@ describe('createNoiseRelayDriver', () => {
     const plaintext = new Uint8Array([0x61, 0x62])
     session.config.onEvent({ type: 'message', plaintext })
     expect(sink.events).toContainEqual({ type: 'message', plaintext })
+  })
+
+  it('forwards the supervisor connect up as relay-link-up AND still starts the handshake (#328 AC2)', async () => {
+    const factory = resolvedSessionFactory()
+    const { sink, supervisor } = setup({ createSession: factory.createSession })
+
+    supervisor().emit({ type: 'connected' })
+    await tick()
+
+    // The relay-leg "socket up" signal is surfaced as a SECOND consumer of the same connect…
+    expect(sink.events).toContainEqual({ type: 'relay-link-up' })
+    // …emitted BEFORE the handshake work (AC2 "in addition to"), and the handshake still runs.
+    expect(sink.events[0]).toEqual({ type: 'relay-link-up' })
+    expect(factory.sessions).toHaveLength(1)
+    expect(factory.sessions[0].calls).toContain('start')
+  })
+
+  it('forwards a retryable daemon-absent close (4404) as relay-link-down carrying the raw code (#328)', () => {
+    const factory = resolvedSessionFactory()
+    const { sink, supervisor } = setup({ createSession: factory.createSession })
+
+    supervisor().emit({ type: 'relay-closed', code: 4404 })
+    expect(sink.events).toContainEqual({ type: 'relay-link-down', code: 4404 })
+  })
+
+  it('forwards an ordinary retryable drop (1006) as relay-link-down, leaving terminal/message intact (#328)', () => {
+    const factory = resolvedSessionFactory()
+    const { sink, supervisor } = setup({ createSession: factory.createSession })
+
+    supervisor().emit({ type: 'relay-closed', code: 1006 })
+    expect(sink.events).toContainEqual({ type: 'relay-link-down', code: 1006 })
+    // The driver classifies nothing — the raw code passes through for daemonConnection to interpret.
+    expect(linkDownsOf(sink.events).map((e) => e.code)).toEqual([1006])
+
+    // Existing terminal forwarding is unchanged by the new relay-leg branch.
+    supervisor().emit({ type: 'terminal', code: 4426, reason: 'handshake' })
+    expect(sink.events).toContainEqual({ type: 'terminal', code: 4426, reason: 'handshake' })
   })
 
   it('re-arms noise_init for the rekey msg1 driven by the session emit-then-send (AC1)', async () => {

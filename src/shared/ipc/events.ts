@@ -40,6 +40,16 @@ export const DAEMON_EVENT_CHANNEL = 'pyry:daemon-event' as const
 export type DebugBundleFailure = 'unavailable' | 'stream-corrupt' | 'write-failed'
 
 /**
+ * The relay-socket leg's state category (#328), mirroring mobile's RelayLinkStatus where it maps
+ * cleanly: 'connected' = socket up; 'offline' = socket dropped (an ordinary retryable close);
+ * 'daemon-absent' = relay reachable but no daemon registered behind it (the relay's 4404 close). No
+ * Reconnecting-countdown category — the supervisor exposes no remaining-backoff, so desktop cannot
+ * honestly emit it (out of scope). A closed, information-minimising enum: it carries no token, key,
+ * raw frame, close code, or payload byte — only the display category.
+ */
+export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
+
+/**
  * A single typed event from the background process to the renderer window. Sealed
  * discriminated union on `type`. The session-lifecycle members
  * (connecting | connected | disconnected | failed | messageReceived | messagesReceived) map
@@ -222,3 +232,11 @@ export type DaemonEvent =
   // DORMANT (every exhaustive bridge routes or no-ops it), matching how sessionTransition (#254) added
   // the arm + three bridge no-ops while its consumer (#259) waited.
   | { type: 'modalAnswerRejected'; modalId: string }
+  // The relay-link status arm (#328). Content-free by construction (ADR 0007): carries ONLY the
+  // closed RelayLinkStatus category — no token, key, raw frame, close code, or payload byte. Surfaces
+  // the relay SOCKET leg (dialing / dropped) as a signal distinct from the session `connecting` /
+  // `connected` / `failed` arms, so a later two-dot indicator can tell a relay-hop stall from a
+  // daemon-hop stall. Consumed by the renderer relay-link store + bridge (#329, not yet built) → the
+  // two-dot indicator (#330); ships DORMANT — all three exhaustive bridges no-op it (the
+  // stallDetected-was-a-no-op-until-#317 precedent).
+  | { type: 'relayLinkChanged'; status: RelayLinkStatus }

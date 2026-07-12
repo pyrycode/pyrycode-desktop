@@ -82,11 +82,13 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'queueState':
     case 'stallDetected':
     case 'screenSnapshotReceived':
+    case 'relayLinkChanged':
       // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
       // conversation-list store (#208), timeline store (#202), create render slice (#242), the #259
       // session-id holder, the #261 / #256 session-settings consumers (confirmed + rejected #269),
-      // the #293 queue store (queueState), the #317 stall-render slice (stallDetected), and the #318
-      // display slice (screenSnapshotReceived) consume these — not the modal store.
+      // the #293 queue store (queueState), the #317 stall-render slice (stallDetected), the #318
+      // display slice (screenSnapshotReceived), and the #329 relay-link store (relayLinkChanged)
+      // consume these — not the modal store.
       return null
     default:
       return assertNever(event)

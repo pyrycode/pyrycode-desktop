@@ -50,8 +50,10 @@ export const NO_PAIRED_RECORD_CLOSE_CODE = 4000
 
 /**
  * A supervised lifecycle event. Sealed discriminated union on `type`. Distinct from #21's
- * RelayEvent: here a transient `closed` drop is ABSORBED (re-dialled) and never surfaced, so the
- * only terminal member is `terminal` — a fatal close code (AC #3) or a clean stop (AC #4).
+ * RelayEvent. A transient `closed` drop is still ABSORBED (re-dialled) — supervision continues —
+ * but since #328 it is ALSO surfaced as `relay-closed` so a higher layer can drive the relay-leg
+ * status indicator; the only TERMINAL member remains `terminal` — a fatal close code (AC #3) or a
+ * clean stop (AC #4).
  */
 export type RelaySupervisorEvent =
   // A fresh underlying connection is live. Re-emitted on EVERY (re)connect — the consumer
@@ -59,6 +61,11 @@ export type RelaySupervisorEvent =
   | { type: 'connected' }
   // One opaque inbound frame, forwarded byte-for-byte.
   | { type: 'message'; frame: Uint8Array }
+  // The current relay connection dropped with a RETRYABLE close code; supervision CONTINUES (a
+  // re-dial is scheduled). Distinct from `terminal`, which ENDS supervision. The `connected` member
+  // above is the paired "relay up" signal (#328). Carries the raw WS close code (not a secret —
+  // `terminal` already carries one) so a higher layer can classify it (4404 vs an ordinary drop).
+  | { type: 'relay-closed'; code: number }
   // Supervision ended, emitted exactly once: a fatal close code or a stop().
   | { type: 'terminal'; code: number; reason: string }
 
@@ -204,8 +211,14 @@ export function createRelaySupervisor(
         if (fatalCloseCodes.has(event.code)) {
           emitTerminal(event.code, event.reason)
         } else {
+          // Arm the re-dial BEFORE surfacing the drop: the backoff is the load-bearing recovery, so
+          // scheduling it first guarantees a transient drop always recovers even in the (contract-
+          // forbidden but defended) case of a misbehaving sink throwing on the emit below. Then
+          // surface the retryable close upward (#328) — the relay-leg "offline"/"daemon-absent"
+          // signal the driver classifies one layer up — while the drop stays absorbed and re-dialled.
           backoffTimer = setTimer(dial, jitteredDelay(attempt))
           attempt++
+          config.onEvent({ type: 'relay-closed', code: event.code })
         }
         break
       }

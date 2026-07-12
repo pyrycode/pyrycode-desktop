@@ -121,6 +121,10 @@ const connectedCount = (events: RelaySupervisorEvent[]) =>
   events.filter((e) => e.type === 'connected').length
 const messages = (events: RelaySupervisorEvent[]) =>
   events.filter((e): e is Extract<RelaySupervisorEvent, { type: 'message' }> => e.type === 'message')
+const relayCloseds = (events: RelaySupervisorEvent[]) =>
+  events.filter(
+    (e): e is Extract<RelaySupervisorEvent, { type: 'relay-closed' }> => e.type === 'relay-closed'
+  )
 
 // Wire the supervisor to the fakes with the wire-spec cadence pinned to round numbers so the
 // backoff sequence (1000/2000/4000/8000/16000/30000) and the 60000 stability threshold are
@@ -281,6 +285,30 @@ describe('createRelaySupervisor', () => {
       expect(scheduler.pending()).toHaveLength(1) // backoff scheduled
       expect(terminals(sink.events)).toHaveLength(0)
     }
+  })
+
+  it('surfaces a retryable daemon-absent close (4404) upward AND still schedules a re-dial (#328)', () => {
+    const { factory, scheduler, sink } = setup()
+    factory.connections[0].emit({ type: 'closed', code: 4404, reason: 'binary-offline' })
+    // The retryable close is now surfaced as its own relay-leg signal (the "offline"/"daemon-absent"
+    // category the driver classifies one layer up), carrying the raw close code…
+    expect(sink.events).toContainEqual({ type: 'relay-closed', code: 4404 })
+    // …while the load-bearing re-dial is still armed (the drop is absorbed, not terminal).
+    expect(scheduler.pending()).toHaveLength(1)
+    expect(terminals(sink.events)).toHaveLength(0)
+  })
+
+  it('surfaces an ordinary retryable drop (1006) upward as relay-closed (#328)', () => {
+    const { factory, sink } = setup()
+    factory.connections[0].emit(dropClosed())
+    expect(sink.events).toContainEqual({ type: 'relay-closed', code: 1006 })
+  })
+
+  it('does NOT surface relay-closed for a fatal close — only terminal (#328)', () => {
+    const { factory, sink } = setup()
+    factory.connections[0].emit({ type: 'closed', code: 4401, reason: 'rejected' })
+    expect(sink.events).toContainEqual({ type: 'terminal', code: 4401, reason: 'rejected' })
+    expect(relayCloseds(sink.events)).toHaveLength(0)
   })
 
   it('honours an injected fatal-close-code set over the default (AC3)', () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { HelloAckPayload, MessagePayload, ErrorPayload } from '@shared/wire/types'
 import { translateTimelineEvent, subscribeTimeline } from './timelineBridge'
-import { createTimelineStore, selectItems, selectPhase } from './timelineStore'
+import { createTimelineStore, selectItems, selectPhase, selectStalled } from './timelineStore'
 import type { ThreadItem } from './threadTimeline'
 
 // Fixtures — plain wire-shaped data, mirroring daemonEventBridge.test.ts. No transport involved.
@@ -113,6 +113,14 @@ describe('translateTimelineEvent — the two owned arms', () => {
     expect(translated).not.toBe(event)
   })
 
+  it('stallDetected → a nullary ThreadEvent stallDetected, a fresh object (#317)', () => {
+    const event: DaemonEvent = { type: 'stallDetected' }
+    const translated = translateTimelineEvent(event)
+    expect(translated).toEqual({ type: 'stallDetected' })
+    // A fresh literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
+
   it('sessionTransition preserves a null workspaceCwd for clear / idle_evict (wire nullability)', () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',
@@ -186,8 +194,6 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         conversationId: 'conv-1',
         queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
       },
-      // stall ships dormant (#315); its render consumer is #317, not the timeline store.
-      { type: 'stallDetected' },
       // screen-snapshot text ships dormant (#316); its consumer is the display slice #318, not the
       // timeline store — it is not a turn-stream ThreadItem.
       { type: 'screenSnapshotReceived', text: 'rendered screen', ts: '2026-07-08T00:00:00Z' }
@@ -396,5 +402,15 @@ describe('subscribeTimeline', () => {
     expect(store.getState()).toBe(afterFirst)
     const item = selectItems(store.getState())[0] as Extract<ThreadItem, { kind: 'toolCall' }>
     expect(item.result).toEqual({ isError: false, resultSummary: 'read 12 lines' })
+  })
+
+  it('#317: a stallDetected daemon event drives the store stalled flag true, no React', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    expect(selectStalled(store.getState())).toBe(false)
+    bridge.emit({ type: 'stallDetected' })
+    expect(selectStalled(store.getState())).toBe(true)
   })
 })

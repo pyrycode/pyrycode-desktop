@@ -352,6 +352,28 @@
   color: var(--color-on-surface-variant);
 }
 
+/* #317 — the stall-indicator wrapper. The .conversation__thinking shape (flex: 0 0 auto so it never
+   claims a competing flex region beside the timeline; the thread's --space-4 inset keeps the bubble
+   left-aligned and thread-consistent), since the stall indicator sits in the same message-list region.
+   No Figma node (the mobile file draws only the connected thread — the documented #148 gap); a dedicated
+   stall visual is a Figma-side follow-up. */
+.conversation__stall {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-start;
+  padding: var(--space-2) var(--space-4);
+}
+
+/* The stall affordance reuses the daemon bubble's fill / radius / measure (via .bubble--daemon) but
+   diverges to the error role so it reads as a PROBLEM state, not normal progress — distinct from the
+   muted .bubble--thinking (AC4). The rejection-line --color-error text plus a leading --color-error
+   accent bar (the connection-banner precedent); --color-error is the only error role token on desktop.
+   Token names only — no color literal, no new theme token. */
+.bubble--stall {
+  color: var(--color-error);
+  border-left: 4px solid var(--color-error);
+}
+
 /* #294 — the held queued backlog region: the messages queued while the daemon is busy, rendered as
    the not-yet-run tail below the delivered thread. flex: 0 0 auto (like .conversation__thinking, NOT
    the thread's 1 1 auto) so it never competes with the timeline's flex region; column + --space-3 gap

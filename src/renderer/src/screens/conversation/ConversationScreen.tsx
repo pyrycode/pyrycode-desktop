@@ -3,7 +3,7 @@ import './conversation.css'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
-import { useTimelineStore, selectItems, selectPhase } from '../../store/timelineStore'
+import { useTimelineStore, selectItems, selectPhase, selectStalled } from '../../store/timelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
   useActiveConversationStore,
@@ -63,6 +63,11 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
   // Selecting only `phase` adds no meaningful churn — the container already re-renders per items delta.
   // Inert in production until #179 flips `interactive` (phase stays `idle`), so the indicator is null.
   const phase = useTimelineStore(selectPhase)
+  // #317: the coarse `stalled` scalar, read beside `phase` (the selectPhase line above). The container
+  // passes only the plain boolean down, so no daemon-supplied string reaches the view — AC4 is a
+  // type-level guarantee, and the stall frame carries no daemon content anyway. `stalled` flips at most
+  // twice per stall, so it adds no meaningful re-render churn beyond the items delta already here.
+  const stalled = useTimelineStore(selectStalled)
   // #278: the conversation the thread is showing, snapshotted when the new discussion was created
   // (PairedShell's conversation_created callback). The container derives it and passes it down; the
   // pure WorkspaceChip self-gates to null. A narrow single-slice read — activeConversation changes
@@ -91,6 +96,10 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
       <WorkspaceChip conversation={activeConversation} isEmpty={items.length === 0} />
       <Timeline items={items} now={now} />
       <ThinkingIndicator isThinking={phase === 'thinking'} />
+      {/* #317: the stalled-turn problem-state indicator — a sibling of the thinking indicator in the
+          message-list region. Shows on a daemon stall onset and self-clears (in the reducer) on the next
+          turn activity. Renders nothing at rest. */}
+      <StallIndicator isStalled={stalled} />
       {/* #294: the held queued backlog — the not-yet-run tail below the delivered thread and the
           working indicator, above the run-config row and composer. Renders nothing when empty. */}
       <QueuedBacklogControl />
@@ -392,6 +401,35 @@ export function ThinkingIndicator({ isThinking }: { isThinking: boolean }): JSX.
   return (
     <div className="conversation__thinking">
       <div className="bubble bubble--daemon bubble--thinking">Thinking…</div>
+    </div>
+  )
+}
+
+// #317: the stall-indicator copy — a module-level, client-owned constant (the EMPTY_THREAD_COPY /
+// 'Thinking…' idiom). Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop
+// lesson) and using the U+2026 ellipsis character (matching 'Thinking…'). Never a daemon string — the
+// stall frame carries no daemon content, so the plain-text-never-HTML guarantee holds by construction.
+const STALL_COPY = 'The turn seems to have stalled…'
+
+// #317: the stall indicator — ThinkingIndicator's twin over the coarse `stalled` scalar. The daemon
+// emits a one-shot `stall` onset when claude goes quiet mid-turn (or the screen parser degrades) with no
+// "cleared" frame, so the reducer self-clears the flag on the next turn activity; this view just renders
+// the current boolean. Pure props-in/markup-out and exported so tests server-render an injected boolean
+// with no store.
+//
+// Takes `isStalled: boolean`, NOT the store type — the boolean makes AC4 ("no daemon-supplied string is
+// rendered") a type-level guarantee: the view structurally cannot receive, hence cannot render, a daemon
+// string. A plain boolean guard, no switch / assertNever (there is no union to discriminate).
+//
+// isStalled false → null (zero layout footprint — the ThinkingIndicator / Timeline null-on-empty
+// posture). isStalled true → the client-owned copy in a wrapper + bubble carrying stall-distinct classes
+// (see conversation.css): it reuses the daemon bubble's fill/radius but diverges to the error role so it
+// reads as a PROBLEM state, visually distinct from the muted .bubble--thinking (AC4).
+export function StallIndicator({ isStalled }: { isStalled: boolean }): JSX.Element | null {
+  if (!isStalled) return null
+  return (
+    <div className="conversation__stall">
+      <div className="bubble bubble--daemon bubble--stall">{STALL_COPY}</div>
     </div>
   )
 }

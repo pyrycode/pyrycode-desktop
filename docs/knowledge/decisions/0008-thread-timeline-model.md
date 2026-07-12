@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199, #203, #214, #217, #218, #229, #230 — all shipped) and the `interactive` flip ([#179](../codebase/179.md), shipped — the vertical's last piece). Extended by [#245](../codebase/245.md) with a fourth, renderer-sourced `ThreadItem` member (`userText`), shipped dormant pending a producer; [#179](../codebase/179.md) wired that producer (the composer echo) and the real render row, and in the same commit retired the coarse `MessageThread` — `Timeline` is now the conversation's single thread surface.
+Accepted, 2026-07-09. First realized in [#121](../codebase/121.md). Foundation for the structured-stream render vertical (#199, #203, #214, #217, #218, #229, #230 — all shipped) and the `interactive` flip ([#179](../codebase/179.md), shipped — the vertical's last piece). Extended by [#245](../codebase/245.md) with a fourth, renderer-sourced `ThreadItem` member (`userText`), shipped dormant pending a producer; [#179](../codebase/179.md) wired that producer (the composer echo) and the real render row, and in the same commit retired the coarse `MessageThread` — `Timeline` is now the conversation's single thread surface. Extended again by [#286](../codebase/286.md) with a fifth member, `sessionBoundary` — the `/clear`/idle-eviction/workspace-change delimiter, wired live end to end in the same ticket (transport widening was the separate split-sibling [#285](../codebase/285.md)).
 
 ## Context
 
@@ -21,9 +21,10 @@ A new, **standalone, framework-free** module `src/renderer/src/store/threadTimel
   - `{ kind: 'toolCall'; turnId; toolUseId; name; inputSummary; result: ToolResult | null }` — a tool invocation; `result` starts `null` and is filled in place when the correlated `tool_result` arrives.
   - `{ kind: 'turnBoundary'; turnId; stopReason }` — a turn-end marker.
   - `{ kind: 'userText'; text }` — the user's own message, a renderer-sourced echo rather than daemon content, so it carries neither `turnId` (the daemon assigns those) nor `seq` (wire fidelity for daemon deltas). Added by [#245](../codebase/245.md), dormant until [#179](../codebase/179.md) wired a producer (the composer echo) and a real render row.
+  - `{ kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }` — a `/clear`, idle-eviction, or workspace-change marker. `SessionBoundaryReason` is a renderer-local re-declaration of the wire `WireSessionTransitionReason` (the `TurnPhase`/`WireTurnState` precedent), not an import, keeping this module wire-free. Added and wired live (bridge arm + render row in the same ticket) by [#286](../codebase/286.md).
 - **`ToolResult`** — `{ isError: boolean; resultSummary: string }`, the filled-in half of a `toolCall`.
 - **`TurnPhase`** — `'thinking' | 'responding' | 'idle'`, the coarse conversation-level lifecycle.
-- **`ThreadEvent`** — the renderer-local, sealed input union the reducer consumes (§ the wire boundary below): `assistantDelta` | `toolUse` | `toolResult` | `turnState` | `turnEnd` | `userText` (#245).
+- **`ThreadEvent`** — the renderer-local, sealed input union the reducer consumes (§ the wire boundary below): `assistantDelta` | `toolUse` | `toolResult` | `turnState` | `turnEnd` | `userText` (#245) | `sessionBoundary` (#286).
 - **`TimelineState`** — `{ items: readonly ThreadItem[]; phase: TurnPhase }`.
 
 Plus a **pure, exported `reduceTimeline(state, event): TimelineState`**, an `initialTimelineState` const, and narrow pure selectors (`selectItems`, `selectPhase`) — the same discipline as `reduceSession`: no mutation, returns fresh state, `switch` on the sealed union with an `assertNever` exhaustiveness guard, unit-tested with no React and no store.
@@ -44,6 +45,7 @@ The structured wire types do not exist in desktop yet (`EnvelopeType` stops at `
 - **`turnState{state}`** — set `phase` to `state`; `items` is preserved by reference. If `state === phase` already, return the same `state` reference (no-churn, mirroring `appendUnique`'s pure-duplicate discipline).
 - **`turnEnd{turnId, stopReason}`** — append a `turnBoundary`. It does **not** reset `phase`; the daemon emits `turn_state: 'idle'` separately. Phase and boundary stay orthogonal, mirroring `sessionStore`'s status/messages orthogonality.
 - **`userText{text}`** (#245) — append a fresh `userText` item; `phase` untouched. Same fresh-tail-append discipline as `toolUse`/`turnEnd` — never coalesced via the `assistantDelta` path, since a user message is one whole message rather than a stream of deltas.
+- **`sessionBoundary{reason, workspaceCwd, occurredAt}`** (#286) — append a fresh `sessionBoundary` item; `phase` untouched. Same fresh-tail-append discipline as `userText`/`turnEnd` — a whole marker, never coalesced. The raw `occurredAt` is carried, not formatted, so the render layer's relative-time label stays fresh (the channel-list precedent) rather than freezing at reduce time.
 
 ## Rationale
 

@@ -41,6 +41,15 @@ same top-level-sibling shape as `message_id` on `sendMessage`). `isRendererComma
 case gained `'changeId' in value && typeof value.changeId === 'string'` — the untrusted-boundary check
 for the second command to carry a client-minted correlation string. No other member changed shape.
 
+The union grew an eleventh member in [#306](../codebase/306.md): a second **bare** command, `interrupt`
+(no payload — the frame is nullary; the daemon maps it to a single claude Esc, no field to
+parameterise) — the renderer-invokable trigger for the [interrupt envelope](interrupt-envelope.md)
+feature's now-complete command pathway. Its guard case is the same bare `return true` posture
+`requestDebugBundle`/`requestConversations` established; unlike every other command added since
+`requestConversations`, it has no daemon reply to correlate — `daemonConnection.interrupt()` records no
+outstanding-request state, mirroring `dequeueMessage`'s (#300) fire-and-forget posture rather than any
+payload shape.
+
 ## What it does
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge. `ipcRenderer` itself never crosses to the window.
@@ -195,5 +204,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the payload-carrying `createConversation` member + `isCreateConversationPayload` guard this channel's union gained, and the `conversationCreated` [daemon-event channel](daemon-event-channel.md) member that reports the reply
 - [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the payload-carrying `setSessionSettings` member + `isSetSessionSettingsPayload` guard (the first optional-absent, rather than nullable-present, presence check) this channel's union gained; ships dormant, consumer is #257
 - [#261 codebase notes](../codebase/261.md) — widened `setSessionSettings` with the top-level-sibling `changeId: string` field + its untrusted-boundary guard clause, the renderer-minted correlation key the [daemon connection](daemon-connection.md) matches replies against
+- [Interrupt envelope](interrupt-envelope.md) / [#306 codebase notes](../codebase/306.md) — the bare `interrupt` member this channel's union gained; unlike its daemon-reply-bearing siblings, the daemon sends no correlated reply at all — the turn-stopped signal rides the pre-existing `turn_state`/`turn_end` stream instead
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

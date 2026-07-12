@@ -424,14 +424,20 @@ describe('QueuedBacklog — the held queued backlog (#294)', () => {
     ts: '2026-07-12T00:00:00Z'
   })
 
+  // #296: the drop affordance made onDrop a REQUIRED prop (the "a view that cannot answer is a bug"
+  // rule). These render calls don't exercise the click path (renderToStaticMarkup can't fire clicks —
+  // the id→command proof lives in dropQueuedMessage.test.ts), so a no-op onDrop satisfies the type.
+  const noopDrop = (): void => {}
+
   it('renders nothing for an empty backlog — no region, no chrome (AC4)', () => {
     // Contrast the Timeline's empty-thread invitation: an empty backlog is silent, not an empty state.
-    expect(renderToStaticMarkup(<QueuedBacklog items={[]} />)).toBe('')
+    // With no rows there is no drop affordance either (#296 AC4) — a structural guarantee of empty→null.
+    expect(renderToStaticMarkup(<QueuedBacklog items={[]} onDrop={noopDrop} />)).toBe('')
   })
 
   it('renders one row per queued item, in enqueue order, each showing its text (AC1)', () => {
     const markup = renderToStaticMarkup(
-      <QueuedBacklog items={[item(1, 'first queued'), item(2, 'second queued')]} />
+      <QueuedBacklog items={[item(1, 'first queued'), item(2, 'second queued')]} onDrop={noopDrop} />
     )
     expect(markup).toContain('conversation__queued')
     expect(markup).toContain('first queued')
@@ -441,7 +447,7 @@ describe('QueuedBacklog — the held queued backlog (#294)', () => {
   })
 
   it('is visually distinct from delivered messages — the queued role, reusing the user bubble (AC2)', () => {
-    const markup = renderToStaticMarkup(<QueuedBacklog items={[item(1, 'waiting to run')]} />)
+    const markup = renderToStaticMarkup(<QueuedBacklog items={[item(1, 'waiting to run')]} onDrop={noopDrop} />)
     // The dimmed region + the queued thread role are the distinctness seams…
     expect(markup).toContain('conversation__queued')
     expect(markup).toContain('data-thread-role="queued"')
@@ -453,9 +459,25 @@ describe('QueuedBacklog — the held queued backlog (#294)', () => {
 
   it('renders untrusted text as plain text, never live markup (load-bearing)', () => {
     // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (a prior desktop lesson).
-    const markup = renderToStaticMarkup(<QueuedBacklog items={[item(1, '<b>x</b>')]} />)
+    const markup = renderToStaticMarkup(<QueuedBacklog items={[item(1, '<b>x</b>')]} onDrop={noopDrop} />)
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
+  })
+
+  // #296: every queued row carries a drop / cancel affordance (AC1) — an icon-only button whose
+  // accessible name is a client-owned aria-label. Exactly one per row (never on a delivered row — AC4/
+  // AC5 are structural: only QueuedBacklog renders this button, and Timeline — which draws the delivered
+  // rows — is untouched). The click→command wiring is proven in dropQueuedMessage.test.ts.
+  it('carries one drop affordance per queued row, each with an accessible name (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <QueuedBacklog items={[item(1, 'first queued'), item(2, 'second queued')]} onDrop={noopDrop} />
+    )
+    // The accessible name is a client-owned aria-label (icon-only control), never a daemon string.
+    expect(markup).toContain('aria-label="Drop queued message"')
+    // Exactly one drop control per queued row — no more, no fewer. Match the exact button class (the
+    // closing quote excludes the .queued-row__drop-icon svg class, which shares the prefix).
+    expect(markup.match(/class="queued-row__drop"/g)?.length ?? 0).toBe(2)
+    expect(markup.match(/aria-label="Drop queued message"/g)?.length ?? 0).toBe(2)
   })
 })
 

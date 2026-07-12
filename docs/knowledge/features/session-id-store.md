@@ -124,3 +124,6 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   via #257's `runSettingsControls.ts` gate.
 - [#257 codebase notes](../codebase/257.md) — the live consumer: gates `submitSettingsChange` on
   `selectSessionId(s) !== null`.
+- [Relay-link store](relay-link-store.md) / [#329](../codebase/329.md) — a sibling store cloning
+  this one's structure verbatim (DI-factory → singleton → hook → selector, reactive-only, `null`
+  sentinel) for the `relayLinkChanged` arm instead of `sessionTransition`.

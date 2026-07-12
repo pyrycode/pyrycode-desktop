@@ -20,7 +20,7 @@ import {
   type FakeDaemonOptions
 } from './fakeDaemon'
 import { createNoiseSession, type NoiseSession, type NoiseSessionEvent } from './noiseSession'
-import { createRelayConnection, type RelayEvent } from './relayConnection'
+import { createRelayConnection, type RelayEvent, type RelayConnection } from './relayConnection'
 import { loadNoiseLib } from './noiseLib'
 import {
   base64StdEncode,
@@ -34,6 +34,48 @@ import { buildClientHello, parseHelloAck } from './helloExchange'
 const EMPTY = new Uint8Array(0)
 const bytes = (u: Uint8Array): number[] => Array.from(u)
 const CONSOLE_METHODS = ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const
+
+// A transient pre-open dial reset (#104): under full-suite CPU starvation a raw dial to the
+// already-listening forwarder can complete its HTTP upgrade abnormally — "socket hang up" /
+// ECONNRESET, an accept-backlog ECONNREFUSED, a malformed-upgrade "Parse Error" (#311), or a
+// non-101 "Unexpected server response: 404" (#336, this file's variant) — which an immediate re-dial
+// clears. Post-close it simply exhausts attempts and rejects.
+function isTransientDialError(err: Error): boolean {
+  const code = (err as NodeJS.ErrnoException).code
+  return (
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    /socket hang up/i.test(err.message) ||
+    /Parse Error/i.test(err.message) ||
+    /Unexpected server response: 404/i.test(err.message) // #336 404-upgrade variant of the #104/#311 family
+  )
+}
+
+// Dial a raw ws client and resolve once it is OPEN. A pre-open transient reset is re-dialled up to
+// `attemptsLeft` times against the already-listening server — deterministic convergence on a
+// recoverable reset, NOT a blind whole-test retry (no assertion re-runs, so a real logic bug is
+// never masked; a genuinely-down target still fails fast once attempts are exhausted). On open the
+// pre-open reject handler is swapped for a benign swallow so a later reset never crashes the process
+// (mirrors fakeDaemon.ts's dial lifecycle).
+function connect(url: string, attemptsLeft = 5): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url)
+    const onDialError = (err: Error): void => {
+      ws.terminate() // drop the half-open socket before re-dialling so none leaks
+      if (attemptsLeft > 1 && isTransientDialError(err)) {
+        setTimeout(() => resolve(connect(url, attemptsLeft - 1)), 20)
+        return
+      }
+      reject(err)
+    }
+    ws.once('error', onDialError)
+    ws.once('open', () => {
+      ws.off('error', onDialError)
+      ws.on('error', () => {})
+      resolve(ws)
+    })
+  })
+}
 
 const cleanups: Array<() => void | Promise<void>> = []
 afterEach(async () => {
@@ -115,26 +157,46 @@ async function driveClient(opts: {
   let firstOut = true
   let initiator!: NoiseSession
 
-  const relay = createRelayConnection({
-    url: `${opts.forwarderUrl}/v1/client`,
-    headers: {
-      'X-Pyrycode-Server': 'fake-daemon',
-      'X-Pyrycode-Token': 'dummy-fakedaemon-token-not-a-real-credential',
-      'User-Agent': 'pyrycode-desktop-fakedaemon-test/0'
-    },
-    onEvent: (e: RelayEvent) => {
-      if (e.type === 'connected') initiator.start()
-      else if (e.type === 'message') {
-        try {
-          const { data } = decodeInnerFrame(e.frame)
-          initiator.onFrame(base64StdDecode(data))
-        } catch {
-          /* fail-closed on a malformed frame; the bounded wait converts it to a timeout */
+  // Bounded transient re-dial for the pre-`connected` 404-upgrade race (#336). createRelayConnection
+  // suppresses a 404 into a silent closed{1006,'connect-error'} (relayConnection.ts's
+  // unexpected-response handler), so the re-dial trigger here is that `closed` RelayEvent, not a
+  // message match. Re-dial fires ONLY before the first `connected`: the Noise initiator is created
+  // once and start()s only after a successful connect, so every attempt hands a pristine initiator
+  // (msg1 never sent) — no half-advanced handshake is re-driven, no assertion re-runs, no Noise
+  // nonce reuse. A terminal `closed` after connect, or an exhausted budget, is a no-op, so a
+  // genuinely dead dial still fails fast via the existing wait/assert path.
+  let connectedOnce = false
+  let dialAttemptsLeft = 5
+  let activeRelay!: RelayConnection
+  const makeRelay = (): RelayConnection =>
+    createRelayConnection({
+      url: `${opts.forwarderUrl}/v1/client`,
+      headers: {
+        'X-Pyrycode-Server': 'fake-daemon',
+        'X-Pyrycode-Token': 'dummy-fakedaemon-token-not-a-real-credential',
+        'User-Agent': 'pyrycode-desktop-fakedaemon-test/0'
+      },
+      onEvent: (e: RelayEvent) => {
+        if (e.type === 'connected') {
+          connectedOnce = true
+          initiator.start()
+        } else if (e.type === 'message') {
+          try {
+            const { data } = decodeInnerFrame(e.frame)
+            initiator.onFrame(base64StdDecode(data))
+          } catch {
+            /* fail-closed on a malformed frame; the bounded wait converts it to a timeout */
+          }
+        } else if (e.type === 'closed' && !connectedOnce && dialAttemptsLeft > 1) {
+          dialAttemptsLeft -= 1
+          setTimeout(() => {
+            if (!connectedOnce) activeRelay = makeRelay()
+          }, 20)
         }
       }
-    }
-  })
-  cleanups.push(() => relay.close())
+    })
+  activeRelay = makeRelay()
+  cleanups.push(() => activeRelay.close())
 
   initiator = await createNoiseSession({
     staticPrivateKey: clientPriv,
@@ -146,7 +208,7 @@ async function driveClient(opts: {
     sendFrame: (raw) => {
       const type = firstOut ? 'noise_init' : 'noise_msg'
       firstOut = false
-      relay.send(encodeInnerFrame({ v: 2, type, data: base64StdEncode(raw) }))
+      activeRelay.send(encodeInnerFrame({ v: 2, type, data: base64StdEncode(raw) }))
     },
     onEvent: (e) => {
       events.push(e)
@@ -378,12 +440,11 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
       cleanups.push(() => daemon.close())
 
       // A raw ws on the client leg keeps this at the byte level, without a full Noise initiator.
-      const raw = new WebSocket(`${forwarder.url}/v1/client`)
+      // Bounded transient re-dial (connect): a raw dial has no createRelayConnection
+      // unexpected-response handler, so the pre-open 404-upgrade race (#336) surfaces here as a raw
+      // throw and is recovered by re-dial rather than crashing the test.
+      const raw = await connect(`${forwarder.url}/v1/client`)
       cleanups.push(() => raw.terminate())
-      await new Promise<void>((resolve, reject) => {
-        raw.once('open', () => resolve())
-        raw.once('error', reject)
-      })
       await forwarder.whenReady()
       raw.send('{not json') // a non-InnerFrameV2 text frame
 

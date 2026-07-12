@@ -20,8 +20,9 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the six timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
- * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286); each is reconstructed
+ * timeline state. Owns exactly the seven timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317);
+ * each is reconstructed
  * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
@@ -82,6 +83,12 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
         workspaceCwd: event.workspaceCwd,
         occurredAt: event.occurredAt
       }
+    case 'stallDetected':
+      // #317: the stall-onset arm (#315 decodes it nullary). Both the DaemonEvent and the ThreadEvent
+      // are `{ type: 'stallDetected' }` — no payload — so this is a filter + fresh literal (arm
+      // selection), never a pass-through of the DaemonEvent object. reduceTimeline sets the `stalled`
+      // scalar; the render slice's self-clear is derived there on the next turn activity.
+      return { type: 'stallDetected' }
     case 'connecting':
     case 'connected':
     case 'disconnected':
@@ -101,7 +108,6 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'sessionSettingsRejected':
     case 'modalAnswerRejected':
     case 'queueState':
-    case 'stallDetected':
     case 'screenSnapshotReceived':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
@@ -111,10 +117,9 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // NOT timeline items — unlike turnState and, since #286, sessionTransition, none drives a timeline
       // row. queueState is deliberately in this null group: `queue_state` is daemon STATE, not a
       // turn-stream item (#720), so it is NOT folded into reduceTimeline — the load-bearing #720 decision.
-      // stallDetected (#315) ships dormant here — its render consumer is #317, which owns the on-thread
-      // indicator and the self-clear; it is not a timeline `ThreadItem`. screenSnapshotReceived (#316)
-      // likewise ships dormant — its consumer is the display slice #318 (the live-screen view), not the
-      // timeline store; it is not a turn-stream `ThreadItem` either.
+      // (stallDetected #315 is now an owned arm — #317 wired its `stalled` scalar above.)
+      // screenSnapshotReceived (#316) still ships dormant — its consumer is the display slice #318 (the
+      // live-screen view), not the timeline store; it is not a turn-stream `ThreadItem` either.
       return null
     default:
       return assertNever(event)

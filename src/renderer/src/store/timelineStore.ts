@@ -48,4 +48,4 @@ export function useTimelineStore<T>(selector: (s: TimelineStore) => T): T {
 
 // Re-export the read surface so #203 imports items/phase selectors from one site. They already exist
 // on the pure reducer module (#121) — re-exported, never redefined.
-export { selectItems, selectPhase } from './threadTimeline'
+export { selectItems, selectPhase, selectStalled } from './threadTimeline'

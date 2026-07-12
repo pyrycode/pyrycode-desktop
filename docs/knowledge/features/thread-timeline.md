@@ -68,14 +68,18 @@ type ThreadEvent =
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   | { type: 'userText'; text: string }
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
+  | { type: 'stallDetected' }
 
-interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase }
+interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean }
 ```
 
 `ThreadItem` is the durable, ordered content; `ThreadEvent` is the renderer-local (camelCase,
 `conversation_id`-free) input the reducer consumes. **`turn_state` is deliberately not a
 `ThreadItem` member** — it's a coarse conversation-level lifecycle scalar (the "thinking…"
 indicator), so it's carried as `phase` beside `items` rather than interleaved as a timeline row.
+**`stalled` ([#317](../codebase/317.md)) is a second such scalar** — a coarse, onset-only stall flag
+set by the nullary `stallDetected` arm and self-cleared by the reducer on the next turn-activity
+arm, likewise never a `ThreadItem` row.
 
 ### The reducer
 
@@ -92,10 +96,18 @@ indicator), so it's carried as `phase` beside `items` rather than interleaved as
 | `turnEnd` | append a `turnBoundary`; does **not** touch `phase` |
 | `userText` | append a fresh `userText` item (never coalesced); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
+| `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
-`items`. `initialTimelineState = { items: [], phase: 'idle' }`; pure selectors `selectItems`,
-`selectPhase` are the only read surface.
+`items`. **`stalled` ([#317](../codebase/317.md)) is a third, independent axis**: the four
+turn-activity arms (`assistantDelta`/`toolUse`/`toolResult`/`turnState`) clear it to `false`; the three
+non-activity arms (`turnEnd`/`userText`/`sessionBoundary`) carry it through unchanged — a boundary
+marker, a renderer-sourced echo, and a session rotation are none of them daemon turn activity. The two
+pre-existing same-reference no-op guards (`toolResult`'s orphan/duplicate check, `turnState`'s
+same-phase check) widen to `&& !state.stalled`, since an orphan result or an idle-when-already-idle
+`turnState` is still turn activity and must still clear a live stall.
+`initialTimelineState = { items: [], phase: 'idle', stalled: false }`; pure selectors `selectItems`,
+`selectPhase`, `selectStalled` are the only read surface.
 
 ### Internal helpers (unexported)
 
@@ -176,6 +188,12 @@ Nothing imports this module yet.
   `sessionBoundaryViewModel.ts` (a long-form-relative-time sibling of `channelListViewModel.ts`'s
   `formatLastActivity`). The fifth application of the "new timeline-item kind → bridge arm → render
   row" pattern (#218/#230/#245).
+- **[#317](../codebase/317.md) (shipped)** added the `stalled` scalar and the `stallDetected` arm —
+  the render consumer of [#315](../codebase/315.md)'s dormant nullary `DaemonEvent`. `timelineBridge.ts`
+  moved `stallDetected` from its inverse-filter `null` group to an owned arm (a fresh, field-identical
+  literal, since both sides are nullary); `ConversationScreen.tsx` gained `StallIndicator`, `Timeline`/
+  `ThinkingIndicator`'s twin. Unlike every prior extension, this one touches an **existing** scalar's
+  clearing logic rather than only adding a new arm — see Edge cases below for the widened no-op guards.
 
 ## Edge cases and limitations
 
@@ -202,6 +220,10 @@ Nothing imports this module yet.
   reorders or inserts mid-list (`appendDelta` grows the tail in place, every other arm appends a new
   tail, `fillResult` replaces a `toolCall` at its own index), so index identity is stable per logical
   item without needing a dedicated `id` field on `ThreadItem`.
+- **`stalled` is onset-only with no daemon "cleared" signal** ([#317](../codebase/317.md)) — the daemon
+  sends a one-shot `stall` frame and never repeats it or clears it, so the reducer derives the clear
+  entirely client-side on the next turn-activity arm. A stall with no following activity stays shown
+  indefinitely; this is by design, mirroring mobile's ADR-025 Phase 2 self-clear contract.
 - **Strangler Fig, cut over in [#179](../codebase/179.md).** `sessionStore`, `messageViewModel.ts`,
   and the coarse `message`/`message_chunk` path were completely untouched by this module through
   #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
@@ -243,6 +265,11 @@ Nothing imports this module yet.
   with a placeholder render arm.
 - [#179 codebase notes](../codebase/179.md) — the vertical's final piece: flips `interactive`, wires
   `userText`'s producer and real render row, and retires the coarse `MessageThread` in the same commit.
+- [#315 codebase notes](../codebase/315.md) — the transport slice: decodes `stall` into the nullary
+  `stallDetected` `DaemonEvent`, shipped dormant.
+- [#317 codebase notes](../codebase/317.md) — the render slice: the `stalled` scalar, the
+  `stallDetected` arm, and `StallIndicator` (see [Conversation shell § Stall
+  indicator](conversation-shell.md#stall-indicator-317)).
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

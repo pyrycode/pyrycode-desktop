@@ -5,6 +5,7 @@ import {
   MessageThread,
   Timeline,
   ThinkingIndicator,
+  StallIndicator,
   QueuedBacklog,
   StatusSheet,
   RepairPrompt,
@@ -413,6 +414,31 @@ describe('ThinkingIndicator — the pre-text working affordance', () => {
   })
 })
 
+// #317: the stall indicator bound to the coarse `stalled` scalar. StallIndicator is the ThinkingIndicator
+// twin over a boolean rather than a ThreadItem[] — pure (isStalled in, markup out) — so a server-rendered
+// string proves both the present affordance (stalled) and the zero-footprint absent case. Boolean input,
+// not the store type: the view structurally cannot render a daemon-supplied string (AC4 — the stall frame
+// carries no daemon content). Injected boolean: no store, no IPC — the container's shown branch is
+// unreachable under server render (zustand v5 reads getInitialState() → stalled: false), so the "showing"
+// assertion lives here, exactly like Timeline's / ThinkingIndicator's populated assertions.
+describe('StallIndicator — the stalled-turn problem-state affordance (#317)', () => {
+  it('is inert when not stalled — renders nothing (zero layout footprint)', () => {
+    expect(renderToStaticMarkup(<StallIndicator isStalled={false} />)).toBe('')
+  })
+
+  it('shows a stall-distinct affordance while stalled, never the thinking treatment (AC4)', () => {
+    const markup = renderToStaticMarkup(<StallIndicator isStalled={true} />)
+    // The stall-distinct wrapper + bubble classes (the problem-state treatment, built from --color-error).
+    expect(markup).toContain('conversation__stall')
+    expect(markup).toContain('bubble--stall')
+    // The client-owned copy — apostrophe-free, U+2026 ellipsis (survives renderToStaticMarkup escaping),
+    // never a daemon string.
+    expect(markup).toContain('The turn seems to have stalled…')
+    // Visually distinct from the thinking indicator (AC4) — a problem state, not normal progress.
+    expect(markup).not.toContain('bubble--thinking')
+  })
+})
+
 // #307: the running-turn interrupt control. isTurnRunning is the exported gate predicate; InterruptButton
 // the exported pure view (the ThinkingIndicator pattern) — call / server-render them directly with
 // injected values, no store. The gate is deliberately BROADER than ThinkingIndicator's (`phase ===
@@ -784,6 +810,15 @@ describe('ConversationScreen — store binding', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__thinking')
     expect(markup).not.toContain('Thinking…')
+  })
+
+  // #317: the stall indicator mounts against the initial timeline store (getInitialState stalled:
+  // false), so isStalled is false and StallIndicator returns nothing — the inert render slice, layout
+  // unchanged until a stall onset (the ThinkingIndicator-smoke analog). The showing path is proven on
+  // the pure StallIndicator describe above.
+  it('mounts the initial timeline with no stall indicator (the inert render slice)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('conversation__stall')
   })
 
   // #294: the queued-backlog control mounts against the empty queue store (getInitialState backlogs:

@@ -4,6 +4,7 @@ import {
   initialTimelineState,
   selectItems,
   selectPhase,
+  selectStalled,
   type ThreadEvent,
   type ThreadItem,
   type TimelineState
@@ -42,6 +43,10 @@ function sessionBoundary(
   occurredAt = '2026-01-15T12:00:00.000Z'
 ): ThreadEvent {
   return { type: 'sessionBoundary', reason, workspaceCwd, occurredAt }
+}
+
+function stall(): ThreadEvent {
+  return { type: 'stallDetected' }
 }
 
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
@@ -239,6 +244,88 @@ describe('reduceTimeline — userText (user message)', () => {
   })
 })
 
+describe('reduceTimeline — stall indicator (#317)', () => {
+  it('stallDetected sets stalled true from the initial state (AC1)', () => {
+    const state = run([stall()])
+    expect(state.stalled).toBe(true)
+    // Onset only flips the scalar — items/phase are untouched.
+    expect(state.items).toEqual([])
+    expect(state.phase).toBe('idle')
+  })
+
+  it('a redundant stall onset is a same-reference no-op (no churn)', () => {
+    const stalled = run([stall()])
+    const again = reduceTimeline(stalled, stall())
+    expect(again).toBe(stalled)
+  })
+
+  // AC2 — each of the four turn-activity events clears a live stall, one case per arm.
+  it('assistantDelta clears a live stall (AC2)', () => {
+    const state = run([stall(), delta('A', 'hi')])
+    expect(state.stalled).toBe(false)
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText'])
+  })
+
+  it('toolUse clears a live stall (AC2)', () => {
+    const state = run([stall(), toolUse('A', 't1')])
+    expect(state.stalled).toBe(false)
+    expect(state.items.map((i) => i.kind)).toEqual(['toolCall'])
+  })
+
+  it('toolResult clears a live stall even when the result is an orphan (still turn activity, AC2)', () => {
+    // An orphan result changes no items (a same-reference fillResult), but it is turn activity, so it
+    // must still clear the stall — the widened no-op guard.
+    const state = run([stall(), toolResult('A', 'nope')])
+    expect(state.stalled).toBe(false)
+  })
+
+  it('a toolResult that fills a pending call clears a live stall (AC2)', () => {
+    const state = run([toolUse('A', 't1'), stall(), toolResult('A', 't1')])
+    expect(state.stalled).toBe(false)
+    const call = state.items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(call.result).toEqual({ isError: false, resultSummary: 'ok t1' })
+  })
+
+  it('turnState clears a live stall for a non-idle state (AC2)', () => {
+    const state = run([stall(), { type: 'turnState', state: 'thinking' }])
+    expect(state.stalled).toBe(false)
+    expect(state.phase).toBe('thinking')
+  })
+
+  it('turnState clears a live stall even for idle — the case a naive guard would miss (AC2)', () => {
+    // The stall arrives while phase is already idle; an idle turnState is "no phase change" but IS turn
+    // activity, so the widened guard must still clear the stall (AC2 "any state, including idle").
+    const state = run([stall(), { type: 'turnState', state: 'idle' }])
+    expect(state.stalled).toBe(false)
+    expect(state.phase).toBe('idle')
+  })
+
+  // AC2 lists exactly four clearing events — a stall alone stays shown, and the three non-activity arms
+  // (turnEnd / userText / sessionBoundary) leave it shown.
+  it('a stall with no following activity keeps stalled true', () => {
+    expect(run([stall()]).stalled).toBe(true)
+  })
+
+  it('turnEnd does NOT clear a stall (a boundary, not turn activity — the daemon clears via turn_state idle)', () => {
+    expect(run([stall(), turnEnd('A')]).stalled).toBe(true)
+  })
+
+  it('userText does NOT clear a stall (a renderer-sourced echo, not daemon turn activity)', () => {
+    expect(run([stall(), userText('typed while stuck')]).stalled).toBe(true)
+  })
+
+  it('sessionBoundary does NOT clear a stall (a session rotation, not turn activity)', () => {
+    expect(run([stall(), sessionBoundary()]).stalled).toBe(true)
+  })
+
+  // Regression guard: the widened toolResult no-op guard must keep the orphan-against-initial path a
+  // same-reference return, because initialTimelineState.stalled is already false (mirrors line ~165).
+  it('the toolResult-orphan same-reference no-op survives the widened guard (regression, AC)', () => {
+    // items unchanged AND !stalled → the reducer returns the exact same reference.
+    expect(reduceTimeline(initialTimelineState, toolResult('A', 't1'))).toBe(initialTimelineState)
+  })
+})
+
 describe('reduceTimeline — purity', () => {
   it('does not mutate the input state, its items array, or an existing item on coalesce', () => {
     const start = run([delta('A', 'Hel')])
@@ -268,14 +355,16 @@ describe('reduceTimeline — purity', () => {
 })
 
 describe('initial state + selectors', () => {
-  it('initialTimelineState is an empty, idle timeline', () => {
+  it('initialTimelineState is an empty, idle, un-stalled timeline', () => {
     expect(initialTimelineState.items).toEqual([])
     expect(initialTimelineState.phase).toBe('idle')
+    expect(initialTimelineState.stalled).toBe(false)
   })
 
-  it('selectItems / selectPhase return the current slices by reference', () => {
-    const state = run([delta('A', 'hi')])
+  it('selectItems / selectPhase / selectStalled return the current slices', () => {
+    const state = run([delta('A', 'hi'), stall()])
     expect(selectItems(state)).toBe(state.items)
     expect(selectPhase(state)).toBe(state.phase)
+    expect(selectStalled(state)).toBe(true)
   })
 })

@@ -77,11 +77,19 @@ export type ThreadEvent =
   // bridge is a filter + fresh copy (not a remap); folded by a plain fresh tail-append (the `userText`
   // discipline), never coalesced.
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
+  // #317: the daemon's one-shot stall onset (#315 decodes it to a nullary `stallDetected` daemon event).
+  // A NULLARY arm — the wire frame carries no field the renderer keeps, so this event has no payload
+  // either. That is what makes AC4 ("no daemon-supplied string is ever rendered") true by construction:
+  // there is no field to render. Onset-only; the reducer derives the self-clear on the next turn activity.
+  | { type: 'stallDetected' }
 
-/** The whole timeline state: ordered content + the coarse lifecycle phase. */
+/** The whole timeline state: ordered content + the coarse lifecycle phase + the onset-only stall flag. */
 export interface TimelineState {
   items: readonly ThreadItem[]
   phase: TurnPhase
+  // #317: a coarse, onset-only stall scalar (the `phase`-beside-`items` precedent — NOT a ThreadItem row).
+  // Set by `stallDetected`, self-cleared by the reducer on the next turn-activity event.
+  stalled: boolean
 }
 
 /** Compile-time exhaustiveness guard: a new ThreadEvent arm without a case is a type error. */
@@ -143,8 +151,16 @@ function fillResult(
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
   switch (event.type) {
     case 'assistantDelta':
-      return { items: appendDelta(state.items, event.turnId, event.text), phase: state.phase }
+      // Turn activity — clears a live stall (AC2). Already returns a fresh `items`, so just carry
+      // `stalled: false`.
+      return {
+        items: appendDelta(state.items, event.turnId, event.text),
+        phase: state.phase,
+        stalled: false
+      }
     case 'toolUse':
+      // Turn activity — clears a live stall (AC2). Already appends a fresh `items`, so just carry
+      // `stalled: false`.
       return {
         items: [
           ...state.items,
@@ -157,38 +173,54 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             result: null
           }
         ],
-        phase: state.phase
+        phase: state.phase,
+        stalled: false
       }
     case 'toolResult': {
       const items = fillResult(state.items, event.toolUseId, {
         isError: event.isError,
         resultSummary: event.resultSummary
       })
-      // Orphan/duplicate result: fillResult returned the same array — return the same state.
-      return items === state.items ? state : { items, phase: state.phase }
+      // Turn activity — clears a live stall (AC2). Same-reference no-op ONLY when the result changed
+      // nothing AND no stall is live; an orphan/duplicate result against a live stall must still clear
+      // it, so the guard widens with `&& !state.stalled`. From `initialTimelineState` (stalled already
+      // false) the orphan path still returns the same reference — the regression guard the test asserts.
+      return items === state.items && !state.stalled
+        ? state
+        : { items, phase: state.phase, stalled: false }
     }
     case 'turnState':
-      // No-churn on an unchanged phase, mirroring appendUnique's pure-duplicate discipline.
-      return event.state === state.phase ? state : { items: state.items, phase: event.state }
+      // Turn activity — clears a live stall (AC2, "any state, including idle"). No-churn ONLY when the
+      // phase is unchanged AND no stall is live; an idle-when-already-idle turnState against a live stall
+      // must still clear it, so the guard widens with `&& !state.stalled`.
+      return event.state === state.phase && !state.stalled
+        ? state
+        : { items: state.items, phase: event.state, stalled: false }
     case 'turnEnd':
       // Appends a boundary; does NOT reset phase — the daemon emits `turn_state: 'idle'` separately.
+      // NOT in AC2's clear set: a turn boundary is not turn activity; the paired `turn_state: idle` is
+      // what clears. `stalled` carried through unchanged.
       return {
         items: [
           ...state.items,
           { kind: 'turnBoundary', turnId: event.turnId, stopReason: event.stopReason }
         ],
-        phase: state.phase
+        phase: state.phase,
+        stalled: state.stalled
       }
     case 'userText':
       // A whole user message: fresh tail-append (never coalesced), `phase` untouched — the `turnEnd`
-      // arm's discipline. Always a new `items` array (a fresh append is always a change).
+      // arm's discipline. Always a new `items` array (a fresh append is always a change). NOT in AC2's
+      // clear set: a renderer-sourced echo is not daemon turn activity, so `stalled` is carried unchanged.
       return {
         items: [...state.items, { kind: 'userText', text: event.text }],
-        phase: state.phase
+        phase: state.phase,
+        stalled: state.stalled
       }
     case 'sessionBoundary':
       // A whole boundary marker: fresh tail-append (never coalesced), `phase` untouched — the `userText` /
-      // `turnEnd` discipline. Always a new `items` array (a fresh append is always a change). AC1.
+      // `turnEnd` discipline. Always a new `items` array (a fresh append is always a change). AC1. NOT in
+      // AC2's clear set: a session rotation is not turn activity, so `stalled` is carried unchanged.
       return {
         items: [
           ...state.items,
@@ -199,15 +231,22 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             occurredAt: event.occurredAt
           }
         ],
-        phase: state.phase
+        phase: state.phase,
+        stalled: state.stalled
       }
+    case 'stallDetected':
+      // #317: onset-only stall — set the scalar, leave `items`/`phase` untouched. A redundant onset (the
+      // stall is already live) is a same-reference no-op, mirroring the pure-duplicate discipline of the
+      // other arms.
+      return state.stalled ? state : { items: state.items, phase: state.phase, stalled: true }
     default:
       return assertNever(event)
   }
 }
 
-export const initialTimelineState: TimelineState = { items: [], phase: 'idle' }
+export const initialTimelineState: TimelineState = { items: [], phase: 'idle', stalled: false }
 
 /** Selectors — the read surface, mirroring `sessionStore`'s. */
 export const selectItems = (s: TimelineState): readonly ThreadItem[] => s.items
 export const selectPhase = (s: TimelineState): TurnPhase => s.phase
+export const selectStalled = (s: TimelineState): boolean => s.stalled

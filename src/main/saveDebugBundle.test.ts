@@ -79,9 +79,18 @@ describe('saveDebugBundle', () => {
     expect(err).toBeInstanceOf(Error)
     // Carries a filesystem errno the caller can map to a user-facing error.
     expect((err as NodeJS.ErrnoException).code).toBeTruthy()
-    // Never leaks the bundle byte values in the rejection.
+    // Never leaks the bundle byte values in the rejection — checks message AND errno code.
     const text = `${(err as Error).message} ${(err as NodeJS.ErrnoException).code}`
-    for (const b of bytes) expect(text).not.toContain(String(b))
+    // A leaked bundle surfaces as the bytes' natural coercion (comma-joined decimals), the exact
+    // output of a `${bytes}` interpolation. mkdtemp suffixes are [0-9A-Za-z] only, so this
+    // comma-delimited rendering can never collide with OS temp-path noise — unlike the old bare
+    // per-byte "34" check, which matched e.g. the suffix in "pyry-bundle-34GTBc". The fixture stays
+    // >= 2 bytes so the coercion holds >= 1 comma; a 1-byte array coerces to a bare decimal and
+    // would reintroduce the collision.
+    expect(text).not.toContain(String(bytes)) // String(bytes) === "17,34,51"
+    // Positive control: the same predicate DOES fire when the rendering is present, so the negative
+    // assertion above is not vacuous — a future `${bytes}` leak into the error would be caught.
+    expect(`bundle bytes: ${bytes}`).toContain(String(bytes))
   })
 
   it('rejects when dir is a regular file (ENOTDIR-style), without creating anything', async () => {

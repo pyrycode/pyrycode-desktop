@@ -8,6 +8,7 @@ import { ConversationListData } from './store/conversationListBridge'
 import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
 import { QueueData } from './store/queueBridge'
+import { ScreenSnapshotData } from './store/screenSnapshotBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -101,12 +102,18 @@ function App(): JSX.Element {
   // snapshot into the keyed queue store for the render slice (#294), on the same App-level
   // always-listening rationale — a snapshot can arrive before #294 is ever mounted, and (per daemon
   // #878/#879) several for different conversations can arrive back-to-back. Reactive-only, no gate.
+  // ScreenSnapshotData (#323) is a fifth sibling headless leaf: it lands each unsolicited
+  // `screenSnapshotReceived` marker into the screen-snapshot store for the display slice (#324), on the
+  // same App-level always-listening rationale — a snapshot can arrive before #324 is ever mounted, so
+  // the latest rendered screen must be retained regardless of which screen is shown. Reactive-only, no
+  // gate. Ships dormant — it populates the store, but nothing renders it yet (#324).
   return (
     <>
       <ConversationListData />
       <SessionIdData />
       <RunSettingsWriteData />
       <QueueData />
+      <ScreenSnapshotData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

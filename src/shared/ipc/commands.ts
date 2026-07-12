@@ -64,7 +64,9 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * opaque correlation key, never a token/key/raw frame and never serialized onto the wire; and
  * `dequeueMessage` (#300), whose `payload` reuses the wire DequeueMessagePayload verbatim
  * (`conversation_id` + `queued_msg_id`) to ask the daemon to drop one queued message — ungated (#720),
- * so the payload carries NO token (no `Omit`-derivative, unlike `answerModal`). No member
+ * so the payload carries NO token (no `Omit`-derivative, unlike `answerModal`); and the bare `interrupt`
+ * (#306), which carries NO payload — it stops the running turn (a fire-and-forget bare control frame the
+ * daemon maps to a single claude Esc; daemon SSOT pyrycode #707). No member
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
  *
@@ -83,6 +85,7 @@ export type RendererCommand =
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
+  | { type: 'interrupt' }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -127,6 +130,18 @@ export function dequeueMessageCommand(fields: DequeueMessagePayload): RendererCo
 }
 
 /**
+ * Construct the bare `interrupt` command (#306) — asks the background process to stop the running
+ * turn. Pure and zero-arg: the frame carries NO payload (no token, no conversation selector — the
+ * daemon maps it to a single claude Esc, daemon SSOT pyrycode #707), so there is nothing to wrap. The
+ * twin of a bare `requestConversations` constructor, not the payload-bearing `dequeueMessageCommand`.
+ * The RendererCommand return type is the compile-time guarantee (AC4). Its caller is the render
+ * affordance in #307.
+ */
+export function interruptCommand(): RendererCommand {
+  return { type: 'interrupt' }
+}
+
+/**
  * Runtime type guard for the untrusted renderer→main boundary. True iff `value` is a
  * structurally valid RendererCommand. Accepts extra/unknown fields (structural minimum);
  * rejects everything else. Pure; never throws. Co-located with the union so the two evolve
@@ -164,6 +179,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       )
     case 'dequeueMessage':
       return 'payload' in value && isDequeueMessagePayload(value.payload)
+    case 'interrupt':
+      // Bare member (#306): no payload to validate, so a well-formed `type` is complete acceptance.
+      return true
     default:
       return false
   }

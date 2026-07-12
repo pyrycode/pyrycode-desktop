@@ -36,6 +36,7 @@ import { buildCreateConversation } from './transport/createConversationEnvelope'
 import { buildPromoteConversation } from './transport/promoteConversationEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
+import { buildInterrupt } from './transport/interruptEnvelope'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
@@ -162,6 +163,18 @@ export interface DaemonConnection {
    * (#296); this slice only wires the command path. NEVER throws out of the module (parity #490).
    */
   dequeueMessage(payload: DequeueMessagePayload): void
+  /**
+   * Encrypt a BARE `interrupt` control envelope onto the live session — the "stop the running turn"
+   * signal the daemon maps to a single claude Esc keystroke (daemon SSOT pyrycode #707). Bare: NO
+   * payload argument (the twin of `requestConversations`, not the payload-bearing `dequeueMessage`);
+   * the #305 builder takes only `{ id, ts }`. The `send` TWIN, not `requestDebugBundle`: an inert no-op
+   * when not connected (`driver === null` → return), never a `consumer.fail`. FIRE-AND-FORGET — no
+   * answer token, no reply, and NO correlation memory to leave dangling; the turn stops via the ordinary
+   * end-of-turn events (`turn_end` / `turn_state{idle}`) the timeline already handles, not this leg. Its
+   * caller is the interrupt affordance (#307); this slice only wires the command path. NEVER throws out
+   * of the module (parity #490).
+   */
+  interrupt(): void
   /**
    * Encrypt a payload-carrying `promote_conversation` control envelope onto the live session — asks the
    * daemon to promote a discussion into a saved channel (all three fields required: the id must resolve,
@@ -827,6 +840,25 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function interrupt(): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A bare interrupt has no consumer to fail and is
+    // fire-and-forget; a frame sent while disconnected simply stops nothing (no session, no reply).
+    if (driver === null) return
+    try {
+      // Bare control frame — no payload arg (the requestConversations shape, not dequeueMessage's
+      // fresh-literal payload). Shares the one monotonic nextEnvelopeId with send / requestSnapshot /
+      // requestConversations — no second counter — so ids stay unique across interleaved calls.
+      const bytes = buildInterrupt({ id: nextEnvelopeId, ts: now() })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): the fixed-shape empty-payload envelope cannot
+      // over-cap, but driver.sendMessage can throw. The caught object is DROPPED (classify-don't-forward,
+      // inherited #62) — nothing sensitive on this bare path, and the affordance (#307) is optimistic.
+    }
+  }
+
   function promoteConversation(payload: PromoteConversationPayload): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A promote request has no consumer to fail; a request sent
@@ -1019,6 +1051,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestConversations,
     createConversation,
     dequeueMessage,
+    interrupt,
     promoteConversation,
     setSessionSettings,
     answerModal,

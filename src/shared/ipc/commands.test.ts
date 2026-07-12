@@ -6,6 +6,7 @@ import {
   answerModalCommand,
   cancelModalCommand,
   dequeueMessageCommand,
+  interruptCommand,
   type RendererCommand,
   type AnswerModalCommandPayload
 } from './commands'
@@ -92,6 +93,19 @@ describe('dequeueMessageCommand (#300)', () => {
       // Verbatim pass-through: no field remap, and no token — dropping a queued message is ungated
       // (#720), so the payload reuses the wire type directly (unlike answerModal's Omit-derivative).
       expect(command.payload).toBe(fields)
+    }
+  })
+})
+
+describe('interruptCommand (#306)', () => {
+  it('constructs a bare interrupt command with no payload (fire-and-forget stop-the-turn)', () => {
+    const command = interruptCommand()
+
+    // Discriminant comes from the module, not a bare literal a rename could silently pass.
+    expect(command).toEqual({ type: 'interrupt' })
+    if (command.type === 'interrupt') {
+      // Bare member: no payload — nothing to parameterise, no token/key/raw-frame field (AC5).
+      expect(command).not.toHaveProperty('payload')
     }
   })
 })
@@ -193,6 +207,20 @@ describe('isRendererCommand', () => {
     // Compile-time proof the bare member is in RendererCommand, hence reachable through the existing
     // generic sendCommand bridge — no new preload method or IPC channel exists to test.
     const command: RendererCommand = { type: 'requestConversations' }
+    expect(isRendererCommand(command)).toBe(true)
+  })
+
+  it('accepts the bare interrupt command (no payload — stops the running turn) (#306)', () => {
+    // The interrupt frame carries nothing to parameterise, so its guard case is a bare `return true`.
+    // A structurally-extra field is harmless (structural minimum), like requestConversations.
+    expect(isRendererCommand({ type: 'interrupt' })).toBe(true)
+    expect(isRendererCommand({ type: 'interrupt', extra: 'ignored' })).toBe(true)
+  })
+
+  it('types the bare interrupt member as part of the union (#306)', () => {
+    // Compile-time proof the bare member is in RendererCommand, hence reachable through the existing
+    // generic sendCommand bridge — no new preload method or IPC channel exists to test.
+    const command: RendererCommand = interruptCommand()
     expect(isRendererCommand(command)).toBe(true)
   })
 

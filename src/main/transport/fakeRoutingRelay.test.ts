@@ -16,11 +16,17 @@ function toBytes(data: RawData): Uint8Array {
 }
 
 // A transient pre-open dial reset (#104): under full-suite CPU contention a raw dial to the
-// already-listening relay can hit one ("socket hang up" / ECONNRESET / ECONNREFUSED), which an
+// already-listening relay can hit one ("socket hang up" / ECONNRESET / ECONNREFUSED / an
+// HTTP-upgrade "Parse Error" when the upgrade response is malformed under CPU starvation), which an
 // immediate re-dial clears. Post-close it simply exhausts attempts and rejects.
 function isTransientDialError(err: Error): boolean {
   const code = (err as NodeJS.ErrnoException).code
-  return code === 'ECONNRESET' || code === 'ECONNREFUSED' || /socket hang up/i.test(err.message)
+  return (
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    /socket hang up/i.test(err.message) ||
+    /Parse Error/i.test(err.message) // pre-open HTTP-upgrade parse race under full-suite CPU load
+  )
 }
 
 function connect(

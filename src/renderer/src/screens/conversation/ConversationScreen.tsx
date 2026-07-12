@@ -9,7 +9,7 @@ import {
   useActiveConversationStore,
   selectActiveConversation
 } from '../../store/activeConversationStore'
-import type { ThreadItem } from '../../store/threadTimeline'
+import type { ThreadItem, TurnPhase } from '../../store/threadTimeline'
 import {
   submitMessage,
   composerAvailability,
@@ -20,6 +20,7 @@ import {
 } from './composerSend'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
+import { sendInterrupt } from './sendInterrupt'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
@@ -94,6 +95,10 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
           working indicator, above the run-config row and composer. Renders nothing when empty. */}
       <QueuedBacklogControl />
       <StatusRow onExpand={() => setSheetOpen(true)} />
+      {/* #307: the running-turn interrupt control — a standalone block, right-aligned over the
+          composer's send side, shown only while a turn is running (phase thinking or responding) and
+          retracting on the daemon's turn_state{idle}. Renders nothing at idle. */}
+      <InterruptControl />
       <Composer />
       <RepairControl onUnpaired={onUnpaired} />
       {sheetOpen && (
@@ -388,6 +393,88 @@ export function ThinkingIndicator({ isThinking }: { isThinking: boolean }): JSX.
     <div className="conversation__thinking">
       <div className="bubble bubble--daemon bubble--thinking">Thinking…</div>
     </div>
+  )
+}
+
+// #307: whether a turn is currently running — the interrupt control's gate. This is the one subtle thing
+// in the ticket: the gate is BROADER than ThinkingIndicator's (`phase === 'thinking'` only) — a turn is
+// "running" in BOTH `thinking` and `responding`, so the interrupt affordance must be available in either.
+// Extracted as a named, exported predicate so AC1 (both running phases show, idle hides) is a
+// deterministic, store-free unit test rather than a store-mounted render. Takes the `phase` scalar; the
+// container derives the boolean and passes only that to the pure view (no daemon string reaches it).
+export function isTurnRunning(phase: TurnPhase): boolean {
+  return phase === 'thinking' || phase === 'responding'
+}
+
+// #307: the client-owned accessible name for the icon-only interrupt button (the DROP_QUEUED_LABEL /
+// EMPTY_THREAD_COPY idiom). Icon-only buttons carry no visible text, so aria-label supplies the
+// accessible name (the .composer__send / .status-sheet__close pattern in this file). Conveys both "stop"
+// and "interrupt" (AC4). Never a daemon string.
+const INTERRUPT_LABEL = 'Stop the running turn'
+
+// #307: the interrupt control's pure view — the ThinkingIndicator twin (null-on-false) plus the
+// QueuedBacklog icon-button shape (aria-label from a client-owned constant, a required injected effect).
+// Pure props-in/markup-out and exported so tests server-render it with an injected boolean, no store.
+//
+// Takes `isRunning: boolean`, NOT `phase: TurnPhase` — the same type-level guarantee as ThinkingIndicator:
+// the view structurally cannot render a daemon-supplied string because it never receives one; the
+// container does the `isTurnRunning(phase)` derivation. `onInterrupt` is a REQUIRED injected effect (the
+// "a view that cannot answer is a bug" rule) — the container binds it to sendInterrupt; the view never
+// touches window.pyry.
+//
+// !isRunning → null (zero layout footprint, the ThinkingIndicator / QueuedBacklog posture — the
+// structural AC1 "absent at idle" guarantee). isRunning → an icon-only <button> carrying an inline M3
+// `stop` glyph (a filled square, the mobile-design gap's derived affordance per the spec's Design
+// source). Keyboard-activatable is free: a native <button> fires onClick on Enter/Space (AC4), so no
+// custom key handling. Not disabled after click and holding no "already interrupted" state — a second Esc
+// is harmless (the daemon owes no reply), and a disable-after-click flag would be new client state (AC3
+// forbids it); the control simply stays until `phase` leaves the running set.
+export function InterruptButton({
+  isRunning,
+  onInterrupt
+}: {
+  isRunning: boolean
+  onInterrupt: () => void
+}): JSX.Element | null {
+  if (!isRunning) return null
+  return (
+    <div className="conversation__interrupt">
+      <button
+        type="button"
+        className="interrupt-button"
+        aria-label={INTERRUPT_LABEL}
+        onClick={onInterrupt}
+      >
+        <svg
+          className="interrupt-button-icon"
+          viewBox="0 0 24 24"
+          width="22"
+          height="22"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M6 6h12v12H6z" />
+        </svg>
+      </button>
+    </div>
+  )
+}
+
+// The store-bound container for the interrupt control (#307). Reads the existing `phase` slice (the same
+// selectPhase the ConversationScreen container already holds), derives the is-running boolean, and binds
+// the injected effect. window.pyry.sendCommand is dereferenced ONLY inside the click closure (interaction
+// time, never render — the Composer.handleSubmit / QueuedBacklogControl discipline), so the
+// server-rendered container smoke test never touches the bridge. No optimistic mutation: the helper only
+// sends (AC3); the control retracts when the daemon's next turn_state{idle} returns `phase` to idle, via
+// this subscription — no new client state, no "stopping" flag, no timers. In-file and not exported, like
+// QueuedBacklogControl.
+function InterruptControl(): JSX.Element | null {
+  const phase = useTimelineStore(selectPhase)
+  return (
+    <InterruptButton
+      isRunning={isTurnRunning(phase)}
+      onInterrupt={() => sendInterrupt({ sendCommand: window.pyry.sendCommand })}
+    />
   )
 }
 

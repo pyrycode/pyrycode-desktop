@@ -9,7 +9,9 @@ import {
   StatusSheet,
   RepairPrompt,
   ConnectionBanner,
-  WorkspaceChip
+  WorkspaceChip,
+  isTurnRunning,
+  InterruptButton
 } from './ConversationScreen'
 import { composerAvailability, CONNECTION_BANNER_COPY } from './composerSend'
 import type { Message } from './messageViewModel'
@@ -411,6 +413,45 @@ describe('ThinkingIndicator — the pre-text working affordance', () => {
   })
 })
 
+// #307: the running-turn interrupt control. isTurnRunning is the exported gate predicate; InterruptButton
+// the exported pure view (the ThinkingIndicator pattern) — call / server-render them directly with
+// injected values, no store. The gate is deliberately BROADER than ThinkingIndicator's (`phase ===
+// 'thinking'` only): a turn is "running" in BOTH thinking and responding, so the interrupt affordance
+// shows in either. The store-bound InterruptControl is untested glue (the QueuedBacklogControl posture);
+// the activation→command proof lives in sendInterrupt.test.ts (the `node` env fires no clicks).
+describe('isTurnRunning — the interrupt gate (broader than the thinking indicator)', () => {
+  it('is running while thinking (AC1)', () => {
+    expect(isTurnRunning('thinking')).toBe(true)
+  })
+
+  it('is running while responding — the broader-than-indicator phase (AC1)', () => {
+    expect(isTurnRunning('responding')).toBe(true)
+  })
+
+  it('is not running while idle (AC1)', () => {
+    expect(isTurnRunning('idle')).toBe(false)
+  })
+})
+
+describe('InterruptButton — the running-turn interrupt affordance (#307)', () => {
+  const noop = (): void => {}
+
+  it('is inert when not running — renders nothing (zero layout footprint, AC1)', () => {
+    expect(renderToStaticMarkup(<InterruptButton isRunning={false} onInterrupt={noop} />)).toBe('')
+  })
+
+  it('shows an icon-only button with an accessible name conveying stop/interrupt while running (AC1/AC4)', () => {
+    const markup = renderToStaticMarkup(<InterruptButton isRunning={true} onInterrupt={noop} />)
+    expect(markup).toContain('conversation__interrupt')
+    // Match the exact button class (the closing quote excludes the .interrupt-button-icon svg class,
+    // which shares the prefix) — one icon-only control.
+    expect(markup).toContain('class="interrupt-button"')
+    // The client-owned accessible name (icon-only control), never a daemon string; conveys both
+    // "stop" and "interrupt" (AC4). Keyboard activation is free from the native <button> (AC4).
+    expect(markup).toContain('aria-label="Stop the running turn"')
+  })
+})
+
 // #294: the held queued backlog. QueuedBacklog is the pure, exported view (the ThinkingIndicator
 // pattern) — server-render it with an injected QueuedItem[] to prove the empty→null posture and the
 // populated rows without touching the queue store. The store-bound QueuedBacklogControl reads
@@ -753,6 +794,18 @@ describe('ConversationScreen — store binding', () => {
   it('mounts the empty queue store with no queued backlog region (the inert render slice, AC4)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__queued')
+  })
+
+  // #307: the interrupt control mounts against the idle timeline store (getInitialState phase: 'idle'),
+  // so isTurnRunning is false and InterruptButton returns null — no interrupt region renders. The inert
+  // render slice, layout unchanged until a turn runs (the ThinkingIndicator-smoke analog); the running
+  // path is proven on the pure InterruptButton describe above, and the dispatch in sendInterrupt.test.ts.
+  // Also keeps window.pyry out of the container render — the bridge is dereferenced only in the click
+  // closure, so the server render never touches it.
+  it('mounts the idle timeline with no interrupt control (the inert render slice)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('conversation__interrupt')
+    expect(markup).not.toContain('interrupt-button')
   })
 
   it('renders the composer with a text input and an accessible send control', () => {

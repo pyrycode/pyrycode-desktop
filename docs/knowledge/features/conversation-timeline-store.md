@@ -47,12 +47,21 @@ self-check (written before #223 merged) undercounted by one file; see [#229 code
 notes](../codebase/229.md) § Lessons learned. `selectItems` now exposes a `toolCall`'s resolved outcome;
 no render yet — that's the sibling slice [#230](https://github.com/pyrycode/pyrycode-desktop/issues/230).
 
+[#317](../codebase/317.md) added a sixth owned arm, `stallDetected` — the daemon's onset-only stall
+liveness signal ([#315](../codebase/315.md)), moved out of the inverse-filter `null` list it shipped
+dormant in. Unlike every prior owned arm, both the `DaemonEvent` and the `ThreadEvent` sides are
+**nullary** (`{ type: 'stallDetected' }`), so the mapping is arm-selection only — no field to filter or
+copy. `reduceTimeline`'s new arm sets a second scalar, `stalled: boolean`, beside `phase`; the four
+other owned arms (`assistantDelta`/`toolUse`/`toolResult`/`turnState`) now also clear it as a side
+effect of being turn activity. `selectStalled` joins `selectItems`/`selectPhase` as the read surface.
+
 ## What it does
 
-Turns the five owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
-via `reduceTimeline`, exposing `selectItems`/`selectPhase` as the only read surface. A stream arrival
-(an `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result` outcome) re-renders
-only components selecting a timeline slice — orthogonal to `sessionStore` and `runConfigStore`.
+Turns the six owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
+via `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled` as the only read surface. A
+stream arrival (an `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result`
+outcome, a `stall` onset) re-renders only components selecting a timeline slice — orthogonal to
+`sessionStore` and `runConfigStore`.
 
 ## How it works
 
@@ -64,7 +73,7 @@ export type TimelineStore = TimelineState & { dispatch: (event: ThreadEvent) => 
 createTimelineStore(init?)   // vanilla createStore — one isolated instance per test (DI seam)
 timelineStore                 // app-wide singleton
 useTimelineStore(selector)    // narrow-slice React binding: useStore(timelineStore, selector)
-export { selectItems, selectPhase } from './threadTimeline'   // re-exported, never redefined
+export { selectItems, selectPhase, selectStalled } from './threadTimeline'   // re-exported, never redefined
 ```
 
 Mirrors `createSessionStore`'s DI-factory → singleton → hook → selectors structure (ADR 0004), but
@@ -77,9 +86,11 @@ speculative observer here would defend an unobserved need.
 
 ```ts
 translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
-// Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229), each rebuilt as a
-// fresh named-field literal (never `return event`, never a spread). Every other arm -> null via explicit
-// fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
+// Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229) / stallDetected
+// (#317), each rebuilt as a fresh named-field literal (never `return event`, never a spread — for
+// stallDetected, both sides are nullary, so the "literal" is arm-selection only). Every other arm ->
+// null via explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft
+// catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te) })
@@ -91,8 +102,8 @@ useTimelineBridge(): void
 ```
 
 This is the deliberate mirror image of [`daemonEventBridge`](daemon-event-bridge.md): that bridge's
-`assertNever`-guarded switch returns `null` for these same five arms and owns the rest; this bridge
-owns exactly these five and returns `null` for the rest — and, since [#223](../codebase/223.md), a
+`assertNever`-guarded switch returns `null` for these same six arms and owns the rest; this bridge
+owns exactly these six and returns `null` for the rest — and, since [#223](../codebase/223.md), a
 **third** independent exhaustive switch, [modal store + bridge](modal-store-bridge.md)'s `modalBridge.ts`,
 returns `null` for them too. Three independent subscribers on the same `window.pyry.onDaemonEvent`
 channel, each with its own hard exhaustiveness guard — so a future `DaemonEvent` member is a compile
@@ -115,19 +126,22 @@ design from ADR 0008. `toolUse` is the first owned arm whose `ThreadEvent` count
 folds into an **appended `ThreadItem`** (a `toolCall`) rather than a text delta or a scalar; `toolResult`
 is the first to **resolve** one already appended — `reduceTimeline`'s `fillResult` (#121) correlates it to
 the pending `toolCall` by `toolUseId` and fills `result` in place, a same-reference no-op on an orphan or
-duplicate.
+duplicate. `stallDetected` ([#317](../codebase/317.md)) is the first arm where **both** sides of the
+mapping are nullary — `DaemonEvent.stallDetected` and `ThreadEvent.stallDetected` are both
+`{ type: 'stallDetected' }`, so the case is pure arm-selection with no field to filter or copy.
 
 ### Data flow
 
 ```
-daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id dropped)→
-   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult}
+daemon frame ─(#199/#214/#217/#229/#315 transport, snake→camel, conversation_id dropped)→
+   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult|stallDetected}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
    → timelineStore.dispatch → reduceTimeline → TimelineState
-   → selectItems / selectPhase   (selectItems read by #203's Timeline view, now also carrying
-                                   pending toolCall items from #217 with results resolved by
-                                   #229; selectPhase read by #215's ThinkingIndicator view)
+   → selectItems / selectPhase / selectStalled   (selectItems read by #203's Timeline view, now also
+                                   carrying pending toolCall items from #217 with results resolved by
+                                   #229; selectPhase read by #215's ThinkingIndicator view; selectStalled
+                                   read by #317's StallIndicator view)
 ```
 
 ## Configuration and usage
@@ -141,7 +155,11 @@ daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id d
   as of [#215](../codebase/215.md) — `ConversationScreen`'s `ThinkingIndicator`, reading
   `useTimelineStore(selectPhase)` to derive `isThinking`. See
   [Conversation shell § Thinking indicator](conversation-shell.md#thinking-indicator-215).
-- Import surface: `import { useTimelineStore, selectItems, selectPhase } from
+  `selectStalled` has a real source as of [#315](../codebase/315.md) (`stall`) and its first reader as
+  of [#317](../codebase/317.md) — `ConversationScreen`'s `StallIndicator`, reading
+  `useTimelineStore(selectStalled)` to derive `isStalled`. See
+  [Conversation shell § Stall indicator](conversation-shell.md#stall-indicator-317).
+- Import surface: `import { useTimelineStore, selectItems, selectPhase, selectStalled } from
   '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
   '@renderer/store/timelineBridge'`.
 - No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
@@ -166,6 +184,9 @@ daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id d
 - **The `toolCall` item's `result` fills as of [#229](../codebase/229.md), rendered as of
   [#230](../codebase/230.md).** The transport-to-reducer chain resolves its correlated `toolCall`'s
   `result` in place, visible via `selectItems`; the success/error visual landed in #230.
+- **`stalled` is onset-only — no daemon "cleared" frame exists ([#317](../codebase/317.md)).** The
+  reducer derives the clear entirely client-side, on the next `assistantDelta`/`toolUse`/`toolResult`/
+  `turnState` arm; a stall with no following turn activity stays shown indefinitely, by design.
 
 ## Related
 
@@ -223,3 +244,8 @@ daemon frame ─(#199/#214/#217/#229 transport, snake→camel, conversation_id d
   [#249](https://github.com/pyrycode/pyrycode-desktop/issues/249).
 - [#179 codebase notes](../codebase/179.md) — flips `interactive` live, and adds `Composer`'s direct
   `userText` dispatch as this store's sixth write path (renderer-sourced, not bridge-translated).
+- [#315 codebase notes](../codebase/315.md) — the `stall` transport slice: wire type, decode, and the
+  nullary `stallDetected` `DaemonEvent` arm, shipped dormant (all three bridges nulled it).
+- [#317 codebase notes](../codebase/317.md) — the render slice: moves `stallDetected` from this
+  bridge's inverse-filter `null` list to a sixth owned arm, adds the `stalled` scalar and
+  `selectStalled`, and gives it its first reader, `ConversationScreen`'s `StallIndicator`.

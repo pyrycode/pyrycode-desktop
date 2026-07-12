@@ -1,16 +1,16 @@
 # Dequeue message envelope (outbound)
 
-The **outbound** half of the queue-drop path: the wire type and the pure, fail-closed transport
-builder the desktop will use to remove one queued-but-not-yet-run message from a conversation's
-backlog before it runs. This slice ships **only** the wire contract and the builder — no command
-wiring, no `daemonConnection` method, no renderer UI.
+The **outbound** half of the queue-drop path: the wire type, the pure fail-closed transport builder,
+and the full renderer→main command path the desktop uses to remove one queued-but-not-yet-run message
+from a conversation's backlog before it runs. No renderer UI yet — the drop affordance that dispatches
+the command is a separate later slice, #296.
 
-Introduced in [#299](../codebase/299.md), the wire+builder base slice split from
+Introduced in [#299](../codebase/299.md) (the wire type + `buildDequeueMessage`), split from
 [#295](https://github.com/pyrycode/pyrycode-desktop/issues/295) along the #235/#236 seam (memory:
-#295 tripped the ≥5-file split gate and was re-split). Blocks
-[#300](https://github.com/pyrycode/pyrycode-desktop/issues/300) — the `daemonConnection.dequeueMessage`
-method + IPC command that will call this builder, and the eventual renderer affordance's dispatch
-target.
+#295 tripped the ≥5-file split gate and was re-split). Wired to the renderer→main command path in
+[#300](../codebase/300.md) (shipped): a `dequeueMessage` `RendererCommand` member, its
+`isDequeueMessagePayload` boundary guard, and a `daemonConnection.dequeueMessage` method. Blocks
+#296 — the render slice that adds the drop affordance and calls `dequeueMessageCommand`.
 
 ## What it does
 
@@ -60,47 +60,83 @@ export function buildDequeueMessage(input: DequeueMessageInput): Uint8Array
 A verbatim structural clone of `buildRequestSnapshot` ([screen-snapshot fetch](screen-snapshot-fetch.md))
 — pure, synchronous, no clock/counter read (`id`/`ts`/`payload` are all caller-injected), no side
 effects. `encodeEnvelope` (see [wire codec](wire-codec.md)) throws `WireEncodeError` above
-`MAX_PLAINTEXT_BYTES`; the builder propagates it unchanged — the eventual caller (#300's
-`daemonConnection.dequeueMessage`) catches it and drops the send, the same posture as
-`buildSendMessage`/`buildRequestSnapshot`/the [modal resolution](modal-resolution-envelope.md)
-builders. No barrel — never re-exported through the renderer; raw bytes stay in main.
+`MAX_PLAINTEXT_BYTES`; the builder propagates it unchanged — `daemonConnection.dequeueMessage` (#300)
+catches it and drops the send, the same posture as `buildSendMessage`/`buildRequestSnapshot`/the
+[modal resolution](modal-resolution-envelope.md) builders. No barrel — never re-exported through the
+renderer; raw bytes stay in main.
+
+### The command path (`src/shared/ipc/commands.ts`, `src/main/daemonConnection.ts`,
+`src/main/index.ts` — [#300](../codebase/300.md))
+
+```ts
+// src/shared/ipc/commands.ts
+export type RendererCommand = ... | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
+export function dequeueMessageCommand(fields: DequeueMessagePayload): RendererCommand
+function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload
+// conversation_id present-and-string, queued_msg_id present-and-number — typeof only,
+// no integer/positive/range check (mirrors the #292 decode guard's requireNumber-alone posture)
+
+// src/main/daemonConnection.ts
+dequeueMessage(payload: DequeueMessagePayload): void
+// driver === null → no-op; fresh-literal { conversation_id, queued_msg_id } (never a spread of
+// payload — bounds the wire regardless of what the structural-minimum guard let through); shares
+// the one monotonic nextEnvelopeId with send/requestSnapshot/createConversation; try/catch drops
+// the caught object (classify-don't-forward); never throws out of the module (parity #490)
+```
+
+The wire payload is reused **verbatim** on the command — no `Omit`-derivative, unlike
+`answerModal`'s token-excluded payload (#236), because dequeue is ungated and there is no token to
+strip. `main/index.ts`'s `onCommand` switch forwards `case 'dequeueMessage'` directly to
+`connection.dequeueMessage(command.payload)` — no orchestrator, mirroring `requestSnapshot`. Full
+detail: [#300 codebase notes](../codebase/300.md).
 
 ## Configuration and usage
 
-**Not yet consumed.** [#300](https://github.com/pyrycode/pyrycode-desktop/issues/300) is expected to
-add `daemonConnection.dequeueMessage(payload)` (the `requestSnapshot` shape — inert no-op when not
-connected, shares the module's `nextEnvelopeId` counter) plus a `dequeueMessage` `RendererCommand`
-member and `isDequeueMessagePayload` boundary guard, routed through `main/index.ts`'s `onCommand`
-switch. The renderer affordance that dispatches it (e.g. a remove control on the [queued backlog
-render](conversation-shell.md)) is deferred further, blocked on #300.
+- **Producer (deferred to #296):** the drop affordance will call `dequeueMessageCommand({
+  conversation_id, queued_msg_id })` and pass the result to `window.pyry.sendCommand`. The
+  `queued_msg_id` it selects by comes from the [queue store](queue-store.md)'s held `QueuedItem` rows.
+- **Consumer, already wired:** `main/index.ts`'s `onCommand` switch → `connection.dequeueMessage`.
+  Fire-and-forget — no reply is expected; the daemon's re-broadcast `queue_state` snapshot (decoded
+  by #292, rendered by #294) is the observable effect, existing machinery outside this feature.
+- No renderer surface exists yet. `dequeueMessageCommand` is exported ahead of its first consumer,
+  the same shape every prior command has shipped in (e.g. `createConversation` before #242).
 
 ## Edge cases and limitations
 
 - **No decode path.** The frame is outbound-only — there is nothing for `inboundMessage.ts` to parse
   here, mirroring #235's modal-resolution slice.
-- **No validation of `queued_msg_id` against the held backlog.** That belongs to the future caller,
-  which holds the live [queue store](queue-store.md) state; the builder serializes whatever payload
-  it is given.
-- **Ungated by design.** No token, no nonce — the sole gate on dropping a queued message is #300's
-  future IPC-edge validation of the renderer-supplied `conversation_id`/`queued_msg_id`, plus the
-  operation's inherently low severity (a user can only drop their own not-yet-run queued entry, and
-  an unknown id is a daemon-side no-op). This is the project security model (#720), not an oversight.
+- **No validation of `queued_msg_id` against the held backlog.** Neither the builder nor the
+  boundary guard checks it against the [queue store](queue-store.md)'s held rows — an unknown id is a
+  daemon-side no-op, not a client-side error.
+- **Ungated by design.** No token, no nonce — the boundary guard (`isDequeueMessagePayload`, #300) is
+  a `typeof`-only structural check, not an authorization gate; a smuggled extra field passes it and is
+  dropped instead by the connection method's fresh-literal construction. Dropping your own queued
+  message has inherently low severity (a user can only affect their own not-yet-run entry, and an
+  out-of-range id is a daemon-side no-op). This is the project security model (#720), not an
+  oversight.
 - **Zero `EnvelopeType` consumer cascade.** No production code does an exhaustive `switch` over
   `EnvelopeType` (unlike the `DaemonEvent` union, which has three independent exhaustive switches) —
   adding the member needed no companion `assertNever` fix-up anywhere.
+- **No renderer surface.** #300 is command-path only by explicit scope boundary; there is no button,
+  row control, or dispatch site until #296 lands.
 
 ## Related
 
 - [Queue store](queue-store.md) / [#292 codebase notes](../codebase/292.md) — the inbound half of the
-  Queue family (`queue_state` decode + `QueuedItem`) this outbound frame is symmetric with.
+  Queue family (`queue_state` decode + `QueuedItem`) this outbound frame is symmetric with, and the
+  future #296 drop affordance's source for `queued_msg_id`.
+- [Command channel](command-channel.md) — the `RendererCommand`/`isRendererCommand` seam #300 extends
+  with the `dequeueMessage` member.
 - [Modal resolution envelope](modal-resolution-envelope.md) / [#235 codebase notes](../codebase/235.md)
   — the closest prior wire+builder-only base slice, split along the same seam this ticket reuses.
+- [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the
+  `createConversation` template #300's connection method and command clone (minus the token mint).
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the `buildRequestSnapshot` precedent this
   builder is a structural clone of.
 - [Wire codec](wire-codec.md) — `encodeEnvelope`/`WireEncodeError`/`MAX_PLAINTEXT_BYTES`, unchanged by
   this slice.
-- [#299 codebase notes](../codebase/299.md) — implementation summary.
-- Blocks [#300](https://github.com/pyrycode/pyrycode-desktop/issues/300) — the `daemonConnection`
-  method + IPC command that will call `buildDequeueMessage`.
+- [#299 codebase notes](../codebase/299.md) / [#300 codebase notes](../codebase/300.md) —
+  implementation summaries for the wire+builder and command-path slices.
+- Blocks #296 — the render slice (drop affordance) that will call `dequeueMessageCommand`.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § Queue; pyrycode #720 (queue
   security model — dequeue is ungated for any paired client).

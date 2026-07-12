@@ -261,6 +261,12 @@ app.whenReady().then(() => {
         // conversation_created → conversationCreated event. Inert no-op when not connected (#241).
         connection.createConversation(command.payload)
         return
+      case 'dequeueMessage':
+        // Direct to the connection method (mirrors requestSnapshot), no orchestrator — a dequeue is
+        // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts
+        // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
+        connection.dequeueMessage(command.payload)
+        return
       case 'promoteConversation':
         // Direct to the connection method (mirrors createConversation), no orchestrator — a promote
         // request has no consumer/reassembler. Sends promote_conversation; the daemon confirms with one

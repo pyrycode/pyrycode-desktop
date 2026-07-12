@@ -19,7 +19,9 @@ context-window usage feature (split from #182); the gauge render is
 in [#316](../codebase/316.md), split from #147: `case 'snapshot'` now fires a **second**, dedicated
 `screenSnapshotReceived` event alongside the unchanged `snapshotReceived`, deliberately surfacing the
 `text`/`ts` fields §5 below used to drop — a security-reviewed reversal of that minimisation now that
-the display slice [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318) needs them.
+the display slice needs them — [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318), since
+split into the store ([#323](../codebase/323.md)) and the action + view
+([#324](../codebase/324.md)).
 
 ## Why this is always-available, not gated on `interactive`
 
@@ -232,7 +234,7 @@ daemon → screen_snapshot frame → onDriverEvent 'message' → parseInboundMes
       → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction) → run-config store (#187,
         still 3-field — usage consumption is #192)
       → emitDaemonEvent {type:'screenSnapshotReceived', text, ts}   [#316, second emit, same frame]
-      → DAEMON_EVENT_CHANNEL → all three bridges (→ null, dormant) → display slice #318
+      → DAEMON_EVENT_CHANNEL → all three bridges (→ null) → screenSnapshotStore (#323) → display slice #324
 ```
 
 ## Error handling
@@ -269,9 +271,8 @@ that failure is actually observed (evidence-based-fix).
   ([#187](../codebase/187.md)) through #191.
 - **Rendering the `text` field** — [#316](../codebase/316.md) surfaced `text`/`ts` across IPC via the
   dedicated `screenSnapshotReceived` event (see §5 above); [#323](../codebase/323.md) added the
-  [dedicated renderer store](screen-snapshot-store.md) that retains the latest value, but actually
-  rendering it as the live-screen view (and the action that triggers it) is
-  [#324](https://github.com/pyrycode/pyrycode-desktop/issues/324), blocked on #323.
+  [dedicated renderer store](screen-snapshot-store.md) that retains the latest value;
+  [#324](../codebase/324.md) added the request action and the `<pre>` display that reads it.
 - **Daemon `error` reply correlation** — see § Correlation above.
 
 ## Related
@@ -281,10 +282,11 @@ that failure is actually observed (evidence-based-fix).
   feature (pyrycode/pyrycode#857).
 - [#316 codebase notes](../codebase/316.md) — the deliberate, security-reviewed widening that
   surfaces `text`/`ts` via a second, dedicated `screenSnapshotReceived` emit at the same seam;
-  unblocks the display slice #318.
+  unblocked the display slice, since split into #323 (store) + #324 (action + view).
 - [Screen-snapshot store](screen-snapshot-store.md) / [#323 codebase notes](../codebase/323.md) —
-  the dedicated renderer store + reactive-only observer that retains this event's `text`/`ts`,
-  unblocking the display slice #324.
+  the dedicated renderer store + reactive-only observer that retains this event's `text`/`ts`.
+- [#324 codebase notes](../codebase/324.md) — the request action + `<pre>` display, the first and
+  only consumer of the store above.
 - [Daemon connection](daemon-connection.md) — hosts `requestSnapshot()`, the `send` twin.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseScreenSnapshotPayload` and the
   `snapshot` `InboundDaemonMessage` kind.

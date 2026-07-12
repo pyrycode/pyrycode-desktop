@@ -96,9 +96,9 @@ so this bridge's `null`-returning case discards a literal that already carries n
 [#316](../codebase/316.md) added a nineteenth no-store-action member, `screenSnapshotReceived` — a
 **deliberate widening**, carrying the rendered-screen `text`/`ts` that `snapshotReceived`
 ([#180](../codebase/180.md)) deliberately excludes, now that the display slice
-[#318](https://github.com/pyrycode/pyrycode-desktop/issues/318) (blocked on this ticket) needs it.
-Emitted from the same `case 'snapshot'` seam as `snapshotReceived`, so one decoded frame now fires
-both events. Consumed by **none** of the three existing bridges; this bridge's `null`-returning case
+[#324](../codebase/324.md) needs it. Emitted from the same `case 'snapshot'` seam as
+`snapshotReceived`, so one decoded frame now fires both events. Consumed by **none** of the three
+existing bridges; this bridge's `null`-returning case
 discards a real, non-trivial payload (unlike `stallDetected`'s nullary literal) — the fifth arm to
 force a case in all three exhaustive `assertNever`-guarded switches at once, after
 `toolResult`/`conversationCreated`/`sessionTransition`/`stallDetected`.
@@ -128,7 +128,7 @@ A `switch (event.type)` over all twenty-three `DaemonEvent` arms with a `default
 | `debugBundleSaved` | `null` | consumed by the download UI (#72), not the session store |
 | `debugBundleFailed` | `null` | consumed by the download UI (#72), not the session store |
 | `snapshotReceived` | `null` | consumed by the [Run configuration store](run-config-store.md)'s data path (#187), not the session store |
-| `screenSnapshotReceived` | `null` | consumed by neither existing bridge; the real consumer is the display slice #318 — present only for exhaustiveness (#316, deliberate widening) |
+| `screenSnapshotReceived` | `null` | consumed by neither existing bridge; the real consumer is the [screen-snapshot store](screen-snapshot-store.md)'s own observer (#323), read by the display slice #324 — present only for exhaustiveness (#316, deliberate widening) |
 | `assistantDelta` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#199) |
 | `turnEnd` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#199) |
 | `conversationsReceived` | `null` | consumed by the conversation-list store (#208), not the session store — present only for exhaustiveness (#139) |
@@ -225,7 +225,7 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turnState` member this bridge tolerates as an eighth `null`-returning case; the third arm the timeline bridge owns, alongside `assistantDelta`/`turnEnd`
 - [#315 codebase notes](../codebase/315.md) — the `stallDetected` member this bridge tolerates as an eighteenth `null`-returning case, the fourth arm to force a case in all three exhaustive bridges at once; the only nullary member (its one decoded field, `conversation_id`, is dropped at the emit)
 - [#317 codebase notes](../codebase/317.md) — the render slice that claims `stallDetected` as the [conversation timeline store](conversation-timeline-store.md) bridge's sixth owned arm (this bridge, the session store, still nulls it)
-- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member this bridge tolerates as a nineteenth `null`-returning case, the fifth arm to force a case in all three exhaustive bridges at once; unlike `stallDetected`, a deliberate widening carrying real content (`text`/`ts`) this bridge still discards, since its consumer is the display slice #318, not the session store
+- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member this bridge tolerates as a nineteenth `null`-returning case, the fifth arm to force a case in all three exhaustive bridges at once; unlike `stallDetected`, a deliberate widening carrying real content (`text`/`ts`) this bridge still discards, since its consumer is the [screen-snapshot store](screen-snapshot-store.md)'s independent observer (#323) and the display slice #324, not the session store
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member this bridge tolerates as a ninth `null`-returning case; the fourth arm the timeline bridge owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members this bridge tolerates as a tenth and eleventh `null`-returning case; unlike every prior member, the timeline bridge ALSO returns `null` for these — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member this bridge tolerates as a twelfth `null`-returning case; the fifth arm the timeline bridge owns and the first to **resolve** an existing `ThreadItem` rather than append one or set a scalar; the first arm to force a case in three exhaustive `DaemonEvent` switches at once (session, timeline, and [modal store + bridge](modal-store-bridge.md))

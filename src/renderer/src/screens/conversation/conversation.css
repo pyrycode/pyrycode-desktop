@@ -670,6 +670,81 @@
   display: block;
 }
 
+/* #324 — the screen-snapshot region: the request button above a bounded panel showing the held daemon
+   screen. flex: 0 0 auto (the .conversation__thinking / .conversation__interrupt posture, NOT the thread's
+   1 1 auto) so it never competes with the timeline's flex region; a column with a small gap and the thread's
+   --space-4 inset. The mobile Figma draws no daemon-screen surface (the documented design gap), so this is
+   built from existing conversation.css idioms. */
+.screen-snapshot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+}
+
+/* The request button — a de-emphasized text button (the .conversation__unpair treatment: muted M3 label,
+   surface tint only on hover), self-aligned to the start so it does not stretch full-width. Disabled while
+   not connected, reusing the .composer__send:disabled convention (muted content, no pointer affordance). */
+.screen-snapshot__request {
+  align-self: flex-start;
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.screen-snapshot__request:hover:not(:disabled) {
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+}
+
+.screen-snapshot__request:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.screen-snapshot__request:disabled {
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
+}
+
+/* The held daemon screen — a monospace, whitespace-preserving <pre> reusing the daemon bubble's
+   fill / radius / padding (.bubble--daemon) so it reads as daemon-originated content. Bounded height with
+   internal scroll (max-height + overflow: auto) so a large screen dump never shoves the composer off-screen.
+   overflow-x: auto lets a wide terminal line scroll horizontally rather than break the layout. `text` is
+   untrusted daemon-relayed content rendered as auto-escaped React children — never an HTML sink (AC4). */
+.screen-snapshot__screen {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--space-3) var(--space-bubble-x);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  white-space: pre;
+}
+
+/* The "no snapshot received yet" placeholder — the muted caption treatment (.composer__hint). Distinct
+   from a received blank screen, which renders an empty .screen-snapshot__screen <pre> instead. */
+.screen-snapshot__empty {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
 /* The collapsed status row (#177) — the trigger that opens the Run configuration sheet. A slim
    full-width button between the thread and the composer, with a top border separating it from the
    thread. Never grows or shrinks. The top border is --color-outline-variant and the muted icon is

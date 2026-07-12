@@ -73,11 +73,12 @@ on this arm carries that warning forward since this ticket has no DOM sink of it
 [#316](../codebase/316.md) added a nineteenth no-`SessionAction` member, `screenSnapshotReceived` — a
 **deliberate widening**, the opposite move from every content-minimised member above. It carries the
 rendered-screen `text` (and its `ts`) that `snapshotReceived` ([#180](../codebase/180.md)) deliberately
-drops, now that the display slice [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318) (blocked
-on this ticket) needs it. Emitted from the **same** `case 'snapshot'` seam as `snapshotReceived` — one
-decoded `screen_snapshot` frame now fires both events, each a fresh named-field literal bounding its own
-two/five fields. Consumed by neither existing bridge; `screenSnapshotReceived` ships dormant, real
-consumer is #318. See [screen snapshot fetch](screen-snapshot-fetch.md) for the full data-flow update.
+drops, now that the display slice [#324](../codebase/324.md) needs it. Emitted from the **same**
+`case 'snapshot'` seam as `snapshotReceived` — one decoded `screen_snapshot` frame now fires both
+events, each a fresh named-field literal bounding its own two/five fields. Consumed by neither
+existing bridge; `screenSnapshotReceived` is held by the [screen-snapshot store](screen-snapshot-store.md)'s
+observer (#323) and read by #324's `ScreenSnapshotControl`. See
+[screen snapshot fetch](screen-snapshot-fetch.md) for the full data-flow update.
 
 ## What it does
 
@@ -150,14 +151,14 @@ export type DaemonEvent =
   now fires both events. Unlike `snapshotReceived`, this is a **deliberate, security-reviewed
   widening**: it carries exactly the two fields `snapshotReceived` was built to exclude (`text`, the
   rendered daemon screen, and `ts`, its RFC3339 timestamp), reversing #180's drop now that a consumer
-  exists (the display slice [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318), blocked on
-  this ticket). Like `assistantDelta`, `text` IS the render payload and crosses IPC on purpose — the
+  exists (the display slice #324, split from #318 via the [screen-snapshot store](screen-snapshot-store.md)'s
+  #323). Like `assistantDelta`, `text` IS the render payload and crosses IPC on purpose — the
   boundary defended upstream is the fail-closed decode (`parseScreenSnapshotPayload`, unchanged since
   #180), not this internal channel. The emit is a **fresh named-field literal**
   (`{ text: inbound.snapshot.text, ts: inbound.snapshot.ts }`), never a spread of the decoded payload, so
   the widening is bounded to exactly these two fields — `conversation_id`/`model`/`effort`/`yolo`/the two
-  usage ints stay on `snapshotReceived` only. `text` is untrusted daemon-relayed content: #318 must
-  render it as plain text, never HTML (the `conversationCreated`/`sessionTransition`/`queueState`
+  usage ints stay on `snapshotReceived` only. `text` is untrusted daemon-relayed content: #324
+  renders it as plain text, never HTML (the `conversationCreated`/`sessionTransition`/`queueState`
   warning applied to a fourth field family). Consumed by none of the three existing bridges; ships
   dormant.
 - **`assistantDelta{turnId,seq,text}` / `turnEnd{turnId,stopReason}`** ([#199](../codebase/199.md))
@@ -367,7 +368,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turnState` member, the third arm the `timelineBridge` owns, and the closed-enum decode idiom cloned from `role`
 - [#315 codebase notes](../codebase/315.md) — the `stallDetected` member, the eighteenth no-`SessionAction` arm and the only nullary one: the wire `StallPayload`'s sole field is dropped at the emit, so zero decoded daemon data crosses this bridge; shipped dormant (all three bridges nulled it)
 - [#317 codebase notes](../codebase/317.md) — the render slice: the [conversation timeline store](conversation-timeline-store.md)'s bridge claims `stallDetected` as a sixth owned arm, feeding a new `stalled` scalar `StallIndicator` renders
-- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member, the nineteenth no-`SessionAction` arm and, unlike every prior member, a deliberate **widening** (not a minimisation): carries exactly the `text`/`ts` fields `snapshotReceived` (#180) was built to exclude, emitted from that same member's `case 'snapshot'` seam; consumed as a no-op by all three exhaustive bridges, real consumer is the display slice #318
+- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member, the nineteenth no-`SessionAction` arm and, unlike every prior member, a deliberate **widening** (not a minimisation): carries exactly the `text`/`ts` fields `snapshotReceived` (#180) was built to exclude, emitted from that same member's `case 'snapshot'` seam; consumed as a no-op by all three exhaustive bridges, real consumer is the [screen-snapshot store](screen-snapshot-store.md) (#323) and the display slice #324
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member, the fourth arm the `timelineBridge` owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member, the twelfth no-`SessionAction` arm and the vertical's last transport slice; the fifth arm the `timelineBridge` owns and the first to resolve an existing `ThreadItem` in place rather than append one or set a scalar

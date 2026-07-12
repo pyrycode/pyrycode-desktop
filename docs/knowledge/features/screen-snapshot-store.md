@@ -1,15 +1,16 @@
 # Screen-snapshot store
 
 The renderer's held copy of the daemon's **latest rendered-screen text** — a dedicated,
-unidirectional Zustand store fed by a reactive-only headless observer, so a future display surface
-(#324) can read the current screen without issuing its own request.
+unidirectional Zustand store fed by a reactive-only headless observer, read by the display surface
+[#324](../codebase/324.md) so a screen request never needs its own store facet or a second
+subscription.
 
 Introduced in [#323](../codebase/323.md), split from [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318)
 (itself split from [#147](../codebase/147.md)). Consumes the `screenSnapshotReceived` event
 [#316](../codebase/316.md) already emits (see [Screen snapshot fetch](screen-snapshot-fetch.md)).
-Ships **dormant** — this ticket adds no UI and no trigger; both are the sibling
-[#324](https://github.com/pyrycode/pyrycode-desktop/issues/324), which is unblocked by this ticket's
-merge.
+Shipped **dormant** at #323 — that ticket added no UI and no trigger; both landed in the sibling
+[#324](../codebase/324.md), the store's sole reader (`ScreenSnapshotControl`) and the sole action
+that fires a fresh `requestSnapshot`.
 
 ## What it does
 
@@ -84,23 +85,25 @@ daemon → screen_snapshot frame → case 'snapshot' → emitDaemonEvent
   → DAEMON_EVENT_CHANNEL → ScreenSnapshotData's subscribeScreenSnapshot
   → translateScreenSnapshot → setSnapshot(s)
   → screenSnapshotStore                                    [most recent snapshot wins]
-  → (not yet consumed — #324 will read via useScreenSnapshotStore(selectScreenSnapshot))
+  → ScreenSnapshotControl reads via useScreenSnapshotStore(selectScreenSnapshot)     [#324]
 ```
 
 ## Configuration and usage
 
-- **Import surface** (dormant until #324):
+- **Import surface** (read by [#324](../codebase/324.md)'s `ScreenSnapshotControl`):
   `import { useScreenSnapshotStore, selectScreenSnapshot } from '@renderer/store/screenSnapshotStore'`.
 - **Mount point:** `src/renderer/src/App.tsx`, alongside the other App-level headless leaves.
 - No new command, no IPC change, no preload change — renderer state only.
 
 ## Edge cases and limitations
 
-- **Nothing renders it yet.** `ScreenSnapshotData` populates the store but ships dormant; the
-  display surface and its trigger are [#324](https://github.com/pyrycode/pyrycode-desktop/issues/324).
-- **No correlation, no request.** Same posture as [#180](../codebase/180.md)/[#316](../codebase/316.md):
-  any `screenSnapshotReceived` that arrives is written unconditionally; there is no
-  `requestScreenSnapshot` analogue for this slice to fire.
+- **One reader.** `ScreenSnapshotControl` ([#324](../codebase/324.md)) is the store's only consumer;
+  a future second reader (e.g. a dedicated screen-snapshot sheet) would select the same narrow slice.
+- **No correlation, no request tracking in this store.** Same posture as
+  [#180](../codebase/180.md)/[#316](../codebase/316.md): any `screenSnapshotReceived` that arrives is
+  written unconditionally. [#324](../codebase/324.md)'s `requestScreenSnapshot` fires a fresh
+  `requestSnapshot` command from a separate, guarded action helper — the store itself still has no
+  request half and no correlation to the command that produced a given reply.
 - **No reset.** Unlike `runConfigStore`, there is no sheet-close boundary to reset on — the store
   simply keeps the last-known screen for the app's lifetime.
 
@@ -115,4 +118,6 @@ daemon → screen_snapshot frame → case 'snapshot' → emitDaemonEvent
   shape this store mirrors, contrasted on request-on-open vs. push-only.
 - [Daemon-event channel](daemon-event-channel.md) — the `screenSnapshotReceived` `DaemonEvent` member.
 - [#323 codebase notes](../codebase/323.md) — implementation summary and patterns established.
-- Blocks **#324** — the live-screen display + its trigger, the first real consumer of this store.
+- [#324 codebase notes](../codebase/324.md) — the live-screen display + its trigger, the store's
+  first and only consumer: `ScreenSnapshotControl` reads `selectScreenSnapshot` and renders the held
+  `text` in a bounded `<pre>`, never HTML.

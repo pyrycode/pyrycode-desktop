@@ -109,6 +109,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'modalAnswerRejected':
     case 'queueState':
     case 'screenSnapshotReceived':
+    case 'relayLinkChanged':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -120,6 +121,8 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // (stallDetected #315 is now an owned arm — #317 wired its `stalled` scalar above.)
       // screenSnapshotReceived (#316) still ships dormant — its consumer is the display slice #318 (the
       // live-screen view), not the timeline store; it is not a turn-stream `ThreadItem` either.
+      // relayLinkChanged (#328) likewise ships dormant — its consumer is the relay-link store #329 (the
+      // two-dot indicator), not the timeline store; the relay socket leg is not a turn-stream item.
       return null
     default:
       return assertNever(event)

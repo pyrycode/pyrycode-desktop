@@ -196,7 +196,10 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       },
       // screen-snapshot text ships dormant (#316); its consumer is the display slice #318, not the
       // timeline store — it is not a turn-stream ThreadItem.
-      { type: 'screenSnapshotReceived', text: 'rendered screen', ts: '2026-07-08T00:00:00Z' }
+      { type: 'screenSnapshotReceived', text: 'rendered screen', ts: '2026-07-08T00:00:00Z' },
+      // relay-link status ships dormant (#328); its consumer is the relay-link store #329, not the
+      // timeline store — the relay socket leg is not a turn-stream item.
+      { type: 'relayLinkChanged', status: 'connected' }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })

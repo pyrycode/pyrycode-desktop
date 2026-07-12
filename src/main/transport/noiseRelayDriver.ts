@@ -60,6 +60,8 @@ export type RelaySessionErrorReason =
 export type RelaySessionEvent =
   | { type: 'handshake-complete'; helloAck: Uint8Array } // forwarded from the session
   | { type: 'message'; plaintext: Uint8Array } // forwarded from the session (decrypted app frame)
+  | { type: 'relay-link-up' } // the relay socket is up — forwarded from the supervisor's `connected` (#328)
+  | { type: 'relay-link-down'; code: number } // the relay socket dropped (retryable) — forwarded from `relay-closed` (#328)
   | { type: 'terminal'; code: number; reason: string } // forwarded from the supervisor (incl. 4426/4421/4401)
   | { type: 'error'; reason: RelaySessionErrorReason } // session errors + adapter-boundary errors
 
@@ -296,10 +298,22 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
   function onSupervisorEvent(event: RelaySupervisorEvent): void {
     switch (event.type) {
       case 'connected':
+        // AC2's "in addition to": surface the relay-leg "socket up" signal (#328) as a SECOND
+        // consumer of the same connect, THEN start the fresh handshake. Emitted first (the socket
+        // came up); onConnected is unchanged. A thin forward — no classification here.
+        emit({ type: 'relay-link-up' })
         onConnected()
         break
       case 'message':
         onMessage(event.frame)
+        break
+      case 'relay-closed':
+        // Forward the retryable socket drop up as the relay-leg "down" signal (#328). The raw close
+        // code passes through verbatim — classification (4404 → daemon-absent vs an ordinary drop →
+        // offline) is wire semantics, done one layer up in daemonConnection, exactly like
+        // `terminal{code}`. No generation fencing: driven directly by a supervisor event, and
+        // daemonConnection's per-dial onEvent wrapper drops a superseded driver's events.
+        emit({ type: 'relay-link-down', code: event.code })
         break
       case 'terminal':
         onTerminal(event.code, event.reason)

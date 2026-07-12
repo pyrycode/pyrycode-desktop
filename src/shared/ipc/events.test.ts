@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { DAEMON_EVENT_CHANNEL, type DaemonEvent, type DebugBundleFailure } from './events'
+import {
+  DAEMON_EVENT_CHANNEL,
+  type DaemonEvent,
+  type DebugBundleFailure,
+  type RelayLinkStatus
+} from './events'
 
 describe('daemon event channel', () => {
   it('pins the IPC channel string both process sides depend on', () => {
@@ -27,5 +32,21 @@ describe('debug-bundle contract shape', () => {
   it('pins the three coarse DebugBundleFailure categories', () => {
     const categories: DebugBundleFailure[] = ['unavailable', 'stream-corrupt', 'write-failed']
     expect(categories).toEqual(['unavailable', 'stream-corrupt', 'write-failed'])
+  })
+})
+
+// The relay-link status arm (#328). Same compile-time shape-lock pattern as the debug-bundle
+// contract: the closed RelayLinkStatus category enum plus the content-free arm — a `type` + a
+// closed `status`, nothing else (AC3). A drift (an added value, or a code/token field smuggled
+// onto the arm) fails `npm run typecheck`, the QA gate.
+describe('relay-link status contract shape (#328)', () => {
+  it('pins the three closed RelayLinkStatus categories', () => {
+    const categories: RelayLinkStatus[] = ['connected', 'offline', 'daemon-absent']
+    expect(categories).toEqual(['connected', 'offline', 'daemon-absent'])
+  })
+
+  it('types relayLinkChanged as a content-free DaemonEvent member (only type + status)', () => {
+    const event: DaemonEvent = { type: 'relayLinkChanged', status: 'daemon-absent' }
+    expect(Object.keys(event)).toEqual(['type', 'status'])
   })
 })

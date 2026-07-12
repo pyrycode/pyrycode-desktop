@@ -85,6 +85,14 @@ the three bridges below. Unlike `sessionTransition`, which content-minimises a f
 `sessionSettingsUpdated` is minimal because the decoded wire payload itself has only one field — nothing
 is dropped anywhere in the chain.
 
+[#315](../codebase/315.md) added an eighteenth no-store-action member, `stallDetected` — the daemon's
+onset-only `stall` liveness signal on the same v2 stream `turnState`/`toolUse` belong to. Joins the
+`assistantDelta`/`turnEnd`/`turnState`/`toolUse`/`toolResult` fall-through group; its consumer is the
+[conversation timeline store](conversation-timeline-store.md)'s bridge, not the session store — the
+fourth arm to force a case in all three exhaustive `assertNever`-guarded switches at once. Unlike every
+prior member, it is **nullary**: `StallPayload`'s one field (`conversation_id`) is dropped at the emit,
+so this bridge's `null`-returning case discards a literal that already carries nothing.
+
 ## What it does
 
 Turns each `DaemonEvent` arriving from the background process into the matching `SessionAction` (or `null`, for events the session store doesn't model) and dispatches non-null results into the one store the UI reads. Two exported symbols:
@@ -114,6 +122,7 @@ A `switch (event.type)` over all twenty-three `DaemonEvent` arms with a `default
 | `turnEnd` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#199) |
 | `conversationsReceived` | `null` | consumed by the conversation-list store (#208), not the session store — present only for exhaustiveness (#139) |
 | `turnState` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#214) |
+| `stallDetected` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge, not the session store — present only for exhaustiveness (#315); ships dormant, real consumer is the render slice #317 |
 | `toolUse` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#217) |
 | `modalShown` | `null` | consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) (#223, shipped) — present only for exhaustiveness (#201) |
 | `modalDismissed` | `null` | consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) (#223, shipped) — present only for exhaustiveness (#201) |
@@ -203,6 +212,7 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Thread timeline (conversation model)](thread-timeline.md) / [#199](../codebase/199.md) — the `assistantDelta`/`turnEnd` members this bridge tolerates as a fifth and sixth `null`-returning case; both carry real content (unlike the four members above) but still map to `null` here because their consumer is [#202](../codebase/202.md)'s [conversation timeline store](conversation-timeline-store.md), not this session-store bridge
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `conversationsReceived` member this bridge tolerates as a seventh `null`-returning case; consumed by the conversation-list store [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208), not this session-store bridge
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turnState` member this bridge tolerates as an eighth `null`-returning case; the third arm the timeline bridge owns, alongside `assistantDelta`/`turnEnd`
+- [#315 codebase notes](../codebase/315.md) — the `stallDetected` member this bridge tolerates as an eighteenth `null`-returning case, the fourth arm to force a case in all three exhaustive bridges at once; the only nullary member (its one decoded field, `conversation_id`, is dropped at the emit); dormant until the render slice #317
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member this bridge tolerates as a ninth `null`-returning case; the fourth arm the timeline bridge owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members this bridge tolerates as a tenth and eleventh `null`-returning case; unlike every prior member, the timeline bridge ALSO returns `null` for these — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member this bridge tolerates as a twelfth `null`-returning case; the fifth arm the timeline bridge owns and the first to **resolve** an existing `ThreadItem` rather than append one or set a scalar; the first arm to force a case in three exhaustive `DaemonEvent` switches at once (session, timeline, and [modal store + bridge](modal-store-bridge.md))

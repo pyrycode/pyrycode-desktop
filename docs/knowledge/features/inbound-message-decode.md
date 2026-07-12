@@ -67,6 +67,15 @@ envelope.in_reply_to }`. `undefined` when the frame omits it, which is exactly w
 (`daemonConnection`'s) correlation lookup fail closed. Not logged — the diagnostic log stays
 `bytes`/`hash` only; a routing id, not content, but still outside the allowlisted field set.
 
+[#315](../codebase/315.md) extended it a thirteenth time, additively, with a `stall` → `stall` kind —
+the daemon's onset-only liveness signal on the same v2 interactive stream `turn_state`/`tool_use`
+belong to (pyrycode #638 wire vocab, #639 fan-out). `StallPayload{conversation_id}` is
+`TurnStatePayload` scaled to its one always-present field, so `parseStallPayload` is a single
+`requireString` call with **no enum check** — `stall` has no `state` to close over. The consumer arm
+drops the one decoded field (`conversation_id`, the `turnState` convention) and emits a **nullary**
+`stallDetected` `DaemonEvent` — the only kind in this file whose event carries no field at all, since
+its one decoded field is the one dropped. Ships dormant; the render slice #317 is the first consumer.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -89,6 +98,7 @@ export type InboundDaemonMessage =
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }              // #199, additive
   | { kind: 'conversations'; conversations: ConversationSummary[] }  // #139, additive
   | { kind: 'turn-state'; turnState: TurnStatePayload }         // #214, additive
+  | { kind: 'stall'; stall: StallPayload }                      // #315, additive
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -99,9 +109,9 @@ export type InboundDaemonMessage =
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
-//                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`tool_use`/
-//                            `modal_shown`/`modal_dismissed`/`tool_result`/`conversation_created`/
-//                            `session_transition`/`session_settings_updated`
+//                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`stall`/
+//                            `tool_use`/`modal_shown`/`modal_dismissed`/`tool_result`/
+//                            `conversation_created`/`session_transition`/`session_settings_updated`
 //                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
@@ -210,6 +220,7 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
    - `'assistant_delta'` → `{ kind: 'assistant-delta', delta }` / `'turn_end'` → `{ kind: 'turn-end', turnEnd }` ([#199](../codebase/199.md)) — narrowed via `parseAssistantDeltaPayload` / `parseTurnEndPayload`, each content-free-logged as `inbound-decoded(code: 'assistant_delta' | 'turn_end')` before the `default` branch. The two v2 interactive-stream kinds that graduate out of `inbound-unmodeled` once #179 flips `interactive` on.
    - `'conversations'` → `{ kind: 'conversations', conversations }` ([#139](../codebase/139.md)) — narrowed via `parseConversationsPayload`, content-free-logged as `inbound-decoded(code: 'conversations')` before the `default` branch — **deliberately no `count` field**, unlike `message_chunk`'s log (a conversation count is more identifying than a message-batch size).
    - `'turn_state'` → `{ kind: 'turn-state', turnState }` ([#214](../codebase/214.md)) — narrowed via `parseTurnStatePayload` (the `role`-style closed-enum check on `state`), content-free-logged as `inbound-decoded(code: 'turn_state')` before the `default` branch. The third v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`.
+   - `'stall'` → `{ kind: 'stall', stall }` ([#315](../codebase/315.md)) — narrowed via `parseStallPayload` (one `requireString` call, no enum), content-free-logged as `inbound-decoded(code: 'stall')` before the `default` branch. The onset-only liveness signal on the same v2 interactive stream as `turn_state`/`tool_use`; ships dormant, the render slice #317 is the first consumer.
    - `'tool_use'` → `{ kind: 'tool-use', toolUse }` ([#217](../codebase/217.md)) — narrowed via `parseToolUsePayload` (five `requireString` calls, no enum), content-free-logged as `inbound-decoded(code: 'tool_use')` before the `default` branch. The fourth v2 interactive-stream kind to graduate out of `inbound-unmodeled`.
    - `'modal_shown'` → `{ kind: 'modal-shown', modalShown }` / `'modal_dismissed'` → `{ kind: 'modal-dismissed', modalDismissed }` ([#201](../codebase/201.md)) — narrowed via `parseModalShownPayload` (the `class` closed-enum check + the `parseModalOption`-mapped `options` array) / `parseModalDismissedPayload` (the `source` closed-enum check), each content-free-logged as `inbound-decoded(code: 'modal_shown' | 'modal_dismissed')` before the `default` branch. Not part of the same v2 interactive-stream family as `assistant_delta`/`turn_state`/`tool_use` — a modal is the permission/trust prompt `claude` raises, gated behind the same `interactive` capability but carrying no `conversation_id`.
    - `'tool_result'` → `{ kind: 'tool-result', toolResult }` ([#229](../codebase/229.md)) — narrowed via `parseToolResultPayload` (four `requireString` calls plus one `requireBoolean` call on `is_error`), content-free-logged as `inbound-decoded(code: 'tool_result')` before the `default` branch. The fifth and last v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`/`turn_state`/`tool_use`.
@@ -240,6 +251,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `assistant_delta` / `turn_end` ([#199](../codebase/199.md)) | `inbound-decoded` | `code: 'assistant_delta' \| 'turn_end'`, `bytes`, `hash` — never `text`/`turn_id`/`seq`/`stop_reason`/`conversation_id`, even though the consumer arm carries `text` onward to the renderer (the log stays content-free regardless of what the event carries) |
 | modeled `conversations` ([#139](../codebase/139.md)) | `inbound-decoded` | `code: 'conversations'`, `bytes`, `hash` — never `id`/`name`/`cwd`/`is_promoted`/`is_archived`/`last_message_ts`/`last_used_at`, and deliberately **no `count`** |
 | modeled `turn_state` ([#214](../codebase/214.md)) | `inbound-decoded` | `code: 'turn_state'`, `bytes`, `hash` — never `state`/`conversation_id` |
+| modeled `stall` ([#315](../codebase/315.md)) | `inbound-decoded` | `code: 'stall'`, `bytes`, `hash` — never `conversation_id` |
 | modeled `tool_use` ([#217](../codebase/217.md)) | `inbound-decoded` | `code: 'tool_use'`, `bytes`, `hash` — never `name`/`input_summary`/`tool_use_id`/`turn_id`/`conversation_id` |
 | modeled `modal_shown` / `modal_dismissed` ([#201](../codebase/201.md)) | `inbound-decoded` | `code: 'modal_shown' \| 'modal_dismissed'`, `bytes`, `hash` — never `modal_id`/`class`/`title`/`prompt`/any `options[].label`/`default_option_id`/`outcome`/`source` |
 | modeled `tool_result` ([#229](../codebase/229.md)) | `inbound-decoded` | `code: 'tool_result'`, `bytes`, `hash` — never `result_summary`/`is_error`/`tool_use_id`/`turn_id`/`conversation_id` |
@@ -327,6 +339,11 @@ case 'message': {
       // active conversation); state carried onward — a 3-value enum, nothing left to minimise.
       emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
       return
+    case 'stall':
+      // #315: fresh NULLARY literal — the payload's only field (conversation_id) is dropped, the
+      // turnState convention, so nothing crosses IPC at all. Onset-only; self-clear is #317's concern.
+      emitDaemonEvent(sink, { type: 'stallDetected' })
+      return
     case 'tool-use':
       // #217: fresh named-field literal, mirrors 'turn-state'. conversation_id dropped (single active
       // conversation); name/input_summary carried onward as opaque display text for the render slice.
@@ -410,6 +427,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **`assistant_delta`/`turn_end` were received by nobody through #178.** Desktop withheld the `interactive` capability until [#179](../codebase/179.md) turned it on; until then these two cases were exercised only by direct unit tests, not a live daemon — a textbook Strangler-Fig: the decode path existed and was tested before the traffic that would use it did. Now live.
 - **`conversations` has no request trigger yet either, but for a different reason.** [#139](../codebase/139.md) ships both the decode path *and* the outbound `requestConversations` command, but nothing in this ticket calls `sendCommand({type:'requestConversations'})` — that's [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)'s on-connect trigger. Unlike `assistant_delta`/`turn_end`, this is blocked only on a sibling renderer ticket, not a daemon capability flip — the daemon would answer today if asked.
 - **`turn_state` was received by nobody through #178, for the same reason as `assistant_delta`/`turn_end`.** [#214](../codebase/214.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). Unlike those two, its consumer arm has nothing to carry-vs-drop debate over: `state` is a closed 3-value enum, so there's no sensitive-vs-render-payload distinction to make; only `conversation_id` is dropped.
+- **`stall` sat on the same `interactive`-capability gate, live since #179, and its consumer arm carries the least of any kind in the file — nothing.** [#315](../codebase/315.md) mirrors `turn_state`'s decode shape (a single `requireString`, no enum), but `StallPayload` has only the one field (`conversation_id`) and that field is the one dropped, so the emitted `stallDetected` is nullary — zero decoded daemon data crosses IPC, stronger than every prior kind. Onset-only: the daemon does not repeat it while the stall persists and sends no "cleared" frame; the client-side self-clear on next turn activity is the render slice [#317](https://github.com/pyrycode/pyrycode-desktop/issues/317)'s concern, not this boundary's.
 - **`tool_use` was received by nobody through #178, same capability gate — and its two untrusted strings forward a render constraint.** [#217](../codebase/217.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). Like `assistant_delta`/`turn_end` (and unlike `turn_state`), the consumer arm carries content onward rather than minimising it: `name`/`input_summary` are opaque daemon-supplied strings that reach the render slice ([#218](../codebase/218.md)) as free text — rendered as plain text, never `dangerouslySetInnerHTML`, never re-parsed.
 - **`modal_shown`/`modal_dismissed` were received by nobody through #178, same capability gate.** [#201](../codebase/201.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). The session and timeline bridges still discard the resulting `DaemonEvent` arms as `null` — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) ([#223](../codebase/223.md), shipped), with `useModalBridge` mounted since [#224](../codebase/224.md). `title`/`prompt`/each `options[].label` are untrusted `claude`-surfaced free text the render slice (#224) renders as plain text, the same constraint `tool_use` forwards.
 - **`default_option_id ∈ options[].id` is not cross-checked at this boundary.** `ModalShownPayload.default_option_id` decodes as a required string with no structural relationship enforced to `options`. A daemon sending a mismatched default is not rejected here — the cross-field invariant is deferred to the render slice ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)), where a mismatch just means nothing pre-highlights (harmless; answering still needs an explicit user action).
@@ -430,6 +448,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [#199 codebase notes](../codebase/199.md) — the fourth additive extension: `assistant_delta`/`turn_end`, the two v2 interactive-stream kinds, and the deliberate content-carrying divergence from the `snapshot` kind's minimisation pattern.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139 codebase notes](../codebase/139.md) — the fifth additive extension: the `conversations` kind, `parseConversationSummary`/`parseConversationsPayload`, and the new `requireStringOrNull` helper (the codec's first nullable-field checker).
 - [Conversation timeline store](conversation-timeline-store.md) / [#214 codebase notes](../codebase/214.md) — the sixth additive extension: the `turn_state` kind, `parseTurnStatePayload`, and the closed-enum idiom's second instance (cloned from `role`, not `requireString`).
+- [#315 codebase notes](../codebase/315.md) — the thirteenth additive extension: the `stall` kind, `parseStallPayload` (`turn_state`'s decode shape scaled to one field, no enum), and the onset-only liveness signal whose consumer arm emits a nullary `stallDetected` — the strongest content-minimisation posture in the file, since the one decoded field is the one dropped. Dormant until the render slice #317.
 - [Conversation timeline store](conversation-timeline-store.md) / [#217 codebase notes](../codebase/217.md) — the seventh additive extension: the `tool_use` kind, `parseToolUsePayload`, and the required-string-presence idiom scaled to five fields with no enum.
 - [Modal-prompt model](modal-prompt-model.md) / [#201 codebase notes](../codebase/201.md) — the eighth additive extension: the `modal_shown`/`modal_dismissed` kinds, `parseModalShownPayload`/`parseModalDismissedPayload`/`parseModalOption`, the closed-enum idiom's third and fourth instances (`class`/`source`), and the array-of-structs narrower's second use (`options`).
 - [Conversation timeline store](conversation-timeline-store.md) / [#229 codebase notes](../codebase/229.md) — the ninth and last additive extension of the v2 interactive-stream family: the `tool_result` kind, `parseToolResultPayload`, and `requireBoolean`'s second use (`is_error`, after `yolo` #180) alongside four `requireString` calls.

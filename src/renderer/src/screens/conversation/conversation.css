@@ -268,6 +268,24 @@
   color: var(--color-on-surface-variant);
 }
 
+/* #294 — the held queued backlog region: the messages queued while the daemon is busy, rendered as
+   the not-yet-run tail below the delivered thread. flex: 0 0 auto (like .conversation__thinking, NOT
+   the thread's 1 1 auto) so it never competes with the timeline's flex region; column + --space-3 gap
+   + --space-4 inset mirror .conversation__thread so the rows sit thread-consistent. The mobile Figma
+   file draws only the delivered thread (no queued/pending component — the documented #148 gap), so the
+   "waiting / not yet run" treatment is within-token: the whole region sits at 50% opacity, the
+   .tool-row pending-dimming precedent (opacity as a de-emphasis device, not a color literal). The rows
+   themselves reuse .message-row--user / .bubble--user unchanged (queued messages are the user's own
+   pending sends) — the dimming is the entire "queued" modifier. */
+.conversation__queued {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  opacity: 0.5;
+}
+
 /* #218 — the pending tool row (Figma node 16-28): a compact bordered chip, not a message bubble,
    left-aligned in the thread, carrying the tool name and its one-line input summary. Every value is a
    token; the two off-grid Figma values are tokenized per the file's established ±2px/±1px convention

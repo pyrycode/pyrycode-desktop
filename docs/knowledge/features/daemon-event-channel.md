@@ -187,17 +187,18 @@ export type DaemonEvent =
   `resultSummary` is opaque daemon-supplied display text (the `input_summary` #217 / `stop_reason` #199
   posture); `conversation_id` is the one field dropped.
 - **`queueState{conversationId,queued}`** ([#292](../codebase/292.md)) also maps to *no* `SessionAction`,
-  consumed by **none** of the three existing bridges — the real consumer is the still-unbuilt #293 queue
-  store. Reuses the wire `QueuedItem` row type verbatim (the `conversationsReceived` precedent) — no
+  consumed by **none** of the three existing bridges — the real consumer is the [queue
+  store](queue-store.md)'s own fourth, independent subscriber ([#293](../codebase/293.md)). Reuses the
+  wire `QueuedItem` row type verbatim (the `conversationsReceived` precedent) — no
   snake→camel remap on the array items, order preserved from the wire (enqueue order). Unlike `turnState`/
   `toolUse`/`toolResult` (which drop `conversation_id`), this member **keeps** it as `conversationId`: the
   daemon SSOT (pyrycode #720) fixes `queue_state` as a **replacement-truth snapshot** of the whole current
-  backlog, and #293's store keys its held backlog by conversation id. This is also the first member the
-  ticket's own architecture spec explicitly rules **out** of the timeline: `queue_state` is daemon *state*,
-  not part of claude's turn stream (#720's own framing), so `timelineBridge` nulls it alongside
-  `daemonEventBridge`/`modalBridge` rather than owning it as a sixth arm. `text` (per queued item) is
-  untrusted, client-originated transit content the eventual render slice (#294) must render as plain text,
-  never HTML — this ticket has no DOM sink of its own.
+  backlog, and the [queue store](queue-store.md) keys its held backlog by conversation id. This is also
+  the first member the ticket's own architecture spec explicitly rules **out** of the timeline:
+  `queue_state` is daemon *state*, not part of claude's turn stream (#720's own framing), so
+  `timelineBridge` nulls it alongside `daemonEventBridge`/`modalBridge` rather than owning it as a sixth
+  arm. `text` (per queued item) is untrusted, client-originated transit content the eventual render slice
+  (#294) must render as plain text, never HTML — this ticket has no DOM sink of its own.
 - **`sessionTransition{newSessionId}`**, shipped [#254](../codebase/254.md), also maps to *no*
   `SessionAction`, consumed instead by the [session-id store](session-id-store.md)'s holder
   ([#259](../codebase/259.md)). Originally a **content-minimised** shape over the **five**-field wire

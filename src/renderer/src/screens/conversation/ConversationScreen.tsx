@@ -19,6 +19,7 @@ import {
   MILESTONE_CONVERSATION_ID
 } from './composerSend'
 import { runUnpair } from './unpairAction'
+import { dropQueuedMessage } from './dropQueuedMessage'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
@@ -390,6 +391,11 @@ export function ThinkingIndicator({ isThinking }: { isThinking: boolean }): JSX.
   )
 }
 
+// #296: the client-owned accessible name for the drop control (the EMPTY_THREAD_COPY / WORKSPACE_CHIP_LABEL
+// idiom). An icon-only button has no visible text, so aria-label supplies its accessible name (the
+// .composer__send / .status-sheet__close pattern already in this file). Never a daemon string.
+const DROP_QUEUED_LABEL = 'Drop queued message'
+
 // #294: the held queued backlog view — the messages queued while the daemon is busy (#293's
 // replacement-truth queue store), rendered as the not-yet-run tail below the delivered thread. Pure
 // props-in/markup-out and exported so tests server-render an injected QueuedItem[] with no store (the
@@ -408,12 +414,43 @@ export function ThinkingIndicator({ isThinking }: { isThinking: boolean }): JSX.
 // — never dangerouslySetInnerHTML (the wire type's own comment mandates plain-text render; load-bearing
 // even though this slice is not security-sensitive). React key = queued_msg_id, a real per-conversation
 // unique integer (better than an array index).
-export function QueuedBacklog({ items }: { items: readonly QueuedItem[] }): JSX.Element | null {
+//
+// #296: each row gains a drop / cancel affordance — an icon-only button, a leading sibling of the bubble
+// inside the right-aligned .message-row--user, so it sits at the row's inner edge. `onDrop` is a REQUIRED
+// injected effect (the PermissionModalView "a view that cannot answer is a bug" rule) taking only the
+// row's queued_msg_id — the CONTAINER owns the conversation id (the conversation-id wall: QueuedItem
+// carries none), so the view never sees it. The button appears ONLY here; the delivered rows are drawn by
+// Timeline (untouched), so "affordance only on queued rows" (AC4) and "delivered rows unaffected" (AC5)
+// are structural, not conventions — no code path reaches a delivered row with this button.
+export function QueuedBacklog({
+  items,
+  onDrop
+}: {
+  items: readonly QueuedItem[]
+  onDrop: (queuedMsgId: number) => void
+}): JSX.Element | null {
   if (items.length === 0) return null
   return (
     <div className="conversation__queued">
       {items.map((item) => (
         <div className="message-row message-row--user" key={item.queued_msg_id}>
+          <button
+            type="button"
+            className="queued-row__drop"
+            aria-label={DROP_QUEUED_LABEL}
+            onClick={() => onDrop(item.queued_msg_id)}
+          >
+            <svg
+              className="queued-row__drop-icon"
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+            </svg>
+          </button>
           <div className="bubble bubble--user" data-thread-role="queued">
             {item.text}
           </div>
@@ -429,11 +466,26 @@ export function QueuedBacklog({ items }: { items: readonly QueuedItem[] }): JSX.
 // scope so it is created once; because selectBacklogFor returns the same array reference (or the stable
 // EMPTY_BACKLOG) for a given id, a snapshot for a DIFFERENT conversation is Object.is-stable here → no
 // re-render churn (AC3 free-of-noise). A pure store read — no window.pyry, no IPC, no effects (AC5).
+//
+// #296: binds onDrop to the pure dropQueuedMessage helper, supplying MILESTONE_CONVERSATION_ID (the
+// conversation-id wall — the row has none). window.pyry.sendCommand is dereferenced ONLY inside the
+// click closure (interaction time, never render — the Composer.handleSubmit / PermissionModal
+// discipline), so the empty-backlog container smoke test stays bridge-free. No optimistic mutation: the
+// helper only sends (AC3); the dropped row leaves on the next queue_state snapshot via this subscription.
 const selectMilestoneBacklog = selectBacklogFor(MILESTONE_CONVERSATION_ID)
 
 function QueuedBacklogControl(): JSX.Element | null {
   const items = useQueueStore(selectMilestoneBacklog)
-  return <QueuedBacklog items={items} />
+  return (
+    <QueuedBacklog
+      items={items}
+      onDrop={(queuedMsgId) =>
+        dropQueuedMessage(MILESTONE_CONVERSATION_ID, queuedMsgId, {
+          sendCommand: window.pyry.sendCommand
+        })
+      }
+    />
+  )
 }
 
 // The collapsed status row between the thread and the composer (Figma node 16-57) — the trigger that

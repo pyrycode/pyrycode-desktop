@@ -2,15 +2,16 @@
 
 The **outbound** half of the queue-drop path: the wire type, the pure fail-closed transport builder,
 and the full renderer→main command path the desktop uses to remove one queued-but-not-yet-run message
-from a conversation's backlog before it runs. No renderer UI yet — the drop affordance that dispatches
-the command is a separate later slice, #296.
+from a conversation's backlog before it runs. The renderer UI that dispatches the command — a drop
+affordance on each queued row — shipped in [#296](../codebase/296.md); the path is now complete
+end to end.
 
 Introduced in [#299](../codebase/299.md) (the wire type + `buildDequeueMessage`), split from
 [#295](https://github.com/pyrycode/pyrycode-desktop/issues/295) along the #235/#236 seam (memory:
 #295 tripped the ≥5-file split gate and was re-split). Wired to the renderer→main command path in
 [#300](../codebase/300.md) (shipped): a `dequeueMessage` `RendererCommand` member, its
-`isDequeueMessagePayload` boundary guard, and a `daemonConnection.dequeueMessage` method. Blocks
-#296 — the render slice that adds the drop affordance and calls `dequeueMessageCommand`.
+`isDequeueMessagePayload` boundary guard, and a `daemonConnection.dequeueMessage` method.
+[#296](../codebase/296.md) (shipped) adds the render slice that calls `dequeueMessageCommand`.
 
 ## What it does
 
@@ -92,14 +93,18 @@ detail: [#300 codebase notes](../codebase/300.md).
 
 ## Configuration and usage
 
-- **Producer (deferred to #296):** the drop affordance will call `dequeueMessageCommand({
-  conversation_id, queued_msg_id })` and pass the result to `window.pyry.sendCommand`. The
-  `queued_msg_id` it selects by comes from the [queue store](queue-store.md)'s held `QueuedItem` rows.
+- **Producer, shipped ([#296](../codebase/296.md)):** the drop affordance on each queued row (a
+  per-row icon button in `QueuedBacklog`, `ConversationScreen.tsx`) calls the pure
+  `dropQueuedMessage(conversation_id, queued_msg_id, { sendCommand })` helper
+  (`dropQueuedMessage.ts`), which calls `dequeueMessageCommand({ conversation_id, queued_msg_id })`
+  and passes the result to the injected `sendCommand` (`window.pyry.sendCommand` in production). The
+  `queued_msg_id` it selects by comes from the [queue store](queue-store.md)'s held `QueuedItem`
+  rows, read by #294's `QueuedBacklog`; `conversation_id` is `MILESTONE_CONVERSATION_ID`, supplied
+  by the container (the row itself carries no conversation id — the "conversation-id wall").
 - **Consumer, already wired:** `main/index.ts`'s `onCommand` switch → `connection.dequeueMessage`.
   Fire-and-forget — no reply is expected; the daemon's re-broadcast `queue_state` snapshot (decoded
-  by #292, rendered by #294) is the observable effect, existing machinery outside this feature.
-- No renderer surface exists yet. `dequeueMessageCommand` is exported ahead of its first consumer,
-  the same shape every prior command has shipped in (e.g. `createConversation` before #242).
+  by #292, rendered by #294) is the observable effect. #296 never mutates the queue store directly —
+  no optimistic removal; the row leaves only via this existing snapshot-replace path.
 
 ## Edge cases and limitations
 
@@ -117,8 +122,11 @@ detail: [#300 codebase notes](../codebase/300.md).
 - **Zero `EnvelopeType` consumer cascade.** No production code does an exhaustive `switch` over
   `EnvelopeType` (unlike the `DaemonEvent` union, which has three independent exhaustive switches) —
   adding the member needed no companion `assertNever` fix-up anywhere.
-- **No renderer surface.** #300 is command-path only by explicit scope boundary; there is no button,
-  row control, or dispatch site until #296 lands.
+- **Region-dimmed drop control.** The [#296](../codebase/296.md) drop button inherits
+  `.conversation__queued`'s 50%-opacity dimming — a child element's own `opacity: 1` cannot escape a
+  parent's opacity compositing group, so the button cannot be rendered at full brightness without
+  restructuring #294's region-level dimming. Shipped dimmed by design; see [#296 codebase
+  notes](../codebase/296.md) Lessons learned.
 
 ## Related
 
@@ -135,8 +143,8 @@ detail: [#300 codebase notes](../codebase/300.md).
   builder is a structural clone of.
 - [Wire codec](wire-codec.md) — `encodeEnvelope`/`WireEncodeError`/`MAX_PLAINTEXT_BYTES`, unchanged by
   this slice.
-- [#299 codebase notes](../codebase/299.md) / [#300 codebase notes](../codebase/300.md) —
-  implementation summaries for the wire+builder and command-path slices.
-- Blocks #296 — the render slice (drop affordance) that will call `dequeueMessageCommand`.
+- [#299 codebase notes](../codebase/299.md) / [#300 codebase notes](../codebase/300.md) /
+  [#296 codebase notes](../codebase/296.md) — implementation summaries for the wire+builder,
+  command-path, and render (drop affordance) slices — the full path, now shipped end to end.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § Queue; pyrycode #720 (queue
   security model — dequeue is ungated for any paired client).

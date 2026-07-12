@@ -268,8 +268,10 @@ that failure is actually observed (evidence-based-fix).
 - **Extending the run-config store to hold usage** — also #192; the store stays three-field
   ([#187](../codebase/187.md)) through #191.
 - **Rendering the `text` field** — [#316](../codebase/316.md) surfaced `text`/`ts` across IPC via the
-  dedicated `screenSnapshotReceived` event (see §5 above); actually rendering it as the live-screen
-  view is [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318), blocked on #316.
+  dedicated `screenSnapshotReceived` event (see §5 above); [#323](../codebase/323.md) added the
+  [dedicated renderer store](screen-snapshot-store.md) that retains the latest value, but actually
+  rendering it as the live-screen view (and the action that triggers it) is
+  [#324](https://github.com/pyrycode/pyrycode-desktop/issues/324), blocked on #323.
 - **Daemon `error` reply correlation** — see § Correlation above.
 
 ## Related
@@ -280,6 +282,9 @@ that failure is actually observed (evidence-based-fix).
 - [#316 codebase notes](../codebase/316.md) — the deliberate, security-reviewed widening that
   surfaces `text`/`ts` via a second, dedicated `screenSnapshotReceived` emit at the same seam;
   unblocks the display slice #318.
+- [Screen-snapshot store](screen-snapshot-store.md) / [#323 codebase notes](../codebase/323.md) —
+  the dedicated renderer store + reactive-only observer that retains this event's `text`/`ts`,
+  unblocking the display slice #324.
 - [Daemon connection](daemon-connection.md) — hosts `requestSnapshot()`, the `send` twin.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseScreenSnapshotPayload` and the
   `snapshot` `InboundDaemonMessage` kind.

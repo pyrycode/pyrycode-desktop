@@ -23,7 +23,15 @@ const message: MessagePayload = {
 
 describe('translateSessionTransition', () => {
   it('maps a sessionTransition to its newSessionId (the owned arm)', () => {
-    const event: DaemonEvent = { type: 'sessionTransition', newSessionId: 's1' }
+    // The #285 fields (reason / occurredAt / workspaceCwd) are present but ignored — the holder reads
+    // only the id, which is exactly the AC5 (consumer-unchanged) proof.
+    const event: DaemonEvent = {
+      type: 'sessionTransition',
+      newSessionId: 's1',
+      reason: 'clear',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: null
+    }
     expect(translateSessionTransition(event)).toBe('s1')
   })
 
@@ -79,7 +87,13 @@ describe('subscribeSessionId', () => {
     const setSessionId = vi.fn()
     subscribeSessionId(bridge.onDaemonEvent, setSessionId)
 
-    bridge.emit({ type: 'sessionTransition', newSessionId: 's1' })
+    bridge.emit({
+      type: 'sessionTransition',
+      newSessionId: 's1',
+      reason: 'clear',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: null
+    })
     expect(setSessionId).toHaveBeenCalledTimes(1)
     expect(setSessionId).toHaveBeenCalledWith('s1')
   })
@@ -89,8 +103,20 @@ describe('subscribeSessionId', () => {
     const setSessionId = vi.fn()
     subscribeSessionId(bridge.onDaemonEvent, setSessionId)
 
-    bridge.emit({ type: 'sessionTransition', newSessionId: 's1' })
-    bridge.emit({ type: 'sessionTransition', newSessionId: 's2' })
+    bridge.emit({
+      type: 'sessionTransition',
+      newSessionId: 's1',
+      reason: 'clear',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: null
+    })
+    bridge.emit({
+      type: 'sessionTransition',
+      newSessionId: 's2',
+      reason: 'clear',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: null
+    })
     expect(setSessionId).toHaveBeenCalledTimes(2)
     expect(setSessionId).toHaveBeenNthCalledWith(2, 's2')
   })
@@ -109,7 +135,13 @@ describe('subscribeSessionId', () => {
     const setSessionId = vi.fn()
     subscribeSessionId(bridge.onDaemonEvent, setSessionId)
 
-    bridge.emit({ type: 'sessionTransition', newSessionId: '' })
+    bridge.emit({
+      type: 'sessionTransition',
+      newSessionId: '',
+      reason: 'clear',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: null
+    })
     expect(setSessionId).toHaveBeenCalledTimes(1)
     expect(setSessionId).toHaveBeenCalledWith('')
   })
@@ -127,7 +159,13 @@ describe('subscribeSessionId', () => {
     subscribeSessionId(bridge.onDaemonEvent, (id) => store.getState().setSessionId(id))
 
     expect(selectSessionId(store.getState())).toBeNull()
-    bridge.emit({ type: 'sessionTransition', newSessionId: 's1' })
+    bridge.emit({
+      type: 'sessionTransition',
+      newSessionId: 's1',
+      reason: 'clear',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: null
+    })
     expect(selectSessionId(store.getState())).toBe('s1')
   })
 })

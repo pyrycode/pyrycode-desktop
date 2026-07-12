@@ -140,7 +140,13 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         defaultOptionId: 'deny'
       },
       { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' },
-      { type: 'sessionTransition', newSessionId: 'sess-2' },
+      {
+        type: 'sessionTransition',
+        newSessionId: 'sess-2',
+        reason: 'clear',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: null
+      },
       { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-x' },
       { type: 'sessionSettingsRejected', changeId: 'change-x' },
       { type: 'modalAnswerRejected', modalId: 'mdl-1' }

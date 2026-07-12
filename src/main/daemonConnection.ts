@@ -428,15 +428,21 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
             return
           case 'session-transition':
-            // The session-boundary data path (#254). The #180 content-drop model: emit a fresh literal
-            // carrying ONLY `newSessionId` (= new_session_id). `previous_session_id` / `reason` /
-            // `occurred_at` / `workspace_cwd` are decoded and validated (so a malformed marker still fails
-            // closed) but DROPPED here — #259's holder retains only the current session id, so the other
-            // four have no built consumer. Never a spread of the decoded payload, so only the narrowed id
-            // crosses IPC. A session_id is a routing id, not a secret (the conversation_id convention).
+            // The session-boundary data path (#254, widened #285). Emit a fresh literal carrying the four
+            // fields the delimiter slice (#286) reads — `newSessionId`, `reason`, `occurredAt`,
+            // `workspaceCwd` — copied by name from the already-decoded, already-validated payload (so a
+            // malformed marker still fails closed upstream in parseSessionTransitionPayload, before this
+            // runs). Only `previous_session_id` is DROPPED — it has no consumer. Never a spread of the
+            // decoded payload (the assistant-delta idiom), so only the four named fields cross IPC and a
+            // decoder that ever grew an extra field cannot smuggle it across. `workspace_cwd` is
+            // `string | null` and carried through unchanged — the null is preserved, not coerced. A
+            // session_id is a routing id, not a secret (the conversation_id convention).
             emitDaemonEvent(sink, {
               type: 'sessionTransition',
-              newSessionId: inbound.sessionTransition.new_session_id
+              newSessionId: inbound.sessionTransition.new_session_id,
+              reason: inbound.sessionTransition.reason,
+              occurredAt: inbound.sessionTransition.occurred_at,
+              workspaceCwd: inbound.sessionTransition.workspace_cwd
             })
             return
           case 'session-settings-updated': {

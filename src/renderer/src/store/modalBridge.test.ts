@@ -126,7 +126,13 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         isError: false,
         resultSummary: 'read 12 lines'
       },
-      { type: 'sessionTransition', newSessionId: 'sess-2' },
+      {
+        type: 'sessionTransition',
+        newSessionId: 'sess-2',
+        reason: 'clear',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: null
+      },
       { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-x' },
       { type: 'sessionSettingsRejected', changeId: 'change-x' }
       // modalAnswerRejected is no longer here — #249 flips it to a `rejected` ModalEvent (asserted above).

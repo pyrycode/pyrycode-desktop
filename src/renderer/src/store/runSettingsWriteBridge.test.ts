@@ -39,7 +39,13 @@ describe('translateWriteEvent', () => {
       { type: 'connecting' },
       { type: 'disconnected' },
       { type: 'messageReceived', message },
-      { type: 'sessionTransition', newSessionId: 's1' },
+      {
+        type: 'sessionTransition',
+        newSessionId: 's1',
+        reason: 'clear',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: null
+      },
       { type: 'conversationsReceived', conversations: [] }
     ]
     for (const event of others) expect(translateWriteEvent(event)).toBeNull()

@@ -1271,22 +1271,29 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
     return ctx
   }
 
-  it('decodes an inbound session_transition into one sessionTransition carrying only newSessionId', async () => {
+  it('decodes an inbound session_transition, carrying newSessionId / reason / occurredAt / workspaceCwd', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
     drivers[0].emit({ type: 'message', plaintext: sessionTransitionPlaintext(SESSION_TRANSITION) })
 
+    // The /clear fixture's null workspace_cwd is carried as `null`, not coerced to '' (AC2).
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'sessionTransition', newSessionId: 'sess-2' }
+      {
+        type: 'sessionTransition',
+        newSessionId: 'sess-2',
+        reason: 'clear',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: null
+      }
     ])
   })
 
-  it('drops the other four marker fields at the emit — only type + newSessionId cross IPC (content-drop, the security property)', async () => {
+  it('carries reason / occurredAt / workspaceCwd; drops only previous_session_id at the emit (content-drop narrowed to the one field with no consumer)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
-    // A workspace_change frame carries a non-null workspace_cwd; it must STILL never cross IPC.
+    // A workspace_change frame carries a non-null workspace_cwd; it now crosses IPC by design (#286).
     drivers[0].emit({
       type: 'message',
       plaintext: sessionTransitionPlaintext({
@@ -1299,20 +1306,26 @@ describe('createDaemonConnection — session_transition stream (#254)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'sessionTransition', newSessionId: 'sess-new' }])
-    // The emitted event has exactly the two keys — the four dropped fields (and any snake/camel
-    // variant) are absent.
-    expect(Object.keys(events[0]).sort()).toEqual(['newSessionId', 'type'])
-    const serialized = JSON.stringify(events)
-    for (const dropped of [
-      'sess-old',
-      'previous_session_id',
+    // The non-null workspace path DOES cross now — the content-drop is narrowed to previous_session_id.
+    expect(events).toEqual([
+      {
+        type: 'sessionTransition',
+        newSessionId: 'sess-new',
+        reason: 'workspace_change',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: '/home/user/secret-workspace'
+      }
+    ])
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'newSessionId',
+      'occurredAt',
       'reason',
-      'workspace_change',
-      'occurred_at',
-      'workspace_cwd',
-      '/home/user/secret-workspace'
-    ]) {
+      'type',
+      'workspaceCwd'
+    ])
+    // The surviving drop: previous_session_id (and its value) never cross — it has no consumer.
+    const serialized = JSON.stringify(events)
+    for (const dropped of ['sess-old', 'previous_session_id']) {
       expect(serialized).not.toContain(dropped)
     }
   })

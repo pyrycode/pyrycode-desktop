@@ -210,7 +210,15 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
   })
 
   it('sessionTransition → null (consumed by the #259 holder, not the session store)', () => {
-    expect(translateDaemonEvent({ type: 'sessionTransition', newSessionId: 'sess-2' })).toBeNull()
+    expect(
+      translateDaemonEvent({
+        type: 'sessionTransition',
+        newSessionId: 'sess-2',
+        reason: 'clear',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: null
+      })
+    ).toBeNull()
   })
 
   it('sessionSettingsUpdated → null (consumed by #261 / #256, not the session store)', () => {

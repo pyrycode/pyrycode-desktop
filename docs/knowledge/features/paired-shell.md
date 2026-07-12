@@ -24,6 +24,10 @@ or frames, so not security-sensitive.
   FAB](new-discussion-fab.md) (#242) fires it asynchronously when the daemon confirms a
   `conversationCreated` event, via `useConversationCreatedNav` mounted in the `PairedShell`
   container. No new route or nav arm — the existing `open` transition is reused as-is.
+- That same `conversationCreated` payload — previously discarded after triggering the nav — is now
+  also snapshotted into the [active-conversation store](conversation-shell.md#workspace-chip-278) so
+  the thread's workspace chip can read its `cwd` ([#278](../codebase/278.md)). Still no new route, nav
+  arm, or subscription — one existing callback now does two things instead of one.
 
 ## How it works
 
@@ -96,7 +100,11 @@ affordance, preserved), since per-conversation selection needs a transport path 
 ```ts
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
-  useConversationCreatedNav(() => dispatch({ type: 'open' }))   // #242
+  const setActiveConversation = useActiveConversationStore((s) => s.setActiveConversation)
+  useConversationCreatedNav((created) => {   // #242, widened #278
+    setActiveConversation(created)            // #278 — snapshot cwd for the workspace chip
+    dispatch({ type: 'open' })
+  })
   return (
     <PairedShellView
       route={route}
@@ -119,6 +127,14 @@ still has no effects and no `window` deref — the hook's own effect is where `w
 dereferenced — so the container stays server-renderable and `App`'s `pending`/`pairing`
 neutral-first-paint invariant is untouched (`PairedShell` only mounts once the app-level route is
 `conversation`).
+
+**[#278](../codebase/278.md) widened the callback**, not the hook: `useConversationCreatedNav` already
+delivered the decoded `created: ConversationCreatedPayload` argument, and the callback used to ignore
+it (`() => dispatch(...)`). It now also calls `setActiveConversation(created)` — a store setter read via
+`useActiveConversationStore`, the `Composer`/`UnpairControl` store-write idiom — before dispatching the
+same `open` transition. No new subscription: this is the one existing `conversation_created` listener
+PairedShell already mounted, doing one more thing on the event it already receives. See [Workspace
+chip](conversation-shell.md#workspace-chip-278) for the store and the render it feeds.
 
 ### The app-shell seam (`App.tsx`)
 
@@ -146,10 +162,14 @@ interim, not an oversight.
 ```
 AppView (route='conversation')
   └─ PairedShell            useReducer(nextPairedRoute, 'list')  ← nav state (ADR 0006)
-       │                    useConversationCreatedNav(() => dispatch({type:'open'}))  ← #242
+       │                    useConversationCreatedNav((created) => {
+       │                      setActiveConversation(created)       ← #278, into activeConversationStore
+       │                      dispatch({type:'open'})              ← #242
+       │                    })
        └─ PairedShellView   route='list'   → ChannelList (store-backed) — any row → dispatch{open}
                                               new-discussion FAB → createConversation command (#242)
                             route='thread' → ConversationScreen (store-backed) + BackControl — [←] → dispatch{back}
+                                              → WorkspaceChip reads activeConversationStore (#278)
 ```
 
 A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row
@@ -181,6 +201,7 @@ navigation, and hence no remount, before this ticket).
 - [App shell](app-shell.md) / [#80](../codebase/80.md) — the outer router; `PairedShell` mounts under its `conversation` route
 - [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — the real `list` view, replacing the placeholder described above
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the second `open` trigger, fired by a daemon-confirmed conversation create rather than a row click
+- [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
 - [Session store](session-store.md) — untouched by this ticket; the store-backed messages that survive navigation
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the ephemeral-state rule `PairedShell`'s `useReducer` follows

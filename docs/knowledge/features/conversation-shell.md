@@ -16,6 +16,8 @@ A **proactive** twin of that escape hatch landed in [#167](../codebase/167.md): 
 
 A **third, prominent** read of the connection status landed in [#279](../codebase/279.md): a disconnected-only banner across the top of the thread, between the header row and the message list — distinct from both the composer's terse inline gate and the still-separate #149 two-dot indicator. See [Connection banner](#connection-banner-279) below.
 
+A **pre-first-message workspace chip** landed in [#278](../codebase/278.md): a Material 3 pill above the empty new-discussion thread showing the workspace `cwd` the discussion will run in, with a disabled "Change" placeholder reserved for the #157 Workspace Picker sheet. Gone once the thread has its first message. See [Workspace chip](#workspace-chip-278) below.
+
 The status row and the "Run configuration" sheet it opens landed as a **chrome-only shell** in [#177](../codebase/177.md): a trigger row between the thread and the composer, and a host modal that renders no live data or sections yet. See [Run configuration sheet](#run-configuration-sheet-177) below.
 
 The sheet's first section, **Log data** (a Download button for the debug bundle), landed in [#72](../codebase/72.md): the last child in the sheet body, beneath where Model/Effort/YOLO/Context-window will mount. See [Log data section](#log-data-section-72) below.
@@ -41,6 +43,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── BackControl                .conversation__back   (leading icon button, #140, null when onBack absent)
 ├── UnpairControl              .conversation__header (slim header row, #166)
 ├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279)
+├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
@@ -218,6 +221,94 @@ overlaying it, never growing or shrinking.
 Not security-sensitive: a pure renderer read of already-store-held status, no transport/crypto/socket
 code touched. See [#279 codebase notes](../codebase/279.md) for the full design, the code-review record,
 and the apostrophe-escaping test lesson.
+
+### Workspace chip (#278)
+
+A pre-first-message pill at the top of the empty new-discussion thread, showing the workspace `cwd`
+the discussion will run in before the user sends the first message, with a "change" affordance
+reserved for the not-yet-built [#157](https://github.com/pyrycode/pyrycode-desktop/issues/157)
+Workspace Picker sheet. Split from #148 alongside #276/#277/#279; no Figma frame exists (the mobile
+file draws only the populated thread), so the design is sourced from the locked mobile design doc
+(a Material 3 pill, "Workspace: … (change)", pre-first-message only; mobile #137) rather than a node.
+
+A new discussion is an unpromoted conversation created via the [new-discussion
+FAB](new-discussion-fab.md) (#242): the renderer fires `createConversation` and the daemon replies
+with `conversationCreated` carrying the chosen `cwd`. That reply already reached [`PairedShell`'s nav
+callback](paired-shell.md) — which dropped the payload after triggering the `open` transition. This
+ticket is the first consumer of that payload beyond navigation.
+
+**`activeConversationStore.ts` (new)** — a dedicated Zustand store, the `sessionIdStore` /
+`conversationListStore` DI-factory → singleton → hook → selector shape, holding
+`ConversationCreatedPayload | null` (`null` = "no conversation created/opened this session yet") **verbatim**
+— snake_case, no camelCase remap, the `conversationListStore` doctrine — so the chip derives `cwd` and
+`is_promoted` at the read boundary rather than the store drifting from the wire shape. One setter,
+`setActiveConversation`, unconditional whole-value replace (most-recent-wins, no merge). [PairedShell's
+`conversation_created` callback](paired-shell.md#the-pure-view--container-pairedshelltsx) is the sole
+writer; `WorkspaceChip` (below) is the sole reader — no other consumer exists yet.
+
+Rejected alternative: correlating `sessionIdStore`'s session id against a `conversationListStore` row.
+There is no join key — `sessionIdStore` holds a daemon *session* routing id from `sessionTransition`,
+`ConversationSummary` is keyed by conversation `id`, and the two are orthogonal ids; a lookup by the
+synthetic `MILESTONE_CONVERSATION_ID` send-id would usually miss the daemon's real `conversations` list
+too. The `conversationCreated` payload already in hand from the create round-trip is the narrow, correct
+source — "the workspace this discussion will run in" is exactly what it carries.
+
+**`WorkspaceChip` (`ConversationScreen.tsx`)** — the exact `ThinkingIndicator` idiom: the container
+derives a value and passes it down, the pure exported view self-gates to `null`, no store read inside
+the view. Mounted as a **sibling above `Timeline`**, below `ConnectionBannerControl`:
+
+```tsx
+<ConnectionBannerControl />
+<WorkspaceChip conversation={activeConversation} isEmpty={items.length === 0} />
+<Timeline items={items} now={now} />
+```
+
+```ts
+export function WorkspaceChip({
+  conversation,   // ConversationCreatedPayload | null — activeConversationStore's held value
+  isEmpty,        // items.length === 0 — the pre-first-message window
+  onChange        // optional () => void — the #157 seam; absent here
+}: WorkspaceChipProps): JSX.Element | null {
+  if (!isEmpty || conversation === null || conversation.is_promoted) return null
+  // … renders a pill: WORKSPACE_CHIP_LABEL, conversation.cwd, and a Change button
+}
+```
+
+**Gate:** `isEmpty && conversation != null && !conversation.is_promoted`. `is_promoted === false` is
+the wire signal for a *discussion* (vs. a channel) — this is what makes the chip a new-discussion,
+pre-first-message affordance only (AC1/AC3): once the first message lands, `items.length` flips
+non-zero and the chip disappears; a promoted conversation never shows it at all.
+
+**`cwd` is rendered whole and opaque** (AC2): plain React children (auto-escaped), never
+`dangerouslySetInnerHTML`, and never split/basenamed/otherwise interpreted as a filesystem path (a
+`cwd.split('/').pop()` would itself be "interpreting it as a path" — the toolCall/sessionBoundary
+untrusted-string posture already in this file). An HTML-ish `cwd` (`<b>hi</b>`) renders as escaped text
+(`&lt;b&gt;hi&lt;/b&gt;`), never markup. The client-owned `WORKSPACE_CHIP_LABEL = 'Workspace'` constant
+is the `EMPTY_THREAD_COPY` idiom — apostrophe-free (`renderToStaticMarkup` escapes `'` → `&#x27;`) and
+never a daemon string, so the label itself carries no untrusted content.
+
+**"Change" affordance (AC4):** a `<button disabled={!onChange} onClick={onChange}>`. This ticket's
+container passes no `onChange`, so the button ships visibly `disabled` — an honest placeholder, not a
+silently-missing feature. #157 lands as a pure additive: pass an `onChange` that opens the Workspace
+Picker sheet (Figma node 20-2) and the button un-disables, with no other change to this view — the same
+optional-prop extension seam #276 reserves for #155's `onChannelInfo?`.
+
+**Why a sibling, not nested inside `EmptyThread`.** #277's `.conversation__empty` surface pins the chip
+"to the top of this surface" per its own CSS comment, but `WorkspaceChip` does **not** thread
+`conversation`/`onChange` through `Timeline` → `EmptyThread` — that would widen `Timeline`'s
+`{ items, now }` contract for an orthogonal concern and cascade its many bare-render test call sites. A
+sibling `flex: 0 0 auto` chip above `Timeline` yields the identical visual result (pill on top, empty
+surface filling below) with `Timeline`'s contract untouched and zero edits to its existing tests.
+
+Styled `.conversation__workspace-chip*` (`conversation.css`) — token-only, no new token: `--radius-full`
+for the Material 3 pill shape (the `--radius-sm` `.tool-row__chip` precedent, made fully round),
+`--color-surface-container-high` fill + `--color-outline-variant` border (the `.conversation__banner`
+fill), `min-width: 0` + `text-overflow: ellipsis` on the `cwd` run so an unbounded daemon path can't blow
+out the layout (the `.tool-row__summary` treatment).
+
+Not security-sensitive: a pure renderer read of an already-decoded store value, rendered on React's
+default-safe escaped path — no transport/crypto/socket surface touched. See [#278 codebase
+notes](../codebase/278.md) for the full design and patterns established.
 
 ### Run configuration sheet (#177)
 
@@ -796,7 +887,7 @@ full design and patterns established.
 ## Related
 
 - [App shell](app-shell.md) — the router that mounts the `paired`/`conversation` route (#80); gains the `onUnpaired` reverse-flip seam this screen's unpair control fires (#166)
-- [Paired shell](paired-shell.md) — the second-level `list ⇄ thread` router now mounting this screen as its `thread` view (#140); source of the `onBack` seam this screen's back control fires
+- [Paired shell](paired-shell.md) — the second-level `list ⇄ thread` router now mounting this screen as its `thread` view (#140); source of the `onBack` seam this screen's back control fires; its `conversation_created` nav callback now also writes `activeConversationStore` (#278)
 - [Session store](session-store.md) — the state the coarse thread rendered through #69–#178; the `MessageThread`/status seams bound to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166); its `messages` slice is unread residue since [#179](../codebase/179.md) (status/`selectStatus` is still live, read by the composer's send gate)
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66), retargeted from the session store into the timeline store since [#179](../codebase/179.md); the send half of this screen; also home of `shouldShowBanner`/`CONNECTION_BANNER_COPY` (#279), the connection banner's predicate + copy, co-located beside `composerAvailability`/`shouldOfferRepair` as a third read of `ConnectionStatus`
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
@@ -811,4 +902,4 @@ full design and patterns established.
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

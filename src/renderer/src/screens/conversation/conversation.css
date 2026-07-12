@@ -144,6 +144,90 @@
   font-weight: var(--text-body-medium-weight);
 }
 
+/* #278 — the pre-first-message workspace chip: a Material 3 pill at the top of the empty new-discussion
+   thread showing the workspace `cwd` the discussion will run in, with a placeholder "Change" affordance
+   (the #157 Workspace Picker seam). No Figma node (the mobile file draws only the populated thread — the
+   documented #148 gap); sourced from the locked mobile design doc pill. The wrapper is flex: 0 0 auto
+   with the thread's --space-4 horizontal inset (the .conversation__banner convention), a flex row so the
+   pill left-anchors and sizes to content, sitting above the empty surface and pushing it down. */
+.conversation__workspace-chip {
+  flex: 0 0 auto;
+  display: flex;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+/* The pill itself — the .tool-row__chip idiom (inline-flex, --space-2 gap, --space-2/--space-3 padding,
+   max-width/min-width/overflow bounding an unbounded untrusted cwd) with --radius-full for the Material 3
+   pill shape and the surface-container-high fill + outline-variant border of the connection banner. */
+.conversation__workspace-chip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-container-high);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius-full);
+  color: var(--color-on-surface);
+}
+
+/* The client-owned "Workspace" label — label-large on-surface, never shrinks or truncates. */
+.conversation__workspace-chip-label {
+  flex: 0 0 auto;
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+/* The untrusted cwd run — ellipsizes rather than overflowing (the .tool-row__summary treatment) so an
+   arbitrarily long daemon path can't blow out the layout. Monospace, muted, to read as a path value. */
+.conversation__workspace-chip-cwd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The "Change" affordance — a compact de-emphasized text button (the .conversation__unpair posture),
+   gaining a surface tint only on hover. This ticket ships it :disabled (the #157 picker isn't built),
+   which reads muted with no pointer affordance. */
+.conversation__workspace-chip-change {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.conversation__workspace-chip-change:hover:not(:disabled) {
+  background: var(--color-surface-container-highest);
+  color: var(--color-on-surface);
+}
+
+.conversation__workspace-chip-change:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.conversation__workspace-chip-change:disabled {
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
+}
+
 /* Scrollable thread. min-height: 0 is load-bearing: without it the flex item
    refuses to shrink and the whole window scrolls instead of this region. */
 .conversation__thread {

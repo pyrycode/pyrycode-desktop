@@ -1,10 +1,14 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import './conversation.css'
 import type { Message } from './messageViewModel'
-import type { QueuedItem } from '@shared/wire/types'
+import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
 import { useTimelineStore, selectItems, selectPhase } from '../../store/timelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
+import {
+  useActiveConversationStore,
+  selectActiveConversation
+} from '../../store/activeConversationStore'
 import type { ThreadItem } from '../../store/threadTimeline'
 import {
   submitMessage,
@@ -57,6 +61,11 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
   // Selecting only `phase` adds no meaningful churn — the container already re-renders per items delta.
   // Inert in production until #179 flips `interactive` (phase stays `idle`), so the indicator is null.
   const phase = useTimelineStore(selectPhase)
+  // #278: the conversation the thread is showing, snapshotted when the new discussion was created
+  // (PairedShell's conversation_created callback). The container derives it and passes it down; the
+  // pure WorkspaceChip self-gates to null. A narrow single-slice read — activeConversation changes
+  // once (on creation), so it adds no meaningful re-render churn beyond the items delta already here.
+  const activeConversation = useActiveConversationStore(selectActiveConversation)
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. The StatusRow trigger sits between the thread and
@@ -74,6 +83,10 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
           header row and above the message list. A third read of the connection status, distinct from
           the composer's terse inline gate below. */}
       <ConnectionBannerControl />
+      {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
+          EmptyThread, so Timeline's { items, now } contract stays untouched (no prop cascade). It
+          self-gates to null unless the thread is empty and shows an unpromoted (discussion) conversation. */}
+      <WorkspaceChip conversation={activeConversation} isEmpty={items.length === 0} />
       <Timeline items={items} now={now} />
       <ThinkingIndicator isThinking={phase === 'thinking'} />
       {/* #294: the held queued backlog — the not-yet-run tail below the delivered thread and the
@@ -294,6 +307,60 @@ function EmptyThread(): JSX.Element {
         <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z" />
       </svg>
       <p className="conversation__empty-copy">{EMPTY_THREAD_COPY}</p>
+    </div>
+  )
+}
+
+// #278: the client-owned chip label. A module-level constant (the EMPTY_THREAD_COPY idiom) —
+// apostrophe-free (renderToStaticMarkup escapes `'`) and never a daemon string, so no untrusted string
+// reaches the label; the only daemon value the chip renders is `cwd`, as auto-escaped React children.
+const WORKSPACE_CHIP_LABEL = 'Workspace'
+
+export interface WorkspaceChipProps {
+  // The conversation the thread is showing (the create-reply payload, held verbatim). null ⇒ no chip.
+  conversation: ConversationCreatedPayload | null
+  // The thread has no timeline items yet — the pre-first-message window (AC1/AC3).
+  isEmpty: boolean
+  // The #157 Workspace Picker seam. Omitted by this ticket's container, so the "Change" button renders
+  // disabled — an honest placeholder (AC4). #157 lands as a pure additive: pass an onChange that opens
+  // the picker and the button un-disables, with no other change to this view.
+  onChange?: () => void
+}
+
+// #278: the pre-first-message workspace chip — a Material 3 pill at the top of the empty new-discussion
+// thread showing the workspace `cwd` the discussion will run in. The exact ThinkingIndicator idiom: the
+// container derives the value (activeConversationStore) and passes it down; this pure view self-gates to
+// null; no store read inside it. Exported so tests server-render it with injected props.
+//
+// Gate (AC1/AC3): render iff the thread is empty (pre-first-message), a real conversation is present, and
+// it is a *discussion* (`is_promoted` false — the wire signal for a new discussion vs a channel). Once the
+// first message lands, isEmpty flips false and the chip is gone (AC3 — a pre-first-message affordance only).
+//
+// `cwd` (AC2) is an untrusted daemon string rendered WHOLE and OPAQUE: auto-escaped React children — never
+// dangerouslySetInnerHTML, and never split/basenamed/otherwise interpreted as a filesystem path (extracting
+// a path segment would itself be "interpreting it as a path", which the AC forbids). React escaping handles
+// HTML-ish characters — the toolCall / sessionBoundary untrusted-string posture already in this file.
+export function WorkspaceChip({
+  conversation,
+  isEmpty,
+  onChange
+}: WorkspaceChipProps): JSX.Element | null {
+  if (!isEmpty || conversation === null || conversation.is_promoted) return null
+  return (
+    <div className="conversation__workspace-chip">
+      <span className="conversation__workspace-chip-pill">
+        <span className="conversation__workspace-chip-label">{WORKSPACE_CHIP_LABEL}</span>
+        <span className="conversation__workspace-chip-cwd">{conversation.cwd}</span>
+        <button
+          type="button"
+          className="conversation__workspace-chip-change"
+          aria-label="Change workspace"
+          disabled={!onChange}
+          onClick={onChange}
+        >
+          Change
+        </button>
+      </span>
     </div>
   )
 }

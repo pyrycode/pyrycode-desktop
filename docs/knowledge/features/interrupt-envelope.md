@@ -1,15 +1,17 @@
 # Interrupt envelope (outbound)
 
-The **outbound** half of the stop-a-running-turn path: the wire type and the pure, fail-closed
-transport builder the desktop will use to send the daemon a single "stop the current turn" signal —
-the desktop equivalent of pressing Esc at the local terminal. This slice ships **only** the wire
-contract and the builder — no command wiring, no `daemonConnection` method, no renderer UI.
+The **outbound** half of the stop-a-running-turn path: the wire type, the pure fail-closed transport
+builder, and (as of #306) the full command pathway the desktop uses to send the daemon a single "stop
+the current turn" signal — the desktop equivalent of pressing Esc at the local terminal. Only the
+renderer-visible affordance is still missing.
 
 Introduced in [#305](../codebase/305.md), the wire+builder base slice split from
 [#146](https://github.com/pyrycode/pyrycode-desktop/issues/146) (interrupt-running-turn), slice 1 of
-3. Blocks [#306](https://github.com/pyrycode/pyrycode-desktop/issues/306) — the
-`daemonConnection.interrupt` method + IPC command that will call this builder — which in turn blocks
-[#307](https://github.com/pyrycode/pyrycode-desktop/issues/307) — the composer stop-state render.
+3 — that slice shipped **only** the wire contract and the builder, no command wiring, no
+`daemonConnection` method, no renderer UI. [#306](../codebase/306.md), slice 2 of 3, wired the
+**command pathway** on top of it: a bare `interrupt` `RendererCommand` member, `daemonConnection.interrupt()`,
+and the main-side dispatcher arm. Blocks [#307](https://github.com/pyrycode/pyrycode-desktop/issues/307)
+— the composer stop-state render, the only remaining slice.
 
 ## What it does
 
@@ -75,27 +77,35 @@ sibling builder. No barrel — never re-exported through the renderer; raw bytes
 
 ## Configuration and usage
 
-**Not yet consumed.** [#306](https://github.com/pyrycode/pyrycode-desktop/issues/306) is expected to
-add `daemonConnection.interrupt()` (no payload arg, since the frame is nullary) plus an `interrupt`
-`RendererCommand` member, routed through `main/index.ts`'s `onCommand` switch — its IPC handler's only
-job is confirming a live/interactive connection, since the renderer supplies zero bytes into the
-frame. The renderer affordance — a composer stop-state control — lands further downstream in
-[#307](https://github.com/pyrycode/pyrycode-desktop/issues/307); the mobile Figma file draws only the
-steady-send composer state (16-61), so the stop-state visual is undrawn and #307 ships without a
-design reference (N/A + justification, per memory `ticket-146-interrupt-turn-split`).
+**Command path complete, no renderer trigger yet.** [#306](../codebase/306.md) added
+`daemonConnection.interrupt(): void` (no payload arg, since the frame is nullary — the `driver === null`
+inert-when-disconnected twin of `requestConversations`) plus a bare `{ type: 'interrupt' }`
+`RendererCommand` member and its `interruptCommand()` factory, routed through `main/index.ts`'s
+`onCommand` switch (`case 'interrupt': connection.interrupt(); return`). The dispatcher does no
+liveness check of its own — `interrupt()` itself is the inert-when-disconnected guard, so the frame is
+silently dropped rather than the connection ever asked to confirm liveness. No preload change: the
+generic `sendCommand(command: RendererCommand)` pipe already carries the new member.
+
+The renderer affordance — a composer stop-state control that calls `interruptCommand()` — lands
+further downstream in [#307](https://github.com/pyrycode/pyrycode-desktop/issues/307); the mobile
+Figma file draws only the steady-send composer state (16-61), so the stop-state visual is undrawn and
+#307 ships without a design reference (N/A + justification, per memory
+`ticket-146-interrupt-turn-split`).
 
 ## Edge cases and limitations
 
 - **No decode path.** The frame is outbound-only — nothing for `inboundMessage.ts` to parse,
   mirroring every other bare/payload-carrying outbound-only slice in this module.
 - **No reply, no correlation.** Unlike `dequeue_message` or `modal_answer`, there is no daemon
-  response to this frame at all. The eventual caller (#306) accumulates no pending-request state for
-  it — the turn-stopped signal is read off the pre-existing `turn_state`/`turn_end` decode path.
+  response to this frame at all. `daemonConnection.interrupt()` (#306) accumulates no pending-request
+  state for it — the turn-stopped signal is read off the pre-existing `turn_state`/`turn_end` decode
+  path.
 - **Ungated by design, and lower-severity than `dequeue_message`.** No token, no nonce, and — unlike
-  `dequeue_message` — no payload for an IPC edge to even validate; the daemon-side `interactive`
-  gate (already satisfied via #179) is the only gate. A compromised renderer's worst case is
-  self-inflicted: stopping the user's own running turn, equivalent to a button the user can already
-  click (architect security review, #305, PASS).
+  `dequeue_message` — no payload for the `isRendererCommand` boundary guard to even validate beyond the
+  `type` discriminant; the daemon-side `interactive` gate (already satisfied via #179) is the only gate.
+  A compromised renderer's worst case is self-inflicted: stopping the user's own running turn,
+  equivalent to a button the user can already click (architect security review, #305 and #306, both
+  PASS).
 - **Zero `EnvelopeType` consumer cascade.** Same as every other outbound-only member — no exhaustive
   `switch` over `EnvelopeType` exists, so the new member needed no companion `assertNever` fix-up.
 
@@ -103,15 +113,21 @@ design reference (N/A + justification, per memory `ticket-146-interrupt-turn-spl
 
 - [Dequeue message envelope](dequeue-message-envelope.md) / [#299 codebase notes](../codebase/299.md)
   — the payload-carrying wire+builder base slice the ticket body initially pointed at as the mirror;
-  the contrasting (non-bare) shape.
+  the contrasting (non-bare) shape. [#300 codebase notes](../codebase/300.md) is the fire-and-forget
+  command-pathway template `daemonConnection.interrupt()` (#306) clones the no-correlation-memory
+  posture from.
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — hosts `requestSnapshotEnvelope.ts`, the
   original `Input{id,ts,payload}` shape both bare and payload-carrying builders derive from.
 - [Wire codec](wire-codec.md) — `encodeEnvelope`/`decodeEnvelope`/`WireEncodeError`, unchanged by
   this slice; `codec.ts:133`'s absent-payload throw is why `payload: {}` is emitted present-and-empty.
-- [#305 codebase notes](../codebase/305.md) — implementation summary.
-- Blocks [#306](https://github.com/pyrycode/pyrycode-desktop/issues/306) — the `daemonConnection`
-  method + IPC command that will call `buildInterrupt`, which blocks
-  [#307](https://github.com/pyrycode/pyrycode-desktop/issues/307) — the composer stop-state render.
+- [Command channel](command-channel.md) — the `RendererCommand`/`isRendererCommand` seam the bare
+  `interrupt` member (#306) extends.
+- [#305 codebase notes](../codebase/305.md) — the wire+builder implementation summary.
+- [#306 codebase notes](../codebase/306.md) — the command-pathway implementation summary: the bare
+  `interrupt` `RendererCommand` member, `daemonConnection.interrupt()`, and the `main/index.ts`
+  dispatcher arm.
+- Blocks [#307](https://github.com/pyrycode/pyrycode-desktop/issues/307) — the composer stop-state
+  render, the only remaining slice; calls `interruptCommand()`.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § interrupt; pyrycode #707 (bare
   `interrupt` → single claude Esc, `interactive`-gated, fire-and-forget,
   `TestV2Session_Interrupt_RoutesEscByCapability`).

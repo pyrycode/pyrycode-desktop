@@ -58,6 +58,7 @@ export type EnvelopeType =
   | 'tool_use'
   | 'tool_result'
   | 'queue_state'
+  | 'dequeue_message'
   | 'modal_shown'
   | 'modal_dismissed'
   | 'modal_answer'
@@ -353,6 +354,24 @@ export interface QueuedItem {
 export interface QueueStatePayload {
   conversation_id: string
   queued: QueuedItem[]
+}
+
+/**
+ * Outbound `dequeue_message` payload (client → daemon). Mirrors the daemon SSOT (pyrycode #720,
+ * docs/protocol-mobile.md § Queue) field-for-field, wire order `conversation_id, queued_msg_id` —
+ * both always present (no `omitempty`). Drops one queued-but-not-yet-run message from a
+ * conversation's backlog, driving the daemon's `msgqueue.Remove`.
+ *
+ * This is an UNGATED control frame — it carries NO nonce and NO answer token (contrast
+ * `ModalAnswerPayload`, which carries `answer_token`). Any paired client may drop a queued message
+ * (project security model #720). `queued_msg_id` is SYMMETRIC with the inbound
+ * `QueuedItem.queued_msg_id`: a plain per-conversation integer (a JSON number, never a string) that
+ * selects the entry to remove. The builder does not police its range — an out-of-range id is a
+ * daemon-side no-op, exactly as the inbound decoder narrows the type but does not police it. See #292.
+ */
+export interface DequeueMessagePayload {
+  conversation_id: string
+  queued_msg_id: number
 }
 
 /**

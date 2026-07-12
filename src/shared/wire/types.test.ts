@@ -24,7 +24,8 @@ import type {
   PromoteConversationPayload,
   ConversationUpdatedPayload,
   QueuedItem,
-  QueueStatePayload
+  QueueStatePayload,
+  DequeueMessagePayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -451,5 +452,31 @@ describe('queue-state wire vocabulary (#292)', () => {
     // @ts-expect-error queued_msg_id is number, not string
     const wrong: QueuedItem = { queued_msg_id: '1', text: 'x', ts: 't' }
     expect(wrong.text).toBe('x')
+  })
+})
+
+describe('dequeue-message wire vocabulary (#299)', () => {
+  it('admits the dequeue_message outbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const dequeue: EnvelopeType = 'dequeue_message'
+    expect(dequeue).toBe('dequeue_message')
+  })
+
+  it('shapes DequeueMessagePayload as { conversation_id, queued_msg_id } in wire order', () => {
+    // Mirrors the daemon SSOT (pyrycode #720) field-for-field, wire order conversation_id then
+    // queued_msg_id — both always present. queued_msg_id selects the queue entry the daemon's
+    // msgqueue.Remove deletes; it is symmetric with the inbound QueuedItem.queued_msg_id (a number).
+    const payload: DequeueMessagePayload = { conversation_id: 'conv-1', queued_msg_id: 7 }
+    expect(payload).toEqual({ conversation_id: 'conv-1', queued_msg_id: 7 })
+    expect(Object.keys(payload)).toEqual(['conversation_id', 'queued_msg_id'])
+  })
+
+  it('pins queued_msg_id as a number — a JSON string is a compile-time type error', () => {
+    // The compile-time no-drift pin symmetric with QueuedItem's: the outbound counter MUST be a
+    // number, never a string. A `'7'` literal here is a TS2322 the @ts-expect-error absorbs — if the
+    // field were ever relaxed to `string`, this line would stop erroring and fail at compile time.
+    // @ts-expect-error queued_msg_id is number, not string
+    const wrong: DequeueMessagePayload = { conversation_id: 'conv-1', queued_msg_id: '7' }
+    expect(wrong.conversation_id).toBe('conv-1')
   })
 })

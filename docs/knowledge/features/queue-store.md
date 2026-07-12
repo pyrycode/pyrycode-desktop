@@ -7,8 +7,11 @@ shipped) and the reconcile-on-connect slice (#197) can read one source of truth.
 
 Introduced in [#293](../codebase/293.md), split from #145 alongside [#292](../codebase/292.md)
 (transport decode, shipped first) / [#294](../codebase/294.md) (render, shipped) / #295 (command,
-not yet built) / #296 (drop, not yet built). This ticket shipped no visible surface — #294 is its
-first consumer.
+re-split) / #296 (drop, not yet built). This ticket shipped no visible surface — #294 is its
+first consumer. #295 (the drop command) tripped the ≥5-file split gate and was re-split along the
+#235/#236 seam into [#299](../codebase/299.md) (wire + builder, shipped — see [dequeue message
+envelope](dequeue-message-envelope.md)) → #300 (the `daemonConnection` method + IPC command, blocked
+on #299); #295 itself is closed.
 
 ## What it does
 
@@ -162,4 +165,8 @@ daemon → queue_state frame → parseQueueStatePayload → queueState DaemonEve
 - [#293 codebase notes](../codebase/293.md) — implementation summary and patterns established.
 - [#294 codebase notes](../codebase/294.md) — the queue render slice, first consumer of
   `useQueueStore`/`selectBacklogFor` (shipped).
+- [Dequeue message envelope](dequeue-message-envelope.md) / [#299 codebase notes](../codebase/299.md)
+  — the outbound wire+builder counterpart to this store's inbound `queue_state` (the #295 drop
+  command's re-split first slice); #300 (blocked on #299) will be the command that actually removes
+  an entry this store holds.
 - Still blocks #197 (reconcile-on-connect, first consumer of `selectBacklogs`, not yet built).

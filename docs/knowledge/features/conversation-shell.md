@@ -30,6 +30,13 @@ A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `
 
 This screen is now the **thread view** of the [paired shell](paired-shell.md), landed in [#140](../codebase/140.md): the paired region enters at a list first, and opening a conversation mounts this screen, which gained a leading back affordance to return to the list. See [Back control](#back-control-140) below.
 
+A **queued backlog** landed in [#294](../codebase/294.md): the messages queued while the daemon is
+busy render as a dimmed, not-yet-run tail below the thread, reusing the delivered user-bubble
+treatment. Each row gained a **drop / cancel affordance** in [#296](../codebase/296.md): an
+icon-only button that dispatches a removal for that entry, with no optimistic UI — the row leaves
+only when the daemon's next queue snapshot confirms it. See [Queued backlog + drop
+affordance](#queued-backlog--drop-affordance-294-drop-since-296) below.
+
 The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249) below.
 
 ## How it works
@@ -860,6 +867,40 @@ and `Install` affordance (Figma 16-38) are out of scope, deferred with the memor
 ticket has no dependency on — title + rule only. See [#286 codebase notes](../codebase/286.md) for the
 full design and patterns established.
 
+### Queued backlog + drop affordance (#294, drop since #296)
+
+The [queue store](queue-store.md)'s held backlog (per-conversation `QueuedItem` rows the daemon has
+accepted but not yet run) renders as `QueuedBacklog`, an exported pure view mounted after
+`<ThinkingIndicator/>` and before the status row's `<StatusRow/>` trigger. Empty → `null` (no
+region, no chrome — the `ThinkingIndicator` posture); non-empty → one row per item, in enqueue
+order, inside a `.conversation__queued` wrapper dimmed to 50% opacity (the `.tool-row` pending
+precedent, the single "waiting / not yet run" signal). Each row reuses the delivered user-bubble
+treatment (`message-row--user` / `bubble--user`) but is tagged `data-thread-role="queued"` —
+distinct from a delivered row's `data-thread-role="user"`. `QueuedBacklogControl`, the in-file
+container, binds a module-scope-hoisted `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (the same
+milestone constant the composer sends under — this screen has no conversation id in nav scope, and
+the spec explicitly ruled out threading one through for this slice).
+
+[#296](../codebase/296.md) added a **drop / cancel affordance** to each row: an icon-only button, a
+leading sibling of the bubble (the row is right-aligned, so leading sits it at the inner edge),
+carrying a client-owned `aria-label="Drop queued message"` and an inline `aria-hidden` SVG glyph.
+`onDrop` is a **required** injected-effect prop on `QueuedBacklog` (the `PermissionModal` "a view
+that cannot answer is a bug" rule) — the container binds it to the pure `dropQueuedMessage` helper
+(`dropQueuedMessage.ts`), supplying `MILESTONE_CONVERSATION_ID` and dereferencing
+`window.pyry.sendCommand` only inside the click closure. Activating it dispatches
+`dequeueMessageCommand` (see [Dequeue message envelope](dequeue-message-envelope.md)) and nothing
+else — **no optimistic removal**: the row disappears only when the daemon's next `queue_state`
+snapshot replaces the backlog and this same store subscription re-renders. The button exists only
+inside `QueuedBacklog`; `Timeline` draws every delivered row and is untouched, so "affordance only
+on queued rows" and "delivered rows unaffected" are structural guarantees, not conventions. The
+drop button inherits the region's 50% dimming (a child's own opacity cannot escape a parent opacity
+compositing group) — shipped dimmed by design; see [#296 codebase notes](../codebase/296.md).
+
+No Figma coverage for either the queued row or its drop control — the same documented gap as
+[#148](../codebase/148.md)'s thread-chrome states: the mobile file draws only the populated,
+delivered thread (node 16-8/16-21). See [#294 codebase notes](../codebase/294.md) and [#296
+codebase notes](../codebase/296.md) for full design and patterns established.
+
 ## Seams (bound + still open)
 
 - **`onBack?: () => void`** — **bound in [#140](../codebase/140.md).** Optional, gated exactly like `onUnpaired?`; wired by the [paired shell](paired-shell.md) when this screen is mounted as its `thread` view, absent for a bare `<ConversationScreen />`. See [Back control](#back-control-140) above.
@@ -873,6 +914,7 @@ full design and patterns established.
 - **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. See [Thinking indicator](#thinking-indicator-215) above.
 - **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md); gained a rejection surface in [#249](../codebase/249.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, `selectRejections`, and `dispatch`, mounted as the last child of `.conversation`. `null` only when both the outstanding prompt and the rejection list are empty; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first, and a round-tripped rejection renders a dismissible banner independent of the prompt. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249) above.
 - **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
+- **`QueuedBacklog({ items, onDrop })` / `QueuedBacklogControl`** — **render bound in [#294](../codebase/294.md); `onDrop` (required) bound in [#296](../codebase/296.md).** `QueuedBacklogControl` reads the [queue store](queue-store.md)'s `selectBacklogFor(MILESTONE_CONVERSATION_ID)` and binds `onDrop` to the pure `dropQueuedMessage` (`dropQueuedMessage.ts`), which dispatches `dequeueMessageCommand` and nothing else — no local mutation. See [Queued backlog + drop affordance](#queued-backlog--drop-affordance-294-drop-since-296) above.
 
 ## Edge cases and limitations
 
@@ -883,6 +925,7 @@ full design and patterns established.
 - **Connection banner** ([#279](../codebase/279.md)) — renders across the top of the thread whenever `selectStatus` is not `connected`, disappearing on reconnect with no reload; text is always the client-owned `CONNECTION_BANNER_COPY`, never `ConnectionError.message`. Coexists with the composer's own terse hint (#31) — both remain visible while disconnected, by design (distinct copy registers, not a duplicate).
 - No DOM interactivity is tested yet — the render test uses `renderToStaticMarkup`, not a DOM harness. Because zustand v5's `useStore` reads `getInitialState()` (not `getState()`) for its server snapshot, a *server*-rendered store-bound container always shows the store's **initial** state; #69 therefore proves ordering + role→type on the pure `MessageThread` view and smoke-tests the container against the empty store. Observing a *populated* container render needs a jsdom harness — still deferred. See [#69 codebase notes](../codebase/69.md).
 - **Session-boundary delimiter** ([#286](../codebase/286.md)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before (AC5). Its `clear`/`idle_evict` copy is provisional — no Figma variant exists for those two reasons yet.
+- **Queued backlog + drop affordance** ([#294](../codebase/294.md)/[#296](../codebase/296.md)) — the region and its drop buttons render only when the milestone conversation's backlog is non-empty; dropping a row is fire-and-forget with no client-side validation of `queued_msg_id` and no error surface on a bridge failure (swallowed, `console.error` only) — the row simply remains, since the daemon never received the drop. The drop button inherits the region's 50% dimming; it cannot be rendered at full opacity without restructuring the region-level dim (a child opacity cannot escape a parent's opacity compositing group).
 
 ## Related
 
@@ -901,5 +944,6 @@ full design and patterns established.
 - [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `role→'daemon'` / `message_id→id` adapter seam deferred to this screen
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
+- [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `<QueuedBacklogControl/>` reads via `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (#293, consumed in #294), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

@@ -7,12 +7,13 @@ shipped) and the reconcile-on-connect slice (#197) can read one source of truth.
 
 Introduced in [#293](../codebase/293.md), split from #145 alongside [#292](../codebase/292.md)
 (transport decode, shipped first) / [#294](../codebase/294.md) (render, shipped) / #295 (command,
-re-split) / #296 (drop, not yet built). This ticket shipped no visible surface — #294 is its
-first consumer. #295 (the drop command) tripped the ≥5-file split gate and was re-split along the
-#235/#236 seam into [#299](../codebase/299.md) (wire + builder, shipped) → [#300](../codebase/300.md)
-(the `daemonConnection` method + IPC command, shipped — see [dequeue message
-envelope](dequeue-message-envelope.md)); #295 itself is closed. #296 (the render affordance that
-actually calls the command) is the last remaining slice.
+re-split) / [#296](../codebase/296.md) (drop, shipped). This ticket shipped no visible surface —
+#294 is its first consumer. #295 (the drop command) tripped the ≥5-file split gate and was
+re-split along the #235/#236 seam into [#299](../codebase/299.md) (wire + builder, shipped) →
+[#300](../codebase/300.md) (the `daemonConnection` method + IPC command, shipped — see [dequeue
+message envelope](dequeue-message-envelope.md)); #295 itself is closed. #296 (the render
+affordance that actually calls the command) shipped last — the queue-drop family (#292/#293/#294/
+#299/#300/#296) is now complete end to end.
 
 ## What it does
 
@@ -127,9 +128,10 @@ daemon → queue_state frame → parseQueueStatePayload → queueState DaemonEve
   composer sends under) at module scope, once, for the single-active-conversation milestone; a
   future conversation-selection ticket is expected to replace this with a real nav-sourced id.
 - Import surface for #197 (reconcile-on-connect): `selectBacklogs` — the whole-map read, to iterate
-  every held backlog and evict ones the daemon didn't refresh on reconnect.
-- No component consumes `useQueueStore` yet — exported ahead of its first consumer, the same shape
-  every prior store/bridge pair in this codebase has shipped in.
+  every held backlog and evict ones the daemon didn't refresh on reconnect. Not yet built.
+- [#296](../codebase/296.md) (shipped) reads this store only indirectly — its drop affordance never
+  touches `useQueueStore`/`selectBacklogFor` itself; it fires `dequeueMessageCommand` and lets the
+  existing #294 subscription remove the row once the daemon's next `queue_state` snapshot arrives.
 
 ## Edge cases and limitations
 
@@ -168,7 +170,8 @@ daemon → queue_state frame → parseQueueStatePayload → queueState DaemonEve
   `useQueueStore`/`selectBacklogFor` (shipped).
 - [Dequeue message envelope](dequeue-message-envelope.md) / [#299 codebase notes](../codebase/299.md)
   / [#300 codebase notes](../codebase/300.md) — the outbound wire+builder+command counterpart to this
-  store's inbound `queue_state` (the #295 drop command's re-split slices, both shipped); #296 (the
-  render affordance, not yet built) is what will actually dispatch a removal against an entry this
-  store holds.
+  store's inbound `queue_state` (the #295 drop command's re-split slices, both shipped).
+- [#296 codebase notes](../codebase/296.md) — the drop affordance (shipped) that dispatches a removal
+  against an entry this store holds; the row leaves only when this store's existing subscription
+  processes the daemon's next `queue_state` snapshot, never via a direct store mutation.
 - Still blocks #197 (reconcile-on-connect, first consumer of `selectBacklogs`, not yet built).

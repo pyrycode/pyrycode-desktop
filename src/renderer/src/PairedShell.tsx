@@ -3,6 +3,7 @@ import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { ChannelList } from './screens/channels/ChannelList'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
+import { useActiveConversationStore } from './store/activeConversationStore'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
 function assertNever(route: never): never {
@@ -45,10 +46,18 @@ export function PairedShellView(props: {
  */
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
-  // The created-event → list→thread nav: the payload is ignored (navigation is conversation-agnostic
-  // today — it opens the single active conversation, the same interim as the row's onClick), reusing the
-  // existing `open` transition with no new route or nav arm.
-  useConversationCreatedNav(() => dispatch({ type: 'open' }))
+  // #278: the setter that snapshots the created discussion so the empty thread's workspace chip can read
+  // its `cwd`. Read via the store hook (the Composer/UnpairControl store-write idiom); the reference is
+  // stable, so no re-render churn, and the created-event callback below closes over it.
+  const setActiveConversation = useActiveConversationStore((s) => s.setActiveConversation)
+  // The created-event → list→thread nav. #278: also record the created payload (its `cwd` feeds the
+  // empty-thread workspace chip) — the callback already receives this payload and previously dropped it.
+  // The `open` nav stays conversation-agnostic (it opens the single active conversation, the same interim
+  // as the row's onClick), reusing the existing transition with no new route or nav arm.
+  useConversationCreatedNav((created) => {
+    setActiveConversation(created)
+    dispatch({ type: 'open' })
+  })
   return (
     <PairedShellView
       route={route}

@@ -7,6 +7,7 @@ import { useModalBridge } from './store/modalBridge'
 import { ConversationListData } from './store/conversationListBridge'
 import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
+import { QueueData } from './store/queueBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -96,11 +97,16 @@ function App(): JSX.Element {
   // sessionSettingsUpdated / sessionSettingsRejected replies into the write store, on the same
   // App-level always-listening rationale — a confirm/reject reply can arrive after the Run config
   // sheet (#257) closes, so the listener must outlive the sheet.
+  // QueueData (#293) is a fourth sibling headless leaf: it lands each unsolicited `queueState`
+  // snapshot into the keyed queue store for the render slice (#294), on the same App-level
+  // always-listening rationale — a snapshot can arrive before #294 is ever mounted, and (per daemon
+  // #878/#879) several for different conversations can arrive back-to-back. Reactive-only, no gate.
   return (
     <>
       <ConversationListData />
       <SessionIdData />
       <RunSettingsWriteData />
+      <QueueData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

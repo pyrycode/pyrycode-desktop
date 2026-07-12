@@ -56,7 +56,9 @@ export type DebugBundleFailure = 'unavailable' | 'stream-corrupt' | 'write-faile
  * only a count, a local path, and the closed DebugBundleFailure enum, and `snapshotReceived`
  * (#180) carries the three session-settings fields plus two usage ints (#191) — five fields, a
  * DEDICATED minimal shape, deliberately NOT reusing ScreenSnapshotPayload, so the sensitive
- * rendered-screen `text` can never ride this channel. Session member and field names mirror
+ * rendered-screen `text` never rides `snapshotReceived` (the run-config arm); `text` crosses only
+ * on the dedicated `screenSnapshotReceived` arm (#316), where it is the render payload for the
+ * live-screen view (#318). Session member and field names mirror
  * SessionAction's so #19's mapping is near-identity, while the two unions stay separately declared
  * per layer.
  */
@@ -78,6 +80,17 @@ export type DaemonEvent =
       used_tokens: number
       window_tokens: number
     }
+  // The dedicated rendered-screen arm (#316, split from #147). Carries ONLY the rendered daemon screen
+  // `text` (the wire ScreenSnapshotPayload.text) and its `ts` (the RFC3339 timestamp string) — no token,
+  // key, raw frame, conversation_id, or run-config field (those ride snapshotReceived, above). A
+  // DELIBERATE, security-reviewed WIDENING: it reverses #180's text-drop now that a consumer exists.
+  // Like assistantDelta, `text` IS the render payload and crosses IPC deliberately — the boundary
+  // defended upstream is the fail-closed decode (parseScreenSnapshotPayload, #180), not this internal
+  // channel. `text` is UNTRUSTED daemon-relayed content: the display slice #318 (the first consumer)
+  // must render it as PLAIN TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), mirroring the
+  // identical warning on conversationCreated / sessionTransition / queueState. This slice has no DOM
+  // sink; the constraint is inherited for #318. Ships dormant — all three exhaustive bridges no-op it.
+  | { type: 'screenSnapshotReceived'; text: string; ts: string }
   // The two v2 interactive-stream arms (#199). Unlike snapshotReceived, `text` IS the render payload
   // (#203) and crosses IPC deliberately — the boundary defended upstream is the fail-closed decode, not
   // this internal channel. Consumed by the renderer timeline bridge (#202), not the session store.

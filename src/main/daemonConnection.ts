@@ -412,11 +412,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           }
           case 'snapshot':
-            // The content-minimisation seam (#180): `text` / `ts` / `conversation_id` are decoded but
-            // DROPPED here — only the three settings fields plus the two usage ints (#191) cross to the
-            // renderer. The dedicated minimal snapshotReceived event shape (NOT a reuse of
-            // ScreenSnapshotPayload) is what makes this hard to get wrong; a naive "reuse the wire type"
-            // would leak `text` to the renderer. The two ints are non-secret context-window counts.
+            // One screen_snapshot frame emits TWO events (#316). `conversation_id` is dropped (no
+            // consumer); the run-config fields ride the dedicated minimal snapshotReceived shape (NOT a
+            // reuse of ScreenSnapshotPayload — a naive "reuse the wire type" would leak `text`); `text`
+            // + `ts` ride the dedicated screenSnapshotReceived arm below (the live-screen data path),
+            // never folded into snapshotReceived. The two ints are non-secret context-window counts.
             emitDaemonEvent(sink, {
               type: 'snapshotReceived',
               model: inbound.snapshot.model,
@@ -424,6 +424,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               yolo: inbound.snapshot.yolo,
               used_tokens: inbound.snapshot.used_tokens,
               window_tokens: inbound.snapshot.window_tokens
+            })
+            // The rendered-screen data path (#316), a deliberate security-reviewed widening of #180's
+            // text-drop. A fresh literal with named fields (the assistant-delta idiom), never a spread
+            // of inbound.snapshot — so ONLY `text` + `ts` cross; a future decoder that grew a field
+            // cannot smuggle it onto this arm. No log call here: the content-free screen_snapshot
+            // diagnostic stays in inboundMessage.ts, so `text` is never written to a sink (AC3).
+            emitDaemonEvent(sink, {
+              type: 'screenSnapshotReceived',
+              text: inbound.snapshot.text,
+              ts: inbound.snapshot.ts
             })
             return
           case 'assistant-delta':

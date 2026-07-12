@@ -251,6 +251,16 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'stallDetected' })).toBeNull()
   })
 
+  it('screenSnapshotReceived → null (consumed by the display slice #318, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'screenSnapshotReceived',
+        text: 'rendered screen',
+        ts: '2026-07-08T00:00:00Z'
+      })
+    ).toBeNull()
+  })
+
   it('the three debug-bundle events dispatch nothing into the session store', () => {
     // Belt-and-suspenders, mirroring production: feed each new event through the same null-guarded
     // dispatch the bridge applies; the store stays at its initial state (no status flip, no message).

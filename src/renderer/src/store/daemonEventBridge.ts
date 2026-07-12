@@ -105,6 +105,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // the session store. Present only because the assertNever guard below makes a new arm a compile
       // error (the snapshotReceived-was-a-no-op-until-#187 precedent).
       return null
+    case 'screenSnapshotReceived':
+      // No session-store action: the display slice (#318, not yet built) renders the screen text, not the
+      // session store. Present only because the assertNever guard below makes a new arm a compile error
+      // (the snapshotReceived-was-a-no-op-until-#187 precedent).
+      return null
     default:
       return assertNever(event)
   }

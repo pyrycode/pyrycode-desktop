@@ -505,12 +505,13 @@ describe('createDaemonConnection debug-bundle download orchestrator round-trip (
   )
 })
 
-// --- screen_snapshot request/reply through the real handshake (#180, AC5) --------------------
+// --- screen_snapshot request/reply through the real handshake (#180, #316 AC5) ---------------
 // Drives the assembled stack end-to-end: connection.requestSnapshot sends a real request_snapshot
 // over the live Noise session; the fake daemon (via buildReplyFrames, which receives the decrypted
 // inbound plaintext) asserts the outbound frame is a request_snapshot carrying the given
-// conversation_id, then streams back a crafted screen_snapshot; the client emits exactly one
-// snapshotReceived carrying only model/effort/yolo — and text never appears on any emitted event.
+// conversation_id, then streams back a crafted screen_snapshot; the client emits BOTH a
+// snapshotReceived (run-config only) and a screenSnapshotReceived (text + ts, #316) — and the
+// rendered text rides only the dedicated arm, never the run-config snapshotReceived.
 describe('createDaemonConnection screen_snapshot round-trip (in-process fake target, #180)', () => {
   const SECRET_SCREEN = 'secret-rendered-terminal-output'
 
@@ -534,7 +535,7 @@ describe('createDaemonConnection screen_snapshot round-trip (in-process fake tar
   }
 
   it(
-    'sends request_snapshot(conversation_id) and emits one snapshotReceived (text dropped)',
+    'sends request_snapshot(conversation_id) and emits BOTH snapshotReceived and screenSnapshotReceived (#316)',
     async () => {
       let inboundType: string | undefined
       let inboundConversationId: unknown
@@ -557,7 +558,7 @@ describe('createDaemonConnection screen_snapshot round-trip (in-process fake tar
       expect(inboundType).toBe('request_snapshot')
       expect(inboundConversationId).toBe('conv-snap')
 
-      // Exactly one snapshotReceived, carrying ONLY the three settings fields.
+      // Exactly one snapshotReceived, carrying ONLY the three settings fields + usage ints.
       const snap = findEvent(events, 'snapshotReceived')
       expect(snap, `expected snapshotReceived; observed ${types(events)}`).toBeDefined()
       expect(snap).toEqual({
@@ -568,8 +569,12 @@ describe('createDaemonConnection screen_snapshot round-trip (in-process fake tar
         used_tokens: 45000,
         window_tokens: 200000
       })
-      // The rendered screen text never crosses to the renderer on any event.
-      for (const e of events) expect(JSON.stringify(e)).not.toContain(SECRET_SCREEN)
+      // #316: the dedicated screen-text arm ALSO emits, carrying text + ts.
+      const screen = findEvent(events, 'screenSnapshotReceived')
+      expect(screen, `expected screenSnapshotReceived; observed ${types(events)}`).toBeDefined()
+      expect(screen).toEqual({ type: 'screenSnapshotReceived', text: SECRET_SCREEN, ts: FIXED_TS })
+      // The rendered screen text rides ONLY screenSnapshotReceived, never the run-config arm (AC5).
+      expect(JSON.stringify(snap)).not.toContain(SECRET_SCREEN)
       expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
     },
     15_000

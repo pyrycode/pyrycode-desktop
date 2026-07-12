@@ -70,6 +70,15 @@ bridge; the real consumer is the render sibling [#242](https://github.com/pyryco
 (blocked on this ticket), which must render `name`/`cwd` as plain text, never HTML — the doc-comment
 on this arm carries that warning forward since this ticket has no DOM sink of its own.
 
+[#316](../codebase/316.md) added a nineteenth no-`SessionAction` member, `screenSnapshotReceived` — a
+**deliberate widening**, the opposite move from every content-minimised member above. It carries the
+rendered-screen `text` (and its `ts`) that `snapshotReceived` ([#180](../codebase/180.md)) deliberately
+drops, now that the display slice [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318) (blocked
+on this ticket) needs it. Emitted from the **same** `case 'snapshot'` seam as `snapshotReceived` — one
+decoded `screen_snapshot` frame now fires both events, each a fresh named-field literal bounding its own
+two/five fields. Consumed by neither existing bridge; `screenSnapshotReceived` ships dormant, real
+consumer is #318. See [screen snapshot fetch](screen-snapshot-fetch.md) for the full data-flow update.
+
 ## What it does
 
 Gives the background process **one typed function** to emit a sealed daemon-event to the window, and gives the renderer **one typed function** to subscribe to those events. Every event travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge.
@@ -105,6 +114,7 @@ export type DaemonEvent =
   | { type: 'debugBundleFailed'; reason: DebugBundleFailure }
   | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean
       ; used_tokens: number; window_tokens: number }
+  | { type: 'screenSnapshotReceived'; text: string; ts: string }
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
@@ -135,6 +145,21 @@ export type DaemonEvent =
   `conversation_id`, none of which this member has a field for. See [screen snapshot
   fetch](screen-snapshot-fetch.md) for why that's the load-bearing content-minimisation control, not
   an incidental narrowing.
+- **`screenSnapshotReceived{text,ts}`** ([#316](../codebase/316.md)) also maps to *no* `SessionAction`,
+  emitted from the **same** `case 'snapshot'` seam as `snapshotReceived` — one `screen_snapshot` frame
+  now fires both events. Unlike `snapshotReceived`, this is a **deliberate, security-reviewed
+  widening**: it carries exactly the two fields `snapshotReceived` was built to exclude (`text`, the
+  rendered daemon screen, and `ts`, its RFC3339 timestamp), reversing #180's drop now that a consumer
+  exists (the display slice [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318), blocked on
+  this ticket). Like `assistantDelta`, `text` IS the render payload and crosses IPC on purpose — the
+  boundary defended upstream is the fail-closed decode (`parseScreenSnapshotPayload`, unchanged since
+  #180), not this internal channel. The emit is a **fresh named-field literal**
+  (`{ text: inbound.snapshot.text, ts: inbound.snapshot.ts }`), never a spread of the decoded payload, so
+  the widening is bounded to exactly these two fields — `conversation_id`/`model`/`effort`/`yolo`/the two
+  usage ints stay on `snapshotReceived` only. `text` is untrusted daemon-relayed content: #318 must
+  render it as plain text, never HTML (the `conversationCreated`/`sessionTransition`/`queueState`
+  warning applied to a fourth field family). Consumed by none of the three existing bridges; ships
+  dormant.
 - **`assistantDelta{turnId,seq,text}` / `turnEnd{turnId,stopReason}`** ([#199](../codebase/199.md))
   also map to *no* `SessionAction`, consumed instead by the renderer timeline bridge
   [#202](../codebase/202.md) will build. Field names are renamed from the wire's `snake_case`
@@ -319,6 +344,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **`toolResult` had a real producer but no traffic through #178 — same capability gate.** [#229](../codebase/229.md) wired `emitDaemonEvent` for it from the same `case 'message'` choke point, giving `selectItems` its first real *resolved* `toolCall`; no `tool_result` frame reached it until [#179](../codebase/179.md) flipped `interactive`. Proven only by unit tests driving `daemonConnection` and `timelineBridge` directly (the latter through a real `createTimelineStore()`), and by the reducer's existing `fillResult` correlation tests (#121), until then. Now live.
 - **`queueState` is wired at the same `case 'message'` choke point as `toolUse`/`toolResult`, but its traffic is not known to be gated behind the `interactive` capability flip.** [#292](../codebase/292.md) added the emit from `daemonConnection.ts` directly, alongside `tool-use`/`tool-result`/`conversations`; unlike those turn-stream arms, `queue_state` is daemon **state** (#720) that can change independent of any turn being interactive, so — unlike the documented #178/#179 gate for `turnState`/`toolUse`/`toolResult`/`modalShown` — no capability precondition is asserted here. Proven only by unit tests driving `daemonConnection` and all three bridges directly; a live daemon `queue_state` frame has not yet been observed through #178.
 - **`modalAnswerRejected` is correlated, not decoded.** [#248](../codebase/248.md) added a fifteenth member, `modalAnswerRejected{modalId}` — the only member built entirely from main-side memory rather than a wire field: the daemon `error` (#116) that follows a rejected `modal_answer` carries no `modal_id`, so `daemonConnection.ts` attributes it via a FIFO queue of its own outstanding answered ids (push-on-send, dequeue-on-error, drain-on-accept, reset-on-dial). Consumed by neither `daemonEventBridge` nor `timelineBridge` (both null it); the real, still-dormant owner is the [modal store + bridge](modal-store-bridge.md) — render lands in #249.
+- **`screenSnapshotReceived` shares its producer's choke point with `snapshotReceived`, not a new one.** [#316](../codebase/316.md) added the second `emitDaemonEvent` call inside the same `case 'snapshot'` block `snapshotReceived` already occupies — the first member to be emitted from an *existing* member's exact call site rather than a new `case` or a new orchestrator. Both fire on every `screen_snapshot` reply; `screen_snapshot` is always-available (ADR-025, not gated on `interactive` — see [screen snapshot fetch](screen-snapshot-fetch.md)), so unlike `assistantDelta`/`turnState`/`toolUse`, this member had live traffic from the moment #180 shipped the underlying request/reply, not gated behind [#179](../codebase/179.md).
 - **`sessionSettingsRejected` is correlated by lookup, not by FIFO memory.** [#269](../codebase/269.md) added a seventeenth member, sharing the *same* `daemon-error` wire trigger as `modalAnswerRejected` above but a different attribution mechanism: unlike the FIFO (which cannot disambiguate two outstanding answers of the same kind and picks oldest-first), `daemon-error` here is looked up in `pendingSettings` by its own `Envelope.in_reply_to` — a precise per-request match, not a queue position. On a match this precedence gate **consumes the frame entirely**, skipping both the bundle reassembler and the `modalAnswerRejected` FIFO shift; on no match, both fire exactly as before #269. Consumed by none of the three existing bridges; the real consumer is the [Run configuration write store](run-settings-write-store.md) ([#256](../codebase/256.md), shipped), same as `sessionSettingsUpdated`.
 
 ## Security posture
@@ -340,6 +366,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `conversationsReceived` member, its `requestConversations` [command channel](command-channel.md) mirror, and why it reuses the wire row type verbatim instead of a hand-built minimal shape
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turnState` member, the third arm the `timelineBridge` owns, and the closed-enum decode idiom cloned from `role`
 - [#315 codebase notes](../codebase/315.md) — the `stallDetected` member, the eighteenth no-`SessionAction` arm and the only nullary one: the wire `StallPayload`'s sole field is dropped at the emit, so zero decoded daemon data crosses this bridge; consumed as a no-op by all three exhaustive bridges for now, real consumer is the render slice #317
+- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member, the nineteenth no-`SessionAction` arm and, unlike every prior member, a deliberate **widening** (not a minimisation): carries exactly the `text`/`ts` fields `snapshotReceived` (#180) was built to exclude, emitted from that same member's `case 'snapshot'` seam; consumed as a no-op by all three exhaustive bridges, real consumer is the display slice #318
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member, the fourth arm the `timelineBridge` owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member, the twelfth no-`SessionAction` arm and the vertical's last transport slice; the fifth arm the `timelineBridge` owns and the first to resolve an existing `ThreadItem` in place rather than append one or set a scalar

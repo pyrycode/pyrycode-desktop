@@ -142,7 +142,10 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
       },
       // stall ships dormant (#315); its render consumer is #317, not the modal store.
-      { type: 'stallDetected' }
+      { type: 'stallDetected' },
+      // screen-snapshot text ships dormant (#316); its consumer is the display slice #318, not the
+      // modal store.
+      { type: 'screenSnapshotReceived', text: 'rendered screen', ts: '2026-07-08T00:00:00Z' }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()
   })

@@ -15,7 +15,11 @@ split of [#181](https://github.com/pyrycode/pyrycode-desktop/issues/181) (itself
 (the render, blocked on #187). Extended in [#191](../codebase/191.md) (pyrycode/pyrycode#857) to
 carry two more always-present fields, `used_tokens`/`window_tokens` — the transport slice of the
 context-window usage feature (split from #182); the gauge render is
-[#192](https://github.com/pyrycode/pyrycode-desktop/issues/192), blocked on #191 + #188.
+[#192](https://github.com/pyrycode/pyrycode-desktop/issues/192), blocked on #191 + #188. Widened again
+in [#316](../codebase/316.md), split from #147: `case 'snapshot'` now fires a **second**, dedicated
+`screenSnapshotReceived` event alongside the unchanged `snapshotReceived`, deliberately surfacing the
+`text`/`ts` fields §5 below used to drop — a security-reviewed reversal of that minimisation now that
+the display slice [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318) needs them.
 
 ## Why this is always-available, not gated on `interactive`
 
@@ -144,7 +148,7 @@ the content-free diagnostic log fires, so a malformed snapshot throws first and 
 renderer-side pin is untouched). `MAX_PLAINTEXT_BYTES` already bounds an oversized reply — no new size
 guard needed.
 
-### 5. Content minimisation at the emit site (`daemonConnection.ts`'s consumer arm)
+### 5. Content minimisation — and its deliberate reversal (`daemonConnection.ts`'s consumer arm)
 
 ```ts
 case 'snapshot':
@@ -156,19 +160,33 @@ case 'snapshot':
     used_tokens: inbound.snapshot.used_tokens,      // #191
     window_tokens: inbound.snapshot.window_tokens   // #191
   })
+  emitDaemonEvent(sink, {
+    type: 'screenSnapshotReceived',                 // #316
+    text: inbound.snapshot.text,
+    ts: inbound.snapshot.ts
+  })
   return
 ```
 
-This is the **load-bearing content-minimisation seam**: `text` / `ts` / `conversation_id` are decoded
-(so a malformed frame still fails closed) but **dropped here** — only the settings fields plus the
-two usage ints (#191) cross IPC. The `snapshotReceived` `DaemonEvent` member is a **dedicated minimal
-shape**, deliberately *not* a reuse of `ScreenSnapshotPayload` — a naive "reuse the wire type like the
-other events" would put `text` (the rendered screen, potentially sensitive terminal output) one field
-away from a compromised renderer's DevTools console. Making the event shape structurally incapable of
-holding `text` is what the architect's security review flagged as the thing code review must confirm
-— and code review did (PASS, no findings for #180; PASS again for #191's two-field extension, one
-informational NIT on the deliberate snake_case field naming), verified by test as well as by
-construction.
+Through #191 this was the **load-bearing content-minimisation seam**: `text` / `ts` /
+`conversation_id` were decoded (so a malformed frame still fails closed) but **dropped here** — only
+the settings fields plus the two usage ints crossed IPC. The `snapshotReceived` `DaemonEvent` member
+is still a **dedicated minimal shape**, deliberately *not* a reuse of `ScreenSnapshotPayload` — a
+naive "reuse the wire type like the other events" would put `text` one field away from a compromised
+renderer's DevTools console. Making the event shape structurally incapable of holding `text` is what
+the architect's security review flagged as the thing code review must confirm — and code review did
+(PASS, no findings for #180; PASS again for #191's two-field extension, one informational NIT on the
+deliberate snake_case field naming), verified by test as well as by construction.
+
+**[#316](../codebase/316.md) deliberately reverses that drop for `text`/`ts` specifically**, once a
+real consumer existed: `conversation_id` still never crosses (no consumer), but `text`/`ts` now ride a
+**second, dedicated** `screenSnapshotReceived` emit — a fresh named-field literal, never a spread of
+`inbound.snapshot`, so the widening is bounded to exactly those two fields. `snapshotReceived` itself
+is untouched (byte-for-byte, verified by test) — the widening is isolated to the new arm, not folded
+into the existing one. This is a security-reviewed policy change (ADR-025: the live-screen view *is*
+the rendered `text`, the sanctioned design, not a leak), not a retraction of the #180/#191 minimisation
+discipline — see [#316's security review](https://github.com/pyrycode/pyrycode-desktop/issues/316) for
+the full adversarial walkthrough.
 
 ### The command + event surface (`commands.ts` / `events.ts`)
 
@@ -210,9 +228,11 @@ window → sendCommand({type:'requestSnapshot', payload:{conversation_id}})
 daemon → screen_snapshot frame → onDriverEvent 'message' → parseInboundMessage
       → {kind:'snapshot', snapshot} → emitDaemonEvent
         {type:'snapshotReceived', model, effort, yolo, used_tokens, window_tokens}
-        [text/ts/conversation_id dropped here; used_tokens/window_tokens added #191]
+        [conversation_id dropped here; used_tokens/window_tokens added #191]
       → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction) → run-config store (#187,
         still 3-field — usage consumption is #192)
+      → emitDaemonEvent {type:'screenSnapshotReceived', text, ts}   [#316, second emit, same frame]
+      → DAEMON_EVENT_CHANNEL → all three bridges (→ null, dormant) → display slice #318
 ```
 
 ## Error handling
@@ -247,8 +267,9 @@ that failure is actually observed (evidence-based-fix).
   values and performs no interpretation.
 - **Extending the run-config store to hold usage** — also #192; the store stays three-field
   ([#187](../codebase/187.md)) through #191.
-- **The `text` field's use** — decoded and validated, never surfaced; a future live-screen feature
-  would need its own event.
+- **Rendering the `text` field** — [#316](../codebase/316.md) surfaced `text`/`ts` across IPC via the
+  dedicated `screenSnapshotReceived` event (see §5 above); actually rendering it as the live-screen
+  view is [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318), blocked on #316.
 - **Daemon `error` reply correlation** — see § Correlation above.
 
 ## Related
@@ -256,6 +277,9 @@ that failure is actually observed (evidence-based-fix).
 - [#180 codebase notes](../codebase/180.md) — implementation summary, patterns, lessons.
 - [#191 codebase notes](../codebase/191.md) — the `used_tokens`/`window_tokens` extension to this
   feature (pyrycode/pyrycode#857).
+- [#316 codebase notes](../codebase/316.md) — the deliberate, security-reviewed widening that
+  surfaces `text`/`ts` via a second, dedicated `screenSnapshotReceived` emit at the same seam;
+  unblocks the display slice #318.
 - [Daemon connection](daemon-connection.md) — hosts `requestSnapshot()`, the `send` twin.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseScreenSnapshotPayload` and the
   `snapshot` `InboundDaemonMessage` kind.

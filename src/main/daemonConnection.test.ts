@@ -1082,13 +1082,14 @@ describe('createDaemonConnection — requestSnapshot (screen_snapshot request/re
     expect(() => connection.requestSnapshot(PAYLOAD)).not.toThrow()
   })
 
-  it('decodes an inbound screen_snapshot into one snapshotReceived carrying model/effort/yolo + usage (#191)', async () => {
+  it('decodes an inbound screen_snapshot into BOTH snapshotReceived (run-config) and screenSnapshotReceived (text), #316', async () => {
     const { sink, drivers } = await connected()
 
     drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(SNAPSHOT) })
 
     const events = emitted(sink)
-    expect(events.filter((e) => e.type === 'snapshotReceived')).toEqual([
+    const runConfig = events.filter((e) => e.type === 'snapshotReceived')
+    expect(runConfig).toEqual([
       {
         type: 'snapshotReceived',
         model: 'claude-opus-4-8',
@@ -1098,10 +1099,28 @@ describe('createDaemonConnection — requestSnapshot (screen_snapshot request/re
         window_tokens: 200000
       }
     ])
-    // Content minimisation: the rendered screen text / ts / conversation_id are dropped at the choke
-    // point (only the settings fields + usage ints cross), so no emitted event carries them.
-    expect(JSON.stringify(events)).not.toContain('secret rendered screen')
+    // The dedicated screen-text arm (#316) emits ALONGSIDE snapshotReceived, carrying ONLY text + ts.
+    expect(events.filter((e) => e.type === 'screenSnapshotReceived')).toEqual([
+      { type: 'screenSnapshotReceived', text: 'secret rendered screen', ts: '2026-07-08T00:00:00Z' }
+    ])
+    // text / ts ride only screenSnapshotReceived, NEVER the run-config snapshotReceived arm (AC2).
+    expect(JSON.stringify(runConfig)).not.toContain('secret rendered screen')
+    expect(JSON.stringify(runConfig)).not.toContain('2026-07-08T00:00:00Z')
+    // conversation_id is dropped from BOTH events (no consumer).
     expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('carries an empty text through to screenSnapshotReceived as the value "", not dropped (#316)', async () => {
+    const { sink, drivers } = await connected()
+
+    const emptyText: ScreenSnapshotPayload = { ...SNAPSHOT, text: '' }
+    drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(emptyText) })
+
+    expect(emitted(sink).find((e) => e.type === 'screenSnapshotReceived')).toEqual({
+      type: 'screenSnapshotReceived',
+      text: '',
+      ts: '2026-07-08T00:00:00Z'
+    })
   })
 
   it('decodes the empty-model/effort and yolo:false defaults as those values (AC3)', async () => {

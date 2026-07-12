@@ -9,6 +9,7 @@ import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
 import { QueueData } from './store/queueBridge'
 import { ScreenSnapshotData } from './store/screenSnapshotBridge'
+import { RelayLinkData } from './store/relayLinkBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -114,6 +115,7 @@ function App(): JSX.Element {
       <RunSettingsWriteData />
       <QueueData />
       <ScreenSnapshotData />
+      <RelayLinkData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

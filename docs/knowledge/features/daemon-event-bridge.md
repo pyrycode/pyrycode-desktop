@@ -103,6 +103,15 @@ discards a real, non-trivial payload (unlike `stallDetected`'s nullary literal) 
 force a case in all three exhaustive `assertNever`-guarded switches at once, after
 `toolResult`/`conversationCreated`/`sessionTransition`/`stallDetected`.
 
+[#328](../codebase/328.md) added a twentieth no-store-action member, `relayLinkChanged` — the
+relay-**socket** leg's classified link category (`RelayLinkStatus`), distinct from this bridge's
+own combined session status. Content-free by construction (no token, key, frame, or raw close
+code — only the category crosses IPC). Consumed by **none** of the three existing bridges; unlike
+every prior no-store-action member, its real consumer is a **new, fourth independent** subscriber
+purpose-built for it — the [relay-link store](relay-link-store.md)'s own `RelayLinkData` bridge
+([#329](../codebase/329.md)), not any of the three switches below. The sixth arm to force a case in
+all three exhaustive `assertNever`-guarded switches at once.
+
 ## What it does
 
 Turns each `DaemonEvent` arriving from the background process into the matching `SessionAction` (or `null`, for events the session store doesn't model) and dispatches non-null results into the one store the UI reads. Two exported symbols:
@@ -142,6 +151,7 @@ A `switch (event.type)` over all twenty-three `DaemonEvent` arms with a `default
 | `sessionTransition` | `null` | consumed by none of the three existing bridges; the real consumer is the renderer holder #259 — present only for exhaustiveness (#254) |
 | `sessionSettingsUpdated` | `null` | consumed by none of the three existing bridges; the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md) (shipped) — present only for exhaustiveness (#264, correlation widened by #261) |
 | `sessionSettingsRejected` | `null` | consumed by none of the three existing bridges; the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md) (shipped) — present only for exhaustiveness (#269) |
+| `relayLinkChanged` | `null` | consumed by none of the three existing bridges; the real consumer is the [relay-link store](relay-link-store.md)'s own bridge (#329, shipped) — present only for exhaustiveness (#328) |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 
@@ -235,5 +245,6 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Session settings send](session-settings-send.md) / [#264 codebase notes](../codebase/264.md) — the `sessionSettingsUpdated` member this bridge tolerates as a sixteenth `null`-returning case, widened with a `changeId` correlation key by [#261](../codebase/261.md); consumed by none of the three existing bridges, the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md), shipped
 - [Session settings send](session-settings-send.md) / [#269 codebase notes](../codebase/269.md) — the `sessionSettingsRejected` member this bridge tolerates as a seventeenth `null`-returning case, the rejected twin of `sessionSettingsUpdated`; consumed by none of the three existing bridges, the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md), shipped
 - [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md) — the fourth independent App-level subscriber on this channel (alongside this bridge, the timeline bridge, and the modal bridge), consuming `sessionSettingsUpdated`/`sessionSettingsRejected` into the pending-write state machine; does not modify this bridge
+- [Relay-link store](relay-link-store.md) / [#328 codebase notes](../codebase/328.md) / [#329 codebase notes](../codebase/329.md) — the `relayLinkChanged` member this bridge tolerates as a twentieth `null`-returning case (#328, content-free relay-socket-leg category); its real consumer is a fifth independent App-level subscriber, the relay-link store's own `RelayLinkData` bridge (#329, shipped) — the sixth arm to force a case in all three exhaustive bridges at once
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [#19 codebase notes](../codebase/19.md) · Spec: `docs/specs/architecture/19-translate-daemon-events-to-session-actions.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

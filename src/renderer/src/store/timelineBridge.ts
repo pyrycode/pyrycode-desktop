@@ -20,8 +20,9 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the five v2 stream arms (`assistantDelta` / `turnEnd` / `turnState` /
- * `toolUse` #217 / `toolResult` #229); each is reconstructed as a fresh literal with named fields — not `return event`, not a spread
+ * timeline state. Owns exactly the six timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286); each is reconstructed
+ * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
  * rename: the owned arms are field-for-field identical to their `ThreadEvent` counterparts, so there
@@ -65,6 +66,22 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
         isError: event.isError,
         resultSummary: event.resultSummary
       }
+    case 'sessionTransition':
+      // The session-boundary arm (#285 widened it, #286 renders it). The DaemonEvent carries
+      // `newSessionId` (the #259 holder's addressing key) beside the three render fields; this drops
+      // `newSessionId` and copies the rest into a fresh `sessionBoundary` ThreadEvent — a filter + fresh
+      // copy (arm selection), not a field remap, since the render fields are field-for-field identical.
+      // `event.reason` is WireSessionTransitionReason; the ThreadEvent arm expects SessionBoundaryReason —
+      // the same literal union, so this assigns with no cast (the `turnState` precedent). `workspaceCwd`
+      // nullability is preserved verbatim. reduceTimeline folds it into a fresh `sessionBoundary` item in
+      // arrival order (#121). The #259 holder is a SEPARATE subscriber on the same channel and still sees
+      // this event unchanged — moving it out of the no-op group here does not affect it.
+      return {
+        type: 'sessionBoundary',
+        reason: event.reason,
+        workspaceCwd: event.workspaceCwd,
+        occurredAt: event.occurredAt
+      }
     case 'connecting':
     case 'connected':
     case 'disconnected':
@@ -80,16 +97,15 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'conversationUpdated':
     case 'modalShown':
     case 'modalDismissed':
-    case 'sessionTransition':
     case 'sessionSettingsUpdated':
     case 'sessionSettingsRejected':
     case 'modalAnswerRejected':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
-      // render), the create render slice (#242), the #259 session-id holder, and the #261 / #256
-      // session-settings consumers (confirmed + rejected #269) consume these — not the timeline store.
-      // sessionTransition, sessionSettingsUpdated, sessionSettingsRejected, and modalAnswerRejected are
-      // NOT timeline items — unlike turnState, none drives a timeline row.
+      // render), the create render slice (#242), and the #261 / #256 session-settings consumers
+      // (confirmed + rejected #269) consume these — not the timeline store. sessionSettingsUpdated,
+      // sessionSettingsRejected, and modalAnswerRejected are NOT timeline items — unlike turnState and,
+      // since #286, sessionTransition, none drives a timeline row.
       return null
     default:
       return assertNever(event)

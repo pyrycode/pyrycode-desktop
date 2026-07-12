@@ -16,6 +16,7 @@ import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
+import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -58,6 +59,10 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
   // never reopens itself across a screen remount. The StatusRow trigger sits between the thread and
   // the composer (per Figma); the sheet overlays the whole conversation surface as the last child.
   const [sheetOpen, setSheetOpen] = useState(false)
+  // #286: the render-time clock for the session-boundary delimiter's relative time (`2 hours ago`).
+  // A plain render-local value, not store state (the ChannelList precedent) — safe under
+  // renderToStaticMarkup, adds no subscription, and re-derives on each render so the label stays fresh.
+  const now = Date.now()
   return (
     <div className="conversation">
       <BackControl onBack={onBack} />
@@ -66,7 +71,7 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
           header row and above the message list. A third read of the connection status, distinct from
           the composer's terse inline gate below. */}
       <ConnectionBannerControl />
-      <Timeline items={items} />
+      <Timeline items={items} now={now} />
       <ThinkingIndicator isThinking={phase === 'thinking'} />
       <StatusRow onExpand={() => setSheetOpen(true)} />
       <Composer />
@@ -122,7 +127,17 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // Empty items → the pre-first-message empty state (#277), not null: a fresh thread now reads as a
 // purposeful invitation rather than a blank gap between the top bar and the composer. EmptyThread is a
 // distinct surface from the thread scroll region, so an empty timeline never renders a thread container.
-export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Element {
+// #286: `now` (ms) is the render-time clock the sessionBoundary row uses to derive its relative time,
+// threaded from the container so the pure view stays deterministic under test. Defaulted to `Date.now()`
+// so the existing `<Timeline items={...} />` call sites (which render no sessionBoundary row, so `now` is
+// never consulted) stay green untouched — no edit cascade across the test suite.
+export function Timeline({
+  items,
+  now = Date.now()
+}: {
+  items: readonly ThreadItem[]
+  now?: number
+}): JSX.Element {
   if (items.length === 0) return <EmptyThread />
   const lastIndex = items.length - 1
   return (
@@ -138,6 +153,7 @@ export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Eleme
           key={index}
           item={item}
           inProgress={index === lastIndex && item.kind === 'assistantText'}
+          now={now}
         />
       ))}
     </div>
@@ -145,15 +161,19 @@ export function Timeline({ items }: { items: readonly ThreadItem[] }): JSX.Eleme
 }
 
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
-// over the four kinds (only turnBoundary null), so a future fifth ThreadItem kind makes it
+// over the five kinds (only turnBoundary null), so a future sixth ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
 // while a structural-only kind (turnBoundary) still degrades to nothing rather than throwing.
+// #286: `now` (ms, defaulted to Date.now()) is consulted only by the sessionBoundary case, to format its
+// relative time at render — kept out of the item so the label stays fresh (the channel-list precedent).
 function TimelineRow({
   item,
-  inProgress
+  inProgress,
+  now = Date.now()
 }: {
   item: ThreadItem
   inProgress: boolean
+  now?: number
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText':
@@ -206,6 +226,23 @@ function TimelineRow({
       // Structural marker only — no drawn element (Figma has no per-turn divider). Its sole
       // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.
       return null
+    case 'sessionBoundary':
+      // #286: the session-boundary delimiter (Figma node 16-35) — a monospace title above a full-width
+      // horizontal rule, marking where a /clear, an idle eviction, or a workspace change started a fresh
+      // session. Its own visually-distinct row: NO data-thread-role (AC4 — not attributed to
+      // assistant/user/tool), identified by class (the .conversation__empty / thinking-indicator idiom).
+      // `workspaceCwd` reaches the DOM only INSIDE the title string as auto-escaped React children — never
+      // dangerouslySetInnerHTML, no path/markup interpretation (the toolCall/userText posture; the
+      // events.ts constraint). The title is formatted at render from the raw `occurredAt` (kept fresh, the
+      // channel-list precedent). The rule is a decorative styled div (aria-hidden), not a semantic <hr> —
+      // it is purely visual. The explanatory sentence + Install affordance (Figma 16-38) are out of scope
+      // (deferred with the memory-plugin subsystem); this builds title + rule only.
+      return (
+        <div className="session-delimiter">
+          <p className="session-delimiter__title">{sessionBoundaryTitle(item, now)}</p>
+          <div className="session-delimiter__rule" aria-hidden="true" />
+        </div>
+      )
     case 'userText':
       // #179: the user's own message, sourced from the composer echo (composerSend → timelineStore).
       // The right-aligned user bubble mirrors MessageBubble's user treatment but carries the timeline's

@@ -36,6 +36,14 @@ function userText(text: string): ThreadEvent {
   return { type: 'userText', text }
 }
 
+function sessionBoundary(
+  reason: 'clear' | 'idle_evict' | 'workspace_change' = 'clear',
+  workspaceCwd: string | null = null,
+  occurredAt = '2026-01-15T12:00:00.000Z'
+): ThreadEvent {
+  return { type: 'sessionBoundary', reason, workspaceCwd, occurredAt }
+}
+
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
 function run(events: readonly ThreadEvent[]): TimelineState {
   return events.reduce(reduceTimeline, initialTimelineState)
@@ -55,6 +63,43 @@ describe('reduceTimeline — append order', () => {
       'assistantText',
       'turnBoundary'
     ])
+  })
+})
+
+describe('reduceTimeline — sessionBoundary (#286)', () => {
+  it('appends a fresh sessionBoundary item in arrival order, between the surrounding items, never coalesced', () => {
+    const state = run([
+      delta('A', 'before the break'),
+      sessionBoundary('workspace_change', '/home/user/next', '2026-01-15T10:00:00.000000000Z'),
+      userText('after the break')
+    ])
+    expect(state.items.map((i) => i.kind)).toEqual([
+      'assistantText',
+      'sessionBoundary',
+      'userText'
+    ])
+    const item = state.items[1] as Extract<ThreadItem, { kind: 'sessionBoundary' }>
+    expect(item).toEqual({
+      kind: 'sessionBoundary',
+      reason: 'workspace_change',
+      workspaceCwd: '/home/user/next',
+      occurredAt: '2026-01-15T10:00:00.000000000Z'
+    })
+  })
+
+  it('always yields a new items array (a fresh append is always a change) and leaves phase untouched', () => {
+    const before = { ...initialTimelineState, phase: 'thinking' as const }
+    const after = reduceTimeline(before, sessionBoundary())
+    expect(after.items).not.toBe(before.items)
+    expect(after.items).toHaveLength(1)
+    expect(after.phase).toBe('thinking')
+  })
+
+  it('carries a null workspaceCwd for clear / idle_evict verbatim (wire nullability preserved)', () => {
+    const state = run([sessionBoundary('idle_evict', null)])
+    const item = state.items[0] as Extract<ThreadItem, { kind: 'sessionBoundary' }>
+    expect(item.reason).toBe('idle_evict')
+    expect(item.workspaceCwd).toBeNull()
   })
 })
 

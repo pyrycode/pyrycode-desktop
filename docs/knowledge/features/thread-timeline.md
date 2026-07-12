@@ -50,6 +50,7 @@ no singleton, no React hook here; that render-integration layer is #202/#203's.
 
 ```ts
 type TurnPhase = 'thinking' | 'responding' | 'idle'
+type SessionBoundaryReason = 'clear' | 'idle_evict' | 'workspace_change'
 interface ToolResult { isError: boolean; resultSummary: string }
 
 type ThreadItem =
@@ -57,6 +58,7 @@ type ThreadItem =
   | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; result: ToolResult | null }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
   | { kind: 'userText'; text: string }
+  | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
 
 type ThreadEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
@@ -65,6 +67,7 @@ type ThreadEvent =
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   | { type: 'userText'; text: string }
+  | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
 
 interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase }
 ```
@@ -88,6 +91,7 @@ indicator), so it's carried as `phase` beside `items` rather than interleaved as
 | `turnState` | set `phase`; same reference if unchanged (no-churn) |
 | `turnEnd` | append a `turnBoundary`; does **not** touch `phase` |
 | `userText` | append a fresh `userText` item (never coalesced); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
+| `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
 `items`. `initialTimelineState = { items: [], phase: 'idle' }`; pure selectors `selectItems`,
@@ -163,6 +167,15 @@ Nothing imports this module yet.
   capability the whole vertical had been gated on, and retired the coarse `MessageThread` mount in the
   same commit. `reduceTimeline`'s `userText` arm is unmodified by this ticket. The vertical is
   complete.
+- **[#286](../codebase/286.md) (shipped)** added a fifth `ThreadItem`/`ThreadEvent` kind,
+  `sessionBoundary` — the `/clear`/idle-eviction/workspace-change marker #285 widened the
+  `sessionTransition` `DaemonEvent` arm to carry. `timelineBridge.ts` moved that arm out of its no-op
+  fall-through into a translating case (dropping `newSessionId`, which the sibling #259 session-id
+  holder still owns unaffected); `reduceTimeline` fresh-tail-appends the item (the `userText`/`turnEnd`
+  discipline, never coalesced); `TimelineRow` draws it as a titled horizontal rule via a new pure
+  `sessionBoundaryViewModel.ts` (a long-form-relative-time sibling of `channelListViewModel.ts`'s
+  `formatLastActivity`). The fifth application of the "new timeline-item kind → bridge arm → render
+  row" pattern (#218/#230/#245).
 
 ## Edge cases and limitations
 
@@ -197,6 +210,8 @@ Nothing imports this module yet.
 
 ## Related
 
+- [#286 codebase notes](../codebase/286.md) — added the fifth `ThreadItem` kind, `sessionBoundary`,
+  and its `TimelineRow` render row + pure long-form relative-time view-model.
 - [ADR 0008 — Conversation-timeline model](../decisions/0008-thread-timeline-model.md) — full
   rationale, every reducer arm's normative contract, and the Strangler-Fig coexistence decision.
 - [#121 codebase notes](../codebase/121.md) — implementation summary and the `as`-cast rework.

@@ -10,6 +10,14 @@
 /** Coarse conversation-level lifecycle — the "thinking…" indicator. A scalar, not an item. */
 export type TurnPhase = 'thinking' | 'responding' | 'idle'
 
+/**
+ * The reason a session rotated, renderer-local. A deliberate re-declaration of
+ * `WireSessionTransitionReason` (the `TurnPhase` ↔ `WireTurnState` precedent), NOT an import — it keeps
+ * this reducer wire-free, lets the bridge assign `event.reason` with no cast (the literal unions are
+ * identical), and turns a future fourth wire reason into a compile error here (the intended no-drift guard).
+ */
+export type SessionBoundaryReason = 'clear' | 'idle_evict' | 'workspace_change'
+
 /** The filled-in half of a `toolCall`, correlated to it by `toolUseId`. */
 export interface ToolResult {
   isError: boolean
@@ -37,6 +45,17 @@ export type ThreadItem =
   // (the daemon assigns those) and no `seq` (wire fidelity for daemon deltas): just the text. Ships
   // dormant; #179 wires the producer (the composer echo) and the render row.
   | { kind: 'userText'; text: string }
+  // #286: the session-boundary delimiter — a `/clear`, an idle eviction, or a workspace change started a
+  // fresh session. A whole marker, never coalesced. Carries the RAW `occurredAt` (formatted at render, the
+  // channel-list precedent, so the relative time stays fresh) and the untrusted `workspaceCwd` (rendered as
+  // auto-escaped text). `newSessionId` is deliberately absent — the #259 holder owns it; this render slice
+  // consumes only the three display fields.
+  | {
+      kind: 'sessionBoundary'
+      reason: SessionBoundaryReason
+      workspaceCwd: string | null
+      occurredAt: string
+    }
 
 /**
  * The renderer-local, sealed input union the reducer consumes. camelCase and
@@ -54,6 +73,10 @@ export type ThreadEvent =
   // The user's own message. A whole message, never a stream of deltas — folded by a plain fresh
   // tail-append (like `toolUse`/`turnEnd`), not coalesced via `appendDelta`.
   | { type: 'userText'; text: string }
+  // #286: the session boundary. Field-for-field identical to the `sessionBoundary` ThreadItem, so the
+  // bridge is a filter + fresh copy (not a remap); folded by a plain fresh tail-append (the `userText`
+  // discipline), never coalesced.
+  | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
 
 /** The whole timeline state: ordered content + the coarse lifecycle phase. */
 export interface TimelineState {
@@ -161,6 +184,21 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // arm's discipline. Always a new `items` array (a fresh append is always a change).
       return {
         items: [...state.items, { kind: 'userText', text: event.text }],
+        phase: state.phase
+      }
+    case 'sessionBoundary':
+      // A whole boundary marker: fresh tail-append (never coalesced), `phase` untouched — the `userText` /
+      // `turnEnd` discipline. Always a new `items` array (a fresh append is always a change). AC1.
+      return {
+        items: [
+          ...state.items,
+          {
+            kind: 'sessionBoundary',
+            reason: event.reason,
+            workspaceCwd: event.workspaceCwd,
+            occurredAt: event.occurredAt
+          }
+        ],
         phase: state.phase
       }
     default:

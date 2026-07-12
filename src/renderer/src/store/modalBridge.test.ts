@@ -134,8 +134,13 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         workspaceCwd: null
       },
       { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-x' },
-      { type: 'sessionSettingsRejected', changeId: 'change-x' }
+      { type: 'sessionSettingsRejected', changeId: 'change-x' },
       // modalAnswerRejected is no longer here — #249 flips it to a `rejected` ModalEvent (asserted above).
+      {
+        type: 'queueState',
+        conversationId: 'conv-1',
+        queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
+      }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()
   })

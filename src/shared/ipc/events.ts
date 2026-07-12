@@ -18,6 +18,7 @@ import type {
   ConversationSummary,
   ConversationCreatedPayload,
   ConversationUpdatedPayload,
+  QueuedItem,
   WireTurnState,
   WireSessionTransitionReason,
   WireModalClass,
@@ -141,6 +142,16 @@ export type DaemonEvent =
   // success, a value); `resultSummary` is opaque daemon display text the render slice (#230) must render
   // as plain text. No token, key, or raw frame.
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
+  // The queued-backlog arm (#292). Reuses the wire QueuedItem row type verbatim (the
+  // conversationsReceived precedent) — snake_case, order preserved from the wire (enqueue order). Carries
+  // `conversationId` (unlike turnState / toolUse, which drop it) because the snapshot is REPLACEMENT-truth
+  // and the #293 store keys its backlog by it. Consumed by the #293 queue store, NOT the session / timeline
+  // / modal store — queue_state is daemon STATE, not a turn-stream item (#720), so all three exhaustive
+  // bridges no-op it. `text` is UNTRUSTED daemon-relayed transit content the eventual render slice (#294)
+  // must render as plain text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML); this slice has no DOM
+  // sink, but the constraint is inherited here. No token, key, or raw frame can ride this arm (AC5-by-
+  // construction: QueuedItem holds only a numeric counter, opaque text, and a timestamp).
+  | { type: 'queueState'; conversationId: string; queued: readonly QueuedItem[] }
   // The conversation-list arm (#139). Reuses the wire ConversationSummary row type verbatim (the
   // messagesReceived precedent) — snake_case, order preserved from the wire. Consumed by the
   // conversation-list store (#208), not the session store, so the session bridge maps it to `null`.

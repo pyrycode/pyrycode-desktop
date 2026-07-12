@@ -36,6 +36,8 @@ import type {
   SessionSettingsUpdatedPayload,
   ToolUsePayload,
   ToolResultPayload,
+  QueuedItem,
+  QueueStatePayload,
   ConversationSummary,
   ConversationCreatedPayload,
   ConversationUpdatedPayload,
@@ -117,6 +119,15 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * four required strings PLUS one required boolean (`is_error`, whose `false` is a value, not an absence).
  * `result_summary` is opaque display text carried onward, its DOM sink being the render slice #230.
  *
+ * The `queue-state` kind (#292) carries the decoded QueueStatePayload — the daemon's queued-backlog
+ * snapshot (daemon STATE, not part of claude's turn stream, #720). Like `conversations`, one frame narrows
+ * to a whole ordered list; the fail-closed decode here (a `conversation_id` string plus a per-item narrower
+ * over the `queued` array — each item a required NUMBER `queued_msg_id` + two required strings) is the
+ * boundary this slice defends. A JSON-string `queued_msg_id` is rejected (the bundle `seq/total` precedent);
+ * an empty `queued: []` is valid. The consumer carries `conversation_id` (as `conversationId`) + the backlog
+ * onward; `text` is untrusted display text the render slice (#294) must render as plain text. The real
+ * consumer is the #293 queue store; all three renderer bridges no-op this arm.
+ *
  * The `conversations` kind (#139) carries the decoded ConversationSummary[] (order preserved from the
  * wire). Like `chunk`, a single reply narrows to a whole list; the consumer forwards it verbatim as
  * one `conversationsReceived` event — no field is a secret, so nothing is dropped.
@@ -152,6 +163,7 @@ export type InboundDaemonMessage =
     }
   | { kind: 'tool-use'; toolUse: ToolUsePayload }
   | { kind: 'tool-result'; toolResult: ToolResultPayload }
+  | { kind: 'queue-state'; queueState: QueueStatePayload }
   | { kind: 'conversations'; conversations: ConversationSummary[] }
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
   | { kind: 'conversation-updated'; conversationUpdated: ConversationUpdatedPayload }
@@ -440,6 +452,46 @@ function parseToolResultPayload(payload: unknown): ToolResultPayload {
   const is_error = requireBoolean(payload, 'is_error')
   const result_summary = requireString(payload, 'result_summary')
   return { conversation_id, turn_id, tool_use_id, is_error, result_summary }
+}
+
+/**
+ * Narrow one opaque queued-backlog entry into a QueuedItem (#292). Fail-closed like parseModalOption:
+ * `queued_msg_id` a required NUMBER via requireNumber (the bundle `seq` / `total` #116 idiom — the check
+ * is on the TYPE, so a JSON-string `'7'` fails closed rather than being silently coerced, which is exactly
+ * what rejects a mistyped counter, AC4), plus `text` / `ts` required strings. Deliberately NO integer /
+ * `≥ 1` / range check: "integer ≥ 1" is a daemon guarantee, and policing it here would defend an unobserved
+ * failure mode (the parseSessionTransitionPayload no-cross-validate posture). Returns only the three known
+ * fields; unknown server-added keys are tolerated (forward-compat) but not copied. Its message names the
+ * category only — `text` is untrusted transit content and `queued_msg_id` correlates a message.
+ */
+function parseQueuedItem(payload: unknown): QueuedItem {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed queued item')
+  }
+  const queued_msg_id = requireNumber(payload, 'queued_msg_id')
+  const text = requireString(payload, 'text')
+  const ts = requireString(payload, 'ts')
+  return { queued_msg_id, text, ts }
+}
+
+/**
+ * Narrow an opaque payload into a QueueStatePayload (#292): `conversation_id` a required string, then
+ * `queued` must be an array, and every element narrows via parseQueuedItem — one bad item throws, failing
+ * the whole snapshot closed (the parseConversationsPayload precedent). An EMPTY array is valid (`[].map()`
+ * → `[]`, AC3 — a zero-length backlog is a value, never null or an error). Order is preserved from the
+ * wire (enqueue order, AC2). Its messages name the failure category only — a `conversation_id` correlates
+ * a conversation and a queued item's `text` is untrusted content.
+ */
+function parseQueueStatePayload(payload: unknown): QueueStatePayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed queue_state payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const raw = payload.queued
+  if (!Array.isArray(raw)) {
+    throw new WireDecodeError('malformed queued list')
+  }
+  return { conversation_id, queued: raw.map(parseQueuedItem) }
 }
 
 /**
@@ -776,6 +828,21 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'tool-result', toolResult }
+    }
+    case 'queue_state': {
+      // Narrow BEFORE logging so a malformed snapshot (a non-array `queued`, a string `queued_msg_id`)
+      // throws first and leaves no record. No decoded field (conversation_id / queued_msg_id / text / ts)
+      // is logged — only the frame's byte length + one-way hash, reusing the existing content-free field
+      // set. Deliberately NO `count` field (the conversations #139 posture): the set stays type/bytes/hash.
+      // `text` is carried onward by the consumer (the render payload, #294), but it never enters the log.
+      const queueState = parseQueueStatePayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'queue_state',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'queue-state', queueState }
     }
     case 'conversations': {
       // Narrow BEFORE logging so a malformed reply (a bad row, a non-array) throws first and leaves no

@@ -115,6 +115,11 @@ function encodeSessionSettingsUpdated(payload: unknown, inReplyTo?: number): Uin
   })
 }
 
+/** A `queue_state` envelope's plaintext bytes, wrapping an arbitrary payload (#292). */
+function encodeQueueState(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 21, type: 'queue_state', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -164,6 +169,15 @@ const TOOL_RESULT = {
   tool_use_id: 'tu-1',
   is_error: false,
   result_summary: 'read 12 lines'
+}
+
+/** A fully-populated, well-formed queue_state payload — an ordered two-item backlog (#292). */
+const QUEUE_STATE = {
+  conversation_id: 'conv-1',
+  queued: [
+    { queued_msg_id: 1, text: 'first queued', ts: '2026-07-10T00:00:00Z' },
+    { queued_msg_id: 2, text: 'second queued', ts: '2026-07-10T00:00:01Z' }
+  ]
 }
 
 /** A fully-populated, well-formed modal_shown payload with two ordered options (#201). */
@@ -1292,6 +1306,132 @@ describe('parseInboundMessage — tool_result fail-closed (#229)', () => {
   })
 })
 
+describe('parseInboundMessage — queue_state recognition (#292, additive)', () => {
+  it('narrows a full queue_state into { kind: queue-state } carrying the ordered backlog verbatim', () => {
+    expect(parseInboundMessage(encodeQueueState(QUEUE_STATE))).toEqual({
+      kind: 'queue-state',
+      queueState: QUEUE_STATE
+    })
+  })
+
+  it('preserves per-item queued_msg_id (as a number), text, and ts in enqueue order (AC2)', () => {
+    const result = parseInboundMessage(encodeQueueState(QUEUE_STATE))
+    expect(result?.kind).toBe('queue-state')
+    if (result?.kind === 'queue-state') {
+      expect(result.queueState.conversation_id).toBe('conv-1')
+      expect(result.queueState.queued.map((q) => q.queued_msg_id)).toEqual([1, 2])
+      // queued_msg_id decodes as a number, never a string (AC1).
+      expect(typeof result.queueState.queued[0].queued_msg_id).toBe('number')
+      expect(result.queueState.queued.map((q) => q.text)).toEqual(['first queued', 'second queued'])
+      expect(result.queueState.queued[0].ts).toBe('2026-07-10T00:00:00Z')
+    }
+  })
+
+  it('treats an empty queued array as a valid zero-length backlog — not null, not an error (AC3)', () => {
+    expect(parseInboundMessage(encodeQueueState({ conversation_id: 'conv-1', queued: [] }))).toEqual({
+      kind: 'queue-state',
+      queueState: { conversation_id: 'conv-1', queued: [] }
+    })
+  })
+
+  it('drops unknown server keys per item, keeping only the three known fields (forward-compat)', () => {
+    const withExtras = {
+      conversation_id: 'conv-1',
+      queued: [{ queued_msg_id: 1, text: 'x', ts: 't', priority: 'high', extra: 3 }]
+    }
+    expect(parseInboundMessage(encodeQueueState(withExtras))).toEqual({
+      kind: 'queue-state',
+      queueState: { conversation_id: 'conv-1', queued: [{ queued_msg_id: 1, text: 'x', ts: 't' }] }
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — queue_state fail-closed (#292, AC4)', () => {
+  it('throws when a queue_state payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeQueueState('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeQueueState(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws when conversation_id is missing or non-string', () => {
+    const bad: unknown[] = [
+      { queued: [] },
+      { conversation_id: 7, queued: [] },
+      { conversation_id: null, queued: [] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQueueState(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when queued is missing or not an array', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'conv-1' },
+      { conversation_id: 'conv-1', queued: {} },
+      { conversation_id: 'conv-1', queued: 'x' },
+      { conversation_id: 'conv-1', queued: 3 }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQueueState(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a queued_msg_id arrives as a JSON string, never coercing it (AC4)', () => {
+    // The load-bearing AC4 case: requireNumber checks typeof === 'number', so the string '7' fails
+    // closed rather than being silently accepted. A truthiness or Number()-coerce would let it pass.
+    const bad = { conversation_id: 'conv-1', queued: [{ queued_msg_id: '7', text: 'x', ts: 't' }] }
+    expect(() => parseInboundMessage(encodeQueueState(bad))).toThrow(WireDecodeError)
+  })
+
+  it('throws when any per-item field is missing (never a partial event)', () => {
+    for (const field of ['queued_msg_id', 'text', 'ts'] as const) {
+      const item = { queued_msg_id: 1, text: 'x', ts: 't' }
+      const { [field]: _dropped, ...missing } = item
+      const payload = { conversation_id: 'conv-1', queued: [missing] }
+      expect(() => parseInboundMessage(encodeQueueState(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when text or ts is a non-string', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'conv-1', queued: [{ queued_msg_id: 1, text: 42, ts: 't' }] },
+      { conversation_id: 'conv-1', queued: [{ queued_msg_id: 1, text: 'x', ts: null }] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQueueState(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('fails the whole backlog closed when any single item is invalid', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'conv-1', queued: [{ queued_msg_id: 1, text: 'x', ts: 't' }, 'not-an-object'] },
+      { conversation_id: 'conv-1', queued: [{ queued_msg_id: 1, text: 'x', ts: 't' }, { queued_msg_id: '2', text: 'y', ts: 'u' }] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQueueState(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an oversized queue_state plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 21,
+        type: 'queue_state',
+        ts: FIXED_TS,
+        payload: {
+          conversation_id: 'conv-1',
+          queued: [{ queued_msg_id: 1, text: 'x'.repeat(MAX_PLAINTEXT_BYTES), ts: 't' }]
+        }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — modal_shown recognition (#201, additive)', () => {
   it('narrows a full modal_shown into { kind: modal-shown } carrying all six fields verbatim', () => {
     expect(parseInboundMessage(encodeModalShown(MODAL_SHOWN))).toEqual({
@@ -1847,6 +1987,42 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeToolResult({ ...TOOL_RESULT, is_error: 'nope' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a queue_state content-free, never a text / queued_msg_id / conversation_id (#292)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_TEXT = 'secret-queued-message-text'
+    const SECRET_MSG_ID = 987654
+    const plaintext = encodeQueueState({
+      conversation_id: SECRET_CONV,
+      queued: [{ queued_msg_id: SECRET_MSG_ID, text: SECRET_TEXT, ts: '2026-07-10T00:00:00Z' }]
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('queue_state')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log (deliberately no count).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_CONV, SECRET_TEXT, String(SECRET_MSG_ID)]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed queue_state throw path (#292)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeQueueState({ conversation_id: 'conv-1', queued: [{ queued_msg_id: '7', text: 'x', ts: 't' }] }),
+        log
+      )
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

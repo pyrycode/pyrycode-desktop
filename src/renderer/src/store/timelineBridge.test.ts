@@ -179,7 +179,13 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' },
       { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-x' },
       { type: 'sessionSettingsRejected', changeId: 'change-x' },
-      { type: 'modalAnswerRejected', modalId: 'mdl-1' }
+      { type: 'modalAnswerRejected', modalId: 'mdl-1' },
+      // queue_state is daemon state, not a turn-stream item (#720) — deliberately NOT a timeline row.
+      {
+        type: 'queueState',
+        conversationId: 'conv-1',
+        queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
+      }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })

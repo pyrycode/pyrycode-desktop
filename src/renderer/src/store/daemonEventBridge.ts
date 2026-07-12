@@ -95,6 +95,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // No session-store action: the modal bridge (#249, render) consumes this, not the session store.
       // Present only because the assertNever guard below makes a new arm a compile error.
       return null
+    case 'queueState':
+      // No session-store action: the #293 queue store (not yet built) holds the backlog, not the session
+      // store — queue_state is daemon state, not a turn-stream item (#720). Present only because the
+      // assertNever guard below makes a new arm a compile error.
+      return null
     default:
       return assertNever(event)
   }

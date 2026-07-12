@@ -120,6 +120,11 @@ function encodeQueueState(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 21, type: 'queue_state', ts: FIXED_TS, payload })
 }
 
+/** A `stall` envelope's plaintext bytes, wrapping an arbitrary payload (#315). */
+function encodeStall(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 22, type: 'stall', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -151,6 +156,11 @@ const TURN_END = {
 const TURN_STATE = {
   conversation_id: 'conv-1',
   state: 'thinking'
+}
+
+/** A fully-populated, well-formed stall payload — `conversation_id` only (#315). */
+const STALL = {
+  conversation_id: 'conv-1'
 }
 
 /** A fully-populated, well-formed tool_use payload (#217). */
@@ -1173,6 +1183,50 @@ describe('parseInboundMessage — turn_state fail-closed (#214)', () => {
   })
 })
 
+describe('parseInboundMessage — stall recognition (#315, additive)', () => {
+  it('narrows a full stall into { kind: stall } carrying only conversation_id', () => {
+    expect(parseInboundMessage(encodeStall(STALL))).toEqual({
+      kind: 'stall',
+      stall: STALL
+    })
+  })
+
+  it('drops unknown server keys, keeping only the one known stall field (forward-compat)', () => {
+    const withExtras = { ...STALL, turn_id: 'turn-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeStall(withExtras))).toEqual({
+      kind: 'stall',
+      stall: STALL
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — stall fail-closed (#315)', () => {
+  it('throws when conversation_id is absent, a non-string, or null', () => {
+    const bad: unknown[] = [
+      {}, // conversation_id absent
+      { conversation_id: 42 }, // non-string
+      { conversation_id: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeStall(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a stall payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeStall('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeStall(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — tool_use recognition (#217, additive)', () => {
   it('narrows a full tool_use into { kind: tool-use } carrying all five fields verbatim', () => {
     expect(parseInboundMessage(encodeToolUse(TOOL_USE))).toEqual({
@@ -1911,6 +1965,33 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
   it('does NOT log on a malformed turn_state throw path (#214)', () => {
     const { log, lines } = captureLog()
     expect(() => parseInboundMessage(encodeTurnState({ ...TURN_STATE, state: 'done' }), log)).toThrow(
+      WireDecodeError
+    )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a stall content-free, never the conversation_id (#315)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const plaintext = encodeStall({ conversation_id: SECRET_CONV })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('stall')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field (conversation_id) reaches the log, and no
+    // new DiagnosticEvent field is introduced (reuses the existing set).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+  })
+
+  it('does NOT log on a malformed stall throw path (#315)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeStall({ conversation_id: 42 }), log)).toThrow(
       WireDecodeError
     )
     expect(lines).toHaveLength(0)

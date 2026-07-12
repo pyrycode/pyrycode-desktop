@@ -54,6 +54,7 @@ export type EnvelopeType =
   | 'assistant_delta'
   | 'turn_end'
   | 'turn_state'
+  | 'stall'
   | 'session_transition'
   | 'tool_use'
   | 'tool_result'
@@ -253,6 +254,21 @@ export type WireTurnState = 'thinking' | 'responding' | 'idle'
 export interface TurnStatePayload {
   conversation_id: string
   state: WireTurnState
+}
+
+/**
+ * Inbound `stall` event (daemon → client). Mirrors the daemon's StallPayload field-for-field (pyrycode
+ * #638 wire vocab, #639 fan-out), which carries `conversation_id` ONLY — always present (no `omitempty`).
+ * An internal-only liveness signal the daemon fans out ONLY to `interactive`-capable clients when a turn
+ * goes quiet (claude stalled mid-turn, or the screen-parser degrading); it has no ACP equivalent.
+ *
+ * ONSET-ONLY: the daemon emits one `stall` on the rising edge and does NOT repeat it while the stall
+ * persists; there is NO "stall cleared" frame. It is deliberately NOT turn-scoped, so there is no
+ * `turn_id`, and it carries no clearing / recovery field — the client self-clears on the next turn
+ * activity, which is the render slice's concern (#317), not this wire type's. See #315.
+ */
+export interface StallPayload {
+  conversation_id: string
 }
 
 /**

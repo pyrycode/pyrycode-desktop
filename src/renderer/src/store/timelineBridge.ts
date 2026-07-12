@@ -101,6 +101,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'sessionSettingsRejected':
     case 'modalAnswerRejected':
     case 'queueState':
+    case 'stallDetected':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -109,6 +110,8 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // NOT timeline items — unlike turnState and, since #286, sessionTransition, none drives a timeline
       // row. queueState is deliberately in this null group: `queue_state` is daemon STATE, not a
       // turn-stream item (#720), so it is NOT folded into reduceTimeline — the load-bearing #720 decision.
+      // stallDetected (#315) ships dormant here — its render consumer is #317, which owns the on-thread
+      // indicator and the self-clear; it is not a timeline `ThreadItem`.
       return null
     default:
       return assertNever(event)

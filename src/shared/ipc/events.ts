@@ -88,6 +88,13 @@ export type DaemonEvent =
   // `conversation_id` is dropped at the emit (single active conversation). Consumed by the renderer
   // timeline bridge (#202) → `phase`, not the session store. No token, key, or raw frame.
   | { type: 'turnState'; state: WireTurnState }
+  // The stall-liveness arm (#315). A NULLARY arm — the wire StallPayload's only field
+  // (`conversation_id`) is dropped at the emit (single active conversation, matching turnState), so the
+  // event carries no payload at all: no token, key, raw frame, or conversation content can ride it
+  // (AC3-by-construction — the wire frame carries none). Onset-only; the client self-clear on next turn
+  // activity is the render slice's concern (#317). Consumed by the render slice #317 (not yet built), so
+  // all three exhaustive bridges no-op it for now — the sessionSettingsRejected-was-a-no-op precedent.
+  | { type: 'stallDetected' }
   // The session-boundary arm (#254, widened #285). Carries the four render fields the delimiter slice
   // (#286) needs: `newSessionId` (the addressing key the #259 holder retains), `reason` (the closed
   // WireSessionTransitionReason enum, carried so #286's title switch stays exhaustive — NOT a bare

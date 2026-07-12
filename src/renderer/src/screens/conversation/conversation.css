@@ -1343,3 +1343,94 @@
   letter-spacing: var(--text-body-large-tracking);
   font-weight: var(--text-body-large-weight);
 }
+
+/* #276 — the thread top app bar's trailing overflow menu (Figma node 16-16): the single entry point to
+   per-conversation actions, opening the Channel Info sheet first (#155). The wrapper anchors the trigger
+   to the top-right corner of .conversation (the position: relative containing block), balancing the
+   left-aligned BackControl across the top-bar band. Absolute, so it overlays rather than pushing flow;
+   the back arrow's row leaves this corner empty. NO explicit z-index by design: a positioned element
+   already paints above the non-positioned message thread ("above the message list"), and the
+   status-sheet / permission-modal overlays — also positioned but later in the child list — keep painting
+   above this menu by DOM order ("below the sheet overlay"). A competing z-index here would lift the menu
+   above those overlays, the very stacking regression the spec's open question flags; the menu and a
+   sheet/modal never coexist anyway (an outside-click dismisses the menu). */
+.conversation__overflow {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+}
+
+/* The trigger — the .conversation__back glyph-in-48px treatment (Figma 16-16's 48px frame around the
+   24px more_vert 16-17): a transparent round icon button, on-surface content gaining a surface tint on
+   hover and a focus-visible outline. 48px is structural component geometry (the send-square convention). */
+.conversation__overflow-trigger {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface);
+  cursor: pointer;
+}
+
+.conversation__overflow-trigger:hover {
+  background: var(--color-surface-container-high);
+}
+
+.conversation__overflow-trigger:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.conversation__overflow-icon {
+  display: block;
+}
+
+/* The opened menu surface — no Figma frame (the mobile file draws a native Android overflow menu, the
+   documented #148 gap), so an M3-idiom dropdown: right-anchored below the trigger (top: 100% of the 48px
+   wrapper, right: 0), a surface-container card with an elevation border. The .status-sheet panel surface
+   treatment (--color-surface-container-low fill, --radius-md corners, --color-outline-variant border) —
+   no new color literals. */
+.conversation__overflow-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1) 0;
+  background: var(--color-surface-container-low);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius-md);
+}
+
+/* One menu item — a full-width, left-aligned text button (label-large on-surface), gaining a surface
+   tint on hover and a focus-visible outline. The #155 Channel Info slot; later actions (#274/#153/#154)
+   add sibling rows through the same treatment. */
+.conversation__overflow-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  background: transparent;
+  color: var(--color-on-surface);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.conversation__overflow-item:hover {
+  background: var(--color-surface-container-high);
+}
+
+.conversation__overflow-item:focus-visible {
+  outline: 1px solid var(--color-outline);
+}

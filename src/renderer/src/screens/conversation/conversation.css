@@ -340,6 +340,41 @@
   font-weight: var(--text-body-small-weight);
 }
 
+/* #286 — the session-boundary delimiter (Figma node 16-35): a monospace title above a full-width 1px
+   horizontal rule, marking where a /clear, an idle eviction, or a workspace change started a fresh
+   session. A child of .conversation__thread's flex column (inherits its horizontal padding), the
+   .tool-row posture — its own centered column, no flex/margin of its own beyond the stack below. Token
+   only — every value below exists in tokens.css. Figma: 12px gap, 20px top / 4px bottom padding. */
+.session-delimiter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5) 0 var(--space-1);
+}
+
+/* The title run (Figma node 16-36): centered monospace body-small in on-surface-variant. An untrusted
+   long workspace path must wrap, not overflow — word-break: break-word (the Figma sets the same). */
+.session-delimiter__title {
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  color: var(--color-on-surface-variant);
+  text-align: center;
+  word-break: break-word;
+}
+
+/* The horizontal rule (Figma node 16-37): a full-width 1px band in outline at 60% opacity. A purely
+   decorative styled div (aria-hidden in the markup), not a semantic <hr>. */
+.session-delimiter__rule {
+  width: 100%;
+  height: 1px;
+  background: var(--color-outline);
+  opacity: 0.6;
+}
+
 /* Pinned composer — never grows or shrinks. A vertical stack so the status hint (#31) can sit
    above the input/button row without disturbing that row's flex layout. */
 .composer {

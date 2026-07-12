@@ -91,6 +91,43 @@ describe('translateTimelineEvent — the two owned arms', () => {
     // A fresh literal, not a pass-through of the DaemonEvent object.
     expect(translated).not.toBe(event)
   })
+
+  it('sessionTransition → a sessionBoundary ThreadEvent carrying the render fields, dropping newSessionId', () => {
+    const event: DaemonEvent = {
+      type: 'sessionTransition',
+      newSessionId: 'sess-2',
+      reason: 'workspace_change',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: '/home/user/next'
+    }
+    const translated = translateTimelineEvent(event)
+    // Exactly the three render fields — newSessionId is dropped (the #259 holder owns it, not the timeline).
+    expect(translated).toEqual({
+      type: 'sessionBoundary',
+      reason: 'workspace_change',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: '/home/user/next'
+    })
+    expect(translated).not.toHaveProperty('newSessionId')
+    // A fresh literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
+
+  it('sessionTransition preserves a null workspaceCwd for clear / idle_evict (wire nullability)', () => {
+    const event: DaemonEvent = {
+      type: 'sessionTransition',
+      newSessionId: 'sess-3',
+      reason: 'clear',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: null
+    }
+    expect(translateTimelineEvent(event)).toEqual({
+      type: 'sessionBoundary',
+      reason: 'clear',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: null
+    })
+  })
 })
 
 describe('translateTimelineEvent — every other arm returns null (the inverse filter)', () => {
@@ -140,13 +177,6 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         defaultOptionId: 'deny'
       },
       { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' },
-      {
-        type: 'sessionTransition',
-        newSessionId: 'sess-2',
-        reason: 'clear',
-        occurredAt: '2026-07-10T00:00:00.000000000Z',
-        workspaceCwd: null
-      },
       { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-x' },
       { type: 'sessionSettingsRejected', changeId: 'change-x' },
       { type: 'modalAnswerRejected', modalId: 'mdl-1' }

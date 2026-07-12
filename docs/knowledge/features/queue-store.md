@@ -2,12 +2,13 @@
 
 The renderer's held copy of each open conversation's queued-message backlog — a dedicated,
 unidirectional Zustand store fed by a headless subscription binding that observes the [daemon-event
-channel](daemon-event-channel.md)'s `queueState` arm, so the still-unbuilt queue render slice
-(#294) and the reconcile-on-connect slice (#197) can read one source of truth.
+channel](daemon-event-channel.md)'s `queueState` arm, so the queue render slice ([#294](../codebase/294.md),
+shipped) and the reconcile-on-connect slice (#197) can read one source of truth.
 
 Introduced in [#293](../codebase/293.md), split from #145 alongside [#292](../codebase/292.md)
-(transport decode, shipped first) / #294 (render, not yet built) / #295 (command, not yet built) /
-#296 (drop, not yet built). This ticket shipped no visible surface — #294 is its first consumer.
+(transport decode, shipped first) / [#294](../codebase/294.md) (render, shipped) / #295 (command,
+not yet built) / #296 (drop, not yet built). This ticket shipped no visible surface — #294 is its
+first consumer.
 
 ## What it does
 
@@ -114,10 +115,13 @@ daemon → queue_state frame → parseQueueStatePayload → queueState DaemonEve
   app-lifetime listener with no subscribe/unsubscribe churn as the route flips, because a
   `queue_state` marker can arrive before #294's render slice is ever mounted, and several can
   arrive back-to-back for different conversations (#878/#879).
-- Import surface for #294: `import { useQueueStore, selectBacklogFor } from
-  '@renderer/store/queueStore'`. #294 must source "which conversation is open" itself (a
-  nav/route concern this store deliberately does not own) and pass that id to
-  `selectBacklogFor`.
+- Import surface for #294 (shipped): `import { useQueueStore, selectBacklogFor } from
+  '../../store/queueStore'`, consumed in `ConversationScreen.tsx`. #294 did **not** source "which
+  conversation is open" from nav/route state — this store deliberately does not own that concern,
+  and the architecture spec explicitly ruled out adding nav plumbing for this slice. Instead #294
+  binds `selectBacklogFor` to `MILESTONE_CONVERSATION_ID` (from `composerSend.ts`, the same id the
+  composer sends under) at module scope, once, for the single-active-conversation milestone; a
+  future conversation-selection ticket is expected to replace this with a real nav-sourced id.
 - Import surface for #197 (reconcile-on-connect): `selectBacklogs` — the whole-map read, to iterate
   every held backlog and evict ones the daemon didn't refresh on reconnect.
 - No component consumes `useQueueStore` yet — exported ahead of its first consumer, the same shape
@@ -130,8 +134,8 @@ daemon → queue_state frame → parseQueueStatePayload → queueState DaemonEve
 - **No coercion or validation of `queued`.** The store trusts #292's fail-closed decode
   completely; `queued_msg_id` arrives as a `number`, `text`/`ts` as opaque strings.
 - **`text` is untrusted, client-originated transit content** relayed by a content-blind relay.
-  This slice has no DOM sink, but #294 (the render consumer) must render it as plain text only —
-  never `innerHTML` / `dangerouslySetInnerHTML`.
+  This slice has no DOM sink itself; [#294](../codebase/294.md) (the render consumer) renders it as
+  plain text only, via auto-escaped React children — never `innerHTML` / `dangerouslySetInnerHTML`.
 - **A conversation that *became* empty won't get a fresh `queue_state` on reconnect**, since the
   daemon only unicasts non-empty backlogs per #878/#879 — a stale non-empty entry can persist in
   this store past a reconnect until something prunes it. This store intentionally keeps every key
@@ -156,5 +160,6 @@ daemon → queue_state frame → parseQueueStatePayload → queueState DaemonEve
   store's `setBacklog` reuses (mirrored for `Map` handling only, not the reducer that idiom lives
   inside there).
 - [#293 codebase notes](../codebase/293.md) — implementation summary and patterns established.
-- Blocks #294 (queue render slice, first consumer of `useQueueStore`/`selectBacklogFor`) and #197
-  (reconcile-on-connect, first consumer of `selectBacklogs`).
+- [#294 codebase notes](../codebase/294.md) — the queue render slice, first consumer of
+  `useQueueStore`/`selectBacklogFor` (shipped).
+- Still blocks #197 (reconcile-on-connect, first consumer of `selectBacklogs`, not yet built).

@@ -115,7 +115,8 @@ export type DaemonEvent =
   | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   | { type: 'conversationCreated'; conversation: ConversationCreatedPayload }
-  | { type: 'sessionTransition'; newSessionId: string }
+  | { type: 'sessionTransition'; newSessionId: string; reason: WireSessionTransitionReason
+      ; occurredAt: string; workspaceCwd: string | null }
   | { type: 'sessionSettingsUpdated'; sessionId: string; changeId: string }
   | { type: 'sessionSettingsRejected'; changeId: string }
 ```
@@ -184,15 +185,24 @@ export type DaemonEvent =
   required boolean whose `false` is a value, decoded via `requireBoolean` (the `yolo` #180 idiom);
   `resultSummary` is opaque daemon-supplied display text (the `input_summary` #217 / `stop_reason` #199
   posture); `conversation_id` is the one field dropped.
-- **`sessionTransition{newSessionId}`** ([#254](../codebase/254.md)) also maps to *no* `SessionAction`,
-  consumed by **none of the three** existing bridges — its consumer is a not-yet-built renderer holder,
-  [#259](https://github.com/pyrycode/pyrycode-desktop/issues/259) (blocked on this ticket). Unlike
-  every prior member, this is a **content-minimised** shape over a **five**-field wire payload
-  (`SessionTransitionPayload`): `previous_session_id` / `reason` / `occurred_at` / `workspace_cwd` are
-  decoded and fail-closed validated at the transport boundary but dropped at the emit — only
-  `new_session_id` (the addressing key #259 retains) crosses IPC, the `snapshotReceived`
-  dedicated-minimal-shape precedent applied to a second field family. No `conversation_id` to drop — a
-  session boundary is attributed by the connection it arrives on, not a wire field.
+- **`sessionTransition{newSessionId}`**, shipped [#254](../codebase/254.md), also maps to *no*
+  `SessionAction`, consumed instead by the [session-id store](session-id-store.md)'s holder
+  ([#259](../codebase/259.md)). Originally a **content-minimised** shape over the **five**-field wire
+  payload (`SessionTransitionPayload`): `previous_session_id` / `reason` / `occurred_at` /
+  `workspace_cwd` were decoded and fail-closed validated at the transport boundary but dropped at the
+  emit — only `new_session_id` crossed IPC, the `snapshotReceived` dedicated-minimal-shape precedent
+  applied to a second field family. **Widened by [#285](../codebase/285.md)** to also carry `reason`
+  (the closed `WireSessionTransitionReason` union, not a bare string — keeps the delimiter render
+  slice's title switch exhaustive), `occurredAt` (opaque RFC3339Nano string), and `workspaceCwd`
+  (`string | null`, wire nullability preserved) — the three fields the delimiter render slice
+  ([#286](https://github.com/pyrycode/pyrycode-desktop/issues/286), consumes them) needs. Only
+  `previous_session_id` is dropped now — it still has no consumer. `workspaceCwd` is an **untrusted
+  daemon-supplied filesystem path**: #286 must render it as plain text, never through an HTML sink
+  (the `conversationCreated`/`conversationUpdated` warning applied to a third field family). The
+  existing consumer ([#259](../codebase/259.md)) reads only `newSessionId` and is unaffected by the
+  widen — none of the three exhaustive bridges needed a new `case`, since a required-field widen on an
+  existing arm doesn't force one. No `conversation_id` to drop — a session boundary is attributed by
+  the connection it arrives on, not a wire field.
 - **`sessionSettingsUpdated{sessionId, changeId}`** — introduced with only `sessionId` in
   [#264](../codebase/264.md), widened with `changeId` in [#261](../codebase/261.md). Maps to *no*
   `SessionAction`, consumed by **none** of the three existing bridges — its consumer is the

@@ -7,9 +7,11 @@ can address a `set_session_settings` write to the session that is actually runni
 
 Introduced in [#259](../codebase/259.md), the renderer-side retention half of #183's interactive
 Run-configuration write path, split alongside #254/#255/#256/#257. Consumes the transport
-[#254](../codebase/254.md) already shipped (`sessionTransition{newSessionId}` daemon event). This
-store itself delivers no visible surface of its own — [#257](../codebase/257.md) (since shipped, PR
-#283) is its live reader, the same posture `runConfigStore` (#187) had before #188.
+[#254](../codebase/254.md) already shipped (`sessionTransition{newSessionId}` daemon event, later
+widened by [#285](../codebase/285.md) to also carry `reason`/`occurredAt`/`workspaceCwd` for the
+delimiter render slice #286 — this store's bridge still reads only `newSessionId` and is unaffected).
+This store itself delivers no visible surface of its own — [#257](../codebase/257.md) (since shipped,
+PR #283) is its live reader, the same posture `runConfigStore` (#187) had before #188.
 
 ## What it does
 
@@ -103,7 +105,8 @@ daemon → transport (#254) → sessionTransition{newSessionId}
 ## Related
 
 - [Daemon-event channel](daemon-event-channel.md) — the `sessionTransition` event this store's bridge
-  consumes, shipped content-minimised (only `newSessionId`) in [#254](../codebase/254.md).
+  consumes, shipped content-minimised (only `newSessionId`) in [#254](../codebase/254.md) and later
+  widened (unaffecting this store) by [#285](../codebase/285.md).
 - [Daemon-event bridge](daemon-event-bridge.md) — the `assertNever`-guarded bridge whose
   `sessionTransition → null` arm (added in #254) reserved this feature's consumer role; this store is
   a **fifth**, independent subscriber on the same channel, not a change to that bridge.

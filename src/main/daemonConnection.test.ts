@@ -266,6 +266,11 @@ function sessionTransitionPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'session_transition', ts: FIXED_TS, payload })
 }
 
+/** A `queue_state` plaintext, wrapping an arbitrary payload (#292). */
+function queueStatePlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'queue_state', ts: FIXED_TS, payload })
+}
+
 /** A `session_settings_updated` plaintext, wrapping an arbitrary payload (#264). The optional
  *  `inReplyTo` rides the ENVELOPE (not the payload) — the #261 request↔reply correlation key. */
 function sessionSettingsUpdatedPlaintext(payload: unknown, inReplyTo?: number): Uint8Array {
@@ -1682,6 +1687,75 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
           tool_use_id: 'tu-1',
           is_error: 'nope', // non-boolean → fail closed
           result_summary: 'x'
+        })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — queue_state stream (#292)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound queue_state into one queueState carrying conversationId + the ordered backlog', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: queueStatePlaintext({
+        conversation_id: 'conv-1',
+        queued: [
+          { queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' },
+          { queued_msg_id: 2, text: 'second', ts: '2026-07-10T00:00:01Z' }
+        ]
+      })
+    })
+
+    // AC2: the event carries the conversation id and the ordered backlog, queued_msg_id as numbers.
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'queueState',
+        conversationId: 'conv-1',
+        queued: [
+          { queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' },
+          { queued_msg_id: 2, text: 'second', ts: '2026-07-10T00:00:01Z' }
+        ]
+      }
+    ])
+  })
+
+  it('emits an empty backlog as queued: [] — not null, not an error (AC3)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: queueStatePlaintext({ conversation_id: 'conv-1', queued: [] })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'queueState', conversationId: 'conv-1', queued: [] }
+    ])
+  })
+
+  it('drops a malformed queue_state without emitting or throwing (fail-closed, AC4)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: queueStatePlaintext({
+          conversation_id: 'conv-1',
+          queued: [{ queued_msg_id: '7', text: 'x', ts: 't' }] // string counter → fail closed
         })
       })
     ).not.toThrow()

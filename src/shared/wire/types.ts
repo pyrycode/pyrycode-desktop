@@ -57,6 +57,7 @@ export type EnvelopeType =
   | 'session_transition'
   | 'tool_use'
   | 'tool_result'
+  | 'queue_state'
   | 'modal_shown'
   | 'modal_dismissed'
   | 'modal_answer'
@@ -319,6 +320,39 @@ export interface ToolResultPayload {
   tool_use_id: string
   is_error: boolean
   result_summary: string
+}
+
+/**
+ * One entry of a queued-backlog snapshot (daemon → client). Mirrors the daemon's queue-item struct
+ * field-for-field (SSOT pyrycode #720, docs/protocol-mobile.md § Queue), wire order
+ * `queued_msg_id, text, ts` — all always present (no `omitempty`). Array position in
+ * `QueueStatePayload.queued` IS the enqueue order. `queued_msg_id` is a plain per-conversation
+ * counter (an integer ≥ 1) and decodes as a NUMBER, never a string (the daemon guarantees the range;
+ * the decoder narrows the type but does not police it). `text` is UNTRUSTED, client-originated transit
+ * content, relayed by a content-blind relay — carried as opaque display text, decoded but never
+ * interpreted; the eventual render slice (#294) must render it as plain text, never HTML. `ts` is the
+ * enqueue time (RFC3339), a plain wire string the decoder requires but does not parse. See #292.
+ */
+export interface QueuedItem {
+  queued_msg_id: number
+  text: string
+  ts: string
+}
+
+/**
+ * Inbound `queue_state` event (daemon → client). Mirrors the daemon's queue-snapshot struct
+ * field-for-field (SSOT pyrycode #720, docs/protocol-mobile.md § Queue), wire order
+ * `conversation_id, queued` — both always present. An UNSOLICITED snapshot the daemon emits whenever
+ * the per-conversation backlog changes (not a reply to any request): `queue_state` is daemon STATE,
+ * not part of claude's turn stream, so it gets its own daemon event and is NOT folded into the
+ * thread-timeline reducer (#720's "queue backlog is state, not turn-stream" decision). `queued` is
+ * ALWAYS present and enqueue-ordered — an empty backlog is `[]` (never omitted, never null); it is a
+ * REPLACEMENT-truth snapshot (the whole current backlog), not a delta. Where the backlog is held is
+ * the next slice's decision (#293). See #292.
+ */
+export interface QueueStatePayload {
+  conversation_id: string
+  queued: QueuedItem[]
 }
 
 /**

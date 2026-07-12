@@ -22,7 +22,9 @@ import type {
   CreateConversationPayload,
   ConversationCreatedPayload,
   PromoteConversationPayload,
-  ConversationUpdatedPayload
+  ConversationUpdatedPayload,
+  QueuedItem,
+  QueueStatePayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -403,5 +405,51 @@ describe('conversations-write promote/update wire vocabulary (#273)', () => {
     // A populated name is an equally valid value (a named channel).
     const named: ConversationUpdatedPayload = { ...payload, name: 'weekly sync' }
     expect(named.name).toBe('weekly sync')
+  })
+})
+
+describe('queue-state wire vocabulary (#292)', () => {
+  it('admits the queue_state inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const queueState: EnvelopeType = 'queue_state'
+    expect(queueState).toBe('queue_state')
+  })
+
+  it('shapes QueuedItem as { queued_msg_id, text, ts } — queued_msg_id a number', () => {
+    const item: QueuedItem = { queued_msg_id: 1, text: 'hello there', ts: '2026-07-10T00:00:00Z' }
+    expect(item).toEqual({ queued_msg_id: 1, text: 'hello there', ts: '2026-07-10T00:00:00Z' })
+  })
+
+  it('shapes QueueStatePayload as { conversation_id, queued } — an ordered two-item backlog', () => {
+    // Mirrors the daemon SSOT (pyrycode #720) field-for-field. `queued` is always present and
+    // enqueue-ordered; each item carries queued_msg_id (a number) / text / ts.
+    const payload: QueueStatePayload = {
+      conversation_id: 'conv-1',
+      queued: [
+        { queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' },
+        { queued_msg_id: 2, text: 'second', ts: '2026-07-10T00:00:01Z' }
+      ]
+    }
+    expect(payload).toEqual({
+      conversation_id: 'conv-1',
+      queued: [
+        { queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' },
+        { queued_msg_id: 2, text: 'second', ts: '2026-07-10T00:00:01Z' }
+      ]
+    })
+  })
+
+  it('admits an empty queued array as a valid zero-length backlog (never null, never absent)', () => {
+    const empty: QueueStatePayload = { conversation_id: 'conv-1', queued: [] }
+    expect(empty.queued).toEqual([])
+  })
+
+  it('pins queued_msg_id as a number — a JSON string is a compile-time type error', () => {
+    // The compile-time no-drift pin: the counter MUST be a number, never a string (AC1). A `'1'`
+    // literal here is a TS2322 the @ts-expect-error absorbs — if the field were ever relaxed to
+    // `string`, this line would stop erroring and fail the test at compile time.
+    // @ts-expect-error queued_msg_id is number, not string
+    const wrong: QueuedItem = { queued_msg_id: '1', text: 'x', ts: 't' }
+    expect(wrong.text).toBe('x')
   })
 })

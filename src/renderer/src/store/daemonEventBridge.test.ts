@@ -237,6 +237,16 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('queueState → null (consumed by the #293 queue store, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'queueState',
+        conversationId: 'conv-1',
+        queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
+      })
+    ).toBeNull()
+  })
+
   it('the three debug-bundle events dispatch nothing into the session store', () => {
     // Belt-and-suspenders, mirroring production: feed each new event through the same null-guarded
     // dispatch the bridge applies; the store stays at its initial state (no status flip, no message).

@@ -494,6 +494,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               resultSummary: inbound.toolResult.result_summary
             })
             return
+          case 'queue-state':
+            // The queued-backlog data path (#292). Emit a fresh literal carrying `conversationId` (snake→
+            // camel) plus the already-narrowed backlog by reference — unlike turnState / toolUse this KEEPS
+            // conversation_id, because the snapshot is REPLACEMENT-truth and #293 keys its backlog by it. The
+            // `queued` array passes through verbatim (parseQueuedItem already stripped each item to the three
+            // known fields, nothing to drop, no snake→camel on the row) — the `conversations` precedent. A
+            // fresh top-level literal, never a spread of the decoded payload. Consumed by the #293 queue
+            // store, not the session / timeline / modal store — queue_state is daemon state (#720).
+            emitDaemonEvent(sink, {
+              type: 'queueState',
+              conversationId: inbound.queueState.conversation_id,
+              queued: inbound.queueState.queued
+            })
+            return
           case 'conversations':
             // The conversation-list data path (#139). Emit a fresh literal reusing the already-minimal
             // decoded array — mirror messagesReceived, NOT the snapshot content-drop: there is nothing

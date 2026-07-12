@@ -140,7 +140,9 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         type: 'queueState',
         conversationId: 'conv-1',
         queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
-      }
+      },
+      // stall ships dormant (#315); its render consumer is #317, not the modal store.
+      { type: 'stallDetected' }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()
   })

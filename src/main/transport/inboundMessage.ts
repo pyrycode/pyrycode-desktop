@@ -32,6 +32,7 @@ import type {
   AssistantDeltaPayload,
   TurnEndPayload,
   TurnStatePayload,
+  StallPayload,
   SessionTransitionPayload,
   SessionSettingsUpdatedPayload,
   ToolUsePayload,
@@ -91,6 +92,12 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The `turn-state` kind (#214) carries the decoded TurnStatePayload — the coarse lifecycle scalar that
  * drives the timeline `phase` (#202). The consumer carries only `state` onward (dropping
  * `conversation_id`); the fail-closed `state` enum check here is the boundary this slice defends.
+ *
+ * The `stall` kind (#315) carries the decoded StallPayload — the onset-only liveness signal the daemon
+ * fans out to interactive clients when a turn goes quiet. The consumer drops `conversation_id` and emits
+ * a NULLARY `stallDetected` event (the payload's only field is not carried); the fail-closed required
+ * `conversation_id` string here is the boundary this slice defends. Ships dormant — the render slice
+ * (#317) is the first consumer.
  *
  * The `session-transition` kind (#254) carries the decoded SessionTransitionPayload — the session-boundary
  * marker whose `new_session_id` is the addressing key the #259 holder will retain. The consumer carries
@@ -155,6 +162,7 @@ export type InboundDaemonMessage =
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
+  | { kind: 'stall'; stall: StallPayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
   | {
       kind: 'session-settings-updated'
@@ -363,6 +371,24 @@ function parseTurnStatePayload(payload: unknown): TurnStatePayload {
     throw new WireDecodeError('missing required field: state')
   }
   return { conversation_id, state }
+}
+
+/**
+ * Narrow an opaque payload into a StallPayload (#315). Fail-closed like parseTurnStatePayload, scaled
+ * down to the frame's ONE field: a single `requireString(payload, 'conversation_id')` — no closed enum
+ * (stall carries no `state`), no nullable, no cross-field validation. A missing / mistyped
+ * `conversation_id` throws WireDecodeError (never a partial value); the frame-level MAX_PLAINTEXT_BYTES
+ * guard in parseInboundMessage covers the oversized case. Returns only the one known field; unknown
+ * server-added keys (e.g. a spurious `turn_id`) are tolerated (forward-compat) but NOT copied through.
+ * Its message names the failure CATEGORY only (`requireString` emits `missing required field:
+ * conversation_id`) — never interpolating the value, which is conversation-correlating.
+ */
+function parseStallPayload(payload: unknown): StallPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed stall payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  return { conversation_id }
 }
 
 /**
@@ -768,6 +794,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'turn-state', turnState }
+    }
+    case 'stall': {
+      // Narrow BEFORE logging so a malformed frame (an absent / non-string conversation_id) throws
+      // first and leaves no record. No decoded field (conversation_id) is logged — only the frame's
+      // byte length + one-way hash, reusing the existing content-free field set (no new DiagnosticEvent
+      // field, so #131's renderer pin is untouched).
+      const stall = parseStallPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'stall',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'stall', stall }
     }
     case 'session_transition': {
       // Narrow BEFORE logging so a malformed frame (a `reason` outside the closed enum, an

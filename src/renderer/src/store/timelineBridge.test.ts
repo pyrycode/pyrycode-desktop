@@ -185,7 +185,9 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         type: 'queueState',
         conversationId: 'conv-1',
         queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
-      }
+      },
+      // stall ships dormant (#315); its render consumer is #317, not the timeline store.
+      { type: 'stallDetected' }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })

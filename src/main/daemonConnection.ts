@@ -452,6 +452,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // The timeline bridge (#202), not the session store, maps this onto the reducer's `phase`.
             emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
             return
+          case 'stall':
+            // The stall-liveness data path (#315). Emit a fresh NULLARY literal; `conversation_id` is
+            // DROPPED (never referenced — single active conversation, the turnState convention), so zero
+            // untrusted daemon data crosses IPC. Onset-only: no de-dup / timer state here; the render
+            // slice (#317), not this leg, owns the self-clear on next turn activity. Not compile-forced
+            // (this inner switch has no assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, { type: 'stallDetected' })
+            return
           case 'session-transition':
             // The session-boundary data path (#254, widened #285). Emit a fresh literal carrying the four
             // fields the delimiter slice (#286) reads — `newSessionId`, `reason`, `occurredAt`,

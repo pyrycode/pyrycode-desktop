@@ -8,6 +8,7 @@ import type {
   TurnEndPayload,
   TurnStatePayload,
   WireTurnState,
+  StallPayload,
   WireSessionTransitionReason,
   SessionTransitionPayload,
   ToolUsePayload,
@@ -108,6 +109,19 @@ describe('turn-state wire vocabulary (#214)', () => {
   it('admits exactly the three WireTurnState values (mobile field-for-field, no named enum)', () => {
     const states: WireTurnState[] = ['thinking', 'responding', 'idle']
     expect(states).toEqual(['thinking', 'responding', 'idle'])
+  })
+})
+
+describe('stall wire vocabulary (#315)', () => {
+  it('admits the stall inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const stall: EnvelopeType = 'stall'
+    expect(stall).toBe('stall')
+  })
+
+  it('shapes StallPayload as { conversation_id } only — no turn_id, no clear field', () => {
+    const payload: StallPayload = { conversation_id: 'conv-1' }
+    expect(payload).toEqual({ conversation_id: 'conv-1' })
   })
 })
 

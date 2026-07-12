@@ -100,6 +100,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // store — queue_state is daemon state, not a turn-stream item (#720). Present only because the
       // assertNever guard below makes a new arm a compile error.
       return null
+    case 'stallDetected':
+      // No session-store action: the render slice (#317, not yet built) surfaces the stall indicator, not
+      // the session store. Present only because the assertNever guard below makes a new arm a compile
+      // error (the snapshotReceived-was-a-no-op-until-#187 precedent).
+      return null
     default:
       return assertNever(event)
   }

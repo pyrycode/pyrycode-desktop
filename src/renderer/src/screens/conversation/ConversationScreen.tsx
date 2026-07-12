@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import './conversation.css'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
@@ -47,9 +47,17 @@ export interface ConversationScreenProps {
   // bare `<ConversationScreen />` keeps today's behavior with no top-bar back affordance (AC3). The
   // PairedShell-mounted thread wires it to a nav dispatch.
   onBack?: () => void
+  // #276→#155: the overflow menu's Channel-info item invokes this. Optional and absent this ticket, so
+  // selecting the item just closes the menu (a live no-op); #155 passes it from PairedShell to open the
+  // Channel Info sheet (Figma 20-48). The same optional-callback seam as WorkspaceChip's onChange? (#278).
+  onChannelInfo?: () => void
 }
 
-export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenProps = {}): JSX.Element {
+export function ConversationScreen({
+  onUnpaired,
+  onBack,
+  onChannelInfo
+}: ConversationScreenProps = {}): JSX.Element {
   // #179: the structured-stream timeline slice is now the single thread surface — the coarse
   // `MessageThread` is retired (its mount + the `selectMessages` read are gone), and the composer's
   // optimistic echo routes here as a `userText` item beside the daemon's structured reply. `ThreadItem`
@@ -85,6 +93,12 @@ export function ConversationScreen({ onUnpaired, onBack }: ConversationScreenPro
   return (
     <div className="conversation">
       <BackControl onBack={onBack} />
+      {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
+          actions, opening the Channel Info sheet first (#155). Gated on onBack presence, the established
+          "mounted in the paired shell" signal (BackControl's gate): a bare `<ConversationScreen />` shows
+          neither. Gated at the mount site, not self-gated, so ThreadOverflowMenu's hooks stay
+          unconditional (rules-of-hooks). */}
+      {onBack && <ThreadOverflowMenu onChannelInfo={onChannelInfo} />}
       <UnpairControl onUnpaired={onUnpaired} />
       {/* #279: the prominent, disconnected-only connection banner — the top of the thread, below the
           header row and above the message list. A third read of the connection status, distinct from
@@ -861,7 +875,8 @@ function ConnectionBannerControl(): JSX.Element | null {
 // list view. Optional-prop-gated exactly like #166's onUnpaired — returns null when onBack is absent,
 // so a bare `<ConversationScreen />` (no shell) is unchanged DOM-wise and only the PairedShell-mounted
 // thread shows it (AC3/AC4). Icon-only, so aria-label supplies the accessible name (the
-// .composer__send / StatusRow pattern). The title and overflow menu from Figma 16-9 are future tickets.
+// .composer__send / StatusRow pattern). The title from Figma 16-9 is a future ticket; its trailing
+// overflow menu (16-16) is #276's ThreadOverflowMenu, mounted beside this control.
 function BackControl({ onBack }: { onBack?: () => void }): JSX.Element | null {
   if (!onBack) return null
   return (
@@ -877,6 +892,130 @@ function BackControl({ onBack }: { onBack?: () => void }): JSX.Element | null {
         <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
       </svg>
     </button>
+  )
+}
+
+// #276: the thread top app bar's trailing overflow menu's pure view (Figma node 16-16) — the
+// BackControl twin on the right edge, the single entry point to per-conversation actions. Props-in /
+// markup-out with NO state and NO effects, so renderToStaticMarkup renders both the collapsed and open
+// states directly (the entire tested contract, the InterruptButton / ThinkingIndicator posture). The
+// interaction shell (toggle, Escape / outside-click dismiss, focus-return) lives in the container below.
+//
+// The trigger is an icon-only <button> carrying the 24px more_vert glyph (Figma 16-17) in a 48px frame,
+// the .conversation__back treatment; aria-label supplies its accessible name, aria-haspopup="menu"
+// advertises the popup, and aria-expanded tracks open/closed (React stringifies the aria boolean under
+// server render → "true"/"false", both directly assertable). When `open`, a role="menu" surface drops
+// below it holding a single role="menuitem" — the documented extension slot #155 and later action
+// tickets (#274/#153/#154) add rows to. The item is ENABLED and routed to `onSelect` (a live no-op this
+// ticket, since onChannelInfo is undefined) rather than disabled, so "dismisses on selecting an item"
+// (AC3) is genuinely live now. Copy `More actions` / `Channel info` is apostrophe-free (renderToStaticMarkup
+// escapes ' → &#x27; — the standing desktop lesson). `triggerRef` is forwarded for the container's
+// focus-return; omitted in tests (a native <button> accepts ref={undefined}).
+export function ThreadOverflowMenuView({
+  open,
+  onToggle,
+  onSelect,
+  triggerRef
+}: {
+  open: boolean
+  onToggle: () => void
+  onSelect: () => void
+  triggerRef?: Ref<HTMLButtonElement>
+}): JSX.Element {
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="conversation__overflow-trigger"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <svg
+          className="conversation__overflow-icon"
+          viewBox="0 0 24 24"
+          width="24"
+          height="24"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+        </svg>
+      </button>
+      {open && (
+        <div className="conversation__overflow-menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            className="conversation__overflow-item"
+            onClick={onSelect}
+          >
+            Channel info
+          </button>
+        </div>
+      )}
+    </>
+  )
+}
+
+// #276: the store-free interaction container for the overflow menu — the thin shell around the pure view
+// (the RepairControl / ConnectionBannerControl split, minus the store read: this control subscribes to
+// nothing). Menu open/closed is screen-local useState, never the session store (ADR 0006, the `sheetOpen`
+// precedent), so it resets to closed on remount for free (AC5). In-file and not exported, like Composer.
+//
+// close/select both return focus to the trigger (AC3); select also invokes onChannelInfo (undefined this
+// ticket → the item just closes). Dismiss-on-Escape and dismiss-on-outside-click (AC3) attach document
+// listeners only while open, torn down by the effect cleanup on close/unmount so no listener outlives an
+// open menu. Both handlers read the DOM event via addEventListener's event-map inference — NOT an
+// annotation — because this file imports React's `KeyboardEvent` type at the top, which would otherwise
+// shadow the DOM one; the outside-click target is narrowed with `instanceof Node` (never an `as` cast).
+function ThreadOverflowMenu({ onChannelInfo }: { onChannelInfo?: () => void }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+
+  const close = (): void => {
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+  const select = (): void => {
+    setOpen(false)
+    onChannelInfo?.()
+    triggerRef.current?.focus()
+  }
+
+  useEffect(() => {
+    if (!open) return
+    // Index the DOM event map for the exact event types — the top-level `import { type KeyboardEvent }`
+    // shadows the global one, so a bare `KeyboardEvent` annotation would resolve to React's synthetic type.
+    const onMouseDown = (event: DocumentEventMap['mousedown']): void => {
+      const target = event.target
+      if (target instanceof Node && wrapperRef.current && !wrapperRef.current.contains(target)) {
+        close()
+      }
+    }
+    const onKeyDown = (event: DocumentEventMap['keydown']): void => {
+      if (event.key === 'Escape') close()
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div ref={wrapperRef} className="conversation__overflow">
+      <ThreadOverflowMenuView
+        open={open}
+        onToggle={() => setOpen((o) => !o)}
+        onSelect={select}
+        triggerRef={triggerRef}
+      />
+    </div>
   )
 }
 

@@ -12,7 +12,8 @@ import {
   ConnectionBanner,
   WorkspaceChip,
   isTurnRunning,
-  InterruptButton
+  InterruptButton,
+  ThreadOverflowMenuView
 } from './ConversationScreen'
 import { composerAvailability, CONNECTION_BANNER_COPY } from './composerSend'
 import type { Message } from './messageViewModel'
@@ -767,6 +768,43 @@ describe('WorkspaceChip — the pre-first-message workspace pill (#278)', () => 
   })
 })
 
+// #276: the thread top-bar overflow menu. ThreadOverflowMenuView is the pure, exported view (the
+// InterruptButton / ThinkingIndicator pattern) — server-render it with an injected `open` boolean to
+// prove the collapsed trigger and the opened menu surface without a store or a DOM harness. The
+// interaction shell (open/close toggle, Escape / outside-click dismiss, focus-return) lives in the
+// in-file ThreadOverflowMenu container: it is untested reviewed glue, exactly like Composer.handleKeyDown
+// and UnpairControl's phase transitions — the `node` env fires no clicks and runs no effects.
+describe('ThreadOverflowMenuView — the thread overflow menu (#276)', () => {
+  const noop = (): void => {}
+
+  it('renders a collapsed icon-only trigger advertising a menu popup, no surface (AC1/AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ThreadOverflowMenuView open={false} onToggle={noop} onSelect={noop} />
+    )
+    // The icon-only trigger: a client-owned accessible name, the haspopup=menu affordance, and the
+    // collapsed state (React stringifies aria booleans under renderToStaticMarkup → "false").
+    expect(markup).toContain('aria-label="More actions"')
+    expect(markup).toContain('aria-haspopup="menu"')
+    expect(markup).toContain('aria-expanded="false"')
+    // Closed: the menu surface is not rendered.
+    expect(markup).not.toContain('role="menu"')
+    expect(markup).not.toContain('Channel info')
+  })
+
+  it('exposes a role=menu surface with a single Channel info item when open (AC2/AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ThreadOverflowMenuView open={true} onToggle={noop} onSelect={noop} />
+    )
+    // The trigger now advertises the expanded state…
+    expect(markup).toContain('aria-expanded="true"')
+    // …and the menu surface exposes role=menu with a menuitem carrying the (apostrophe-free) copy that
+    // #155 wires to open the Channel Info sheet (Figma 20-48).
+    expect(markup).toContain('role="menu"')
+    expect(markup).toContain('role="menuitem"')
+    expect(markup).toContain('Channel info')
+  })
+})
+
 describe('ConversationScreen — store binding', () => {
   beforeEach(() => {
     // setState shallow-merges (preserving dispatch); reset to a clean, empty session.
@@ -941,5 +979,25 @@ describe('ConversationScreen — store binding', () => {
   it('renders no back affordance for a bare ConversationScreen (onBack absent — unchanged, AC3)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('aria-label="Back"')
+  })
+
+  // #276: the thread overflow menu is gated on onBack presence exactly like BackControl — mounted only
+  // when the paired shell wires navigation. When onBack is provided the trailing more_vert trigger
+  // renders (its popup advertised via aria-haspopup="menu"); it starts closed, so no menu surface is
+  // present at first paint (the open toggle is untested useState glue — effects don't run under server
+  // render). The pure view's open/closed contract is proven in the ThreadOverflowMenuView describe above.
+  it('renders the overflow trigger, collapsed, when onBack is provided (the shell-mounted thread, AC1)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen onBack={() => {}} />)
+    expect(markup).toContain('conversation__overflow')
+    expect(markup).toContain('aria-haspopup="menu"')
+    // Closed at first paint — no menu surface yet.
+    expect(markup).not.toContain('role="menu"')
+  })
+
+  it('renders no overflow menu for a bare ConversationScreen (onBack absent — unchanged, AC1)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('conversation__overflow')
+    // StatusRow keeps its own aria-haspopup="dialog"; only the menu popup must be absent.
+    expect(markup).not.toContain('aria-haspopup="menu"')
   })
 })

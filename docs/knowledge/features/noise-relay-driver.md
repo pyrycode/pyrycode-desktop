@@ -12,6 +12,7 @@ Gives the background process **one factory** — `createNoiseRelayDriver(config)
 - **Each inbound `message` frame** is decoded through the #5 codec (`decodeInnerFrame` → `base64StdDecode` of `.data`) and its raw Noise bytes fed to the session; **each outbound frame** the session emits is base64-std wrapped into an `InnerFrameV2` and sent via the supervisor — the handshake message-1 frame tagged `type: "noise_init"`, every later frame `type: "noise_msg"` — **except** the fresh `msg1` of an in-session rekey, re-armed to `noise_init` so the daemon routes it to its rekey responder (see § Rekey `noise_init` re-arm, [#112](../codebase/112.md)).
 - **The combined lifecycle** — the session's `handshake-complete{helloAck}` and decrypted `message{plaintext}`, the supervisor's `terminal{code}` (incl. `4426`/`4421`/`4401`), and the session's + adapter's `error{reason}` — surfaces through **one typed sink** to the consumer above.
 - **`sendMessage(plaintext)`** delegates a post-handshake app message to the current session (inert before handshake-complete / after terminal); **`stop()`** tears the whole thing down idempotently.
+- **Forwards the relay-socket leg as its own signal, unclassified ([#328](../codebase/328.md)).** On every supervisor `connected` the driver emits `relay-link-up` *in addition to* (not instead of) starting the fresh handshake — a second consumer of the same event, ordered first. On a supervisor `relay-closed{code}` (a retryable drop, supervision continues) it forwards `relay-link-down{code}` verbatim — the driver does not interpret the code, exactly as it forwards `terminal{code}` raw; classification is `daemonConnection`'s job, one layer up.
 
 Keys and the `hello` early-data are **injected from above** (sourced later by [#42](secure-store.md)/[#43](device-keypair.md)/#10) — this ticket wires the plumbing, not the key sourcing, so it is self-contained and unit-testable with injected fake keys/`hello`.
 
@@ -35,6 +36,8 @@ export type RelaySessionErrorReason =
 export type RelaySessionEvent =
   | { type: 'handshake-complete'; helloAck: Uint8Array } // forwarded from the session
   | { type: 'message'; plaintext: Uint8Array }           // forwarded from the session (decrypted app frame)
+  | { type: 'relay-link-up' }                            // relay socket up — forwarded from supervisor `connected` (#328)
+  | { type: 'relay-link-down'; code: number }             // relay socket dropped, retryable — forwarded from `relay-closed` (#328)
   | { type: 'terminal'; code: number; reason: string }   // forwarded from the supervisor (incl. 4426/4421/4401)
   | { type: 'error'; reason: RelaySessionErrorReason }    // session errors + adapter-boundary errors
 
@@ -112,12 +115,12 @@ Absent an injected `diagnosticLog`, both paths are no-ops (optional-chaining), b
 
 ```
 construct ─▶ supervisor dials
-  connected ─▶ ++gen ─▶ close old ─▶ createSession (async)
+  connected ─▶ sink relay-link-up (#328) ─▶ ++gen ─▶ close old ─▶ createSession (async)
                                        └▶ resolve ─▶ start() [msg1 → noise_init out] ─▶ replay pending (in order)
   message(frame) ─▶ decode(#5) ─▶ session.onFrame(raw)          [msg2 in ─▶ handshake-complete{helloAck} → sink]
   sendMessage(pt) ─▶ session.sendMessage ─▶ sendFrame [→ noise_msg out]
   message(frame) ─▶ decode ─▶ session.onFrame ─▶ message{plaintext} → sink
-  drop ─▶ (supervisor absorbs, re-dials) ─▶ connected ─▶ ++gen ─▶ close old session ─▶ FRESH handshake
+  relay-closed{code} (retryable) ─▶ sink relay-link-down{code} (#328) ─▶ (supervisor absorbs, re-dials) ─▶ connected ─▶ ++gen ─▶ close old session ─▶ FRESH handshake
   fatal close / stop() ─▶ terminal{code} ─▶ close session ─▶ sink terminal
 ```
 
@@ -165,6 +168,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 
 - [#50 codebase notes](../codebase/50.md) — implementation summary, patterns, lessons.
 - [#112 codebase notes](../codebase/112.md) — the `rekeyInitPending` latch that re-arms `noise_init` for the fresh rekey `msg1` (§ Rekey `noise_init` re-arm) + the assembled-stack e2e that drives this driver through a daemon-initiated rekey.
+- [#328 codebase notes](../codebase/328.md) / [Relay supervisor](relay-supervisor.md) / [Daemon connection](daemon-connection.md) — the `relay-link-up`/`relay-link-down{code}` members added here as a thin, unclassified forward of the supervisor's `connected`/`relay-closed`; `daemonConnection`'s choke point classifies the code into the renderer-facing `relayLinkChanged` `DaemonEvent`. First of three slices toward a two-dot connection-status indicator.
 - [Content-free diagnostic log](diagnostic-log.md) / [#133 codebase notes](../codebase/133.md) — the optional injected `diagnosticLog` this driver uses at the `onMessage` framing catch and forwards into every [Noise session](noise-session.md) it builds (§ *Pre-decryption framing-failure byte logging*), carrying the capped raw ciphertext via the branded `safeBytes` field.
 - [Relay supervisor](relay-supervisor.md) / [#22](../codebase/22.md) — the self-healing byte-pipe the driver constructs and drives; explicitly names this driver as its "future Noise-handshake layer" consumer, and owns the reconnect loop / backoff / fatal-code classification the driver does **not**. Its `resolveConnection` provider ([#83](../codebase/83.md)) is the driver's wrapper over `loadDialConfig`.
 - [#83 codebase notes](../codebase/83.md) / [Daemon connection](daemon-connection.md) — reload-per-dial: the `SessionMaterial`/`DialConfig`/`DialConfigProvider` types, the `resolveConnection` wrapper, and `onConnected`'s reloaded-material selection added here; the `loadDialConfig` provider is constructed in `daemonConnection`.

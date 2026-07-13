@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PairedShell, PairedShellView } from './PairedShell'
 import { nextPairedRoute } from './pairedRoute'
@@ -21,12 +21,15 @@ const LIST_MARKER = 'aria-label="Conversations"'
 // entry-button `aria-label="Settings"` nor the thread's `aria-label="Back"` matches it, and — unlike the
 // "Connection" heading text — it does not collide with the thread's `aria-label="Connection status"`.
 const SETTINGS_MARKER = 'aria-label="Settings screen"'
+// The pair-server view's marker (#152): the reused PairingScreen's EntryCard heading. Unique to the
+// pairing flow — neither the list, thread, nor settings markers match it.
+const PAIRING_MARKER = 'Paste pairing code'
 
 describe('PairedShellView', () => {
   describe("route='list'", () => {
     it('shows the Channel List wrapper and never the thread', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="list" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} />
+        <PairedShellView route="list" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(LIST_MARKER)
       expect(markup).not.toContain(CONVERSATION_MARKER)
@@ -42,7 +45,7 @@ describe('PairedShellView', () => {
 
     it('shows the conversation thread with its leading back affordance', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="thread" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} />
+        <PairedShellView route="thread" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(CONVERSATION_MARKER)
       expect(markup).toContain(BACK_MARKER)
@@ -52,11 +55,41 @@ describe('PairedShellView', () => {
   describe("route='settings'", () => {
     it('shows the Settings screen and neither the list nor the thread (#333)', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="settings" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} />
+        <PairedShellView route="settings" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(SETTINGS_MARKER)
       expect(markup).not.toContain(LIST_MARKER)
       expect(markup).not.toContain(CONVERSATION_MARKER)
+    })
+  })
+
+  describe("route='pairServer'", () => {
+    // PairingScreen derefs window.pyry at render (target = bridge ?? window.pyry); the node env has no
+    // window. An empty `pyry` suffices — no bridge method runs during a static render (App.test.tsx
+    // stubs the same way for its pairing route).
+    beforeEach(() => {
+      globalThis.window = { pyry: {} } as unknown as Window & typeof globalThis
+    })
+    afterEach(() => {
+      Reflect.deleteProperty(globalThis, 'window')
+    })
+
+    it('reuses the existing pairing screen and shows neither the list nor the settings (#152, AC2)', () => {
+      const markup = renderToStaticMarkup(
+        <PairedShellView
+          route="pairServer"
+          onOpen={noop}
+          onBack={noop}
+          onOpenSettings={noop}
+          onUnpaired={noop}
+          onOpenPairServer={noop}
+          onPairServerPaired={noop}
+          onPairServerCancelled={noop}
+        />
+      )
+      expect(markup).toContain(PAIRING_MARKER)
+      expect(markup).not.toContain(LIST_MARKER)
+      expect(markup).not.toContain(SETTINGS_MARKER)
     })
   })
 })
@@ -82,5 +115,22 @@ describe('PairedShell', () => {
   // above) — the same composition posture the created-event nav uses, no jsdom harness.
   it('the settings button → openSettings dispatch lands on the settings route (#333)', () => {
     expect(nextPairedRoute('list', { type: 'openSettings' })).toBe('settings')
+  })
+
+  // #152: the three pair-server seams the shell wires, closed by composing the separately-tested
+  // reducer (pairedRoute.test.ts) with the pairServer view (PairedShellView above) — the same
+  // composition posture the settings/created-event navs use, no jsdom harness. The Settings row →
+  // openPairServer entry, and the two PairingScreen exits (cancel → settings, paired → list) land on
+  // their distinct destinations.
+  it('the Settings "Pair another server" row → openPairServer opens the pair-server route (#152)', () => {
+    expect(nextPairedRoute('settings', { type: 'openPairServer' })).toBe('pairServer')
+  })
+
+  it('PairingScreen onCancel → pairServerCancelled returns to settings, non-destructive (#152, AC4)', () => {
+    expect(nextPairedRoute('pairServer', { type: 'pairServerCancelled' })).toBe('settings')
+  })
+
+  it('PairingScreen onPaired → pairServerPaired lands on the new server’s list (#152, AC3)', () => {
+    expect(nextPairedRoute('pairServer', { type: 'pairServerPaired' })).toBe('list')
   })
 })

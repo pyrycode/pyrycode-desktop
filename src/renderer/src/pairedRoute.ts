@@ -4,19 +4,28 @@
 // React, store, or Electron. PairedShell is the thin container (a useReducer) over this.
 
 /**
- * The views of the paired region: the channel `list` (home), a single conversation `thread`, and the
- * `settings` scaffold (#333). Extensible by construction — `settings` was added as one union member, not
- * a rewrite (AC1); a further Archive view would be the same. Mirrors AppRoute's bare string union.
+ * The views of the paired region: the channel `list` (home), a single conversation `thread`, the
+ * `settings` scaffold (#333), and `pairServer` — the existing pairing flow re-opened from inside the
+ * paired app to switch to a different daemon (#152). Extensible by construction — each was added as one
+ * union member, not a rewrite (AC1). Mirrors AppRoute's bare string union.
  */
-export type PairedRoute = 'list' | 'thread' | 'settings'
+export type PairedRoute = 'list' | 'thread' | 'settings' | 'pairServer'
 
 /**
  * The sealed nav-event union driving transitions (CLAUDE.md's discriminated-union convention). `open`
  * pushes the active conversation's thread; `openSettings` opens the Settings screen (#333); `back`
- * returns to the list. Each new navigation event is an added arm, forced by the assertNever
- * exhaustiveness guard below.
+ * returns to the list. The three pair-server arms (#152) are the Settings entry (`openPairServer`) and
+ * the two pairing exits: `pairServerCancelled` (non-destructive, back to settings, AC4) and
+ * `pairServerPaired` (done, home to the new server's list, AC3). Each new navigation event is an added
+ * arm, forced by the assertNever exhaustiveness guard below.
  */
-export type PairedNav = { type: 'open' } | { type: 'openSettings' } | { type: 'back' }
+export type PairedNav =
+  | { type: 'open' }
+  | { type: 'openSettings' }
+  | { type: 'back' }
+  | { type: 'openPairServer' }
+  | { type: 'pairServerCancelled' }
+  | { type: 'pairServerPaired' }
 
 /** Compile-time exhaustiveness guard: a new PairedNav arm without a case is a type error. */
 function assertNever(nav: never): never {
@@ -39,6 +48,16 @@ export function nextPairedRoute(current: PairedRoute, nav: PairedNav): PairedRou
     case 'openSettings':
       return 'settings'
     case 'back':
+      return 'list'
+    case 'openPairServer':
+      return 'pairServer'
+    case 'pairServerCancelled':
+      // AC4: cancel returns to where pairing was launched (settings), NOT the list — a distinct
+      // destination from a completed pair, so it is its own arm and cannot reuse the absolute `back`.
+      return 'settings'
+    case 'pairServerPaired':
+      // AC3: a successful pair goes home to the new server's channel list, not "back" to settings —
+      // semantically "done, go home", and forward-safe if `back` ever becomes stack-aware.
       return 'list'
     default:
       return assertNever(nav)

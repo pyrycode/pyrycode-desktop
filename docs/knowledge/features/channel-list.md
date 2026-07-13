@@ -27,6 +27,10 @@ transport, or new store/wire code, so not security-sensitive.
   three states — a sibling of the section/row rendering described above, added by [#242](../codebase/242.md).
 - A [Settings](settings-screen.md) entry button (gear glyph, `aria-label="Settings"`) is pinned
   top-right over the list, likewise present in all three states — added by [#333](../codebase/333.md).
+- An [Archive](archive-screen.md) entry button (Material `archive`-box glyph, `aria-label="Archive"`)
+  joins it inside the same top-right `.channel-list__actions` cluster, leading the Settings button
+  (gear-rightmost) — added by [#347](../codebase/347.md). Two independent sticky top-right children
+  would have stacked awkwardly, so both buttons now share one sticky flex-row wrapper.
 - Each Recent (unpromoted) row carries a trailing [Save-as-channel](save-as-channel-dialog.md)
   affordance; saved Channel rows carry none. Added by [#274](../codebase/274.md) — see § The row's
   save affordance below.
@@ -151,6 +155,8 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
   affordance rendered as a sibling of this screen's rows.
 - [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the settings entry button
   rendered as a sibling of this screen's rows, and the `settings` route it navigates to.
+- [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the archive entry button sharing
+  the Settings button's top-right actions cluster, and the `archive` route it navigates to.
 - [Save-as-channel dialog](save-as-channel-dialog.md) / [#274](../codebase/274.md) — the per-row
   save affordance and naming dialog; restructured `Row` into the open-action + save-affordance
   sibling shape described above.

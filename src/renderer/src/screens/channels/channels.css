@@ -136,22 +136,63 @@
   margin: var(--space-3) var(--space-4) 0;
 }
 
-/* The Settings entry affordance (#333) — a desktop-invented icon button pinned top-right of the list.
-   ChannelList has no top app bar, so this is the interim reachable entry to the Settings screen. It is
-   the FIRST child of the scroll column and kept in-flow (no portal — the FAB precedent), pinned to the
-   top-right corner by two composed rules mirroring the FAB inverted to the top:
+/* The top-right actions cluster (#347) — hosts the Archive (#347) and Settings (#333) entries side by
+   side. ChannelList has no top app bar, so this is the interim reachable entry to both screens. Two
+   independent sticky children would stack awkwardly, so both icon buttons share ONE sticky flex-row
+   cluster. It is the FIRST child of the scroll column and kept in-flow (no portal — the FAB precedent),
+   pinned to the top-right corner by the two composed rules the Settings button carried before (mirroring
+   the FAB inverted to the top):
      - `align-self: flex-end` right-aligns it in the flex column;
      - `position: sticky; top` floats it over the rows and keeps it visible as the list scrolls under it.
-   z-index lifts it above the rows. The 48px glyph-in-square is the .conversation__back treatment
-   (transparent → surface-container-high on hover, focus-visible outline); 48px is structural component
-   geometry (the .conversation__back square precedent). */
-.channel-list__settings {
+   z-index lifts it above the rows; margin-right insets it from the window edge. */
+.channel-list__actions {
   position: sticky;
   top: var(--space-1);
   align-self: flex-end;
   z-index: 1;
   flex: 0 0 auto;
   margin-right: var(--space-1);
+  display: flex;
+  align-items: center;
+}
+
+/* The Archive entry (#347) — the leading cluster member, a desktop-invented icon button mirroring the
+   gear's shape (no Figma node pins it on the list scope 15-8, like the Settings entry). The 48px
+   glyph-in-square is the .conversation__back treatment (transparent → surface-container-high on hover,
+   focus-visible outline); 48px is structural component geometry (the .conversation__back square
+   precedent). */
+.channel-list__archive {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface);
+  cursor: pointer;
+}
+
+.channel-list__archive:hover {
+  background: var(--color-surface-container-high);
+}
+
+.channel-list__archive:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.channel-list__archive-icon {
+  display: block;
+}
+
+/* The Settings entry affordance (#333) — the trailing cluster member (conventional gear-rightmost). Now
+   a child of .channel-list__actions (#347), so the sticky positioning moved to the cluster; this rule
+   keeps only the 48px glyph-in-square box + presentation (the .conversation__back treatment: transparent
+   → surface-container-high on hover, focus-visible outline). 48px is structural component geometry. */
+.channel-list__settings {
+  flex: 0 0 auto;
   width: 48px;
   height: 48px;
   display: flex;

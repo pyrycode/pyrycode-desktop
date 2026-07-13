@@ -5,23 +5,25 @@
 
 /**
  * The views of the paired region: the channel `list` (home), a single conversation `thread`, the
- * `settings` scaffold (#333), and `pairServer` — the existing pairing flow re-opened from inside the
- * paired app to switch to a different daemon (#152). Extensible by construction — each was added as one
- * union member, not a rewrite (AC1). Mirrors AppRoute's bare string union.
+ * `settings` scaffold (#333), `pairServer` — the existing pairing flow re-opened from inside the paired
+ * app to switch to a different daemon (#152) — and the `archive` screen scaffold (#347). Extensible by
+ * construction — each was added as one union member, not a rewrite (AC1). Mirrors AppRoute's bare string
+ * union.
  */
-export type PairedRoute = 'list' | 'thread' | 'settings' | 'pairServer'
+export type PairedRoute = 'list' | 'thread' | 'settings' | 'pairServer' | 'archive'
 
 /**
  * The sealed nav-event union driving transitions (CLAUDE.md's discriminated-union convention). `open`
- * pushes the active conversation's thread; `openSettings` opens the Settings screen (#333); `back`
- * returns to the list. The three pair-server arms (#152) are the Settings entry (`openPairServer`) and
- * the two pairing exits: `pairServerCancelled` (non-destructive, back to settings, AC4) and
- * `pairServerPaired` (done, home to the new server's list, AC3). Each new navigation event is an added
- * arm, forced by the assertNever exhaustiveness guard below.
+ * pushes the active conversation's thread; `openSettings` opens the Settings screen (#333);
+ * `openArchive` opens the Archive screen (#347); `back` returns to the list. The three pair-server arms
+ * (#152) are the Settings entry (`openPairServer`) and the two pairing exits: `pairServerCancelled`
+ * (non-destructive, back to settings, AC4) and `pairServerPaired` (done, home to the new server's list,
+ * AC3). Each new navigation event is an added arm, forced by the assertNever exhaustiveness guard below.
  */
 export type PairedNav =
   | { type: 'open' }
   | { type: 'openSettings' }
+  | { type: 'openArchive' }
   | { type: 'back' }
   | { type: 'openPairServer' }
   | { type: 'pairServerCancelled' }
@@ -47,6 +49,8 @@ export function nextPairedRoute(current: PairedRoute, nav: PairedNav): PairedRou
       return 'thread'
     case 'openSettings':
       return 'settings'
+    case 'openArchive':
+      return 'archive'
     case 'back':
       return 'list'
     case 'openPairServer':

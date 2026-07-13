@@ -30,6 +30,7 @@ const render = (conversations: readonly ConversationSummary[] | null): string =>
       conversations={conversations}
       now={NOW}
       onOpen={noop}
+      onOpenSettings={noop}
       onNewConversation={noop}
       onSaveAsChannel={noop}
     />
@@ -37,6 +38,9 @@ const render = (conversations: readonly ConversationSummary[] | null): string =>
 
 // The new-discussion FAB's accessible name (#242) — present in every list state (AC1/AC4).
 const FAB_MARKER = 'aria-label="New discussion"'
+
+// The Settings entry affordance's accessible name (#333) — present in every list state, like the FAB.
+const SETTINGS_ENTRY_MARKER = 'aria-label="Settings"'
 
 // The per-row Save-as-channel affordance's accessible name (#274) — present on Recent (unpromoted)
 // discussion rows, absent on saved Channel rows (AC1).
@@ -124,5 +128,13 @@ describe('ChannelListView', () => {
     expect(render(null)).toContain(FAB_MARKER)
     expect(render([])).toContain(FAB_MARKER)
     expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(FAB_MARKER)
+  })
+
+  it('renders the Settings entry with its accessible name in all three list states (#333 AC1)', () => {
+    // Like the FAB, the Settings entry is a sibling of the list body, so it is reachable whether the
+    // list is not-loaded, empty, or populated.
+    expect(render(null)).toContain(SETTINGS_ENTRY_MARKER)
+    expect(render([])).toContain(SETTINGS_ENTRY_MARKER)
+    expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(SETTINGS_ENTRY_MARKER)
   })
 })

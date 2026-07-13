@@ -1,6 +1,7 @@
 import { useReducer } from 'react'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { ChannelList } from './screens/channels/ChannelList'
+import { SettingsScreen } from './screens/settings/SettingsScreen'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
 import { useActiveConversationStore } from './store/activeConversationStore'
@@ -13,21 +14,25 @@ function assertNever(route: never): never {
 /**
  * The pure route→view of the paired region — no hooks, no effects — mirroring how AppView lives beside
  * App. `list` shows the Channel List home screen (#141); `thread` shows the existing store-backed
- * ConversationScreen with a back affordance. Both routes render, so there is no null arm. Adding a
- * future `settings` / `archive` view is one new case, forced by the assertNever default (AC1: an added
- * arm, not a rewrite).
+ * ConversationScreen with a back affordance; `settings` shows the Settings scaffold (#333). Every route
+ * renders, so there is no null arm. Adding a future `archive` view is one new case, forced by the
+ * assertNever default (AC1: an added arm, not a rewrite). The `settings` case reuses the same `onBack`
+ * as `thread` (both dispatch `back`, which the absolute `back` arm lands on `list`).
  */
 export function PairedShellView(props: {
   route: PairedRoute
   onOpen: () => void
+  onOpenSettings: () => void
   onBack: () => void
   onUnpaired: () => void
 }): JSX.Element {
   switch (props.route) {
     case 'list':
-      return <ChannelList onOpen={props.onOpen} />
+      return <ChannelList onOpen={props.onOpen} onOpenSettings={props.onOpenSettings} />
     case 'thread':
       return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
+    case 'settings':
+      return <SettingsScreen onBack={props.onBack} />
     default:
       return assertNever(props.route)
   }
@@ -62,6 +67,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     <PairedShellView
       route={route}
       onOpen={() => dispatch({ type: 'open' })}
+      onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onBack={() => dispatch({ type: 'back' })}
       onUnpaired={onUnpaired}
     />

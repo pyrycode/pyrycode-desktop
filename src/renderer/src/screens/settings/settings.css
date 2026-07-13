@@ -1,0 +1,110 @@
+/*
+ * Settings screen styles (#333), mirrored from the mobile Figma node 17-2 (chrome + Connection header
+ * only). Every color / type / spacing value references a theme token from theme/tokens.css — no
+ * color/type/spacing literal lives here. The bare structural literals (100%, the 48px back-button square)
+ * are layout geometry (the .conversation__back convention), not theme values. The Server row, the
+ * preference sections, and the remaining section headers are deferred to #334 / #151 / #152.
+ */
+
+/* The scroll column. PairedShellView returns this <section> directly, so — like .channel-list /
+   .conversation — it is a direct child of the block-level #root (height:100%), filling the window;
+   box-sizing:border-box keeps padding inside that 100% so the surface fills edge-to-edge (Figma 17-2)
+   and a long settings list scrolls inside this column rather than the window. */
+.settings {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* The top app-bar row (Figma 17:3) — back button + title, left-aligned. Never grows or shrinks. The
+   Figma pads pl-4 pr-16 py-8 with a 4px gap; expressed in spacing tokens. */
+.settings__topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-1);
+}
+
+/* The leading back affordance (Figma 17:4's arrow_back inside a 48px frame) — duplicates the
+   .conversation__back treatment (a 48px touch target wrapping the 24px glyph, on-surface, gaining a
+   surface tint on hover). Duplicated rather than extracted to a shared class so this slice touches no
+   adjacent stylesheet. 48px is structural component geometry (the send-square convention). */
+.settings__back {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface);
+  cursor: pointer;
+}
+
+.settings__back:hover {
+  background: var(--color-surface-container-high);
+}
+
+.settings__back:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.settings__back-icon {
+  display: block;
+}
+
+/* The title "Settings" (Figma 17:8) — title-large, on-surface. margin:0 resets the heading default. */
+.settings__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+  letter-spacing: var(--text-title-large-tracking);
+  font-weight: var(--text-title-large-weight);
+}
+
+/* The scroll body (Figma 17:9) — fills the remaining height below the top bar and holds the sections.
+   pt-4 → --space-1; Figma's pb-32 has no exact token (the 4px scale stops at --space-6/24px), so map to
+   the nearest --space-6 (the .channel-list__fab ±token-mapping precedent) — an 8px delta below an empty
+   scaffold section, immaterial until #334/#151/#152 fill the body. */
+.settings__body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1) 0 var(--space-6);
+}
+
+/* One settings section (Figma 17:9 children) — a header plus its content area. */
+.settings__section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The section header "Connection" (Figma 17:10/17:11) — label-large in the PRIMARY accent (the M3
+   settings section-header color), NOT the muted --color-on-surface-variant of .channel-list__section-header.
+   margin:0 resets the heading default; padding is pt-16 pb-4 px-16 (Figma 17:10) in spacing tokens. */
+.settings__section-header {
+  margin: 0;
+  padding: var(--space-4) var(--space-4) var(--space-1);
+  color: var(--color-primary);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+/* The Connection section's content area — #334's mount point for the store-bound Server row (Figma
+   17:12). Empty in this slice, so it holds no styling of its own; the row will bring its own. */
+.settings__section-body {
+  display: flex;
+  flex-direction: column;
+}

@@ -21,4 +21,14 @@ describe('nextPairedRoute', () => {
   it('back at the list home is a no-op — stays on the list', () => {
     expect(nextPairedRoute('list', { type: 'back' })).toBe('list')
   })
+
+  it('openSettings pushes the settings view (#333)', () => {
+    expect(nextPairedRoute('list', { type: 'openSettings' })).toBe('settings')
+  })
+
+  it('back from settings returns to the list — reuses the existing absolute back arm (#333)', () => {
+    // Documents that Settings → channel-home needs no stack-aware back: the `back` arm is absolute
+    // (current-independent), so it lands on `list` from `settings` exactly as it does from `thread`.
+    expect(nextPairedRoute('settings', { type: 'back' })).toBe('list')
+  })
 })

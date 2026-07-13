@@ -24,6 +24,7 @@ import {
   type ScreenSnapshotPayload,
   type CreateConversationPayload,
   type PromoteConversationPayload,
+  type UnarchiveConversationPayload,
   type SetSessionSettingsPayload,
   type DequeueMessagePayload
 } from '../shared/wire/types'
@@ -2301,6 +2302,73 @@ describe('createDaemonConnection — promoteConversation (promote_conversation r
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — unarchiveConversation (outbound unarchive_conversation, #346)', () => {
+  const UNARCHIVE: UnarchiveConversationPayload = { conversation_id: 'conv-9' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.unarchiveConversation(UNARCHIVE)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one unarchive_conversation envelope with id 2, ts, and the field', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.unarchiveConversation(UNARCHIVE)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('unarchive_conversation')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual(UNARCHIVE)
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.unarchiveConversation(UNARCHIVE)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.unarchiveConversation(UNARCHIVE)).not.toThrow()
+  })
+
+  it('strips a smuggled extra field — the sent payload is exactly the one modeled field (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an extra key past the structural-minimum guard. The
+    // fresh-literal construction in unarchiveConversation must bound the wire to exactly conversation_id.
+    connection.unarchiveConversation({
+      conversation_id: 'conv-9',
+      is_archived: false
+    } as unknown as UnarchiveConversationPayload)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual(UNARCHIVE)
+    expect(JSON.stringify(payload)).not.toContain('is_archived')
   })
 })
 

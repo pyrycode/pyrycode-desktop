@@ -73,6 +73,7 @@ export type EnvelopeType =
   | 'create_conversation'
   | 'conversation_created'
   | 'promote_conversation'
+  | 'unarchive_conversation'
   | 'conversation_updated'
   | 'ack'
   | 'error'
@@ -582,6 +583,24 @@ export interface PromoteConversationPayload {
   conversation_id: string
   name: string
   cwd: string
+}
+
+/**
+ * Outbound `unarchive_conversation` request body (client → daemon). Mirrors the daemon's shared
+ * ArchiveConversationPayload{ConversationID string} field-for-field (pyrycode#881) — the one struct
+ * serving BOTH the archive and unarchive verbs; desktop wires only unarchive here (#346), so a single
+ * UnarchiveConversationPayload is the right desktop surface.
+ *
+ * **A single REQUIRED value-string.** JSON key `conversation_id`, a plain `string` (no pointer, no
+ * `omitempty`) — the id of an existing conversation row whose durable archived flag the daemon clears,
+ * persisting eagerly and confirming with a `conversation_updated` record reflecting the restored (active)
+ * state. Simpler than PromoteConversationPayload's three fields — one required string, so no explicit-`null`
+ * concern. `conversation_id` is a routing id (an existing row's id), not a secret; the desktop never
+ * resolves it into a filesystem path. Do NOT drift it (CLAUDE.md no-drift): change only alongside a
+ * daemon/mobile change. See #346.
+ */
+export interface UnarchiveConversationPayload {
+  conversation_id: string
 }
 
 /**

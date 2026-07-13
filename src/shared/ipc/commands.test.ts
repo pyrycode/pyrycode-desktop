@@ -15,6 +15,7 @@ import type {
   ModalCancelPayload,
   CreateConversationPayload,
   PromoteConversationPayload,
+  UnarchiveConversationPayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -353,6 +354,28 @@ describe('isRendererCommand', () => {
     // A missing key is rejected.
     expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', name: 'weekly' } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { name: 'weekly', cwd: '/w' } })).toBe(false)
+  })
+
+  it('accepts a well-formed unarchiveConversation command with a conversation_id string (#346)', () => {
+    // Mirrors requestSnapshot: a single required-string field, no constructor (the renderer in #348 builds
+    // the literal inline). A structurally-extra field is harmless (structural minimum); the main-side fresh
+    // literal drops it.
+    const payload: UnarchiveConversationPayload = { conversation_id: 'c1' }
+    const command: RendererCommand = { type: 'unarchiveConversation', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    expect(isRendererCommand({ type: 'unarchiveConversation', payload, extra: 1 })).toBe(true)
+  })
+
+  it('rejects an unarchiveConversation with a missing/null payload (#346)', () => {
+    expect(isRendererCommand({ type: 'unarchiveConversation' })).toBe(false)
+    expect(isRendererCommand({ type: 'unarchiveConversation', payload: null })).toBe(false)
+  })
+
+  it('rejects an unarchiveConversation whose conversation_id is missing, null, or non-string (#346)', () => {
+    const t = 'unarchiveConversation'
+    expect(isRendererCommand({ type: t, payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 3 } })).toBe(false)
   })
 
   it('accepts a setSessionSettings command with only session_id (all optionals omitted) (#263)', () => {

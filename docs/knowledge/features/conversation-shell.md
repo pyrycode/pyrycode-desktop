@@ -65,6 +65,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
 │   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…")
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
+│   └── ConnectionStatusIndicatorControl .status-row__connection (two dots, inside .status-row__summary, #330)
 ├── Composer                  .composer            (pinned)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
 ├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
@@ -238,6 +239,84 @@ Not security-sensitive: a pure renderer read of already-store-held status, no tr
 code touched. See [#279 codebase notes](../codebase/279.md) for the full design, the code-review record,
 and the apostrophe-escaping test lesson.
 
+### Two-dot Relay/Pyrycode connection-status indicator (#330)
+
+The final slice of the two-dot connection indicator, split from [#149](../codebase/149.md):
+[#328](../codebase/328.md) (relay-leg transport) → [#329](../codebase/329.md) (renderer [relay-link
+store](relay-link-store.md)) → this ticket (render). Two independently-read legs — the relay-socket
+leg from `relayLinkStore` and the daemon-session leg from [session store](session-store.md)'s
+`ConnectionStatus` — render as two labelled, colour-coded dots inside `StatusRow`'s
+`.status-row__summary` slot (Figma node `16-58`), mirroring mobile's `ConnectionStatusLine`
+(mobile #397/#398, not itself drawn in the locked Figma file). Complements the disconnected-only
+[Connection banner](#connection-banner-279) — the banner announces failure, this is the persistent
+at-a-glance state.
+
+Two exported pure mapping functions turn each leg's raw status into a `{ category, label }` pair —
+`category: 'up' | 'in-progress' | 'down'` drives the dot's colour class; `label` is the full visible
+status word, baked in so the pure view stays dumb (a coloured dot + its label, nothing else) and
+status is legible without colour perception:
+
+```ts
+export function relayLeg(status: RelayLinkStatus | null): ConnectionLeg
+export function daemonLeg(status: ConnectionStatus): ConnectionLeg
+```
+
+| `relayLeg(status)` | category | label |
+| --- | --- | --- |
+| `'connected'` | up | `Relay Connected` |
+| `'daemon-absent'` | up | `Relay Reachable` — distinct label; a missing daemon behind a reachable relay is the **daemon leg's** story, not a relay failure |
+| `'offline'` | down | `Relay Offline` |
+| `null` | down | `Relay Offline` — relay not yet up |
+
+| `daemonLeg(status.type)` | category | label |
+| --- | --- | --- |
+| `connected` | up | `Pyrycode Connected` |
+| `connecting` | in-progress | `Pyrycode Connecting` |
+| `disconnected` | down | `Pyrycode Offline` |
+| `error` | down | `Pyrycode Offline` — `ConnectionError.message` never reaches this indicator, the banner (#279) owns error text |
+
+Both functions `switch` with an explicit `ConnectionLeg` return type and **no `default`** — the
+standing desktop exhaustive-switch guard (TS2366), so a future `RelayLinkStatus`/`ConnectionStatus`
+member fails the build here. **Neither leg's category ever references the other** — this is
+structural, not a convention: after a fatal session close (`4401`/`4421`/`4426`) the relay leg is
+left at its last value (typically `connected`) by design (#328's forward decision), so relay = up
+while daemon = down is a legitimate, intended render, not a bug the mapping functions reconcile. A
+retryable `daemon-absent` (4404) close similarly leaves the daemon leg at `connecting` (in-progress,
+never down) while the relay leg reads up/"Reachable" — both legs are honest about their own hop only.
+
+`ConnectionStatusIndicator({ relay, daemon })` is the exported pure view: a
+`<span className="status-row__connection" role="group" aria-label="Connection status">` holding one
+`.conn-leg` per leg (relay first, then daemon), each a `.conn-dot--{category}` (`aria-hidden`,
+decorative — colour is redundant with the label) plus a `.conn-leg__label` span. A static
+`role="group"`, not a live region — the banner (#279) already announces disconnect transitions, so a
+second live region here would double-announce. `ConnectionStatusIndicatorControl`, the in-file
+container, reads `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)` (the
+`ScreenSnapshotControl` two-independent-store precedent) and passes the mapped legs down; no
+`window.pyry`, no IPC, no effects, so the server-rendered smoke test touches no bridge (initial state
+→ two "Offline" dots — the relay leg's `null` sentinel and the daemon leg's `disconnected`).
+
+Mounted inside `StatusRow`'s previously-empty `.status-row__summary` span, now a flex row
+(`gap: var(--space-3); min-width: 0`) so the dots and #181/#182's future run-config summary text
+("Opus 4.7 · high · 73% used") can sit side by side — this slice does not claim the slot
+exclusively. New theme token `--color-warning: #ffca45` (`tokens.css`, after `--color-error`) drives
+the in-progress dot — M3 has no warning role and the design-system file has no such variable (the
+two-dot line post-dates the 2026-05-08 Figma lock, a code-era addition like the dots themselves).
+`.conn-dot` is an 8px circle (structural component geometry, the `.run-config__context-bar`
+precedent, not a spacing token); `.conn-leg__label` is `body-small` on
+`--color-on-surface-variant`, `white-space: nowrap`.
+
+**Screen-reader note (accepted, not a gap):** the indicator sits inside `StatusRow`, a `<button
+aria-label="Run configuration">` — the button's `aria-label` overrides its inner text as the
+accessible *name*, so the connection labels are visible content but not announced as part of the
+button's name. This satisfies AC2 (colour-independence via visible text) and matches Figma's summary
+placement inside the row button; a dedicated live-region announcement was left out of scope, since
+the banner (#279) already announces the disconnect transition.
+
+Not security-sensitive: pure presentation over already-classified, content-free store state (#328's
+guarantee) — no transport, crypto, or socket code touched. See [#330 codebase
+notes](../codebase/330.md) for the full design, the leg → category → label matrix tests, and the
+code-review record.
+
 ### Workspace chip (#278)
 
 A pre-first-message pill at the top of the empty new-discussion thread, showing the workspace `cwd`
@@ -335,8 +414,13 @@ the empty, dismissible sheet.
 
 `StatusRow` is a full-width icon-only `<button aria-label="Run configuration" aria-haspopup="dialog">`
 between `MessageThread` and `Composer` (Figma node `16-57`), with a top border separating it from
-the thread. Its left summary region (`model · effort · context%`) is intentionally empty — that
-live text is the collapsed mirror of the sheet's read sections, owned by #188/#182, not this shell.
+the thread. Its left summary region (`model · effort · context%`) was originally intentionally empty —
+that live text is the collapsed mirror of the sheet's read sections, owned by #188/#182, not this shell.
+[#330](../codebase/330.md) turned `.status-row__summary` into a flex row and mounted the two-dot
+connection indicator as its first child (see [Two-dot Relay/Pyrycode connection-status
+indicator](#two-dot-relaypyrycode-connection-status-indicator-330) below); the `model · effort ·
+context%` text itself is still unbuilt and, per #330's design, lands as a **sibling** beside the dots,
+not a replacement of them.
 Clicking it calls `onExpand`, which flips `sheetOpen` (a single `useState(false)` in
 `ConversationScreen` — the "trivial single-value local UI state" case carved out by
 [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md), not its `useReducer`
@@ -369,7 +453,9 @@ inline `currentColor` SVGs, the `.composer__send` precedent — no remote asset 
 Not wired yet at shell-landing time: no live summary text in `StatusRow`, no focus trap/restore on
 open-close (accepted for a shell with a single focusable control; worth adding once more than one
 section is interactive — see [#177 codebase notes](../codebase/177.md) for the full code-review
-record). The sheet body itself gained its first section in [#72](#log-data-section-72) below; all
+record). `StatusRow`'s summary slot gained its first content in [#330](../codebase/330.md) — the
+two-dot connection indicator, not the run-config text this paragraph originally meant. The sheet
+body itself gained its first section in [#72](#log-data-section-72) below; all
 four read-only sections (Model/Effort/YOLO, #188, and Context window, #192) have since landed. See
 [#177 codebase notes](../codebase/177.md) for the shell's full design and lessons learned.
 
@@ -1005,7 +1091,8 @@ notes](../codebase/324.md) for the full design and patterns established.
 - **`UnpairControl`** — **bound in [#166](../codebase/166.md).** A screen-local confirm-phase container delegating its decision logic to the pure `runUnpair` in `unpairAction.ts`, the same pattern as `Composer`/`composerSend.ts`. See [Unpair control](#unpair-control-166) above.
 - **`RepairPrompt({ status, onRepair })` / `RepairControl`** — **bound in [#167](../codebase/167.md).** `RepairPrompt` is the exported pure view (`status` as a prop, gated by `shouldOfferRepair`); `RepairControl` is the in-file container reusing `runUnpair`. See [Re-pair control](#re-pair-control-167) above.
 - **`ConnectionBanner({ status })` / `ConnectionBannerControl`** — **bound in [#279](../codebase/279.md).** `ConnectionBanner` is the exported pure view (`status` as a prop, gated by `shouldShowBanner`); `ConnectionBannerControl` is the in-file container reading only `selectStatus`, mounted between `UnpairControl` and `Timeline`. See [Connection banner](#connection-banner-279) above.
-- **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md).** `StatusRow`'s summary region is still empty (no live text yet); `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), and [Run configuration Context window section](#run-configuration-context-window-section-192) above.
+- **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md); the summary slot's first content in [#330](../codebase/330.md).** `StatusRow`'s summary region now holds the two-dot connection indicator (#330); the `model · effort · context%` run-config text itself is still unbuilt and lands as a sibling beside the dots. `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), [Run configuration Context window section](#run-configuration-context-window-section-192), and [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
+- **`ConnectionStatusIndicator({ relay, daemon })` / `ConnectionStatusIndicatorControl`** — **bound in [#330](../codebase/330.md).** `ConnectionStatusIndicator` is the exported pure view (both legs as props, matrix proven by direct server-render); `ConnectionStatusIndicatorControl` is the in-file container reading `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)`, mounted inside `StatusRow`'s summary slot. See [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md).** Reads the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply. See [Structured-stream timeline render](#structured-stream-timeline-render-203) and [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
 - **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. See [Thinking indicator](#thinking-indicator-215) above.
 - **`StallIndicator({ isStalled })`** — **bound in [#317](../codebase/317.md).** `ThinkingIndicator`'s own twin over the store's new `selectStalled`, mounted as its sibling right after it. See [Stall indicator](#stall-indicator-317) above.
@@ -1025,6 +1112,7 @@ notes](../codebase/324.md) for the full design and patterns established.
 - **Session-boundary delimiter** ([#286](../codebase/286.md)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before (AC5). Its `clear`/`idle_evict` copy is provisional — no Figma variant exists for those two reasons yet.
 - **Queued backlog + drop affordance** ([#294](../codebase/294.md)/[#296](../codebase/296.md)) — the region and its drop buttons render only when the milestone conversation's backlog is non-empty; dropping a row is fire-and-forget with no client-side validation of `queued_msg_id` and no error surface on a bridge failure (swallowed, `console.error` only) — the row simply remains, since the daemon never received the drop. The drop button inherits the region's 50% dimming; it cannot be rendered at full opacity without restructuring the region-level dim (a child opacity cannot escape a parent's opacity compositing group).
 - **Screen-snapshot action & display** ([#324](../codebase/324.md)) — unlike every other in-thread control, this region is **always visible** (button + placeholder-or-`<pre>`), never `null` at rest; a re-request is fire-and-forget with no pending/loading state, so re-clicking before a reply lands simply waits for the next `screenSnapshotReceived` to overwrite the store. A send-bridge failure is swallowed (`console.error`, no crash); the held screen is unchanged.
+- **Two-dot connection indicator** ([#330](../codebase/330.md)) — the two legs render independently and are never reconciled: a fatal session close leaves the relay dot at its last value (typically up) while the daemon dot shows down, and a retryable daemon-absent close leaves the daemon dot in-progress while the relay dot shows up/"Reachable" — both are intended, honest-per-hop renders, not bugs. The relay leg has no in-progress arm (that category is exercised only by the daemon leg's `connecting`), so the daemon dot never shows a false green.
 
 ## Related
 
@@ -1037,6 +1125,7 @@ notes](../codebase/324.md) for the full design and patterns established.
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`; also the `requestSnapshot` command `<ScreenSnapshotControl/>`'s `requestScreenSnapshot` fires and the `screenSnapshotReceived` event its display renders (#316, #324)
 - [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323) `<ScreenSnapshotControl/>` reads via `selectScreenSnapshot`, its only consumer (#324)
+- [Relay-link store](relay-link-store.md) — the dedicated store (#329) `<ConnectionStatusIndicatorControl/>` reads via `selectRelayLinkStatus`, its first real consumer; combined at render time with [session store](session-store.md)'s `ConnectionStatus` (#330)
 - [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` now also writes to this store's `dispatch` as the `userText` producer, and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is now translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` reads the store's new `selectStalled` (#317, transport #315)
 - [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224) and now also `dispatch` (#237); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, live since [#179](../codebase/179.md) flipped `interactive` (dormant #223–#178)
 - [Modal resolution envelope](modal-resolution-envelope.md) / [Command channel](command-channel.md) — the `answerModalCommand`/`cancelModalCommand` this screen's `PermissionModal` now dispatches through `modalResolution.ts` (#237), routed main-side by [Daemon connection](daemon-connection.md)'s `answerModal`/`cancelModal` (#236); gated behind a `selectOption` client-side second-confirm on `defaultOptionId` for any non-default answer (#226) — no wire/envelope change, the gate lives entirely in `modalResolution.ts`/`PermissionModal.tsx`
@@ -1046,4 +1135,4 @@ notes](../codebase/324.md) for the full design and patterns established.
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `<QueuedBacklogControl/>` reads via `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (#293, consumed in #294), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

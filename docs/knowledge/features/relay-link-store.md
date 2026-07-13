@@ -1,17 +1,17 @@
 # Relay-link store
 
 The renderer's held copy of the **relay-socket leg's** link status — a dedicated, unidirectional
-Zustand store fed by a headless subscription binding, so the future two-dot connection indicator
-([#330](https://github.com/pyrycode/pyrycode-desktop/issues/330)) can read the relay leg
-independently of the daemon-session leg already in the [session store](session-store.md)'s
-`ConnectionStatus`.
+Zustand store fed by a headless subscription binding, read by the two-dot connection indicator
+([#330](../codebase/330.md)) independently of the daemon-session leg already in the [session
+store](session-store.md)'s `ConnectionStatus`.
 
 Introduced in [#329](../codebase/329.md), the renderer-side retention half of the two-dot indicator
 family split from [#149](../codebase/149.md): [#328](../codebase/328.md) (transport) → this ticket
-(store + bridge) → #330 (render, not yet shipped). Consumes the `relayLinkChanged` `DaemonEvent` arm
-#328 already shipped. This store delivers no visible surface of its own — #330 will be its first
-reader, the same posture [`runConfigStore`](run-config-store.md) had before #188 and
-[`sessionIdStore`](session-id-store.md) had before #257.
+(store + bridge) → [#330](../codebase/330.md) (render, shipped). Consumes the `relayLinkChanged`
+`DaemonEvent` arm #328 shipped. This store delivered no visible surface of its own until #330's
+`ConnectionStatusIndicatorControl` became its first reader — the same posture
+[`runConfigStore`](run-config-store.md) had before #188 and [`sessionIdStore`](session-id-store.md)
+had before #257.
 
 ## What it does
 
@@ -95,13 +95,13 @@ daemon → relay supervisor + driver → relaySupervisor/noiseRelayDriver events
                                      → translateRelayLink → setRelayLinkStatus
                                      → relayLinkStore                              [last category wins]
 
-#330 (not yet shipped): useRelayLinkStore(selectRelayLinkStatus) → combined with
-  sessionStore's ConnectionStatus at render time
+#330 (shipped): useRelayLinkStore(selectRelayLinkStatus) → relayLeg(status) → combined with
+  daemonLeg(sessionStore's ConnectionStatus) at render time, in ConnectionStatusIndicatorControl
 ```
 
 ## Configuration and usage
 
-- **Import surface**, for #330 to consume:
+- **Import surface**, consumed by [#330](../codebase/330.md)'s `ConnectionStatusIndicatorControl`:
   `import { useRelayLinkStore, selectRelayLinkStatus } from '@renderer/store/relayLinkStore'`.
 - **Mount point:** `src/renderer/src/App.tsx`, `<RelayLinkData />` next to `<SessionIdData />`.
 - **No component-facing setter beyond `setRelayLinkStatus`** — it is invoked only by
@@ -111,14 +111,14 @@ daemon → relay supervisor + driver → relaySupervisor/noiseRelayDriver events
 
 - **Deliberately does not model the daemon-session leg.** `sessionStore.ConnectionStatus` already
   reports the combined status honestly (`connected` only after handshake-complete); folding it into
-  this store would duplicate state across two sources of truth. #330 reads both stores and combines
-  them at render time.
+  this store would duplicate state across two sources of truth. [#330](../codebase/330.md) reads
+  both stores and combines them at render time via its `relayLeg`/`daemonLeg` mapping functions.
 - **No terminal-state handling.** A fatal session close (`4401`/`4421`/`4426`) is a session-level
   rejection delivered *through* a relay that was reachable — per #328's forward decision, it does
   **not** emit a `relayLinkChanged` event, so this store's `status` is left at its last value
-  (likely stale `'connected'`) while `sessionStore` transitions to `failed`. Presenting that
-  divergence (or suppressing the relay dot) is #330's call, since it is the first reader holding
-  both legs — this store correctly does not decide it.
+  (likely stale `'connected'`) while `sessionStore` transitions to `failed`. [#330](../codebase/330.md)
+  decided **not** to reconcile this: the relay dot legitimately renders up while the daemon dot
+  renders down — the two legs never cross-reference, by design.
 - **No reconnect-countdown category.** The relay supervisor exposes no remaining-backoff value, so
   there is no honest way to emit a "reconnecting in Ns" status; `events.ts` names this as future
   work, not built.
@@ -139,8 +139,10 @@ daemon → relay supervisor + driver → relaySupervisor/noiseRelayDriver events
   cite, though the request/connected-gate shape itself is *not* mirrored here.
 - [Session store](session-store.md) — holds the daemon-session leg (`ConnectionStatus`) this store
   deliberately does not model; #330 combines both at render time.
+- [Conversation shell](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330) —
+  the two-dot indicator this store's first reader (`ConnectionStatusIndicatorControl`) renders into.
 - [#328 codebase notes](../codebase/328.md) — the transport slice that classifies the raw relay
   close code into `RelayLinkStatus` and emits the arm this store consumes.
 - [#329 codebase notes](../codebase/329.md) — implementation summary and patterns established.
-- Next: [#330](https://github.com/pyrycode/pyrycode-desktop/issues/330) — the two-dot render slice,
-  this store's first reader, which also decides terminal-state relay-dot presentation.
+- [#330 codebase notes](../codebase/330.md) — the two-dot render slice, this store's first reader,
+  which decided to leave terminal-state relay-dot presentation unreconciled (by design).

@@ -14,7 +14,10 @@ import {
   isTurnRunning,
   InterruptButton,
   ScreenSnapshotView,
-  ThreadOverflowMenuView
+  ThreadOverflowMenuView,
+  relayLeg,
+  daemonLeg,
+  ConnectionStatusIndicator
 } from './ConversationScreen'
 import { composerAvailability, CONNECTION_BANNER_COPY } from './composerSend'
 import type { Message } from './messageViewModel'
@@ -763,6 +766,131 @@ describe('ConnectionBanner — the disconnected-only connection band', () => {
   })
 })
 
+// #330: the two-dot Relay/Pyrycode connection-status indicator. relayLeg / daemonLeg are the exported
+// pure leg-mapping predicates (the isTurnRunning shape) — call them directly with each store value to
+// prove the full leg → category → label matrix with no store, no render. ConnectionStatusIndicator is
+// the exported pure view (the ConnectionBanner pattern) — server-render it with injected ConnectionLeg
+// props to prove category → dot class, label legibility (AC2), and independent legs (AC4). The
+// store-bound ConnectionStatusIndicatorControl is untested glue (the QueuedBacklogControl posture); its
+// initial two-Offline render is proven in the ConversationScreen container block below.
+describe('relayLeg — the relay-link leg mapping (#330)', () => {
+  it('connected → up / "Relay Connected"', () => {
+    expect(relayLeg('connected')).toEqual({ category: 'up', label: 'Relay Connected' })
+  })
+
+  // daemon-absent = relay reachable but no daemon behind it: the relay leg reads up with a DISTINCT
+  // "Reachable" label — the missing daemon is the daemon leg's story, not a relay failure (AC4).
+  it('daemon-absent → up / "Relay Reachable" (a reachable relay, not a relay failure)', () => {
+    expect(relayLeg('daemon-absent')).toEqual({ category: 'up', label: 'Relay Reachable' })
+  })
+
+  it('offline → down / "Relay Offline"', () => {
+    expect(relayLeg('offline')).toEqual({ category: 'down', label: 'Relay Offline' })
+  })
+
+  // AC1: null is the initial "relay not yet up" state — down, NOT in-progress (the relay leg has no
+  // in-progress arm; that category is exercised only by the daemon leg's connecting).
+  it('null → down / "Relay Offline" — the initial not-connected state (AC1)', () => {
+    expect(relayLeg(null)).toEqual({ category: 'down', label: 'Relay Offline' })
+  })
+})
+
+describe('daemonLeg — the daemon-session leg mapping (#330)', () => {
+  const ack = { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] }
+
+  it('connected → up / "Pyrycode Connected"', () => {
+    expect(daemonLeg({ type: 'connected', ack })).toEqual({
+      category: 'up',
+      label: 'Pyrycode Connected'
+    })
+  })
+
+  // AC3: the daemon dot reaches up ONLY on connected — connecting is in-progress (amber), never green.
+  it('connecting → in-progress / "Pyrycode Connecting" — never up (AC3, no false green)', () => {
+    expect(daemonLeg({ type: 'connecting' })).toEqual({
+      category: 'in-progress',
+      label: 'Pyrycode Connecting'
+    })
+  })
+
+  it('disconnected → down / "Pyrycode Offline"', () => {
+    expect(daemonLeg({ type: 'disconnected' })).toEqual({
+      category: 'down',
+      label: 'Pyrycode Offline'
+    })
+  })
+
+  // error maps to the same down/"Offline" as disconnected and renders a fixed client-owned label — the
+  // daemon ErrorPayload.message never reaches the leg (the banner #279 owns the error text).
+  it('error → down / "Pyrycode Offline" — never a daemon-supplied string', () => {
+    expect(
+      daemonLeg({ type: 'error', error: { code: 'x', message: 'DAEMON_SECRET', retryable: false } })
+    ).toEqual({ category: 'down', label: 'Pyrycode Offline' })
+  })
+})
+
+describe('ConnectionStatusIndicator — the two-dot pure view (#330)', () => {
+  it('maps each category to its dot modifier class (up, in-progress, down)', () => {
+    const up = renderToStaticMarkup(
+      <ConnectionStatusIndicator
+        relay={{ category: 'up', label: 'Relay Connected' }}
+        daemon={{ category: 'in-progress', label: 'Pyrycode Connecting' }}
+      />
+    )
+    // up → the success/green dot; in-progress → the warning/amber dot (the AC3 daemon-connecting story).
+    expect(up).toContain('conn-dot--up')
+    expect(up).toContain('conn-dot--in-progress')
+
+    const down = renderToStaticMarkup(
+      <ConnectionStatusIndicator
+        relay={{ category: 'down', label: 'Relay Offline' }}
+        daemon={{ category: 'down', label: 'Pyrycode Offline' }}
+      />
+    )
+    expect(down).toContain('conn-dot--down')
+  })
+
+  // AC2: status is legible without colour — each leg's label text renders alongside its dot.
+  it("renders each leg's label text so status reads without colour (AC2)", () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionStatusIndicator
+        relay={{ category: 'up', label: 'Relay Reachable' }}
+        daemon={{ category: 'down', label: 'Pyrycode Offline' }}
+      />
+    )
+    expect(markup).toContain('Relay Reachable')
+    expect(markup).toContain('Pyrycode Offline')
+  })
+
+  // AC4: the two legs render independently — neither leg's category forces the other's. relay=up +
+  // daemon=down coexist (the intended relay-up-daemon-handshaking / stale-relay-after-fatal render).
+  it('renders independent legs — relay up and daemon down coexist (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionStatusIndicator
+        relay={{ category: 'up', label: 'Relay Reachable' }}
+        daemon={{ category: 'down', label: 'Pyrycode Offline' }}
+      />
+    )
+    expect(markup).toContain('conn-dot--up')
+    expect(markup).toContain('conn-dot--down')
+  })
+
+  // The dots are decorative (colour is redundant with the label, AC2) and the wrapper is a STATIC
+  // labelled group, not a live region — the banner (#279) already announces disconnects, so a second
+  // live region here would double-announce.
+  it('marks the dots aria-hidden and the wrapper as a labelled group', () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionStatusIndicator
+        relay={{ category: 'up', label: 'Relay Connected' }}
+        daemon={{ category: 'up', label: 'Pyrycode Connected' }}
+      />
+    )
+    expect(markup).toContain('role="group"')
+    expect(markup).toContain('aria-label="Connection status"')
+    expect(markup).toContain('aria-hidden="true"')
+  })
+})
+
 // #278: the pre-first-message workspace chip. WorkspaceChip is pure (props in, markup out) — a
 // ConversationCreatedPayload | null + an isEmpty boolean + an optional onChange — so a server-rendered
 // string proves the gate (empty AND present AND unpromoted) and the escaping of the untrusted cwd. The
@@ -1054,6 +1182,19 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('Opus 4.7')
     expect(markup).not.toContain('% used')
     expect(markup).not.toContain('high')
+  })
+
+  // #330: the two-dot connection indicator mounts inside the status-row summary slot (beside — not
+  // replacing — #181/#182's future run-config summary text). Under server render the initial store state
+  // is relay = null (→ "Relay Offline") and daemon = disconnected (→ "Pyrycode Offline"), so both legs
+  // render down — proving the container reads both stores with NO false green at rest (AC3).
+  it('renders the two-dot connection indicator (both offline) in the status-row summary (#330)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('status-row__connection')
+    expect(markup).toContain('Relay Offline')
+    expect(markup).toContain('Pyrycode Offline')
+    // Two down dots at the initial state — never up/green before a connection exists.
+    expect(markup).not.toContain('conn-dot--up')
   })
 
   // #140: the leading back affordance (Figma 16-9's arrow_back). Gated on the optional `onBack` prop

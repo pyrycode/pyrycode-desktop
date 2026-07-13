@@ -778,6 +778,64 @@
   flex: 0 0 auto;
 }
 
+/* The status-row summary slot (Figma node 16-58). A flex row so the #330 two-dot connection indicator and
+   #181/#182's future run-config summary text ("Opus 4.7 · high · 73% used") coexist side by side; neither
+   claims the slot exclusively. min-width: 0 lets it shrink/truncate once that text lands. */
+.status-row__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* #330 — the two-dot connection indicator: a relay leg and a daemon leg, each a coloured dot + a muted
+   label. The dot colour is redundant with the label text (legible without colour, AC2). */
+.status-row__connection {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.conn-leg {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* An 8px status dot — structural component geometry (the .run-config__context-bar precedent), not off a
+   spacing token. flex: 0 0 auto keeps it a perfect circle when the label truncates. */
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+}
+
+/* The category → colour contract (mirrors mobile's ConnectionStatusLine): up = success green,
+   in-progress = warning amber (the daemon `connecting` state, AC3), down = error peach. */
+.conn-dot--up {
+  background: var(--color-success);
+}
+
+.conn-dot--in-progress {
+  background: var(--color-warning);
+}
+
+.conn-dot--down {
+  background: var(--color-error);
+}
+
+/* The leg's status label — body-small, muted, matching the row's existing summary treatment. nowrap so a
+   leg reads as one dot + label unit and never wraps mid-phrase. */
+.conn-leg__label {
+  color: var(--color-on-surface-variant);
+  white-space: nowrap;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
 /* The Run configuration sheet overlay (#177) — bottom-anchored inside .conversation (which is the
    position: relative containing block), not a portal. flex-end anchors the panel to the bottom. */
 .status-sheet-overlay {

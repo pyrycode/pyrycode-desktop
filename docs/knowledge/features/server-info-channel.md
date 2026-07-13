@@ -9,8 +9,8 @@ signal](pairing-status-signal.md) (#79) / [unpair channel](unpair-channel.md) (#
 four-layer shape (shared contract, main handler, preload bridge, composition-root registration), same
 injected-target / stateless-handler / classify-don't-forward discipline. The one structural difference
 from both siblings: its present arm **carries data** — `serverId` + `relayUrl` — rather than being
-fully value-free. **No caller yet** — the renderer store that consumes it is [#340](../codebase/340.md)
-(blocked on this slice); the visible Settings row is [#334](../codebase/334.md). Same "ship the IPC
+fully value-free. Its caller is the [server-info store](server-info-store.md)'s one-shot loader
+([#340](../codebase/340.md)); the visible Settings row is [#334](../codebase/334.md). Same "ship the IPC
 boundary ahead of its consumer" shape as [#131→#134](diagnostics-channel.md) and
 [#173→#166/#167](unpair-channel.md).
 
@@ -161,8 +161,10 @@ three twins whose present arm carries data). Key findings:
 
 ## Edge cases and limitations
 
-- **No caller yet.** Nothing invokes `serverInfo()` in this ticket — the renderer store is
-  [#340](../codebase/340.md), the visible Settings row is [#334](../codebase/334.md).
+- **Caller: the [server-info store](server-info-store.md)'s one-shot loader** ([#340](../codebase/340.md)),
+  which maps this union into `{ serverId, relayUrl } | null` via a single `window.pyry.serverInfo()`
+  invoke per mount. That store ships dormant too — the visible Settings row is
+  [#334](../codebase/334.md).
 - **No error sub-reason**, same discipline as `pairingStatus`/`unpair` — the unavailable arm never
   distinguishes not-paired from malformed from undecrypted. A future consumer needing that distinction
   extends the union additively.
@@ -182,3 +184,5 @@ three twins whose present arm carries data). Key findings:
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — the classify-don't-forward
   discipline the `catch` implements.
 - [#339 codebase notes](../codebase/339.md) — implementation summary, patterns established.
+- [Server-info store](server-info-store.md) / [#340 codebase notes](../codebase/340.md) — the renderer
+  store + one-shot loader that consumes this channel.

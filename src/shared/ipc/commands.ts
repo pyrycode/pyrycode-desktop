@@ -22,6 +22,7 @@ import type {
   ModalCancelPayload,
   CreateConversationPayload,
   PromoteConversationPayload,
+  UnarchiveConversationPayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -55,7 +56,9 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * whose `payload` reuses the wire CreateConversationPayload (three nullable-and-present fields, all
  * server-defaultable — no secret); `promoteConversation` (#273), whose `payload` reuses the wire
  * PromoteConversationPayload (three REQUIRED strings — the deliberate opposite of create's nullable
- * fields — `conversation_id` / `name` / `cwd`, no secret); and `setSessionSettings` (#263), whose `payload` reuses the wire
+ * fields — `conversation_id` / `name` / `cwd`, no secret); `unarchiveConversation` (#346), whose `payload`
+ * reuses the wire UnarchiveConversationPayload (a single REQUIRED `conversation_id` string — a routing id,
+ * not a secret — asking the daemon to restore an archived conversation); and `setSessionSettings` (#263), whose `payload` reuses the wire
  * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
  * presence contract is applied main-side by the builder, not carried here) and additionally carries a
  * `changeId` (#261): a renderer-minted, client-internal correlation string riding ALONGSIDE `payload` (a
@@ -83,6 +86,7 @@ export type RendererCommand =
   | { type: 'cancelModal'; payload: ModalCancelPayload }
   | { type: 'createConversation'; payload: CreateConversationPayload }
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
+  | { type: 'unarchiveConversation'; payload: UnarchiveConversationPayload }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
   | { type: 'interrupt' }
@@ -168,6 +172,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isCreateConversationPayload(value.payload)
     case 'promoteConversation':
       return 'payload' in value && isPromoteConversationPayload(value.payload)
+    case 'unarchiveConversation':
+      return 'payload' in value && isUnarchiveConversationPayload(value.payload)
     case 'setSessionSettings':
       // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
       // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.
@@ -265,6 +271,16 @@ function isPromoteConversationPayload(value: unknown): value is PromoteConversat
     'cwd' in value &&
     typeof value.cwd === 'string'
   )
+}
+
+/** The untrusted renderer→main boundary guard for the unarchiveConversation payload (#346) — the reason
+ *  the command half is security-sensitive. Mirrors isRequestSnapshotPayload (the single-`conversation_id`-
+ *  string precedent): one present-and-string check — a literal `null`, a missing key, and a non-string are
+ *  all rejected. Structural minimum — a smuggled extra field is not rejected here; the main-side sender's
+ *  fresh-literal construction bounds the wire to exactly the one modeled field. Pure; never throws. */
+function isUnarchiveConversationPayload(value: unknown): value is UnarchiveConversationPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string'
 }
 
 /** The untrusted renderer→main boundary guard for the setSessionSettings payload (#263) — the reason

@@ -8,8 +8,16 @@ import { ServerRowControl } from './ServerRow'
 const SETTINGS_COPY = {
   title: 'Settings',
   back: 'Back',
-  connection: 'Connection'
+  connection: 'Connection',
+  about: 'About'
 } as const
+
+// The running build's version line (#350, Figma 17-108). __APP_VERSION__ is the compile-time constant
+// substituted by the Vite `define` in both build configs, fed from package.json's `version` — a static,
+// client-owned, non-secret string known at build time, so it needs no main→renderer bridge (the opposite
+// of the daemon-sourced serverInfo row above). The Figma's "build a8f3c2d" sub-line (17-109) is out of
+// scope — desktop has no wired build-metadata source yet.
+const VERSION_LINE = `Version ${__APP_VERSION__}`
 
 /**
  * The Settings screen (#333 scaffold + #334 Server row) — the paired shell's `settings` view (Figma
@@ -38,6 +46,17 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): JSX.Element 
           <div className="settings__section-body">
             <ServerInfoData />
             <ServerRowControl />
+          </div>
+        </section>
+        {/* #350: the About section (Figma 17-104…17-108) — same header treatment as Connection, with a
+            single static version readout. No store, no loader, no null matrix: the value is a build-time
+            constant, so this stays inline (a container/pure-view split would be over-engineering). */}
+        <section className="settings__section">
+          <h2 className="settings__section-header">{SETTINGS_COPY.about}</h2>
+          <div className="settings__section-body">
+            <div className="settings__about-row">
+              <p className="settings__about-version">{VERSION_LINE}</p>
+            </div>
           </div>
         </section>
       </div>

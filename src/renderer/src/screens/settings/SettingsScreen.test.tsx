@@ -38,4 +38,14 @@ describe('SettingsScreen', () => {
     expect(markup).not.toContain('aria-label="Connection status"')
     expect(markup).not.toContain('juhana-mac-2026')
   })
+
+  it('renders the "About" section heading (#350 AC1)', () => {
+    expect(render()).toContain('>About</h2>')
+  })
+
+  it('renders the running build version readout (#350 AC2)', () => {
+    // The version is the compile-time constant __APP_VERSION__, fed from package.json's `version` via
+    // the Vite `define` mirrored into vitest.config.ts — today "0.1.0". Not a daemon round-trip.
+    expect(render()).toContain('Version 0.1.0')
+  })
 })

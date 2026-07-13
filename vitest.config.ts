@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
@@ -5,8 +6,17 @@ import react from '@vitejs/plugin-react'
 // Mirrors the renderer aliases in electron.vite.config.ts so TSX tests resolve
 // the same @renderer/@shared imports the app uses. Node environment: the render
 // tests use renderToStaticMarkup, so no DOM harness is needed yet (deferred to #2).
+
+// __APP_VERSION__ (#350): this config is a SEPARATE Vite config from electron.vite.config.ts, so its
+// `define` is invisible here. Without this mirror the renderer's __APP_VERSION__ reference is undefined
+// at transform time and the test throws ReferenceError. Read from package.json exactly as the sibling.
+const appVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf-8')).version
+
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion)
+  },
   resolve: {
     alias: {
       '@renderer': resolve('src/renderer/src'),

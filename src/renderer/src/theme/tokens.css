@@ -31,6 +31,12 @@
   --color-tertiary: #ffb59f;
   --color-success: #2fc038;
   --color-error: #ffb4ab; /* M3 default (dark) error role — error tone 80 (#230) */
+  --color-warning: #ffca45; /* Amber for the in-progress connection category (#330). M3 has no warning
+                               role and the design system has no such variable (the two-dot line
+                               post-dates the 2026-05-08 file lock — a code-era addition, like the dots
+                               themselves). A dark-scheme warm amber (~tone 80, the band --color-error
+                               sits in), clearly distinct from --color-success green and --color-error
+                               peach so the three dot categories are colour-separable. */
 
   /* Type families — Roboto is not bundled (self-only CSP); fall back to
      system-ui. The M3 size/line/tracking/weight scale carries the fidelity. */

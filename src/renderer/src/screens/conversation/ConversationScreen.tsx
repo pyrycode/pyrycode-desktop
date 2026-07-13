@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type R
 import './conversation.css'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
+import type { RelayLinkStatus } from '@shared/ipc/events'
 import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
+import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkStore'
 import { useTimelineStore, selectItems, selectPhase, selectStalled } from '../../store/timelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
@@ -729,8 +731,12 @@ function StatusRow({ onExpand }: { onExpand: () => void }): JSX.Element {
       aria-haspopup="dialog"
       onClick={onExpand}
     >
-      {/* The live summary region, intentionally empty in this shell (#181/#182 populate it). */}
-      <span className="status-row__summary" />
+      {/* The live summary region. #330 mounts the two-dot connection indicator here as a distinct child;
+          #181/#182's run-config summary text ("Opus 4.7 · high · 73% used") lands as a SIBLING beside it —
+          this slot is a flex row, not claimed exclusively by either. */}
+      <span className="status-row__summary">
+        <ConnectionStatusIndicatorControl />
+      </span>
       <svg
         className="status-row__chevron"
         viewBox="0 0 24 24"
@@ -956,6 +962,99 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
 function ConnectionBannerControl(): JSX.Element | null {
   const status = useSessionStore(selectStatus)
   return <ConnectionBanner status={status} />
+}
+
+// #330: the two-dot Relay/Pyrycode connection-status indicator — the persistent at-a-glance state that
+// complements the failure-only ConnectionBanner (#279). Two legs read independently: the relay-socket leg
+// (relayLinkStore, #329) and the daemon-session leg (sessionStore's ConnectionStatus). Mirrors mobile's
+// ConnectionStatusLine (mobile #397/#398): each leg shows its own honest state so "relay up, daemon still
+// handshaking" is expressible rather than a single false "connected".
+
+// A leg's coarse display category. The dot colour is driven ONLY by this (success / warning / error); the
+// visible status word rides `label`, so status is legible without colour perception (AC2).
+export type LegCategory = 'up' | 'in-progress' | 'down'
+
+// One rendered leg: its category (→ dot colour) and its full visible label (leg name + status word). The
+// leg name is baked into the label so the pure view stays dumb — a coloured dot plus the label, nothing
+// else — and no daemon-status value ever chooses the leg name.
+export interface ConnectionLeg {
+  category: LegCategory
+  label: string
+}
+
+// The relay-link leg mapping (#329's RelayLinkStatus | null → a ConnectionLeg). `daemon-absent` reads
+// up/"Reachable" — the relay IS reachable; the missing daemon is the daemon leg's story, not a relay
+// failure (mobile's DaemonAbsent → green "Reachable", AC4). `null` is the initial "relay not yet up" state
+// and maps down (AC1) — the relay leg has NO in-progress arm (that category is the daemon leg's
+// `connecting`). Independent of daemonLeg — the two never cross-reference (AC4). Explicit return type +
+// no `default` so a future RelayLinkStatus member trips TS2366 (the exhaustive-switch guard).
+export function relayLeg(status: RelayLinkStatus | null): ConnectionLeg {
+  if (status === null) return { category: 'down', label: 'Relay Offline' }
+  switch (status) {
+    case 'connected':
+      return { category: 'up', label: 'Relay Connected' }
+    case 'daemon-absent':
+      return { category: 'up', label: 'Relay Reachable' }
+    case 'offline':
+      return { category: 'down', label: 'Relay Offline' }
+  }
+}
+
+// The daemon-session leg mapping (sessionStore's ConnectionStatus → a ConnectionLeg). Reaches up ONLY on
+// `connected` (handshake complete) — `connecting` is in-progress (amber), never green (AC3, no false
+// green). `error` maps to the same down/"Offline" as `disconnected`, rendering a fixed client-owned label
+// so no ConnectionError.message reaches this indicator (the banner #279 owns the error text). Independent
+// of relayLeg (AC4). Explicit return type + no `default` so a future ConnectionStatus member trips TS2366.
+export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
+  switch (status.type) {
+    case 'connected':
+      return { category: 'up', label: 'Pyrycode Connected' }
+    case 'connecting':
+      return { category: 'in-progress', label: 'Pyrycode Connecting' }
+    case 'disconnected':
+      return { category: 'down', label: 'Pyrycode Offline' }
+    case 'error':
+      return { category: 'down', label: 'Pyrycode Offline' }
+  }
+}
+
+// #330: the two-dot indicator's pure view — takes the two already-mapped legs (relay first, then daemon)
+// and renders a coloured dot + its label per leg. Pure props-in/markup-out and exported so tests
+// server-render the full category × label matrix directly with injected legs (the ConnectionBanner /
+// ThinkingIndicator discipline). The wrapper is a STATIC labelled group, not a live region — this is the
+// persistent at-a-glance state; the banner (#279) already politely announces disconnects, so a second
+// live region here would double-announce. Each dot is aria-hidden (decorative — its colour is redundant
+// with the label text, AC2); the category drives ONLY the dot's modifier class.
+export function ConnectionStatusIndicator({
+  relay,
+  daemon
+}: {
+  relay: ConnectionLeg
+  daemon: ConnectionLeg
+}): JSX.Element {
+  return (
+    <span className="status-row__connection" role="group" aria-label="Connection status">
+      <span className="conn-leg">
+        <span className={`conn-dot conn-dot--${relay.category}`} aria-hidden="true" />
+        <span className="conn-leg__label">{relay.label}</span>
+      </span>
+      <span className="conn-leg">
+        <span className={`conn-dot conn-dot--${daemon.category}`} aria-hidden="true" />
+        <span className="conn-leg__label">{daemon.label}</span>
+      </span>
+    </span>
+  )
+}
+
+// The store-bound container (#330). Reads both stores with narrow single-slice selectors — the relay leg
+// from relayLinkStore (#329), the daemon leg from sessionStore — and passes the mapped legs to the pure
+// view (the ScreenSnapshotControl two-store precedent). No window.pyry, no IPC, no effects: a pure read,
+// so the server-rendered smoke test touches no bridge (initial state → two "Offline" dots, AC3 no false
+// green). The two narrow selectors re-render this control only on its own leg's change.
+function ConnectionStatusIndicatorControl(): JSX.Element {
+  const relayStatus = useRelayLinkStore(selectRelayLinkStatus)
+  const daemonStatus = useSessionStore(selectStatus)
+  return <ConnectionStatusIndicator relay={relayLeg(relayStatus)} daemon={daemonLeg(daemonStatus)} />
 }
 
 // #140: the leading back affordance of the thread's top app bar (Figma node 16-9 → arrow_back 16-11):

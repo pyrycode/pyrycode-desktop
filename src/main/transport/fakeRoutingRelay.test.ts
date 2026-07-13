@@ -29,6 +29,15 @@ function isTransientDialError(err: Error): boolean {
   )
 }
 
+// A silently-stalled dial (#342): under full-suite CPU starvation a dial can land its TCP connect
+// yet never see the server process the HTTP upgrade, so `ws` emits neither 'open' nor 'error' and
+// the dial hangs to vitest's 5000ms budget — the emitted-'error' ladder above can't see it. A
+// per-attempt timeout drops the half-open socket and re-dials (a stall is inherently transient: the
+// server is already 'listening', so a dial that yields no event within a generous margin is a
+// contention artifact), bounded by the same attemptsLeft budget. > healthy contended dial (~250ms)
+// and leaves room for ≥2 attempts inside the 5000ms per-test budget.
+const DIAL_STALL_MS = 1500
+
 function connect(
   url: string,
   opts: { headers?: Record<string, string>; attemptsLeft?: number } = {}
@@ -37,6 +46,7 @@ function connect(
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, headers ? { headers } : undefined)
     const onDialError = (err: Error): void => {
+      clearTimeout(dialTimer) // this dial settled: the stall timer must not also fire
       ws.terminate() // drop the half-open socket before re-dialling so none leaks
       if (attemptsLeft > 1 && isTransientDialError(err)) {
         setTimeout(() => resolve(connect(url, { headers, attemptsLeft: attemptsLeft - 1 })), 20)
@@ -46,10 +56,23 @@ function connect(
     }
     ws.once('error', onDialError)
     ws.once('open', () => {
+      clearTimeout(dialTimer) // this dial settled: the stall timer must not also fire
       ws.off('error', onDialError)
       ws.on('error', () => {})
       resolve(ws)
     })
+    // Re-dial unconditionally on a stall (no error object to classify); detach onDialError first so
+    // terminate()'s teardown events cannot spawn a duplicate re-dial. Exhaustion rejects with a
+    // descriptive message so a genuine never-accept regression still turns the test red.
+    const dialTimer = setTimeout(() => {
+      ws.off('error', onDialError)
+      ws.terminate()
+      if (attemptsLeft > 1) {
+        resolve(connect(url, { headers, attemptsLeft: attemptsLeft - 1 }))
+      } else {
+        reject(new Error(`dial to ${url} stalled: no open/error within ${DIAL_STALL_MS}ms`))
+      }
+    }, DIAL_STALL_MS)
   })
 }
 
@@ -106,7 +129,11 @@ describe('startFakeRoutingRelay — lifecycle parity (AC1)', () => {
 
     await serverLeg(relay)
     let resolved = false
-    void relay.whenReady().then(() => {
+    // 4000ms headroom (not the 1000ms default): a stalled client-leg dial (116) below is detected
+    // and re-dialled at DIAL_STALL_MS=1500ms, which the default gate would pre-empt with a 1000ms
+    // rejection. Decouples this test's readiness gate from the dial-timeout retry; touches no
+    // production timeout and no expect(). (#342)
+    void relay.whenReady(4000).then(() => {
       resolved = true
     })
     // A macrotask tick with only the server leg up: still pending (the timeout has not fired).

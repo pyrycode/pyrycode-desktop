@@ -6,9 +6,9 @@ channel](server-info-channel.md), so a Settings screen can render which server t
 **including while disconnected**.
 
 Introduced in [#340](../codebase/340.md), the renderer-side half of the #339/#340/#333/#334 split
-(parent [#332](../codebase/332.md)). Ships **dormant** — no consumer mounts the loader in this ticket.
-The Settings scaffold + navigation ([#333](../codebase/333.md)) or the visible Server row
-([#334](../codebase/334.md)) mounts `<ServerInfoData />` inside the paired-only Settings tree.
+(parent [#332](../codebase/332.md)). Shipped **dormant** in #340 — no consumer mounted the loader in
+that ticket. [#334](../codebase/334.md) mounts `<ServerInfoData />` inside the paired-only [Settings
+tree](settings-screen.md), alongside the store-bound Server row that reads what it writes.
 
 ## What it does
 
@@ -73,26 +73,23 @@ paired-server record (at rest) → registerServerInfoHandler (#339) → ServerIn
   → window.pyry.serverInfo()  [invoked once, on ServerInfoData mount]
     → loadServerInfo → mapServerInfo → setServerInfo → serverInfoStore   [status discriminant dropped]
 
-not built here: <ServerInfoData /> mount (#333/#334) → useServerInfoStore(selectServerInfo) → Server row
+<ServerInfoData /> mount (#334, inside SettingsScreen) → useServerInfoStore(selectServerInfo) → Server row
 ```
 
 ## Configuration and usage
 
-- **Import surface** (for the future mounting ticket):
+- **Import surface:**
   `import { ServerInfoData } from '@renderer/store/serverInfoLoader'` and
   `import { useServerInfoStore, selectServerInfo } from '@renderer/store/serverInfoStore'`.
-- **Mount point — not wired here.** No `App.tsx` edit in this ticket (deliberately, to keep the slice
-  purely additive). `<ServerInfoData />` belongs inside the paired-only Settings tree, mounted when
-  that screen opens — **not** app-level — so a same-session pair is reflected on next open rather than
-  requiring a relaunch (an app-level launch-time fetch would race pairing and permanently cache
-  `unavailable`).
+- **Mount point — inside the Settings tree, not `App.tsx`.** No app-level edit ([#334](../codebase/334.md)
+  mounts `<ServerInfoData />` directly inside `SettingsScreen`'s section-body, not app-level) — so a
+  same-session pair is reflected on next Settings-open rather than requiring a relaunch (an app-level
+  launch-time fetch would race pairing and permanently cache `unavailable`).
 
 ## Edge cases and limitations
 
-- **No consumer yet.** `ServerInfoData` is unmounted in production until #333 or #334 mounts it — the
-  `modalBridge` / `screenSnapshotBridge` "ship the boundary ahead of its consumer" shape.
-- **Fetches once per mount, not once per app lifetime.** Unlike `sessionIdStore` (App-level, permanent
-  subscription), this store's value can go stale if the Settings screen stays mounted across a
+- **Fetches once per Settings-open, not once per app lifetime.** Unlike `sessionIdStore` (App-level,
+  permanent subscription), this store's value can go stale if the Settings screen stays mounted across a
   disconnect/re-pair; a fresh fetch requires a fresh mount. This is intentional — see the mount-point
   rationale above.
 - **`{ status: 'unavailable' }` and a rejected invoke are indistinguishable** in the store — both leave
@@ -111,5 +108,5 @@ not built here: <ServerInfoData /> mount (#333/#334) → useServerInfoStore(sele
 - [Paired-server store](paired-server-store.md) / [#44](../codebase/44.md) — the ultimate at-rest
   source (`record.server` / `record.relay`) behind the channel this loader reads.
 - [#340 codebase notes](../codebase/340.md) — implementation summary and patterns established.
-- Downstream: [#333](../codebase/333.md) (Settings scaffold + navigation) and
-  [#334](../codebase/334.md) (visible Server row) — either mounts `<ServerInfoData />`.
+- [Settings screen](settings-screen.md) / [#334 codebase notes](../codebase/334.md) — mounts
+  `<ServerInfoData />` and renders the Server row that reads this store.

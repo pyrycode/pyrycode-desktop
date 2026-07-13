@@ -26,13 +26,16 @@ describe('SettingsScreen', () => {
     expect(render()).toContain('aria-label="Settings screen"')
   })
 
-  it('is a data-free scaffold — no #334 Server row yet (AC4)', () => {
-    // The Connection section is an empty container this slice; #334 mounts the store-bound Server row
-    // (the "Server" label + the `juhana-mac-2026` host sentinel) into it later.
+  it('mounts the #334 Server row (loading branch) in the Connection section (AC2/AC3)', () => {
+    // The Connection section now composes ServerInfoData (headless loader) + ServerRowControl. Under
+    // server render zustand v5 reads the store's initial `null`, so the row shows its loading branch —
+    // proving both are wired into the section-body. No seeded value reaches a server-rendered container.
     const markup = render()
-    expect(markup).not.toContain('Server')
+    expect(markup).toContain('Server') // the row's "Server" label
+    expect(markup).toContain('Loading') // the not-yet-loaded placeholder
+    expect(markup).toContain('settings__section-body') // still the documented mount point
+    // AC4: this slice introduces no #330 two-dot marker; no seeded serverId at server render.
+    expect(markup).not.toContain('aria-label="Connection status"')
     expect(markup).not.toContain('juhana-mac-2026')
-    // The mount point exists but is empty.
-    expect(markup).toContain('settings__section-body')
   })
 })

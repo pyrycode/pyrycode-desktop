@@ -4,8 +4,9 @@ The second-level router **under** the app shell's `conversation` route: a pure `
 view-state model plus a thin container, mirroring the `appRoute.ts` + `AppView` split the
 [app shell](app-shell.md) shipped as. Before this, the `conversation` route dropped straight into a
 single [conversation shell](conversation-shell.md) screen with no list and no way back; this is the
-inner navigation spine for the paired region, extensible to the Settings and Archive screens that
-attach to it later.
+inner navigation spine for the paired region. [#333](../codebase/333.md) added the third arm, a
+[Settings screen](settings-screen.md); an Archive screen remains a future added arm along the same
+seam.
 
 Introduced in [#140](../codebase/140.md). Renderer-only, pure view-state — no keys, sockets, tokens,
 or frames, so not security-sensitive.
@@ -19,7 +20,11 @@ or frames, so not security-sensitive.
   [conversation shell](conversation-shell.md), unchanged. (Per-row opening of a *specific* conversation
   is deferred — see the [Channel List doc](channel-list.md).)
 - The thread view shows a leading back affordance (Figma node 16-9's `arrow_back`) that returns to the list.
-- Navigation is a two-state spine (`list ⇄ thread`) today; a future `settings`/`archive` view is an added `PairedRoute` member and an added `PairedShellView` case, not a rewrite (the ticket's extensibility requirement).
+- Navigation is a three-state spine (`list ⇄ thread`, `list → settings`) since [#333](../codebase/333.md)
+  added a `settings` view — a new entry button on the list opens it, and its own back affordance returns
+  to `list` via the same absolute `back` transition `thread` already used. A future `archive` view is the
+  same shape again: an added `PairedRoute` member and an added `PairedShellView` case, not a rewrite (the
+  ticket's extensibility requirement).
 - The `open` transition has a second trigger besides a list row click: the [new-discussion
   FAB](new-discussion-fab.md) (#242) fires it asynchronously when the daemon confirms a
   `conversationCreated` event, via `useConversationCreatedNav` mounted in the `PairedShell`
@@ -45,26 +50,29 @@ src/renderer/src/
 ### The route model + transition (`pairedRoute.ts`)
 
 ```ts
-export type PairedRoute = 'list' | 'thread'
-export type PairedNav = { type: 'open' } | { type: 'back' }
+export type PairedRoute = 'list' | 'thread' | 'settings'
+export type PairedNav = { type: 'open' } | { type: 'openSettings' } | { type: 'back' }
 
 export function nextPairedRoute(current: PairedRoute, nav: PairedNav): PairedRoute {
   switch (nav.type) {
-    case 'open': return 'thread'
-    case 'back': return 'list'
-    default:     return assertNever(nav)
+    case 'open':         return 'thread'
+    case 'openSettings': return 'settings'
+    case 'back':          return 'list'
+    default:              return assertNever(nav)
   }
 }
 ```
 
-The `(state, event) => state` shape `useReducer` wants directly. Both transitions are **absolute and
-idempotent**: `open` from `thread` stays `thread`; `back` from `list` (home) stays `list` — there is no
-stack today. `current` is unreferenced (both arms ignore it) but is kept in the signature deliberately:
-a future stack-aware `back` (settings/archive → list vs. thread → list) becomes an added arm, not a
-signature rewrite. `noUnusedParameters` is off in both tsconfigs, so this compiles clean; a one-line
-comment in the source heads off a review flag. `assertNever(nav)` at the `switch`'s `default` — the
-`pairingState.ts` idiom — makes a future nav event (e.g. `openSettings`) without a case a compile
-error, satisfying AC1's "exhaustive/compile-checked transition surface."
+The `(state, event) => state` shape `useReducer` wants directly. Every transition is **absolute and
+idempotent**: `open` from `thread` stays `thread`; `openSettings` from `settings` stays `settings`;
+`back` from `list` (home) stays `list` — there is no stack today. `current` is unreferenced (every arm
+ignores it) but is kept in the signature deliberately: a future stack-aware `back` (settings/archive →
+list vs. thread → list) becomes an added arm, not a signature rewrite. [#333](../codebase/333.md)
+proved this design bet — adding `openSettings` needed zero changes to the `back` arm, since `back` was
+already `current`-independent. `noUnusedParameters` is off in both tsconfigs, so this compiles clean; a
+one-line comment in the source heads off a review flag. `assertNever(nav)` at the `switch`'s `default`
+— the `pairingState.ts` idiom — makes a future nav event without a case a compile error, satisfying
+AC1's "exhaustive/compile-checked transition surface."
 
 ### The pure view + container (`PairedShell.tsx`)
 
@@ -75,19 +83,22 @@ own `assertNever` default:
 export function PairedShellView(props: {
   route: PairedRoute
   onOpen: () => void
+  onOpenSettings: () => void
   onBack: () => void
   onUnpaired: () => void
 }): JSX.Element {
   switch (props.route) {
-    case 'list':   return <ChannelList onOpen={props.onOpen} />
-    case 'thread': return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
-    default:       return assertNever(props.route)
+    case 'list':     return <ChannelList onOpen={props.onOpen} onOpenSettings={props.onOpenSettings} />
+    case 'thread':   return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
+    case 'settings': return <SettingsScreen onBack={props.onBack} />
+    default:         return assertNever(props.route)
   }
 }
 ```
 
-Both routes render a real view (no `null` arm, unlike `AppView`'s `pending` case) — the paired region
-always has *something* to show.
+Every route renders a real view (no `null` arm, unlike `AppView`'s `pending` case) — the paired region
+always has *something* to show. The `settings` case reuses the shared `onBack` unchanged — see
+[Settings screen](settings-screen.md) for the scaffold it renders.
 
 `case 'list'` originally rendered an in-file `PlaceholderList` throwaway (a bare `Open conversation`
 button); [#141](../codebase/141.md) replaced it wholesale with the real
@@ -109,6 +120,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     <PairedShellView
       route={route}
       onOpen={() => dispatch({ type: 'open' })}
+      onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onBack={() => dispatch({ type: 'back' })}
       onUnpaired={onUnpaired}
     />
@@ -166,10 +178,12 @@ AppView (route='conversation')
        │                      setActiveConversation(created)       ← #278, into activeConversationStore
        │                      dispatch({type:'open'})              ← #242
        │                    })
-       └─ PairedShellView   route='list'   → ChannelList (store-backed) — any row → dispatch{open}
-                                              new-discussion FAB → createConversation command (#242)
-                            route='thread' → ConversationScreen (store-backed) + BackControl — [←] → dispatch{back}
-                                              → WorkspaceChip reads activeConversationStore (#278)
+       └─ PairedShellView   route='list'     → ChannelList (store-backed) — any row → dispatch{open}
+                                                new-discussion FAB → createConversation command (#242)
+                                                SettingsButton → dispatch{openSettings} (#333)
+                            route='thread'   → ConversationScreen (store-backed) + BackControl — [←] → dispatch{back}
+                                                → WorkspaceChip reads activeConversationStore (#278)
+                            route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
 ```
 
 A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row
@@ -195,11 +209,16 @@ navigation, and hence no remount, before this ticket).
   `onPaired`→`setRoute`.
 - **Back-arrow vs. unpair-header coexistence** is transitional chrome, not the final top app bar — see
   above.
+- **`settings`'s back is not stack-aware**, same as `thread`'s: it always lands on `list`, regardless of
+  which route dispatched `back`. `current` stays unreferenced in `nextPairedRoute` for exactly the
+  reason noted above — a future sub-screen under Settings (e.g. [#152](../codebase/152.md)'s "pair
+  another server") is the first candidate that would need a real stack.
 
 ## Related
 
 - [App shell](app-shell.md) / [#80](../codebase/80.md) — the outer router; `PairedShell` mounts under its `conversation` route
 - [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — the real `list` view, replacing the placeholder described above
+- [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the third route, `settings`, and its entry button on the Channel List
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the second `open` trigger, fired by a daemon-confirmed conversation create rather than a row click
 - [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here

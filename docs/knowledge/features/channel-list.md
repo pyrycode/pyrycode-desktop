@@ -25,6 +25,8 @@ transport, or new store/wire code, so not security-sensitive.
   conversation. See § Edge cases.
 - A [new-discussion FAB](new-discussion-fab.md) floats bottom-right over the list, present in all
   three states — a sibling of the section/row rendering described above, added by [#242](../codebase/242.md).
+- A [Settings](settings-screen.md) entry button (gear glyph, `aria-label="Settings"`) is pinned
+  top-right over the list, likewise present in all three states — added by [#333](../codebase/333.md).
 - Each Recent (unpromoted) row carries a trailing [Save-as-channel](save-as-channel-dialog.md)
   affordance; saved Channel rows carry none. Added by [#274](../codebase/274.md) — see § The row's
   save affordance below.
@@ -127,11 +129,12 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
 - **Relative times don't tick.** `now` is captured once per render at the container — a live-updating
   interval is a deferred enhancement.
 - **Deferred visual elements** (documented as intentionally absent, not missing): the top app bar
-  (logo/"Pyrycode" title/settings gear → a future Settings screen), monogram avatars, and the "See
-  all discussions (N)" collapse. (The new-discussion FAB, once deferred here, shipped in
-  [#242](../codebase/242.md) — see [its feature doc](new-discussion-fab.md).) A screenshot of this
-  screen will not match the full Figma frame 15-8 for this reason — fidelity is scoped to the
-  two-section list body only.
+  (logo/"Pyrycode" title), monogram avatars, and the "See all discussions (N)" collapse. (The
+  new-discussion FAB, once deferred here, shipped in [#242](../codebase/242.md) — see [its feature
+  doc](new-discussion-fab.md); the settings gear, also once deferred here as "inside a future top app
+  bar," instead shipped in [#333](../codebase/333.md) as its own pinned button, since ChannelList still
+  has no top app bar.) A screenshot of this screen will not match the full Figma frame 15-8 for this
+  reason — fidelity is scoped to the two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
 
@@ -146,6 +149,8 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
 - [Conversation shell](conversation-shell.md) — the thread view every row opens into via `onOpen`.
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the floating `+`
   affordance rendered as a sibling of this screen's rows.
+- [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the settings entry button
+  rendered as a sibling of this screen's rows, and the `settings` route it navigates to.
 - [Save-as-channel dialog](save-as-channel-dialog.md) / [#274](../codebase/274.md) — the per-row
   save affordance and naming dialog; restructured `Row` into the open-action + save-affordance
   sibling shape described above.

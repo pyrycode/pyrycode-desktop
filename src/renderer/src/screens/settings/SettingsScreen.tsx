@@ -11,7 +11,8 @@ const SETTINGS_COPY = {
   back: 'Back',
   connection: 'Connection',
   storage: 'Storage',
-  about: 'About'
+  about: 'About',
+  pairAnother: 'Pair another server'
 } as const
 
 // The running build's version line (#350, Figma 17-108). __APP_VERSION__ is the compile-time constant
@@ -30,8 +31,18 @@ const VERSION_LINE = `Version ${__APP_VERSION__}`
  * `onBack` is REQUIRED chrome — a Settings screen always has a back affordance, unlike ConversationScreen's
  * optional-gated BackControl. PairedShellView binds it to the shared `back` dispatch, which returns to the
  * channel-home `list` view (the absolute `back` arm — no stack-aware back needed, AC3).
+ *
+ * `onPairAnother` (#152) is the also-required Connection-section entry that re-opens the pairing flow to
+ * switch daemons. PairedShellView binds it to the `openPairServer` dispatch; the pairing screen's own
+ * confirm/cancel drive the two exits, so this screen only fires the forward-nav intent.
  */
-export function SettingsScreen({ onBack }: { onBack: () => void }): JSX.Element {
+export function SettingsScreen({
+  onBack,
+  onPairAnother
+}: {
+  onBack: () => void
+  onPairAnother: () => void
+}): JSX.Element {
   return (
     <section className="settings" aria-label="Settings screen">
       <div className="settings__topbar">
@@ -48,6 +59,11 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): JSX.Element 
           <div className="settings__section-body">
             <ServerInfoData />
             <ServerRowControl />
+            {/* #152: the "Pair another server" nav row (Figma 17:18) — directly below the Server row.
+                Re-opens the pairing flow to switch daemons; the trailing chevron marks it as a real
+                forward-nav affordance (unlike the static Server/Storage rows, whose chevrons #334/#351
+                omitted). onPairAnother dispatches the paired shell's openPairServer nav. */}
+            <PairAnotherServerRow onActivate={onPairAnother} />
           </div>
         </section>
         {/* #351: the Storage section (Figma 17-91…17-97) — sits between Connection and About to preserve
@@ -93,6 +109,29 @@ function BackControl({ onBack }: { onBack: () => void }): JSX.Element {
         aria-hidden="true"
       >
         <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
+      </svg>
+    </button>
+  )
+}
+
+// The "Pair another server" Connection row (Figma 17:18) — an inline, non-exported control mirroring
+// BackControl's inline-component + inline-SVG posture. It is a <button>, so its text ("Pair another
+// server") IS the accessible name (no aria-label); the trailing chevron SVG is aria-hidden. The glyph is
+// the Material chevron_right (viewBox 0 0 24 24 rendered at 20×20, currentColor), the mobile forward-nav
+// affordance kept here because the row navigates (unlike the static #334 Server / #351 Storage rows).
+function PairAnotherServerRow({ onActivate }: { onActivate: () => void }): JSX.Element {
+  return (
+    <button type="button" className="settings__pair-another-row" onClick={onActivate}>
+      <span className="settings__pair-another-label">{SETTINGS_COPY.pairAnother}</span>
+      <svg
+        className="settings__pair-another-chevron"
+        viewBox="0 0 24 24"
+        width="20"
+        height="20"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
       </svg>
     </button>
   )

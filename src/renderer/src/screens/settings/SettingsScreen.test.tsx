@@ -7,7 +7,8 @@ import { SettingsScreen } from './SettingsScreen'
 // string proves its chrome + Connection container without a jsdom harness.
 const noop = (): void => {}
 
-const render = (): string => renderToStaticMarkup(<SettingsScreen onBack={noop} />)
+const render = (): string =>
+  renderToStaticMarkup(<SettingsScreen onBack={noop} onPairAnother={noop} />)
 
 describe('SettingsScreen', () => {
   it('renders the "Settings" title (AC2)', () => {
@@ -37,6 +38,16 @@ describe('SettingsScreen', () => {
     // AC4: this slice introduces no #330 two-dot marker; no seeded serverId at server render.
     expect(markup).not.toContain('aria-label="Connection status"')
     expect(markup).not.toContain('juhana-mac-2026')
+  })
+
+  it('mounts the #152 "Pair another server" row in the Connection section (AC1)', () => {
+    // The nav row's text content is its accessible name (a <button>, no aria-label). Interaction
+    // (click → onPairAnother) is not exercisable under renderToStaticMarkup; the wiring is closed by
+    // composition — row present here + openPairServer → pairServer (pairedRoute.test.ts) + pairServer
+    // route renders PairingScreen (PairedShell.test.tsx). Same server-render-only posture as the suite.
+    const markup = render()
+    expect(markup).toContain('Pair another server')
+    expect(markup).toContain('settings__pair-another-row') // mounted as a button, not static text
   })
 
   it('renders the "Storage" section heading (#351 AC1)', () => {

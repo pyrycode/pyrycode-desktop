@@ -31,4 +31,20 @@ describe('nextPairedRoute', () => {
     // (current-independent), so it lands on `list` from `settings` exactly as it does from `thread`.
     expect(nextPairedRoute('settings', { type: 'back' })).toBe('list')
   })
+
+  it('openPairServer from settings opens the pair-server sub-route (#152, AC1/AC2)', () => {
+    expect(nextPairedRoute('settings', { type: 'openPairServer' })).toBe('pairServer')
+  })
+
+  it('pairServerCancelled returns to settings — non-destructive, no server forgotten (#152, AC4)', () => {
+    // Cancel lands back on `settings` (where the user launched pairing), NOT the list: this is a
+    // distinct destination from a completed pair, so it needs its own arm — it cannot reuse `back`.
+    expect(nextPairedRoute('pairServer', { type: 'pairServerCancelled' })).toBe('settings')
+  })
+
+  it('pairServerPaired goes home to the new server’s list (#152, AC3)', () => {
+    // A successful pair is "done, go home to the new server", landing on `list` — a different
+    // destination than cancel's `settings`, so the two exits are separate arms by design.
+    expect(nextPairedRoute('pairServer', { type: 'pairServerPaired' })).toBe('list')
+  })
 })

@@ -2,6 +2,7 @@ import { useReducer } from 'react'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { ChannelList } from './screens/channels/ChannelList'
 import { SettingsScreen } from './screens/settings/SettingsScreen'
+import { ArchiveScreen } from './screens/archive/ArchiveScreen'
 import { PairingScreen } from './screens/pairing/PairingScreen'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
@@ -15,11 +16,12 @@ function assertNever(route: never): never {
 /**
  * The pure route→view of the paired region — no hooks, no effects — mirroring how AppView lives beside
  * App. `list` shows the Channel List home screen (#141); `thread` shows the existing store-backed
- * ConversationScreen with a back affordance; `settings` shows the Settings scaffold (#333); `pairServer`
- * re-opens the existing PairingScreen from inside the paired app to switch daemons (#152). Every route
- * renders, so there is no null arm. Adding a future view is one new case, forced by the assertNever
- * default (AC1: an added arm, not a rewrite). The `settings` case reuses the same `onBack` as `thread`
- * (both dispatch `back`, which the absolute `back` arm lands on `list`).
+ * ConversationScreen with a back affordance; `settings` shows the Settings scaffold (#333); `archive`
+ * shows the Archive scaffold (#347); `pairServer` re-opens the existing PairingScreen from inside the
+ * paired app to switch daemons (#152). Every route renders, so there is no null arm. Adding a future
+ * view is one new case, forced by the assertNever default (AC1: an added arm, not a rewrite). The
+ * `settings` and `archive` cases reuse the same `onBack` as `thread` (all dispatch `back`, which the
+ * absolute `back` arm lands on `list`).
  *
  * The `pairServer` case passes no `bridge` to PairingScreen — production uses its `window.pyry` default
  * (bridge ?? window.pyry), the same as App's `pairing` route. The two seams are distinct destinations:
@@ -30,6 +32,7 @@ export function PairedShellView(props: {
   route: PairedRoute
   onOpen: () => void
   onOpenSettings: () => void
+  onOpenArchive: () => void
   onBack: () => void
   onUnpaired: () => void
   onOpenPairServer: () => void
@@ -38,11 +41,19 @@ export function PairedShellView(props: {
 }): JSX.Element {
   switch (props.route) {
     case 'list':
-      return <ChannelList onOpen={props.onOpen} onOpenSettings={props.onOpenSettings} />
+      return (
+        <ChannelList
+          onOpen={props.onOpen}
+          onOpenSettings={props.onOpenSettings}
+          onOpenArchive={props.onOpenArchive}
+        />
+      )
     case 'thread':
       return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
     case 'settings':
       return <SettingsScreen onBack={props.onBack} onPairAnother={props.onOpenPairServer} />
+    case 'archive':
+      return <ArchiveScreen onBack={props.onBack} />
     case 'pairServer':
       return (
         <PairingScreen
@@ -85,6 +96,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       route={route}
       onOpen={() => dispatch({ type: 'open' })}
       onOpenSettings={() => dispatch({ type: 'openSettings' })}
+      onOpenArchive={() => dispatch({ type: 'openArchive' })}
       onBack={() => dispatch({ type: 'back' })}
       onUnpaired={onUnpaired}
       onOpenPairServer={() => dispatch({ type: 'openPairServer' })}

@@ -28,10 +28,12 @@ import { titleFor, partitionByPromotion, formatLastActivity } from './channelLis
  */
 export function ChannelList({
   onOpen,
-  onOpenSettings
+  onOpenSettings,
+  onOpenArchive
 }: {
   onOpen: () => void
   onOpenSettings: () => void
+  onOpenArchive: () => void
 }): JSX.Element {
   const conversations = useConversationListStore(selectConversations)
   const now = Date.now()
@@ -49,6 +51,7 @@ export function ChannelList({
         now={now}
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
+        onOpenArchive={onOpenArchive}
         onNewConversation={() => requestNewConversation(window.pyry.sendCommand)}
         onSaveAsChannel={(row) => {
           // Open the dialog and seed the field from the row's displayed title in one handler — no effect,
@@ -86,6 +89,7 @@ export function ChannelListView({
   now,
   onOpen,
   onOpenSettings,
+  onOpenArchive,
   onNewConversation,
   onSaveAsChannel
 }: {
@@ -93,12 +97,19 @@ export function ChannelListView({
   now: number
   onOpen: () => void
   onOpenSettings: () => void
+  onOpenArchive: () => void
   onNewConversation: () => void
   onSaveAsChannel: (row: ConversationSummary) => void
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
-      <SettingsButton onClick={onOpenSettings} />
+      {/* #347: the top-right actions cluster — the Archive entry leads, the gear trails (conventional
+          gear-rightmost). One sticky flex-row wrapper hosts both, so two independent sticky children do
+          not stack awkwardly. Present in all three list states (AC1), like the FAB. */}
+      <div className="channel-list__actions">
+        <ArchiveButton onClick={onOpenArchive} />
+        <SettingsButton onClick={onOpenSettings} />
+      </div>
       {renderBody(conversations, now, onOpen, onSaveAsChannel)}
       <NewConversationFab onClick={onNewConversation} />
     </section>
@@ -130,6 +141,34 @@ function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
         aria-hidden="true"
       >
         <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+      </svg>
+    </button>
+  )
+}
+
+// The Archive entry affordance (#347) — a desktop-invented control mirroring SettingsButton's shape (no
+// Figma node pins it on the list scope 15-8, like the gear). It leads the top-right actions cluster.
+// Clones the gear's posture exactly: an icon-only native <button> (keyboard-focusable), whose distinct
+// `aria-label="Archive"` supplies the accessible name and disambiguates it from the gear's "Settings"
+// (the ticket's disambiguation), and whose SVG is aria-hidden. onClick is a pure injected nav effect —
+// no window.pyry, no store. The 24px Material `archive` (box) glyph.
+function ArchiveButton({ onClick }: { onClick: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="channel-list__archive"
+      aria-label="Archive"
+      onClick={onClick}
+    >
+      <svg
+        className="channel-list__archive-icon"
+        viewBox="0 0 24 24"
+        width="24"
+        height="24"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z" />
       </svg>
     </button>
   )

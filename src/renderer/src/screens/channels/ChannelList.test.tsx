@@ -31,6 +31,7 @@ const render = (conversations: readonly ConversationSummary[] | null): string =>
       now={NOW}
       onOpen={noop}
       onOpenSettings={noop}
+      onOpenArchive={noop}
       onNewConversation={noop}
       onSaveAsChannel={noop}
     />
@@ -41,6 +42,10 @@ const FAB_MARKER = 'aria-label="New discussion"'
 
 // The Settings entry affordance's accessible name (#333) — present in every list state, like the FAB.
 const SETTINGS_ENTRY_MARKER = 'aria-label="Settings"'
+
+// The Archive entry affordance's accessible name (#347) — present in every list state, like the FAB and
+// the Settings entry, and DISTINCT from the gear's aria-label="Settings".
+const ARCHIVE_ENTRY_MARKER = 'aria-label="Archive"'
 
 // The per-row Save-as-channel affordance's accessible name (#274) — present on Recent (unpromoted)
 // discussion rows, absent on saved Channel rows (AC1).
@@ -136,5 +141,13 @@ describe('ChannelListView', () => {
     expect(render(null)).toContain(SETTINGS_ENTRY_MARKER)
     expect(render([])).toContain(SETTINGS_ENTRY_MARKER)
     expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(SETTINGS_ENTRY_MARKER)
+  })
+
+  it('renders the Archive entry with its accessible name in all three list states (#347 AC1)', () => {
+    // Like the FAB and the Settings entry, the Archive entry lives in the top-right actions cluster — a
+    // sibling of the list body — so it is reachable whether the list is not-loaded, empty, or populated.
+    expect(render(null)).toContain(ARCHIVE_ENTRY_MARKER)
+    expect(render([])).toContain(ARCHIVE_ENTRY_MARKER)
+    expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(ARCHIVE_ENTRY_MARKER)
   })
 })

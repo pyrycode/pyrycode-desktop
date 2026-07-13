@@ -21,6 +21,10 @@ const LIST_MARKER = 'aria-label="Conversations"'
 // entry-button `aria-label="Settings"` nor the thread's `aria-label="Back"` matches it, and — unlike the
 // "Connection" heading text — it does not collide with the thread's `aria-label="Connection status"`.
 const SETTINGS_MARKER = 'aria-label="Settings screen"'
+// The archive view's root region marker (#347). An archive-UNIQUE discriminator: the list's Archive
+// entry button is `aria-label="Archive"` (no trailing "screen"), so it does not match this marker, and
+// neither do the thread's/settings' markers.
+const ARCHIVE_MARKER = 'aria-label="Archive screen"'
 // The pair-server view's marker (#152): the reused PairingScreen's EntryCard heading. Unique to the
 // pairing flow — neither the list, thread, nor settings markers match it.
 const PAIRING_MARKER = 'Paste pairing code'
@@ -29,7 +33,7 @@ describe('PairedShellView', () => {
   describe("route='list'", () => {
     it('shows the Channel List wrapper and never the thread', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="list" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="list" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(LIST_MARKER)
       expect(markup).not.toContain(CONVERSATION_MARKER)
@@ -45,7 +49,7 @@ describe('PairedShellView', () => {
 
     it('shows the conversation thread with its leading back affordance', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="thread" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="thread" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(CONVERSATION_MARKER)
       expect(markup).toContain(BACK_MARKER)
@@ -55,9 +59,20 @@ describe('PairedShellView', () => {
   describe("route='settings'", () => {
     it('shows the Settings screen and neither the list nor the thread (#333)', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="settings" onOpen={noop} onBack={noop} onOpenSettings={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="settings" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(SETTINGS_MARKER)
+      expect(markup).not.toContain(LIST_MARKER)
+      expect(markup).not.toContain(CONVERSATION_MARKER)
+    })
+  })
+
+  describe("route='archive'", () => {
+    it('shows the Archive screen and neither the list nor the thread (#347)', () => {
+      const markup = renderToStaticMarkup(
+        <PairedShellView route="archive" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+      )
+      expect(markup).toContain(ARCHIVE_MARKER)
       expect(markup).not.toContain(LIST_MARKER)
       expect(markup).not.toContain(CONVERSATION_MARKER)
     })
@@ -81,6 +96,7 @@ describe('PairedShellView', () => {
           onOpen={noop}
           onBack={noop}
           onOpenSettings={noop}
+          onOpenArchive={noop}
           onUnpaired={noop}
           onOpenPairServer={noop}
           onPairServerPaired={noop}
@@ -115,6 +131,13 @@ describe('PairedShell', () => {
   // above) — the same composition posture the created-event nav uses, no jsdom harness.
   it('the settings button → openSettings dispatch lands on the settings route (#333)', () => {
     expect(nextPairedRoute('list', { type: 'openSettings' })).toBe('settings')
+  })
+
+  // #347: the entry→route seam the ChannelList Archive button drives, closed by composing the
+  // separately-tested reducer (pairedRoute.test.ts) with the archive view (PairedShellView route='archive'
+  // above) — the same composition posture the settings/created-event navs use, no jsdom harness.
+  it('the Archive button → openArchive dispatch lands on the archive route (#347)', () => {
+    expect(nextPairedRoute('list', { type: 'openArchive' })).toBe('archive')
   })
 
   // #152: the three pair-server seams the shell wires, closed by composing the separately-tested

@@ -1,0 +1,131 @@
+/*
+ * Archive screen styles (#347 scaffold), mirrored from the mobile Figma node 18-2 (chrome + the empty
+ * two-tab segmented header). Every color / type / spacing value references a theme token from
+ * theme/tokens.css — no color/type/spacing literal lives here. The bare structural literals (100%, the
+ * 48px back-button square, the 2px indicator underline) are layout geometry (the .settings__back /
+ * indicator convention), not theme values. The topbar/back/title rules are cloned from settings.css:24-73
+ * (settings__ → archive__) since both screens share the M3 top-app-bar chrome — duplicated rather than
+ * extracted to a shared class so this slice touches no adjacent stylesheet. The populated tab bodies
+ * (restore rows, Figma 18:18) are #348's content; this slice leaves the tab panel empty.
+ */
+
+/* The scroll column. PairedShellView returns this <section> directly, so — like .settings /
+   .channel-list — it is a direct child of the block-level #root (height:100%), filling the window;
+   box-sizing:border-box keeps padding inside that 100% so the surface fills edge-to-edge (Figma 18-2). */
+.archive {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* The top app-bar row (Figma 18:3) — back button + title, left-aligned. Never grows or shrinks. Cloned
+   from .settings__topbar (the Figma pads pl-4 pr-16 py-8 with a 4px gap; spacing tokens). */
+.archive__topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-1);
+}
+
+/* The leading back affordance (Figma 18:4's arrow_back inside a 48px frame) — cloned from .settings__back
+   (a 48px touch target wrapping the 24px glyph, on-surface, gaining a surface tint on hover). 48px is
+   structural component geometry (the send-square convention). */
+.archive__back {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface);
+  cursor: pointer;
+}
+
+.archive__back:hover {
+  background: var(--color-surface-container-high);
+}
+
+.archive__back:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.archive__back-icon {
+  display: block;
+}
+
+/* The title "Archived" (Figma 18:8) — title-large, on-surface. margin:0 resets the heading default. */
+.archive__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+  letter-spacing: var(--text-title-large-tracking);
+  font-weight: var(--text-title-large-weight);
+}
+
+/* The two-tab segmented header (Figma 18:9) — a full-width flex row of equal-width tabs with a bottom
+   hairline in --color-outline-variant. Never grows or shrinks. */
+.archive__tabs {
+  flex: 0 0 auto;
+  display: flex;
+  border-bottom: 1px solid var(--color-outline-variant);
+}
+
+/* One tab (Figma 18:10 / 18:14) — an equal-width (flex 1 1 0), centered, label-large button. The 2px
+   bottom border is the selected-tab indicator slot: transparent by default (the inactive tab's
+   underline, Figma 18:17) and --color-primary when selected (Figma 18:13, see the [aria-selected] rule
+   below). Button reset (no border on the other edges, transparent bg, inherited font). Inactive text is
+   the muted --color-on-surface-variant (Figma 18:16). Figma tab padding pt-14 pb-12: pt → --space-4
+   (16px, a +2px delta) and pb → --space-3 (12px, exact) — the settings.css 10px→--space-3 mapping
+   precedent. */
+.archive__tab {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4) 0 var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.archive__tab:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* The selected tab (Figma 18:10 active) — an on-surface label above the 2px --color-primary underline
+   (Figma 18:13). Driving both off [aria-selected="true"] makes the ARIA state the single source of
+   active-ness; no separate modifier class or indicator node. */
+.archive__tab[aria-selected='true'] {
+  color: var(--color-on-surface);
+  border-bottom-color: var(--color-primary);
+}
+
+/* The tab body (Figma 18:18) — fills the remaining height below the segmented header, matching
+   .settings__body. Empty in this slice: #348 mounts the archived-conversation restore rows here (a pure
+   function of the selected tab). Figma pads pt-4 pb-32; pt-4 → --space-1, and pb-32 has no exact token
+   (the 4px scale stops at --space-6/24px) so it maps to the nearest --space-6 — an 8px delta below an
+   empty panel, immaterial until #348 fills it (the .settings__body pb-32→--space-6 mapping precedent). */
+.archive__tab-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1) 0 var(--space-6);
+}

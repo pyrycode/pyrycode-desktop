@@ -47,4 +47,14 @@ describe('nextPairedRoute', () => {
     // destination than cancel's `settings`, so the two exits are separate arms by design.
     expect(nextPairedRoute('pairServer', { type: 'pairServerPaired' })).toBe('list')
   })
+
+  it('openArchive from the list opens the archive screen (#347, AC3)', () => {
+    expect(nextPairedRoute('list', { type: 'openArchive' })).toBe('archive')
+  })
+
+  it('back from archive returns to the list — reuses the existing absolute back arm (#347, AC2)', () => {
+    // Documents that Archive → channel-home needs no stack-aware back: the `back` arm is absolute
+    // (current-independent), so it lands on `list` from `archive` exactly as it does from `settings`.
+    expect(nextPairedRoute('archive', { type: 'back' })).toBe('list')
+  })
 })

@@ -162,6 +162,51 @@
   gap: var(--space-4);
 }
 
+/* The Storage section's archived-count row (#351, Figma 17-93) — mirrors the Server row's geometry
+   (px-16 py-10: horizontal → --space-4, 10px vertical → --space-3, the same 2px-delta mapping). A
+   dedicated class (the .settings__about-row precedent) keeps the row semantically decoupled while
+   reusing tokens rather than the Server row's classes; no new token or literal. The mobile row's
+   trailing chevron (17:97) is omitted, so the row is just its text column. */
+.settings__storage-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* The left text column (Figma 17:94) — flex-col, 2px gap (structural geometry, no token, the Server-row
+   text-column convention). min-width:0 lets a long line wrap inside the column rather than overflow. */
+.settings__storage-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The "Archived conversations" label (Figma 17:95) — body-large, on-surface (mirrors the Server row's
+   label). margin:0 resets the paragraph default. */
+.settings__storage-row-label {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* The "N archived" count line (Figma 17:96) — body-small, on-surface-variant (mirrors the Server row's
+   id line). overflow-wrap guards long content; margin:0 resets the paragraph default. */
+.settings__storage-row-count {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
 /* The About section's version row (#350, Figma 17-106) — mirrors the Server row's padding (px-16 py-10:
    horizontal → --space-4, 10px vertical → --space-3, the same 2px-delta mapping the Server row uses). A
    dedicated class rather than reusing .settings__server-row keeps the version row semantically decoupled

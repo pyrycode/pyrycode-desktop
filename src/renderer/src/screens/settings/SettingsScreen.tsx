@@ -1,6 +1,7 @@
 import './settings.css'
 import { ServerInfoData } from '../../store/serverInfoLoader'
 import { ServerRowControl } from './ServerRow'
+import { ArchivedCountRowControl } from './ArchivedCountRow'
 
 // Client-owned copy — module-level constants (the EMPTY_THREAD_COPY idiom), never daemon strings. The
 // scaffold renders no untrusted text, so there is no injection sink: this is why the slice is not
@@ -9,6 +10,7 @@ const SETTINGS_COPY = {
   title: 'Settings',
   back: 'Back',
   connection: 'Connection',
+  storage: 'Storage',
   about: 'About'
 } as const
 
@@ -46,6 +48,16 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): JSX.Element 
           <div className="settings__section-body">
             <ServerInfoData />
             <ServerRowControl />
+          </div>
+        </section>
+        {/* #351: the Storage section (Figma 17-91…17-97) — sits between Connection and About to preserve
+            the mobile design's relative vertical order (Storage y=910 above About y=1056). A single
+            store-bound archived-count row; no loader to mount (unlike #334's ServerInfoData) — the
+            conversation list is kept live app-level, so ArchivedCountRowControl is a pure store read. */}
+        <section className="settings__section">
+          <h2 className="settings__section-header">{SETTINGS_COPY.storage}</h2>
+          <div className="settings__section-body">
+            <ArchivedCountRowControl />
           </div>
         </section>
         {/* #350: the About section (Figma 17-104…17-108) — same header treatment as Connection, with a

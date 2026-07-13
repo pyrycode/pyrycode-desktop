@@ -39,6 +39,20 @@ describe('SettingsScreen', () => {
     expect(markup).not.toContain('juhana-mac-2026')
   })
 
+  it('renders the "Storage" section heading (#351 AC1)', () => {
+    expect(render()).toContain('>Storage</h2>')
+  })
+
+  it('mounts the #351 archived-count row (placeholder branch) in the Storage section (AC2/AC4)', () => {
+    // Under server render zustand v5 reads the store's initial `null`, so the container resolves to the
+    // not-yet-loaded branch — the em-dash placeholder, never "0 archived" (a loaded value can't reach a
+    // server-rendered container). The populated count paths are proven on the pure view.
+    const markup = render()
+    expect(markup).toContain('Archived conversations') // the row's label
+    expect(markup).toContain('—') // the neutral not-yet-loaded placeholder
+    expect(markup).not.toContain('0 archived') // 0 is a loaded value; must not appear pre-load
+  })
+
   it('renders the "About" section heading (#350 AC1)', () => {
     expect(render()).toContain('>About</h2>')
   })

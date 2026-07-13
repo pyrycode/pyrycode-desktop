@@ -3,6 +3,7 @@ import type { ConversationSummary } from '@shared/wire/types'
 import {
   createConversationListStore,
   initialConversationListState,
+  selectArchivedCount,
   selectConversations
 } from './conversationListStore'
 
@@ -92,5 +93,37 @@ describe('conversationListStore', () => {
     const before = store.getState().setConversations
     store.getState().setConversations([row()])
     expect(store.getState().setConversations).toBe(before)
+  })
+})
+
+// selectArchivedCount (#351) — the derived read the Storage row draws its count from. `null` (not yet
+// loaded) is passed through as `null` so the row can show a neutral placeholder rather than a spurious
+// "0 archived"; a loaded list resolves to the count of `is_archived === true` rows.
+describe('selectArchivedCount', () => {
+  it('passes null through — not-yet-loaded stays null, never 0 (AC4)', () => {
+    expect(selectArchivedCount({ conversations: null })).toBeNull()
+  })
+
+  it('a loaded empty list is 0 archived, distinct from null (AC4)', () => {
+    expect(selectArchivedCount({ conversations: [] })).toBe(0)
+  })
+
+  it('counts zero when the only row is not archived (AC3)', () => {
+    expect(selectArchivedCount({ conversations: [row({ is_archived: false })] })).toBe(0)
+  })
+
+  it('counts one when the only row is archived (AC3)', () => {
+    expect(selectArchivedCount({ conversations: [row({ is_archived: true })] })).toBe(1)
+  })
+
+  it('counts only the archived rows in a mixed list (AC2)', () => {
+    const list = [
+      row({ id: 'a', is_archived: true }),
+      row({ id: 'b', is_archived: false }),
+      row({ id: 'c', is_archived: true }),
+      row({ id: 'd', is_archived: false }),
+      row({ id: 'e', is_archived: false })
+    ]
+    expect(selectArchivedCount({ conversations: list })).toBe(2)
   })
 })

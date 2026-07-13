@@ -62,3 +62,11 @@ export function useConversationListStore<T>(selector: (s: ConversationListStore)
 export const selectConversations = (
   s: ConversationListState
 ): readonly ConversationSummary[] | null => s.conversations
+
+/** The archived-conversation count for the Settings Storage row (#351). Passes `null` (not yet loaded)
+ *  through as `null` so the row shows a neutral placeholder rather than a spurious "0 archived"; a loaded
+ *  list — including `[]` — resolves to the count of `is_archived === true` rows. A primitive return means
+ *  zustand's `Object.is` equality re-renders the row only when the count itself changes, not on every list
+ *  replacement. */
+export const selectArchivedCount = (s: ConversationListState): number | null =>
+  s.conversations === null ? null : s.conversations.filter((c) => c.is_archived).length

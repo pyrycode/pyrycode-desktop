@@ -1,20 +1,24 @@
-# Settings screen (scaffold + Connection section + About section)
+# Settings screen (scaffold + Connection + Storage + About sections)
 
 The paired region's third view — `settings`, a sibling of [`list`](channel-list.md) and
 [`thread`](conversation-shell.md) — reachable from a new entry button on the Channel List home. A
-top-bar (back + "Settings" title) above two sections: "Connection", whose body renders the paired
+top-bar (back + "Settings" title) above three sections: "Connection", whose body renders the paired
 server's identity (a Server row showing `serverId` + `relayUrl`, plus an empty host slot for the future
-two-dot status indicator), and "About", whose body renders the running app's build version. Mirrors
-mobile #390/#398, with the relay URL as a documented desktop addition.
+two-dot status indicator); "Storage", whose body renders a live archived-conversations count; and
+"About", whose body renders the running app's build version. Mirrors mobile #390/#398, with the relay
+URL as a documented desktop addition.
 
 Introduced in [#333](../codebase/333.md) as a chrome-only scaffold (the scaffold child of the #150
 split; the other child, #332, shipped the data path: [#339](../codebase/339.md)'s IPC surface +
 [#340](../codebase/340.md)'s renderer store). [#334](../codebase/334.md) then filled the scaffold's empty
 section-body with the store-bound Server row and mounted #340's previously-dormant loader. [#350](../codebase/350.md)
 appended the About section, a static version readout sourced from `package.json` at build time (a #151
-split sibling). Renderer-only throughout — no keys, sockets, or tokens touched directly (the Server row
-reads only the vetted, non-secret `serverId`/`relayUrl` pair off #340's store; the About row reads a
-compile-time constant) — not security-sensitive.
+split sibling). [#351](../codebase/351.md) then inserted a Storage section between Connection and About,
+a live archived-conversations count derived from the existing
+[conversation list store](conversation-list-store.md) (another #151 split sibling). Renderer-only throughout — no keys, sockets, or tokens touched
+directly (the Server row reads only the vetted, non-secret `serverId`/`relayUrl` pair off #340's store;
+the Storage row reads a derived count off the conversation-list store; the About row reads a compile-time
+constant) — not security-sensitive.
 
 ## What it does
 
@@ -30,7 +34,11 @@ compile-time constant) — not security-sensitive.
   `relayUrl` as a secondary line beneath it — or, before the one-shot fetch resolves, a `Loading…`
   placeholder in place of both values. An empty host slot beneath the values is reserved for a future
   two-dot Relay/Pyrycode status indicator (#330's `ConnectionStatusIndicator`, not yet mounted here).
-- Below the Connection section, an "About" heading (same `--color-primary` treatment) precedes a single
+- Below the Connection section, a "Storage" heading (same `--color-primary` treatment) precedes a single
+  row reading "Archived conversations" with a secondary line — "N archived" for a loaded list (every N,
+  including 0 and 1 — no singular/plural branch) or a neutral "—" placeholder before the conversation list
+  has loaded. The count is a live derived read: it updates when an archive/restore round trip re-lists.
+- Below the Storage section, an "About" heading (same `--color-primary` treatment) precedes a single
   row reading "Version X.Y.Z" — the running app's `package.json` `version`, baked in at build time.
 - Back returns to the channel-home `list` view via the paired router's existing `back` transition — no
   new nav event, no stack-aware back.
@@ -46,9 +54,12 @@ src/renderer/src/
 └── screens/
     ├── channels/ChannelList.tsx          # + SettingsButton entry (in-file, unexported)
     └── settings/
-        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + About section (#350)
+        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Storage section (#351) + About section (#350)
         ├── ServerRow.tsx                 # pure ServerRow view + store-bound ServerRowControl (#334, new)
-        └── settings.css                 # token-only, scaffold + Server row + About row styles (#333 + #334 + #350)
+        ├── ArchivedCountRow.tsx          # pure ArchivedCountRow view + store-bound ArchivedCountRowControl (#351, new)
+        └── settings.css                 # token-only, scaffold + Server row + Storage row + About row styles (#333 + #334 + #351 + #350)
+
+src/renderer/src/store/conversationListStore.ts  # + selectArchivedCount selector (#351)
 
 src/renderer/src/version.d.ts             # ambient `declare const __APP_VERSION__: string` (#350, new)
 electron.vite.config.ts                   # + __APP_VERSION__ define, renderer block (#350)
@@ -144,6 +155,34 @@ shipped that loader dormant (zero consumers), so before #334 the store sat at `n
 `SettingsScreen` mounts only under the paired shell's `settings` route (post-pairing, [PairedShell](paired-shell.md)),
 a fresh fetch fires every time Settings opens rather than once at app launch.
 
+### The Storage section (`ArchivedCountRow.tsx` + `conversationListStore.ts`, #351)
+
+Inserted as a `settings__section` **between** Connection and About — Figma's Storage section sits above
+About in the mobile layout (y=910 vs y=1056), and this insertion point preserves that relative order now
+that desktop builds both neighbors:
+
+```ts
+export const selectArchivedCount = (s: ConversationListState): number | null =>
+  s.conversations === null ? null : s.conversations.filter((c) => c.is_archived).length
+
+export function ArchivedCountRow({ archivedCount }: { archivedCount: number | null }): JSX.Element
+export function ArchivedCountRowControl(): JSX.Element   // useConversationListStore(selectArchivedCount) → <ArchivedCountRow>
+```
+
+The same `ServerRow`/`ServerRowControl` pure-view/store-bound-container split (#334), reading the
+[conversation list store](conversation-list-store.md) through a new selector rather than a new store. `ArchivedCountRow` always renders the "Archived conversations" label; the secondary line is
+the em-dash placeholder when `archivedCount` is `null` (list not yet loaded — never rendered as "0
+archived", since `0` is a real loaded value), else `` `${archivedCount} archived` `` uniformly for every
+count including 0 and 1 ("archived" is a past-participle state, not a countable noun, so there is no
+singular/plural branch). No trailing chevron, mirroring the Server row's own omission.
+
+Unlike the Server row, **no loader to mount**: the conversation list is already kept live app-level by
+`ConversationListData` ([conversation-list store](conversation-list-store.md)), requested on
+connect and re-requested on every `conversationUpdated` broadcast (including archive/restore). So
+`ArchivedCountRowControl` is a pure store read with nothing to fetch — the count reflects the latest
+state on every render, and an archive/restore round trip flows through the existing re-list path into a
+fresh count with no new data path added.
+
 ### The About section (`SettingsScreen.tsx`, #350)
 
 Appended inline as a second `settings__section`, after Connection — no new component file, since the
@@ -182,10 +221,12 @@ tone: `.settings__section-header` uses `--color-primary` (#9dcbfc), not the mute
 color per Figma. `.settings__back` duplicates `.conversation__back`'s ~15-line treatment verbatim
 (48px square, `--radius-full`, transparent→`--color-surface-container-high` hover,
 `--color-outline` focus-visible outline) rather than extracting a shared class — an explicit
-out-of-scope call in the spec, not an oversight. `.settings__about-row` (`--space-3`/`--space-4` padding)
-and `.settings__about-version` (`--color-on-surface` + the four `--text-body-large-*` declarations)
-mirror the Server row's padding and label type treatment (#350) — a dedicated class rather than reusing
-`.settings__server-row*`, introducing no new token or literal.
+out-of-scope call in the spec, not an oversight. `.settings__storage-row` / `-text` / `-label` / `-count` (#351) and `.settings__about-row` (`--space-3`/
+`--space-4` padding) / `.settings__about-version` (`--color-on-surface` + the four `--text-body-large-*`
+declarations) mirror the Server row's padding and label type treatment (#350/#351) — each a dedicated
+class rather than reusing `.settings__server-row*`, introducing no new token or literal.
+`.settings__storage-row-count` additionally sets `overflow-wrap: anywhere` (the Server-row-id-line guard)
+since the derived count string has no fixed length.
 
 ### Data flow
 
@@ -197,7 +238,11 @@ ChannelList SettingsButton.onClick
     → mounts <ServerInfoData />  → window.pyry.serverInfo() [once]
         → mapServerInfo → setServerInfo → serverInfoStore
     → mounts <ServerRowControl /> → useServerInfoStore(selectServerInfo) → <ServerRow serverInfo=… />
+    → mounts <ArchivedCountRowControl /> → useConversationListStore(selectArchivedCount) → <ArchivedCountRow archivedCount=… />
     → renders the About section: `Version ${__APP_VERSION__}` (no fetch, no store — substituted at build time)
+
+conversationUpdated (archive/restore) → ConversationListData re-list → setConversations
+  → selectArchivedCount recomputes → ArchivedCountRowControl re-renders iff the count itself changed
 
 SettingsScreen BackControl.onClick
   → dispatch({ type: 'back' }) → nextPairedRoute('settings', back) = 'list' → ChannelList
@@ -206,8 +251,10 @@ SettingsScreen BackControl.onClick
 The nav shell (`pairedRoute.ts`/`PairedShell.tsx`) added no store, IPC, wire, or daemon event — that
 part is still exactly the screen-local `useReducer` from #333. #334 wires the pre-existing
 [server-info store](server-info-store.md) into the tree; the store and its channel are entirely #339/#340's.
-#350's About section adds no runtime data flow at all — the value is fixed at build time, so there is
-nothing to fetch or subscribe to.
+#351's Storage section adds no new data path either: it reads the pre-existing
+[conversation list store](conversation-list-store.md) through a new selector, and that store is already
+kept live by the app-level `ConversationListData` bridge. #350's About section adds no runtime data flow
+at all — the value is fixed at build time, so there is nothing to fetch or subscribe to.
 
 ## Edge cases and limitations
 
@@ -220,7 +267,16 @@ nothing to fetch or subscribe to.
   class-labelled mount point for a future #330-style indicator; it carries no `aria-label="Connection
   status"` in this slice to avoid colliding with the `thread` view's existing indicator of the same name.
 - **No trailing chevron.** Mobile's Server row (17:12) has a navigate-to-detail chevron (17:16); desktop
-  has no server-detail screen for it to lead to, so it's omitted rather than rendered dead.
+  has no server-detail screen for it to lead to, so it's omitted rather than rendered dead. The Storage
+  row (17:97) omits its own chevron for the same reason — no archive browse screen exists yet (#153/#347).
+- **The Storage row's `null` vs. `0` distinction is load-bearing and easy to erode.** `conversations:
+  null` (not yet loaded) and a loaded `[]` (zero archived) must stay distinct — collapsing them would
+  regress the placeholder to a spurious "0 archived" during the brief pre-load window. Any future selector
+  added to `conversationListStore` over the same `conversations` slice should preserve this passthrough.
+- **The Storage row's populated branch is untestable through `SettingsScreen`'s server-render test** —
+  same zustand-v5 gotcha as the Server row: `renderToStaticMarkup` only ever sees the store's initial
+  `null`. The count matrix (0/1/5/mixed) is proven on `ArchivedCountRow`'s pure view directly, not through
+  the container.
 - **No stack-aware back.** `settings` → `back` always lands on `list`, even though the ticket's own
   comments (both here and in [#334](../codebase/334.md)/[#151](../codebase/151.md)) anticipate this
   changing if a future sub-navigation (e.g. a "pair another server" sub-screen, [#152](../codebase/152.md))
@@ -253,6 +309,9 @@ nothing to fetch or subscribe to.
   ticket (the entry exists; the top app bar it was originally imagined inside still doesn't).
 - [Server-info store](server-info-store.md) / [#340](../codebase/340.md) — the store and loader
   [#334](../codebase/334.md) mounts and reads for the Server row.
+- [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — the store
+  [#351](../codebase/351.md)'s `selectArchivedCount` selector reads, kept live by the same
+  `ConversationListData` bridge the Channel List home also depends on.
 - [#330 codebase notes](../codebase/330.md) — the `ConnectionStatusIndicator`/`Control` view/container
   precedent `ServerRow`/`ServerRowControl` follows, and the `aria-label="Connection status"` marker this
   screen's empty host slot deliberately avoids duplicating.
@@ -263,5 +322,8 @@ nothing to fetch or subscribe to.
   — fills this screen's Connection section-body with the Server row.
 - [#350 codebase notes](../codebase/350.md) · Spec: `docs/specs/architecture/350-settings-about-version.md`
   — appends the About section and its version readout; a #151 split sibling of #351/#352/#353.
+- [#351 codebase notes](../codebase/351.md) · Spec: `docs/specs/architecture/351-settings-storage-archived-count.md`
+  — inserts the Storage section and its archived-count row between Connection and About; a #151 split
+  sibling of #350/#352/#353.
 - Remaining follow-ups, blocked-by #333: [#152](../codebase/152.md) (pair another server); #151 split
-  siblings #351 (archived count), #352 (Defaults), #353 (Push).
+  siblings #352 (Defaults), #353 (Push), both still Inbox.

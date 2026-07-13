@@ -117,6 +117,7 @@ This module persists the pairing `token` (a bearer credential the relay/daemon a
 - **Log-free by construction** — no `console.*` anywhere; the record is opaque locals, never named fields of a logged struct. `MalformedPairedServerRecordError` carries a static message with no token/URL/bytes. A test spies all six `console` methods across `save` + `load` + every error path and asserts none fire.
 - **Fixed store name** — `PAIRED_SERVER_NAME` is a constant, never derived from the QR/paste payload, so no untrusted input reaches the persistence path (no traversal surface). The per-server-id future must validate the `serverId` before it becomes part of the name.
 - **`clear()` shrinks the token-theft-from-disk window, and fails closed** ([#172](../codebase/172.md)) — the erase is a positive-posture change (it destroys the at-rest bearer `token` and `server_static_pubkey`), but only if a `delete` failure is never mistaken for success: `clear` has no `try`/`catch`, so a propagated error leaves the caller aware the token may still be on disk. Reachable from the renderer via the [unpair channel](unpair-channel.md) ([#173](../codebase/173.md)) — value-free by construction, so a renderer compromise can at most trigger the erase, never read or inject a secret.
+- **`load()` gains a second, read-only renderer-reachable path** — the [server-info channel](server-info-channel.md) ([#339](../codebase/339.md)) exposes exactly `record.server`/`record.relay` (never `token`/`server_static_pubkey`) to the renderer, so a Settings screen can show which server is paired even while disconnected. Structurally distinct from `unpair`'s erase: this path only reads, and the handler names the two non-secret fields explicitly rather than forwarding the record.
 
 ## Edge cases and limitations
 
@@ -140,6 +141,7 @@ This module persists the pairing `token` (a bearer credential the relay/daemon a
 - [#172 codebase notes](../codebase/172.md) — the `clear()` erase capability: widened-return-type design, fail-closed delegation to `secureStore.delete`, no fixture cascade.
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — secret-at-rest via `safeStorage`, fail-closed, "recovery is a consumer decision".
 - [Unpair channel](unpair-channel.md) / [#173 codebase notes](../codebase/173.md) — the renderer-triggered IPC channel + preload method that calls `clear()`.
+- [Server-info channel](server-info-channel.md) / [#339 codebase notes](../codebase/339.md) — the renderer-triggered IPC channel that reads `record.server`/`record.relay` via `load()`, never `token`/`server_static_pubkey`.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model (token/keys never reach the renderer; mirror mobile).
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — the ported wire types, including `QrPayload`, that `PairedServerRecord` aliases.
 - Downstream consumers: the pairing input flow (#9, which validates then calls `save`) and the Noise_IK transport (#7/#30, which `load`s the record at connect time).

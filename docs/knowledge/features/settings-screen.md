@@ -3,10 +3,10 @@
 The paired region's third view — `settings`, a sibling of [`list`](channel-list.md) and
 [`thread`](conversation-shell.md) — reachable from a new entry button on the Channel List home. A
 top-bar (back + "Settings" title) above three sections: "Connection", whose body renders the paired
-server's identity (a Server row showing `serverId` + `relayUrl`, plus an empty host slot for the future
-two-dot status indicator); "Storage", whose body renders a live archived-conversations count; and
-"About", whose body renders the running app's build version. Mirrors mobile #390/#398, with the relay
-URL as a documented desktop addition.
+server's identity (a Server row showing `serverId` + `relayUrl`, an empty host slot for the future
+two-dot status indicator, and a "Pair another server" nav row that switches daemons); "Storage", whose
+body renders a live archived-conversations count; and "About", whose body renders the running app's
+build version. Mirrors mobile #390/#398, with the relay URL as a documented desktop addition.
 
 Introduced in [#333](../codebase/333.md) as a chrome-only scaffold (the scaffold child of the #150
 split; the other child, #332, shipped the data path: [#339](../codebase/339.md)'s IPC surface +
@@ -15,10 +15,15 @@ section-body with the store-bound Server row and mounted #340's previously-dorma
 appended the About section, a static version readout sourced from `package.json` at build time (a #151
 split sibling). [#351](../codebase/351.md) then inserted a Storage section between Connection and About,
 a live archived-conversations count derived from the existing
-[conversation list store](conversation-list-store.md) (another #151 split sibling). Renderer-only throughout — no keys, sockets, or tokens touched
-directly (the Server row reads only the vetted, non-secret `serverId`/`relayUrl` pair off #340's store;
-the Storage row reads a derived count off the conversation-list store; the About row reads a compile-time
-constant) — not security-sensitive.
+[conversation list store](conversation-list-store.md) (another #151 split sibling). [#152](../codebase/152.md)
+then added a "Pair another server" row below the Server row that re-opens the existing
+[pairing screen](pairing-input-screen.md) as a new [paired-shell](paired-shell.md) sub-route, letting the
+user switch which daemon desktop drives without a relaunch — the last open follow-up on the #150 line.
+Renderer-only throughout — no keys, sockets, or tokens touched directly (the Server row reads only the
+vetted, non-secret `serverId`/`relayUrl` pair off #340's store; the Storage row reads a derived count off
+the conversation-list store; the About row reads a compile-time constant; the Pair-another-server row
+fires pure navigation over the already-vetted pairing IPC surface, #152 security review PASS) — not
+security-sensitive except for #152's navigation-only reach into the pairing flow.
 
 ## What it does
 
@@ -34,6 +39,10 @@ constant) — not security-sensitive.
   `relayUrl` as a secondary line beneath it — or, before the one-shot fetch resolves, a `Loading…`
   placeholder in place of both values. An empty host slot beneath the values is reserved for a future
   two-dot Relay/Pyrycode status indicator (#330's `ConnectionStatusIndicator`, not yet mounted here).
+- Directly below the Server row, a "Pair another server" nav row (label + trailing chevron) opens the
+  existing pairing flow in place. Confirming a new pairing overwrites the single stored server record
+  and the transport reconnects to the new daemon automatically; cancelling returns to Settings with the
+  current server untouched — see [#152](../codebase/152.md).
 - Below the Connection section, a "Storage" heading (same `--color-primary` treatment) precedes a single
   row reading "Archived conversations" with a secondary line — "N archived" for a loaded list (every N,
   including 0 and 1 — no singular/plural branch) or a neutral "—" placeholder before the conversation list
@@ -49,15 +58,16 @@ Additive throughout — no existing route, nav arm, or view is rewritten:
 
 ```
 src/renderer/src/
-├── pairedRoute.ts                        # + 'settings' route, + 'openSettings' nav arm
-├── PairedShell.tsx                       # + case 'settings', + onOpenSettings threading
+├── pairedRoute.ts                        # + 'settings' route, + 'openSettings' nav arm; + 'pairServer' route, + 3 nav arms (#152)
+├── PairedShell.tsx                       # + case 'settings', + onOpenSettings threading; + case 'pairServer' (#152)
 └── screens/
     ├── channels/ChannelList.tsx          # + SettingsButton entry (in-file, unexported)
+    ├── pairing/PairingScreen.tsx          # reused as-is on the new 'pairServer' route (#152, no edit)
     └── settings/
-        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Storage section (#351) + About section (#350)
+        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152)
         ├── ServerRow.tsx                 # pure ServerRow view + store-bound ServerRowControl (#334, new)
         ├── ArchivedCountRow.tsx          # pure ArchivedCountRow view + store-bound ArchivedCountRowControl (#351, new)
-        └── settings.css                 # token-only, scaffold + Server row + Storage row + About row styles (#333 + #334 + #351 + #350)
+        └── settings.css                 # token-only, scaffold + Server row + Storage row + About row + Pair-another-server row styles (#333 + #334 + #351 + #350 + #152)
 
 src/renderer/src/store/conversationListStore.ts  # + selectArchivedCount selector (#351)
 
@@ -86,6 +96,14 @@ export function nextPairedRoute(current: PairedRoute, nav: PairedNav): PairedRou
 the **existing** `back` arm unchanged: `nextPairedRoute('settings', { type: 'back' })` already resolved
 to `'list'` before this ticket, since `back`'s arm never inspected `current`. This is the ticket's
 central economy — one new route, one new nav arm, zero new back-transition logic.
+
+[#152](../codebase/152.md) later added a fourth route, `'pairServer'`, plus three nav arms:
+`openPairServer` (the Settings row → `pairServer`), `pairServerCancelled` (`pairServer` → `settings`,
+AC4 non-destructive), and `pairServerPaired` (`pairServer` → `list`, AC3, the new server's home). The
+two exits deliberately do **not** reuse the absolute `back` arm even though `back` also currently
+resolves to `list`: cancel's destination (`settings`, "return to where I launched pairing from") and a
+completed pair's destination (`list`, "go home to the new server") are two different intents that only
+coincide with `back` by accident today, and would diverge the moment `back` becomes stack-aware.
 
 ### The second guard (`PairedShell.tsx`)
 
@@ -117,7 +135,13 @@ it.
 A single pure, exported, server-renderable view — no store read, no effects, no `window.pyry`:
 
 ```ts
-export function SettingsScreen({ onBack }: { onBack: () => void }): JSX.Element
+export function SettingsScreen({
+  onBack,
+  onPairAnother
+}: {
+  onBack: () => void
+  onPairAnother: () => void
+}): JSX.Element
 ```
 
 `onBack` is **required** (unlike `ConversationScreen`'s optional-gated `BackControl` — a Settings
@@ -125,10 +149,32 @@ screen always has a back affordance). Structure: root `<section className="setti
 aria-label="Settings screen">` → top-bar (`BackControl` + `<h1>Settings</h1>`) → body → one
 `<section className="settings__section">` with `<h2>Connection</h2>` and a
 `<div className="settings__section-body">` that mounts `<ServerInfoData /><ServerRowControl />`
-([#334](../codebase/334.md)). Copy strings live in a client-owned `SETTINGS_COPY` module constant (the
-`EMPTY_THREAD_COPY` idiom) — never a daemon string. `SettingsScreen` itself stays a pure, store-free
-composition point: it reads no store and fires no effect directly — the store read and the one-shot
-fetch both live inside the two mounted children.
+([#334](../codebase/334.md)) followed by `<PairAnotherServerRow onActivate={onPairAnother} />`
+([#152](../codebase/152.md), below). Copy strings live in a client-owned `SETTINGS_COPY` module
+constant (the `EMPTY_THREAD_COPY` idiom) — never a daemon string. `SettingsScreen` itself stays a pure,
+store-free composition point: it reads no store and fires no effect directly — the store read and the
+one-shot fetch both live inside the mounted children; `onPairAnother` is a pure injected callback with
+no store or effect of its own.
+
+### The Pair-another-server row (`SettingsScreen.tsx`, #152)
+
+An in-file, non-exported control mirroring `BackControl`'s inline-component + inline-SVG posture (not a
+dedicated module like `ServerRow.tsx` — it has no populated/null matrix, just a click):
+
+```ts
+function PairAnotherServerRow({ onActivate }: { onActivate: () => void }): JSX.Element
+// <button type="button" className="settings__pair-another-row" onClick={onActivate}>
+//   <span className="settings__pair-another-label">Pair another server</span>
+//   <svg aria-hidden="true" …chevron_right…/>
+// </button>
+```
+
+The row is a native `<button>`, so its visible text is the accessible name (no `aria-label`); the
+chevron `<svg>` is `aria-hidden`. Unlike the Server row (#334) and Storage row (#351), which both
+**omit** their trailing chevron because they have no detail screen to lead to, this row **keeps** its
+chevron — it is a genuine forward-nav affordance, matching Figma `17:21`. Activating it fires
+`onPairAnother`, wired by `PairedShellView` to `dispatch({ type: 'openPairServer' })` — see
+[Paired shell](paired-shell.md#the-pairserver-route-152) for what renders next.
 
 ### The Server row (`ServerRow.tsx`, #334)
 
@@ -226,7 +272,12 @@ out-of-scope call in the spec, not an oversight. `.settings__storage-row` / `-te
 declarations) mirror the Server row's padding and label type treatment (#350/#351) — each a dedicated
 class rather than reusing `.settings__server-row*`, introducing no new token or literal.
 `.settings__storage-row-count` additionally sets `overflow-wrap: anywhere` (the Server-row-id-line guard)
-since the derived count string has no fixed length.
+since the derived count string has no fixed length. `.settings__pair-another-row` (#152) mirrors
+`.settings__back`'s button reset + hover/focus treatment (`--space-3`/`--space-4` padding, transparent→
+`--color-surface-container-high` hover, `--color-outline` focus-visible outline);
+`.settings__pair-another-label` mirrors the Server-row label's `--text-body-large-*` treatment; the
+chevron slot is `flex:0 0 auto`, 20×20, `--color-on-surface-variant` (a muted trailing affordance) — no
+new token introduced.
 
 ### Data flow
 
@@ -240,12 +291,21 @@ ChannelList SettingsButton.onClick
     → mounts <ServerRowControl /> → useServerInfoStore(selectServerInfo) → <ServerRow serverInfo=… />
     → mounts <ArchivedCountRowControl /> → useConversationListStore(selectArchivedCount) → <ArchivedCountRow archivedCount=… />
     → renders the About section: `Version ${__APP_VERSION__}` (no fetch, no store — substituted at build time)
+    → renders <PairAnotherServerRow onActivate={onPairAnother} />
 
 conversationUpdated (archive/restore) → ConversationListData re-list → setConversations
   → selectArchivedCount recomputes → ArchivedCountRowControl re-renders iff the count itself changed
 
 SettingsScreen BackControl.onClick
   → dispatch({ type: 'back' }) → nextPairedRoute('settings', back) = 'list' → ChannelList
+
+PairAnotherServerRow.onClick (#152)
+  → dispatch({ type: 'openPairServer' }) → nextPairedRoute('settings', openPairServer) = 'pairServer'
+  → PairedShellView renders <PairingScreen> fresh (editing phase, no bridge — window.pyry default)
+    confirm → MAIN: persists the overwriting record → pairingHandler.onPaired → connection.reconnect()
+            → RENDERER: onPaired → dispatch({ type: 'pairServerPaired' }) → route 'list' (AC3)
+    cancel  → pairing reducer resets (no persist, no reconnect)
+            → onCancel → dispatch({ type: 'pairServerCancelled' }) → route 'settings' (AC4)
 ```
 
 The nav shell (`pairedRoute.ts`/`PairedShell.tsx`) added no store, IPC, wire, or daemon event — that
@@ -277,11 +337,15 @@ at all — the value is fixed at build time, so there is nothing to fetch or sub
   same zustand-v5 gotcha as the Server row: `renderToStaticMarkup` only ever sees the store's initial
   `null`. The count matrix (0/1/5/mixed) is proven on `ArchivedCountRow`'s pure view directly, not through
   the container.
-- **No stack-aware back.** `settings` → `back` always lands on `list`, even though the ticket's own
-  comments (both here and in [#334](../codebase/334.md)/[#151](../codebase/151.md)) anticipate this
-  changing if a future sub-navigation (e.g. a "pair another server" sub-screen, [#152](../codebase/152.md))
-  needs a real stack. `current` stays in `nextPairedRoute`'s signature for exactly this reason — see
-  [paired shell](paired-shell.md).
+- **No stack-aware back.** `settings` → `back` always lands on `list`; the `pairServer` sub-route added
+  by [#152](../codebase/152.md) sidesteps rather than solves this — its two exits are their own explicit
+  nav arms (`pairServerCancelled`/`pairServerPaired`), not a reuse of `back`, precisely because a future
+  stack-aware `back` from `pairServer` would need to land on `settings`, which is a different resolution
+  than the two intents this ticket actually needs. `current` stays in `nextPairedRoute`'s signature for
+  exactly this reason — see [paired shell](paired-shell.md).
+- **Desktop remains single-server, overwrite semantics after #152.** Confirming a new pairing from
+  Settings replaces the one stored record; it is not a multi-server manager. Per-server `.${serverId}`
+  keying is a deliberately deferred, separate change (`pairedServerStore.ts`).
 - **Marker collision, worth knowing before writing more `PairedShellView` tests.** The `thread` view
   already renders `aria-label="Connection status"` (the two-dot indicator, [#330](../codebase/330.md)),
   and `list` now renders a button with `aria-label="Settings"` — so neither `"Connection"` nor
@@ -325,5 +389,9 @@ at all — the value is fixed at build time, so there is nothing to fetch or sub
 - [#351 codebase notes](../codebase/351.md) · Spec: `docs/specs/architecture/351-settings-storage-archived-count.md`
   — inserts the Storage section and its archived-count row between Connection and About; a #151 split
   sibling of #350/#352/#353.
-- Remaining follow-ups, blocked-by #333: [#152](../codebase/152.md) (pair another server); #151 split
-  siblings #352 (Defaults), #353 (Push), both still Inbox.
+- [#152 codebase notes](../codebase/152.md) · Spec: `docs/specs/architecture/152-pair-another-server-from-settings.md`
+  — adds the "Pair another server" row and the `pairServer` sub-route it opens; the last open follow-up
+  on the #150 line for the Connection section.
+- [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the reused
+  `PairingScreen` paste→review→confirm flow #152 re-opens as a paired sub-route.
+- Remaining follow-ups: #151 split siblings #352 (Defaults), #353 (Push), both still Inbox.

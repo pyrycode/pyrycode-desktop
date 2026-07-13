@@ -5,8 +5,9 @@ view-state model plus a thin container, mirroring the `appRoute.ts` + `AppView` 
 [app shell](app-shell.md) shipped as. Before this, the `conversation` route dropped straight into a
 single [conversation shell](conversation-shell.md) screen with no list and no way back; this is the
 inner navigation spine for the paired region. [#333](../codebase/333.md) added the third arm, a
-[Settings screen](settings-screen.md); an Archive screen remains a future added arm along the same
-seam.
+[Settings screen](settings-screen.md); [#152](../codebase/152.md) added a fourth, `pairServer`, that
+re-opens the existing [pairing screen](pairing-input-screen.md) to switch daemons. An Archive screen
+remains a future added arm along the same seam.
 
 Introduced in [#140](../codebase/140.md). Renderer-only, pure view-state — no keys, sockets, tokens,
 or frames, so not security-sensitive.
@@ -25,6 +26,12 @@ or frames, so not security-sensitive.
   to `list` via the same absolute `back` transition `thread` already used. A future `archive` view is the
   same shape again: an added `PairedRoute` member and an added `PairedShellView` case, not a rewrite (the
   ticket's extensibility requirement).
+- [#152](../codebase/152.md) added a fourth view, `pairServer` — reached from a "Pair another server" row
+  inside `settings` — that re-opens the existing pairing screen from inside the paired app. Unlike
+  `settings`'s single `back` exit, `pairServer` has **two** distinct exits with their own nav arms:
+  cancelling returns to `settings` (the current server stays paired and connected); completing a new
+  pairing goes to `list` (the freshly-paired server's channel home). See [Settings
+  screen](settings-screen.md#the-pair-another-server-row-settingsscreentsx-152) for the entry row.
 - The `open` transition has a second trigger besides a list row click: the [new-discussion
   FAB](new-discussion-fab.md) (#242) fires it asynchronously when the daemon confirms a
   `conversationCreated` event, via `useConversationCreatedNav` mounted in the `PairedShell`
@@ -50,15 +57,24 @@ src/renderer/src/
 ### The route model + transition (`pairedRoute.ts`)
 
 ```ts
-export type PairedRoute = 'list' | 'thread' | 'settings'
-export type PairedNav = { type: 'open' } | { type: 'openSettings' } | { type: 'back' }
+export type PairedRoute = 'list' | 'thread' | 'settings' | 'pairServer'
+export type PairedNav =
+  | { type: 'open' }
+  | { type: 'openSettings' }
+  | { type: 'back' }
+  | { type: 'openPairServer' }
+  | { type: 'pairServerCancelled' }
+  | { type: 'pairServerPaired' }
 
 export function nextPairedRoute(current: PairedRoute, nav: PairedNav): PairedRoute {
   switch (nav.type) {
-    case 'open':         return 'thread'
-    case 'openSettings': return 'settings'
-    case 'back':          return 'list'
-    default:              return assertNever(nav)
+    case 'open':               return 'thread'
+    case 'openSettings':       return 'settings'
+    case 'back':                return 'list'
+    case 'openPairServer':     return 'pairServer'
+    case 'pairServerCancelled': return 'settings'
+    case 'pairServerPaired':    return 'list'
+    default:                    return assertNever(nav)
   }
 }
 ```
@@ -74,6 +90,14 @@ one-line comment in the source heads off a review flag. `assertNever(nav)` at th
 — the `pairingState.ts` idiom — makes a future nav event without a case a compile error, satisfying
 AC1's "exhaustive/compile-checked transition surface."
 
+[#152](../codebase/152.md) added `pairServer` and its three arms. `pairServerCancelled` and
+`pairServerPaired` are deliberately **not** a reuse of `back`, even though `back` also resolves to
+`list` today: the two pairing exits carry distinct intents (cancel → return to `settings`, where
+pairing was launched from; a completed pair → go home to `list`, the new server's channel list), and
+only one of those coincides with `back`'s current absolute resolution. Keeping them as their own arms
+is forward-safe if `back` ever becomes stack-aware — a stack-aware `back` from `pairServer` would pop to
+`settings` (correct for cancel, wrong for a completed pair).
+
 ### The pure view + container (`PairedShell.tsx`)
 
 `PairedShellView` is `AppView`'s inner twin — hookless, effectless, a `switch (props.route)` with its
@@ -86,12 +110,16 @@ export function PairedShellView(props: {
   onOpenSettings: () => void
   onBack: () => void
   onUnpaired: () => void
+  onOpenPairServer: () => void
+  onPairServerPaired: () => void
+  onPairServerCancelled: () => void
 }): JSX.Element {
   switch (props.route) {
-    case 'list':     return <ChannelList onOpen={props.onOpen} onOpenSettings={props.onOpenSettings} />
-    case 'thread':   return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
-    case 'settings': return <SettingsScreen onBack={props.onBack} />
-    default:         return assertNever(props.route)
+    case 'list':       return <ChannelList onOpen={props.onOpen} onOpenSettings={props.onOpenSettings} />
+    case 'thread':     return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
+    case 'settings':   return <SettingsScreen onBack={props.onBack} onPairAnother={props.onOpenPairServer} />
+    case 'pairServer': return <PairingScreen onPaired={props.onPairServerPaired} onCancel={props.onPairServerCancelled} />
+    default:           return assertNever(props.route)
   }
 }
 ```
@@ -99,6 +127,19 @@ export function PairedShellView(props: {
 Every route renders a real view (no `null` arm, unlike `AppView`'s `pending` case) — the paired region
 always has *something* to show. The `settings` case reuses the shared `onBack` unchanged — see
 [Settings screen](settings-screen.md) for the scaffold it renders.
+
+### The `pairServer` route (#152)
+
+The `pairServer` case renders the pre-existing `PairingScreen` ([#55](../codebase/55.md)) with **no**
+`bridge` prop, so it falls back to its production `window.pyry` default — the same posture the app-shell
+`pairing` route already uses. `PairingScreen` derefs `window.pyry` at render time (not in an effect), so
+any test that server-renders the `pairServer` route needs a `globalThis.window = { pyry: {} }` stub, the
+same one `App.test.tsx` already carries for its own `pairing` route. Unlike `thread`/`settings`, which
+share `onBack`, `pairServer` binds to two distinct callbacks — `onPairServerPaired` and
+`onPairServerCancelled` — because its two exits land on different routes (see above). `PairingScreen`
+mounts fresh on every entry to `pairServer` (its own `useReducer(pairingReducer, initialPairingState)`)
+and unmounts on every exit, so it always opens at an empty paste screen — no stale paste survives a route
+change.
 
 `case 'list'` originally rendered an in-file `PlaceholderList` throwaway (a bare `Open conversation`
 button); [#141](../codebase/141.md) replaced it wholesale with the real
@@ -123,6 +164,9 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onBack={() => dispatch({ type: 'back' })}
       onUnpaired={onUnpaired}
+      onOpenPairServer={() => dispatch({ type: 'openPairServer' })}
+      onPairServerPaired={() => dispatch({ type: 'pairServerPaired' })}
+      onPairServerCancelled={() => dispatch({ type: 'pairServerCancelled' })}
     />
   )
 }
@@ -184,6 +228,10 @@ AppView (route='conversation')
                             route='thread'   → ConversationScreen (store-backed) + BackControl — [←] → dispatch{back}
                                                 → WorkspaceChip reads activeConversationStore (#278)
                             route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
+                                                PairAnotherServerRow → dispatch{openPairServer} (#152)
+                            route='pairServer' → PairingScreen (window.pyry default) — (#152)
+                                                onCancel → dispatch{pairServerCancelled} → 'settings'
+                                                onPaired → dispatch{pairServerPaired} → 'list'
 ```
 
 A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row
@@ -211,17 +259,28 @@ navigation, and hence no remount, before this ticket).
   above.
 - **`settings`'s back is not stack-aware**, same as `thread`'s: it always lands on `list`, regardless of
   which route dispatched `back`. `current` stays unreferenced in `nextPairedRoute` for exactly the
-  reason noted above — a future sub-screen under Settings (e.g. [#152](../codebase/152.md)'s "pair
-  another server") is the first candidate that would need a real stack.
+  reason noted above.
+- **`pairServer` sidesteps the stack-aware-back gap rather than closing it.** [#152](../codebase/152.md)
+  gave its two exits their own explicit nav arms instead of extending `back` with stack awareness — a
+  smaller, sufficient fix for this one sub-screen. A future sub-screen under Settings still can't lean on
+  a general "return to origin" `back`; it would need the same one-arm-per-exit treatment, or a real stack,
+  whichever comes first.
+- **`pairServer`'s render test needs a `window` stub.** `PairingScreen` derefs `window.pyry` at render
+  time; server-rendering `<PairedShellView route="pairServer" …/>` in the `node` vitest env throws
+  without `globalThis.window = { pyry: {} }` (`beforeEach`/`afterEach`), the same stub `App.test.tsx`
+  uses for its `pairing` route.
 
 ## Related
 
 - [App shell](app-shell.md) / [#80](../codebase/80.md) — the outer router; `PairedShell` mounts under its `conversation` route
 - [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — the real `list` view, replacing the placeholder described above
 - [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the third route, `settings`, and its entry button on the Channel List
+- [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the fourth route, `pairServer` (#152), reuses this screen as-is
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the second `open` trigger, fired by a daemon-confirmed conversation create rather than a row click
 - [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
 - [Session store](session-store.md) — untouched by this ticket; the store-backed messages that survive navigation
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the ephemeral-state rule `PairedShell`'s `useReducer` follows
 - [#140 codebase notes](../codebase/140.md) · Spec: `docs/specs/architecture/140-list-thread-navigation-shell.md`
+- [#152 codebase notes](../codebase/152.md) · Spec: `docs/specs/architecture/152-pair-another-server-from-settings.md`
+  — adds the `pairServer` route and its two dedicated exit arms.

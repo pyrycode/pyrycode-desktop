@@ -9,6 +9,7 @@ import {
 } from '../shared/ipc/pairing'
 import { PAIRING_STATUS_CHANNEL, type PairingStatus } from '../shared/ipc/pairingStatus'
 import { UNPAIR_CHANNEL, type UnpairResult } from '../shared/ipc/unpair'
+import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -77,6 +78,16 @@ const api = {
    * action is #166/#167.
    */
   unpair: (): Promise<UnpairResult> => ipcRenderer.invoke(UNPAIR_CHANNEL),
+
+  /**
+   * Ask the background process for the paired server's NON-SECRET identity — its server id and relay
+   * URL — so a Settings screen can tell the user which server they are paired with, including while
+   * disconnected (#340/#334). Request/response (ipcRenderer.invoke) called with NO second argument —
+   * no data leaves the renderer; only the two-field-or-absent union comes back, never the token /
+   * server key. SERVER_INFO_CHANNEL is fixed here so the renderer cannot address arbitrary channels,
+   * and ipcRenderer never crosses the bridge. No caller is wired yet — the renderer store is #340.
+   */
+  serverInfo: (): Promise<ServerInfo> => ipcRenderer.invoke(SERVER_INFO_CHANNEL),
 
   /**
    * Subscribe to typed daemon events from the background process; returns an unsubscribe

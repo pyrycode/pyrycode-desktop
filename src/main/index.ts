@@ -13,6 +13,7 @@ import { selectRelayPolicy } from './relayPolicy'
 import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairHandler } from './unpairHandler'
+import { registerServerInfoHandler } from './serverInfoHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
@@ -151,6 +152,16 @@ app.whenReady().then(() => {
   // symmetric with unregisterPairingStatus.
   const unregisterUnpair = registerUnpairHandler(ipcMain, { store: pairedServerStore })
   app.on('will-quit', () => unregisterUnpair())
+
+  // The paired-server-info query (#339): reuse the same pairedServerStore — do not construct a second
+  // store — so a Settings screen (#340/#334) can read the paired server's non-secret identity (its
+  // server id + relay URL) from the at-rest record, including while disconnected. Grouped with the
+  // pairing-status / unpair registrations (needs only the store — no `connection`, no did-finish-load
+  // gate). Only the two non-secret fields cross back — never the token / server_static_pubkey; every
+  // non-readable case collapses to a value-free `unavailable`. No caller races it — the consumer is
+  // #340. `will-quit` removes the handler, symmetric with unregisterUnpair.
+  const unregisterServerInfo = registerServerInfoHandler(ipcMain, { store: pairedServerStore })
+  app.on('will-quit', () => unregisterServerInfo())
 
   // The transport consumer (#62): reuse the paired-server store, add a device-keypair store over
   // the same secret chain, and drive the Noise relay driver — emitting typed daemon events to the

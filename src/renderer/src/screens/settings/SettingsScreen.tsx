@@ -1,4 +1,6 @@
 import './settings.css'
+import { ServerInfoData } from '../../store/serverInfoLoader'
+import { ServerRowControl } from './ServerRow'
 
 // Client-owned copy — module-level constants (the EMPTY_THREAD_COPY idiom), never daemon strings. The
 // scaffold renders no untrusted text, so there is no injection sink: this is why the slice is not
@@ -10,10 +12,10 @@ const SETTINGS_COPY = {
 } as const
 
 /**
- * The Settings screen scaffold (#333) — the paired shell's `settings` view (Figma 17-2, chrome + the
- * Connection section header only). A pure, exported, server-renderable view: no store read, no effects,
- * no window.pyry — the scaffold carries no data. #334 mounts the store-bound Server row into the empty
- * `.settings__section-body`; the preference sections (Appearance/Defaults/…) are #151/#152.
+ * The Settings screen (#333 scaffold + #334 Server row) — the paired shell's `settings` view (Figma
+ * 17-2, chrome + the Connection section). A thin composition point, still server-renderable: it takes an
+ * `onBack` callback and mounts the store-bound Server row into the Connection section-body. The remaining
+ * preference sections (Appearance/Defaults/…) are #151/#152.
  *
  * `onBack` is REQUIRED chrome — a Settings screen always has a back affordance, unlike ConversationScreen's
  * optional-gated BackControl. PairedShellView binds it to the shared `back` dispatch, which returns to the
@@ -29,9 +31,14 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): JSX.Element 
       <div className="settings__body">
         <section className="settings__section">
           <h2 className="settings__section-header">{SETTINGS_COPY.connection}</h2>
-          {/* #334's mount point: the store-bound Server row (Figma 17:12) becomes this container's
-              child. Empty in this slice — the scaffold ships the section, not its content. */}
-          <div className="settings__section-body" />
+          {/* #334: the store-bound Server row (Figma 17:12). ServerInfoData is the headless one-shot
+              loader — mounting it here (not app-level) fires window.pyry.serverInfo() on Settings-open
+              and writes the store; ServerRowControl reads that store and renders the row. DOM order is
+              immaterial — the loader renders null. */}
+          <div className="settings__section-body">
+            <ServerInfoData />
+            <ServerRowControl />
+          </div>
         </section>
       </div>
     </section>

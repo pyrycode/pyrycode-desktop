@@ -161,3 +161,22 @@
   align-items: center;
   gap: var(--space-4);
 }
+
+/* The About section's version row (#350, Figma 17-106) — mirrors the Server row's padding (px-16 py-10:
+   horizontal → --space-4, 10px vertical → --space-3, the same 2px-delta mapping the Server row uses). A
+   dedicated class rather than reusing .settings__server-row keeps the version row semantically decoupled
+   while introducing no new token or literal. */
+.settings__about-row {
+  padding: var(--space-3) var(--space-4);
+}
+
+/* The "Version X.Y.Z" line (Figma 17-108) — body-large, on-surface, the same type treatment as the
+   Server row's label. margin:0 resets the paragraph default. */
+.settings__about-version {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}

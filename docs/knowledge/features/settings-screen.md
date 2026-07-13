@@ -1,17 +1,20 @@
-# Settings screen (scaffold + Connection section)
+# Settings screen (scaffold + Connection section + About section)
 
 The paired region's third view — `settings`, a sibling of [`list`](channel-list.md) and
 [`thread`](conversation-shell.md) — reachable from a new entry button on the Channel List home. A
-top-bar (back + "Settings" title) above one "Connection" section, whose body now renders the paired
-server's identity: a Server row showing `serverId` + `relayUrl`, plus an empty host slot for the future
-two-dot status indicator. Mirrors mobile #390/#398, with the relay URL as a documented desktop addition.
+top-bar (back + "Settings" title) above two sections: "Connection", whose body renders the paired
+server's identity (a Server row showing `serverId` + `relayUrl`, plus an empty host slot for the future
+two-dot status indicator), and "About", whose body renders the running app's build version. Mirrors
+mobile #390/#398, with the relay URL as a documented desktop addition.
 
 Introduced in [#333](../codebase/333.md) as a chrome-only scaffold (the scaffold child of the #150
 split; the other child, #332, shipped the data path: [#339](../codebase/339.md)'s IPC surface +
 [#340](../codebase/340.md)'s renderer store). [#334](../codebase/334.md) then filled the scaffold's empty
-section-body with the store-bound Server row and mounted #340's previously-dormant loader. Renderer-only
-throughout — no keys, sockets, or tokens touched directly (the row reads only the vetted, non-secret
-`serverId`/`relayUrl` pair off #340's store) — not security-sensitive.
+section-body with the store-bound Server row and mounted #340's previously-dormant loader. [#350](../codebase/350.md)
+appended the About section, a static version readout sourced from `package.json` at build time (a #151
+split sibling). Renderer-only throughout — no keys, sockets, or tokens touched directly (the Server row
+reads only the vetted, non-secret `serverId`/`relayUrl` pair off #340's store; the About row reads a
+compile-time constant) — not security-sensitive.
 
 ## What it does
 
@@ -27,6 +30,8 @@ throughout — no keys, sockets, or tokens touched directly (the row reads only 
   `relayUrl` as a secondary line beneath it — or, before the one-shot fetch resolves, a `Loading…`
   placeholder in place of both values. An empty host slot beneath the values is reserved for a future
   two-dot Relay/Pyrycode status indicator (#330's `ConnectionStatusIndicator`, not yet mounted here).
+- Below the Connection section, an "About" heading (same `--color-primary` treatment) precedes a single
+  row reading "Version X.Y.Z" — the running app's `package.json` `version`, baked in at build time.
 - Back returns to the channel-home `list` view via the paired router's existing `back` transition — no
   new nav event, no stack-aware back.
 
@@ -41,9 +46,13 @@ src/renderer/src/
 └── screens/
     ├── channels/ChannelList.tsx          # + SettingsButton entry (in-file, unexported)
     └── settings/
-        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334)
+        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + About section (#350)
         ├── ServerRow.tsx                 # pure ServerRow view + store-bound ServerRowControl (#334, new)
-        └── settings.css                 # token-only, scaffold + Server row styles (#333 + #334)
+        └── settings.css                 # token-only, scaffold + Server row + About row styles (#333 + #334 + #350)
+
+src/renderer/src/version.d.ts             # ambient `declare const __APP_VERSION__: string` (#350, new)
+electron.vite.config.ts                   # + __APP_VERSION__ define, renderer block (#350)
+vitest.config.ts                          # + __APP_VERSION__ define, mirrored so tests see it (#350)
 ```
 
 ### The route + nav arm (`pairedRoute.ts`)
@@ -135,6 +144,35 @@ shipped that loader dormant (zero consumers), so before #334 the store sat at `n
 `SettingsScreen` mounts only under the paired shell's `settings` route (post-pairing, [PairedShell](paired-shell.md)),
 a fresh fetch fires every time Settings opens rather than once at app launch.
 
+### The About section (`SettingsScreen.tsx`, #350)
+
+Appended inline as a second `settings__section`, after Connection — no new component file, since the
+version readout has no store and no populated/null matrix (a container/pure-view split would be
+over-engineering for a static string):
+
+```ts
+const VERSION_LINE = `Version ${__APP_VERSION__}`
+```
+
+`__APP_VERSION__` is a compile-time constant substituted by a Vite `define`, fed from `package.json`'s
+`version`, present in **both** `electron.vite.config.ts` (drives `npm run dev`/`npm run build`) and
+`vitest.config.ts` (drives `npm test` — a separate Vite config, invisible to the electron-vite one, so
+without its own copy of the `define` the test throws `ReferenceError: __APP_VERSION__ is not defined` at
+transform time rather than a clean assertion miss). Both configs read the version the same way —
+`JSON.parse(readFileSync(resolve('package.json'), 'utf-8')).version` — never a JSON import, since
+`electron.vite.config.ts` is typechecked by `tsconfig.node.json`, which sets no `resolveJsonModule`
+anywhere in the repo. A new ambient `src/renderer/src/version.d.ts` (`declare const __APP_VERSION__:
+string`, no import/export) types the global for every renderer module, picked up by `tsconfig.web.json`'s
+existing `src/renderer/src/**/*` glob.
+
+This is the deliberate opposite of the Server row above: `serverInfo` is daemon-sourced, async, and
+nullable, so it crosses main→renderer over IPC (#339/#340). The version is static, non-secret, and known
+at build time, so a compile-time `define` avoids the IPC round-trip and the transport/render split
+entirely — no `src/main`, `src/preload`, or `src/shared/ipc` edit.
+
+The Figma's build-hash sub-line (`build a8f3c2d`, node 17-109) is out of scope — desktop has no wired
+build-metadata source yet; a follow-up could add it with a second `define` using this same mechanism.
+
 ### CSS (`settings.css`)
 
 Token-only, mirroring `channels.css`'s screen-root posture (`height: 100%; overflow-y: auto`, the
@@ -144,7 +182,10 @@ tone: `.settings__section-header` uses `--color-primary` (#9dcbfc), not the mute
 color per Figma. `.settings__back` duplicates `.conversation__back`'s ~15-line treatment verbatim
 (48px square, `--radius-full`, transparent→`--color-surface-container-high` hover,
 `--color-outline` focus-visible outline) rather than extracting a shared class — an explicit
-out-of-scope call in the spec, not an oversight.
+out-of-scope call in the spec, not an oversight. `.settings__about-row` (`--space-3`/`--space-4` padding)
+and `.settings__about-version` (`--color-on-surface` + the four `--text-body-large-*` declarations)
+mirror the Server row's padding and label type treatment (#350) — a dedicated class rather than reusing
+`.settings__server-row*`, introducing no new token or literal.
 
 ### Data flow
 
@@ -156,6 +197,7 @@ ChannelList SettingsButton.onClick
     → mounts <ServerInfoData />  → window.pyry.serverInfo() [once]
         → mapServerInfo → setServerInfo → serverInfoStore
     → mounts <ServerRowControl /> → useServerInfoStore(selectServerInfo) → <ServerRow serverInfo=… />
+    → renders the About section: `Version ${__APP_VERSION__}` (no fetch, no store — substituted at build time)
 
 SettingsScreen BackControl.onClick
   → dispatch({ type: 'back' }) → nextPairedRoute('settings', back) = 'list' → ChannelList
@@ -164,6 +206,8 @@ SettingsScreen BackControl.onClick
 The nav shell (`pairedRoute.ts`/`PairedShell.tsx`) added no store, IPC, wire, or daemon event — that
 part is still exactly the screen-local `useReducer` from #333. #334 wires the pre-existing
 [server-info store](server-info-store.md) into the tree; the store and its channel are entirely #339/#340's.
+#350's About section adds no runtime data flow at all — the value is fixed at build time, so there is
+nothing to fetch or subscribe to.
 
 ## Edge cases and limitations
 
@@ -190,6 +234,15 @@ part is still exactly the screen-local `useReducer` from #333. #334 wires the pr
   [#333 codebase notes](../codebase/333.md#lessons-learned).
 - **Settings entry corner is a free CSS swap.** Top-right sticky was the developer's call against the
   mobile home mock; no Figma node pins it, and the AC only required presence + an accessible name.
+- **A `define` added to `electron.vite.config.ts` alone is invisible to `npm test`.** `vitest.config.ts`
+  is a separate Vite config; any future compile-time renderer constant needs the same `define` mirrored
+  into both, or the render test throws `ReferenceError` at transform rather than failing the assertion
+  (#350).
+- **The "Version 0.1.0" test assertion is coupled to `package.json`'s current version** and needs a
+  one-line update on the next version bump — accepted deliberately since deriving it dynamically in the
+  test would need its own JSON import, blocked by the same missing `resolveJsonModule` (#350).
+- **No build-hash sub-line.** Desktop has no wired build-metadata source; the Figma's "build a8f3c2d" row
+  is deferred to a follow-up.
 
 ## Related
 
@@ -208,5 +261,7 @@ part is still exactly the screen-local `useReducer` from #333. #334 wires the pr
 - [#333 codebase notes](../codebase/333.md) · Spec: `docs/specs/architecture/333-settings-screen-scaffold.md`
 - [#334 codebase notes](../codebase/334.md) · Spec: `docs/specs/architecture/334-settings-connection-server-row.md`
   — fills this screen's Connection section-body with the Server row.
-- Remaining follow-ups, blocked-by #333: [#151](../codebase/151.md) (preference rows), [#152](../codebase/152.md)
-  (pair another server).
+- [#350 codebase notes](../codebase/350.md) · Spec: `docs/specs/architecture/350-settings-about-version.md`
+  — appends the About section and its version readout; a #151 split sibling of #351/#352/#353.
+- Remaining follow-ups, blocked-by #333: [#152](../codebase/152.md) (pair another server); #151 split
+  siblings #351 (archived count), #352 (Defaults), #353 (Push).

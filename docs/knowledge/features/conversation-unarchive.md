@@ -1,15 +1,16 @@
 # Conversation unarchive (transport)
 
 The **transport data path** that lets the desktop client ask the pyry daemon to restore an
-archived conversation back to active, so a future Archive screen's restore row can flip
-`ConversationSummary.is_archived` back to `false` on a row the [conversation list
+archived conversation back to active, so the [Archive screen](archive-screen.md)'s restore row can
+flip `ConversationSummary.is_archived` back to `false` on a row the [conversation list
 store](conversation-list-store.md) already holds.
 
 Introduced in [#346](../codebase/346.md), split from [#153](../codebase/153.md) (the Archive
-screen split: transport `#346` / scaffold+nav `#347` / counts+restore `#348`). **Ships dormant** —
-fully wired and tested, but with no caller yet. #348's restore row is its first consumer. The
-direct twin of [conversation promote](conversation-promote.md) (#273), field-for-field, with the
-payload narrowed to a single id.
+screen split: transport `#346` / scaffold+nav `#347` / counts+restore `#348`). Shipped dormant —
+fully wired and tested, with no caller at the time. [#348](../codebase/348.md)'s Archive screen
+restore row is now its first (and so far only) caller. The direct twin of
+[conversation promote](conversation-promote.md) (#273), field-for-field, with the payload narrowed
+to a single id.
 
 ## The wire contract
 
@@ -29,9 +30,10 @@ caller.
 **Reply is a broadcast, not correlated.** The daemon confirms by clearing the durable archived
 flag, persisting eagerly, and replying with the same `conversation_updated` record `promote_conversation`
 uses (see [conversation promote](conversation-promote.md) for its shape) — reflecting the restored,
-active state. This slice does not correlate that reply; the future restore consumer (#348) instead
-reads `ConversationSummary.is_archived` off the [conversation list store](conversation-list-store.md)'s
-next re-list, exactly as [#275](../codebase/275.md) did for promote's `is_promoted` flip.
+active state. This slice does not correlate that reply; the [Archive screen](archive-screen.md)'s
+restore row instead reads `ConversationSummary.is_archived` off the
+[conversation list store](conversation-list-store.md)'s next re-list, exactly as
+[#275](../codebase/275.md) did for promote's `is_promoted` flip.
 
 ## The five pieces
 
@@ -57,10 +59,10 @@ method's fresh-literal construction (naming only `conversation_id`, never spread
 payload) is the layer that actually bounds what reaches the wire. This two-layer defense is the
 same posture #273 and #236 established.
 
-## Data flow (once #348 wires the renderer)
+## Data flow (wired by #348)
 
 ```
-restore row click
+restore row click (ArchiveScreen, archive-screen.md)
   → { type: 'unarchiveConversation', payload: { conversation_id } }  (renderer, built inline, no constructor)
   → onCommand dispatch (src/main/index.ts)
   → connection.unarchiveConversation(payload)                        (fresh literal, fire-and-forget)
@@ -72,13 +74,15 @@ restore row click
 
 ## Related
 
+- [Archive screen](archive-screen.md) / [#348](../codebase/348.md) — the first (and so far only)
+  caller: its restore row dispatches this command via `requestUnarchiveConversation`.
 - [Conversation promote (transport)](conversation-promote.md) / [#273](../codebase/273.md) — the
   direct twin this slice clones field-for-field (three required strings + broadcast reply vs. one
   required string + broadcast reply).
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — origin of
-  `ConversationSummary.is_archived`, the field the eventual restore consumer reads instead of
-  correlating this verb's reply.
+  `ConversationSummary.is_archived`, the field the restore consumer reads instead of correlating
+  this verb's reply.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — re-lists on
-  any `conversation_updated` broadcast, so a future restore's flip lands automatically, the same
+  any `conversation_updated` broadcast, so a restore's flip lands automatically, the same
   mechanism [#275](../codebase/275.md) relied on for promote.
 - [#346 codebase notes](../codebase/346.md) — implementation summary.

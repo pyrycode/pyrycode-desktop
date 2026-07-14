@@ -58,8 +58,12 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // an unrelated field later. The discriminant is renamed across the boundary: modalAnswerRejected
       // → 'rejected'. Content-free by construction — only the correlation nonce crosses (AC3).
       return { type: 'rejected', modalId: event.modalId }
-    case 'connecting':
     case 'connected':
+      // #415: every supervisor (re)handshake re-emits `connected`. Flip it to the payload-free reset that
+      // clears the outstanding modal slice so the daemon's connect-time re-sends are the sole repopulation
+      // truth. Ignores `event.ack` (HelloAckPayload) — the reset needs no field off it.
+      return { type: 'reconnected' }
+    case 'connecting':
     case 'disconnected':
     case 'failed':
     case 'messageReceived':

@@ -48,6 +48,11 @@ function rejectionDismissed(modalId: string): ModalEvent {
   return { type: 'rejectionDismissed', modalId }
 }
 
+// #415: the transport (re)handshake. Payload-free — the reset needs nothing from the connect ack.
+function reconnected(): ModalEvent {
+  return { type: 'reconnected' }
+}
+
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
 function run(events: readonly ModalEvent[]): ModalState {
   return events.reduce(reduceModal, initialModalState)
@@ -254,6 +259,56 @@ describe('reduceModal — the two surfaces are orthogonal', () => {
     const after = reduceModal(before, rejected('m2'))
     expect(after.outstanding).toBe(before.outstanding)
     expect(after.rejections).toEqual(['m2'])
+  })
+})
+
+describe('reduceModal — reconnect reconcile (#415)', () => {
+  it('clears outstanding on reconnect (resolved-while-away → cleared, AC1/AC2)', () => {
+    const state = run([shown('m1'), shown('m2'), reconnected()])
+    expect(state.outstanding).toEqual([])
+  })
+
+  it('preserves the resolved slice by reference across the reset (AC3)', () => {
+    // A prompt answered before the drop records its id in resolved (#195); the reset must keep it so a
+    // daemon re-send stays suppressed — see the exactly-once-suppressed case below.
+    const before = run([shown('m1'), dismissed('m1')])
+    expect(before.resolved).toEqual(['m1'])
+    const after = reduceModal(before, reconnected())
+    expect(after.resolved).toBe(before.resolved)
+  })
+
+  it('preserves the rejections surface by reference across the reset (AC3)', () => {
+    // rejections (#249) has no daemon repopulation path — clearing it would drop a banner with nothing
+    // to refill.
+    const before = run([shown('m1'), rejected('r1')])
+    expect(before.rejections).toEqual(['r1'])
+    const after = reduceModal(before, reconnected())
+    expect(after.rejections).toBe(before.rejections)
+    expect(after.rejections).toEqual(['r1'])
+  })
+
+  it('returns the same state reference when outstanding is already empty — first connect (AC4)', () => {
+    const after = reduceModal(initialModalState, reconnected())
+    expect(after).toBe(initialModalState)
+  })
+
+  it('returns the same state reference on a reconnect after everything already resolved (AC4)', () => {
+    const before = run([shown('m1'), dismissed('m1')])
+    expect(before.outstanding).toEqual([])
+    const after = reduceModal(before, reconnected())
+    expect(after).toBe(before)
+  })
+
+  it('a still-held prompt re-sent after the reset surfaces exactly once (AC2)', () => {
+    const state = run([shown('m1'), reconnected(), shown('m1')])
+    expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1'])
+    expect(state.outstanding).toHaveLength(1)
+  })
+
+  it('an optimistically-answered prompt stays suppressed if re-sent after the reset (AC3)', () => {
+    // The resolved-first early-out in the shown arm fires because the reset preserved resolved.
+    const state = run([shown('m1'), dismissed('m1'), reconnected(), shown('m1')])
+    expect(state.outstanding).toEqual([])
   })
 })
 

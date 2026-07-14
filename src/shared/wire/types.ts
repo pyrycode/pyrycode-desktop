@@ -690,6 +690,24 @@ export interface ConversationUpdatedPayload {
 }
 
 /**
+ * Inbound `conversation_deleted` reply body (daemon → client). The permanent-delete confirmation
+ * (pyrycode#822): unlike `conversation_updated` — an UNSOLICITED BROADCAST the daemon fans out on
+ * archive/unarchive/promote — a delete is confirmed with a distinct, CORRELATED record (matched to the
+ * requester by `Envelope.in_reply_to`, with NO broadcast). The deliberate contrast with
+ * ConversationUpdatedPayload above; do not conflate the two.
+ *
+ * **A single REQUIRED value-string.** JSON key `id` — the id of the row the daemon deleted. Note the
+ * reply field is **`id`**, distinct from the request's `conversation_id` (DeleteConversationPayload):
+ * do NOT drift it to match the request (CLAUDE.md no-drift; pyrycode#822). Exactly one field — this is
+ * NOT ConversationUpdatedPayload's five-field / nullable-`name` shape. `id` is a routing id (an existing
+ * row's id), not a secret; the desktop never resolves it into a filesystem path. Do NOT drift it: change
+ * only alongside a daemon/mobile change. See #375.
+ */
+export interface ConversationDeletedPayload {
+  id: string
+}
+
+/**
  * One ordered slice of a streamed debug bundle (daemon → client). Mirrors the daemon's
  * DebugBundleChunkPayload{Seq int; Data []byte} field-for-field: `seq` is 0-based, contiguous,
  * ascending, and `data` is the raw bundle slice as standard base64 on the wire (Go's `[]byte`

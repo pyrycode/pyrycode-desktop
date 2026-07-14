@@ -98,6 +98,11 @@ function encodeConversationUpdated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 19, type: 'conversation_updated', ts: FIXED_TS, payload })
 }
 
+/** A `conversation_deleted` envelope's plaintext bytes, wrapping an arbitrary payload (#375). */
+function encodeConversationDeleted(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 20, type: 'conversation_deleted', ts: FIXED_TS, payload })
+}
+
 /** A `session_transition` envelope's plaintext bytes, wrapping an arbitrary payload (#254). */
 function encodeSessionTransition(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 19, type: 'session_transition', ts: FIXED_TS, payload })
@@ -267,6 +272,10 @@ const UPDATED_UNNAMED = {
   cwd: '/tmp/scratch',
   last_used_at: '2026-07-12T01:00:00Z'
 }
+
+/** A well-formed conversation_deleted reply — a single required `id`, the deleted row (#375).
+ *  Note the field is `id`, NOT `conversation_id` (the request's field) — do not drift it. */
+const DELETED = { id: 'conv-9' }
 
 /** A fully-populated, well-formed session_transition payload — a /clear rotation, workspace_cwd null (#254). */
 const SESSION_TRANSITION = {
@@ -916,6 +925,62 @@ describe('parseInboundMessage — conversation_updated fail-closed (#273, AC)', 
         type: 'conversation_updated',
         ts: FIXED_TS,
         payload: { ...UPDATED_NAMED, name: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — conversation_deleted recognition (#375, additive)', () => {
+  it('narrows a conversation_deleted reply into { kind: conversation-deleted } with the id', () => {
+    expect(parseInboundMessage(encodeConversationDeleted(DELETED))).toEqual({
+      kind: 'conversation-deleted',
+      conversationDeleted: DELETED
+    })
+  })
+
+  it('drops unknown server keys, keeping only the fresh single-field { id } object (forward-compat)', () => {
+    const withExtras = { ...DELETED, conversation_id: 'conv-9', reason: 'x', name: 'ignore' }
+    expect(parseInboundMessage(encodeConversationDeleted(withExtras))).toEqual({
+      kind: 'conversation-deleted',
+      conversationDeleted: DELETED
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — conversation_deleted fail-closed (#375, AC)', () => {
+  it('throws when the payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeConversationDeleted('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeConversationDeleted(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws when id is missing or non-string', () => {
+    const bad: unknown[] = [
+      {}, // id absent
+      { id: undefined },
+      { id: 42 },
+      { id: null },
+      { id: {} },
+      // the request's field name, not the reply's — a drifted frame must still fail closed.
+      { conversation_id: 'conv-9' }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeConversationDeleted(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an oversized conversation_deleted plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 20,
+        type: 'conversation_deleted',
+        ts: FIXED_TS,
+        payload: { id: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
       })
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
@@ -2277,6 +2342,32 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() =>
       parseInboundMessage(encodeConversationUpdated({ ...UPDATED_NAMED, is_promoted: 'nope' }), log)
     ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a conversation_deleted reply content-free, never the id, and no count (#375)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_ID = 'secret-deleted-conv-id'
+    const plaintext = encodeConversationDeleted({ id: SECRET_ID })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('conversation_deleted')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no `id`, and NO `count` (the conversation_updated posture).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_ID)
+  })
+
+  it('does NOT log on a malformed conversation_deleted throw path (#375)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeConversationDeleted({ id: 42 }), log)).toThrow(
+      WireDecodeError
+    )
     expect(lines).toHaveLength(0)
   })
 

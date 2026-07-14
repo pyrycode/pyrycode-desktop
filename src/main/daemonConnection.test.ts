@@ -270,6 +270,11 @@ function conversationUpdatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversation_updated', ts: FIXED_TS, payload })
 }
 
+/** A `conversation_deleted` plaintext, wrapping an arbitrary payload (#375). */
+function conversationDeletedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'conversation_deleted', ts: FIXED_TS, payload })
+}
+
 /** A `session_transition` plaintext, wrapping an arbitrary payload (#254). */
 function sessionTransitionPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'session_transition', ts: FIXED_TS, payload })
@@ -2301,6 +2306,41 @@ describe('createDaemonConnection — promoteConversation (promote_conversation r
       drivers[0].emit({
         type: 'message',
         plaintext: conversationUpdatedPlaintext({ ...UPDATED, is_promoted: 'nope' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — conversation_deleted inbound decode → conversationDeleted event (#375)', () => {
+  const DELETED = { id: 'conv-9' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes an inbound conversation_deleted into one conversationDeleted carrying the bare id', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: conversationDeletedPlaintext(DELETED) })
+
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'conversationDeleted', id: DELETED.id }])
+  })
+
+  it('drops a malformed conversation_deleted reply without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: conversationDeletedPlaintext({ id: 42 })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

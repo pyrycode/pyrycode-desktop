@@ -18,6 +18,8 @@ A **third, prominent** read of the connection status landed in [#279](../codebas
 
 A **pre-first-message workspace chip** landed in [#278](../codebase/278.md): a Material 3 pill above the empty new-discussion thread showing the workspace `cwd` the discussion will run in, with a disabled "Change" placeholder reserved for the #157 Workspace Picker sheet. Gone once the thread has its first message. See [Workspace chip](#workspace-chip-278) below.
 
+The chip's "Change" placeholder was wired in [#383](../codebase/383.md): a bottom sheet (Figma node 20-2) listing the [recent-workspaces store](recent-workspaces-store.md) (#382), marking the row matching the active conversation's `cwd` with a "default" pill, and dispatching the existing [`changeWorkspace` command](conversation-workspace-change.md) (#379) on selection — the daemon's `conversation_updated` reply reflects the change into the conversation list for free, no optimistic update. Closes #157's split except for the "Other" section's create-folder dialog, deferred to #384. See [Workspace Picker sheet](#workspace-picker-sheet-383) below.
+
 The status row and the "Run configuration" sheet it opens landed as a **chrome-only shell** in [#177](../codebase/177.md): a trigger row between the thread and the composer, and a host modal that renders no live data or sections yet. See [Run configuration sheet](#run-configuration-sheet-177) below.
 
 The sheet's first section, **Log data** (a Download button for the debug bundle), landed in [#72](../codebase/72.md): the last child in the sheet body, beneath where Model/Effort/YOLO/Context-window will mount. See [Log data section](#log-data-section-72) below.
@@ -59,7 +61,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── BackControl                .conversation__back   (leading icon button, #140, null when onBack absent)
 ├── UnpairControl              .conversation__header (slim header row, #166)
 ├── ConnectionBannerControl    .conversation__banner (null unless not-connected, top of thread, #279)
-├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278)
+├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278; onChange opens WorkspacePickerSheet, #383)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
@@ -388,8 +390,11 @@ silently-missing feature. #157 lands as a pure additive: pass an `onChange` that
 Picker sheet (Figma node 20-2) and the button un-disables, with no other change to this view — the same
 optional-prop extension seam #276 originally reserved for #155's `onChannelInfo?` — [#365](../codebase/365.md)
 later retired that speculative prop in favor of `ConversationScreen` owning the Channel Info sheet's
-open-state itself (see [Channel Info sheet](#channel-info-sheet-365) below), so `onChange?` here is now
-the pattern's only live instance.
+open-state itself (see [Channel Info sheet](#channel-info-sheet-365) below), so `onChange?` here was, for
+a time, the pattern's only live instance. **[#383](../codebase/383.md) bound it:** `ConversationScreen`
+passes `onChange={() => setPickerOpen(true)}` (a `pickerOpen` `useState` twin of `channelInfoOpen`), which
+un-disables the button — no other change to this view. See [Workspace Picker
+sheet](#workspace-picker-sheet-383) below.
 
 **Why a sibling, not nested inside `EmptyThread`.** #277's `.conversation__empty` surface pins the chip
 "to the top of this surface" per its own CSS comment, but `WorkspaceChip` does **not** thread
@@ -407,6 +412,87 @@ out the layout (the `.tool-row__summary` treatment).
 Not security-sensitive: a pure renderer read of an already-decoded store value, rendered on React's
 default-safe escaped path — no transport/crypto/socket surface touched. See [#278 codebase
 notes](../codebase/278.md) for the full design and patterns established.
+
+### Workspace Picker sheet (#383)
+
+The UI slice of #157 (Figma node 20-2): a bottom sheet, opened from the `WorkspaceChip`'s "Change"
+button, that lists the [recent-workspaces store](recent-workspaces-store.md) (#382), marks the row
+matching the active conversation's current `cwd`, and dispatches the existing [`changeWorkspace`
+command](conversation-workspace-change.md) (#379) on selection. Everything it consumes — the store +
+its dormant data-path bridge (#382), the command (#379), `formatLastActivity` (#141), and the
+`.status-sheet__*` chrome (#177/#365) — was already merged; this ticket adds one new file:
+`WorkspacePickerSheet.tsx` (a pure view, a one-line dispatch helper, and an in-file container — the
+`ChannelInfoSheetView`/`ChannelInfoSheet` split), plus an ~8-line wiring delta in `ConversationScreen`.
+No new command, no new transport plumbing, no store change.
+
+```
+.conversation
+└── WorkspacePickerSheet                (mounted beside ChannelInfoSheet, when pickerOpen)
+    ├── RecentWorkspacesData             (#382's dormant bridge — mounted only while open, so
+    │                                     each open fires a fresh one-shot requestRecentWorkspaces)
+    └── WorkspacePickerSheetView
+        ├── .status-sheet-overlay__scrim         (onClick → onClose)
+        └── .status-sheet  role="dialog" aria-labelledby="workspace-picker-sheet-title"
+            ├── .status-sheet__handle
+            ├── .status-sheet__header             "Choose workspace" + close
+            └── .status-sheet__body
+                ├── "Recent" section-header
+                ├── .workspace-picker__row × N     path (mono) + "Last used …" + "default" pill (if cwd match)
+                ├── .workspace-picker__empty        "No recent workspaces" (workspaces === [])
+                │                                   — no row, no empty copy at all when workspaces === null
+                ├── "Other" section-header
+                └── .workspace-picker__other        "Create new folder…" — disabled (inert, #384 wires it)
+```
+
+**Null-vs-empty store (AC1).** `workspaces` (from `useRecentWorkspacesStore(selectRecentWorkspaces)`)
+is `null` while the one-shot request is in flight — the section header renders with no rows and no
+empty copy — versus a delivered `[]`, which renders the header plus a client-owned
+`.workspace-picker__empty` line. The two are structurally distinct output, the #141/#324 null-vs-empty
+precedent, and neither branch crashes.
+
+**"default" pill (AC2).** `activeCwd` — `conversation?.cwd ?? null`, sourced from
+`activeConversationStore` (#278) — is compared by exact string equality against each row's `path`; a
+match renders `.workspace-picker__default-pill` (secondary-container fill, Figma 20:36). `activeCwd
+=== null` (a list-opened thread never populates `activeConversationStore`) marks no row — the same
+graceful-empty posture the [Channel Info sheet](#channel-info-sheet-365) established for the same
+store.
+
+**Choose → dispatch → close (AC3).** Each row is `disabled={!onChoose}`; the container supplies
+`onChoose` only when `conversation !== null`, so a list-opened thread's rows render inert — the
+`WorkspaceChip` disabled-until-wired idiom, reused for the same reason (no `conversation_id` to
+dispatch with). When wired, choosing a row calls the new exported `requestChangeWorkspace(sendCommand,
+conversationId, path)` — an inline `{ type: 'changeWorkspace', payload: { conversation_id: cwd }
+}` literal (the `requestArchiveConversation` clone), mapping the row's `path` into the wire's `cwd`
+field — then `onClose()`. Fire-and-forget, no optimistic update: the conversation **list** picks up the
+new workspace only once the daemon's existing `conversation_updated` reply re-triggers the #275 re-list
+(see [Conversation workspace change](conversation-workspace-change.md)). The active-conversation chip
+itself does not live-update on that reply (`activeConversationStore` is written only on
+`conversation_created`) — reopening the picker right after a change still marks the *old* `cwd` until
+the next create, a pre-existing #278 limitation, not fixed here.
+
+**"Other" entry present but inert (AC4).** The create-folder row is `disabled={!onCreateFolder}`; this
+ticket's container omits `onCreateFolder`, so it always renders disabled. Its label ships as the
+generic `'Create new folder…'` rather than Figma's parent-specific "…under &lt;parent&gt;" — the
+renderer has no clean source for the workspace-root basename here; #384 (the create-folder dialog)
+resolves the parent and supplies the real handler as a pure additive, the same seam shape as
+`WorkspaceChip.onChange` before this ticket.
+
+**Untrusted strings.** `path` renders as auto-escaped React children, never
+`dangerouslySetInnerHTML`, never split/basenamed/otherwise resolved as a filesystem path — the
+`WorkspaceChip`/`RecentWorkspace` posture carried forward. `last_used_at` is fed only to
+`formatLastActivity`, which degrades an unparseable value to `''` (the `|| '—'` fallback) and never
+throws.
+
+Two glyphs (`FolderIcon`/`FolderPlusIcon`) are inline `currentColor` Material SVGs, not the Figma's
+asset images or accent colors — the app's standing "no asset fetch, no hardcoded illustration hex"
+posture, flagged as a non-gating NIT in code review for designer awareness. Styled entirely with
+`.workspace-picker__*` classes in `conversation.css` — token-only, no new CSS token (the pill reuses
+`--color-secondary-container`/`--color-on-secondary-container`, already introduced by earlier tickets).
+
+Not security-sensitive: a pure renderer read of two already-decoded stores plus a dispatch of an
+already-guarded command; no transport/crypto/socket surface touched. Code review PASS, two non-gating
+NITs (glyph coloring, the deferred create-folder label). See [#383 codebase
+notes](../codebase/383.md) for the full design and patterns established.
 
 ### Run configuration sheet (#177)
 
@@ -1192,6 +1278,13 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
 - **`QueuedBacklog({ items, onDrop })` / `QueuedBacklogControl`** — **render bound in [#294](../codebase/294.md); `onDrop` (required) bound in [#296](../codebase/296.md).** `QueuedBacklogControl` reads the [queue store](queue-store.md)'s `selectBacklogFor(MILESTONE_CONVERSATION_ID)` and binds `onDrop` to the pure `dropQueuedMessage` (`dropQueuedMessage.ts`), which dispatches `dequeueMessageCommand` and nothing else — no local mutation. See [Queued backlog + drop affordance](#queued-backlog--drop-affordance-294-drop-since-296) above.
 - **`ScreenSnapshotView({ snapshot, canRequest, onRequest })` / `ScreenSnapshotControl`** — **bound in [#324](../codebase/324.md).** `ScreenSnapshotControl` reads `useSessionStore(selectStatus)` (for `canRequest`, via `composerAvailability`) and the [screen-snapshot store](screen-snapshot-store.md)'s `selectScreenSnapshot` (#323, this store's only reader), binds `onRequest` to the new `requestScreenSnapshot` helper, and mounts between `StatusRow` and `InterruptControl`. See [Screen-snapshot action & display](#screen-snapshot-action--display-324) above.
+- **`WorkspacePickerSheetView({ workspaces, activeCwd, now?, onClose, onChoose?, onCreateFolder? })` /
+  `WorkspacePickerSheet`** — **bound in [#383](../codebase/383.md).** `WorkspacePickerSheetView` is the
+  exported pure view; `WorkspacePickerSheet` is the in-file container mounting `RecentWorkspacesData`
+  (#382), reading `useRecentWorkspacesStore(selectRecentWorkspaces)`, deriving `activeCwd` from
+  `activeConversationStore`, and supplying `onChoose` only for a non-null active conversation.
+  `WorkspaceChip`'s `onChange` now calls `() => setPickerOpen(true)` — see [Workspace Picker
+  sheet](#workspace-picker-sheet-383) above.
 - **`ChannelInfoSheetView({ conversation, now?, onClose })` / `ChannelInfoSheet`** — **shell + About detail bound in [#365](../codebase/365.md).** `ChannelInfoSheetView` is the exported pure view (`conversation` as a prop, sourced from `activeConversationStore`); `ChannelInfoSheet` is the in-file container owning only the Escape effect. The `ThreadOverflowMenu`'s `onChannelInfo` now calls `() => setChannelInfoOpen(true)` — the speculative `ConversationScreenProps.onChannelInfo?` prop #276 reserved is **retired**, not bound; see [Channel Info sheet](#channel-info-sheet-365) above. **Rename bound in [#368](../codebase/368.md):** the `.channel-info__actions` slot's first filler, an `onRename?` prop supplied by the container only in the `conversation !== null` branch, opening the reused [Rename dialog](rename-conversation-dialog.md) (#360) — see [Channel Info sheet](#channel-info-sheet-365) above. **Archive bound in [#366](../codebase/366.md):** the slot's second filler, an `onArchive?` prop under the same null-guard, dispatching the already-shipped [`archiveConversation` command](conversation-archive.md) (#363) then closing the sheet — see [Channel Info sheet](#channel-info-sheet-365) above. **Delete bound in [#377](../codebase/377.md), completing the slot:** the third and final filler, gated the same way (`onDelete?` supplied only for a non-null active conversation) but dispatch is two-step — `onDelete` opens an inline confirm (a client-owned invention, no Figma node, the #226 second-confirm posture) that swaps in for the pill; confirming dispatches the already-shipped [`deleteConversation` command](conversation-delete.md) (#364) via a new `requestDeleteConversation` helper then closes the sheet, cancelling returns to the pill with no wire effect. The pill and confirm's destructive styling is a new `.channel-info__action--danger` modifier (error-tinted outline via `box-shadow: inset`, since desktop has no error-container fill token). `window.pyry` is dereferenced only inside the confirm handler; the confirm's own open state (`deleteConfirmOpen`) is screen-local `useState`, the `renameOpen` twin.
 
 ## Edge cases and limitations
@@ -1207,6 +1300,15 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **Screen-snapshot action & display** ([#324](../codebase/324.md)) — unlike every other in-thread control, this region is **always visible** (button + placeholder-or-`<pre>`), never `null` at rest; a re-request is fire-and-forget with no pending/loading state, so re-clicking before a reply lands simply waits for the next `screenSnapshotReceived` to overwrite the store. A send-bridge failure is swallowed (`console.error`, no crash); the held screen is unchanged.
 - **Two-dot connection indicator** ([#330](../codebase/330.md)) — the two legs render independently and are never reconciled: a fatal session close leaves the relay dot at its last value (typically up) while the daemon dot shows down, and a retryable daemon-absent close leaves the daemon dot in-progress while the relay dot shows up/"Reachable" — both are intended, honest-per-hop renders, not bugs. The relay leg has no in-progress arm (that category is exercised only by the daemon leg's `connecting`), so the daemon dot never shows a false green.
 - **Channel Info sheet** ([#365](../codebase/365.md)) — a list-opened thread (never populates `activeConversationStore`) opens the sheet gracefully: chrome + a placeholder About line, no Channel ID footer, no crash. `sheetOpen` (run-config) and `channelInfoOpen` are independent booleans, so both overlays could in principle stack — not reachable through normal use (separate triggers) and no AC requires mutual exclusion, left as-is. Created / Total sessions / Total messages / Memory (Figma 20-48) have no desktop wire field and are deferred, not invented. Escape-dismiss and the overflow-select → open wiring are reviewed glue, not unit-tested (the `renderToStaticMarkup`-only suite constraint, same as #276/#177).
+- **Workspace Picker sheet** ([#383](../codebase/383.md)) — same `activeConversationStore`-null
+  graceful posture as the Channel Info sheet: a list-opened thread marks no row and renders every
+  row inert, no crash. `pickerOpen` is independent of `sheetOpen`/`channelInfoOpen`, so overlays could
+  in principle stack — not reachable through normal use, no AC requires mutual exclusion. The change
+  action is fire-and-forget with no optimistic update; the conversation list only reflects the new
+  workspace once the daemon's `conversation_updated` re-list arrives, and the picker's own "default"
+  mark stays stale until the next `conversation_created` (`activeConversationStore` does not observe
+  `conversation_updated`) — a pre-existing #278 limitation, not fixed here. The "Other" create-folder
+  entry is permanently inert until #384 supplies `onCreateFolder`.
 
 ## Related
 
@@ -1228,5 +1330,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the `useState` boolean the Run configuration sheet's open/close toggle follows (#177); the `useReducer` phase-machine the Log data download state follows (#72)
 - [ADR 0003 — M3 theme tokens](../decisions/0003-m3-theme-tokens-css-custom-properties.md) — gains `--color-surface-container-low` + `--color-scrim` (#177); gains `--color-secondary-container` + `--color-on-secondary-container` (#72); gains `--color-surface-container-highest` (#188, reused by #192's context-window track — 0 new tokens)
 - [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `<QueuedBacklogControl/>` reads via `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (#293, consumed in #294), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
+- [Recent-workspaces store](recent-workspaces-store.md) — the dedicated store + dormant bridge `WorkspacePickerSheet` reads via `selectRecentWorkspaces` and mounts (`RecentWorkspacesData`), its first real consumer (#382, consumed in #383)
+- [Conversation workspace change](conversation-workspace-change.md) — the `changeWorkspace` command `requestChangeWorkspace` dispatches on a row choice, its first real caller (#379, consumed in #383)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

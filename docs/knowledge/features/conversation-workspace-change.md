@@ -1,15 +1,15 @@
 # Conversation workspace change (transport)
 
 The **transport data path** that lets the desktop client ask the pyry daemon to move a
-conversation's recorded workspace (`cwd`) to a different folder. Its intended caller is the
-not-yet-built Workspace Picker UI (#157's remaining split-child).
+conversation's recorded workspace (`cwd`) to a different folder. Its caller is the [Workspace
+Picker sheet](conversation-shell.md#workspace-picker-sheet-383) (#157's remaining split-child).
 
 Introduced in [#379](../codebase/379.md), split from #157 (the transport half; the Workspace Picker
-UI is the other half, not yet built). Shipped dormant — fully wired and tested, with no caller at
-ship time. The closest structural and guard twin is [conversation rename](conversation-rename.md)
-(#359) — both carry `conversation_id` plus exactly one other required string, so this slice clones
-rename's builder / method / dispatch / guard shape verbatim with the second field renamed
-`name` → `cwd`.
+UI was the other half, then not yet built). Shipped dormant — fully wired and tested, with no caller
+at ship time; [#383](../codebase/383.md) later wired the real caller. The closest structural and guard
+twin is [conversation rename](conversation-rename.md) (#359) — both carry `conversation_id` plus
+exactly one other required string, so this slice clones rename's builder / method / dispatch / guard
+shape verbatim with the second field renamed `name` → `cwd`.
 
 ## The wire contract
 
@@ -61,17 +61,20 @@ rejected — the connection method's fresh-literal construction (naming only
 `conversation_id`/`cwd`, never spreading the caller's payload) is the layer that actually bounds
 what reaches the wire. Same two-layer posture as #236/#273/#346/#359.
 
-## Data flow (wiring pending the Workspace Picker, #157)
+## Data flow
 
 ```
-Workspace Picker "Change" action (not yet built)
-  → { type: 'changeWorkspace', payload: { conversation_id, cwd } }  (renderer, built inline)
+Workspace Picker sheet — choosing a recent-workspace row (#383)
+  → requestChangeWorkspace(sendCommand, conversationId, path)
+  → { type: 'changeWorkspace', payload: { conversation_id: conversationId, cwd: path } }
   → onCommand dispatch (src/main/index.ts)
   → connection.changeWorkspace(payload)                             (fresh literal, fire-and-forget)
   → buildChangeWorkspace → encodeEnvelope → driver.sendMessage       (main process only)
   ⋯ daemon updates the recorded workspace, replies conversation_updated
   → existing conversation_updated decode + conversationListStore re-list  (#273 / conversation-list-store.md)
-  → the conversation's cwd updates on the next render
+  → the conversation's cwd updates on the next render (the list's; the picker's own "default" mark
+    does not — activeConversationStore is written only on conversation_created, a pre-existing #278
+    limitation the picker inherits, not fixed by this slice)
 ```
 
 ## Related
@@ -82,7 +85,9 @@ Workspace Picker "Change" action (not yet built)
   of the `cwd`-is-server-resolved-only security posture this slice reuses, and of the
   `conversation_updated` decode/re-list this slice rides for free.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — re-lists on
-  any `conversation_updated`, so a workspace change lands automatically once a caller exists.
+  any `conversation_updated`, so a workspace change lands automatically now that a caller exists.
+- [Workspace Picker sheet](conversation-shell.md#workspace-picker-sheet-383) / [#383
+  codebase notes](../codebase/383.md) — the real caller, `requestChangeWorkspace`.
 - [#157 codebase notes](../codebase/157.md) — parent split ticket (this transport slice / the
-  Workspace Picker UI), once it exists.
+  Workspace Picker UI, #383).
 - [#379 codebase notes](../codebase/379.md) — implementation summary.

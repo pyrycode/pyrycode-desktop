@@ -12,6 +12,19 @@ Introduced in [#360](../codebase/360.md), split from #154 (transport [#359](../c
 dialog #360). Renderer-only — no new transport, IPC, store, or wire code; consumes the
 `renameConversation` command #359 already shipped.
 
+**Second entry point ([#368](../codebase/368.md)):** the [Channel Info sheet](conversation-shell.md#channel-info-sheet-365)'s
+Actions slot gained a Rename tonal pill (Figma 20:89) that opens this same
+`RenameConversationDialogView` and dispatches through this same `requestRenameConversation`,
+imported verbatim from this module — no clone, no second dialog. The sheet's active conversation
+is a `ConversationCreatedPayload` (5 fields), not a `ConversationSummary` (7 fields — adds
+`is_archived`/`last_message_ts`), so it wasn't structurally assignable to the row-side caller
+below without a cast. Since `requestRenameConversation` reads only `row.id`, its param was
+narrowed from `ConversationSummary` to `Pick<ConversationSummary, 'id'>` (see the signature below)
+— a one-line, behavior-preserving type change (the helper now states its real input) that keeps
+the `ChannelList` call site valid (a full `ConversationSummary` still satisfies the narrower
+`Pick`) and lets the sheet pass its payload directly, with no adapter. `requestPromoteConversation`
+keeps its richer `row` type unchanged — it genuinely reads `cwd` too, so only rename widens.
+
 ## What it does
 
 - Each saved (promoted) Channel row in the Channel List renders a trailing icon-only "Rename"
@@ -51,7 +64,7 @@ export function RenameConversationDialogView(props: {
 
 export function requestRenameConversation(
   sendCommand: (command: RendererCommand) => void,
-  row: ConversationSummary,
+  row: Pick<ConversationSummary, 'id'>,   // narrowed from ConversationSummary — #368
   name: string
 ): void
 ```
@@ -167,4 +180,7 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
 - [Channel List home screen](channel-list.md) / [#141 codebase notes](../codebase/141.md) — the
   screen this affordance is added to.
 - [#360 codebase notes](../codebase/360.md) — implementation summary, patterns, lessons.
-- Spec: `docs/specs/architecture/360-rename-dialog.md`.
+- [Conversation shell](conversation-shell.md#channel-info-sheet-365) / [#368 codebase notes](../codebase/368.md)
+  — the Channel Info sheet's Rename action, this dialog's second entry point and the source of the
+  `Pick<ConversationSummary, 'id'>` param widening.
+- Spec: `docs/specs/architecture/360-rename-dialog.md` (dialog); `docs/specs/architecture/368-channel-info-rename-action.md` (second entry point).

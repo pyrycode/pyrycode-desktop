@@ -1116,6 +1116,39 @@ describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
     expect(markup).not.toContain('Total messages')
     expect(markup).not.toContain('Memory')
   })
+
+  // #368: the Rename action fills the Actions slot #365 left empty. It is gated on the `onRename`
+  // callback, which the container supplies ONLY when there is an active conversation to rename — so
+  // the button's presence maps one-to-one onto AC1 (present with a conversation, absent on the
+  // list-opened null-conversation case).
+  it('renders a Rename action in the Actions slot when a conversation and onRename are supplied (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} onRename={noop} />
+    )
+    // The tonal pill lands in the existing Actions mount point, labelled "Rename". The quote-terminated
+    // class distinguishes the button (.channel-info__action) from the plural slot (.channel-info__actions).
+    expect(markup).toContain('class="channel-info__action"')
+    expect(markup).toContain('>Rename</button>')
+  })
+
+  it('offers no Rename action when the active conversation is null (the graceful-empty guard, AC1)', () => {
+    // A list-opened thread (conversation === null) gets no onRename from the container, so the
+    // Actions header renders over an empty slot — no Rename control, consistent with #365's empty About.
+    const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={null} onClose={noop} />)
+    expect(markup).toContain('Actions')
+    expect(markup).not.toContain('class="channel-info__action"')
+    expect(markup).not.toContain('Rename')
+  })
+
+  it('offers no Rename action when onRename is omitted, even with a conversation (callback-gated, AC1)', () => {
+    // The button is gated on the callback, not the conversation alone — this proves the view honours
+    // the container's null-guard contract rather than deriving the button from `conversation` itself.
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
+    )
+    expect(markup).not.toContain('class="channel-info__action"')
+    expect(markup).not.toContain('Rename')
+  })
 })
 
 describe('ConversationScreen — store binding', () => {

@@ -1146,6 +1146,21 @@ strings rendered (`name`/`cwd`/`id`) are already rendered elsewhere in this file
 children, same posture as `WorkspaceChip`. See [#365 codebase notes](../codebase/365.md) for the full
 design and patterns established.
 
+**Rename action ([#368](../codebase/368.md)).** The Actions slot's first filler: a Material 3 tonal
+pill (Figma 20:89, `.channel-info__action`) rendered only when the container supplies an `onRename?`
+callback — supplied exactly in the `conversation !== null` branch, so the null-conversation
+graceful-empty case (above) offers no Rename control either. Activating it seeds and opens the
+existing [Rename dialog](rename-conversation-dialog.md) (`RenameConversationDialogView`, #360) via a
+second screen-local `useState` pair (`renameOpen`/`renameName`) the `ChannelInfoSheet` container
+grows, mirroring `ChannelList.tsx`'s row-level rename state shape; Save dispatches the already-shipped
+`renameConversation` command (#359) via `requestRenameConversation`, imported verbatim rather than
+cloned. That helper's `row` param narrowed from `ConversationSummary` to `Pick<ConversationSummary,
+'id'>` (it only ever read `.id`) so the sheet's `ConversationCreatedPayload` — a narrower 5-field
+shape lacking `is_archived`/`last_message_ts` — passes directly, no adapter, no cast; the existing
+`ChannelList` call site is unaffected (a wider shape still satisfies the narrower `Pick`). No new
+transport, IPC, or wire code. See [#368 codebase notes](../codebase/368.md) for the full design and
+patterns established.
+
 ## Seams (bound + still open)
 
 - **`onBack?: () => void`** — **bound in [#140](../codebase/140.md).** Optional, gated exactly like `onUnpaired?`; wired by the [paired shell](paired-shell.md) when this screen is mounted as its `thread` view, absent for a bare `<ConversationScreen />`. See [Back control](#back-control-140) above.
@@ -1163,7 +1178,7 @@ design and patterns established.
 - **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
 - **`QueuedBacklog({ items, onDrop })` / `QueuedBacklogControl`** — **render bound in [#294](../codebase/294.md); `onDrop` (required) bound in [#296](../codebase/296.md).** `QueuedBacklogControl` reads the [queue store](queue-store.md)'s `selectBacklogFor(MILESTONE_CONVERSATION_ID)` and binds `onDrop` to the pure `dropQueuedMessage` (`dropQueuedMessage.ts`), which dispatches `dequeueMessageCommand` and nothing else — no local mutation. See [Queued backlog + drop affordance](#queued-backlog--drop-affordance-294-drop-since-296) above.
 - **`ScreenSnapshotView({ snapshot, canRequest, onRequest })` / `ScreenSnapshotControl`** — **bound in [#324](../codebase/324.md).** `ScreenSnapshotControl` reads `useSessionStore(selectStatus)` (for `canRequest`, via `composerAvailability`) and the [screen-snapshot store](screen-snapshot-store.md)'s `selectScreenSnapshot` (#323, this store's only reader), binds `onRequest` to the new `requestScreenSnapshot` helper, and mounts between `StatusRow` and `InterruptControl`. See [Screen-snapshot action & display](#screen-snapshot-action--display-324) above.
-- **`ChannelInfoSheetView({ conversation, now?, onClose })` / `ChannelInfoSheet`** — **shell + About detail bound in [#365](../codebase/365.md).** `ChannelInfoSheetView` is the exported pure view (`conversation` as a prop, sourced from `activeConversationStore`); `ChannelInfoSheet` is the in-file container owning only the Escape effect. The `ThreadOverflowMenu`'s `onChannelInfo` now calls `() => setChannelInfoOpen(true)` — the speculative `ConversationScreenProps.onChannelInfo?` prop #276 reserved is **retired**, not bound; see [Channel Info sheet](#channel-info-sheet-365) above. **Still open:** the `.channel-info__actions` slot is empty — #366 (Archive), #367 (Delete), and #368 (Rename) are its intended fillers, each keying off `activeConversationStore.id` with a null-guard per the split's contract.
+- **`ChannelInfoSheetView({ conversation, now?, onClose })` / `ChannelInfoSheet`** — **shell + About detail bound in [#365](../codebase/365.md).** `ChannelInfoSheetView` is the exported pure view (`conversation` as a prop, sourced from `activeConversationStore`); `ChannelInfoSheet` is the in-file container owning only the Escape effect. The `ThreadOverflowMenu`'s `onChannelInfo` now calls `() => setChannelInfoOpen(true)` — the speculative `ConversationScreenProps.onChannelInfo?` prop #276 reserved is **retired**, not bound; see [Channel Info sheet](#channel-info-sheet-365) above. **Rename bound in [#368](../codebase/368.md):** the `.channel-info__actions` slot's first filler, an `onRename?` prop supplied by the container only in the `conversation !== null` branch, opening the reused [Rename dialog](rename-conversation-dialog.md) (#360) — see [Channel Info sheet](#channel-info-sheet-365) above. **Still open:** #366 (Archive) and #367 (Delete) are the slot's remaining intended fillers, each keying off `activeConversationStore.id` with a null-guard per the split's contract.
 
 ## Edge cases and limitations
 

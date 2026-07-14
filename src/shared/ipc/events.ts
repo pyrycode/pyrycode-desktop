@@ -227,6 +227,21 @@ export type DaemonEvent =
   // must NEVER resolve it into a local filesystem operation (it is a remote daemon-side path). This
   // ticket has no DOM sink, but the constraint is inherited here — do not drop this warning.
   | { type: 'recentWorkspacesReceived'; recentWorkspaces: readonly RecentWorkspace[] }
+  // The workspace-folder-created arm (#381). Carries the BARE created `path` (a fresh literal, not the
+  // wire payload object): the sibling conversationCreated reuses ConversationCreatedPayload by reference
+  // because it has five fields with nothing to drop, but this reply has exactly one field, so it flattens
+  // to `path: string` — the single-field emit idiom (conversationDeleted naming `id`, turnState naming
+  // `state`, sessionSettingsUpdated naming `sessionId`): a fresh literal naming the one field, keeping
+  // events.ts free of a WorkspaceFolderCreatedPayload import (a primitive crosses IPC). Emitted from a
+  // CORRELATED reply (matched by in_reply_to, NOT a broadcast), but the `path` is self-sufficient so no
+  // correlation state is threaded. `path` is an UNTRUSTED daemon-supplied REMOTE filesystem path: the
+  // Create-folder dialog (#157, not yet built) must render it as PLAIN TEXT, NEVER HTML (no innerHTML /
+  // dangerouslySetInnerHTML) and must NEVER resolve it into a local filesystem operation (it is a remote
+  // daemon-side path). This ticket has no DOM sink, but the constraint is inherited here — do not drop this
+  // warning. Consumed by #157, so every exhaustive consumer no-ops it for now; ships DORMANT (the
+  // conversationDeleted-was-a-no-op-until-#376 precedent). No token, key, or raw frame can ride a bare
+  // string path (AC-by-construction).
+  | { type: 'workspaceFolderCreated'; path: string }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
   // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is

@@ -279,6 +279,13 @@ app.whenReady().then(() => {
         // conversation_created → conversationCreated event. Inert no-op when not connected (#241).
         connection.createConversation(command.payload)
         return
+      case 'createWorkspaceFolder':
+        // Direct to the connection method (mirrors createConversation), no orchestrator — a create-folder
+        // request has no consumer/reassembler. Sends create_workspace_folder; the daemon replies with one
+        // workspace_folder_created → workspaceFolderCreated event (consumed by #157). Inert no-op when not
+        // connected (#381).
+        connection.createWorkspaceFolder(command.payload)
+        return
       case 'dequeueMessage':
         // Direct to the connection method (mirrors requestSnapshot), no orchestrator — a dequeue is
         // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts

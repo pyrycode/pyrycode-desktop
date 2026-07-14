@@ -34,6 +34,7 @@ import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildRecentWorkspaces } from './transport/recentWorkspacesEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
+import { buildCreateWorkspaceFolder } from './transport/createWorkspaceFolderEnvelope'
 import { buildPromoteConversation } from './transport/promoteConversationEnvelope'
 import { buildArchiveConversation } from './transport/archiveConversationEnvelope'
 import { buildUnarchiveConversation } from './transport/unarchiveConversationEnvelope'
@@ -62,6 +63,7 @@ import {
   type SendMessagePayload,
   type RequestSnapshotPayload,
   type CreateConversationPayload,
+  type CreateWorkspaceFolderPayload,
   type PromoteConversationPayload,
   type ArchiveConversationPayload,
   type UnarchiveConversationPayload,
@@ -183,6 +185,17 @@ export interface DaemonConnection {
    * caller is #242; this ticket only wires the round-trip. NEVER throws out of the module (parity #490).
    */
   createConversation(payload: CreateConversationPayload): void
+  /**
+   * Encrypt a payload-carrying `create_workspace_folder` control envelope onto the live session — asks
+   * the daemon to create a new workspace folder (both `parent` and `name` required; the daemon confines
+   * the create to the operator's $HOME and enforces a single-clean-element name server-side). The `send`
+   * TWIN, not `requestDebugBundle`: a create-folder request has no consumer to fail, so it is an inert
+   * no-op when not connected (`driver === null` → return). The reply arrives asynchronously as one
+   * `workspaceFolderCreated` DaemonEvent carrying the created `path`, consumed by the Create-folder dialog
+   * (#157), not the session store. Its caller is #157; this ticket only wires the round-trip. NEVER throws
+   * out of the module (parity #490).
+   */
+  createWorkspaceFolder(payload: CreateWorkspaceFolderPayload): void
   /**
    * Encrypt a payload-carrying `dequeue_message` control envelope onto the live session — asks the
    * daemon to drop one queued-but-not-yet-run message from a conversation's backlog. The `send` TWIN,
@@ -677,6 +690,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversation: inbound.conversationCreated
             })
             return
+          case 'workspace-folder-created':
+            // The workspace-folder-created data path (#381). A CORRELATED reply (matched by in_reply_to,
+            // NOT a broadcast), but the `path` is self-sufficient so it is emitted unconditionally on
+            // decode — NO outstanding-request / correlation state is threaded here (#157 consumes the
+            // created path). A fresh literal naming the single `path` field, never a spread of the decoded
+            // payload, so a decoder that ever grew an extra field cannot smuggle it across IPC. The
+            // Create-folder dialog (#157), not the session store, consumes this. `path` is an untrusted
+            // REMOTE path — plain-text-only, never resolved locally. Not compile-forced (this inner switch
+            // has no assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'workspaceFolderCreated',
+              path: inbound.workspaceFolderCreated.path
+            })
+            return
           case 'conversation-updated':
             // The conversation-updated data path (#273). An UNSOLICITED daemon BROADCAST (not correlated
             // by in_reply_to), so it is emitted unconditionally on decode — no outstanding-request memory.
@@ -968,6 +995,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           is_promoted: payload.is_promoted,
           name: payload.name,
           cwd: payload.cwd
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
+      // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
+  function createWorkspaceFolder(payload: CreateWorkspaceFolderPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A create-folder request has no consumer to fail; a request
+    // sent while disconnected simply produces no reply.
+    if (driver === null) return
+    try {
+      // Build a FRESH literal naming exactly the two modeled fields — never a spread of `payload`. This
+      // is the deterministic net that bounds the wire to exactly parent / name, ignoring any
+      // renderer-smuggled extra field the structural-minimum guard let through (the createConversation
+      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / createConversation /
+      // requestSnapshot — no second counter — so ids stay unique across interleaved calls.
+      const bytes = buildCreateWorkspaceFolder({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          parent: payload.parent,
+          name: payload.name
         }
       })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
@@ -1360,6 +1415,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestConversations,
     requestRecentWorkspaces,
     createConversation,
+    createWorkspaceFolder,
     dequeueMessage,
     interrupt,
     promoteConversation,

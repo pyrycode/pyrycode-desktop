@@ -80,6 +80,8 @@ export type EnvelopeType =
   | 'delete_conversation'
   | 'rename_conversation'
   | 'change_workspace'
+  | 'create_workspace_folder'
+  | 'workspace_folder_created'
   | 'conversation_updated'
   | 'ack'
   | 'error'
@@ -710,6 +712,42 @@ export interface RenameConversationPayload {
 export interface ChangeWorkspacePayload {
   conversation_id: string
   cwd: string
+}
+
+/**
+ * Outbound `create_workspace_folder` request body (client → daemon). Mirrors the daemon's
+ * CreateWorkspaceFolderPayload{Parent, Name string} field-for-field (pyrycode #887), wire order
+ * `parent, name`.
+ *
+ * **Two REQUIRED value-strings** — the same posture as ChangeWorkspacePayload (plain `string`, no
+ * pointer, no `omitempty`), rekeyed to `parent` (the containing directory) + `name` (a single folder
+ * name). `parent`/`name` are renderer-supplied strings the daemon polices SERVER-side ($HOME
+ * confinement + a single-clean-element name guard — #887's two deterministic gates); the desktop
+ * NEVER resolves them into a local filesystem path (they are serialized to wire bytes only). An empty
+ * `parent` / a bad `name` (a separator, `..`, an absolute path, or empty) is a valid string on the
+ * wire — the daemon rejects it as `malformed`; do NOT add a client-side check. Kept a DISTINCT type
+ * (not an alias of any sibling) so the verb owns its own wire surface. Do NOT drift it (CLAUDE.md
+ * no-drift): change only alongside a daemon/mobile change. See #381.
+ */
+export interface CreateWorkspaceFolderPayload {
+  parent: string
+  name: string
+}
+
+/**
+ * Inbound `workspace_folder_created` reply body (daemon → client). Mirrors the daemon's
+ * WorkspaceFolderCreatedPayload{Path string} field-for-field (pyrycode #887).
+ *
+ * ITS OWN single-field shape — deliberately NOT RecentWorkspace (which adds `last_used_at`) nor a
+ * conversation type: the created reply is `path`-only. `path` is the created folder's canonical
+ * daemon-side path, an untrusted REMOTE path carried as OPAQUE DISPLAY TEXT: this client never
+ * `fs`- / `path.resolve`-s it and never logs its value (the RecentWorkspace #380 /
+ * ConversationSummary.cwd #139 posture). A DIRECT reply to the requester (correlated by
+ * `Envelope.in_reply_to`), no broadcast, no `conversation_id`. Do NOT drift it (CLAUDE.md no-drift):
+ * change only alongside a daemon/mobile change. See #381.
+ */
+export interface WorkspaceFolderCreatedPayload {
+  path: string
 }
 
 /**

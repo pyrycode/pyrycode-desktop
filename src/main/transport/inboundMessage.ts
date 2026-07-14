@@ -44,6 +44,7 @@ import type {
   ConversationUpdatedPayload,
   ConversationDeletedPayload,
   RecentWorkspace,
+  WorkspaceFolderCreatedPayload,
   ModalShownPayload,
   ModalDismissedPayload,
   WireModalOption
@@ -184,6 +185,7 @@ export type InboundDaemonMessage =
   | { kind: 'conversation-updated'; conversationUpdated: ConversationUpdatedPayload }
   | { kind: 'conversation-deleted'; conversationDeleted: ConversationDeletedPayload }
   | { kind: 'recent-workspaces'; recentWorkspaces: RecentWorkspace[] }
+  | { kind: 'workspace-folder-created'; workspaceFolderCreated: WorkspaceFolderCreatedPayload }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
 
@@ -666,6 +668,22 @@ function parseConversationDeletedPayload(payload: unknown): ConversationDeletedP
 }
 
 /**
+ * Narrow an opaque payload into a WorkspaceFolderCreatedPayload (#381). Fail-closed like
+ * parseConversationDeletedPayload but keyed on the create reply's single field: an `isRecord` guard, then
+ * the single required `path` string. Returns a FRESH single-field `{ path }` object; unknown server-added
+ * keys are tolerated (forward-compat) but NOT copied through. Its message names the failure category only
+ * — a `path` is an untrusted daemon-side REMOTE path that could echo a `$HOME` / username / project name,
+ * so it is NEVER interpolated (requireString already emits `missing required field: path`).
+ */
+function parseWorkspaceFolderCreatedPayload(payload: unknown): WorkspaceFolderCreatedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed workspace_folder_created payload')
+  }
+  const path = requireString(payload, 'path')
+  return { path }
+}
+
+/**
  * Narrow one opaque option into a WireModalOption (#201). Fail-closed like parseConversationSummary:
  * two required strings (`id` / `label`), unknown keys tolerated but not copied. Its message names the
  * category only — an option `label` is untrusted `claude`-surfaced display text.
@@ -1014,6 +1032,21 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'conversation-deleted', conversationDeleted }
+    }
+    case 'workspace_folder_created': {
+      // Narrow BEFORE logging so a malformed reply (a missing / non-string `path`) throws first and leaves
+      // no record. The decoded `path` is NEVER logged — only the frame's byte length + one-way hash, reusing
+      // the existing content-free field set. Deliberately NO `count` field (the conversation_deleted #375
+      // posture): the set stays type/bytes/hash — a `path` could echo a $HOME / username, so nothing but
+      // the shape is recorded.
+      const workspaceFolderCreated = parseWorkspaceFolderCreatedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'workspace_folder_created',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'workspace-folder-created', workspaceFolderCreated }
     }
     case 'modal_shown': {
       // Narrow BEFORE logging so a malformed frame (a `class` outside the closed enum, a bad option)

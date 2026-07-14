@@ -205,6 +205,18 @@ export type DaemonEvent =
   // text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML). This ticket has no DOM sink, but the
   // constraint is inherited here — do not drop this warning.
   | { type: 'conversationUpdated'; conversation: ConversationUpdatedPayload }
+  // The conversation-deleted arm (#375). Carries the BARE routing `id` (a fresh literal, not the wire
+  // payload object): the sibling conversationUpdated reuses ConversationUpdatedPayload by reference
+  // because it has five fields with nothing to drop, but a delete reply has exactly one field, and the
+  // single-field emit idiom (turnState carrying `state`, sessionSettingsUpdated naming `sessionId`) is a
+  // fresh literal naming individual fields — so this flattens to `id: string`. The renderer removes a row
+  // by id, a bare string is exactly what it needs, and events.ts stays free of a ConversationDeletedPayload
+  // import (a primitive crosses IPC). Emitted from a CORRELATED reply (matched by in_reply_to, NOT a
+  // broadcast — the deliberate contrast with conversationUpdated), but the `id` is self-sufficient so no
+  // correlation state is threaded. Consumed by the list-reflect slice (#376, not yet built), so every
+  // exhaustive consumer no-ops it for now; ships DORMANT (the stallDetected-was-a-no-op-until-#317
+  // precedent). No token, key, or raw frame can ride a bare string id (AC-by-construction).
+  | { type: 'conversationDeleted'; id: string }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
   // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is

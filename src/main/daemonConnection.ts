@@ -650,6 +650,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversation: inbound.conversationUpdated
             })
             return
+          case 'conversation-deleted':
+            // The conversation-deleted data path (#375). A CORRELATED reply (matched by in_reply_to, NOT a
+            // broadcast — the deliberate contrast with the conversation-updated arm), but the `id` is
+            // self-sufficient so it is emitted unconditionally on decode — NO outstanding-request /
+            // correlation state is threaded here (#376 removes the row by id). A fresh literal naming the
+            // single `id` field, never a spread of the decoded payload, so a decoder that ever grew an
+            // extra field cannot smuggle it across IPC. The list-reflect slice (#376), not the session
+            // store, reconciles the removal. Not compile-forced (this inner switch has no assertNever) —
+            // the round-trip test guards this emit.
+            emitDaemonEvent(sink, { type: 'conversationDeleted', id: inbound.conversationDeleted.id })
+            return
           case 'modal-shown':
             // The modal data path (#201). snake→camel here (`modal_id`→`modalId`,
             // `default_option_id`→`defaultOptionId`); `options` is reused verbatim (the `conversations`

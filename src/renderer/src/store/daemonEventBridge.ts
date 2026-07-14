@@ -75,6 +75,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // No session-store action: the list-reflect slice (#275) flips the promoted row, not the session
       // store. Present only because the assertNever guard below makes a new arm a compile error.
       return null
+    case 'conversationDeleted':
+      // No session-store action: the list-reflect slice (#376, not yet built) removes the deleted row,
+      // not the session store. Present only because the assertNever guard below makes a new arm a compile
+      // error (the conversationUpdated-is-a-no-op precedent).
+      return null
     case 'modalShown':
     case 'modalDismissed':
       // No session-store action: the modal store + bridge (#223), not the session store, consumes

@@ -42,6 +42,7 @@ import type {
   ConversationSummary,
   ConversationCreatedPayload,
   ConversationUpdatedPayload,
+  ConversationDeletedPayload,
   ModalShownPayload,
   ModalDismissedPayload,
   WireModalOption
@@ -145,6 +146,11 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * nullable) is the boundary this slice defends; the consumer forwards it verbatim as one
  * `conversationCreated` event — nothing to drop. `name` / `cwd` are untrusted display text.
  *
+ * The `conversation-deleted` kind (#375) carries the decoded single-field ConversationDeletedPayload —
+ * the CORRELATED permanent-delete confirmation (matched by `in_reply_to`, NOT a broadcast; the deliberate
+ * contrast with `conversation-updated`). The emit (#375) flattens it to the bare `id` — the routing id of
+ * the deleted row. `id` is untrusted daemon-supplied routing text; no consumer resolves it to a path.
+ *
  * The two modal kinds (#201) carry the decoded ModalShownPayload / ModalDismissedPayload — the
  * permission/trust prompt `claude` blocks on. The fail-closed decode here (two closed-enum checks on
  * `class` / `source` + a per-option narrower over the ordered `options` array) is the boundary this
@@ -175,6 +181,7 @@ export type InboundDaemonMessage =
   | { kind: 'conversations'; conversations: ConversationSummary[] }
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
   | { kind: 'conversation-updated'; conversationUpdated: ConversationUpdatedPayload }
+  | { kind: 'conversation-deleted'; conversationDeleted: ConversationDeletedPayload }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
 
@@ -607,6 +614,22 @@ function parseConversationUpdatedPayload(payload: unknown): ConversationUpdatedP
 }
 
 /**
+ * Narrow an opaque payload into a ConversationDeletedPayload (#375). Fail-closed like
+ * parseConversationUpdatedPayload but scaled to ONE field: an `isRecord` guard, then the single required
+ * `id` string. Returns a FRESH single-field `{ id }` object — the reply field is `id`, distinct from the
+ * request's `conversation_id`; unknown server-added keys (including a stray `conversation_id`) are
+ * tolerated (forward-compat) but NOT copied through. Its message names the failure category only (uniform
+ * with the file — `id` is a routing id, not a secret, but the category-only posture stays consistent).
+ */
+function parseConversationDeletedPayload(payload: unknown): ConversationDeletedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed conversation_deleted payload')
+  }
+  const id = requireString(payload, 'id')
+  return { id }
+}
+
+/**
  * Narrow one opaque option into a WireModalOption (#201). Fail-closed like parseConversationSummary:
  * two required strings (`id` / `label`), unknown keys tolerated but not copied. Its message names the
  * category only — an option `label` is untrusted `claude`-surfaced display text.
@@ -926,6 +949,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'conversation-updated', conversationUpdated }
+    }
+    case 'conversation_deleted': {
+      // Narrow BEFORE logging so a malformed reply (a missing / non-string `id`) throws first and leaves
+      // no record. The decoded `id` is NEVER logged — only the frame's byte length + one-way hash, reusing
+      // the existing content-free field set. Deliberately NO `count` field (the conversation_updated #273
+      // posture): the set stays type/bytes/hash.
+      const conversationDeleted = parseConversationDeletedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'conversation_deleted',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'conversation-deleted', conversationDeleted }
     }
     case 'modal_shown': {
       // Narrow BEFORE logging so a malformed frame (a `class` outside the closed enum, a bad option)

@@ -102,6 +102,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'conversationsReceived':
     case 'conversationCreated':
     case 'conversationUpdated':
+    case 'conversationDeleted':
     case 'modalShown':
     case 'modalDismissed':
     case 'sessionSettingsUpdated':
@@ -113,8 +114,8 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
-      // (confirmed + rejected #269), and the #293 queue store (queueState) consume these — not the
-      // timeline store. sessionSettingsUpdated, sessionSettingsRejected, and modalAnswerRejected are
+      // (confirmed + rejected #269), the #293 queue store (queueState), and the #376 list-reflect slice
+      // (conversationDeleted) consume these — not the timeline store. sessionSettingsUpdated, sessionSettingsRejected, and modalAnswerRejected are
       // NOT timeline items — unlike turnState and, since #286, sessionTransition, none drives a timeline
       // row. queueState is deliberately in this null group: `queue_state` is daemon STATE, not a
       // turn-stream item (#720), so it is NOT folded into reduceTimeline — the load-bearing #720 decision.

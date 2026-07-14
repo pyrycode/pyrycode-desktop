@@ -199,5 +199,10 @@ notes](../codebase/249.md) for the render design.
   at the modal host (see § Modal-answer rejection above).
 - [#195 codebase notes](../codebase/195.md) — makes `reduceModal`'s `shown` arm idempotent on `modalId`
   (match-and-replace + resolved-id no-op), consumed by this bridge and store unchanged.
+- [#416 codebase notes](../codebase/416.md) — proves the `reconnected` reset ([#415](../codebase/415.md))
+  against a **genuine** reconnect: a `modalBridge.test.ts` case runs the real `subscribeModal` over the
+  exact ordered `connected`/`modalShown` sequence a mid-session relay drop + real supervisor re-dial
+  produces (via the [reconnect-capable fake harness](fake-daemon.md#reconnect-capability-416)), asserting
+  `selectOutstanding` clears then repopulates exactly once. No production code in this file changed.
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` arm's dormant-arm-ahead-of-holder
   posture `modalAnswerRejected` followed until #249.

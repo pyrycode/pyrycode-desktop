@@ -12,7 +12,7 @@
 // token — never a real PYRY_LIVE_* credential (see the spec's Security review).
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
-import { startFakeRelayForwarder } from './fakeRelayForwarder'
+import { startFakeRelayForwarder, type FakeRelayForwarder } from './fakeRelayForwarder'
 import {
   startFakeDaemon,
   DEFAULT_REKEY_RESUME_MESSAGE,
@@ -149,9 +149,19 @@ async function driveClient(opts: {
   forwarderUrl: string
   remoteStaticPublicKey: Uint8Array
   hello: Uint8Array
-}): Promise<{ initiator: NoiseSession; events: NoiseSessionEvent[]; waiter: ReturnType<typeof makeWaiter> }> {
+  /** Reuse a device static across a reconnect leg (#416). Omitted → a fresh in-process static, the
+   *  pre-#416 behaviour. IK recovers whatever static the initiator presents, so the daemon completes
+   *  the handshake either way; passing it lets a reconnect leg present the SAME device identity as the
+   *  first, mirroring the real driver's material reuse across a reconnect. */
+  clientPrivateKey?: Uint8Array
+}): Promise<{
+  initiator: NoiseSession
+  events: NoiseSessionEvent[]
+  waiter: ReturnType<typeof makeWaiter>
+  clientPrivateKey: Uint8Array
+}> {
   const lib = await loadNoiseLib()
-  const [clientPriv] = lib.CreateKeyPair(lib.constants.NOISE_DH_CURVE25519) // fresh in-process static
+  const clientPriv = opts.clientPrivateKey ?? lib.CreateKeyPair(lib.constants.NOISE_DH_CURVE25519)[0] // fresh in-process static
   const events: NoiseSessionEvent[] = []
   const waiter = makeWaiter()
   let firstOut = true
@@ -216,11 +226,12 @@ async function driveClient(opts: {
     }
   })
   cleanups.push(() => initiator.close())
-  return { initiator, events, waiter }
+  return { initiator, events, waiter, clientPrivateKey: clientPriv }
 }
 
 /** Stand up a forwarder + fake daemon pair, registering teardown. */
 async function standUp(daemonOpts?: Omit<FakeDaemonOptions, 'url'>): Promise<{
+  forwarder: FakeRelayForwarder
   forwarderUrl: string
   whenReady: () => Promise<void>
   daemon: FakeDaemon
@@ -229,7 +240,7 @@ async function standUp(daemonOpts?: Omit<FakeDaemonOptions, 'url'>): Promise<{
   cleanups.push(() => forwarder.close())
   const daemon = await startFakeDaemon({ url: forwarder.url, ...daemonOpts })
   cleanups.push(() => daemon.close())
-  return { forwarderUrl: forwarder.url, whenReady: () => forwarder.whenReady(), daemon }
+  return { forwarder, forwarderUrl: forwarder.url, whenReady: () => forwarder.whenReady(), daemon }
 }
 
 describe('in-process Noise_IK fake daemon round-trip', () => {
@@ -406,6 +417,102 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     const streamed = events.filter((e) => e.type === 'message')[1]
     expect(bytes((streamed as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(resume))
     expect(events.some((e) => e.type === 'error')).toBe(false)
+  })
+
+  it('survives a client drop and runs a fresh responder handshake on the reconnect noise_init (#416, AC2/AC3/AC4)', async () => {
+    // The whole reconnect path — fresh responder handshake + the sealed re-send — under console spies:
+    // the fake must not leak transcript bytes across a reconnect any more than across the initial connect.
+    const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    try {
+      // A canned server-pushed frame: used BOTH as the mid-session pushFrame payload (AC3, server-
+      // initiated push) and as the reconnectResendFrames re-send after the reconnect handshake.
+      const canned = encodeEnvelope({
+        id: 7,
+        type: 'message',
+        ts: '2026-01-01T00:00:07Z',
+        payload: { conversation_id: 'c1', message_id: 'pushed-1', role: 'assistant', text: 'server push' }
+      })
+      const { forwarder, forwarderUrl, whenReady, daemon } = await standUp({ reconnectResendFrames: [canned] })
+      const hello = buildTestHello()
+      const first = await driveClient({
+        forwarderUrl,
+        remoteStaticPublicKey: daemon.staticPublicKey,
+        hello
+      })
+      await whenReady()
+
+      // Initial handshake + one K0 round-trip (default echo) — the pre-reconnect baseline.
+      await first.waiter.wait(() => first.events.some((e) => e.type === 'handshake-complete'))
+      const probe0 = encodeEnvelope({
+        id: 2,
+        type: 'send_message',
+        ts: '2026-01-01T00:00:01Z',
+        payload: { conversation_id: 'c1', message_id: 'm1', text: 'k0 probe' }
+      })
+      first.initiator.sendMessage(probe0)
+      await first.waiter.wait(() => first.events.filter((e) => e.type === 'message').length >= 1)
+
+      // AC3: a server-initiated push mid-session — pushFrame seals `canned` under the CURRENT send
+      // cipher and streams it, arriving as a `message` with no client request.
+      daemon.pushFrame(canned)
+      await first.waiter.wait(() => first.events.filter((e) => e.type === 'message').length >= 2)
+      const pushed = first.events.filter((e) => e.type === 'message')[1]
+      expect(bytes((pushed as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(canned))
+
+      // AC1: drop the client leg. The forwarder nulls it on close so a fresh /v1/client dial re-splices
+      // to the still-connected server leg (the daemon), instead of being terminated.
+      forwarder.dropClientLeg()
+
+      // A fresh initiator re-dials with the SAME device static + hello. Its first outbound is tagged
+      // noise_init, so the transport-state daemon routes it to handleReconnect — a fresh RESPONDER
+      // handshake reusing the same static. driveClient's built-in transient re-dial converges past the
+      // old leg's close (a raced dial that lands before the close is nulled is retried).
+      const second = await driveClient({
+        forwarderUrl,
+        remoteStaticPublicKey: daemon.staticPublicKey,
+        hello,
+        clientPrivateKey: first.clientPrivateKey
+      })
+
+      // AC2: the reconnect handshake completes with the SAME hello_ack the initial handshake sealed —
+      // proving a faithful fresh responder handshake, not a MAC-failed transport frame.
+      await second.waiter.wait(() => second.events.some((e) => e.type === 'handshake-complete'))
+      const complete2 = second.events.find((e) => e.type === 'handshake-complete')
+      expect(complete2, 'the reconnect noise_init must drive a fresh responder handshake').toBeDefined()
+      expect(parseHelloAck((complete2 as { helloAck: Uint8Array }).helloAck)).toEqual({
+        protocol_version: 'v2',
+        server_id: 'fake-daemon',
+        conn_id: 'conn-1',
+        capabilities: []
+      })
+
+      // AC3: reconnectResendFrames streams `canned` sealed under the NEW send cipher, right after the
+      // reconnect hello_ack — the fresh session receives it as a `message`.
+      await second.waiter.wait(() => second.events.some((e) => e.type === 'message'))
+      const resent = second.events.find((e) => e.type === 'message')
+      expect(bytes((resent as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(canned))
+
+      // A post-reconnect round-trip under the NEW keys: the client's send opens under the daemon's new
+      // recv cipher and the echoed reply comes back under the new send cipher (the crossed-Split oracle).
+      const probe1 = encodeEnvelope({
+        id: 3,
+        type: 'send_message',
+        ts: '2026-01-01T00:00:02Z',
+        payload: { conversation_id: 'c1', message_id: 'm2', text: 'post-reconnect probe' }
+      })
+      second.initiator.sendMessage(probe1)
+      await second.waiter.wait(() => second.events.filter((e) => e.type === 'message').length >= 2)
+      const reply1 = second.events.filter((e) => e.type === 'message')[1]
+      expect(bytes((reply1 as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(probe1))
+
+      // No client error across either leg (no transport-decrypt-failed → the reconnect cipher mapping
+      // is correct), and the fake stayed log-free across the whole reconnect path.
+      expect(first.events.some((e) => e.type === 'error')).toBe(false)
+      expect(second.events.some((e) => e.type === 'error')).toBe(false)
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
   })
 
   it('drives the full handshake + transport + a client error path with zero console output (security)', async () => {

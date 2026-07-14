@@ -265,4 +265,58 @@ describe('subscribeModal', () => {
     // The rejection surface is orthogonal to the prompt set — no outstanding prompt was involved.
     expect(selectOutstanding(store.getState())).toEqual([])
   })
+
+  // #416: the renderer-store half of the reconnect reconcile e2e. These fold the SAME ordered
+  // DaemonEvent stream a genuine reconnect emits (proven in daemonConnection.roundtrip.test.ts —
+  // `connected` then `modalShown`, re-sent or not) through the REAL subscribeModal → translateModalEvent
+  // → reduceModal, and assert the clear-then-repopulate at ModalState.outstanding. The transport e2e
+  // can't run this half (tsconfig.node.json can't import renderer code), so AC4 splits across the two
+  // files at that project boundary; the in-order single daemon-event channel joins them.
+  it('reconnect variant 1: a still-held modal re-sent after the reconnect connected surfaces exactly once (#416)', () => {
+    const bridge = fakeBridge()
+    const store = createModalStore()
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    // Initial connect (empty outstanding → the `reconnected` clear is a no-op), then the modal shows.
+    bridge.emit({ type: 'connected', ack })
+    bridge.emit(modalShown)
+    expect(selectOutstanding(store.getState())).toHaveLength(1)
+
+    // A genuine reconnect re-emits `connected`: translateModalEvent flips it to `reconnected`, clearing
+    // outstanding so the daemon's connect-time re-sends are the sole repopulation truth.
+    bridge.emit({ type: 'connected', ack })
+    expect(selectOutstanding(store.getState())).toEqual([])
+
+    // The daemon re-sends the still-held modal (same modalId) → repopulated exactly once, options +
+    // defaultOptionId intact (the answerable precondition), no duplicate.
+    bridge.emit(modalShown)
+    const outstanding = selectOutstanding(store.getState())
+    expect(outstanding).toHaveLength(1)
+    expect(outstanding[0]).toEqual({
+      modalId: 'mdl-7f3a',
+      class: 'permission',
+      title: 'Allow Bash?',
+      prompt: 'run rm -rf',
+      options: [
+        { id: 'allow', label: 'Allow' },
+        { id: 'deny', label: 'Deny' }
+      ],
+      defaultOptionId: 'deny'
+    })
+  })
+
+  it('reconnect variant 2: a resolved-while-away modal (not re-sent) is gone after the reconnect connected (#416)', () => {
+    const bridge = fakeBridge()
+    const store = createModalStore()
+    subscribeModal(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    bridge.emit({ type: 'connected', ack })
+    bridge.emit(modalShown)
+    expect(selectOutstanding(store.getState())).toHaveLength(1)
+
+    // The reconnect `connected` clears outstanding; the daemon does NOT re-send (resolved-while-away),
+    // so nothing repopulates it — the prompt is gone.
+    bridge.emit({ type: 'connected', ack })
+    expect(selectOutstanding(store.getState())).toEqual([])
+  })
 })

@@ -6,7 +6,7 @@ import {
   selectConversations
 } from '../../store/conversationListStore'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
-import { SaveAsChannelDialogView, requestPromoteConversation } from './SaveAsChannelDialog'
+import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
 import { titleFor, partitionByPromotion, formatLastActivity } from './channelListViewModel'
 
@@ -40,11 +40,11 @@ export function ChannelList({
   const now = Date.now()
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
   // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
-  // dialog is open (or none); `name` is the controlled field value. Both reset on each open. The dialog
-  // is not rendered on first paint (`saveRow` starts null) and `window.pyry` is dereferenced only inside
-  // the click closures, so the container stays server-renderable (the onNewConversation discipline).
+  // Save-as-channel dialog is open (or none); the dialog's name + location + round-trip state now live in
+  // the SaveAsChannelDialog container itself (#288), seeded from the row on mount. The dialog is not
+  // rendered on first paint (`saveRow` starts null) and `window.pyry` is dereferenced only inside the
+  // container's callbacks, so ChannelList stays server-renderable (the onNewConversation discipline).
   const [saveRow, setSaveRow] = useState<ConversationSummary | null>(null)
-  const [name, setName] = useState('')
   // The Rename dialog's independent per-interaction state (#360) — a separate local pair, not shared with
   // the save-as one. No mutual-exclusion logic is needed: an open dialog's fixed-inset overlay covers the
   // window, so the row affordance behind it is not clickable and the two dialogs cannot both be open.
@@ -61,12 +61,7 @@ export function ChannelList({
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
         onNewConversation={() => requestNewConversation(window.pyry.sendCommand)}
-        onSaveAsChannel={(row) => {
-          // Open the dialog and seed the field from the row's displayed title in one handler — no effect,
-          // no key-remount; re-seeding on each open replaces any prior value.
-          setSaveRow(row)
-          setName(titleFor(row.name))
-        }}
+        onSaveAsChannel={(row) => setSaveRow(row)}
         onRename={(row) => {
           // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the
           // same one-handler seed as save-as; a null-name row prefills with its "Untitled" placeholder.
@@ -75,14 +70,10 @@ export function ChannelList({
         }}
       />
       {saveRow && (
-        <SaveAsChannelDialogView
-          name={name}
-          onNameChange={setName}
-          onCancel={() => setSaveRow(null)}
-          onSave={() => {
-            requestPromoteConversation(window.pyry.sendCommand, saveRow, name)
-            setSaveRow(null)
-          }}
+        <SaveAsChannelDialog
+          row={saveRow}
+          onDismiss={() => setSaveRow(null)}
+          onPromoted={() => setSaveRow(null)}
         />
       )}
       {renameRow && (

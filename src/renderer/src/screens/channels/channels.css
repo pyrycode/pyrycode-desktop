@@ -446,6 +446,75 @@
   cursor: default;
 }
 
+/* #288 — the location radio group (Figma 19:29): a column of two option rows with an 8px gap. */
+.save-as-channel__location {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* One option row (Figma 19:30/19:36) — the native radio + its label text, 12px gap, top-aligned so a
+   wrapped label / the preview line keeps the radio pinned to the first line. The wrapping <label> makes
+   the whole row toggle its radio. 4px/8px padding = --space-1/--space-2 (the node's px-4 py-8). */
+.save-as-channel__option {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-1) var(--space-2);
+}
+
+/* The native radio (Figma 19:31/19:37) — the codebase's first radio. accent-color tokenizes the checked
+   fill (no color literal — the --color-primary role); margin: 0 resets the UA default so --space-3 is exact. */
+.save-as-channel__radio {
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+/* The dedicated option stacks its label over the illustrative preview (Figma 19:33); min-width: 0 lets the
+   monospace preview wrap inside the row rather than forcing the panel wider. */
+.save-as-channel__option-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* The option label (Figma 19:34/19:38) — body-large on-surface, mirroring the input typography tokens. */
+.save-as-channel__option-label {
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* The illustrative slug preview (Figma 19:35) — monospace + muted, mirroring the conversation cwd chip
+   (conversation.css). overflow-wrap keeps a long slug wrapping inside the panel (the spec's wrap-safe note)
+   rather than the Figma's nowrap, so an arbitrarily long name can't blow out the width. Illustrative ONLY —
+   the promote uses the daemon-returned path, never this string (#288). */
+.save-as-channel__preview {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The rejected failure line (AC5) — spec-added, not in the Figma. Clones .create-folder__error
+   (conversation.css): the error-role token, muted body-medium. margin: 0 resets the paragraph default. */
+.save-as-channel__error {
+  margin: 0;
+  color: var(--color-error);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
 /* #360 — the Rename dialog (Figma 19:14), a token-identical twin of the Save-as-channel dialog (19:24):
    the only visual differences are the title text and the prefilled Name field, so every rule below mirrors
    its .save-as-channel* counterpart verbatim (overlay + scrim + centered M3 panel), only the selector

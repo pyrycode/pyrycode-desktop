@@ -108,6 +108,11 @@ function encodeConversationDeleted(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 20, type: 'conversation_deleted', ts: FIXED_TS, payload })
 }
 
+/** A `workspace_folder_created` envelope's plaintext bytes, wrapping an arbitrary payload (#381). */
+function encodeWorkspaceFolderCreated(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 21, type: 'workspace_folder_created', ts: FIXED_TS, payload })
+}
+
 /** A `session_transition` envelope's plaintext bytes, wrapping an arbitrary payload (#254). */
 function encodeSessionTransition(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 19, type: 'session_transition', ts: FIXED_TS, payload })
@@ -287,6 +292,10 @@ const UPDATED_UNNAMED = {
 /** A well-formed conversation_deleted reply — a single required `id`, the deleted row (#375).
  *  Note the field is `id`, NOT `conversation_id` (the request's field) — do not drift it. */
 const DELETED = { id: 'conv-9' }
+
+/** A well-formed workspace_folder_created reply — a single required `path`, the created folder (#381).
+ *  `path` is the daemon-side canonical path; a remote, opaque display string never resolved locally. */
+const FOLDER_CREATED = { path: '/home/user/projects/new-app' }
 
 /** A fully-populated, well-formed session_transition payload — a /clear rotation, workspace_cwd null (#254). */
 const SESSION_TRANSITION = {
@@ -1089,6 +1098,62 @@ describe('parseInboundMessage — conversation_deleted fail-closed (#375, AC)', 
         type: 'conversation_deleted',
         ts: FIXED_TS,
         payload: { id: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — workspace_folder_created recognition (#381, additive)', () => {
+  it('narrows a workspace_folder_created reply into { kind: workspace-folder-created } with the path', () => {
+    expect(parseInboundMessage(encodeWorkspaceFolderCreated(FOLDER_CREATED))).toEqual({
+      kind: 'workspace-folder-created',
+      workspaceFolderCreated: FOLDER_CREATED
+    })
+  })
+
+  it('drops unknown server keys, keeping only the fresh single-field { path } object (forward-compat)', () => {
+    const withExtras = { ...FOLDER_CREATED, parent: '/home/user/projects', name: 'new-app' }
+    expect(parseInboundMessage(encodeWorkspaceFolderCreated(withExtras))).toEqual({
+      kind: 'workspace-folder-created',
+      workspaceFolderCreated: FOLDER_CREATED
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — workspace_folder_created fail-closed (#381, AC)', () => {
+  it('throws when the payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeWorkspaceFolderCreated('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeWorkspaceFolderCreated(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws when path is missing or non-string', () => {
+    const bad: unknown[] = [
+      {}, // path absent
+      { path: undefined },
+      { path: 42 },
+      { path: null },
+      { path: {} },
+      // the request's field names, not the reply's — a drifted frame must still fail closed.
+      { parent: '/home/user/projects', name: 'new-app' }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeWorkspaceFolderCreated(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an oversized workspace_folder_created plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 21,
+        type: 'workspace_folder_created',
+        ts: FIXED_TS,
+        payload: { path: 'x'.repeat(MAX_PLAINTEXT_BYTES) }
       })
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
@@ -2503,6 +2568,32 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
   it('does NOT log on a malformed conversation_deleted throw path (#375)', () => {
     const { log, lines } = captureLog()
     expect(() => parseInboundMessage(encodeConversationDeleted({ id: 42 }), log)).toThrow(
+      WireDecodeError
+    )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a workspace_folder_created reply content-free, never the path, and no count (#381)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_PATH = '/home/secret-user/projects/secret-app'
+    const plaintext = encodeWorkspaceFolderCreated({ path: SECRET_PATH })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('workspace_folder_created')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no `path`, and NO `count` (the conversation_deleted posture).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_PATH)
+  })
+
+  it('does NOT log on a malformed workspace_folder_created throw path (#381)', () => {
+    const { log, lines } = captureLog()
+    expect(() => parseInboundMessage(encodeWorkspaceFolderCreated({ path: 42 }), log)).toThrow(
       WireDecodeError
     )
     expect(lines).toHaveLength(0)

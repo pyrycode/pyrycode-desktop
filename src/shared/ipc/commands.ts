@@ -27,6 +27,7 @@ import type {
   DeleteConversationPayload,
   RenameConversationPayload,
   ChangeWorkspacePayload,
+  CreateWorkspaceFolderPayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -75,7 +76,11 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * `name`, no secret — asking the daemon to change a conversation's stored name); `changeWorkspace` (#379),
  * whose `payload` reuses the wire ChangeWorkspacePayload (two REQUIRED strings — `conversation_id` + `cwd`,
  * no secret — asking the daemon to move a conversation's workspace to a different folder; `cwd` is
- * renderer-supplied text the daemon resolves SERVER-side, never a local path here); and `setSessionSettings` (#263), whose `payload` reuses the wire
+ * renderer-supplied text the daemon resolves SERVER-side, never a local path here); `createWorkspaceFolder` (#381),
+ * whose `payload` reuses the wire CreateWorkspaceFolderPayload (two REQUIRED strings — `parent` + `name`, no
+ * secret — asking the daemon to create a new workspace folder; both are renderer-supplied text the daemon
+ * polices SERVER-side ($HOME confinement + a single-clean-element name guard), never a local path here; the
+ * daemon replies with one `workspace_folder_created { path }` → `workspaceFolderCreated` event); and `setSessionSettings` (#263), whose `payload` reuses the wire
  * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
  * presence contract is applied main-side by the builder, not carried here) and additionally carries a
  * `changeId` (#261): a renderer-minted, client-internal correlation string riding ALONGSIDE `payload` (a
@@ -109,6 +114,7 @@ export type RendererCommand =
   | { type: 'deleteConversation'; payload: DeleteConversationPayload }
   | { type: 'renameConversation'; payload: RenameConversationPayload }
   | { type: 'changeWorkspace'; payload: ChangeWorkspacePayload }
+  | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
   | { type: 'interrupt' }
@@ -207,6 +213,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isRenameConversationPayload(value.payload)
     case 'changeWorkspace':
       return 'payload' in value && isChangeWorkspacePayload(value.payload)
+    case 'createWorkspaceFolder':
+      return 'payload' in value && isCreateWorkspaceFolderPayload(value.payload)
     case 'setSessionSettings':
       // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
       // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.
@@ -374,6 +382,25 @@ function isChangeWorkspacePayload(value: unknown): value is ChangeWorkspacePaylo
     typeof value.conversation_id === 'string' &&
     'cwd' in value &&
     typeof value.cwd === 'string'
+  )
+}
+
+/** The untrusted renderer→main boundary guard for the createWorkspaceFolder payload (#381) — the reason
+ *  the command half is security-sensitive. A clone of isChangeWorkspacePayload with the two field keys
+ *  `conversation_id`/`cwd` → `parent`/`name`: both must be present-and-string — a literal `null`, a
+ *  missing key, and a non-string are all rejected. Checks TYPE, not emptiness — an empty-string `parent`
+ *  or a bad `name` (separator, `..`, absolute, empty) passes here; the daemon polices both server-side
+ *  ($HOME confinement + a single-clean-element name guard, #887). `parent`/`name` are filesystem-shaped
+ *  but are never resolved into a local path here (only serialized onto the wire). Structural minimum — a
+ *  smuggled extra field is not rejected here; the main-side sender's fresh-literal construction bounds the
+ *  wire to exactly these two fields. Pure; never throws. */
+function isCreateWorkspaceFolderPayload(value: unknown): value is CreateWorkspaceFolderPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'parent' in value &&
+    typeof value.parent === 'string' &&
+    'name' in value &&
+    typeof value.name === 'string'
   )
 }
 

@@ -85,6 +85,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // the session store. Present only because the assertNever guard below makes a new arm a compile
       // error (the conversationsReceived-is-a-no-op precedent).
       return null
+    case 'workspaceFolderCreated':
+      // No session-store action: the Create-folder dialog (#157, not yet built) consumes the created path,
+      // not the session store. Present only because the assertNever guard below makes a new arm a compile
+      // error (the conversationDeleted-is-a-no-op precedent).
+      return null
     case 'modalShown':
     case 'modalDismissed':
       // No session-store action: the modal store + bridge (#223), not the session store, consumes

@@ -20,6 +20,7 @@ import type {
   DeleteConversationPayload,
   RenameConversationPayload,
   ChangeWorkspacePayload,
+  CreateWorkspaceFolderPayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -512,6 +513,39 @@ describe('isRendererCommand', () => {
     // A missing key is rejected.
     expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { cwd: '/p' } })).toBe(false)
+  })
+
+  it('accepts a well-formed createWorkspaceFolder command with both string fields (#381)', () => {
+    // Clones the changeWorkspace guard with both fields rekeyed to parent / name: both are REQUIRED
+    // strings (a literal null, a missing key, and a non-string are all rejected). No constructor exists;
+    // the Create-folder dialog (#157's UI slice) builds the literal inline.
+    const payload: CreateWorkspaceFolderPayload = { parent: '/home/user/projects', name: 'new-app' }
+    const command: RendererCommand = { type: 'createWorkspaceFolder', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum); the main-side fresh literal drops it.
+    expect(isRendererCommand({ type: 'createWorkspaceFolder', payload, extra: 1 })).toBe(true)
+  })
+
+  it('accepts a createWorkspaceFolder with empty-string fields — the guard checks type, not emptiness (#381)', () => {
+    // An empty parent / bad name is a valid wire string; the daemon polices both server-side ($HOME
+    // confinement + a single-clean-element name guard, #887). Pin that the guard does not over-reject.
+    const payload: CreateWorkspaceFolderPayload = { parent: '', name: '' }
+    expect(isRendererCommand({ type: 'createWorkspaceFolder', payload })).toBe(true)
+  })
+
+  it('rejects a createWorkspaceFolder with a missing/null payload (#381)', () => {
+    expect(isRendererCommand({ type: 'createWorkspaceFolder' })).toBe(false)
+    expect(isRendererCommand({ type: 'createWorkspaceFolder', payload: null })).toBe(false)
+  })
+
+  it('rejects a createWorkspaceFolder whose fields are wrong-typed, a literal null, or missing (#381)', () => {
+    const t = 'createWorkspaceFolder'
+    expect(isRendererCommand({ type: t, payload: { parent: '/p', name: 3 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { parent: '/p', name: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { parent: null, name: 'x' } })).toBe(false)
+    // A missing key is rejected.
+    expect(isRendererCommand({ type: t, payload: { parent: '/p' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { name: 'x' } })).toBe(false)
   })
 
   it('accepts a setSessionSettings command with only session_id (all optionals omitted) (#263)', () => {

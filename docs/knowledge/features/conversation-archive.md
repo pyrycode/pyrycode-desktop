@@ -1,16 +1,16 @@
 # Conversation archive (transport)
 
 The **transport data path** that lets the desktop client ask the pyry daemon to archive an active
-conversation, so the Channel Info sheet's Archive action (#366) can flip
+conversation, so the Channel Info sheet's Archive action (#366) flips
 `ConversationSummary.is_archived` from `false` to `true` on a row the [conversation list
 store](conversation-list-store.md) already holds.
 
 Introduced in [#363](../codebase/363.md), split from #155 (the Channel Info sheet split: archive
 transport `#363` / delete transport `#364` / sheet shell `#365` / archive action `#366` / delete
 action+confirm `#367` / rename action `#368`). Shipped dormant — fully wired and tested, with no
-caller at the time; #366 is its designated first caller. The mirror-image twin of [conversation
-unarchive](conversation-unarchive.md) (#346), field-for-field, differing only in which way the
-durable flag flips.
+caller at the time; [#366](../codebase/366.md) is its live caller, see below. The mirror-image twin
+of [conversation unarchive](conversation-unarchive.md) (#346), field-for-field, differing only in
+which way the durable flag flips.
 
 ## The wire contract
 
@@ -32,9 +32,9 @@ method, guard, dispatch arm) so the two can evolve independently if the daemon e
 flag (the opposite of unarchive's clear), persisting eagerly, and replying with the same
 `conversation_updated` record [conversation unarchive](conversation-unarchive.md) uses — reflecting
 the now-archived state. This slice does not correlate that reply; the Channel Info sheet's Archive
-action is expected to read `ConversationSummary.is_archived` off the [conversation list
-store](conversation-list-store.md)'s next re-list, exactly as [#348](../codebase/348.md) did for
-unarchive's flip back to active.
+action ([#366](../codebase/366.md)) reads `ConversationSummary.is_archived` off the [conversation
+list store](conversation-list-store.md)'s next re-list, exactly as [#348](../codebase/348.md) did
+for unarchive's flip back to active.
 
 ## The five pieces
 
@@ -59,11 +59,12 @@ method's fresh-literal construction (naming only `conversation_id`, never spread
 payload) is the layer that actually bounds what reaches the wire. This two-layer defense is the
 same posture #273, #236, and #346 established.
 
-## Data flow (wiring pending #366)
+## Data flow
 
 ```
-Archive action click (Channel Info sheet, #366, not yet built)
-  → { type: 'archiveConversation', payload: { conversation_id } }  (renderer, built inline, no constructor)
+Archive action click (Channel Info sheet, #366)
+  → requestArchiveConversation(sendCommand, conversationId)         (renderer helper, ConversationScreen.tsx)
+  → { type: 'archiveConversation', payload: { conversation_id } }  (inline literal, no constructor)
   → onCommand dispatch (src/main/index.ts)
   → connection.archiveConversation(payload)                        (fresh literal, fire-and-forget)
   → buildArchiveConversation → encodeEnvelope → driver.sendMessage  (main process only)
@@ -78,12 +79,15 @@ Archive action click (Channel Info sheet, #366, not yet built)
   the direct twin this slice clones field-for-field, and the sibling this verb's payload type is
   deliberately kept distinct from.
 - [Archive screen](archive-screen.md) / [#348](../codebase/348.md) — the restore-side consumer
-  pattern this verb's eventual caller (#366) is expected to follow (read the flip off the next
-  re-list rather than correlating the reply).
+  pattern [#366](../codebase/366.md)'s Archive action follows (reads the flip off the next re-list
+  rather than correlating the reply).
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — origin of
-  `ConversationSummary.is_archived`, the field #366's action is expected to read post-archive.
+  `ConversationSummary.is_archived`, the field [#366](../codebase/366.md)'s action reads post-archive.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — re-lists on
   any `conversation_updated` broadcast, so an archive's flip lands automatically, the same
   mechanism [#275](../codebase/275.md) relied on for promote and [#346](../codebase/346.md) for
   unarchive.
 - [#363 codebase notes](../codebase/363.md) — implementation summary.
+- [Conversation shell](conversation-shell.md#channel-info-sheet-365) / [#366
+  codebase notes](../codebase/366.md) — the Channel Info sheet's Archive action, this transport's
+  live caller.

@@ -215,6 +215,20 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(command)).toBe(true)
   })
 
+  it('accepts the bare requestRecentWorkspaces command (no payload — the request carries nothing) (#380)', () => {
+    // The recent-workspaces request carries nothing to parameterise, so its guard case is a bare
+    // `return true`. A structurally-extra field is harmless (structural minimum), like requestConversations.
+    expect(isRendererCommand({ type: 'requestRecentWorkspaces' })).toBe(true)
+    expect(isRendererCommand({ type: 'requestRecentWorkspaces', extra: 'ignored' })).toBe(true)
+  })
+
+  it('types the bare requestRecentWorkspaces member as part of the union (#380)', () => {
+    // Compile-time proof the bare member is in RendererCommand, hence reachable through the existing
+    // generic sendCommand bridge — no new preload method or IPC channel exists to test.
+    const command: RendererCommand = { type: 'requestRecentWorkspaces' }
+    expect(isRendererCommand(command)).toBe(true)
+  })
+
   it('accepts the bare interrupt command (no payload — stops the running turn) (#306)', () => {
     // The interrupt frame carries nothing to parameterise, so its guard case is a bare `return true`.
     // A structurally-extra field is harmless (structural minimum), like requestConversations.

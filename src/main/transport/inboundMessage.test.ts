@@ -63,6 +63,11 @@ function encodeConversations(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 12, type: 'conversations', ts: FIXED_TS, payload })
 }
 
+/** A `recent_workspaces_list` envelope's plaintext bytes, wrapping an arbitrary payload (#380). */
+function encodeRecentWorkspaces(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 14, type: 'recent_workspaces_list', ts: FIXED_TS, payload })
+}
+
 /** A `turn_state` envelope's plaintext bytes, wrapping an arbitrary payload (#214). */
 function encodeTurnState(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 13, type: 'turn_state', ts: FIXED_TS, payload })
@@ -236,6 +241,12 @@ const CONV_UNNAMED = {
   last_message_ts: '2026-07-07T00:00:00Z',
   last_used_at: '2026-07-07T12:00:00Z'
 }
+
+/** A well-formed recent-workspace row — path + opaque last_used_at (#380). */
+const WS_ONE = { path: '/home/user/project', last_used_at: '2026-07-09T00:00:00Z' }
+
+/** A second recent-workspace row, to prove wire order is preserved (#380). */
+const WS_TWO = { path: '/tmp/scratch', last_used_at: '2026-07-07T12:00:00Z' }
 
 /** A well-formed conversation_created reply with a string name — its OWN 5-field shape (#241). */
 const CREATED_NAMED = {
@@ -735,6 +746,103 @@ describe('parseInboundMessage — conversations fail-closed (#139, AC2/AC4)', ()
         type: 'conversations',
         ts: FIXED_TS,
         payload: { conversations: [{ ...CONV_NAMED, name: 'x'.repeat(MAX_PLAINTEXT_BYTES) }] }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — recent_workspaces_list recognition (#380, additive)', () => {
+  it('narrows a recent_workspaces_list reply into an ordered { kind: recent-workspaces } list', () => {
+    const result = parseInboundMessage(encodeRecentWorkspaces({ workspaces: [WS_ONE, WS_TWO] }))
+    expect(result).toEqual({ kind: 'recent-workspaces', recentWorkspaces: [WS_ONE, WS_TWO] })
+  })
+
+  it('preserves wire order (most-recent-first is the daemon truth, carried unchanged)', () => {
+    const result = parseInboundMessage(encodeRecentWorkspaces({ workspaces: [WS_TWO, WS_ONE] }))
+    if (result?.kind === 'recent-workspaces') {
+      expect(result.recentWorkspaces.map((w) => w.path)).toEqual([WS_TWO.path, WS_ONE.path])
+    }
+  })
+
+  it('treats an empty workspaces array as a valid zero-length list', () => {
+    expect(parseInboundMessage(encodeRecentWorkspaces({ workspaces: [] }))).toEqual({
+      kind: 'recent-workspaces',
+      recentWorkspaces: []
+    })
+  })
+
+  it('drops unknown server keys per row, keeping only path + last_used_at (forward-compat)', () => {
+    const withExtras = { ...WS_ONE, is_current: true, label: 'ignore-me' }
+    expect(parseInboundMessage(encodeRecentWorkspaces({ workspaces: [withExtras] }))).toEqual({
+      kind: 'recent-workspaces',
+      recentWorkspaces: [WS_ONE]
+    })
+  })
+
+  it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — recent_workspaces_list fail-closed (#380, AC3)', () => {
+  it('throws when a recent_workspaces_list payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeRecentWorkspaces('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeRecentWorkspaces(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws when workspaces is absent or not an array', () => {
+    const bad: unknown[] = [{}, { workspaces: {} }, { workspaces: 'x' }, { workspaces: 3 }]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeRecentWorkspaces(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a row is missing path, or path is a non-string', () => {
+    const bad: unknown[] = [
+      { last_used_at: '2026-07-09T00:00:00Z' }, // path absent
+      { ...WS_ONE, path: 42 },
+      { ...WS_ONE, path: null }
+    ]
+    for (const row of bad) {
+      expect(() => parseInboundMessage(encodeRecentWorkspaces({ workspaces: [row] }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when last_used_at is missing or a non-string', () => {
+    const bad: unknown[] = [
+      { path: '/home/user/project' }, // last_used_at absent
+      { ...WS_ONE, last_used_at: 42 },
+      { ...WS_ONE, last_used_at: null }
+    ]
+    for (const row of bad) {
+      expect(() => parseInboundMessage(encodeRecentWorkspaces({ workspaces: [row] }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('fails the whole reply closed when any single row is invalid', () => {
+    const bad: unknown[] = [
+      { workspaces: [WS_ONE, 'not-an-object'] },
+      { workspaces: [WS_ONE, { ...WS_TWO, path: undefined }] },
+      { workspaces: [{ ...WS_ONE, last_used_at: 42 }] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeRecentWorkspaces(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an oversized recent_workspaces_list plaintext even when the JSON is valid', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 14,
+        type: 'recent_workspaces_list',
+        ts: FIXED_TS,
+        payload: { workspaces: [{ ...WS_ONE, path: 'x'.repeat(MAX_PLAINTEXT_BYTES) }] }
       })
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
@@ -2273,6 +2381,35 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeConversations({ conversations: [{ ...CONV_NAMED, name: 42 }] }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a recent_workspaces_list reply content-free, never a path, and no count (#380)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_PATH = '/home/secret/workspace'
+    const plaintext = encodeRecentWorkspaces({
+      workspaces: [{ ...WS_ONE, path: SECRET_PATH }, WS_TWO]
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('recent_workspaces_list')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no row field, and NO `count` (the conversations #139 posture):
+    // a workspace-count is more identifying than a message-batch size (AC restricts to type/bytes/hash).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_PATH)
+  })
+
+  it('does NOT log on a malformed recent_workspaces_list throw path (#380)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeRecentWorkspaces({ workspaces: [{ ...WS_ONE, path: 42 }] }), log)
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

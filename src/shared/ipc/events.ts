@@ -18,6 +18,7 @@ import type {
   ConversationSummary,
   ConversationCreatedPayload,
   ConversationUpdatedPayload,
+  RecentWorkspace,
   QueuedItem,
   WireTurnState,
   WireSessionTransitionReason,
@@ -217,6 +218,15 @@ export type DaemonEvent =
   // exhaustive consumer no-ops it for now; ships DORMANT (the stallDetected-was-a-no-op-until-#317
   // precedent). No token, key, or raw frame can ride a bare string id (AC-by-construction).
   | { type: 'conversationDeleted'; id: string }
+  // The recent-workspaces arm (#380). Reuses the wire RecentWorkspace row type verbatim (the
+  // conversationsReceived precedent) — snake_case, order preserved from the wire (most-recent-first).
+  // Consumed by the recent-workspaces store (#382), NOT the session store, so every exhaustive consumer
+  // no-ops it. No token/key/raw frame — each row carries only a `path` (untrusted display text) and an
+  // opaque `last_used_at` timestamp. `path` is an UNTRUSTED daemon-supplied filesystem path: the #382
+  // render slice must render it as PLAIN TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML) and
+  // must NEVER resolve it into a local filesystem operation (it is a remote daemon-side path). This
+  // ticket has no DOM sink, but the constraint is inherited here — do not drop this warning.
+  | { type: 'recentWorkspacesReceived'; recentWorkspaces: readonly RecentWorkspace[] }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
   // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is

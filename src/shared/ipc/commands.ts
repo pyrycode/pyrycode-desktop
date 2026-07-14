@@ -54,7 +54,9 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * `requestSnapshot` (#180), whose `payload` reuses the wire RequestSnapshotPayload (a
  * `conversation_id` routing id, not a secret) to ask the daemon for the current screen_snapshot;
  * the bare `requestConversations` (#139), which carries NO payload — the daemon returns every
- * conversation; `answerModal` (#236), whose `payload` is AnswerModalCommandPayload (`modal_id` +
+ * conversation; the bare `requestRecentWorkspaces` (#380), which likewise carries NO payload — the
+ * daemon returns the recent-workspaces list (its reply is decoded to a `recentWorkspacesReceived`
+ * event, consumed by #382); `answerModal` (#236), whose `payload` is AnswerModalCommandPayload (`modal_id` +
  * `option_id`, the token Omit-excluded — minted main-side); `cancelModal` (#236), whose
  * `payload` reuses the wire ModalCancelPayload (`modal_id` only); and `createConversation` (#241),
  * whose `payload` reuses the wire CreateConversationPayload (three nullable-and-present fields, all
@@ -97,6 +99,7 @@ export type RendererCommand =
   | { type: 'requestDebugBundle' }
   | { type: 'requestSnapshot'; payload: RequestSnapshotPayload }
   | { type: 'requestConversations' }
+  | { type: 'requestRecentWorkspaces' }
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
   | { type: 'cancelModal'; payload: ModalCancelPayload }
   | { type: 'createConversation'; payload: CreateConversationPayload }
@@ -182,6 +185,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isRequestSnapshotPayload(value.payload)
     case 'requestConversations':
       // Bare member (#139): no payload to validate, so a well-formed `type` is complete acceptance.
+      return true
+    case 'requestRecentWorkspaces':
+      // Bare member (#380): no payload to validate, so a well-formed `type` is complete acceptance.
       return true
     case 'answerModal':
       return 'payload' in value && isAnswerModalPayload(value.payload)

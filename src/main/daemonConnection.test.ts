@@ -231,6 +231,11 @@ function conversationsPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversations', ts: FIXED_TS, payload })
 }
 
+/** A `recent_workspaces_list` plaintext, wrapping an arbitrary payload (#380). */
+function recentWorkspacesPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'recent_workspaces_list', ts: FIXED_TS, payload })
+}
+
 /** A `turn_state` plaintext, wrapping an arbitrary payload (#214). */
 function turnStatePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'turn_state', ts: FIXED_TS, payload })
@@ -2093,6 +2098,103 @@ describe('createDaemonConnection — conversations (list_conversations request /
       drivers[0].emit({
         type: 'message',
         plaintext: conversationsPlaintext({ conversations: [{ ...CONV_NAMED, is_promoted: 'nope' }] })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — recentWorkspaces (recent_workspaces request / recent_workspaces_list reply, #380)', () => {
+  const WS_ONE = { path: '/home/user/project', last_used_at: '2026-07-09T00:00:00Z' }
+  const WS_TWO = { path: '/tmp/scratch', last_used_at: '2026-07-07T12:00:00Z' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.requestRecentWorkspaces()).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one bare recent_workspaces envelope with id 2 and the fixed ts', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.requestRecentWorkspaces()
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('recent_workspaces')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    // Bare control frame: a present-but-empty payload, no selector.
+    expect(envelope.payload).toEqual({})
+  })
+
+  it('shares the one envelope-id counter with send and requestConversations (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.requestConversations()
+    connection.requestRecentWorkspaces()
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+    expect(decodeEnvelope(drivers[0].sent[2]).id).toBe(4)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.requestRecentWorkspaces()).not.toThrow()
+  })
+
+  it('decodes an inbound recent_workspaces_list reply into one recentWorkspacesReceived carrying the rows (order preserved)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: recentWorkspacesPlaintext({ workspaces: [WS_ONE, WS_TWO] })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'recentWorkspacesReceived', recentWorkspaces: [WS_ONE, WS_TWO] }
+    ])
+  })
+
+  it('carries an empty workspaces list through unchanged', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: recentWorkspacesPlaintext({ workspaces: [] })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'recentWorkspacesReceived', recentWorkspaces: [] }
+    ])
+  })
+
+  it('drops a malformed recent_workspaces_list reply without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: recentWorkspacesPlaintext({ workspaces: [{ ...WS_ONE, path: 42 }] })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

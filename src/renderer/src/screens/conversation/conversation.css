@@ -1696,3 +1696,132 @@
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
 }
+
+/* #383 — the Workspace Picker sheet's content classes (Figma node 20-2). The sheet reuses the
+   .status-sheet__* chrome + .status-sheet__section-header verbatim (the Channel Info sheet clone); only
+   the recent-workspace rows, the "default" pill, the loaded-empty line, and the create-folder entry are
+   new. All token-based — no color/size/spacing literals (opacity is the only de-emphasis device). */
+
+/* A recent-workspace row button (Figma 20:13 — px 16 / py 12): a folder glyph + the text column, a full
+   reset, left-aligned, hover/focus like .channel-list__row-open. :disabled (no active conversation)
+   drops the pointer affordance (the .composer__send:disabled convention, no opacity literal). */
+.workspace-picker__row,
+.workspace-picker__other {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  background: transparent;
+  color: var(--color-on-surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-picker__row:hover:not(:disabled),
+.workspace-picker__other:hover:not(:disabled) {
+  background: var(--color-surface-container);
+}
+
+.workspace-picker__row:focus-visible,
+.workspace-picker__other:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.workspace-picker__row:disabled,
+.workspace-picker__other:disabled {
+  cursor: not-allowed;
+}
+
+/* The 24px glyph wrappers (Figma 20:14 / 20:42) — muted content, never grow or shrink. */
+.workspace-picker__row-icon,
+.workspace-picker__other-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-on-surface-variant);
+}
+
+/* The text column (Figma 20:17) — path line over the meta line. min-width: 0 lets the path ellipsize. */
+.workspace-picker__row-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The top line (Figma 20:18/20:34): path + optional "default" pill. */
+.workspace-picker__row-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The workspace path (Figma 20:19) — mono on-surface, ellipsizing rather than overflowing (the
+   .channel-info__row-value--mono idiom at the row's larger body size). */
+.workspace-picker__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The "default" pill (Figma 20:36) — the current-workspace mark: secondary-container fill,
+   on-secondary-container label, label-small. The 4px radius is structural geometry (smaller than
+   --radius-xs, the handle carve-out precedent). Never grows or shrinks. */
+.workspace-picker__default-pill {
+  flex: 0 0 auto;
+  padding: 0 var(--space-2);
+  border-radius: 4px;
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+  white-space: nowrap;
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+}
+
+/* The "Last used …" meta line (Figma 20:20) — muted body-small. */
+.workspace-picker__meta {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The loaded-empty line (workspaces === []) — muted body-medium at the row padding (the
+   .channel-info__empty token set), structurally distinct from the not-loaded (null) case. */
+.workspace-picker__empty {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The create-folder entry label (Figma 20:47) — on-surface body-large. */
+.workspace-picker__other-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}

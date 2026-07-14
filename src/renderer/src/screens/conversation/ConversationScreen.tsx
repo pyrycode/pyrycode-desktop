@@ -39,6 +39,7 @@ import {
   RenameConversationDialogView,
   requestRenameConversation
 } from '../channels/RenameConversationDialog'
+import { WorkspacePickerSheet } from './WorkspacePickerSheet'
 import type { RendererCommand } from '@shared/ipc/commands'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
@@ -100,6 +101,11 @@ export function ConversationScreen({
   // menu's Channel-info item flips it open; the sheet reads the same `activeConversation` slice already
   // held above. Independent of `sheetOpen`: separate triggers, one sheet at a time in normal use.
   const [channelInfoOpen, setChannelInfoOpen] = useState(false)
+  // #383: the Workspace Picker sheet's open/closed state — the `channelInfoOpen` twin, a single-value
+  // screen-local boolean → useState, never the store (ADR 0006), resetting to closed on remount for free.
+  // The WorkspaceChip's "Change" button flips it open (the named "#157 Workspace Picker seam"); the sheet
+  // reads the same `activeConversation` slice and `now` clock already held. One sheet at a time in normal use.
+  const [pickerOpen, setPickerOpen] = useState(false)
   // #286: the render-time clock for the session-boundary delimiter's relative time (`2 hours ago`).
   // A plain render-local value, not store state (the ChannelList precedent) — safe under
   // renderToStaticMarkup, adds no subscription, and re-derives on each render so the label stays fresh.
@@ -121,7 +127,11 @@ export function ConversationScreen({
       {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
           EmptyThread, so Timeline's { items, now } contract stays untouched (no prop cascade). It
           self-gates to null unless the thread is empty and shows an unpromoted (discussion) conversation. */}
-      <WorkspaceChip conversation={activeConversation} isEmpty={items.length === 0} />
+      <WorkspaceChip
+        conversation={activeConversation}
+        isEmpty={items.length === 0}
+        onChange={() => setPickerOpen(true)}
+      />
       <Timeline items={items} now={now} />
       <ThinkingIndicator isThinking={phase === 'thinking'} />
       {/* #317: the stalled-turn problem-state indicator — a sibling of the thinking indicator in the
@@ -165,6 +175,17 @@ export function ConversationScreen({
           conversation={activeConversation}
           now={now}
           onClose={() => setChannelInfoOpen(false)}
+        />
+      )}
+      {/* #383: the Workspace Picker sheet — the ChannelInfoSheet twin, overlaying the conversation surface.
+          Reuses the render-time `now` (the "Last used …" relative time) and the `activeConversation` slice
+          already read above; the container mounts the #382 data-path bridge, marks the current workspace,
+          and dispatches `change_workspace` on selection. Opened from the WorkspaceChip's "Change" button. */}
+      {pickerOpen && (
+        <WorkspacePickerSheet
+          conversation={activeConversation}
+          now={now}
+          onClose={() => setPickerOpen(false)}
         />
       )}
       {/* #224: the interactive permission/trust modal — the last child so it overlays the whole

@@ -7,6 +7,7 @@ import {
 } from '../../store/conversationListStore'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 import { SaveAsChannelDialogView, requestPromoteConversation } from './SaveAsChannelDialog'
+import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
 import { titleFor, partitionByPromotion, formatLastActivity } from './channelListViewModel'
 
 // The Channel List home screen (#141) — the paired shell's `list` view, replacing the throwaway
@@ -44,6 +45,13 @@ export function ChannelList({
   // the click closures, so the container stays server-renderable (the onNewConversation discipline).
   const [saveRow, setSaveRow] = useState<ConversationSummary | null>(null)
   const [name, setName] = useState('')
+  // The Rename dialog's independent per-interaction state (#360) — a separate local pair, not shared with
+  // the save-as one. No mutual-exclusion logic is needed: an open dialog's fixed-inset overlay covers the
+  // window, so the row affordance behind it is not clickable and the two dialogs cannot both be open.
+  // `renameRow` is the row whose Rename dialog is open (or none); `renameName` is the controlled field,
+  // seeded from the row's displayed title on open (a null-name row prefills with its "Untitled" placeholder).
+  const [renameRow, setRenameRow] = useState<ConversationSummary | null>(null)
+  const [renameName, setRenameName] = useState('')
   return (
     <>
       <ChannelListView
@@ -59,6 +67,12 @@ export function ChannelList({
           setSaveRow(row)
           setName(titleFor(row.name))
         }}
+        onRename={(row) => {
+          // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the
+          // same one-handler seed as save-as; a null-name row prefills with its "Untitled" placeholder.
+          setRenameRow(row)
+          setRenameName(titleFor(row.name))
+        }}
       />
       {saveRow && (
         <SaveAsChannelDialogView
@@ -68,6 +82,17 @@ export function ChannelList({
           onSave={() => {
             requestPromoteConversation(window.pyry.sendCommand, saveRow, name)
             setSaveRow(null)
+          }}
+        />
+      )}
+      {renameRow && (
+        <RenameConversationDialogView
+          name={renameName}
+          onNameChange={setRenameName}
+          onCancel={() => setRenameRow(null)}
+          onSave={() => {
+            requestRenameConversation(window.pyry.sendCommand, renameRow, renameName)
+            setRenameRow(null)
           }}
         />
       )}
@@ -91,7 +116,8 @@ export function ChannelListView({
   onOpenSettings,
   onOpenArchive,
   onNewConversation,
-  onSaveAsChannel
+  onSaveAsChannel,
+  onRename
 }: {
   conversations: readonly ConversationSummary[] | null
   now: number
@@ -100,6 +126,7 @@ export function ChannelListView({
   onOpenArchive: () => void
   onNewConversation: () => void
   onSaveAsChannel: (row: ConversationSummary) => void
+  onRename: (row: ConversationSummary) => void
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
@@ -110,7 +137,7 @@ export function ChannelListView({
         <ArchiveButton onClick={onOpenArchive} />
         <SettingsButton onClick={onOpenSettings} />
       </div>
-      {renderBody(conversations, now, onOpen, onSaveAsChannel)}
+      {renderBody(conversations, now, onOpen, onSaveAsChannel, onRename)}
       <NewConversationFab onClick={onNewConversation} />
     </section>
   )
@@ -208,7 +235,8 @@ function renderBody(
   conversations: readonly ConversationSummary[] | null,
   now: number,
   onOpen: () => void,
-  onSaveAsChannel: (row: ConversationSummary) => void
+  onSaveAsChannel: (row: ConversationSummary) => void,
+  onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
   // Not-yet-loaded: neither rows nor the empty state (distinct from loaded-zero, per #208).
   if (conversations === null) return null
@@ -223,10 +251,11 @@ function renderBody(
       {channels.length > 0 && (
         <>
           <header className="channel-list__section-header">Channels</header>
-          {/* Saved Channels are already promoted — they pass no onSaveAsChannel, so the affordance is
-              structurally absent on their rows (AC1). */}
+          {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
+              only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
+              AC1) — the symmetric counterpart to Save-as-channel on Recent rows. */}
           {channels.map((c) => (
-            <Row key={c.id} row={c} now={now} onOpen={onOpen} />
+            <Row key={c.id} row={c} now={now} onOpen={onOpen} onRename={() => onRename(c)} />
           ))}
         </>
       )}
@@ -257,10 +286,12 @@ function renderBody(
 // untrusted daemon-derived strings rendered as auto-escaped React children (never
 // dangerouslySetInnerHTML) — displayed as opaque text.
 //
-// The open action is its own button; the optional Save-as-channel affordance (#274) is a SIBLING, not a
-// nested control — an interactive control cannot nest inside a <button>. `.channel-list__row` is a flex
-// wrapper; the old row button-reset/hover/focus rules now live on `.channel-list__row-open`. Recent rows
-// pass `onSaveAsChannel` → the affordance renders; saved Channel rows pass none → it is absent (AC1).
+// The open action is its own button; the optional trailing affordances (Save-as-channel #274, Rename
+// #360) are SIBLINGS, not nested controls — an interactive control cannot nest inside a <button>.
+// `.channel-list__row` is a flex wrapper; the old row button-reset/hover/focus rules now live on
+// `.channel-list__row-open`. The two affordances are disjoint by section: Recent rows pass
+// `onSaveAsChannel` (→ Save-as renders, Rename absent); saved Channel rows pass `onRename` (→ Rename
+// renders, Save-as absent), so no row carries two trailing buttons (AC1).
 //
 // `onClick={onOpen}` is deliberate and interim: per the ticket's Out of Scope, opening a *specific*
 // tapped conversation needs a select-and-load transport path that does not exist, so every row invokes
@@ -271,12 +302,14 @@ function Row({
   row,
   now,
   onOpen,
-  onSaveAsChannel
+  onSaveAsChannel,
+  onRename
 }: {
   row: ConversationSummary
   now: number
   onOpen: () => void
   onSaveAsChannel?: () => void
+  onRename?: () => void
 }): JSX.Element {
   const time = formatLastActivity(row.last_message_ts, now)
   return (
@@ -285,6 +318,29 @@ function Row({
         <span className="channel-list__title">{titleFor(row.name)}</span>
         <span className="channel-list__time">{time}</span>
       </button>
+      {onRename && (
+        // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),
+        // since the glyph alone carries no text. The 24px Material `edit` (pencil) glyph is a reasonable
+        // stand-in: no Figma node pins this row-level control (19:14 is the dialog); a specific glyph is a
+        // small architect swap, the save affordance's bookmark-glyph precedent.
+        <button
+          type="button"
+          className="channel-list__rename"
+          aria-label="Rename"
+          onClick={onRename}
+        >
+          <svg
+            className="channel-list__rename-icon"
+            viewBox="0 0 24 24"
+            width="24"
+            height="24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+          </svg>
+        </button>
+      )}
       {onSaveAsChannel && (
         // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__fab pattern),
         // since the glyph alone carries no text. The Material bookmark glyph is a reasonable stand-in: no

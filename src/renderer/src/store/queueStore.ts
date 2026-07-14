@@ -39,9 +39,12 @@ export interface QueueState {
   backlogs: ReadonlyMap<string, readonly QueuedItem[]>
 }
 
-/** Store shape = state + the single mutation entry point. */
+/** Store shape = state + the two mutation entry points: record one conversation's snapshot, and
+ *  clear every backlog on reconnect (#197). Still two named setters, not a discriminated-union action
+ *  set — that would be ceremony for two operations. */
 export type QueueStore = QueueState & {
   setBacklog: (snapshot: QueueSnapshot) => void
+  resetBacklogs: () => void
 }
 
 export const initialQueueState: QueueState = { backlogs: new Map() }
@@ -53,7 +56,16 @@ export const initialQueueState: QueueState = { backlogs: new Map() }
  * latest snapshot's `queued`, no merge / append / dedupe. `queued` is stored VERBATIM by reference (no
  * coercion, no validation — #292 owns the fail-closed decode). The write is unconditional: an empty
  * `queued: []` sets that key to `[]` ("the daemon says this conversation's backlog is now empty" — the
- * AC2 clear case); it does NOT delete the key (stale-key eviction is #197's concern via selectBacklogs).
+ * AC2 clear case); it does NOT delete the key (per-conversation stale-key clearing is a `setBacklog []`,
+ * not `resetBacklogs`).
+ *
+ * `resetBacklogs` (#197) is the reconnect reconcile: the relay re-emits `connected` on every
+ * (re)handshake, and the daemon re-sends one queue_state per NON-EMPTY conversation, so the client
+ * clears the WHOLE map and lets those re-sends repopulate via `setBacklog`. Clearing the map IS
+ * clearing every backlog — an absent key reads `EMPTY_BACKLOG` (AC3), so no per-key eviction loop is
+ * needed. Copy-on-write like `setBacklog` (never mutate `s.backlogs` in place); returning the SAME
+ * state reference when the map is already empty makes zustand's `Object.is` short-circuit fire — no
+ * listener churn on a first connect or a reconnect that held nothing (the #415 empty-slice no-op twin).
  */
 export function createQueueStore(init: QueueState = initialQueueState) {
   return createStore<QueueStore>((set) => ({
@@ -63,7 +75,8 @@ export function createQueueStore(init: QueueState = initialQueueState) {
         const next = new Map(s.backlogs)
         next.set(snapshot.conversationId, snapshot.queued)
         return { backlogs: next }
-      })
+      }),
+    resetBacklogs: () => set((s) => (s.backlogs.size === 0 ? s : { backlogs: new Map() }))
   }))
 }
 

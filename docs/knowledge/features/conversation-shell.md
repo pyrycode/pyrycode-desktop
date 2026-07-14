@@ -386,7 +386,10 @@ never a daemon string, so the label itself carries no untrusted content.
 container passes no `onChange`, so the button ships visibly `disabled` — an honest placeholder, not a
 silently-missing feature. #157 lands as a pure additive: pass an `onChange` that opens the Workspace
 Picker sheet (Figma node 20-2) and the button un-disables, with no other change to this view — the same
-optional-prop extension seam #276 reserves for #155's `onChannelInfo?`.
+optional-prop extension seam #276 originally reserved for #155's `onChannelInfo?` — [#365](../codebase/365.md)
+later retired that speculative prop in favor of `ConversationScreen` owning the Channel Info sheet's
+open-state itself (see [Channel Info sheet](#channel-info-sheet-365) below), so `onChange?` here is now
+the pattern's only live instance.
 
 **Why a sibling, not nested inside `EmptyThread`.** #277's `.conversation__empty` surface pins the chip
 "to the top of this surface" per its own CSS comment, but `WorkspaceChip` does **not** thread
@@ -1083,6 +1086,66 @@ coverage (the mobile file draws no daemon-screen surface, the same documented ga
 [#279](../codebase/279.md)/[#294](../codebase/294.md)/[#317](../codebase/317.md)). See [#324 codebase
 notes](../codebase/324.md) for the full design and patterns established.
 
+### Channel Info sheet (#365)
+
+Makes the thread overflow menu's **Channel info** item (#276, previously a live no-op) open a new
+bottom sheet (Figma node 20-48), reusing the Run-configuration `StatusSheet`'s `.status-sheet__*`
+chrome verbatim — the second sheet to do so. Renders the active conversation's **About** detail
+(Workspace `cwd` + Last activity), an empty **Actions** section slot, and a monospace **Channel ID**
+footer. Renderer-contained: no transport, IPC, or wire code.
+
+```
+.conversation
+├── … (StatusSheet, when sheetOpen)
+└── ChannelInfoSheet                    (mounted last, when channelInfoOpen)
+    └── ChannelInfoSheetView
+        ├── .status-sheet-overlay__scrim         (onClick → onClose)
+        └── .status-sheet  role="dialog"
+            ├── .status-sheet__handle
+            ├── .status-sheet__header             title (name / "Unnamed conversation" / "Channel info") + close
+            └── .status-sheet__body
+                ├── "About" section-header
+                ├── .channel-info__row × 2          Workspace (mono, cwd) / Last activity  — or —
+                ├── .channel-info__empty            "No conversation details yet" (conversation === null)
+                ├── "Actions" section-header
+                ├── .channel-info__actions          empty div — mount point for #366/#367/#368
+                └── .channel-info__footer           "Channel ID: {id}" (omitted when conversation === null)
+```
+
+**Open-state ownership stays local, not threaded through `PairedShell`.** `channelInfoOpen` is a new
+`useState(false)` in `ConversationScreen` — the `sheetOpen` precedent (ADR 0006) — flipped by the
+overflow menu's `onChannelInfo={() => setChannelInfoOpen(true)}`. This is a deliberate divergence from
+#276's original design: #276 shipped a speculative `ConversationScreenProps.onChannelInfo?` seam
+assuming the sheet would live *above* `ConversationScreen` (opened by `PairedShell`). #365 retired that
+prop instead (removed from the interface and the destructure) because the sheet's trigger, data
+(`activeConversationStore`), and chrome are all `ConversationScreen`-local, exactly like `StatusSheet` —
+splitting one sheet's control across two files for zero behavioral gain would have contradicted the very
+precedent the seam was named after. No caller ever passed `onChannelInfo` (`PairedShell`, `App.tsx`, and
+every test constructed props without it), so the removal is a pure simplification, not a breaking change.
+
+**`conversation === null` renders gracefully, not a crash.** [`activeConversationStore`](#workspace-chip-278)
+is written on exactly one path — the FAB create-nav callback — so a thread opened from the channel list
+never populates it (the app's single-active-conversation interim). The sheet still opens: chrome + a
+`CHANNEL_INFO_EMPTY_COPY` placeholder line in place of the About rows, and the Channel ID footer omitted
+entirely (there is no id to show). `conversation.name === null` (an unnamed scratch conversation) is a
+separate, narrower case — the title falls back to `UNNAMED_CONVERSATION_LABEL` — distinct from no
+conversation at all.
+
+**Deferred, not invented:** Figma 20-48 also shows Created / Total sessions / Total messages rows and a
+Memory section — none has a field on the desktop `ConversationCreatedPayload`, so none is built. The
+Channel ID footer ships at the app's `body-small` (12px) mono token rather than Figma's 11px — a
+type-scale simplification (the app's fixed vocabulary is the fidelity ceiling, not a literal Figma
+pixel match), not drift.
+
+Escape-to-dismiss is wired via the same `document`-`keydown`-listener-scoped-to-mount-lifetime idiom
+#276 established (`DocumentEventMap['keydown']`, not a bare `KeyboardEvent` — this file's top-level
+`import { type KeyboardEvent } from 'react'` shadows the DOM type). Untested here, same as #276's
+Escape/outside-click and `StatusSheet`'s open-on-click wiring — the suite is `renderToStaticMarkup`-only,
+no jsdom, so interactive effects are reviewed glue, not asserted. Not security-sensitive: the only daemon
+strings rendered (`name`/`cwd`/`id`) are already rendered elsewhere in this file as auto-escaped React
+children, same posture as `WorkspaceChip`. See [#365 codebase notes](../codebase/365.md) for the full
+design and patterns established.
+
 ## Seams (bound + still open)
 
 - **`onBack?: () => void`** — **bound in [#140](../codebase/140.md).** Optional, gated exactly like `onUnpaired?`; wired by the [paired shell](paired-shell.md) when this screen is mounted as its `thread` view, absent for a bare `<ConversationScreen />`. See [Back control](#back-control-140) above.
@@ -1100,6 +1163,7 @@ notes](../codebase/324.md) for the full design and patterns established.
 - **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
 - **`QueuedBacklog({ items, onDrop })` / `QueuedBacklogControl`** — **render bound in [#294](../codebase/294.md); `onDrop` (required) bound in [#296](../codebase/296.md).** `QueuedBacklogControl` reads the [queue store](queue-store.md)'s `selectBacklogFor(MILESTONE_CONVERSATION_ID)` and binds `onDrop` to the pure `dropQueuedMessage` (`dropQueuedMessage.ts`), which dispatches `dequeueMessageCommand` and nothing else — no local mutation. See [Queued backlog + drop affordance](#queued-backlog--drop-affordance-294-drop-since-296) above.
 - **`ScreenSnapshotView({ snapshot, canRequest, onRequest })` / `ScreenSnapshotControl`** — **bound in [#324](../codebase/324.md).** `ScreenSnapshotControl` reads `useSessionStore(selectStatus)` (for `canRequest`, via `composerAvailability`) and the [screen-snapshot store](screen-snapshot-store.md)'s `selectScreenSnapshot` (#323, this store's only reader), binds `onRequest` to the new `requestScreenSnapshot` helper, and mounts between `StatusRow` and `InterruptControl`. See [Screen-snapshot action & display](#screen-snapshot-action--display-324) above.
+- **`ChannelInfoSheetView({ conversation, now?, onClose })` / `ChannelInfoSheet`** — **shell + About detail bound in [#365](../codebase/365.md).** `ChannelInfoSheetView` is the exported pure view (`conversation` as a prop, sourced from `activeConversationStore`); `ChannelInfoSheet` is the in-file container owning only the Escape effect. The `ThreadOverflowMenu`'s `onChannelInfo` now calls `() => setChannelInfoOpen(true)` — the speculative `ConversationScreenProps.onChannelInfo?` prop #276 reserved is **retired**, not bound; see [Channel Info sheet](#channel-info-sheet-365) above. **Still open:** the `.channel-info__actions` slot is empty — #366 (Archive), #367 (Delete), and #368 (Rename) are its intended fillers, each keying off `activeConversationStore.id` with a null-guard per the split's contract.
 
 ## Edge cases and limitations
 
@@ -1113,6 +1177,7 @@ notes](../codebase/324.md) for the full design and patterns established.
 - **Queued backlog + drop affordance** ([#294](../codebase/294.md)/[#296](../codebase/296.md)) — the region and its drop buttons render only when the milestone conversation's backlog is non-empty; dropping a row is fire-and-forget with no client-side validation of `queued_msg_id` and no error surface on a bridge failure (swallowed, `console.error` only) — the row simply remains, since the daemon never received the drop. The drop button inherits the region's 50% dimming; it cannot be rendered at full opacity without restructuring the region-level dim (a child opacity cannot escape a parent's opacity compositing group).
 - **Screen-snapshot action & display** ([#324](../codebase/324.md)) — unlike every other in-thread control, this region is **always visible** (button + placeholder-or-`<pre>`), never `null` at rest; a re-request is fire-and-forget with no pending/loading state, so re-clicking before a reply lands simply waits for the next `screenSnapshotReceived` to overwrite the store. A send-bridge failure is swallowed (`console.error`, no crash); the held screen is unchanged.
 - **Two-dot connection indicator** ([#330](../codebase/330.md)) — the two legs render independently and are never reconciled: a fatal session close leaves the relay dot at its last value (typically up) while the daemon dot shows down, and a retryable daemon-absent close leaves the daemon dot in-progress while the relay dot shows up/"Reachable" — both are intended, honest-per-hop renders, not bugs. The relay leg has no in-progress arm (that category is exercised only by the daemon leg's `connecting`), so the daemon dot never shows a false green.
+- **Channel Info sheet** ([#365](../codebase/365.md)) — a list-opened thread (never populates `activeConversationStore`) opens the sheet gracefully: chrome + a placeholder About line, no Channel ID footer, no crash. `sheetOpen` (run-config) and `channelInfoOpen` are independent booleans, so both overlays could in principle stack — not reachable through normal use (separate triggers) and no AC requires mutual exclusion, left as-is. Created / Total sessions / Total messages / Memory (Figma 20-48) have no desktop wire field and are deferred, not invented. Escape-dismiss and the overflow-select → open wiring are reviewed glue, not unit-tested (the `renderToStaticMarkup`-only suite constraint, same as #276/#177).
 
 ## Related
 

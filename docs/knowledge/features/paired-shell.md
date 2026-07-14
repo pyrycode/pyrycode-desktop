@@ -41,6 +41,15 @@ or frames, so not security-sensitive.
   FAB](new-discussion-fab.md) (#242) fires it asynchronously when the daemon confirms a
   `conversationCreated` event, via `useConversationCreatedNav` mounted in the `PairedShell`
   container. No new route or nav arm — the existing `open` transition is reused as-is.
+- [#393](../codebase/393.md) added a **third** trigger: clicking a fired [push
+  notification](push-notifications.md) (main-process, not daemon-relayed). A sibling hook,
+  `useNotificationActivatedNav`, is mounted beside `useConversationCreatedNav` and dispatches the same
+  `open` transition on a nullary `notificationActivated` `DaemonEvent`. Because `open` is already
+  absolute (any route → `thread`), this lands on the thread view regardless of which paired view —
+  list, settings, or archive — was showing when the notification fired, with no new route or arm.
+  Unlike the FAB trigger, it does **not** call `setActiveConversation` — the click carries no
+  conversation payload, and in the single-active-conversation model "open" already means "show the
+  existing active conversation's thread."
 - That same `conversationCreated` payload — previously discarded after triggering the nav — is now
   also snapshotted into the [active-conversation store](conversation-shell.md#workspace-chip-278) so
   the thread's workspace chip can read its `cwd` ([#278](../codebase/278.md)). Still no new route, nav
@@ -168,6 +177,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     setActiveConversation(created)            // #278 — snapshot cwd for the workspace chip
     dispatch({ type: 'open' })
   })
+  useNotificationActivatedNav(() => dispatch({ type: 'open' }))   // #393 — no setActiveConversation
   return (
     <PairedShellView
       route={route}
@@ -190,8 +200,12 @@ the session store (AC5). Enters at `'list'` (AC2). `onUnpaired` threads straight
 `ConversationScreen` unchanged ([#166](../codebase/166.md)); `PairedShell` does not intercept it.
 [`useConversationCreatedNav`](new-discussion-fab.md) (#242) is the one added line: it subscribes to
 the daemon's `conversationCreated` event and dispatches the same `open` transition the list rows
-use, so a FAB-initiated create eventually opens the thread with no new route. `PairedShell` itself
-still has no effects and no `window` deref — the hook's own effect is where `window.pyry` is
+use, so a FAB-initiated create eventually opens the thread with no new route. `useNotificationActivatedNav`
+([#393](../codebase/393.md), see [Push notifications](push-notifications.md#clicking-the-notification-393))
+is a second, sibling hook mounted the same way, over a different (main-local, nullary)
+`notificationActivated` event — its callback dispatches `open` only, with no
+`setActiveConversation` call, since a notification click carries no conversation payload. `PairedShell`
+itself still has no effects and no `window` deref — each hook's own effect is where `window.pyry` is
 dereferenced — so the container stays server-renderable and `App`'s `pending`/`pairing`
 neutral-first-paint invariant is untouched (`PairedShell` only mounts once the app-level route is
 `conversation`).
@@ -234,6 +248,7 @@ AppView (route='conversation')
        │                      setActiveConversation(created)       ← #278, into activeConversationStore
        │                      dispatch({type:'open'})              ← #242
        │                    })
+       │                    useNotificationActivatedNav(() => dispatch({type:'open'}))  ← #393, no setActiveConversation
        └─ PairedShellView   route='list'     → ChannelList (store-backed) — any row → dispatch{open}
                                                 new-discussion FAB → createConversation command (#242)
                                                 SettingsButton → dispatch{openSettings} (#333)
@@ -250,7 +265,9 @@ AppView (route='conversation')
 ```
 
 A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row
-click — see [the new-discussion FAB](new-discussion-fab.md) for the bridge that fires it.
+click — see [the new-discussion FAB](new-discussion-fab.md) for the bridge that fires it. A clicked
+push notification reaches the same `dispatch({ type: 'open' })` the same way, independently of both —
+see [Push notifications](push-notifications.md#clicking-the-notification-393) for that bridge.
 
 `sessionStore` (module-singleton, app-lifetime) holds the messages, independent of this nav state.
 Navigating list→thread→list→thread unmounts/remounts `ConversationScreen`, which re-reads the store on
@@ -293,6 +310,7 @@ navigation, and hence no remount, before this ticket).
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the fourth route, `pairServer` (#152), reuses this screen as-is
 - [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the fifth route, `archive`, and its entry button sharing the Channel List's actions cluster
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the second `open` trigger, fired by a daemon-confirmed conversation create rather than a row click
+- [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
 - [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
 - [Session store](session-store.md) — untouched by this ticket; the store-backed messages that survive navigation

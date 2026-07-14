@@ -34,7 +34,11 @@ import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
-import { formatLastActivity } from '../channels/channelListViewModel'
+import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
+import {
+  RenameConversationDialogView,
+  requestRenameConversation
+} from '../channels/RenameConversationDialog'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -854,11 +858,16 @@ const CHANNEL_INFO_SHEET_TITLE_ID = 'channel-info-sheet-title'
 export function ChannelInfoSheetView({
   conversation,
   now = Date.now(),
-  onClose
+  onClose,
+  onRename
 }: {
   conversation: ConversationCreatedPayload | null
   now?: number
   onClose: () => void
+  // #368: the Rename action, supplied by the container ONLY when there is a conversation to rename.
+  // Absent ⇒ no Rename control (the list-opened null-conversation case, AC1) — the ChannelList
+  // `onRename?`-optional-affordance idiom: the button is gated on the callback, not on `conversation`.
+  onRename?: () => void
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
   // "unnamed scratch conversation", not an empty string); the fallback when there is no conversation.
@@ -916,8 +925,15 @@ export function ChannelInfoSheetView({
             </>
           )}
           <p className="status-sheet__section-header">{CHANNEL_INFO_ACTIONS_HEADER}</p>
-          {/* The empty Actions slot — the mount point #366/#367/#368 fill. No buttons, no wire (AC5/AC6). */}
-          <div className="channel-info__actions" />
+          {/* The Actions slot #365 left for #366/#367/#368. #368 fills it with the Rename tonal pill,
+              rendered only when `onRename` is supplied (⇒ there is an active conversation to rename). */}
+          <div className="channel-info__actions">
+            {onRename && (
+              <button type="button" className="channel-info__action" onClick={onRename}>
+                Rename
+              </button>
+            )}
+          </div>
           {conversation !== null && (
             <p className="channel-info__footer">{CHANNEL_ID_PREFIX + conversation.id}</p>
           )}
@@ -941,6 +957,13 @@ function ChannelInfoSheet({
   now: number
   onClose: () => void
 }): JSX.Element {
+  // #368: the Rename dialog's per-interaction state — a screen-local copy of the ChannelList shape
+  // (transient UI state → useState, not the store; ADR 0006). `renameOpen` gates the dialog; `renameName`
+  // is the controlled field, seeded from the conversation's displayed title on open. Both reset for free
+  // on the sheet's unmount (it only mounts while open). `window.pyry` is dereferenced only inside the
+  // interaction callbacks below, never during render, so the pure view stays server-renderable.
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameName, setRenameName] = useState('')
   useEffect(() => {
     // Index the DOM event map — the top-level `import { type KeyboardEvent }` shadows the global one, so a
     // bare `KeyboardEvent` annotation would resolve to React's synthetic type (the ThreadOverflowMenu note).
@@ -950,7 +973,36 @@ function ChannelInfoSheet({
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onClose])
-  return <ChannelInfoSheetView conversation={conversation} now={now} onClose={onClose} />
+  return (
+    <>
+      <ChannelInfoSheetView
+        conversation={conversation}
+        now={now}
+        onClose={onClose}
+        // Supply onRename ONLY for a non-null conversation — a null active conversation yields no button
+        // (AC1). Seed the field via titleFor so a null-name conversation prefills with 'Untitled' (AC2).
+        onRename={
+          conversation === null
+            ? undefined
+            : () => {
+                setRenameName(titleFor(conversation.name))
+                setRenameOpen(true)
+              }
+        }
+      />
+      {renameOpen && conversation !== null && (
+        <RenameConversationDialogView
+          name={renameName}
+          onNameChange={setRenameName}
+          onCancel={() => setRenameOpen(false)}
+          onSave={() => {
+            requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
+            setRenameOpen(false)
+          }}
+        />
+      )}
+    </>
+  )
 }
 
 function Composer(): JSX.Element {

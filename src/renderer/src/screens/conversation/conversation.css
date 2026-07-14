@@ -1618,13 +1618,35 @@
   font-weight: var(--text-body-small-weight);
 }
 
-/* The empty Actions slot #366/#367/#368 fill (Figma 20:87 — a column, pt 4 / px 16; the .log-data
-   shape). Empty in this shell, so it renders as a zero-height mount point. */
+/* The Actions slot #366/#367/#368 fill (Figma 20:87 — a column, pt 4 / px 16; the .log-data
+   shape). A zero-height mount point until an action lands. */
 .channel-info__actions {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-4) 0;
+}
+
+/* #368: the Rename action — a full-width Material 3 tonal pill (Figma 20:89): secondary-container fill,
+   on-secondary-container label, fully-rounded, label-large centred text. Token-based only, no literals.
+   A generic base #366/#367 reuse (#367's destructive Delete layers an error-tinted variant on top).
+   min-height hits Figma's 40px button (its py-10 + 20px line-height); --space-2 vertical is the nearest
+   token to that off-grid 10px. */
+.channel-info__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+  cursor: pointer;
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
 }
 
 /* The graceful-empty About placeholder (conversation === null) — muted body-medium, the row padding. */

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { ConversationSummary } from '@shared/wire/types'
+import type { ConversationSummary, ConversationCreatedPayload } from '@shared/wire/types'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
 
 // The #218/#224 idiom (the SaveAsChannelDialog test twin): server-render the pure view with injected
@@ -103,6 +103,29 @@ describe('requestRenameConversation', () => {
       payload: {
         conversation_id: 'conv-42',
         name: 'Padded Name'
+      }
+    })
+  })
+
+  // #368: the Channel Info sheet passes its active conversation — a 5-field ConversationCreatedPayload
+  // (no is_archived / last_message_ts), not a ConversationSummary — straight into this helper. The
+  // widened `Pick<ConversationSummary, 'id'>` param accepts it with no adapter, since the helper reads
+  // only `.id`. A ConversationSummary still satisfies the narrowed param, so the tests above stay valid.
+  it('accepts a ConversationCreatedPayload-shaped arg — the widened id-only param (#368, AC3)', () => {
+    const created: ConversationCreatedPayload = {
+      id: 'conv-99',
+      is_promoted: false,
+      cwd: '/home/pyry/scratch/conv-99',
+      name: null,
+      last_used_at: '2026-07-12T00:00:00Z'
+    }
+    const sendCommand = vi.fn()
+    requestRenameConversation(sendCommand, created, '  Renamed  ')
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'renameConversation',
+      payload: {
+        conversation_id: 'conv-99',
+        name: 'Renamed'
       }
     })
   })

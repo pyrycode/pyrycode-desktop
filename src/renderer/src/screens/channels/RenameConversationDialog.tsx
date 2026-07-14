@@ -95,7 +95,12 @@ export function RenameConversationDialogView({
  */
 export function requestRenameConversation(
   sendCommand: (command: RendererCommand) => void,
-  row: ConversationSummary,
+  // The param is narrowed to exactly what this helper reads — the `id`. A full ConversationSummary (the
+  // ChannelList caller) still satisfies `Pick<…, 'id'>`, and the Channel Info sheet's active conversation
+  // (a ConversationCreatedPayload, #368) is accepted directly with no adapter — it too carries `id`,
+  // though not ConversationSummary's is_archived / last_message_ts. Reading only `.id`, the signature now
+  // states its real input rather than over-demanding a shape it never touches.
+  row: Pick<ConversationSummary, 'id'>,
   name: string
 ): void {
   sendCommand({

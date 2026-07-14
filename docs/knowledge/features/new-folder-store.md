@@ -174,3 +174,7 @@ daemon rejects → correlated daemon-error → workspaceFolderRejected DaemonEve
 - [#398 codebase notes](../codebase/398.md) — the Create-folder dialog UI, split-child C of #384, and
   this store's first real consumer: mounts `NewFolderData` dialog-scoped, dispatches `createRequested`/
   `reset`, and reads `selectNewFolderRoundTrip` to drive the dialog's in-flight/error states.
+- [#288 codebase notes](../codebase/288.md) / [Save-as-channel dialog](save-as-channel-dialog.md) —
+  this store's second real consumer, confirming the "each consumer mounts the bridge dialog-scoped
+  and resets to idle on unmount" posture generalizes: the picker (#398) and the Channel List (#288)
+  can't be open at once, so the shared app-singleton never carries stale state between them.

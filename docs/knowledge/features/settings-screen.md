@@ -1,14 +1,15 @@
-# Settings screen (scaffold + Connection + Defaults + Storage + About sections)
+# Settings screen (scaffold + Connection + Defaults + Notifications + Storage + About sections)
 
 The paired region's third view — `settings`, a sibling of [`list`](channel-list.md) and
 [`thread`](conversation-shell.md) — reachable from a new entry button on the Channel List home. A
-top-bar (back + "Settings" title) above four sections: "Connection", whose body renders the paired
+top-bar (back + "Settings" title) above five sections: "Connection", whose body renders the paired
 server's identity (a Server row showing `serverId` + `relayUrl`, an empty host slot for the future
 two-dot status indicator, and a "Pair another server" nav row that switches daemons); "Defaults for new
 conversations", whose body renders a Default workspace row showing the client-owned default-workspace
-preference and opens a picker to change it; "Storage", whose body renders a live archived-conversations
-count; and "About", whose body renders the running app's build version. Mirrors mobile #390/#398, with
-the relay URL as a documented desktop addition.
+preference and opens a picker to change it; "Notifications", whose body renders a single push-toggle
+row reflecting and writing the client-owned push-notification preference; "Storage", whose body renders
+a live archived-conversations count; and "About", whose body renders the running app's build version.
+Mirrors mobile #390/#398, with the relay URL as a documented desktop addition.
 
 Introduced in [#333](../codebase/333.md) as a chrome-only scaffold (the scaffold child of the #150
 split; the other child, #332, shipped the data path: [#339](../codebase/339.md)'s IPC surface +
@@ -24,13 +25,18 @@ user switch which daemon desktop drives without a relaunch — the last open fol
 [#404](../codebase/404.md) then inserted a Defaults section between Connection and Storage, holding a
 single interactive Default-workspace row that reads and writes the [#403](../codebase/403.md)
 default-workspace preference and opens the [#383](../codebase/383.md) recent-workspaces picker to change
-it (a #352 split sibling — #352 itself split from the #151 line's Defaults/Push follow-ups).
+it (a #352 split sibling — #352 itself split from the #151 line's Defaults/Push follow-ups). [#409](../codebase/409.md)
+then inserted a Notifications section between Defaults and Storage, holding a single push-toggle row
+that reads and writes the [#408](../codebase/408.md) push-notification preference — the write half of
+the #353 push-toggle split (#353 itself split from the #158 push-notifications line; #408, the data
+half, shipped first).
 Renderer-only throughout — no keys, sockets, or tokens touched directly (the Server row reads only the
 vetted, non-secret `serverId`/`relayUrl` pair off #340's store; the Default-workspace row reads/writes a
-renderer-local, non-secret preference and sends no daemon command; the Storage row reads a derived count
-off the conversation-list store; the About row reads a compile-time constant; the Pair-another-server row
-fires pure navigation over the already-vetted pairing IPC surface, #152 security review PASS) — not
-security-sensitive except for #152's navigation-only reach into the pairing flow.
+renderer-local, non-secret preference and sends no daemon command; the Notifications row reads/writes
+another renderer-local, non-secret preference and sends no daemon command either; the Storage row reads
+a derived count off the conversation-list store; the About row reads a compile-time constant; the
+Pair-another-server row fires pure navigation over the already-vetted pairing IPC surface, #152 security
+review PASS) — not security-sensitive except for #152's navigation-only reach into the pairing flow.
 
 ## What it does
 
@@ -55,7 +61,11 @@ security-sensitive except for #152's navigation-only reach into the pairing flow
   line showing the current default (the stored path verbatim, or the client-owned "scratch" placeholder
   when none has ever been chosen) and a trailing chevron. Activating it opens the recent-workspaces
   picker; choosing an entry writes the new default and closes the picker — see [#404](../codebase/404.md).
-- Below the Defaults section, a "Storage" heading (same `--color-primary` treatment) precedes a single
+- Below the Defaults section, a "Notifications" heading (same `--color-primary` treatment) precedes a
+  single row: the label "Push notifications when claude responds" beside a trailing on/off switch
+  reflecting the client-owned push-notification preference. Toggling it writes the negated value back
+  through the preference store immediately — see [#409](../codebase/409.md).
+- Below the Notifications section, a "Storage" heading (same `--color-primary` treatment) precedes a single
   row reading "Archived conversations" with a secondary line — "N archived" for a loaded list (every N,
   including 0 and 1 — no singular/plural branch) or a neutral "—" placeholder before the conversation list
   has loaded. The count is a live derived read: it updates when an archive/restore round trip re-lists.
@@ -76,14 +86,16 @@ src/renderer/src/
     ├── channels/ChannelList.tsx          # + SettingsButton entry (in-file, unexported)
     ├── pairing/PairingScreen.tsx          # reused as-is on the new 'pairServer' route (#152, no edit)
     └── settings/
-        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Defaults section (#404) + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152)
+        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Defaults section (#404) + Notifications section (#409) + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152)
         ├── ServerRow.tsx                 # pure ServerRow view + store-bound ServerRowControl (#334, new)
         ├── DefaultWorkspaceRow.tsx       # pure DefaultWorkspaceRowView + store-bound DefaultWorkspaceRowControl + in-file DefaultWorkspacePickerSheet (#404, new)
+        ├── PushNotificationRow.tsx       # pure PushNotificationRowView + store-bound PushNotificationRowControl (#409, new)
         ├── ArchivedCountRow.tsx          # pure ArchivedCountRow view + store-bound ArchivedCountRowControl (#351, new)
-        └── settings.css                 # token-only, scaffold + Server row + Default-workspace row + Storage row + About row + Pair-another-server row styles (#333 + #334 + #404 + #351 + #350 + #152)
+        └── settings.css                 # token-only, scaffold + Server row + Default-workspace row + Notifications row/switch + Storage row + About row + Pair-another-server row styles (#333 + #334 + #404 + #409 + #351 + #350 + #152)
 
 src/renderer/src/store/conversationListStore.ts  # + selectArchivedCount selector (#351)
 src/renderer/src/store/defaultWorkspaceStore.ts  # #403; read/write seam #404 consumes (documented separately)
+src/renderer/src/store/pushNotificationPrefStore.ts  # #408; read/write seam #409 consumes (documented separately)
 src/renderer/src/store/recentWorkspacesStore.ts + recentWorkspacesBridge.ts  # #382; picker data path #404 mounts while open
 
 src/renderer/src/version.d.ts             # ambient `declare const __APP_VERSION__: string` (#350, new)
@@ -274,6 +286,51 @@ workspace). `onCreateFolder` is deliberately not supplied: [#398](../codebase/39
 dialog is conversation-scoped, so the picker's "Other → Create new folder" entry renders disabled rather
 than being wired to a non-conversation folder-creation path (out of scope).
 
+### The Notifications section (`PushNotificationRow.tsx`, #409)
+
+Inserted as a `settings__section` **between** Defaults and Storage — Figma's Notifications section
+(header 17:62 at y=610) sits between Defaults (y=322) and Storage (y=910), so this insertion point
+preserves that relative order, the same placement discipline #404/#351 used. Unlike the interactive
+Default-workspace row, this row has no picker to open — it's a direct on/off control, so it follows
+the static `ServerRow`/`ArchivedCountRow` two-part idiom (pure view + store-bound Control) rather than
+the `DefaultWorkspaceRow`/`PairAnotherServerRow` button-with-chevron idiom, plus one callback prop
+neither of those needs:
+
+```ts
+export function PushNotificationRowView({
+  enabled,
+  onToggle
+}: { enabled: boolean; onToggle: (next: boolean) => void }): JSX.Element
+
+export function PushNotificationRowControl(): JSX.Element
+// usePushNotificationPrefStore(selectPushNotificationsEnabled) → <PushNotificationRowView>
+```
+
+`PushNotificationRowView` renders a text column holding the Figma-verbatim label "Push notifications
+when claude responds" (17:66 — a module-level `PUSH_TOGGLE_LABEL` constant, the `SERVER_ROW_LABEL`
+idiom, never a daemon string) beside a trailing native `<button type="button" role="switch">` (Figma
+17:67 track / 17:68 knob) carrying `aria-checked={enabled}` and a decorative `aria-hidden` knob
+child. `onClick={() => onToggle(!enabled)}` is the switch's only interaction wiring — no
+`onKeyDown` needed, because a native `<button>` already fires `onClick` on both Space and Enter.
+This is the genuine delta from the pre-existing `run-config__switch` in
+`RunConfigSections.tsx` — that switch is a `<span role="switch">` wired only to `onClick`, so it is
+focusable-but-not-keyboard-operable; this ticket's keyboard AC required real Space/Enter activation,
+which a `<span>` cannot give without an `onKeyDown` handler, so the architect spec called for a
+native `<button>` here instead of cloning the span verbatim.
+
+Because the switch button is a *sibling* of the label `<p>` (not its parent) and `role="switch"`
+computes its accessible name from the author rather than from sibling content, the button also
+carries an explicit `aria-label={PUSH_TOGGLE_LABEL}` — the same constant the visible label renders,
+so the accessible name can never drift from the visible copy.
+
+`PushNotificationRowControl` reads `usePushNotificationPrefStore(selectPushNotificationsEnabled)`
+and hands the boolean straight to the view, wiring `onToggle` to
+`pushNotificationPrefStore.getState().setPushNotificationsEnabled(next)` — dereferenced inside the
+callback only, never at render (the `DefaultWorkspaceRow` `onChoose` discipline). No `useState`, no
+effect, no `window.pyry` — a pure read plus one interaction-time write, and no daemon command: the
+preference is entirely client-owned (see [Push-notification preference
+store](push-notification-preference-store.md)).
+
 ### The Storage section (`ArchivedCountRow.tsx` + `conversationListStore.ts`, #351)
 
 Inserted as a `settings__section` **between** Connection and About — Figma's Storage section sits above
@@ -354,7 +411,19 @@ new token introduced. `.settings__default-workspace-row` (#404) fuses the two pr
 `.settings__pair-another-row` button-reset/hover/focus shell (it is also interactive) with the
 `.settings__server-row-text`-style two-line column (`-text`/`-label`/`-value`, `-value` carrying the same
 `overflow-wrap: anywhere` long-value guard as `-storage-row-count`); its `-chevron` mirrors
-`.settings__pair-another-chevron` — again no new token.
+`.settings__pair-another-chevron` — again no new token. `.settings__notifications-row` / `-text` /
+`-label` (#409) mirror `.settings__storage-row`'s geometry and label typography as their own
+dedicated classes (the `.settings__storage-row` / `.settings__about-row` precedent of never sharing
+row classes across sections). `.settings__switch` / `--on` / `-knob` (#409) are cloned — not
+reused — from `conversation.css`'s `.run-config__switch` family (the client-owned-copy idiom, avoiding
+a `settings.css` → conversation-screen selector coupling), adapted from a `<span>` to a `<button>`
+with an added button reset; the switch here is always operable (no read-only variant), so
+`cursor: pointer` and the `:focus-visible` ring are unconditional, unlike the run-config switch's
+`:not([aria-readonly])`-guarded original. Token choices carry over verbatim: off — 52×32 track,
+`--color-surface-container-highest` fill, 2px `--color-outline` border, 16px `--color-outline` knob at
+`left: 8px`; on — `--color-primary` track+border, knob grown to 24px at `right: 4px`, filled
+`--color-surface` (the dark knob substitute, since no `--color-on-primary` token exists in this
+codebase's tokens.css). No new token or literal introduced.
 
 ### Data flow
 
@@ -368,6 +437,8 @@ ChannelList SettingsButton.onClick
     → mounts <ServerRowControl /> → useServerInfoStore(selectServerInfo) → <ServerRow serverInfo=… />
     → mounts <DefaultWorkspaceRowControl /> → useDefaultWorkspaceStore(selectDefaultWorkspace)
         → <DefaultWorkspaceRowView defaultWorkspace=… onActivate={() => setOpen(true)} />
+    → mounts <PushNotificationRowControl /> → usePushNotificationPrefStore(selectPushNotificationsEnabled)
+        → <PushNotificationRowView enabled=… onToggle={(next) => setPushNotificationsEnabled(next)} />
     → mounts <ArchivedCountRowControl /> → useConversationListStore(selectArchivedCount) → <ArchivedCountRow archivedCount=… />
     → renders the About section: `Version ${__APP_VERSION__}` (no fetch, no store — substituted at build time)
     → renders <PairAnotherServerRow onActivate={onPairAnother} />
@@ -385,6 +456,12 @@ DefaultWorkspaceRowView.onActivate (#404)
         → onClose() → setOpen(false) → picker sheet unmounts (RecentWorkspacesData subscription torn down)
       Escape / onClose → setOpen(false) → picker sheet unmounts
     → DefaultWorkspaceRowControl re-renders with the new store value on the next tick
+
+PushNotificationRowView switch button.onClick (#409)
+  → onToggle(!enabled)
+    → pushNotificationPrefStore.getState().setPushNotificationsEnabled(next)  [no daemon command]
+      → storage.write(next) [localStorage, #408] then set({ pushNotificationsEnabled: next })
+    → PushNotificationRowControl re-renders with the new store value on the next tick
 
 SettingsScreen BackControl.onClick
   → dispatch({ type: 'back' }) → nextPairedRoute('settings', back) = 'list' → ChannelList
@@ -405,7 +482,10 @@ part is still exactly the screen-local `useReducer` from #333. #334 wires the pr
 (#403) and reuses the pre-existing [recent-workspaces store](recent-workspaces-store.md)/bridge (#382)
 and [`WorkspacePickerSheetView`](conversation-shell.md#workspace-picker-sheet-383) (#383) for its picker —
 no new store, wire type, or daemon command; the sole wire traffic is the pre-existing
-`requestRecentWorkspaces` fetch, re-fired fresh on every picker open. #351's Storage section adds no new
+`requestRecentWorkspaces` fetch, re-fired fresh on every picker open. #409's Notifications section adds
+no new data path either: it reads and writes the pre-existing [push-notification preference
+store](push-notification-preference-store.md) (#408) directly, with no daemon command and no wire
+traffic at all — the entire round trip stays inside the renderer. #351's Storage section adds no new
 data path either: it reads the pre-existing [conversation list store](conversation-list-store.md) through
 a new selector, and that store is already kept live by the app-level `ConversationListData` bridge. #350's
 About section adds no runtime data flow at all — the value is fixed at build time, so there is nothing to
@@ -446,6 +526,12 @@ fetch or subscribe to.
   `SettingsScreen.test.tsx` only ever exercises the "scratch" placeholder branch — the non-null path
   matrix is proven on `DefaultWorkspaceRowView` directly, and the picker's open/choose interaction isn't
   exercisable under `renderToStaticMarkup` at all (untested reviewed glue, like #383's own container).
+  The Notifications row (#409) has the same structural gotcha in the opposite direction: under `node`,
+  `pushNotificationPrefStore` always hydrates to the enabled default (its own `typeof window` guard makes
+  `storage.read()` return `null`), so a `SettingsScreen`-level render test would only ever see the
+  `aria-checked="true"` branch — the full reflect matrix (both states, the `role="switch"` + label +
+  native-`<button>` assertions) is proven directly on `PushNotificationRowView` with injected props, not
+  through the container, same as the Default-workspace and Storage rows above.
 - **No stack-aware back.** `settings` → `back` always lands on `list`; the `pairServer` sub-route added
   by [#152](../codebase/152.md) sidesteps rather than solves this — its two exits are their own explicit
   nav arms (`pairServerCancelled`/`pairServerPaired`), not a reuse of `back`, precisely because a future
@@ -488,6 +574,10 @@ fetch or subscribe to.
 - [Default-workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) —
   the client-owned preference [#404](../codebase/404.md)'s Default-workspace row reads and writes; this
   screen is that store's only UI consumer.
+- [Push-notification preference store](push-notification-preference-store.md) / [#408 codebase
+  notes](../codebase/408.md) — the client-owned preference [#409](../codebase/409.md)'s Notifications
+  row reads and writes; this screen is that store's write consumer (the read consumer, #392, is
+  separate — the delivery-side [Push notifications](push-notifications.md) trigger, still open).
 - [Conversation shell](conversation-shell.md#workspace-picker-sheet-383) / [#383 codebase notes](../codebase/383.md)
   — `WorkspacePickerSheetView`, the pure picker view [#404](../codebase/404.md) reuses (not its
   conversation-coupled container).
@@ -514,7 +604,12 @@ fetch or subscribe to.
 - [#404 codebase notes](../codebase/404.md) · Spec: `docs/specs/architecture/404-default-workspace-row.md`
   — inserts the Defaults section and its Default-workspace row between Connection and Storage; a #352
   split sibling of #403 (data half) and #405 (model/effort/YOLO rows, still daemon-blocked).
+- [#409 codebase notes](../codebase/409.md) · Spec: `docs/specs/architecture/409-push-toggle-ui.md`
+  — inserts the Notifications section and its push-toggle row between Defaults and Storage; the write
+  half of the #353 split (data half: [#408](../codebase/408.md)).
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the reused
   `PairingScreen` paste→review→confirm flow #152 re-opens as a paired sub-route.
-- Remaining follow-ups: #151 split sibling #353 (Push), still Inbox; #352 split sibling #405
-  (model/effort/YOLO rows of the Defaults section), daemon-blocked.
+- Remaining follow-ups: #158 split sibling #392 (the renderer trigger reading [#409](../codebase/409.md)'s
+  preference to gate [push notifications](push-notifications.md)), blocked-by the now-merged #353 line
+  but not yet built; #352 split sibling #405 (model/effort/YOLO rows of the Defaults section),
+  daemon-blocked.

@@ -17,6 +17,7 @@ import type {
   PromoteConversationPayload,
   ArchiveConversationPayload,
   UnarchiveConversationPayload,
+  DeleteConversationPayload,
   RenameConversationPayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
@@ -397,6 +398,37 @@ describe('isRendererCommand', () => {
 
   it('rejects an archiveConversation whose conversation_id is missing, null, or non-string (#363)', () => {
     const t = 'archiveConversation'
+    expect(isRendererCommand({ type: t, payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 3 } })).toBe(false)
+  })
+
+  it('accepts a well-formed deleteConversation command with a conversation_id string (#364)', () => {
+    // The permanent-delete sibling of unarchive/archive: a single required-string field, no constructor
+    // (the renderer in #367 builds the literal inline). A structurally-extra field is harmless (structural
+    // minimum); the main-side fresh literal drops it. Delete is the PERMANENT verb, but the transport guard
+    // is identical to unarchive's — the destructive gate is #367's user-facing confirmation, not a second
+    // factor here.
+    const payload: DeleteConversationPayload = { conversation_id: 'c1' }
+    const command: RendererCommand = { type: 'deleteConversation', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    expect(isRendererCommand({ type: 'deleteConversation', payload, extra: 1 })).toBe(true)
+  })
+
+  it('accepts a deleteConversation with an empty-string conversation_id — the guard checks type, not emptiness (#364)', () => {
+    // An empty conversation_id is a valid wire string (the daemon polices ids); pin that the guard checks
+    // the TYPE of the field, not its emptiness, so it does not over-reject.
+    const payload: DeleteConversationPayload = { conversation_id: '' }
+    expect(isRendererCommand({ type: 'deleteConversation', payload })).toBe(true)
+  })
+
+  it('rejects a deleteConversation with a missing/null payload (#364)', () => {
+    expect(isRendererCommand({ type: 'deleteConversation' })).toBe(false)
+    expect(isRendererCommand({ type: 'deleteConversation', payload: null })).toBe(false)
+  })
+
+  it('rejects a deleteConversation whose conversation_id is missing, null, or non-string (#364)', () => {
+    const t = 'deleteConversation'
     expect(isRendererCommand({ type: t, payload: {} })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { conversation_id: null } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { conversation_id: 3 } })).toBe(false)

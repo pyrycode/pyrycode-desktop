@@ -65,6 +65,13 @@ export type ModalEvent =
 export interface ModalState {
   outstanding: readonly ModalPrompt[]
   rejections: readonly string[]
+  // #195: the `modalId`s that have LEFT `outstanding` via `dismissed` (answer/cancel/remote/timeout).
+  // Internal reducer bookkeeping — no selector, no consumer reads it. It lets the `shown` arm tell a
+  // never-seen id (→ append) from a seen-then-resolved one (→ no-op), so the daemon's reconcile-on-
+  // connect re-send of a still-outstanding prompt updates the one prompt already shown rather than
+  // re-surfacing an already-answered one. Disjoint from `outstanding` by construction. `modalId`s are
+  // one-time nonces (never reused), so a retained id is never legitimately re-shown — retain forever.
+  resolved: readonly string[]
 }
 
 /** Compile-time exhaustiveness guard: a new ModalEvent arm without a case is a type error. */
@@ -103,34 +110,46 @@ function removeRejection(rejections: readonly string[], modalId: string): readon
 }
 
 /**
- * Pure reducer — no mutation, returns fresh state. `shown` always appends (a shown is always a
- * change); `dismissed` removes by id, or no-ops on an unknown id. Mirrors `reduceTimeline`: a
- * `switch` on the sealed union with an `assertNever` default, and a same-reference return when
- * nothing changes so an unchanged slice does not churn selectors.
+ * Pure reducer — no mutation, returns fresh state. `shown` is idempotent on `modalId` (#195): a
+ * never-seen id appends, a re-delivered still-outstanding id updates in place, a re-delivered
+ * already-resolved id is a same-reference no-op — so the daemon's reconcile-on-connect re-send never
+ * double-shows. `dismissed` removes by id (recording it as resolved), or no-ops on an unknown id.
+ * Mirrors `reduceTimeline`: a `switch` on the sealed union with an `assertNever` default, and a
+ * same-reference return when nothing changes so an unchanged slice does not churn selectors.
  */
 export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
   switch (event.type) {
-    case 'shown':
-      // Spread state so the orthogonal `rejections` surface survives a prompt install (#249).
-      return {
-        ...state,
-        outstanding: [
-          ...state.outstanding,
-          {
-            modalId: event.modalId,
-            class: event.class,
-            title: event.title,
-            prompt: event.prompt,
-            options: event.options,
-            defaultOptionId: event.defaultOptionId
-          }
-        ]
+    case 'shown': {
+      // Check `resolved` first — the cheap reconnect-race early-out: a re-delivered prompt the client
+      // already answered/dismissed (optimistically, #237) must NOT re-surface. Same-reference no-op.
+      if (state.resolved.includes(event.modalId)) return state
+      const prompt: ModalPrompt = {
+        modalId: event.modalId,
+        class: event.class,
+        title: event.title,
+        prompt: event.prompt,
+        options: event.options,
+        defaultOptionId: event.defaultOptionId
       }
+      // Re-delivery of a still-outstanding id: replace in place from the RE-DELIVERED fields
+      // (match-and-replace takes the latest) — position + length preserved, no duplicate append.
+      // Spread state so the orthogonal `rejections`/`resolved` surfaces survive a prompt install.
+      const outstanding = state.outstanding.some((p) => p.modalId === event.modalId)
+        ? state.outstanding.map((p) => (p.modalId === event.modalId ? prompt : p))
+        : [...state.outstanding, prompt]
+      return { ...state, outstanding }
+    }
     case 'dismissed': {
       const outstanding = removeById(state.outstanding, event.modalId)
       // Unknown/already-dismissed id: removeById returned the same array — return the same state.
+      // Do NOT record `resolved` here: a `dismissed` for a never-outstanding id must not poison
+      // `resolved`, or a later legitimate `shown` of that id would be wrongly suppressed (ordering edge).
+      if (outstanding === state.outstanding) return state
+      // Genuine removal — the single choke point where a prompt leaves `outstanding` (answer/cancel/
+      // remote/timeout all dispatch `dismissed`). Record the id so a reconnect re-send no-ops (#195).
       // Spread state so `rejections` survives a real clear (#249).
-      return outstanding === state.outstanding ? state : { ...state, outstanding }
+      const resolved = appendUnique(state.resolved, event.modalId)
+      return { ...state, outstanding, resolved }
     }
     case 'rejected': {
       const rejections = appendUnique(state.rejections, event.modalId)
@@ -147,7 +166,7 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
   }
 }
 
-export const initialModalState: ModalState = { outstanding: [], rejections: [] }
+export const initialModalState: ModalState = { outstanding: [], rejections: [], resolved: [] }
 
 /** Selector — the read surface, returns the slice by reference (matching `selectItems`). */
 export const selectOutstanding = (s: ModalState): readonly ModalPrompt[] => s.outstanding

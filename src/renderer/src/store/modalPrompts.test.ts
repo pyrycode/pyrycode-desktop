@@ -92,6 +92,49 @@ describe('reduceModal — clear by id', () => {
   })
 })
 
+describe('reduceModal — re-delivery / reconcile-on-connect (#195)', () => {
+  it('a re-delivered shown for an outstanding id updates in place — no duplicate, position preserved (AC2)', () => {
+    const state = run([shown('m1'), shown('m2'), shown('m1', { title: 'Updated' })])
+    // Still two prompts, in arrival order — the re-send did NOT append a duplicate.
+    expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1', 'm2'])
+    // Match-and-replace takes the RE-DELIVERED fields (the latest), not the stale first ones.
+    expect(state.outstanding[0].title).toBe('Updated')
+  })
+
+  it('a re-delivered shown after resolution is a same-reference no-op (AC3)', () => {
+    // The answer path dispatches `dismissed` locally (#237), so a resolved id covers "already
+    // answered OR dismissed" in one place — dismissal is the single choke point.
+    const base = run([shown('m1'), dismissed('m1')])
+    expect(base.outstanding).toEqual([])
+    const after = reduceModal(base, shown('m1'))
+    expect(after).toBe(base) // no re-append, no selector churn
+    expect(after.outstanding).toEqual([])
+  })
+
+  it('a dismiss for a never-outstanding id does not suppress a later legitimate shown (ordering edge)', () => {
+    // The never-outstanding `dismissed('ghost')` must NOT record `ghost` as resolved, or the later
+    // real `shown('ghost')` would be wrongly no-op'd (Technical Notes ordering edge).
+    const state = run([dismissed('ghost'), shown('ghost')])
+    expect(state.outstanding.map((p) => p.modalId)).toEqual(['ghost'])
+  })
+
+  it('does not mutate the input state or its outstanding array on a re-delivery in place', () => {
+    const start = run([shown('m1')])
+    const startOutstanding = start.outstanding
+    const startPrompt = start.outstanding[0]
+
+    const next = reduceModal(start, shown('m1', { title: 'Updated' }))
+
+    // A real change: new outstanding array + a freshly built entry.
+    expect(next.outstanding).not.toBe(start.outstanding)
+    expect(next.outstanding[0].title).toBe('Updated')
+    // Old references intact and unmutated.
+    expect(start.outstanding).toBe(startOutstanding)
+    expect(start.outstanding[0]).toBe(startPrompt)
+    expect(start.outstanding[0].title).toBe('Title m1')
+  })
+})
+
 describe('reduceModal — unknown-id no-op (AC4)', () => {
   it('returns the same state reference when dismissing against an empty set', () => {
     const after = reduceModal(initialModalState, dismissed('nope'))
@@ -221,6 +264,10 @@ describe('initial state + selector', () => {
 
   it('initialModalState is an empty rejection set', () => {
     expect(initialModalState.rejections).toEqual([])
+  })
+
+  it('initialModalState is an empty resolved set', () => {
+    expect(initialModalState.resolved).toEqual([])
   })
 
   it('selectOutstanding returns the current slice by reference', () => {

@@ -861,7 +861,11 @@ export function ChannelInfoSheetView({
   now = Date.now(),
   onClose,
   onRename,
-  onArchive
+  onArchive,
+  onDelete,
+  deleteConfirmPending,
+  onDeleteConfirm,
+  onDeleteCancel
 }: {
   conversation: ConversationCreatedPayload | null
   now?: number
@@ -873,6 +877,14 @@ export function ChannelInfoSheetView({
   // #366: the Archive action, callback-gated exactly like `onRename` (supplied only for an active
   // conversation, AC1). Reuses #368's `.channel-info__action` tonal pill verbatim; renders below Rename.
   onArchive?: () => void
+  // #377: the Delete action, callback-gated like the others (supplied only for an active conversation,
+  // AC1). Delete is a two-step: `onDelete` opens the inline confirm (it never dispatches, AC2); the
+  // container owns the confirm state and threads `deleteConfirmPending` (which sub-state to render),
+  // `onDeleteConfirm` (dispatch + close) and `onDeleteCancel` (dismiss, no wire effect, AC3).
+  onDelete?: () => void
+  deleteConfirmPending?: boolean
+  onDeleteConfirm?: () => void
+  onDeleteCancel?: () => void
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
   // "unnamed scratch conversation", not an empty string); the fallback when there is no conversation.
@@ -930,10 +942,11 @@ export function ChannelInfoSheetView({
             </>
           )}
           <p className="status-sheet__section-header">{CHANNEL_INFO_ACTIONS_HEADER}</p>
-          {/* The Actions slot #365 left for #366/#367/#368. Rename (#368) then Archive (#366), each a
-              `.channel-info__action` tonal pill rendered only when its callback is supplied (⇒ there is an
-              active conversation). Destructive-last order: edit (Rename) → soft-remove (Archive) → the
-              future permanent Delete (#367). */}
+          {/* The Actions slot #365 left for #366/#367/#368. Rename (#368) then Archive (#366) then
+              Delete (#377), each a `.channel-info__action` tonal pill rendered only when its callback is
+              supplied (⇒ there is an active conversation). Destructive-last order: edit (Rename) →
+              soft-remove (Archive) → permanent Delete (#377) — the last carrying the `--danger` variant
+              and an inline confirm before it dispatches. */}
           <div className="channel-info__actions">
             {onRename && (
               <button type="button" className="channel-info__action" onClick={onRename}>
@@ -945,6 +958,34 @@ export function ChannelInfoSheetView({
                 Archive
               </button>
             )}
+            {onDelete &&
+              (deleteConfirmPending ? (
+                // The confirm step, in place of the pill: a prompt line then Cancel (no-op escape) and
+                // the destructive confirm, both full-width pills stacked in the existing flex column.
+                <>
+                  <p className="channel-info__confirm-text">
+                    Delete this conversation permanently? This cannot be undone.
+                  </p>
+                  <button type="button" className="channel-info__action" onClick={onDeleteCancel}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="channel-info__action channel-info__action--danger"
+                    onClick={onDeleteConfirm}
+                  >
+                    Delete
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="channel-info__action channel-info__action--danger"
+                  onClick={onDelete}
+                >
+                  Delete
+                </button>
+              ))}
           </div>
           {conversation !== null && (
             <p className="channel-info__footer">{CHANNEL_ID_PREFIX + conversation.id}</p>
@@ -969,6 +1010,19 @@ export function requestArchiveConversation(
   sendCommand({ type: 'archiveConversation', payload: { conversation_id: conversationId } })
 }
 
+// #377: fire the `deleteConversation` command (#364 wired the main side through to the daemon, and #376
+// reflects the removal by re-listing on the `conversationDeleted` event). Cloned from
+// `requestArchiveConversation` — the nearest sibling: a single REQUIRED `conversation_id`, fire-and-forget
+// (`sendCommand` returns void, no try/catch), an inline literal typed as RendererCommand with no
+// constructor. Exported so the dispatch stays directly unit-testable: the sheet renders server-side only,
+// so the confirm handler cannot be fired via a DOM event.
+export function requestDeleteConversation(
+  sendCommand: (command: RendererCommand) => void,
+  conversationId: string
+): void {
+  sendCommand({ type: 'deleteConversation', payload: { conversation_id: conversationId } })
+}
+
 // #365: the Channel Info sheet's thin interaction container (the ThreadOverflowMenu idiom minus its own
 // open-state, which ConversationScreen owns). Its sole effect is an Escape document-listener: because the
 // sheet only mounts while open (gated in ConversationScreen), the listener attaches on mount and detaches
@@ -990,6 +1044,10 @@ function ChannelInfoSheet({
   // interaction callbacks below, never during render, so the pure view stays server-renderable.
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState('')
+  // #377: the Delete confirm's per-interaction state — the `renameOpen` twin (transient UI state →
+  // useState, not the store; ADR 0006). It gates the inline confirm step and resets for free on the
+  // sheet's unmount (it only mounts while open). `window.pyry` is dereferenced only inside onDeleteConfirm.
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   useEffect(() => {
     // Index the DOM event map — the top-level `import { type KeyboardEvent }` shadows the global one, so a
     // bare `KeyboardEvent` annotation would resolve to React's synthetic type (the ThreadOverflowMenu note).
@@ -1025,6 +1083,21 @@ function ChannelInfoSheet({
                 onClose()
               }
         }
+        // #377: Delete is the two-step destructive action. onDelete only opens the confirm (no wire
+        // traffic, AC2); it is supplied only for a non-null conversation (AC1), mirroring onArchive's
+        // gating. onDeleteConfirm dispatches then closes — `window.pyry` is dereferenced ONLY here (AC5).
+        // onDeleteCancel dismisses with no wire effect (AC3).
+        onDelete={conversation === null ? undefined : () => setDeleteConfirmOpen(true)}
+        deleteConfirmPending={deleteConfirmOpen}
+        onDeleteConfirm={
+          conversation === null
+            ? undefined
+            : () => {
+                requestDeleteConversation(window.pyry.sendCommand, conversation.id)
+                onClose()
+              }
+        }
+        onDeleteCancel={() => setDeleteConfirmOpen(false)}
       />
       {renameOpen && conversation !== null && (
         <RenameConversationDialogView

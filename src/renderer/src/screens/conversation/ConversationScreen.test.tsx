@@ -17,6 +17,7 @@ import {
   ThreadOverflowMenuView,
   ChannelInfoSheetView,
   requestArchiveConversation,
+  requestDeleteConversation,
   relayLeg,
   daemonLeg,
   ConnectionStatusIndicator
@@ -1178,6 +1179,62 @@ describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
     )
     expect(markup).not.toContain('>Archive</button>')
   })
+
+  // #377: Delete is the third action — destructive-last (edit → soft-remove → permanent delete) and a
+  // two-step: the pill opens an inline confirm (state owned by the container, threaded as props) before
+  // any dispatch. Anchor on `>Delete</button>` / the `--danger` class, never on the shared
+  // `.channel-info__action` class (Rename/Archive carry it) nor the bare word "Delete" (the confirm
+  // prompt copy contains it as text).
+  it('renders a destructive Delete action when a conversation and onDelete are supplied (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} onDelete={noop} />
+    )
+    expect(markup).toContain('>Delete</button>')
+    expect(markup).toContain('channel-info__action--danger')
+    // The pill, not the confirm step: no confirm prompt, no Cancel control until it is activated.
+    expect(markup).not.toContain('>Cancel</button>')
+  })
+
+  it('offers no Delete action when the active conversation is null (the graceful-empty guard, AC1)', () => {
+    // A list-opened thread (conversation === null) gets no onDelete from the container, so the Actions
+    // header renders over an empty slot — no Delete control, consistent with #365's empty About.
+    const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={null} onClose={noop} />)
+    expect(markup).toContain('Actions')
+    expect(markup).not.toContain('>Delete</button>')
+    expect(markup).not.toContain('channel-info__action--danger')
+  })
+
+  it('offers no Delete action when onDelete is omitted, even with a conversation (callback-gated, AC1)', () => {
+    // Gated on the callback, not the conversation — proves the view honours the container's null-guard
+    // rather than deriving the button from `conversation` itself.
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
+    )
+    expect(markup).not.toContain('>Delete</button>')
+    expect(markup).not.toContain('channel-info__action--danger')
+  })
+
+  it('swaps the Delete pill for an inline confirm — prompt, Cancel, and destructive Delete — when pending (AC2/AC3)', () => {
+    // deleteConfirmPending renders the confirm block in place of the pill. Activating Delete only opens
+    // this step (its onClick is onDelete, which sets state) — no dispatch is reachable from a pure
+    // render, so "no dispatch on activate" (AC2) holds by construction. Cancel is the no-op escape (AC3).
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView
+        conversation={createdPayload()}
+        onClose={noop}
+        onDelete={noop}
+        deleteConfirmPending={true}
+        onDeleteConfirm={noop}
+        onDeleteCancel={noop}
+      />
+    )
+    // The confirm prompt + both controls appear only in the pending sub-state.
+    expect(markup).toContain('This cannot be undone')
+    expect(markup).toContain('>Cancel</button>')
+    // The confirm button retains the destructive treatment.
+    expect(markup).toContain('>Delete</button>')
+    expect(markup).toContain('channel-info__action--danger')
+  })
 })
 
 // #366: the exported dispatch helper. The sheet renders server-side only, so the click handler cannot be
@@ -1192,6 +1249,21 @@ describe('requestArchiveConversation', () => {
     expect(fakeSend).toHaveBeenCalledWith({
       type: 'archiveConversation',
       payload: { conversation_id: 'conv-x' }
+    })
+  })
+})
+
+// #377: the exported dispatch helper cloned from requestArchiveConversation (a single REQUIRED
+// `conversation_id`, fire-and-forget). Exported to keep the dispatch directly unit-testable — the sheet
+// renders server-side only, so the confirm handler cannot be exercised via a DOM event.
+describe('requestDeleteConversation', () => {
+  it('dispatches the deleteConversation command for the conversation id, fire-and-forget (AC4)', () => {
+    const fakeSend = vi.fn()
+    requestDeleteConversation(fakeSend, 'conv-d')
+    expect(fakeSend).toHaveBeenCalledTimes(1)
+    expect(fakeSend).toHaveBeenCalledWith({
+      type: 'deleteConversation',
+      payload: { conversation_id: 'conv-d' }
     })
   })
 })

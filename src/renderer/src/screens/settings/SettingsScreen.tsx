@@ -1,6 +1,7 @@
 import './settings.css'
 import { ServerInfoData } from '../../store/serverInfoLoader'
 import { ServerRowControl } from './ServerRow'
+import { DefaultWorkspaceRowControl } from './DefaultWorkspaceRow'
 import { ArchivedCountRowControl } from './ArchivedCountRow'
 
 // Client-owned copy — module-level constants (the EMPTY_THREAD_COPY idiom), never daemon strings. The
@@ -10,6 +11,7 @@ const SETTINGS_COPY = {
   title: 'Settings',
   back: 'Back',
   connection: 'Connection',
+  defaults: 'Defaults for new conversations',
   storage: 'Storage',
   about: 'About',
   pairAnother: 'Pair another server'
@@ -64,6 +66,18 @@ export function SettingsScreen({
                 forward-nav affordance (unlike the static Server/Storage rows, whose chevrons #334/#351
                 omitted). onPairAnother dispatches the paired shell's openPairServer nav. */}
             <PairAnotherServerRow onActivate={onPairAnother} />
+          </div>
+        </section>
+        {/* #404: the "Defaults for new conversations" section (Figma 17:37 header / 17:56 row) — sits
+            between Connection and Storage to preserve the mobile design's relative vertical order (Defaults
+            y=322 above Storage y=910), the same placement discipline #351 used for Storage. A single
+            store-bound Default-workspace row; no loader to mount (the row reads the client-owned
+            defaultWorkspaceStore #403 directly, and the picker mounts its own RecentWorkspacesData while
+            open). The row is interactive — activating it opens the recent-workspaces picker (#383). */}
+        <section className="settings__section">
+          <h2 className="settings__section-header">{SETTINGS_COPY.defaults}</h2>
+          <div className="settings__section-body">
+            <DefaultWorkspaceRowControl />
           </div>
         </section>
         {/* #351: the Storage section (Figma 17-91…17-97) — sits between Connection and About to preserve

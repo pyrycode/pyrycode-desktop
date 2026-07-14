@@ -305,6 +305,14 @@ app.whenReady().then(() => {
         // the re-list). Inert no-op when not connected (#346).
         connection.unarchiveConversation(command.payload)
         return
+      case 'deleteConversation':
+        // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
+        // forget request has no consumer/reassembler. Sends delete_conversation; the daemon replies with a
+        // distinct conversation_deleted { id } record correlated to the requester (no broadcast), NOT
+        // decoded or correlated here — #367 owns the reply decode + explicit re-list. Inert no-op when not
+        // connected (#364).
+        connection.deleteConversation(command.payload)
+        return
       case 'renameConversation':
         // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
         // forget request has no consumer/reassembler. Sends rename_conversation; the daemon confirms by

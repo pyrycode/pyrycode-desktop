@@ -75,6 +75,7 @@ export type EnvelopeType =
   | 'promote_conversation'
   | 'archive_conversation'
   | 'unarchive_conversation'
+  | 'delete_conversation'
   | 'rename_conversation'
   | 'conversation_updated'
   | 'ack'
@@ -621,6 +622,27 @@ export interface ArchiveConversationPayload {
  * daemon/mobile change. See #346.
  */
 export interface UnarchiveConversationPayload {
+  conversation_id: string
+}
+
+/**
+ * Outbound `delete_conversation` request body (client → daemon). The PERMANENT hard-delete verb
+ * (pyrycode#822): unlike archive/unarchive — which flip a durable soft-state flag on a row that
+ * survives — delete removes the conversation row outright. Independent of the archive/unarchive pair.
+ * Kept a DISTINCT type (not an alias of UnarchiveConversationPayload) so the verb owns its own
+ * five-site wire surface and the two can evolve independently — the same rationale the archive/unarchive
+ * doc-comments already state.
+ *
+ * **A single REQUIRED value-string.** JSON key `conversation_id`, a plain `string` (no pointer, no
+ * `omitempty`) — the id of an existing conversation row the daemon **permanently deletes**. One required
+ * string, so no explicit-`null` concern. `conversation_id` is a routing id (an existing row's id), not a
+ * secret; the desktop never resolves it into a filesystem path. The daemon does NOT reply
+ * `conversation_updated`; it replies with a distinct `conversation_deleted { id }` record correlated to
+ * the requester (`in_reply_to`), with no broadcast — decoding that reply and reflecting the removal via
+ * an explicit re-list are owned by the Delete-action caller (#367), NOT here. Do NOT drift it (CLAUDE.md
+ * no-drift): change only alongside a daemon/mobile change. See #364.
+ */
+export interface DeleteConversationPayload {
   conversation_id: string
 }
 

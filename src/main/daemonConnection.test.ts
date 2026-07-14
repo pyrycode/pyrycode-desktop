@@ -25,6 +25,7 @@ import {
   type CreateConversationPayload,
   type PromoteConversationPayload,
   type UnarchiveConversationPayload,
+  type DeleteConversationPayload,
   type RenameConversationPayload,
   type SetSessionSettingsPayload,
   type DequeueMessagePayload
@@ -2369,6 +2370,74 @@ describe('createDaemonConnection — unarchiveConversation (outbound unarchive_c
 
     const payload = decodeEnvelope(drivers[0].sent[0]).payload
     expect(payload).toEqual(UNARCHIVE)
+    expect(JSON.stringify(payload)).not.toContain('is_archived')
+  })
+})
+
+describe('createDaemonConnection — deleteConversation (outbound delete_conversation, #364)', () => {
+  const DELETE: DeleteConversationPayload = { conversation_id: 'conv-9' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.deleteConversation(DELETE)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one delete_conversation envelope with id 2, ts, and the field', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.deleteConversation(DELETE)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('delete_conversation')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual(DELETE)
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.deleteConversation(DELETE)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.deleteConversation(DELETE)).not.toThrow()
+  })
+
+  it('strips a smuggled extra field — the sent payload is exactly the one modeled field (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an extra key past the structural-minimum guard. The
+    // fresh-literal construction in deleteConversation must bound the wire to exactly conversation_id.
+    // Delete is the PERMANENT verb — bounding the wire to the one modeled field matters most here.
+    connection.deleteConversation({
+      conversation_id: 'conv-9',
+      is_archived: false
+    } as unknown as DeleteConversationPayload)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual(DELETE)
     expect(JSON.stringify(payload)).not.toContain('is_archived')
   })
 })

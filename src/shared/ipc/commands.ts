@@ -24,6 +24,7 @@ import type {
   PromoteConversationPayload,
   ArchiveConversationPayload,
   UnarchiveConversationPayload,
+  DeleteConversationPayload,
   RenameConversationPayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
@@ -63,7 +64,10 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * not a secret — asking the daemon to archive an active conversation, the mirror-image twin of
  * unarchive); `unarchiveConversation` (#346), whose `payload`
  * reuses the wire UnarchiveConversationPayload (a single REQUIRED `conversation_id` string — a routing id,
- * not a secret — asking the daemon to restore an archived conversation); and `setSessionSettings` (#263), whose `payload` reuses the wire
+ * not a secret — asking the daemon to restore an archived conversation); `deleteConversation` (#364), whose
+ * `payload` reuses the wire DeleteConversationPayload (a single REQUIRED `conversation_id` string — a routing
+ * id, not a secret — asking the daemon to PERMANENTLY delete a conversation; the daemon replies with a
+ * distinct `conversation_deleted { id }` record, not decoded here — #367 owns it); and `setSessionSettings` (#263), whose `payload` reuses the wire
  * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
  * presence contract is applied main-side by the builder, not carried here) and additionally carries a
  * `changeId` (#261): a renderer-minted, client-internal correlation string riding ALONGSIDE `payload` (a
@@ -93,6 +97,7 @@ export type RendererCommand =
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'archiveConversation'; payload: ArchiveConversationPayload }
   | { type: 'unarchiveConversation'; payload: UnarchiveConversationPayload }
+  | { type: 'deleteConversation'; payload: DeleteConversationPayload }
   | { type: 'renameConversation'; payload: RenameConversationPayload }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
@@ -183,6 +188,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isArchiveConversationPayload(value.payload)
     case 'unarchiveConversation':
       return 'payload' in value && isUnarchiveConversationPayload(value.payload)
+    case 'deleteConversation':
+      return 'payload' in value && isDeleteConversationPayload(value.payload)
     case 'renameConversation':
       return 'payload' in value && isRenameConversationPayload(value.payload)
     case 'setSessionSettings':
@@ -301,6 +308,20 @@ function isArchiveConversationPayload(value: unknown): value is ArchiveConversat
  *  all rejected. Structural minimum — a smuggled extra field is not rejected here; the main-side sender's
  *  fresh-literal construction bounds the wire to exactly the one modeled field. Pure; never throws. */
 function isUnarchiveConversationPayload(value: unknown): value is UnarchiveConversationPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** The untrusted renderer→main boundary guard for the deleteConversation payload (#364) — the reason
+ *  the command half is security-sensitive. An exact clone of isUnarchiveConversationPayload, mirroring
+ *  isRequestSnapshotPayload (the single-`conversation_id`-string precedent): one present-and-string check
+ *  — a literal `null`, a missing key, and a non-string are all rejected. Checks the TYPE of the field,
+ *  NOT emptiness (an empty string passes; the daemon polices it). Structural minimum — a smuggled extra
+ *  field is not rejected here; the main-side sender's fresh-literal construction bounds the wire to
+ *  exactly the one modeled field. Delete is the PERMANENT verb, but the transport guard is identical to
+ *  unarchive's — the destructive-action gate is the user-facing confirmation (#367), not a second factor
+ *  here. Pure; never throws. */
+function isDeleteConversationPayload(value: unknown): value is DeleteConversationPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
 }

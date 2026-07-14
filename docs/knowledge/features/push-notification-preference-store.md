@@ -107,9 +107,11 @@ Two behaviors:
   `pushNotificationPrefStore.getState().setPushNotificationsEnabled(next)` on toggle, the same
   `getState().setter(...)`-from-callback idiom [#404](../codebase/404.md) established for
   `defaultWorkspaceStore` (no standalone exported setter function).
-- **The read consumer is still open.** **#392** (renderer trigger, still blocked) will read
-  `usePushNotificationPrefStore(selectPushNotificationsEnabled)` — or `pushNotificationPrefStore.
-  getState()` at fire-time — before dispatching the `notify` command described in [Push
+- **The read consumer has shipped.** [#392](../codebase/392.md) (renderer trigger) reads
+  `pushNotificationPrefStore.getState().pushNotificationsEnabled` — not the React hook, since the
+  read happens inside a daemon-event subscriber callback, not a render — as a **per-event thunk**
+  passed into `subscribePushNotify`, so a mid-session toggle flip is honored on the very next
+  `turnEnd`/`modalShown` before dispatching the `notify` command described in [Push
   notifications](push-notifications.md).
 
 ## Edge cases and limitations
@@ -133,10 +135,10 @@ Two behaviors:
 - [Default-workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) —
   the direct structural precedent this store clones (DI-factory → singleton → hook → selector; the
   `fakeStorage()` test idiom).
-- [Push notifications](push-notifications.md) — the delivery primitive (#391) + click-to-focus (#393)
-  this preference will gate once #392 reads it and fires `notify` conditionally.
+- [Push notifications](push-notifications.md) — the delivery primitive (#391) + trigger (#392) +
+  click-to-focus (#393) this preference gates; the feature is live end-to-end.
 - [#408 codebase notes](../codebase/408.md) — implementation summary, the two deltas vs. #403, and
   patterns established.
 - [Settings screen](settings-screen.md) / [#409 codebase notes](../codebase/409.md) — the Notifications
   section's push-toggle row, the write consumer (shipped).
-- #392 (renderer trigger, blocked-by this ticket, not yet built) — the read consumer.
+- [#392 codebase notes](../codebase/392.md) — the renderer trigger, the read consumer (shipped).

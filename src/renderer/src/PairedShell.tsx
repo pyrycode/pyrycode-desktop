@@ -7,6 +7,7 @@ import { PairingScreen } from './screens/pairing/PairingScreen'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
+import { usePushNotify } from './store/pushNotifyBridge'
 import { useActiveConversationStore } from './store/activeConversationStore'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
@@ -97,6 +98,10 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // payload; in the single-active model "open" means "show the existing active conversation", so this
   // reuses the existing transition (absolute → thread from any paired view, AC2) with no new route or arm.
   useNotificationActivatedNav(() => dispatch({ type: 'open' }))
+  // #392: watch the daemon-event channel for turn-end / permission-prompt moments and, gated by the
+  // Settings push toggle (#408), ask main to raise an OS notification (#391 owns the unfocused-window
+  // gate). A headless subscriber — no nav, no payload — that tears down with the shell on unpair.
+  usePushNotify()
   return (
     <PairedShellView
       route={route}

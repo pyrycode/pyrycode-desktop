@@ -1,4 +1,4 @@
-# Push notifications (delivery primitive + click-to-focus)
+# Push notifications
 
 Fires a native OS notification when the main window is unfocused, so background alerts (a
 turn-complete, an incoming prompt) can reach the user without their having to watch the window.
@@ -6,14 +6,12 @@ Desktop push rides the relay socket the app already holds open — no Firebase, 
 unlike mobile: a backgrounded desktop app is not suspended, so the events that matter already
 arrive over the socket to a client that never disconnected.
 
-Introduced in [#391](../codebase/391.md) as the **delivery primitive only** — a `notify` command
-(renderer→main) that main turns into an Electron `Notification`, gated on focus. Split from
-[#158](https://github.com/pyrycode/pyrycode-desktop/issues/158) into three slices: #391 (this
-primitive), [#392](https://github.com/pyrycode/pyrycode-desktop/issues/392) (the trigger — decides
-*when* the renderer sends `notify`, blocked on the interactive stream #353, still open), and
-[#393](../codebase/393.md) (click-to-focus, merged — see [below](#clicking-the-notification-393)).
-Ships **dormant** — no renderer sends `notify` yet, so the click path is exercised only with a fake
-notification in tests until #392 lands.
+Split from [#158](https://github.com/pyrycode/pyrycode-desktop/issues/158) into three slices, all
+now merged: [#391](../codebase/391.md) (the delivery primitive — a `notify` command, renderer→main,
+that main turns into an Electron `Notification`, gated on focus), [#392](../codebase/392.md) (the
+**trigger** — decides *when* the renderer sends `notify`, see [below](#the-trigger-392)), and
+[#393](../codebase/393.md) (click-to-focus, see [below](#clicking-the-notification-393)). The
+feature is now **live end-to-end**.
 
 ## What it does
 
@@ -46,6 +44,7 @@ notification and appear on a lock screen — it is impossible by construction, n
 | `case 'notify':` dispatch, incl. the `onClick` composition (#393) | `src/main/index.ts` (the single `onCommand` switch) |
 | `notificationActivated` `DaemonEvent` arm (#393) | `src/shared/ipc/events.ts` |
 | `notificationActivatedBridge.ts` (#393) | `src/renderer/src/store/notificationActivatedBridge.ts` |
+| `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392) | `src/renderer/src/store/pushNotifyBridge.ts` |
 
 ```ts
 export type NotifyKind = 'turn-complete' | 'prompt'
@@ -131,6 +130,47 @@ Two effects, composed in one place:
    gained a one-line `case 'notificationActivated': return null` (or equivalent), compile-forced by
    their `assertNever` guards — the same cascade every prior arm-adding slice paid.
 
+## The trigger (#392)
+
+[#392](../codebase/392.md) is the renderer half that decides *when* to send `notify`. A filter
+bridge, `src/renderer/src/store/pushNotifyBridge.ts`, watches the already-decoded `DaemonEvent`
+channel for exactly two arms:
+
+```ts
+export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
+  switch (event.type) {
+    case 'turnEnd':
+      return 'turn-complete'
+    case 'modalShown':
+      return 'prompt'
+    default:
+      return null
+  }
+}
+```
+
+Every `modalShown` is a permission/trust prompt by construction (`WireModalClass` admits exactly
+`'permission' | 'trust'`, ADR 0009 — no destructive class), so no class-narrowing is needed. This is
+a `default: null` **filter**, not an `assertNever` exhaustive switch — it introduces no new
+`DaemonEvent` arm, so it doesn't force a matching no-op case into `modalBridge` / `timelineBridge` /
+`daemonEventBridge`, unlike the `notificationActivated` arm #393 added.
+
+`subscribePushNotify(onDaemonEvent, sendCommand, isPushEnabled)` is the React-free data path: filter
+first (short-circuits on the common case), then — only for the two owned arms — reads
+`isPushEnabled()` and, if true, sends `{ type: 'notify', payload: { kind } }` as an inline
+`RendererCommand` literal (no constructor helper added). `isPushEnabled` is a **per-event thunk**,
+not a boolean captured at subscribe time — production passes
+`() => pushNotificationPrefStore.getState().pushNotificationsEnabled`, so a user who flips the
+[Settings toggle](push-notification-preference-store.md) mid-session sees the very next
+turn-end/prompt respect the new value. `usePushNotify()` mounts this in
+[`PairedShell`](paired-shell.md) beside `useNotificationActivatedNav`, with no `useRef` — unlike its
+sibling hooks, it takes no per-render caller callback, so its three dependencies (`window.pyry.*`,
+the pref-store thunk) can be closed over directly in an empty-dep effect.
+
+Two independent, deterministic gates guard the same notification, in different fabric: main gates on
+*window focus* (§ above, #391 owns it); the trigger gates on the *Settings push toggle* (#392 owns
+it, the renderer owns settings state). Neither is a stochastic agent rule.
+
 ## The guard is the security-relevant line
 
 `isNotifyPayload` deliberately does **not** follow the sibling `is*Payload` shape (`typeof
@@ -155,18 +195,15 @@ no daemon source); only the shape (static, main-owned, keyed by `kind`) is load-
 
 ## Configuration and usage
 
-Not wired to anything yet. When #392 lands, its renderer trigger will build
-`{ type: 'notify', payload: { kind } }` and call `window.pyry.sendCommand(...)` — no constructor
-exists for this member (several bare/simple members build inline; #392 may add one). The click
-behaviour (#393, above) is already in place on the `Notification` instance this module constructs —
-it activates the window and navigates to the thread — but is only reachable in practice once #392
-causes a real fire.
-
-`#392`'s trigger will also need to read whether the user *wants* notifications before firing: that
-on/off preference now exists — see the [push-notification preference store](push-notification-preference-store.md)
-(#408), the renderer-local, persisted `boolean` #392 will gate on and [#409](https://github.com/pyrycode/pyrycode-desktop/issues/409)
-(the Settings toggle) will write. This slice (delivery) and that one (preference) are independent;
-neither reads or depends on the other yet — #392 is the wiring point that joins them.
+`usePushNotify()` ([#392](../codebase/392.md)) is mounted in [`PairedShell`](paired-shell.md), so the
+trigger is live for the lifetime of the paired shell — subscribed on mount, torn down on unpair
+(off-handle cleanup), fresh again on re-pair. Whether a fired notification is actually shown to the
+user is gated twice, in different fabric: main gates on window focus (#391); the trigger gates on the
+Settings push toggle — see the [push-notification preference store](push-notification-preference-store.md)
+(#408, renderer-local, persisted `boolean`, default enabled) and the
+[Settings row](../codebase/409.md) (#409) that writes it. Click-to-focus (#393, above) is now
+reachable for real: any `notify` the trigger causes to fire is clickable, activating the window and
+navigating to the thread.
 
 ## Edge cases and limitations
 
@@ -176,26 +213,30 @@ neither reads or depends on the other yet — #392 is the wiring point that join
 - **Focus is read synchronously at fire-time**, not tracked. `isFocused()` is already `false` when
   the window is blurred, minimized, or hidden — exactly the notify condition — so there is nothing a
   separate tracker would add.
-- **Click-to-focus is dormant, not untested.** The click path (#393) is fully unit-tested with a fake
-  notification + fake window, but has never fired for real — that waits on #392.
+- **The push toggle is read per-event, not cached.** A user flipping [Settings](push-notification-preference-store.md)
+  mid-session sees the change apply to the very next `turnEnd`/`modalShown`, not just future app
+  launches.
 - **`notificationActivated` is the first main-local `DaemonEvent` arm.** Every other arm is decoded
   from a validated wire envelope; this one originates entirely in the main process (a click on a
   locally-constructed `Notification`). Documented as an exception at the arm's own doc comment in
   `events.ts` rather than editing `emitDaemonEvent.ts`'s "nothing else sends" header.
+- **No conversation id on the notification.** Desktop's single-active-conversation model means daemon
+  events drop `conversation_id` at the emit, so `NotifyPayload` carries only `kind` — clicking always
+  opens the one active conversation ([#393](../codebase/393.md)), never a specific thread.
 
 ## Related
 
 - [Command channel](command-channel.md) — the `notify` `RendererCommand` member + `isNotifyPayload`
   guard this feature's command rides on.
-- [Paired shell](paired-shell.md) — the container `notificationActivatedBridge`'s
-  `useNotificationActivatedNav` hook is mounted in.
+- [Paired shell](paired-shell.md) — the container both `notificationActivatedBridge`'s
+  `useNotificationActivatedNav` and `pushNotifyBridge`'s `usePushNotify` are mounted in.
 - [Push-notification preference store](push-notification-preference-store.md) / [#408 codebase
-  notes](../codebase/408.md) — the persisted on/off preference #392 will gate firing on.
+  notes](../codebase/408.md) — the persisted on/off preference the trigger (#392) gates firing on.
 - [#391 codebase notes](../codebase/391.md) — implementation summary, patterns, lessons for the
   delivery primitive.
+- [#392 codebase notes](../codebase/392.md) — implementation summary, patterns, lessons for the
+  renderer trigger.
 - [#393 codebase notes](../codebase/393.md) — implementation summary, patterns, lessons for
   click-to-focus.
-- [#158](https://github.com/pyrycode/pyrycode-desktop/issues/158) — the parent split into #391/#392/#393.
-- Next: [#392](https://github.com/pyrycode/pyrycode-desktop/issues/392) (the trigger, still open,
-  blocked on #353) is the piece that joins this primitive to the [preference
-  store](push-notification-preference-store.md) and makes the feature live end-to-end.
+- [#158](https://github.com/pyrycode/pyrycode-desktop/issues/158) — the parent split into
+  #391/#392/#393, all merged.

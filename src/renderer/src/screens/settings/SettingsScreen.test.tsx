@@ -50,6 +50,36 @@ describe('SettingsScreen', () => {
     expect(markup).toContain('settings__pair-another-row') // mounted as a button, not static text
   })
 
+  it('renders the "Defaults for new conversations" section heading (#404 AC1)', () => {
+    expect(render()).toContain('>Defaults for new conversations</h2>')
+  })
+
+  it('mounts the #404 Default workspace row (placeholder branch) in the Defaults section (AC1/AC2)', () => {
+    // Under server render the defaultWorkspaceStore hydrates to `null` (its typeof-window import guard),
+    // so the row shows the "scratch" placeholder — proving the store-bound row is wired into the Defaults
+    // section-body as an interactive button, not static text.
+    const markup = render()
+    expect(markup).toContain('Default workspace') // the row's primary label
+    expect(markup).toContain('scratch') // the null-placeholder for the server default
+    expect(markup).toContain('settings__default-workspace-row') // mounted as a button, not static text
+  })
+
+  it('keeps the workspace picker closed until the row is activated (#404 AC3)', () => {
+    // The Control owns the picker open-state (useState, default false), so no picker sheet renders at rest.
+    // Interaction (click → open) is not exercisable under renderToStaticMarkup; the closed default proves
+    // the picker is not mounted app-level.
+    expect(render()).not.toContain('Choose workspace') // the picker sheet's title
+  })
+
+  it('places the Defaults section between Connection and Storage (#404 AC1)', () => {
+    // Mobile vertical order: Defaults (y=322) above Storage (y=910), below Connection.
+    const markup = render()
+    expect(markup.indexOf('Connection')).toBeLessThan(
+      markup.indexOf('Defaults for new conversations')
+    )
+    expect(markup.indexOf('Defaults for new conversations')).toBeLessThan(markup.indexOf('Storage'))
+  })
+
   it('renders the "Storage" section heading (#351 AC1)', () => {
     expect(render()).toContain('>Storage</h2>')
   })

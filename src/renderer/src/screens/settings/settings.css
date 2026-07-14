@@ -274,3 +274,73 @@
   letter-spacing: var(--text-body-large-tracking);
   font-weight: var(--text-body-large-weight);
 }
+
+/* The "Default workspace" row (#404, Figma 17:56) — the interactive row of the Defaults section. It fuses
+   the .settings__pair-another-row button shell (gap-16 → --space-4; px-16 py-10: horizontal → --space-4,
+   10px vertical → --space-3, the same 2px-delta mapping) with the .settings__server-row-text two-line text
+   column: unlike the static Server/Storage rows it opens a picker, so it is an interactive <button> taking
+   the button-reset + hover/focus treatment. width:100% makes the whole row the click target; text-align:left
+   keeps the column left-aligned against the button's default centering. */
+.settings__default-workspace-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+.settings__default-workspace-row:hover {
+  background: var(--color-surface-container-high);
+}
+
+.settings__default-workspace-row:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* The left text column (Figma 17:57) — flex-col, 2px gap between lines (structural geometry, no token, the
+   Server-row text-column convention). flex:1 fills the width so the chevron is pushed to the trailing edge;
+   min-width:0 lets a long value wrap inside the column via the value line's overflow-wrap rather than
+   overflow the window (the min-width:0 flex-shrink idiom). */
+.settings__default-workspace-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The "Default workspace" label (Figma 17:58) — body-large, on-surface (the Server row's label treatment). */
+.settings__default-workspace-label {
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* The current-default value line (Figma 17:59) — body-small, on-surface-variant (the Server row's id
+   treatment). overflow-wrap lets a long path wrap inside the column rather than overflow the window (the
+   long-path guard; Figma 17:57 uses word-break: break-word). */
+.settings__default-workspace-value {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
+/* The trailing chevron (Figma 17:60) — a 20×20 forward-nav affordance in the muted on-surface-variant (the
+   trailing-affordance tint), never shrinking. display:block drops the inline-SVG baseline gap (the
+   .settings__pair-another-chevron treatment). */
+.settings__default-workspace-chevron {
+  flex: 0 0 auto;
+  display: block;
+  color: var(--color-on-surface-variant);
+}

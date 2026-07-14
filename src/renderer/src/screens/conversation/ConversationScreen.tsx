@@ -34,6 +34,7 @@ import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
+import { formatLastActivity } from '../channels/channelListViewModel'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -55,16 +56,11 @@ export interface ConversationScreenProps {
   // bare `<ConversationScreen />` keeps today's behavior with no top-bar back affordance (AC3). The
   // PairedShell-mounted thread wires it to a nav dispatch.
   onBack?: () => void
-  // #276→#155: the overflow menu's Channel-info item invokes this. Optional and absent this ticket, so
-  // selecting the item just closes the menu (a live no-op); #155 passes it from PairedShell to open the
-  // Channel Info sheet (Figma 20-48). The same optional-callback seam as WorkspaceChip's onChange? (#278).
-  onChannelInfo?: () => void
 }
 
 export function ConversationScreen({
   onUnpaired,
-  onBack,
-  onChannelInfo
+  onBack
 }: ConversationScreenProps = {}): JSX.Element {
   // #179: the structured-stream timeline slice is now the single thread surface — the coarse
   // `MessageThread` is retired (its mount + the `selectMessages` read are gone), and the composer's
@@ -94,6 +90,11 @@ export function ConversationScreen({
   // never reopens itself across a screen remount. The StatusRow trigger sits between the thread and
   // the composer (per Figma); the sheet overlays the whole conversation surface as the last child.
   const [sheetOpen, setSheetOpen] = useState(false)
+  // #365: the Channel Info sheet's open/closed state — the `sheetOpen` twin, a single-value screen-local
+  // boolean → useState, never the store (ADR 0006), resetting to closed on remount for free. The overflow
+  // menu's Channel-info item flips it open; the sheet reads the same `activeConversation` slice already
+  // held above. Independent of `sheetOpen`: separate triggers, one sheet at a time in normal use.
+  const [channelInfoOpen, setChannelInfoOpen] = useState(false)
   // #286: the render-time clock for the session-boundary delimiter's relative time (`2 hours ago`).
   // A plain render-local value, not store state (the ChannelList precedent) — safe under
   // renderToStaticMarkup, adds no subscription, and re-derives on each render so the label stays fresh.
@@ -102,11 +103,11 @@ export function ConversationScreen({
     <div className="conversation">
       <BackControl onBack={onBack} />
       {/* #276: the trailing overflow menu (Figma 16-16) — the single entry point to per-conversation
-          actions, opening the Channel Info sheet first (#155). Gated on onBack presence, the established
-          "mounted in the paired shell" signal (BackControl's gate): a bare `<ConversationScreen />` shows
-          neither. Gated at the mount site, not self-gated, so ThreadOverflowMenu's hooks stay
-          unconditional (rules-of-hooks). */}
-      {onBack && <ThreadOverflowMenu onChannelInfo={onChannelInfo} />}
+          actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no
+          longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal
+          (BackControl's gate): a bare `<ConversationScreen />` shows neither. Gated at the mount site, not
+          self-gated, so ThreadOverflowMenu's hooks stay unconditional (rules-of-hooks). */}
+      {onBack && <ThreadOverflowMenu onChannelInfo={() => setChannelInfoOpen(true)} />}
       <UnpairControl onUnpaired={onUnpaired} />
       {/* #279: the prominent, disconnected-only connection banner — the top of the thread, below the
           header row and above the message list. A third read of the connection status, distinct from
@@ -148,6 +149,18 @@ export function ConversationScreen({
               Context-window section above it as it lands. */}
           <LogDataSection />
         </StatusSheet>
+      )}
+      {/* #365: the Channel Info sheet — the StatusSheet twin, overlaying the conversation surface with the
+          active conversation detail. Reuses the render-time `now` (the Last-activity relative time) and the
+          `activeConversation` slice already read above; `null` (a list-opened thread with no create this
+          session) still opens gracefully to chrome + a placeholder About. Its empty Actions slot is the
+          mount point #366/#367/#368 fill. */}
+      {channelInfoOpen && (
+        <ChannelInfoSheet
+          conversation={activeConversation}
+          now={now}
+          onClose={() => setChannelInfoOpen(false)}
+        />
       )}
       {/* #224: the interactive permission/trust modal — the last child so it overlays the whole
           conversation surface (the StatusSheet placement). Renders null until an outstanding prompt
@@ -805,6 +818,139 @@ export function StatusSheet({ onClose, children }: StatusSheetProps): JSX.Elemen
       </div>
     </div>
   )
+}
+
+// #365: the Channel Info sheet's copy + its title id — module-level, client-owned constants (the
+// EMPTY_THREAD_COPY / WORKSPACE_CHIP_LABEL idiom). Every literal is apostrophe-free: renderToStaticMarkup
+// escapes `'` → `&#x27;` (the standing desktop lesson). None is ever a daemon string — the only daemon
+// values the sheet renders (name / cwd / id) are auto-escaped React children, never these labels.
+const CHANNEL_INFO_FALLBACK_TITLE = 'Channel info'
+const UNNAMED_CONVERSATION_LABEL = 'Unnamed conversation'
+const CHANNEL_INFO_ABOUT_HEADER = 'About'
+const CHANNEL_INFO_ACTIONS_HEADER = 'Actions'
+const CHANNEL_INFO_WORKSPACE_LABEL = 'Workspace'
+const CHANNEL_INFO_LAST_ACTIVITY_LABEL = 'Last activity'
+const CHANNEL_INFO_EMPTY_COPY = 'No conversation details yet'
+const CHANNEL_ID_PREFIX = 'Channel ID: '
+// Distinct from STATUS_SHEET_TITLE_ID so both sheets can coexist without duplicate ids.
+const CHANNEL_INFO_SHEET_TITLE_ID = 'channel-info-sheet-title'
+
+// #365: the Channel Info sheet's pure view (Figma node 20-48) — the StatusSheet twin, reusing its
+// `.status-sheet__*` overlay/scrim/panel/handle/header/close/body chrome verbatim (the ticket sanctions
+// the reuse) and adding only the About detail, the empty Actions slot, and the Channel ID footer. Pure
+// props-in/markup-out (no store, no effects, no window.pyry) and exported so tests server-render it with
+// an injected conversation — the StatusSheet / ThreadOverflowMenuView discipline.
+//
+// `conversation` is the active conversation (activeConversationStore's held ConversationCreatedPayload) or
+// `null` — a list-opened thread never populates the store (the app is single-active-conversation until the
+// deferred select-and-load transport lands), so the sheet must open gracefully on `null`: chrome + a
+// placeholder About, the Channel ID footer omitted (there is no id). `now` (ms, defaulted to Date.now() —
+// the Timeline precedent) feeds the Last-activity relative time, kept out of the payload so it stays fresh
+// and injectable under test.
+//
+// The daemon strings (name / cwd / id) reach the DOM only as auto-escaped React children — never
+// dangerouslySetInnerHTML, never path/markup interpretation (the WorkspaceChip / toolCall posture). They
+// are already rendered elsewhere in this file, so no new trust boundary.
+export function ChannelInfoSheetView({
+  conversation,
+  now = Date.now(),
+  onClose
+}: {
+  conversation: ConversationCreatedPayload | null
+  now?: number
+  onClose: () => void
+}): JSX.Element {
+  // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
+  // "unnamed scratch conversation", not an empty string); the fallback when there is no conversation.
+  const title =
+    conversation === null
+      ? CHANNEL_INFO_FALLBACK_TITLE
+      : (conversation.name ?? UNNAMED_CONVERSATION_LABEL)
+  return (
+    <div className="status-sheet-overlay">
+      <div className="status-sheet-overlay__scrim" aria-hidden="true" onClick={onClose} />
+      <div
+        className="status-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={CHANNEL_INFO_SHEET_TITLE_ID}
+      >
+        <div className="status-sheet__handle" aria-hidden="true" />
+        <div className="status-sheet__header">
+          <p id={CHANNEL_INFO_SHEET_TITLE_ID} className="status-sheet__title">
+            {title}
+          </p>
+          <button type="button" className="status-sheet__close" aria-label="Close" onClick={onClose}>
+            <svg
+              className="status-sheet__close-icon"
+              viewBox="0 0 24 24"
+              width="22"
+              height="22"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+            </svg>
+          </button>
+        </div>
+        <div className="status-sheet__body">
+          <p className="status-sheet__section-header">{CHANNEL_INFO_ABOUT_HEADER}</p>
+          {conversation === null ? (
+            // The graceful-empty About: a single placeholder line, no rows (AC4).
+            <p className="channel-info__empty">{CHANNEL_INFO_EMPTY_COPY}</p>
+          ) : (
+            <>
+              <div className="channel-info__row">
+                <span className="channel-info__row-label">{CHANNEL_INFO_WORKSPACE_LABEL}</span>
+                {/* `cwd` is opaque daemon display text — auto-escaped, never resolved as a path. */}
+                <span className="channel-info__row-value--mono">{conversation.cwd}</span>
+              </div>
+              <div className="channel-info__row">
+                <span className="channel-info__row-label">{CHANNEL_INFO_LAST_ACTIVITY_LABEL}</span>
+                {/* formatLastActivity returns '' only on an unparseable timestamp (last_used_at is always
+                    present) — an em-dash then keeps the row from looking broken. */}
+                <span className="channel-info__row-value">
+                  {formatLastActivity(conversation.last_used_at, now) || '—'}
+                </span>
+              </div>
+            </>
+          )}
+          <p className="status-sheet__section-header">{CHANNEL_INFO_ACTIONS_HEADER}</p>
+          {/* The empty Actions slot — the mount point #366/#367/#368 fill. No buttons, no wire (AC5/AC6). */}
+          <div className="channel-info__actions" />
+          {conversation !== null && (
+            <p className="channel-info__footer">{CHANNEL_ID_PREFIX + conversation.id}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// #365: the Channel Info sheet's thin interaction container (the ThreadOverflowMenu idiom minus its own
+// open-state, which ConversationScreen owns). Its sole effect is an Escape document-listener: because the
+// sheet only mounts while open (gated in ConversationScreen), the listener attaches on mount and detaches
+// on unmount via the cleanup — no `open` flag needed, no leak past close. Renders the pure view. In-file
+// and not exported, like ThreadOverflowMenu.
+function ChannelInfoSheet({
+  conversation,
+  now,
+  onClose
+}: {
+  conversation: ConversationCreatedPayload | null
+  now: number
+  onClose: () => void
+}): JSX.Element {
+  useEffect(() => {
+    // Index the DOM event map — the top-level `import { type KeyboardEvent }` shadows the global one, so a
+    // bare `KeyboardEvent` annotation would resolve to React's synthetic type (the ThreadOverflowMenu note).
+    const onKeyDown = (event: DocumentEventMap['keydown']): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+  return <ChannelInfoSheetView conversation={conversation} now={now} onClose={onClose} />
 }
 
 function Composer(): JSX.Element {

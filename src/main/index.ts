@@ -20,7 +20,7 @@ import { createDaemonConnection } from './daemonConnection'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent } from './emitDaemonEvent'
-import { fireNotification } from './fireNotification'
+import { fireNotification, activateWindow } from './fireNotification'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
@@ -359,9 +359,16 @@ app.whenReady().then(() => {
         // tracker); the kind→copy mapping is owned by the module, so no command field supplies text.
         // Dormant — no renderer sends `notify` yet (the trigger is #392). Closes mainWindow.isFocused()
         // and Electron's Notification, exactly as the root closes downloadsDir into saveDebugBundle.
+        // #393: the click is composed HERE (the sole composition site) — on click, activate the window
+        // (AC1) and emit the nullary notificationActivated event (AC2/AC3) so the renderer navigates to
+        // the thread. `mainWindow` satisfies both ActivatableWindow and DaemonEventSink structurally.
         fireNotification(command.payload.kind, {
           isWindowFocused: () => mainWindow.isFocused(),
-          Notification
+          Notification,
+          onClick: () => {
+            activateWindow(mainWindow)
+            emitDaemonEvent(mainWindow, { type: 'notificationActivated' })
+          }
         })
         return
     }

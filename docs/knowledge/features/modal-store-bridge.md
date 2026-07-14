@@ -116,10 +116,11 @@ daemon frame ─(#201/#248 transport, snake→camel, no conversation_id on a mod
 
 ## Edge cases and limitations
 
-- **`shown` for an already-outstanding `modalId` plain-appends (a duplicate entry), not a
-  replace** — inherited unchanged from `reduceModal` (#122). Reconnect re-delivery idempotency is
-  [#195](https://github.com/pyrycode/pyrycode-desktop/issues/195), layered on this store, out of scope
-  here.
+- **`shown` for an already-outstanding `modalId` now replaces in place, and a `shown` for an
+  already-resolved `modalId` is a no-op** — [#195](../codebase/195.md) made `reduceModal`'s `shown`
+  arm idempotent on `modalId`, the client half of the daemon's reconcile-on-connect contract. This
+  bridge itself needed no change: `translateModalEvent`'s `modalShown → shown` tag-rename is invisible
+  to the reducer's internal id-tracking.
 - **`dismissed` for an unknown/already-dismissed `modalId` is a same-reference no-op**, not a surfaced
   error — inherited from `reduceModal`; this store and bridge do not re-handle it.
 - **`title`/`prompt`/`options[].label` are untrusted `claude` free text, carried opaquely.** Neither
@@ -196,5 +197,7 @@ notes](../codebase/249.md) for the render design.
 - [#249 codebase notes](../codebase/249.md) — flips the dormant `modalAnswerRejected` case live, adds the
   `rejected`/`rejectionDismissed` `ModalEvent` arms and the `rejections` slice, and renders the surface
   at the modal host (see § Modal-answer rejection above).
+- [#195 codebase notes](../codebase/195.md) — makes `reduceModal`'s `shown` arm idempotent on `modalId`
+  (match-and-replace + resolved-id no-op), consumed by this bridge and store unchanged.
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` arm's dormant-arm-ahead-of-holder
   posture `modalAnswerRejected` followed until #249.

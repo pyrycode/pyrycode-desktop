@@ -55,6 +55,9 @@ type ModalEvent =
 interface ModalState {
   outstanding: readonly ModalPrompt[]
   rejections: readonly string[]   // #249: modalIds of round-tripped rejections, arrival order, deduped
+  resolved: readonly string[]     // #195: modalIds that left `outstanding` via `dismissed` — internal
+                                   // bookkeeping only, no selector, retained forever (modalIds are
+                                   // one-time nonces, never reused)
 }
 ```
 
@@ -85,17 +88,19 @@ on `event.type` with an `assertNever` default — the same discipline as `reduce
 
 | event | effect |
 |---|---|
-| `shown` | append a fresh `ModalPrompt` built from the event's fields. Always a new state (spreads `state` so `rejections` survives). A `shown` for an already-outstanding `modalId` (reconnect re-delivery) is **not** defended here — plain append is correct for first-delivery; match-and-replace is #195's. |
-| `dismissed` | remove the `ModalPrompt` whose `modalId` matches (spreads `state` so `rejections` survives). No match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4). `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. |
+| `shown` | idempotent on `modalId` ([#195](../codebase/195.md)), checked in this order: (1) `modalId ∈ resolved` → **same `state` reference**, a no-op (already answered/dismissed — the reconnect-race early-out); (2) `modalId ∈ outstanding` → replace that entry in place with the fresh `ModalPrompt` built from the **re-delivered** fields (match-and-replace takes the latest values), position and length preserved, no duplicate; (3) else → append, exactly as first-delivery always did. Always spreads `state` so `rejections`/`resolved` survive. |
+| `dismissed` | remove the `ModalPrompt` whose `modalId` matches (spreads `state` so `rejections` survives). No match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4) — and does **not** touch `resolved`, the ordering-edge guard ([#195](../codebase/195.md)): a `dismissed` for a never-outstanding id must not poison `resolved`, or a later legitimate `shown` of that id would be wrongly suppressed. A genuine removal also records the id into `resolved` via `appendUnique` — `dismissed` is the single choke point a prompt leaves `outstanding` through (answer/cancel/remote/timeout all dispatch it), so this one arm covers "already answered or dismissed." `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. |
 | `rejected` ([#249](../codebase/249.md)) | append `modalId` to `rejections`, de-duplicated (`appendUnique`). Repeat id → **same `state` reference** (no churn); `outstanding` is untouched. |
 | `rejectionDismissed` ([#249](../codebase/249.md)) | remove `modalId` from `rejections` (`removeRejection`). Unknown/already-dismissed id → **same `state` reference**, a non-throwing no-op; `outstanding` is untouched. |
 
 Note that `shown`/`dismissed` originally built their return value as `{ outstanding: … }` — #249 changed
 both to `{ ...state, outstanding: … }` so they stop silently dropping the (then-new) `rejections` field;
-any future field added to `ModalState` needs the same audit of every non-spreading reduce arm.
+any future field added to `ModalState` needs the same audit of every non-spreading reduce arm. [#195](../codebase/195.md)
+confirmed the audit still held when it added `resolved`: both arms already spread `state`.
 
-`initialModalState = { outstanding: [], rejections: [] }`; `selectOutstanding` and `selectRejections`
-are the two read surfaces, each returning its slice by reference.
+`initialModalState = { outstanding: [], rejections: [], resolved: [] }`; `selectOutstanding` and
+`selectRejections` are the two read surfaces, each returning its slice by reference. `resolved` has no
+selector — it is internal reducer bookkeeping only, never read outside `reduceModal` itself.
 
 ### Internal helpers (unexported)
 
@@ -109,6 +114,10 @@ are the two read surfaces, each returning its slice by reference.
   `readonly string[]`.
 - `assertNever(event)` — the compile-time exhaustiveness guard, reused verbatim from
   `threadTimeline`.
+
+`appendUnique` ([#249](../codebase/249.md)) is also reused verbatim by `dismissed`
+([#195](../codebase/195.md)) to record a resolved id — a generic `readonly string[]` same-reference
+dedup op, not rejection-specific despite its origin.
 
 ## Configuration and usage
 
@@ -145,27 +154,38 @@ The `modalStore.ts` Zustand-container name this ADR reserved is exactly what
 [#223](modal-store-bridge.md) named it, mirroring how [conversation timeline
 store](conversation-timeline-store.md) (`timelineStore.ts`, #202) wrapped `reduceTimeline`.
 
-[#195](https://github.com/pyrycode/pyrycode-desktop/issues/195) (match-and-replace by `modalId`,
-no-second-notification, answered-id no-op) and
-[#196](https://github.com/pyrycode/pyrycode-desktop/issues/196) (reconnect reconcile) both build on
-this store; the id-addressed array keeps each a small extension rather than a refactor.
+**[#195](../codebase/195.md) (shipped)** — match-and-replace by `modalId`, no-second-notification,
+answered-id no-op — the `resolved` field and the `shown` arm's three-case decision above. Confirmed the
+ADR's prediction: a one-arm reducer change, no representation refactor, because the model was
+id-addressed from the start.
+[#196](https://github.com/pyrycode/pyrycode-desktop/issues/196) (reconnect reconcile — filtering
+`outstanding` to a daemon-asserted id set on a fresh handshake) remains open; it builds on this store the
+same way.
 
 ## Edge cases and limitations
 
-- **`shown` for an already-outstanding `modalId` plain-appends (a duplicate entry), not a
-  replace.** Evidence-based: no re-delivery is receivable yet (the transport doesn't exist), so
-  defending it now would guard an unobserved failure mode. #195 owns the match-and-replace fix.
+- **`shown` for an already-outstanding `modalId` now replaces in place** ([#195](../codebase/195.md)),
+  fixing the earlier plain-append (duplicate entry) behavior. A `shown` for an id already in `resolved`
+  is a same-reference no-op instead.
 - **Unknown/already-dismissed `modalId` on `dismissed` is a silent no-op, not a surfaced error** —
   absorbs a `modal_dismissed` whose `modal_shown` fell before a reconnect replay cursor, or a
   double-dismiss race, without killing the store. Same drop-and-document posture as
-  [thread timeline](thread-timeline.md)'s orphan `tool_result`.
-- **No answered-id memory.** A `dismissed` prompt's id can be re-shown by a later `shown` with no
-  memory that it was already resolved — deliberately deferred to #195.
+  [thread timeline](thread-timeline.md)'s orphan `tool_result`. It also deliberately does **not** record
+  the id into `resolved` — the ordering-edge guard ([#195](../codebase/195.md)): recording an
+  unknown-id dismiss would permanently suppress a later legitimate `shown` of that same id.
+- **`resolved` retains ids forever, with no eviction.** Correct rather than a leak: `modalId`s are
+  one-time nonces the daemon never reuses for a new prompt, so a retained resolved id can never
+  legitimately need to re-surface. Flagged as a deliberate, evidence-based choice in [#195](../codebase/195.md)
+  — no observed growth problem to defend against, and modals are human-gated and rare in practice.
 - **`outcome`/`source` still have no home in this state.** A resolved prompt is removed outright, so
   that metadata is carried on the `dismissed` event but never lands in `ModalState`. The anticipated
   "resolution toast" this comment referred to shipped as [#249](../codebase/249.md)'s rejection surface
   — but it consumes a *different*, content-free event (`rejected`, carrying only `modalId`), not
   `dismissed`'s `outcome`/`source`; those two fields remain genuinely unconsumed.
+- **Reset-on-reconnect is still not modeled here.** A fresh Noise handshake resetting client control
+  state (#879's third sub-rule) is [#196](https://github.com/pyrycode/pyrycode-desktop/issues/196)'s,
+  not this ticket's — the `ModalEvent` union has no reset arm; connection state arrives as separate
+  `DaemonEvent`s handled elsewhere.
 - **Nothing to gate on here.** The `--allow-remote-permissions` grant is a daemon-side, per-device
   flag, not on the wire and not in `PairedServerRecord` — the desktop cannot self-gate. The follow-up
   renders and answers regardless; an ungranted answer round-trips to an `error` envelope.
@@ -202,3 +222,5 @@ this store; the id-addressed array keeps each a small extension rather than a re
 - [#249 codebase notes](../codebase/249.md) — the render half: `rejected`/`rejectionDismissed`, the
   orthogonal `rejections` slice, `selectRejections`, and the `RejectionSurfaceView` banner stack at the
   modal host ([Conversation shell](conversation-shell.md)).
+- [#195 codebase notes](../codebase/195.md) — match-and-replace by `modalId`: adds `resolved`, makes
+  `shown` idempotent, confirms the ADR's "one-arm extension" prediction.

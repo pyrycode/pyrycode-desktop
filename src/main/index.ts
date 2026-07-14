@@ -298,6 +298,13 @@ app.whenReady().then(() => {
         // the re-list). Inert no-op when not connected (#346).
         connection.unarchiveConversation(command.payload)
         return
+      case 'renameConversation':
+        // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
+        // forget request has no consumer/reassembler. Sends rename_conversation; the daemon confirms by
+        // replying with a conversation_updated record, decoded by the existing path and reflected in the
+        // list by #275 (consumed by #360), not correlated here. Inert no-op when not connected (#359).
+        connection.renameConversation(command.payload)
+        return
       case 'setSessionSettings':
         // Direct to the connection method (mirrors requestSnapshot), no orchestrator. Sends
         // set_session_settings; the daemon replies with one session_settings_updated (decoded by #264,

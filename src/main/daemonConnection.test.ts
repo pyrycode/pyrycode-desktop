@@ -25,6 +25,7 @@ import {
   type CreateConversationPayload,
   type PromoteConversationPayload,
   type UnarchiveConversationPayload,
+  type RenameConversationPayload,
   type SetSessionSettingsPayload,
   type DequeueMessagePayload
 } from '../shared/wire/types'
@@ -2369,6 +2370,74 @@ describe('createDaemonConnection — unarchiveConversation (outbound unarchive_c
     const payload = decodeEnvelope(drivers[0].sent[0]).payload
     expect(payload).toEqual(UNARCHIVE)
     expect(JSON.stringify(payload)).not.toContain('is_archived')
+  })
+})
+
+describe('createDaemonConnection — renameConversation (outbound rename_conversation, #359)', () => {
+  const RENAME: RenameConversationPayload = { conversation_id: 'conv-9', name: 'weekly sync' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.renameConversation(RENAME)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one rename_conversation envelope with id 2, ts, and the payload', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.renameConversation(RENAME)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('rename_conversation')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual(RENAME)
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.renameConversation(RENAME)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.renameConversation(RENAME)).not.toThrow()
+  })
+
+  it('strips a smuggled extra field — the sent payload is exactly the two modeled fields (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an extra key past the structural-minimum guard. The
+    // fresh-literal construction in renameConversation must bound the wire to conversation_id + name.
+    connection.renameConversation({
+      conversation_id: 'conv-9',
+      name: 'weekly sync',
+      cwd: '/smuggled'
+    } as unknown as RenameConversationPayload)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual(RENAME)
+    expect(JSON.stringify(payload)).not.toContain('cwd')
   })
 })
 

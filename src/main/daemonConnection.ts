@@ -35,6 +35,7 @@ import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
 import { buildPromoteConversation } from './transport/promoteConversationEnvelope'
 import { buildUnarchiveConversation } from './transport/unarchiveConversationEnvelope'
+import { buildRenameConversation } from './transport/renameConversationEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
@@ -59,6 +60,7 @@ import {
   type CreateConversationPayload,
   type PromoteConversationPayload,
   type UnarchiveConversationPayload,
+  type RenameConversationPayload,
   type SetSessionSettingsPayload,
   type ModalAnswerPayload,
   type ModalCancelPayload,
@@ -209,6 +211,17 @@ export interface DaemonConnection {
    * of the module (parity #490).
    */
   unarchiveConversation(payload: UnarchiveConversationPayload): void
+  /**
+   * Encrypt a payload-carrying `rename_conversation` control envelope onto the live session — asks the
+   * daemon to change one conversation's stored name (two required fields: the id must resolve to an
+   * existing row; `name` is the new display text). The `send` TWIN, not `requestDebugBundle`: a rename
+   * request has no consumer to fail, so it is an inert no-op when not connected (`driver === null` →
+   * return). FIRE-AND-FORGET — no reply is correlated or awaited here: the daemon confirms the rename by
+   * replying with a `conversation_updated` record, but the desktop does not correlate it (#360 reads the
+   * new name from the full re-list). Its caller is the Rename dialog (#360); this ticket ships the
+   * transport DORMANT. NEVER throws out of the module (parity #490).
+   */
+  renameConversation(payload: RenameConversationPayload): void
   /**
    * Encrypt a payload-carrying `set_session_settings` control envelope onto the live session — asks the
    * daemon to change one session's model / reasoning effort / YOLO (pyrycode #844/#845). Honors the
@@ -974,6 +987,35 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function renameConversation(payload: RenameConversationPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A rename request has no consumer to fail; a request sent
+    // while disconnected simply produces no reply (the daemon's `conversation_updated` confirmation never
+    // arrives, and there is no correlation memory to leave dangling).
+    if (driver === null) return
+    try {
+      // Build a FRESH literal naming exactly the two modeled fields — never a spread of `payload`. This
+      // is the deterministic net that bounds the wire to exactly conversation_id / name, ignoring any
+      // renderer-smuggled extra field the structural-minimum guard let through (#236's fresh-literal
+      // posture). Shares the one monotonic nextEnvelopeId with send / promoteConversation /
+      // unarchiveConversation — no second counter — so ids stay unique across interleaved calls.
+      const bytes = buildRenameConversation({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id,
+          name: payload.name
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload (including
+      // the user-content `name`); no log, no event (classify-don't-forward, inherited #62).
+    }
+  }
+
   function setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A settings change has no consumer to fail; a request sent
@@ -1139,6 +1181,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     interrupt,
     promoteConversation,
     unarchiveConversation,
+    renameConversation,
     setSessionSettings,
     answerModal,
     cancelModal,

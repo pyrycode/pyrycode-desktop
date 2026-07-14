@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ConversationScreen,
@@ -16,6 +16,7 @@ import {
   ScreenSnapshotView,
   ThreadOverflowMenuView,
   ChannelInfoSheetView,
+  requestArchiveConversation,
   relayLeg,
   daemonLeg,
   ConnectionStatusIndicator
@@ -1148,6 +1149,50 @@ describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
     )
     expect(markup).not.toContain('class="channel-info__action"')
     expect(markup).not.toContain('Rename')
+  })
+
+  // #366: the Archive action fills the Actions slot's second row, reusing #368's `.channel-info__action`
+  // tonal pill verbatim. Like Rename it is callback-gated (`onArchive`), which the container supplies
+  // ONLY for an active conversation — so its presence maps one-to-one onto AC1. Rename and Archive now
+  // share the class, so these assertions anchor on the label `>Archive</button>`, never on the class.
+  it('renders an Archive action in the Actions slot when a conversation and onArchive are supplied (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} onArchive={noop} />
+    )
+    expect(markup).toContain('>Archive</button>')
+  })
+
+  it('offers no Archive action when the active conversation is null (the graceful-empty guard, AC1)', () => {
+    // A list-opened thread (conversation === null) gets no onArchive from the container, so the Actions
+    // header renders over an empty slot — no Archive control, consistent with #365's empty About.
+    const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={null} onClose={noop} />)
+    expect(markup).toContain('Actions')
+    expect(markup).not.toContain('>Archive</button>')
+  })
+
+  it('offers no Archive action when onArchive is omitted, even with a conversation (callback-gated, AC1)', () => {
+    // Gated on the callback, not the conversation — proves the view honours the container's null-guard
+    // rather than deriving the button from `conversation` itself.
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
+    )
+    expect(markup).not.toContain('>Archive</button>')
+  })
+})
+
+// #366: the exported dispatch helper. The sheet renders server-side only, so the click handler cannot be
+// exercised via a DOM event — the helper is exported to keep the dispatch directly unit-testable, exactly
+// as `requestUnarchiveConversation` is (its mirror-image twin). Bare fire-and-forget: `sendCommand`
+// returns void, no try/catch.
+describe('requestArchiveConversation', () => {
+  it('dispatches the archiveConversation command for the conversation id, fire-and-forget (AC2)', () => {
+    const fakeSend = vi.fn()
+    requestArchiveConversation(fakeSend, 'conv-x')
+    expect(fakeSend).toHaveBeenCalledTimes(1)
+    expect(fakeSend).toHaveBeenCalledWith({
+      type: 'archiveConversation',
+      payload: { conversation_id: 'conv-x' }
+    })
   })
 })
 

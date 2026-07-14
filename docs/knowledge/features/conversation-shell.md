@@ -1108,7 +1108,7 @@ footer. Renderer-contained: no transport, IPC, or wire code.
                 ├── .channel-info__row × 2          Workspace (mono, cwd) / Last activity  — or —
                 ├── .channel-info__empty            "No conversation details yet" (conversation === null)
                 ├── "Actions" section-header
-                ├── .channel-info__actions          empty div — mount point for #366/#367/#368
+                ├── .channel-info__actions          mount point for #366/#367/#368 (Rename+Archive built, Delete #367 open)
                 └── .channel-info__footer           "Channel ID: {id}" (omitted when conversation === null)
 ```
 
@@ -1161,6 +1161,20 @@ shape lacking `is_archived`/`last_message_ts` — passes directly, no adapter, n
 transport, IPC, or wire code. See [#368 codebase notes](../codebase/368.md) for the full design and
 patterns established.
 
+**Archive action ([#366](../codebase/366.md)).** The Actions slot's second filler, landing one
+merge after Rename and reusing its `.channel-info__action` tonal pill (Figma 20:94) verbatim — no
+new CSS. Same callback-gate shape as Rename (`onArchive?`, supplied by the container only when
+`conversation !== null`), but the handler itself is simpler: no dialog, just dispatch-then-close.
+Activating it fires the already-shipped, previously-dormant [`archiveConversation`
+command](conversation-archive.md) (#363) via a new exported helper, `requestArchiveConversation` —
+a structural clone of `requestUnarchiveConversation` (`ArchiveScreen.tsx`) — with
+`{ conversation_id: conversation.id }`, fire-and-forget, then calls the container's existing
+`onClose`. Button order is Rename → Archive → the future Delete (#367), a destructive-last
+convention. The archived conversation leaving the active list needs no new code here: the daemon's
+`conversation_updated` broadcast reply rides the existing #275 list-re-request path, the same
+mechanism the restore flow already proved in reverse (#346/#348). No transport, IPC, or wire code.
+See [#366 codebase notes](../codebase/366.md) for the full design and patterns established.
+
 ## Seams (bound + still open)
 
 - **`onBack?: () => void`** — **bound in [#140](../codebase/140.md).** Optional, gated exactly like `onUnpaired?`; wired by the [paired shell](paired-shell.md) when this screen is mounted as its `thread` view, absent for a bare `<ConversationScreen />`. See [Back control](#back-control-140) above.
@@ -1178,7 +1192,7 @@ patterns established.
 - **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
 - **`QueuedBacklog({ items, onDrop })` / `QueuedBacklogControl`** — **render bound in [#294](../codebase/294.md); `onDrop` (required) bound in [#296](../codebase/296.md).** `QueuedBacklogControl` reads the [queue store](queue-store.md)'s `selectBacklogFor(MILESTONE_CONVERSATION_ID)` and binds `onDrop` to the pure `dropQueuedMessage` (`dropQueuedMessage.ts`), which dispatches `dequeueMessageCommand` and nothing else — no local mutation. See [Queued backlog + drop affordance](#queued-backlog--drop-affordance-294-drop-since-296) above.
 - **`ScreenSnapshotView({ snapshot, canRequest, onRequest })` / `ScreenSnapshotControl`** — **bound in [#324](../codebase/324.md).** `ScreenSnapshotControl` reads `useSessionStore(selectStatus)` (for `canRequest`, via `composerAvailability`) and the [screen-snapshot store](screen-snapshot-store.md)'s `selectScreenSnapshot` (#323, this store's only reader), binds `onRequest` to the new `requestScreenSnapshot` helper, and mounts between `StatusRow` and `InterruptControl`. See [Screen-snapshot action & display](#screen-snapshot-action--display-324) above.
-- **`ChannelInfoSheetView({ conversation, now?, onClose })` / `ChannelInfoSheet`** — **shell + About detail bound in [#365](../codebase/365.md).** `ChannelInfoSheetView` is the exported pure view (`conversation` as a prop, sourced from `activeConversationStore`); `ChannelInfoSheet` is the in-file container owning only the Escape effect. The `ThreadOverflowMenu`'s `onChannelInfo` now calls `() => setChannelInfoOpen(true)` — the speculative `ConversationScreenProps.onChannelInfo?` prop #276 reserved is **retired**, not bound; see [Channel Info sheet](#channel-info-sheet-365) above. **Rename bound in [#368](../codebase/368.md):** the `.channel-info__actions` slot's first filler, an `onRename?` prop supplied by the container only in the `conversation !== null` branch, opening the reused [Rename dialog](rename-conversation-dialog.md) (#360) — see [Channel Info sheet](#channel-info-sheet-365) above. **Still open:** #366 (Archive) and #367 (Delete) are the slot's remaining intended fillers, each keying off `activeConversationStore.id` with a null-guard per the split's contract.
+- **`ChannelInfoSheetView({ conversation, now?, onClose })` / `ChannelInfoSheet`** — **shell + About detail bound in [#365](../codebase/365.md).** `ChannelInfoSheetView` is the exported pure view (`conversation` as a prop, sourced from `activeConversationStore`); `ChannelInfoSheet` is the in-file container owning only the Escape effect. The `ThreadOverflowMenu`'s `onChannelInfo` now calls `() => setChannelInfoOpen(true)` — the speculative `ConversationScreenProps.onChannelInfo?` prop #276 reserved is **retired**, not bound; see [Channel Info sheet](#channel-info-sheet-365) above. **Rename bound in [#368](../codebase/368.md):** the `.channel-info__actions` slot's first filler, an `onRename?` prop supplied by the container only in the `conversation !== null` branch, opening the reused [Rename dialog](rename-conversation-dialog.md) (#360) — see [Channel Info sheet](#channel-info-sheet-365) above. **Archive bound in [#366](../codebase/366.md):** the slot's second filler, an `onArchive?` prop under the same null-guard, dispatching the already-shipped [`archiveConversation` command](conversation-archive.md) (#363) then closing the sheet — see [Channel Info sheet](#channel-info-sheet-365) above. **Still open:** #367 (Delete) is the slot's remaining intended filler, keying off `activeConversationStore.id` with the same null-guard per the split's contract.
 
 ## Edge cases and limitations
 

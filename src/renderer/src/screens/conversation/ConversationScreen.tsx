@@ -39,6 +39,7 @@ import {
   RenameConversationDialogView,
   requestRenameConversation
 } from '../channels/RenameConversationDialog'
+import type { RendererCommand } from '@shared/ipc/commands'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
 // styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
@@ -859,7 +860,8 @@ export function ChannelInfoSheetView({
   conversation,
   now = Date.now(),
   onClose,
-  onRename
+  onRename,
+  onArchive
 }: {
   conversation: ConversationCreatedPayload | null
   now?: number
@@ -868,6 +870,9 @@ export function ChannelInfoSheetView({
   // Absent ⇒ no Rename control (the list-opened null-conversation case, AC1) — the ChannelList
   // `onRename?`-optional-affordance idiom: the button is gated on the callback, not on `conversation`.
   onRename?: () => void
+  // #366: the Archive action, callback-gated exactly like `onRename` (supplied only for an active
+  // conversation, AC1). Reuses #368's `.channel-info__action` tonal pill verbatim; renders below Rename.
+  onArchive?: () => void
 }): JSX.Element {
   // Title: the daemon name when present; the client-owned unnamed label when `name === null` (a distinct
   // "unnamed scratch conversation", not an empty string); the fallback when there is no conversation.
@@ -925,12 +930,19 @@ export function ChannelInfoSheetView({
             </>
           )}
           <p className="status-sheet__section-header">{CHANNEL_INFO_ACTIONS_HEADER}</p>
-          {/* The Actions slot #365 left for #366/#367/#368. #368 fills it with the Rename tonal pill,
-              rendered only when `onRename` is supplied (⇒ there is an active conversation to rename). */}
+          {/* The Actions slot #365 left for #366/#367/#368. Rename (#368) then Archive (#366), each a
+              `.channel-info__action` tonal pill rendered only when its callback is supplied (⇒ there is an
+              active conversation). Destructive-last order: edit (Rename) → soft-remove (Archive) → the
+              future permanent Delete (#367). */}
           <div className="channel-info__actions">
             {onRename && (
               <button type="button" className="channel-info__action" onClick={onRename}>
                 Rename
+              </button>
+            )}
+            {onArchive && (
+              <button type="button" className="channel-info__action" onClick={onArchive}>
+                Archive
               </button>
             )}
           </div>
@@ -941,6 +953,20 @@ export function ChannelInfoSheetView({
       </div>
     </div>
   )
+}
+
+// #366: fire the `archiveConversation` command (#363 wired the main side through to the daemon). An
+// inline literal typed as RendererCommand — no constructor added, keeping the change renderer-contained,
+// the mirror-image of `requestUnarchiveConversation` (both a single REQUIRED `conversation_id`, both
+// fire-and-forget: `sendCommand` returns void, no try/catch). Exported so the dispatch stays directly
+// unit-testable — the sheet renders server-side only, so the click handler cannot be fired via a DOM
+// event. The archived conversation leaving the active list is free: the daemon replies with
+// `conversation_updated`, on which the existing list bridge re-requests the conversations (#275).
+export function requestArchiveConversation(
+  sendCommand: (command: RendererCommand) => void,
+  conversationId: string
+): void {
+  sendCommand({ type: 'archiveConversation', payload: { conversation_id: conversationId } })
 }
 
 // #365: the Channel Info sheet's thin interaction container (the ThreadOverflowMenu idiom minus its own
@@ -987,6 +1013,16 @@ function ChannelInfoSheet({
             : () => {
                 setRenameName(titleFor(conversation.name))
                 setRenameOpen(true)
+              }
+        }
+        // #366: Archive dispatches then closes (no dialog — unlike Rename). Supplied only for a non-null
+        // conversation (AC1). `window.pyry` is dereferenced only inside this callback (AC4).
+        onArchive={
+          conversation === null
+            ? undefined
+            : () => {
+                requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+                onClose()
               }
         }
       />

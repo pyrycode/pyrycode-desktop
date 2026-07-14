@@ -267,6 +267,10 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'relayLinkChanged', status: 'daemon-absent' })).toBeNull()
   })
 
+  it('workspaceFolderRejected → null (consumed by the #397 round-trip store, not the session store)', () => {
+    expect(translateDaemonEvent({ type: 'workspaceFolderRejected' })).toBeNull()
+  })
+
   it('the three debug-bundle events dispatch nothing into the session store', () => {
     // Belt-and-suspenders, mirroring production: feed each new event through the same null-guarded
     // dispatch the bridge applies; the store stays at its initial state (no status flip, no message).

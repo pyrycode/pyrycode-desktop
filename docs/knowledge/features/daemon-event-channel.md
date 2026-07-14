@@ -274,6 +274,17 @@ export type DaemonEvent =
   a pending `set_session_settings` request. Carries **only** `changeId` — deliberately no `sessionId`
   (the wire `error` frame carries none, and `changeId` alone disambiguates two outstanding changes to the
   same session), no `inReplyTo`, and no error code/message.
+- **`workspaceFolderRejected`** ([#396](../codebase/396.md)) is the rejected twin of
+  `workspaceFolderCreated` (#381), a **new** arm (forces a compiler case in all three exhaustive
+  bridges, the `sessionSettingsRejected` precedent). Maps to *no* `SessionAction`, consumed by **none**
+  of the three existing bridges — its real consumer is the not-yet-built
+  [#397](https://github.com/pyrycode/pyrycode-desktop/issues/397) round-trip store. Emitted by
+  [daemon connection](daemon-connection.md)'s correlation gate — the same `case 'daemon-error':`
+  precedence tier as `sessionSettingsRejected`, checked against a new `pendingCreateFolders: Set<number>`
+  rather than `pendingSettings`'s `Map`. **Bare** — carries no field at all, unlike
+  `sessionSettingsRejected`'s `changeId` or `modalAnswerRejected`'s `modalId`: only one create-folder
+  dialog is ever open, so there is no concurrency to disambiguate, and the success twin
+  `workspaceFolderCreated` carries only `path` with no correlation key to mirror.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -380,6 +391,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#261 codebase notes](../codebase/261.md) — widened `sessionSettingsUpdated` with `changeId`, the renderer-minted correlation key matched against `Envelope.in_reply_to`; consumed by none of the three existing bridges, real consumer is [#256](../codebase/256.md) (shipped)
 - [#269 codebase notes](../codebase/269.md) — the `sessionSettingsRejected` member, the seventeenth no-`SessionAction` arm and the rejected twin of `sessionSettingsUpdated`; emitted by [daemon connection](daemon-connection.md)'s `pendingSettings`-lookup precedence gate on a correlated `daemon-error`, which on a match also suppresses that ticket's own `modalAnswerRejected` FIFO and the #116 bundle reassembler; consumed by none of the three existing bridges, real consumer is [#256](../codebase/256.md) (shipped)
 - [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md) — the pending→confirm/reject store consuming both `sessionSettingsUpdated` and `sessionSettingsRejected`; a fourth, independent App-level subscriber on this channel, alongside the three exhaustive bridges above
+- [#396 codebase notes](../codebase/396.md) — the `workspaceFolderRejected` member, the rejected twin of `workspaceFolderCreated` (#381); emitted by [daemon connection](daemon-connection.md)'s `pendingCreateFolders`-lookup precedence gate (the `pendingSettings`/`sessionSettingsRejected` pattern applied to a `Set`, since the event is bare); consumed by none of the three existing bridges, real consumer is the not-yet-built #397 round-trip store
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

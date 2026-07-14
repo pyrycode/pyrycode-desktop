@@ -3536,6 +3536,179 @@ describe('createDaemonConnection — set_session_settings rejection correlation 
   })
 })
 
+describe('createDaemonConnection — create_workspace_folder rejection correlation (#396)', () => {
+  const PAYLOAD: CreateWorkspaceFolderPayload = { parent: '/home/user/projects', name: 'new-app' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** The workspaceFolderRejected events emitted so far, in order. */
+  function folderRejections(sink: ReturnType<typeof fakeSink>): DaemonEvent[] {
+    return emitted(sink).filter((e) => e.type === 'workspaceFolderRejected')
+  }
+  /** The modalAnswerRejected events emitted so far — used to prove the modal FIFO is untouched (AC4). */
+  function modalRejections(sink: ReturnType<typeof fakeSink>): DaemonEvent[] {
+    return emitted(sink).filter((e) => e.type === 'modalAnswerRejected')
+  }
+
+  it('correlates a request-error by in_reply_to to its pending create-folder and emits a bare workspaceFolderRejected (AC1/AC2)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.createWorkspaceFolder(PAYLOAD)
+    // The daemon echoes the request envelope id as in_reply_to (pyrycode#887).
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id) })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([{ type: 'workspaceFolderRejected' }])
+    // Exactly one key — no changeId / modalId / sessionId / in_reply_to / code / message. The event is
+    // bare by construction (AC3). Load-bearing regression pin.
+    expect(Object.keys(events[0])).toEqual(['type'])
+  })
+
+  it('drops the pending entry on a match — a second error for the same id emits no further rejection (AC2)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.createWorkspaceFolder(PAYLOAD)
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id) })
+    const after = emitted(sink).length
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id) })
+
+    expect(emitted(sink).slice(after)).toEqual([])
+  })
+
+  it('an error with an absent in_reply_to short-circuits before the set lookup, even with a request pending (fail-closed AC3/AC4)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.createWorkspaceFolder(PAYLOAD)
+
+    // No in_reply_to at all → undefined short-circuits before the pendingCreateFolders.has.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+
+    expect(folderRejections(sink)).toEqual([])
+  })
+
+  it('an error whose in_reply_to matches no pending request falls through to the modal FIFO unchanged (AC4)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    connection.createWorkspaceFolder(PAYLOAD)
+
+    // An error correlated to NO pending create-folder (id 999) while a request is outstanding → no
+    // folder rejection; falls through to reject the oldest modal answer exactly as #248.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(999) })
+
+    expect(folderRejections(sink)).toEqual([])
+    expect(modalRejections(sink)).toEqual([{ type: 'modalAnswerRejected', modalId: 'mdl-1' }])
+  })
+
+  it('does not shift the modal FIFO when the error correlates to a pending create-folder; the modal stays outstanding (AC4)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.answerModal({ modal_id: 'mdl-1', option_id: 'allow' })
+    connection.createWorkspaceFolder(PAYLOAD)
+    const folderId = decodeEnvelope(drivers[0].sent[1]).id
+
+    // A create-folder-correlated error: emit the rejection, DO NOT shift the modal FIFO.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(folderId) })
+    expect(folderRejections(sink)).toEqual([{ type: 'workspaceFolderRejected' }])
+    expect(modalRejections(sink)).toEqual([])
+
+    // Proof the answer is still outstanding: a later uncorrelated error rejects it exactly as #248.
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext() })
+    expect(modalRejections(sink)).toEqual([{ type: 'modalAnswerRejected', modalId: 'mdl-1' }])
+  })
+
+  it('a create-folder-correlated error does not fail a healthy in-flight bundle (precedence AC4)', async () => {
+    const { connection, sink, drivers } = await connected()
+    const { consumer, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    connection.createWorkspaceFolder(PAYLOAD)
+    const folderId = decodeEnvelope(drivers[0].sent[1]).id
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(folderId) })
+
+    expect(folderRejections(sink)).toEqual([{ type: 'workspaceFolderRejected' }])
+    // A create-folder error is not a bundle error — the healthy bundle is NOT failed.
+    expect(failed).toEqual([])
+  })
+
+  it('an error with no matching request still fails a pending bundle reassembler (AC4)', async () => {
+    const { connection, sink, drivers } = await connected()
+    const { consumer, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    connection.createWorkspaceFolder(PAYLOAD)
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(999) })
+
+    expect(failed).toEqual(['daemon-error'])
+    expect(folderRejections(sink)).toEqual([])
+  })
+
+  it('never echoes the daemon error content (message / code / in_reply_to) onto any emitted event (security no-echo AC3)', async () => {
+    const { connection, sink, drivers } = await connected()
+
+    connection.createWorkspaceFolder(PAYLOAD)
+    const id = decodeEnvelope(drivers[0].sent[0]).id
+
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(id) })
+
+    const serialized = JSON.stringify(emitted(sink))
+    for (const dropped of [
+      'secret error detail',
+      'server.binary_offline',
+      'in_reply_to',
+      'inReplyTo'
+    ]) {
+      expect(serialized).not.toContain(dropped)
+    }
+  })
+
+  it('clears the pending set on reconnect — an error for an abandoned request emits nothing (AC1 backstop)', async () => {
+    const ctx = await connected()
+
+    ctx.connection.createWorkspaceFolder(PAYLOAD)
+    const id = decodeEnvelope(ctx.drivers[0].sent[0]).id
+
+    ctx.connection.reconnect()
+    await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = emitted(ctx.sink).length
+
+    // dial() abandoned the outstanding request; an error echoing the old id (ids recycle from 2)
+    // correlates to nothing on the fresh connection.
+    ctx.drivers[1].emit({ type: 'message', plaintext: errorPlaintext(id) })
+
+    expect(emitted(ctx.sink).slice(before)).toEqual([])
+  })
+
+  it('a request whose send throws records no pending entry — a later error emits no rejection (AC1)', async () => {
+    const { connection, sink, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    // The send throws (caught), so the add after sendMessage never runs — no phantom pending entry. The
+    // id the request would have used is 2 (the first app envelope), so an error echoing 2 must not match.
+    connection.createWorkspaceFolder(PAYLOAD)
+    drivers[0].emit({ type: 'message', plaintext: errorPlaintext(2) })
+
+    expect(folderRejections(sink)).toEqual([])
+  })
+})
+
 describe('createDaemonConnection — diagnostic logging (#128)', () => {
   it('logs a coordinate-free daemon-dial anchor synchronously with connecting (AC1)', () => {
     const cap = captureLog()

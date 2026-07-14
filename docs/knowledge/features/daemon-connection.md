@@ -335,8 +335,45 @@ The emitted event carries **only** the client's own `changeId` — never a field
 `error` payload (no code, no message, no `in_reply_to`). `security-sensitive`, code review **PASS**, no
 findings.
 
+## Create-workspace-folder rejected correlation ([#396](../codebase/396.md))
+
+A fourth correlation store lives here, module-local alongside `outstandingAnswers`/`pendingSettings`:
+`pendingCreateFolders: Set<number>` — envelope ids of outstanding `create_workspace_folder`
+([#381](../codebase/381.md)) requests. Unlike `pendingSettings` (a `Map`, since `sessionSettingsRejected`
+carries a `changeId`), the emitted event is **bare**, so only membership matters — a `Set` suffices.
+Unlike `outstandingAnswers` (a FIFO, used only when the reply carries no discriminating id at all), a
+`create_workspace_folder` request has a unique per-request envelope id, so a keyed set beats a FIFO here.
+
+- **Set** — `createWorkspaceFolder` captures `envelopeId = nextEnvelopeId` before building (the
+  `setSessionSettings`/#269 order) and, only after a successful `driver.sendMessage`, calls
+  `pendingCreateFolders.add(envelopeId)` — a build/send throw leaves no phantom entry.
+- **Match + delete — same tier as `pendingSettings`.** `case 'daemon-error':` checks
+  `pendingCreateFolders.has(inReplyTo)` alongside the `pendingSettings` check, inside the existing
+  `inReplyTo !== undefined` guard. A match `delete`s the entry, emits `{ type: 'workspaceFolderRejected' }`
+  (bare — no field read from the untrusted payload), and `return`s **before** both
+  `reassembler?.fail('daemon-error')` and the `outstandingAnswers.shift()` modal FIFO — the same
+  precedence #269 established, since an envelope id is minted once and can be held by at most one of the
+  two sets.
+- **Reset** — `dial()` clears the set next to `pendingSettings.clear()`: a reconnect abandons every
+  outstanding create-folder request, so a stale envelope id from a dead session can never correlate on
+  the reconnected one.
+- **No match — unchanged fall-through.** An absent `inReplyTo`, a stale id, or a hostile daemon forging a
+  rejection for a request never dispatched falls through to the existing bundle/modal tier exactly as
+  before this ticket.
+
+Bare by design (stronger than `sessionSettingsRejected`'s `changeId` or `modalAnswerRejected`'s
+`modalId`): only one create-folder dialog is ever open, so there is no concurrency to disambiguate and no
+field can hold a daemon-supplied byte. `security-sensitive`, code review **PASS**, no findings. Ships
+dormant — all three exhaustive renderer bridges no-op the new arm; the real consumer is the not-yet-built
+[#397](https://github.com/pyrycode/pyrycode-desktop/issues/397) round-trip store.
+
 ## Related
 
+- [#396 codebase notes](../codebase/396.md) — the `pendingCreateFolders` correlation set (see §
+  Create-workspace-folder rejected correlation above), the new `workspaceFolderRejected` emit inserted
+  into the existing `case 'daemon-error':` precedence gate alongside `pendingSettings`, and the `dial()`
+  reset. No new method on this factory — `createWorkspaceFolder` (#381) is unchanged besides the
+  pending-add after send.
 - [#62 codebase notes](../codebase/62.md) — implementation summary, patterns, lessons.
 - [#82 codebase notes](../codebase/82.md) / [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — connect-on-pair: the `reconnect()` re-arm + generation fence added here, fired by the pairing handler's `onPaired` trigger a confirm-success wires to `connection.reconnect()`.
 - [#83 codebase notes](../codebase/83.md) — reload-per-dial: the `loadDialConfig` provider constructed here and threaded to the driver so the supervisor's *automatic* reconnect re-sources the record too (see § Reload-per-dial).

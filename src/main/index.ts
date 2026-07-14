@@ -291,6 +291,13 @@ app.whenReady().then(() => {
         // Inert no-op when not connected (#273).
         connection.promoteConversation(command.payload)
         return
+      case 'archiveConversation':
+        // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
+        // forget request has no consumer/reassembler. Sends archive_conversation; the daemon confirms by
+        // replying with a conversation_updated record, decoded by the existing path and reflected in the
+        // list by #275 (consumed by #366), not correlated here. Inert no-op when not connected (#363).
+        connection.archiveConversation(command.payload)
+        return
       case 'unarchiveConversation':
         // Direct to the connection method (mirrors promoteConversation), no orchestrator — a fire-and-
         // forget request has no consumer/reassembler. Sends unarchive_conversation; the daemon confirms by

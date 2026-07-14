@@ -9,15 +9,21 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startFakeRelayForwarder, type FakeRelayForwarder } from '../src/main/transport/fakeRelayForwarder'
 import { startFakeDaemon, type FakeDaemon } from '../src/main/transport/fakeDaemon'
+import { encodeEnvelope } from '../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../src/main/secretBackend'
-import type { QrPayload } from '../src/shared/wire/types'
+import type {
+  ConversationSummary,
+  ConversationsPayload,
+  QrPayload
+} from '../src/shared/wire/types'
 
 // The first UI-level e2e scenario (#93): drive the *built* app's main-process transport at a
 // controllable target — the in-process fake relay forwarder (#90) + fake Noise_IK responder daemon
 // (#91), the same doubles the transport-level round-trip test (#89) drives — through the REAL pairing
-// screen, and assert the window advances to the conversation screen with Send enabled. No live relay,
-// no real `pyry` daemon, repeatable, run by `npm run e2e`.
+// screen, and assert the window advances through the ChannelList (#140's paired entry) into the
+// conversation thread with Send enabled. No live relay, no real `pyry` daemon, repeatable, run by
+// `npm run e2e`.
 //
 // It consumes two already-merged, `app.isPackaged`-gated dev affordances and relaxes NO validation
 // itself: #97 (accept a loopback `ws://` relay, `PYRY_ALLOW_LOOPBACK_RELAY=1`) and #99 (a keychain-free
@@ -42,6 +48,35 @@ const DUMMY_TOKEN = 'dummy-token-not-a-real-credential'
 const TEST_TIMEOUT_MS = 60_000
 const HANDSHAKE_TIMEOUT_MS = 15_000
 
+// #140: pairing lands on the ChannelList (route='list'), not the conversation screen — so this scenario
+// must drive one real list→thread step (a row click) before `.conversation` mounts. A clickable row
+// exists only when the list is non-empty, so the fake daemon seeds a one-row `conversations` reply.
+//
+// ConversationListData auto-fires `list_conversations` on the connected RISING EDGE, so the seeded row
+// renders ONLY after the handshake completes — making the row's own auto-wait the connected gate (no
+// extra gating logic; when the row is clickable, Send is already enabled). buildReply ignores its
+// inbound-plaintext argument: this scenario sends no `send_message`, and the seed's whole-list-replace
+// is idempotent, so answering EVERY post-handshake inbound with the same one-row reply is safe — only
+// conversationListBridge consumes `conversations`, and it triggers no re-request. Fixed literals only,
+// no Date.now()/randomness — deterministic per the fakeDaemon convention. The row's fields are
+// non-secret display text; `id`/`ts` are structurally required by decodeEnvelope but never inspected.
+const SEEDED_ROW: ConversationSummary = {
+  id: 'seed-conversation',
+  name: 'Seeded discussion',
+  is_promoted: false,
+  is_archived: false,
+  cwd: '/fake/workspace',
+  last_message_ts: '2026-07-07T12:00:00.000Z',
+  last_used_at: '2026-07-07T12:00:00.000Z'
+}
+const buildReply = (): Uint8Array =>
+  encodeEnvelope({
+    id: 1,
+    type: 'conversations',
+    ts: '2026-07-07T12:00:00.000Z',
+    payload: { conversations: [SEEDED_ROW] } satisfies ConversationsPayload
+  })
+
 type Fixtures = {
   forwarder: FakeRelayForwarder
   daemon: FakeDaemon
@@ -60,10 +95,11 @@ const test = base.extend<Fixtures>({
     await fwd.close()
   },
   daemon: async ({ forwarder }, use) => {
-    // Default buildReply (echo) is fine — this scenario sends no message, so whenSettled stays pending
-    // (settling is #94's concern). Its `/v1/server` leg is OPEN when this resolves, so the client's
-    // msg1 (dialed only after confirm) is never dropped — no explicit whenReady barrier needed.
-    const d = await startFakeDaemon({ url: forwarder.url })
+    // Seed a one-row conversation list so pairing has a clickable list→thread path (#140). The
+    // auto-fired `list_conversations` gets the one-row `conversations` reply (buildReply above). Its
+    // `/v1/server` leg is OPEN when this resolves, so the client's msg1 (dialed only after confirm) is
+    // never dropped — no explicit whenReady barrier needed.
+    const d = await startFakeDaemon({ url: forwarder.url, buildReply })
     await use(d)
     await d.close()
   },
@@ -140,12 +176,23 @@ test('pair through the window against the fake target and reach the conversation
   await page.getByRole('button', { name: 'Confirm', exact: true }).click()
 
   // Route flip (proves #99 active + pair-through-UI works): confirm-succeeded persisted the record
-  // (secureStore.set succeeded under the keychain-free backend) → App.onPaired flips to conversation.
+  // (secureStore.set succeeded under the keychain-free backend) → App.onPaired flips to the paired
+  // route. Since #140 the paired route enters at the ChannelList (route='list'), NOT the conversation
+  // screen — so drive the one real list→thread step: click the seeded row (AC3: a real product-UI
+  // `.channel-list__row-open` button, `onClick={onOpen}` → dispatch `open` → route='thread'; no test
+  // hook, forced dispatch, or store mutation). The seeded row renders only after the handshake
+  // completes (requestConversations fires on the connected edge → the one-row `conversations` reply
+  // arrives), so this row-click auto-wait IS the connected gate.
+  await page.locator('.channel-list__row-open').click()
+
+  // Now on the conversation thread.
   await expect(conversation).toBeVisible()
 
   // Handshake (proves Noise_IK completed): the Send button starts disabled at conversation-mount
   // (status connecting/disconnected) and enables ONLY on the `connected` daemon event, which arrives
-  // only after the real handshake terminates at the fake daemon. This is the one DOM-observable
-  // handshake proof — `.conversation` alone would pass even if the handshake later failed.
+  // only after the real handshake terminates at the fake daemon. Because the seeded row (hence the
+  // click above) could not appear before `connected`, Send is already enabled here — the generous
+  // timeout is retained as headroom for a cold runner. This is the one DOM-observable handshake proof —
+  // `.conversation` alone would pass even if the handshake later failed.
   await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 })

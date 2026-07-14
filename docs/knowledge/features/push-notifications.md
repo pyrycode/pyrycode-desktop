@@ -162,6 +162,12 @@ behaviour (#393, above) is already in place on the `Notification` instance this 
 it activates the window and navigates to the thread — but is only reachable in practice once #392
 causes a real fire.
 
+`#392`'s trigger will also need to read whether the user *wants* notifications before firing: that
+on/off preference now exists — see the [push-notification preference store](push-notification-preference-store.md)
+(#408), the renderer-local, persisted `boolean` #392 will gate on and [#409](https://github.com/pyrycode/pyrycode-desktop/issues/409)
+(the Settings toggle) will write. This slice (delivery) and that one (preference) are independent;
+neither reads or depends on the other yet — #392 is the wiring point that joins them.
+
 ## Edge cases and limitations
 
 - **No `Notification.isSupported()` gate** and **no try/catch around construct/`show()`** —
@@ -183,10 +189,13 @@ causes a real fire.
   guard this feature's command rides on.
 - [Paired shell](paired-shell.md) — the container `notificationActivatedBridge`'s
   `useNotificationActivatedNav` hook is mounted in.
+- [Push-notification preference store](push-notification-preference-store.md) / [#408 codebase
+  notes](../codebase/408.md) — the persisted on/off preference #392 will gate firing on.
 - [#391 codebase notes](../codebase/391.md) — implementation summary, patterns, lessons for the
   delivery primitive.
 - [#393 codebase notes](../codebase/393.md) — implementation summary, patterns, lessons for
   click-to-focus.
 - [#158](https://github.com/pyrycode/pyrycode-desktop/issues/158) — the parent split into #391/#392/#393.
 - Next: [#392](https://github.com/pyrycode/pyrycode-desktop/issues/392) (the trigger, still open,
-  blocked on #353) is the only piece left to make this feature live end-to-end.
+  blocked on #353) is the piece that joins this primitive to the [preference
+  store](push-notification-preference-store.md) and makes the feature live end-to-end.

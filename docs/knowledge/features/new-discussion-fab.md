@@ -16,9 +16,10 @@ wire code added, so not security-sensitive.
 - Renders a floating add (`+`) button pinned bottom-right of the Channel List, present in **all
   three** list states (not-loaded/empty/populated — it is a sibling of the list body, not
   conditional on it).
-- On click, dispatches `createConversation` with `{ is_promoted: false, name: null, cwd: null }` —
-  an ad-hoc discussion with daemon-default name and working directory. The send is
-  fire-and-forget; there is no optimistic UI change.
+- On click, dispatches `createConversation` with `{ is_promoted: false, name: null, cwd }` — an
+  ad-hoc discussion with a daemon-default name. `cwd` is the [default-workspace
+  store](default-workspace-store.md)'s saved value if one is set, or `null` (daemon-default working
+  directory) otherwise (#403). The send is fire-and-forget; there is no optimistic UI change.
 - Navigation to the new thread happens **later and only if the daemon confirms**: when a
   `conversationCreated` `DaemonEvent` arrives, the paired shell fires its existing `open` nav
   transition. A create the daemon never confirms simply leaves the user on the list — there is no
@@ -34,9 +35,10 @@ One new module, twin of [`conversationListBridge.ts`](conversation-list-store.md
 ### The bridge (`src/renderer/src/store/conversationCreatedBridge.ts`)
 
 ```ts
-requestNewConversation(sendCommand: (c: RendererCommand) => void): void
-// sendCommand({ type: 'createConversation', payload: { is_promoted: false, name: null, cwd: null } })
+requestNewConversation(sendCommand: (c: RendererCommand) => void, defaultCwd: string | null): void
+// sendCommand({ type: 'createConversation', payload: { is_promoted: false, name: null, cwd: defaultCwd } })
 // inline literal, no builder — the requestConversationList precedent
+// defaultCwd widened in #403 (required, not defaulted) — see default-workspace-store.md
 
 translateConversationCreated(event: DaemonEvent): ConversationCreatedPayload | null
 // switch (event.type) { case 'conversationCreated': return event.conversation; default: return null }
@@ -70,7 +72,9 @@ aria-label="New discussion">` holding an inline `viewBox="0 0 24 24"` Material `
 (`aria-hidden`). A native `<button>` is keyboard-focusable; `aria-label` supplies the accessible
 name since the glyph carries no text.
 
-The container `ChannelList` supplies `onNewConversation={() => requestNewConversation(window.pyry.sendCommand)}` —
+The container `ChannelList` supplies
+`onNewConversation={() => requestNewConversation(window.pyry.sendCommand, defaultWorkspace)}`, where
+`defaultWorkspace` is a reactive `useDefaultWorkspaceStore(selectDefaultWorkspace)` read (#403) —
 the `window.pyry` deref sits inside the click arrow, never during render, so the
 `renderToStaticMarkup` server-render smoke stays untouched (the `Composer.handleSubmit` /
 `UnpairControl` discipline).
@@ -91,8 +95,8 @@ off-handle, and the subscription tears down; on re-pair a fresh shell mounts a f
 ### Data flow
 
 ```
-FAB click → requestNewConversation(window.pyry.sendCommand)
-  → sendCommand({type:'createConversation', payload:{is_promoted:false,name:null,cwd:null}})
+FAB click → requestNewConversation(window.pyry.sendCommand, defaultWorkspace)
+  → sendCommand({type:'createConversation', payload:{is_promoted:false,name:null,cwd:defaultWorkspace}})
   → [#241, already shipped] COMMAND_CHANNEL → createConversation(payload) → daemon
 
 daemon → conversation_created frame → [#241] → conversationCreated DaemonEvent
@@ -155,5 +159,7 @@ Fill/glyph use the M3 primary-container FAB role tokens (`--color-primary-contai
   screen the FAB renders on, as a sibling of `renderBody`.
 - [Conversation list store](conversation-list-store.md) — the sibling bridge
   (`conversationListBridge.ts`) this ticket's `conversationCreatedBridge.ts` mirrors member-for-member.
+- [Default-workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) —
+  widened `requestNewConversation` with the `defaultCwd` parameter this FAB now supplies.
 - [#242 codebase notes](../codebase/242.md) — implementation summary, patterns, lessons.
 - Spec: `docs/specs/architecture/242-new-discussion-fab.md`.

@@ -32,18 +32,31 @@ export function translateQueueState(event: DaemonEvent): QueueSnapshot | null {
 }
 
 /**
- * Subscribe via the injected `onDaemonEvent`; each `queueState` writes its snapshot into the store via
- * `setBacklog`; every unrelated event no-ops. Returns the unsubscribe handle (the daemonEventBridge
- * off-handle idiom) so the React binding can use it as its effect cleanup. The `snapshot !== null`
- * guard (not `if (snapshot)`) is deliberate: an empty `queued: []` snapshot is a real REPLACEMENT (the
- * AC2 clear case), never dropped. Injected `onDaemonEvent` + `setBacklog` keep it React-free and
- * unit-testable with plain spies. The listener only translates + dispatches — it never throws into React.
+ * Subscribe via the injected `onDaemonEvent`. A `connected` event is the reconnect edge (#197): it
+ * `resetBacklogs()` and returns — the relay re-emits `connected` on every (re)handshake (v2 has no
+ * session resume), and the daemon then re-sends one queue_state per non-empty conversation, so the reset
+ * clears the whole map before those re-sends repopulate it through `setBacklog` unchanged. The reset
+ * reads only the discriminant — it ignores `event.ack`. Every other `queueState` writes its snapshot via
+ * `setBacklog`; unrelated events no-op. Reset-before-repopulate needs no ordering logic here: the
+ * transport emits `connected` before any re-sent queue_state and the single daemon-event channel
+ * delivers in arrival order, dispatched synchronously per event.
+ *
+ * The `snapshot !== null` guard (not `if (snapshot)`) is deliberate: an empty `queued: []` snapshot is a
+ * real REPLACEMENT (the AC2 clear case), never dropped. The reset is a separate branch, not folded into
+ * `translateQueueState`, so that translator stays the pure `queueState`→snapshot filter. Injected
+ * `onDaemonEvent` + `setBacklog` + `resetBacklogs` keep it React-free and unit-testable with plain spies.
+ * The listener only translates + dispatches — it never throws into React.
  */
 export function subscribeQueue(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  setBacklog: (snapshot: QueueSnapshot) => void
+  setBacklog: (snapshot: QueueSnapshot) => void,
+  resetBacklogs: () => void
 ): () => void {
   return onDaemonEvent((event) => {
+    if (event.type === 'connected') {
+      resetBacklogs()
+      return
+    }
     const snapshot = translateQueueState(event)
     if (snapshot !== null) setBacklog(snapshot)
   })
@@ -63,9 +76,12 @@ export function QueueData(): null {
   useEffect(() => {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode double-mount
     // nets exactly one live listener (the sessionIdBridge idiom). Each queueState writes its snapshot
-    // into the app-singleton store via its setter.
-    return subscribeQueue(window.pyry.onDaemonEvent, (snapshot) =>
-      queueStore.getState().setBacklog(snapshot)
+    // into the app-singleton store via its setter; a connected edge resets it (#197). Both write paths
+    // ride this one listener, so the reset lands before the connect-time re-sends on the same channel.
+    return subscribeQueue(
+      window.pyry.onDaemonEvent,
+      (snapshot) => queueStore.getState().setBacklog(snapshot),
+      () => queueStore.getState().resetBacklogs()
     )
   }, [])
 

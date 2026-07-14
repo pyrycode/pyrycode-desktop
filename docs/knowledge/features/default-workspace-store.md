@@ -5,8 +5,8 @@ survives an app restart, so a new discussion can open in the user's saved folder
 falling back to the daemon's server-side scratch default.
 
 Introduced in [#403](../codebase/403.md), the **data half** of the Figma "Default workspace" setting
-(17:56). The Settings row that lets the user *change* the default is [#404](https://github.com/pyrycode/pyrycode-desktop/issues/404)
-(blocked-by this ticket) — out of scope here. This ticket ships no UI.
+(17:56). The Settings row that lets the user *change* the default is [#404](../codebase/404.md) — this
+ticket shipped no UI itself.
 
 ## What it does
 
@@ -88,12 +88,14 @@ Two behaviors:
   [`requestNewConversation`](conversation-create.md) as the new discussion's `cwd`. The reactive hook,
   not a `getState()` read at click time, so the FAB always closes over the current value — a future
   #404 change to the default re-renders the container without extra wiring.
-- **The read/write seam for #404.** `defaultWorkspaceStore` **is** the seam — no additional export is
-  needed. #404's Settings row reads `useDefaultWorkspaceStore(selectDefaultWorkspace)` to render the
-  value (`"scratch"` when `null`) and calls `setDefaultWorkspace(path)` / `setDefaultWorkspace(null)`
-  to change or clear it. #404 also owns the [`WorkspacePickerSheet`](conversation-shell.md#workspace-picker-sheet-383)
-  (#383) / [recent-workspaces store](recent-workspaces-store.md) (#382) reuse for the picker UI — out
-  of scope here.
+- **The read/write seam for #404.** `defaultWorkspaceStore` **is** the seam — no additional export was
+  needed. [#404](../codebase/404.md)'s `DefaultWorkspaceRowControl` reads
+  `useDefaultWorkspaceStore(selectDefaultWorkspace)` to render the value (`"scratch"` when `null`), and
+  its picker sheet's `onChoose` calls `defaultWorkspaceStore.getState().setDefaultWorkspace(path)` to
+  change it (no client-side clear-to-null path is exposed yet — every picker choice writes a concrete
+  path). #404 reuses [`WorkspacePickerSheetView`](conversation-shell.md#workspace-picker-sheet-383)
+  (#383's pure view, not its conversation-coupled container) and the
+  [recent-workspaces store](recent-workspaces-store.md) (#382) for the picker UI.
 
 ## Edge cases and limitations
 
@@ -124,3 +126,5 @@ Two behaviors:
   store-test idiom ([`recentWorkspacesStore.test.ts`](../codebase/382.md)) this ticket's test file
   clones.
 - [#403 codebase notes](../codebase/403.md) — implementation summary and patterns established.
+- [#404 codebase notes](../codebase/404.md) — the Settings UI consumer of this store: the
+  `DefaultWorkspaceRow`/`DefaultWorkspaceRowControl` row and its picker sheet.

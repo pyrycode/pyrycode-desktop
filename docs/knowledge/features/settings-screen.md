@@ -1,12 +1,14 @@
-# Settings screen (scaffold + Connection + Storage + About sections)
+# Settings screen (scaffold + Connection + Defaults + Storage + About sections)
 
 The paired region's third view — `settings`, a sibling of [`list`](channel-list.md) and
 [`thread`](conversation-shell.md) — reachable from a new entry button on the Channel List home. A
-top-bar (back + "Settings" title) above three sections: "Connection", whose body renders the paired
+top-bar (back + "Settings" title) above four sections: "Connection", whose body renders the paired
 server's identity (a Server row showing `serverId` + `relayUrl`, an empty host slot for the future
-two-dot status indicator, and a "Pair another server" nav row that switches daemons); "Storage", whose
-body renders a live archived-conversations count; and "About", whose body renders the running app's
-build version. Mirrors mobile #390/#398, with the relay URL as a documented desktop addition.
+two-dot status indicator, and a "Pair another server" nav row that switches daemons); "Defaults for new
+conversations", whose body renders a Default workspace row showing the client-owned default-workspace
+preference and opens a picker to change it; "Storage", whose body renders a live archived-conversations
+count; and "About", whose body renders the running app's build version. Mirrors mobile #390/#398, with
+the relay URL as a documented desktop addition.
 
 Introduced in [#333](../codebase/333.md) as a chrome-only scaffold (the scaffold child of the #150
 split; the other child, #332, shipped the data path: [#339](../codebase/339.md)'s IPC surface +
@@ -19,9 +21,14 @@ a live archived-conversations count derived from the existing
 then added a "Pair another server" row below the Server row that re-opens the existing
 [pairing screen](pairing-input-screen.md) as a new [paired-shell](paired-shell.md) sub-route, letting the
 user switch which daemon desktop drives without a relaunch — the last open follow-up on the #150 line.
+[#404](../codebase/404.md) then inserted a Defaults section between Connection and Storage, holding a
+single interactive Default-workspace row that reads and writes the [#403](../codebase/403.md)
+default-workspace preference and opens the [#383](../codebase/383.md) recent-workspaces picker to change
+it (a #352 split sibling — #352 itself split from the #151 line's Defaults/Push follow-ups).
 Renderer-only throughout — no keys, sockets, or tokens touched directly (the Server row reads only the
-vetted, non-secret `serverId`/`relayUrl` pair off #340's store; the Storage row reads a derived count off
-the conversation-list store; the About row reads a compile-time constant; the Pair-another-server row
+vetted, non-secret `serverId`/`relayUrl` pair off #340's store; the Default-workspace row reads/writes a
+renderer-local, non-secret preference and sends no daemon command; the Storage row reads a derived count
+off the conversation-list store; the About row reads a compile-time constant; the Pair-another-server row
 fires pure navigation over the already-vetted pairing IPC surface, #152 security review PASS) — not
 security-sensitive except for #152's navigation-only reach into the pairing flow.
 
@@ -43,7 +50,12 @@ security-sensitive except for #152's navigation-only reach into the pairing flow
   existing pairing flow in place. Confirming a new pairing overwrites the single stored server record
   and the transport reconnects to the new daemon automatically; cancelling returns to Settings with the
   current server untouched — see [#152](../codebase/152.md).
-- Below the Connection section, a "Storage" heading (same `--color-primary` treatment) precedes a single
+- Below the Connection section, a "Defaults for new conversations" heading (same `--color-primary`
+  treatment) precedes a single interactive "Default workspace" row: a primary label over a secondary
+  line showing the current default (the stored path verbatim, or the client-owned "scratch" placeholder
+  when none has ever been chosen) and a trailing chevron. Activating it opens the recent-workspaces
+  picker; choosing an entry writes the new default and closes the picker — see [#404](../codebase/404.md).
+- Below the Defaults section, a "Storage" heading (same `--color-primary` treatment) precedes a single
   row reading "Archived conversations" with a secondary line — "N archived" for a loaded list (every N,
   including 0 and 1 — no singular/plural branch) or a neutral "—" placeholder before the conversation list
   has loaded. The count is a live derived read: it updates when an archive/restore round trip re-lists.
@@ -64,12 +76,15 @@ src/renderer/src/
     ├── channels/ChannelList.tsx          # + SettingsButton entry (in-file, unexported)
     ├── pairing/PairingScreen.tsx          # reused as-is on the new 'pairServer' route (#152, no edit)
     └── settings/
-        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152)
+        ├── SettingsScreen.tsx            # scaffold (#333) + mounts ServerInfoData/ServerRowControl (#334) + Defaults section (#404) + Storage section (#351) + About section (#350) + PairAnotherServerRow (#152)
         ├── ServerRow.tsx                 # pure ServerRow view + store-bound ServerRowControl (#334, new)
+        ├── DefaultWorkspaceRow.tsx       # pure DefaultWorkspaceRowView + store-bound DefaultWorkspaceRowControl + in-file DefaultWorkspacePickerSheet (#404, new)
         ├── ArchivedCountRow.tsx          # pure ArchivedCountRow view + store-bound ArchivedCountRowControl (#351, new)
-        └── settings.css                 # token-only, scaffold + Server row + Storage row + About row + Pair-another-server row styles (#333 + #334 + #351 + #350 + #152)
+        └── settings.css                 # token-only, scaffold + Server row + Default-workspace row + Storage row + About row + Pair-another-server row styles (#333 + #334 + #404 + #351 + #350 + #152)
 
 src/renderer/src/store/conversationListStore.ts  # + selectArchivedCount selector (#351)
+src/renderer/src/store/defaultWorkspaceStore.ts  # #403; read/write seam #404 consumes (documented separately)
+src/renderer/src/store/recentWorkspacesStore.ts + recentWorkspacesBridge.ts  # #382; picker data path #404 mounts while open
 
 src/renderer/src/version.d.ts             # ambient `declare const __APP_VERSION__: string` (#350, new)
 electron.vite.config.ts                   # + __APP_VERSION__ define, renderer block (#350)
@@ -201,6 +216,64 @@ shipped that loader dormant (zero consumers), so before #334 the store sat at `n
 `SettingsScreen` mounts only under the paired shell's `settings` route (post-pairing, [PairedShell](paired-shell.md)),
 a fresh fetch fires every time Settings opens rather than once at app launch.
 
+### The Defaults section (`DefaultWorkspaceRow.tsx`, #404)
+
+Inserted as a `settings__section` **between** Connection and Storage — mirroring how #351 placed Storage
+between Connection and About, to preserve the mobile design's relative vertical order (Defaults y=322
+above Storage y=910). Unlike every other row in this screen, the row is *interactive*: activating it
+opens a picker, so it follows the `PairAnotherServerRow` (#152) idiom — a native `<button>` with a
+trailing chevron — rather than the static `ServerRow`/`ArchivedCountRow` idiom:
+
+```ts
+export function DefaultWorkspaceRowView({
+  defaultWorkspace,
+  onActivate
+}: { defaultWorkspace: string | null; onActivate: () => void }): JSX.Element
+
+export function DefaultWorkspaceRowControl(): JSX.Element
+// useDefaultWorkspaceStore(selectDefaultWorkspace) + useState(open) → <DefaultWorkspaceRowView> + picker
+```
+
+`DefaultWorkspaceRowView` renders the primary label "Default workspace" over a secondary line showing
+`defaultWorkspace` verbatim, or the client-owned `'scratch'` placeholder constant when `null` (Figma
+17:59 — a copy string standing for the daemon's server-side scratch default, not a daemon-sourced
+string). No `aria-label`: the button's text content is its accessible name; the trailing chevron SVG is
+`aria-hidden`. `defaultWorkspace` is rendered whole and opaque as auto-escaped React children — never
+split, basenamed, or filesystem-resolved (the same posture `WorkspacePickerSheet`'s `row.path` uses).
+
+`DefaultWorkspaceRowControl` reads the store and owns the picker's open-state in local `useState` (ADR
+0006 — transient UI state, not the store). While open it mounts an in-file, non-exported
+`DefaultWorkspacePickerSheet` — the direct analog of [#383](../codebase/383.md)'s own
+`WorkspacePickerSheet` container, minus its conversation coupling:
+
+```ts
+function DefaultWorkspacePickerSheet({
+  activeCwd,
+  onClose
+}: { activeCwd: string | null; onClose: () => void }): JSX.Element
+```
+
+It mounts `<RecentWorkspacesData />` ([#382](../codebase/382.md)) as a sibling of
+`<WorkspacePickerSheetView>` ([#383](../codebase/383.md)'s pure view, reused as-is), so each open fires a
+fresh `requestRecentWorkspaces` and each close tears the subscription down — "fresh fetch per open" falls
+out of React mount/unmount rather than an explicit refetch call. The Escape-to-close `useEffect` is #383's
+verbatim. `activeCwd` is passed the current default so the matching picker row carries the built-in
+"default" pill. `onChoose` is the sole write path:
+
+```ts
+onChoose={(path) => {
+  defaultWorkspaceStore.getState().setDefaultWorkspace(path)
+  onClose()
+}}
+```
+
+— dereferencing the store setter only inside the callback, never at render, and firing **no** daemon
+command (unlike #383's own container, whose `onChoose` dispatches `change_workspace` against a live
+conversation — wrong here, since Settings writes a client preference, not a live conversation's
+workspace). `onCreateFolder` is deliberately not supplied: [#398](../codebase/398.md)'s create-folder
+dialog is conversation-scoped, so the picker's "Other → Create new folder" entry renders disabled rather
+than being wired to a non-conversation folder-creation path (out of scope).
+
 ### The Storage section (`ArchivedCountRow.tsx` + `conversationListStore.ts`, #351)
 
 Inserted as a `settings__section` **between** Connection and About — Figma's Storage section sits above
@@ -277,7 +350,11 @@ since the derived count string has no fixed length. `.settings__pair-another-row
 `--color-surface-container-high` hover, `--color-outline` focus-visible outline);
 `.settings__pair-another-label` mirrors the Server-row label's `--text-body-large-*` treatment; the
 chevron slot is `flex:0 0 auto`, 20×20, `--color-on-surface-variant` (a muted trailing affordance) — no
-new token introduced.
+new token introduced. `.settings__default-workspace-row` (#404) fuses the two prior idioms: the
+`.settings__pair-another-row` button-reset/hover/focus shell (it is also interactive) with the
+`.settings__server-row-text`-style two-line column (`-text`/`-label`/`-value`, `-value` carrying the same
+`overflow-wrap: anywhere` long-value guard as `-storage-row-count`); its `-chevron` mirrors
+`.settings__pair-another-chevron` — again no new token.
 
 ### Data flow
 
@@ -289,12 +366,25 @@ ChannelList SettingsButton.onClick
     → mounts <ServerInfoData />  → window.pyry.serverInfo() [once]
         → mapServerInfo → setServerInfo → serverInfoStore
     → mounts <ServerRowControl /> → useServerInfoStore(selectServerInfo) → <ServerRow serverInfo=… />
+    → mounts <DefaultWorkspaceRowControl /> → useDefaultWorkspaceStore(selectDefaultWorkspace)
+        → <DefaultWorkspaceRowView defaultWorkspace=… onActivate={() => setOpen(true)} />
     → mounts <ArchivedCountRowControl /> → useConversationListStore(selectArchivedCount) → <ArchivedCountRow archivedCount=… />
     → renders the About section: `Version ${__APP_VERSION__}` (no fetch, no store — substituted at build time)
     → renders <PairAnotherServerRow onActivate={onPairAnother} />
 
 conversationUpdated (archive/restore) → ConversationListData re-list → setConversations
   → selectArchivedCount recomputes → ArchivedCountRowControl re-renders iff the count itself changed
+
+DefaultWorkspaceRowView.onActivate (#404)
+  → DefaultWorkspaceRowControl setOpen(true) → mounts <DefaultWorkspacePickerSheet activeCwd=… onClose=… />
+    → mounts <RecentWorkspacesData />  → window.pyry.sendCommand({type:'requestRecentWorkspaces'}) [once per open]
+        → recentWorkspacesReceived → setRecentWorkspaces → recentWorkspacesStore
+    → renders <WorkspacePickerSheetView workspaces=… activeCwd=… onChoose=… onClose=… />
+      row click → onChoose(path)
+        → defaultWorkspaceStore.getState().setDefaultWorkspace(path)  [no daemon command]
+        → onClose() → setOpen(false) → picker sheet unmounts (RecentWorkspacesData subscription torn down)
+      Escape / onClose → setOpen(false) → picker sheet unmounts
+    → DefaultWorkspaceRowControl re-renders with the new store value on the next tick
 
 SettingsScreen BackControl.onClick
   → dispatch({ type: 'back' }) → nextPairedRoute('settings', back) = 'list' → ChannelList
@@ -311,10 +401,15 @@ PairAnotherServerRow.onClick (#152)
 The nav shell (`pairedRoute.ts`/`PairedShell.tsx`) added no store, IPC, wire, or daemon event — that
 part is still exactly the screen-local `useReducer` from #333. #334 wires the pre-existing
 [server-info store](server-info-store.md) into the tree; the store and its channel are entirely #339/#340's.
-#351's Storage section adds no new data path either: it reads the pre-existing
-[conversation list store](conversation-list-store.md) through a new selector, and that store is already
-kept live by the app-level `ConversationListData` bridge. #350's About section adds no runtime data flow
-at all — the value is fixed at build time, so there is nothing to fetch or subscribe to.
+#404's Defaults section reads and writes the pre-existing [default-workspace store](default-workspace-store.md)
+(#403) and reuses the pre-existing [recent-workspaces store](recent-workspaces-store.md)/bridge (#382)
+and [`WorkspacePickerSheetView`](conversation-shell.md#workspace-picker-sheet-383) (#383) for its picker —
+no new store, wire type, or daemon command; the sole wire traffic is the pre-existing
+`requestRecentWorkspaces` fetch, re-fired fresh on every picker open. #351's Storage section adds no new
+data path either: it reads the pre-existing [conversation list store](conversation-list-store.md) through
+a new selector, and that store is already kept live by the app-level `ConversationListData` bridge. #350's
+About section adds no runtime data flow at all — the value is fixed at build time, so there is nothing to
+fetch or subscribe to.
 
 ## Edge cases and limitations
 
@@ -329,6 +424,16 @@ at all — the value is fixed at build time, so there is nothing to fetch or sub
 - **No trailing chevron.** Mobile's Server row (17:12) has a navigate-to-detail chevron (17:16); desktop
   has no server-detail screen for it to lead to, so it's omitted rather than rendered dead. The Storage
   row (17:97) omits its own chevron for the same reason — no archive browse screen exists yet (#153/#347).
+  The Default-workspace row (#404) is the exception: it **keeps** its chevron, like the Pair-another-server
+  row, because it genuinely opens something (the recent-workspaces picker).
+- **No client-side way to clear the default back to `null`.** The Default-workspace row's picker only
+  ever writes a concrete chosen path via `onChoose`; nothing in the #404 UI calls
+  `setDefaultWorkspace(null)`. `null` is reachable today only via a fresh install (no `localStorage` key
+  written yet) or by clearing it outside the app. A "reset to scratch" affordance is not in the Figma and
+  was out of scope for this ticket.
+- **The create-folder picker entry stays inert here.** The Default-workspace row's picker supplies no
+  `onCreateFolder`, so the "Other → Create new folder" entry renders disabled — [#398](../codebase/398.md)'s
+  `CreateFolderDialog` promotes onto a live conversation, which doesn't exist in the Settings context.
 - **The Storage row's `null` vs. `0` distinction is load-bearing and easy to erode.** `conversations:
   null` (not yet loaded) and a loaded `[]` (zero archived) must stay distinct — collapsing them would
   regress the placeholder to a spurious "0 archived" during the brief pre-load window. Any future selector
@@ -336,7 +441,11 @@ at all — the value is fixed at build time, so there is nothing to fetch or sub
 - **The Storage row's populated branch is untestable through `SettingsScreen`'s server-render test** —
   same zustand-v5 gotcha as the Server row: `renderToStaticMarkup` only ever sees the store's initial
   `null`. The count matrix (0/1/5/mixed) is proven on `ArchivedCountRow`'s pure view directly, not through
-  the container.
+  the container. The Default-workspace row (#404) has the identical gotcha: under server render
+  `defaultWorkspaceStore` hydrates to `null` (its own `typeof window` import guard), so
+  `SettingsScreen.test.tsx` only ever exercises the "scratch" placeholder branch — the non-null path
+  matrix is proven on `DefaultWorkspaceRowView` directly, and the picker's open/choose interaction isn't
+  exercisable under `renderToStaticMarkup` at all (untested reviewed glue, like #383's own container).
 - **No stack-aware back.** `settings` → `back` always lands on `list`; the `pairServer` sub-route added
   by [#152](../codebase/152.md) sidesteps rather than solves this — its two exits are their own explicit
   nav arms (`pairServerCancelled`/`pairServerPaired`), not a reuse of `back`, precisely because a future
@@ -376,6 +485,14 @@ at all — the value is fixed at build time, so there is nothing to fetch or sub
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — the store
   [#351](../codebase/351.md)'s `selectArchivedCount` selector reads, kept live by the same
   `ConversationListData` bridge the Channel List home also depends on.
+- [Default-workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) —
+  the client-owned preference [#404](../codebase/404.md)'s Default-workspace row reads and writes; this
+  screen is that store's only UI consumer.
+- [Conversation shell](conversation-shell.md#workspace-picker-sheet-383) / [#383 codebase notes](../codebase/383.md)
+  — `WorkspacePickerSheetView`, the pure picker view [#404](../codebase/404.md) reuses (not its
+  conversation-coupled container).
+- [Recent-workspaces store](recent-workspaces-store.md) / [#382 codebase notes](../codebase/382.md) —
+  the store + `RecentWorkspacesData` bridge [#404](../codebase/404.md)'s picker sheet mounts while open.
 - [#330 codebase notes](../codebase/330.md) — the `ConnectionStatusIndicator`/`Control` view/container
   precedent `ServerRow`/`ServerRowControl` follows, and the `aria-label="Connection status"` marker this
   screen's empty host slot deliberately avoids duplicating.
@@ -392,6 +509,12 @@ at all — the value is fixed at build time, so there is nothing to fetch or sub
 - [#152 codebase notes](../codebase/152.md) · Spec: `docs/specs/architecture/152-pair-another-server-from-settings.md`
   — adds the "Pair another server" row and the `pairServer` sub-route it opens; the last open follow-up
   on the #150 line for the Connection section.
+- [#403 codebase notes](../codebase/403.md) · Spec: `docs/specs/architecture/403-default-workspace-persist-apply.md`
+  — the data half of the Defaults section: the persisted store and its read/write seam, no UI.
+- [#404 codebase notes](../codebase/404.md) · Spec: `docs/specs/architecture/404-default-workspace-row.md`
+  — inserts the Defaults section and its Default-workspace row between Connection and Storage; a #352
+  split sibling of #403 (data half) and #405 (model/effort/YOLO rows, still daemon-blocked).
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the reused
   `PairingScreen` paste→review→confirm flow #152 re-opens as a paired sub-route.
-- Remaining follow-ups: #151 split siblings #352 (Defaults), #353 (Push), both still Inbox.
+- Remaining follow-ups: #151 split sibling #353 (Push), still Inbox; #352 split sibling #405
+  (model/effort/YOLO rows of the Defaults section), daemon-blocked.

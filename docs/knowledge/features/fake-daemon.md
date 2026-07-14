@@ -23,7 +23,9 @@ export function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeDaemon>
 
 export interface FakeDaemonOptions {
   url: string                                             // forwarder base URL; the daemon dials `${url}/v1/server`
-  buildReply?: (inboundPlaintext: Uint8Array) => Uint8Array  // default: echo the inbound plaintext verbatim
+  buildReply?: (inboundPlaintext: Uint8Array) => Uint8Array  // default: echo the inbound plaintext verbatim; ignored when buildReplyFrames is set
+  buildReplyFrames?: (inboundPlaintext: Uint8Array) => Uint8Array[]  // streams an ordered list of plaintexts, each
+                                                          //   sealed as its own noise_msg (#116); takes precedence over buildReply
   helloAck?: Partial<HelloAckPayload>                     // defaults: v2 / 'fake-daemon' / 'conn-1' / []
   loadTimeoutMs?: number                                  // forwarded to loadNoiseLib as its load deadline
   rekeyResumeMessage?: Uint8Array                         // plaintext sealed under the NEW keys after a rekey swap (#112);
@@ -160,5 +162,6 @@ store, [#197](../codebase/197.md)) can reuse this capability unchanged.
 - [Noise session](noise-session.md) / [#111](../codebase/111.md) — the real client session's rekey re-handshake + atomic swap this daemon's rekey-initiator capability ([#112](../codebase/112.md)) is the responder-side twin of; the assembled-stack e2e ([`daemonConnection.roundtrip.test.ts`](daemon-connection.md), #89) drives them together through a daemon-initiated rekey.
 - [#91 codebase notes](../codebase/91.md) · Spec: `docs/specs/architecture/91-fake-daemon-noise-responder-roundtrip.md` · PR [#95](https://github.com/pyrycode/pyrycode-desktop/pull/95). Split from [#88](https://github.com/pyrycode/pyrycode-desktop/issues/88); blocked-by #90.
 - Consumer: [#89](../codebase/89.md) — the round-trip test that drives this daemon, overriding `buildReply` to return `message`/`message_chunk` envelopes (the richer reply this doc forecast). **Landed.**
+- Consumer: [#435](../codebase/435.md) — the milestone UI e2e specs (#93/#94) use a per-run `buildReply`/`buildReplyFrames` to seed a one-row `conversations` reply, giving ChannelList a clickable row so the drive can reach the conversation thread through real product UI; #94 additionally dispatches `buildReplyFrames` on the decoded inbound type (`send_message` → `[assistant_delta, turn_end]`, everything else → the row seed).
 - [#416 codebase notes](../codebase/416.md) — adds the reconnect capability (`handleReconnect`, `pushFrame`, `reconnectResendFrames`, § above), narrows the leg-boundary module-header claim to "routing only," and the genuine-reconnect e2e that proves [#415](../codebase/415.md)'s renderer reconcile against a real supervisor re-dial through this daemon + the [fake relay forwarder](fake-relay-forwarder.md)'s matching `dropClientLeg` capability.
 - Cross-project prior art: pyrycode `fakerelay-harness.md` + the fake-phone peer (`internal/e2e`, #295 tree) — the same forwarder → fake-peer → consuming-test phasing; the desktop daemon deliberately drops the Go surface and ports only the structuring rationale.

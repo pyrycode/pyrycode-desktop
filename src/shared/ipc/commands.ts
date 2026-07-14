@@ -42,6 +42,26 @@ import type {
  */
 export type AnswerModalCommandPayload = Omit<ModalAnswerPayload, 'answer_token'>
 
+/**
+ * The closed set of push-notification kinds the renderer may ask main to raise (#391). A sealed
+ * enum, NEVER free text: the main process owns the copy table that maps each kind to a static
+ * title/body, so it is impossible by construction for daemon-relayed content (a permission-prompt
+ * title, an assistant message, a workspace path) to ride into an OS notification. Add a kind here
+ * only alongside its copy in fireNotification's NOTIFICATION_COPY (a Record<NotifyKind, …>, so a
+ * new member won't type-check until it has copy).
+ */
+export type NotifyKind = 'turn-complete' | 'prompt'
+
+/**
+ * The `notify` command payload (#391). Defined HERE, not imported from ../wire/types — unlike every
+ * other payload-bearing member, this command is a MAIN-LOCAL side-effect that never reaches the
+ * transport, so its type is client-internal (like the derived AnswerModalCommandPayload above). It
+ * carries only the closed `kind` enum — no title/body free text, no conversation id, no secret.
+ */
+export interface NotifyPayload {
+  kind: NotifyKind
+}
+
 /** The IPC channel every typed renderer command travels on, renderer → main.
  *  Single source of truth: the preload sender ships on it, the main receiver listens on it.
  *  A mismatch would silently drop every command, so both sides reference this constant. */
@@ -91,7 +111,12 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * (`conversation_id` + `queued_msg_id`) to ask the daemon to drop one queued message — ungated (#720),
  * so the payload carries NO token (no `Omit`-derivative, unlike `answerModal`); and the bare `interrupt`
  * (#306), which carries NO payload — it stops the running turn (a fire-and-forget bare control frame the
- * daemon maps to a single claude Esc; daemon SSOT pyrycode #707). No member
+ * daemon maps to a single claude Esc; daemon SSOT pyrycode #707); and `notify` (#391), whose `payload`
+ * is NotifyPayload — the sole member whose payload type is defined in THIS file, not imported from
+ * ../wire/types, because it is a MAIN-LOCAL side-effect command that never reaches the transport. It
+ * carries only the closed `kind` enum (`turn-complete` | `prompt`) — no free-text title/body, no id, no
+ * secret — which main maps to a static copy table to raise an OS notification when the window is unfocused.
+ * No member
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
  *
@@ -118,6 +143,7 @@ export type RendererCommand =
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
   | { type: 'interrupt' }
+  | { type: 'notify'; payload: NotifyPayload }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -229,6 +255,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'interrupt':
       // Bare member (#306): no payload to validate, so a well-formed `type` is complete acceptance.
       return true
+    case 'notify':
+      return 'payload' in value && isNotifyPayload(value.payload)
     default:
       return false
   }
@@ -437,4 +465,17 @@ function isDequeueMessagePayload(value: unknown): value is DequeueMessagePayload
     'queued_msg_id' in value &&
     typeof value.queued_msg_id === 'number'
   )
+}
+
+/** The untrusted renderer→main boundary guard for the notify payload (#391). CRITICALLY UNLIKE every
+ *  sibling is*Payload above — which check `typeof value.field === 'string'` and so accept ANY string —
+ *  this guard tests CLOSED-SET MEMBERSHIP: `kind` must equal one of the two NotifyKind literals. This is
+ *  the security-relevant line of the slice: a `typeof === 'string'` check here would let an arbitrary,
+ *  possibly daemon-derived string pass the boundary and later map to no copy at all, defeating the
+ *  by-construction guarantee that no free text can ride into an OS notification. A non-object, a missing
+ *  `kind`, a non-string `kind`, and any string outside the set are all rejected. Extra fields are ignored
+ *  (structural minimum, consistent with the other guards). Pure; never throws. */
+function isNotifyPayload(value: unknown): value is NotifyPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'kind' in value && (value.kind === 'turn-complete' || value.kind === 'prompt')
 }

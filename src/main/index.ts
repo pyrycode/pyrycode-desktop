@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification, session, shell } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { hostname } from 'os'
@@ -20,6 +20,7 @@ import { createDaemonConnection } from './daemonConnection'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent } from './emitDaemonEvent'
+import { fireNotification } from './fireNotification'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
@@ -351,6 +352,17 @@ app.whenReady().then(() => {
         return
       case 'requestDebugBundle':
         downloader.request()
+        return
+      case 'notify':
+        // Main-local side effect, no connection method: raise an OS notification only when the window
+        // is unfocused. Focus is queried at fire-time (one synchronous isFocused(), no stateful
+        // tracker); the kind→copy mapping is owned by the module, so no command field supplies text.
+        // Dormant — no renderer sends `notify` yet (the trigger is #392). Closes mainWindow.isFocused()
+        // and Electron's Notification, exactly as the root closes downloadsDir into saveDebugBundle.
+        fireNotification(command.payload.kind, {
+          isWindowFocused: () => mainWindow.isFocused(),
+          Notification
+        })
         return
     }
   })

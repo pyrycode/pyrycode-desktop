@@ -8,7 +8,8 @@ import {
   dequeueMessageCommand,
   interruptCommand,
   type RendererCommand,
-  type AnswerModalCommandPayload
+  type AnswerModalCommandPayload,
+  type NotifyPayload
 } from './commands'
 import type {
   SendMessagePayload,
@@ -656,5 +657,43 @@ describe('isRendererCommand', () => {
     // A missing key (either field) is rejected.
     expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { queued_msg_id: 7 } })).toBe(false)
+  })
+
+  it('accepts a well-formed notify command for each closed kind (#391)', () => {
+    // The ONLY member whose guard tests closed-set membership, not `typeof === "string"`. No
+    // constructor exists (the requestSnapshot precedent): #392 builds the literal inline, proven
+    // here through inline literals typed as the union.
+    const turnComplete: RendererCommand = { type: 'notify', payload: { kind: 'turn-complete' } }
+    const prompt: RendererCommand = { type: 'notify', payload: { kind: 'prompt' } }
+    expect(isRendererCommand(turnComplete)).toBe(true)
+    expect(isRendererCommand(prompt)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum), like the other members.
+    const payload: NotifyPayload = { kind: 'turn-complete' }
+    expect(isRendererCommand({ type: 'notify', payload, extra: 1 })).toBe(true)
+  })
+
+  it('rejects a notify with a missing or null payload (#391)', () => {
+    expect(isRendererCommand({ type: 'notify' })).toBe(false)
+    expect(isRendererCommand({ type: 'notify', payload: null })).toBe(false)
+  })
+
+  it('rejects a notify whose payload has no kind (#391)', () => {
+    expect(isRendererCommand({ type: 'notify', payload: {} })).toBe(false)
+  })
+
+  it('rejects a notify whose kind is outside the closed set — free text cannot ride in (#391)', () => {
+    // The AC2 keystone: unlike every other is*Payload (which accepts ANY string), this guard tests
+    // closed-set membership. An arbitrary, possibly daemon-derived string is rejected, so it can never
+    // map to notification copy — the by-construction guarantee that no relayed text reaches an OS notice.
+    const t = 'notify'
+    expect(isRendererCommand({ type: t, payload: { kind: 'evil' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: '' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: 'Permission prompt: rm -rf /' } })).toBe(false)
+  })
+
+  it('rejects a notify whose kind is a non-string (#391)', () => {
+    const t = 'notify'
+    expect(isRendererCommand({ type: t, payload: { kind: 42 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { kind: null } })).toBe(false)
   })
 })

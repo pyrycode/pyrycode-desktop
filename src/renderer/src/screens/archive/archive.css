@@ -129,3 +129,97 @@
   flex-direction: column;
   padding: var(--space-1) 0 var(--space-6);
 }
+
+/* #348 — the archived restore rows and the per-tab empty state that fill the tab panel (Figma 18:18).
+   Each row/subtitle/restore/empty rule clones the equivalent .channel-list__ token set (channels.css)
+   — duplicated rather than extracted to a shared class so this slice touches no adjacent stylesheet
+   (the #347 archive.css convention). No color / type / spacing literal — theme tokens only; the bare
+   structural values (100%, the 1px focus outline) are layout geometry. */
+
+/* One archived row (Figma 18:19) — a flex row: the text column then the trailing restore control.
+   gap-12 / px-16 py-12 map to --space-3 / --space-4 · --space-3. */
+.archive__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* The text column (Figma 18:20) — title over subtitle, 2px gap → --space-1 (a +2px delta, the tab
+   padding mapping precedent). min-width:0 lets the title ellipsize inside the flex row rather than
+   pushing the restore control off the edge. */
+.archive__row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* The row title (Figma 18:21) — title-medium, on-surface. Clones .channel-list__title's tokens;
+   ellipsizes so an arbitrarily long untrusted name is bounded rather than blowing out the row. */
+.archive__row-title {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface);
+  font-size: var(--text-title-medium-size);
+  line-height: var(--text-title-medium-line);
+  letter-spacing: var(--text-title-medium-tracking);
+  font-weight: var(--text-title-medium-weight);
+}
+
+/* The "Archived <relative time>" subtitle (Figma 18:22) — muted body-small at 75% opacity. Clones
+   .channel-list__time's tokens. */
+.archive__subtitle {
+  white-space: nowrap;
+  color: var(--color-on-surface-variant);
+  opacity: 0.75;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The restore affordance (Figma 18:23's 40px frame around the 18:24 glyph) — an icon-only trailing
+   button. Clones .channel-list__save: de-emphasized on-surface-variant, a round hover target, a
+   focus-visible outline. --space-2 padding around the 24px glyph makes the ~40px frame. */
+.archive__restore {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+}
+
+.archive__restore:hover {
+  background: var(--color-surface-container);
+}
+
+.archive__restore:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.archive__restore-icon {
+  display: block;
+}
+
+/* The per-tab loaded-zero empty state (no Figma node — mirrors mobile #312 / .channel-list__empty). A
+   centered neutral body-medium message. */
+.archive__empty {
+  margin: 0;
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}

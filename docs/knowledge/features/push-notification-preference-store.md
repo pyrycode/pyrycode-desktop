@@ -5,10 +5,9 @@ a `boolean` slice that survives an app restart, so the user's choice to be (or n
 an OS notification is remembered.
 
 Introduced in [#408](../codebase/408.md), the **data half** of the push-notification toggle. Split
-from [#353](https://github.com/pyrycode/pyrycode-desktop/issues/353). Renders nothing — the Settings
-row that lets the user *change* the preference is
-[#409](https://github.com/pyrycode/pyrycode-desktop/issues/409) (Figma 17-64, blocked-by this
-ticket).
+from [#353](https://github.com/pyrycode/pyrycode-desktop/issues/353). Renders nothing itself — the
+Settings row that lets the user *change* the preference, [#409](../codebase/409.md) (Figma 17-64,
+blocked-by this ticket), has since shipped and is this store's write consumer.
 
 ## What it does
 
@@ -101,15 +100,17 @@ Two behaviors:
 
 - **Import surface:** `import { usePushNotificationPrefStore, selectPushNotificationsEnabled } from
   '../../store/pushNotificationPrefStore'`.
-- **Not yet consumed.** Both intended consumers are still open:
-  - **#392** (renderer trigger, still blocked) will read
-    `usePushNotificationPrefStore(selectPushNotificationsEnabled)` — or `pushNotificationPrefStore.
-    getState()` at fire-time — before dispatching the `notify` command described in [Push
-    notifications](push-notifications.md).
-  - **#409** (Settings toggle UI, Figma 17-64, blocked-by this ticket) will dispatch into
-    `pushNotificationPrefStore.getState().setPushNotificationsEnabled(next)`, the same
-    `getState().setter(...)`-from-callback idiom [#404](../codebase/404.md) established for
-    `defaultWorkspaceStore` (no standalone exported setter function).
+- **The write consumer has shipped.** [#409](../codebase/409.md) (Settings toggle UI, Figma 17-64) —
+  the [Settings screen](settings-screen.md)'s Notifications section — reads
+  `usePushNotificationPrefStore(selectPushNotificationsEnabled)` to drive its switch's `aria-checked`
+  and on/off styling, and dispatches into
+  `pushNotificationPrefStore.getState().setPushNotificationsEnabled(next)` on toggle, the same
+  `getState().setter(...)`-from-callback idiom [#404](../codebase/404.md) established for
+  `defaultWorkspaceStore` (no standalone exported setter function).
+- **The read consumer is still open.** **#392** (renderer trigger, still blocked) will read
+  `usePushNotificationPrefStore(selectPushNotificationsEnabled)` — or `pushNotificationPrefStore.
+  getState()` at fire-time — before dispatching the `notify` command described in [Push
+  notifications](push-notifications.md).
 
 ## Edge cases and limitations
 
@@ -136,5 +137,6 @@ Two behaviors:
   this preference will gate once #392 reads it and fires `notify` conditionally.
 - [#408 codebase notes](../codebase/408.md) — implementation summary, the two deltas vs. #403, and
   patterns established.
+- [Settings screen](settings-screen.md) / [#409 codebase notes](../codebase/409.md) — the Notifications
+  section's push-toggle row, the write consumer (shipped).
 - #392 (renderer trigger, blocked-by this ticket, not yet built) — the read consumer.
-- #409 (Settings toggle UI, Figma 17-64, blocked-by this ticket, not yet built) — the write consumer.

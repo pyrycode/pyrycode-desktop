@@ -34,6 +34,9 @@ transport, or new store/wire code, so not security-sensitive.
 - Each Recent (unpromoted) row carries a trailing [Save-as-channel](save-as-channel-dialog.md)
   affordance; saved Channel rows carry none. Added by [#274](../codebase/274.md) — see § The row's
   save affordance below.
+- Each saved (promoted) Channel row carries a trailing [Rename](rename-conversation-dialog.md)
+  affordance; Recent rows carry none — the exact symmetric counterpart, so no row ever carries two
+  trailing buttons. Added by [#360](../codebase/360.md).
 
 ## Why last-activity time, not a message preview
 
@@ -100,14 +103,18 @@ keying).
 ### The row's save affordance (`ChannelList.tsx`, added by #274)
 
 An interactive control cannot nest inside a `<button>`, so `Row` is no longer a single button: it's
-now a `.channel-list__row` flex wrapper around two sibling children — `.channel-list__row-open` (the
-original button, `onClick={onOpen}`, `flex: 1 1 auto; min-width: 0` so the title still ellipsizes)
-and an optional trailing icon-only `.channel-list__save` (`aria-label="Save as channel"`). `Row`
-gained `onSaveAsChannel?: () => void`; the Recent `.map` passes it per-row, the Channels `.map`
-passes none — so the affordance is structurally absent on saved rows, not merely hidden by CSS. The
-container owns the resulting [Save-as-channel dialog](save-as-channel-dialog.md)'s open/name state
-as local `useState`, rendered as a sibling of `ChannelListView`. See its feature doc for the dialog
-itself and [#274 codebase notes](../codebase/274.md) for the restructure's lessons learned.
+now a `.channel-list__row` flex wrapper around sibling children — `.channel-list__row-open` (the
+original button, `onClick={onOpen}`, `flex: 1 1 auto; min-width: 0` so the title still ellipsizes),
+an optional trailing icon-only `.channel-list__save` (`aria-label="Save as channel"`), and an
+optional trailing icon-only `.channel-list__rename` (`aria-label="Rename"`, added by
+[#360](../codebase/360.md)). `Row` gained `onSaveAsChannel?: () => void` and (later)
+`onRename?: () => void`; `renderBody` passes `onSaveAsChannel` only to the Recent `.map` and
+`onRename` only to the Channels `.map` — the two affordance sets are disjoint by section, so each
+row carries at most one trailing button, structurally, not merely hidden by CSS. The container owns
+each dialog's open/name state as its own local `useState` pair, rendered as siblings of
+`ChannelListView`. See [Save-as-channel dialog](save-as-channel-dialog.md) and
+[Rename dialog](rename-conversation-dialog.md) for the dialogs themselves, and
+[#274](../codebase/274.md)/[#360](../codebase/360.md) codebase notes for lessons learned.
 
 ### CSS (`channels.css`)
 
@@ -160,6 +167,8 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
 - [Save-as-channel dialog](save-as-channel-dialog.md) / [#274](../codebase/274.md) — the per-row
   save affordance and naming dialog; restructured `Row` into the open-action + save-affordance
   sibling shape described above.
+- [Rename dialog](rename-conversation-dialog.md) / [#360](../codebase/360.md) — the per-row rename
+  affordance on saved Channel rows, the symmetric counterpart of Save-as-channel.
 - [#141 codebase notes](../codebase/141.md) · Spec: `docs/specs/architecture/141-channel-list-screen.md`
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open).

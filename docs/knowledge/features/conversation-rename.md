@@ -1,14 +1,16 @@
 # Conversation rename (transport)
 
 The **transport data path** that lets the desktop client ask the pyry daemon to change a
-conversation's stored name, so a future Rename dialog can update `ConversationSummary.name` on a row
-the [conversation list store](conversation-list-store.md) already holds.
+conversation's stored name, updating `ConversationSummary.name` on a row the
+[conversation list store](conversation-list-store.md) already holds. Its caller is the
+[Rename dialog](rename-conversation-dialog.md) (#360).
 
 Introduced in [#359](../codebase/359.md), split from #154 (transport `#359` / Rename dialog `#360`).
-Shipped dormant — fully wired and tested, with no caller at the time. #360's Rename dialog is its
-first caller. The closest structural twin of [conversation unarchive](conversation-unarchive.md)
-(#346) for plumbing (builder / method / dispatch), and of
-[conversation promote](conversation-promote.md) (#273) for the boundary guard (two required strings).
+Shipped dormant — fully wired and tested, with no caller at the time; #360's
+[Rename dialog](rename-conversation-dialog.md) is now its live caller. The closest structural twin
+of [conversation unarchive](conversation-unarchive.md) (#346) for plumbing (builder / method /
+dispatch), and of [conversation promote](conversation-promote.md) (#273) for the boundary guard
+(two required strings).
 
 ## The wire contract
 
@@ -62,7 +64,7 @@ bounds what reaches the wire. Same two-layer posture as #273/#346/#236.
 ## Data flow (wired by #360)
 
 ```
-Rename dialog Save (not yet built)
+Rename dialog Save (requestRenameConversation, rename-conversation-dialog.md)
   → { type: 'renameConversation', payload: { conversation_id, name } }  (renderer, built inline)
   → onCommand dispatch (src/main/index.ts)
   → connection.renameConversation(payload)                              (fresh literal, fire-and-forget)
@@ -74,13 +76,14 @@ Rename dialog Save (not yet built)
 
 ## Related
 
-- [#360](../codebase/360.md) — the Rename dialog, this verb's intended first caller (once shipped).
+- [Rename dialog + per-row affordance](rename-conversation-dialog.md) / [#360](../codebase/360.md)
+  — this verb's live caller.
 - [Conversation promote (transport)](conversation-promote.md) / [#273](../codebase/273.md) — the
   guard twin this slice clones (three required strings minus `cwd` → two).
 - [Conversation unarchive (transport)](conversation-unarchive.md) / [#346](../codebase/346.md) — the
   plumbing twin (builder / connection method / dispatch shape).
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — origin of
-  `ConversationSummary.name`, the field a future rename consumer will read post-rename.
+  `ConversationSummary.name`, the field the rename consumer reads post-rename.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — re-lists on
-  any `conversation_updated`, so a rename's new name lands automatically once #360 wires the caller.
+  any `conversation_updated`, so a rename's new name lands automatically.
 - [#359 codebase notes](../codebase/359.md) — implementation summary.

@@ -2,6 +2,7 @@ import './settings.css'
 import { ServerInfoData } from '../../store/serverInfoLoader'
 import { ServerRowControl } from './ServerRow'
 import { DefaultWorkspaceRowControl } from './DefaultWorkspaceRow'
+import { PushNotificationRowControl } from './PushNotificationRow'
 import { ArchivedCountRowControl } from './ArchivedCountRow'
 
 // Client-owned copy — module-level constants (the EMPTY_THREAD_COPY idiom), never daemon strings. The
@@ -12,6 +13,7 @@ const SETTINGS_COPY = {
   back: 'Back',
   connection: 'Connection',
   defaults: 'Defaults for new conversations',
+  notifications: 'Notifications',
   storage: 'Storage',
   about: 'About',
   pairAnother: 'Pair another server'
@@ -78,6 +80,18 @@ export function SettingsScreen({
           <h2 className="settings__section-header">{SETTINGS_COPY.defaults}</h2>
           <div className="settings__section-body">
             <DefaultWorkspaceRowControl />
+          </div>
+        </section>
+        {/* #409: the Notifications section (Figma 17:62 header / 17:64 row) — sits between Defaults and
+            Storage to preserve the mobile design's relative vertical order (Notifications y=610 above Storage
+            y=910), the same placement discipline #404/#351 used. A single store-bound push-toggle row; no
+            loader to mount — the row reads and writes the client-owned pushNotificationPrefStore (#408)
+            directly. The Figma section's second row "Notification sound" (17:69) is out of scope (no client-
+            or daemon-side infrastructure). */}
+        <section className="settings__section">
+          <h2 className="settings__section-header">{SETTINGS_COPY.notifications}</h2>
+          <div className="settings__section-body">
+            <PushNotificationRowControl />
           </div>
         </section>
         {/* #351: the Storage section (Figma 17-91…17-97) — sits between Connection and About to preserve

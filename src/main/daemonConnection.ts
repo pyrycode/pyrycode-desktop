@@ -423,6 +423,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // — every mutation runs to completion inside a synchronous setSessionSettings / onDriverEvent body, no
   // await between a read and a write (the nextEnvelopeId / outstandingAnswers single-writer rationale).
   const pendingSettings = new Map<number, string>()
+  // Envelope ids of outstanding create_workspace_folder requests, for the #396 rejection round-trip. A
+  // Set, not a Map: the workspaceFolderRejected event is BARE (no value to carry per entry, contrast
+  // pendingSettings' changeId) — only membership ("is this envelope id an outstanding create-folder
+  // request?") matters. Keyed by the request's unique envelope id (not a FIFO like outstandingAnswers,
+  // whose `error` carries no discriminating id), so a match is unambiguously the reply to THAT request.
+  // Set after a successful send in createWorkspaceFolder, matched by the reply's Envelope.in_reply_to and
+  // deleted in onDriverEvent, and cleared on each dial(). Single-writer — every mutation runs to completion
+  // inside a synchronous createWorkspaceFolder / onDriverEvent body, no await between a read and a write
+  // (the nextEnvelopeId / outstandingAnswers / pendingSettings single-writer rationale).
+  const pendingCreateFolders = new Set<number>()
 
   function emitFailed(code: string, message = messageFor(code)): void {
     emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false } })
@@ -498,6 +508,21 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               if (changeId !== undefined) {
                 pendingSettings.delete(inReplyTo)
                 emitDaemonEvent(sink, { type: 'sessionSettingsRejected', changeId })
+                return
+              }
+              // create_workspace_folder rejection correlation (#396), the settings-rejection sibling in the
+              // same unique-per-request-id tier. Correlate the content-free error to a pending
+              // create_workspace_folder request by Envelope.in_reply_to; a match consumes the frame
+              // ENTIRELY: emit the BARE rejection, drop the pending entry, and skip BOTH the reassembler.fail
+              // and the modal-FIFO shift below (AC4). An error correlated by a UNIQUE per-request envelope id
+              // is unambiguously the reply to THAT request — failing a healthy in-flight bundle or consuming
+              // the oldest modal answer on it would be a bug. Order relative to the settings check is
+              // immaterial: an envelope id is minted once, so at most one of the two sets can hold it. The
+              // emitted event reads NOTHING from the untrusted error payload — it is nullary by construction
+              // (AC3 no-echo); the numeric inReplyTo stays main-internal, never placed on the event.
+              if (pendingCreateFolders.has(inReplyTo)) {
+                pendingCreateFolders.delete(inReplyTo)
+                emitDaemonEvent(sink, { type: 'workspaceFolderRejected' })
                 return
               }
             }
@@ -1011,6 +1036,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // mid-bootstrap, or bootstrap-failed). A create-folder request has no consumer to fail; a request
     // sent while disconnected simply produces no reply.
     if (driver === null) return
+    // Capture the id BEFORE the build increments it, so the pending entry is keyed by this request's
+    // envelope id — the value the daemon echoes as in_reply_to on the rejecting error (#396).
+    const envelopeId = nextEnvelopeId
     try {
       // Build a FRESH literal naming exactly the two modeled fields — never a spread of `payload`. This
       // is the deterministic net that bounds the wire to exactly parent / name, ignoring any
@@ -1018,7 +1046,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / createConversation /
       // requestSnapshot — no second counter — so ids stay unique across interleaved calls.
       const bytes = buildCreateWorkspaceFolder({
-        id: nextEnvelopeId,
+        id: envelopeId,
         ts: now(),
         payload: {
           parent: payload.parent,
@@ -1027,6 +1055,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
+      // Record the pending request AFTER a successful send (the setSessionSettings order, #269): a
+      // build/send throw skips this (caught below), so no phantom entry is left for a reply that will
+      // never come. Removed by the correlated error in onDriverEvent, or abandoned on the next dial().
+      pendingCreateFolders.add(envelopeId)
     } catch {
       // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
       // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
@@ -1378,6 +1410,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // so a stale reply from a dead session can never correlate on the reconnected one. This is what makes
     // the recycled envelope ids (nextEnvelopeId restarts at 2 above) safe.
     pendingSettings.clear()
+    // Reset the create_workspace_folder pending set (#396, AC1): a reconnect abandons outstanding
+    // requests, so a stale envelope id from a dead session can never correlate an `error` on the
+    // reconnected one (which recycles ids from 2). The pendingSettings.clear() rationale, applied to the
+    // create-folder set.
+    pendingCreateFolders.clear()
     // Emitted synchronously, before any await, so status leaves "connecting" the moment the connect
     // begins (AC2). On the first start() the driver is null so the stop above is a no-op — no
     // behavior change from the original once-only start.

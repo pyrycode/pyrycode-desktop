@@ -242,6 +242,19 @@ export type DaemonEvent =
   // conversationDeleted-was-a-no-op-until-#376 precedent). No token, key, or raw frame can ride a bare
   // string path (AC-by-construction).
   | { type: 'workspaceFolderCreated'; path: string }
+  // The create_workspace_folder REJECTION arm (#396), the rejected twin of workspaceFolderCreated.
+  // Emitted by the MAIN-side correlation gate (daemonConnection.ts) when a content-free daemon `error`
+  // (#116) arrives whose `Envelope.in_reply_to` matches a pending create_workspace_folder request — the
+  // client learns its folder-creation request was rejected (a bad name — path separator, `..`, absolute,
+  // or empty) so the Create-folder dialog (#398) can stay open for correction rather than spin forever.
+  // BARE — carries NOTHING (contrast sessionSettingsRejected's `changeId` and modalAnswerRejected's
+  // `modalId`, each of which disambiguates concurrent requests): only ONE create-folder dialog is open at
+  // a time, so there is no concurrency to disambiguate, and the success twin workspaceFolderCreated carries
+  // only `path` with no correlation key — the rejection twin is symmetric and, being bare, is maximally
+  // content-free (AC3-by-construction: no field can hold a daemon-supplied byte, error code, message, path,
+  // or wire id). Consumed by #397 (round-trip store, not yet built), so all three exhaustive bridges no-op
+  // it for now — the workspaceFolderCreated-was-a-no-op precedent.
+  | { type: 'workspaceFolderRejected' }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
   // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is

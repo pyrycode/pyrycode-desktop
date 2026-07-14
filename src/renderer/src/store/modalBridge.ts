@@ -79,6 +79,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'conversationDeleted':
     case 'recentWorkspacesReceived':
     case 'workspaceFolderCreated':
+    case 'workspaceFolderRejected':
     case 'sessionTransition':
     case 'sessionSettingsUpdated':
     case 'sessionSettingsRejected':
@@ -92,8 +93,8 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // the #293 queue store (queueState), the #317 stall-render slice (stallDetected), the #318
       // display slice (screenSnapshotReceived), the #329 relay-link store (relayLinkChanged), the
       // #376 list-reflect slice (conversationDeleted), the #382 recent-workspaces store
-      // (recentWorkspacesReceived), and the #157 Create-folder dialog (workspaceFolderCreated) consume
-      // these — not the modal store.
+      // (recentWorkspacesReceived), the #157 Create-folder dialog (workspaceFolderCreated), and the #397
+      // round-trip store (workspaceFolderRejected) consume these — not the modal store.
       return null
     default:
       return assertNever(event)

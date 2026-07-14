@@ -51,6 +51,9 @@ type ModalEvent =
   | { type: 'rejected'; modalId: string }
   // #249: a LOCAL user action — dismissing a rejection banner. Never produced by the bridge.
   | { type: 'rejectionDismissed'; modalId: string }
+  // #415: the transport (re)connected — fires on EVERY supervisor (re)handshake, including the first
+  // connect. Payload-free; produced by the bridge from the `connected` DaemonEvent, ignoring its ack.
+  | { type: 'reconnected' }
 
 interface ModalState {
   outstanding: readonly ModalPrompt[]
@@ -92,6 +95,7 @@ on `event.type` with an `assertNever` default — the same discipline as `reduce
 | `dismissed` | remove the `ModalPrompt` whose `modalId` matches (spreads `state` so `rejections` survives). No match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4) — and does **not** touch `resolved`, the ordering-edge guard ([#195](../codebase/195.md)): a `dismissed` for a never-outstanding id must not poison `resolved`, or a later legitimate `shown` of that id would be wrongly suppressed. A genuine removal also records the id into `resolved` via `appendUnique` — `dismissed` is the single choke point a prompt leaves `outstanding` through (answer/cancel/remote/timeout all dispatch it), so this one arm covers "already answered or dismissed." `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. |
 | `rejected` ([#249](../codebase/249.md)) | append `modalId` to `rejections`, de-duplicated (`appendUnique`). Repeat id → **same `state` reference** (no churn); `outstanding` is untouched. |
 | `rejectionDismissed` ([#249](../codebase/249.md)) | remove `modalId` from `rejections` (`removeRejection`). Unknown/already-dismissed id → **same `state` reference**, a non-throwing no-op; `outstanding` is untouched. |
+| `reconnected` ([#415](../codebase/415.md)) | clears `outstanding` so the daemon's connect-time re-sends become the sole repopulation truth; a still-held prompt re-appends via the `shown` arm exactly once, absence means resolved-while-away and stays cleared. Spreads `state` so `rejections` and `resolved` survive by reference untouched — `resolved` surviving is what keeps the `shown` arm's resolved-first early-out suppressing an optimistically-answered prompt the daemon re-sends. `outstanding` already empty (first connect, or reconnect after everything resolved) → **same `state` reference**, no selector churn. |
 
 Note that `shown`/`dismissed` originally built their return value as `{ outstanding: … }` — #249 changed
 both to `{ ...state, outstanding: … }` so they stop silently dropping the (then-new) `rejections` field;
@@ -158,9 +162,10 @@ store](conversation-timeline-store.md) (`timelineStore.ts`, #202) wrapped `reduc
 answered-id no-op — the `resolved` field and the `shown` arm's three-case decision above. Confirmed the
 ADR's prediction: a one-arm reducer change, no representation refactor, because the model was
 id-addressed from the start.
-[#196](https://github.com/pyrycode/pyrycode-desktop/issues/196) (reconnect reconcile — filtering
-`outstanding` to a daemon-asserted id set on a fresh handshake) remains open; it builds on this store the
-same way.
+[#196](https://github.com/pyrycode/pyrycode-desktop/issues/196) (reconnect reconcile) split 2-way:
+**[#415](../codebase/415.md) (shipped)** — the `reconnected` arm above, clearing `outstanding` on every
+supervisor (re)handshake and letting the daemon's connect-time re-sends repopulate through the existing
+`shown` arm; sibling #197 (`queue_state` replacement-truth on reconnect, a separate store) remains open.
 
 ## Edge cases and limitations
 
@@ -182,10 +187,11 @@ same way.
   "resolution toast" this comment referred to shipped as [#249](../codebase/249.md)'s rejection surface
   — but it consumes a *different*, content-free event (`rejected`, carrying only `modalId`), not
   `dismissed`'s `outcome`/`source`; those two fields remain genuinely unconsumed.
-- **Reset-on-reconnect is still not modeled here.** A fresh Noise handshake resetting client control
-  state (#879's third sub-rule) is [#196](https://github.com/pyrycode/pyrycode-desktop/issues/196)'s,
-  not this ticket's — the `ModalEvent` union has no reset arm; connection state arrives as separate
-  `DaemonEvent`s handled elsewhere.
+- **Reset-on-reconnect ([#415](../codebase/415.md)).** A fresh Noise handshake resetting client control
+  state (#879's third sub-rule) clears `outstanding` via the `reconnected` arm, produced by
+  `modalBridge.ts` from the `connected` `DaemonEvent` that fires on every supervisor (re)handshake. Only
+  `outstanding` resets; `resolved`/`rejections` survive by reference. The sibling `queue_state` reset
+  (a different store) is [#197](https://github.com/pyrycode/pyrycode-desktop/issues/197), still open.
 - **Nothing to gate on here.** The `--allow-remote-permissions` grant is a daemon-side, per-device
   flag, not on the wire and not in `PairedServerRecord` — the desktop cannot self-gate. The follow-up
   renders and answers regardless; an ungranted answer round-trips to an `error` envelope.
@@ -224,3 +230,6 @@ same way.
   modal host ([Conversation shell](conversation-shell.md)).
 - [#195 codebase notes](../codebase/195.md) — match-and-replace by `modalId`: adds `resolved`, makes
   `shown` idempotent, confirms the ADR's "one-arm extension" prediction.
+- [#415 codebase notes](../codebase/415.md) — reconnect reconcile: the `reconnected` arm clearing
+  `outstanding` on every supervisor (re)handshake while preserving `resolved`/`rejections`, split-child A
+  of #196 (sibling #197 owns the separate `queue_state` reset).

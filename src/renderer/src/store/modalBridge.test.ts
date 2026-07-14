@@ -78,13 +78,21 @@ describe('translateModalEvent — the owned arms', () => {
     // A fresh named-field literal, not a pass-through of the DaemonEvent object.
     expect(translated).not.toBe(event)
   })
+
+  it('connected → a payload-free reconnected ModalEvent, ignoring the ack (#415)', () => {
+    const event: DaemonEvent = { type: 'connected', ack }
+    const translated = translateModalEvent(event)
+    // The re-handshake reset — carries nothing from the HelloAckPayload; the reset needs no field off it.
+    expect(translated).toEqual({ type: 'reconnected' })
+    expect(translated?.type).toBe('reconnected')
+  })
 })
 
 describe('translateModalEvent — every other arm returns null (the inverse filter)', () => {
   it('returns null for every arm that translates to no ModalEvent (the inverse filter)', () => {
     const others: DaemonEvent[] = [
       { type: 'connecting' },
-      { type: 'connected', ack },
+      // connected is no longer here — #415 flips it to a `reconnected` ModalEvent (asserted above).
       { type: 'disconnected' },
       { type: 'failed', error: wireErr },
       { type: 'messageReceived', message },

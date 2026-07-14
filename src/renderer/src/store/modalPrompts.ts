@@ -53,6 +53,11 @@ export type ModalEvent =
   // #249: a LOCAL user action — the user dismissed a rejection banner. Never produced by the bridge;
   // dispatched inline from the container, exactly as answer/cancel dispatch `dismissed` locally.
   | { type: 'rejectionDismissed'; modalId: string }
+  // #415: the transport (re)connected. Fires on EVERY supervisor (re)handshake, including the first
+  // connect. Reconciles `outstanding` against the daemon's connect-time re-sends by clearing it; the
+  // daemon then repopulates via `shown`, and absence = resolved-while-away. Carries no payload — the
+  // reset needs nothing from the connect ack. First-connect is the empty-`outstanding` no-op (AC4).
+  | { type: 'reconnected' }
 
 /**
  * The whole modal state: the ordered set of still-outstanding prompts, plus the rejection surface —
@@ -160,6 +165,14 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
       const rejections = removeRejection(state.rejections, event.modalId)
       // Unknown/already-dismissed id: removeRejection returned the same array — return the same state.
       return rejections === state.rejections ? state : { ...state, rejections }
+    }
+    case 'reconnected': {
+      // #415: on every (re)handshake, clear `outstanding` so the daemon's connect-time re-sends are the
+      // sole repopulation truth (a still-held prompt re-appends via `shown`, absence = resolved-while-away).
+      // Spread preserves `resolved` — keeping the `shown` arm's resolved-first early-out suppressing an
+      // optimistically-answered prompt the daemon re-sends — and `rejections`, which has no repopulation path.
+      if (state.outstanding.length === 0) return state // AC4: no churn on first / held-nothing connect
+      return { ...state, outstanding: [] }
     }
     default:
       return assertNever(event)

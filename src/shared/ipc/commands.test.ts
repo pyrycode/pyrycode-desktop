@@ -19,6 +19,7 @@ import type {
   UnarchiveConversationPayload,
   DeleteConversationPayload,
   RenameConversationPayload,
+  ChangeWorkspacePayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -464,6 +465,39 @@ describe('isRendererCommand', () => {
     // A missing key is rejected.
     expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { name: 'weekly' } })).toBe(false)
+  })
+
+  it('accepts a well-formed changeWorkspace command with both string fields (#379)', () => {
+    // Clones the rename guard with the second field renamed name → cwd: both fields are REQUIRED strings
+    // (a literal null, a missing key, and a non-string are all rejected). No constructor exists; the
+    // Workspace Picker (#157's UI slice) builds the literal inline.
+    const payload: ChangeWorkspacePayload = { conversation_id: 'c1', cwd: '/home/user/project' }
+    const command: RendererCommand = { type: 'changeWorkspace', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum); the main-side fresh literal drops it.
+    expect(isRendererCommand({ type: 'changeWorkspace', payload, extra: 1 })).toBe(true)
+  })
+
+  it('accepts a changeWorkspace with an empty-string cwd — the guard checks type, not emptiness (#379)', () => {
+    // An empty cwd is a valid wire string; the daemon polices the path server-side (#823). Pin that the
+    // guard does not over-reject.
+    const payload: ChangeWorkspacePayload = { conversation_id: 'c1', cwd: '' }
+    expect(isRendererCommand({ type: 'changeWorkspace', payload })).toBe(true)
+  })
+
+  it('rejects a changeWorkspace with a missing/null payload (#379)', () => {
+    expect(isRendererCommand({ type: 'changeWorkspace' })).toBe(false)
+    expect(isRendererCommand({ type: 'changeWorkspace', payload: null })).toBe(false)
+  })
+
+  it('rejects a changeWorkspace whose fields are wrong-typed, a literal null, or missing (#379)', () => {
+    const t = 'changeWorkspace'
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', cwd: 3 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', cwd: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: null, cwd: '/p' } })).toBe(false)
+    // A missing key is rejected.
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { cwd: '/p' } })).toBe(false)
   })
 
   it('accepts a setSessionSettings command with only session_id (all optionals omitted) (#263)', () => {

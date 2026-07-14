@@ -3,15 +3,16 @@
 The renderer's held copy of the daemon's recent-workspaces list — a dedicated, unidirectional
 Zustand store fed by a headless bridge that observes the [daemon-event
 channel](daemon-event-channel.md)'s `recentWorkspacesReceived` event and drives a de-duplicated
-one-shot `requestRecentWorkspaces` request, so the not-yet-built Workspace Picker (#157's remaining
-split-child) can read one source of truth.
+one-shot `requestRecentWorkspaces` request, so the [Workspace Picker
+sheet](conversation-shell.md#workspace-picker-sheet-383) (#157's remaining split-child) can read one
+source of truth.
 
 Introduced in [#382](../codebase/382.md), the renderer half of the `#380 transport → #382 renderer`
 split — the exact `#139 → #208` shape. #380 (transport, shipped PR#388) decoded the daemon's
 `recent_workspaces_list` reply into `recentWorkspacesReceived` and shipped the outbound
-`requestRecentWorkspaces` [command](command-channel.md), both dormant. This ticket shipped no
-visible surface — the store and its bridge ship dormant too; the Workspace Picker is the first
-consumer, on its own ticket.
+`requestRecentWorkspaces` [command](command-channel.md), both dormant. #382 shipped no visible
+surface — the store and its bridge shipped dormant too; [#383](../codebase/383.md) later mounted
+`RecentWorkspacesData` inside the Workspace Picker sheet, its first and (so far) only consumer.
 
 ## What it does
 
@@ -98,7 +99,7 @@ server-renders to empty markup without a bridge mock (the `ServerInfoData` invar
 ### Data flow
 
 ```
-picker mounts RecentWorkspacesData (future ticket, not yet built)
+WorkspacePickerSheet mounts RecentWorkspacesData while open (#383)
   → subscribe effect: window.pyry.onDaemonEvent → subscribeRecentWorkspaces (live immediately)
   → one-shot effect: requestRecentWorkspaces(window.pyry.sendCommand) → {type:'requestRecentWorkspaces'}
     → COMMAND_CHANNEL → onCommand → connection.requestRecentWorkspaces() [#380, already shipped]
@@ -107,7 +108,7 @@ daemon → recent_workspaces_list frame → parseInboundMessage → recentWorksp
   → DAEMON_EVENT_CHANNEL → subscribeRecentWorkspaces listener
     → translateRecentWorkspacesEvent → rows (or null → skip)
     → recentWorkspacesStore.setRecentWorkspaces(rows)   [whole-list replace]
-  → selectRecentWorkspaces / useRecentWorkspacesStore   (read by the future picker)
+  → selectRecentWorkspaces / useRecentWorkspacesStore   (read by WorkspacePickerSheet, #383)
 ```
 
 ## Configuration and usage
@@ -115,10 +116,10 @@ daemon → recent_workspaces_list frame → parseInboundMessage → recentWorksp
 - **Import surface:** `import { useRecentWorkspacesStore, selectRecentWorkspaces } from
   '@renderer/store/recentWorkspacesStore'` and `import { RecentWorkspacesData } from
   '@renderer/store/recentWorkspacesBridge'`.
-- **Ships dormant.** No consumer mounts `RecentWorkspacesData` in #382 — the Workspace Picker wires
-  the mount point on its own ticket (#157's remaining split-child) and decides whether to gate the
-  one-shot on `connected` (recent-workspaces is a paired-only surface, so the connection is expected
-  live at mount — no gate is added here, deliberately).
+- **Mounted by the Workspace Picker sheet** ([#383](../codebase/383.md)) — `WorkspacePickerSheet`
+  mounts `<RecentWorkspacesData />` only while the picker is open, so each open is a fresh instance →
+  fresh `useRef` → exactly one `requestRecentWorkspaces` per open, re-fetching on every reopen. No
+  gate on `connected` (recent-workspaces is a paired-only surface, expected live at mount).
 
 ## Edge cases and limitations
 
@@ -154,5 +155,8 @@ daemon → recent_workspaces_list frame → parseInboundMessage → recentWorksp
   connection-lifecycle gate).
 - [Conversation workspace change](conversation-workspace-change.md) / [#379 codebase
   notes](../codebase/379.md) — the sibling outbound slice of the same #157 Workspace Picker split
-  (`change_workspace`); together with this store, both wait on the not-yet-built picker UI.
+  (`change_workspace`); both are now wired by the same consumer, the picker UI.
+- [Workspace Picker sheet](conversation-shell.md#workspace-picker-sheet-383) / [#383 codebase
+  notes](../codebase/383.md) — the real consumer, mounting `RecentWorkspacesData` and reading
+  `selectRecentWorkspaces`.
 - [#382 codebase notes](../codebase/382.md) — implementation summary and patterns established.

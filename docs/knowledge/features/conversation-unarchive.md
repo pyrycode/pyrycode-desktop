@@ -23,9 +23,9 @@ export interface UnarchiveConversationPayload {
 
 The daemon (pyrycode/pyrycode#881) models `archive_conversation` and `unarchive_conversation` as
 one shared Go struct, `ArchiveConversationPayload{ConversationID string}`, and one parameterized
-handler. Desktop has no `archive_conversation` caller — the only surface is the restore/unarchive
-row — so only the unarchive verb is wired here. Do **not** add the symmetric verb without a real
-caller.
+handler. The symmetric `archive_conversation` verb is now also wired, as of
+[#363](../codebase/363.md) — see [conversation archive](conversation-archive.md) — shipped dormant
+until the Channel Info sheet's Archive action (#366) calls it.
 
 **Reply is a broadcast, not correlated.** The daemon confirms by clearing the durable archived
 flag, persisting eagerly, and replying with the same `conversation_updated` record `promote_conversation`
@@ -74,6 +74,9 @@ restore row click (ArchiveScreen, archive-screen.md)
 
 ## Related
 
+- [Conversation archive (transport)](conversation-archive.md) / [#363](../codebase/363.md) — the
+  now-wired mirror-image twin (sets the flag instead of clearing it), kept as a distinct payload
+  type on purpose.
 - [Archive screen](archive-screen.md) / [#348](../codebase/348.md) — the first (and so far only)
   caller: its restore row dispatches this command via `requestUnarchiveConversation`.
 - [Conversation promote (transport)](conversation-promote.md) / [#273](../codebase/273.md) — the

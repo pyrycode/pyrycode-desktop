@@ -33,16 +33,19 @@ export function translateConversationsEvent(
 }
 
 /**
- * The refresh trigger (#275): should this event re-request the list? True only for the unsolicited
- * `conversationUpdated` broadcast. Deliberately a plain boolean, NOT a type guard that narrows to the
- * payload — the event's `id` / `name` / `cwd` are never consulted (AC3). We react to the OCCURRENCE of
- * a daemon-side conversation change, then let the daemon's authoritative reply land the new rows via
- * the existing `conversationsReceived → setConversations` seam. Kept separate from
+ * The refresh trigger (#275, #376): should this event re-request the list? True for the two arms that
+ * signal a daemon-side conversation change — the unsolicited `conversationUpdated` BROADCAST (promote /
+ * rename / archive) and the CORRELATED `conversationDeleted` reply (a permanent delete confirmed with
+ * a distinct `{ id }` and no broadcast, pyrycode #822). Deliberately a plain boolean, NOT a type guard
+ * that narrows to the payload — the event's `id` / `name` / `cwd` are never consulted (AC3). We react
+ * to the OCCURRENCE of a change, then let the daemon's authoritative reply land the new rows via the
+ * existing `conversationsReceived → setConversations` seam: a delete drops the row because the fresh
+ * `list_conversations` reply omits it, no local array surgery. Kept separate from
  * `translateConversationsEvent` so that pure `event → rows | null` filter stays single-purpose (the
  * ticket's "don't overload that filter"). Total over the sealed union — no failure mode.
  */
-export function isConversationUpdated(event: DaemonEvent): boolean {
-  return event.type === 'conversationUpdated'
+export function shouldRefreshList(event: DaemonEvent): boolean {
+  return event.type === 'conversationUpdated' || event.type === 'conversationDeleted'
 }
 
 /**
@@ -57,11 +60,12 @@ export function requestConversationList(sendCommand: (command: RendererCommand) 
 
 /**
  * Subscribe via the injected `onDaemonEvent` with a SINGLE listener that has two independent reactions
- * (a single event is never both a `conversationsReceived` and a `conversationUpdated`, so they never
+ * (a single event is never both a `conversationsReceived` and a refresh-trigger event, so they never
  * cross-fire): each `conversationsReceived` writes its rows verbatim into the store via
- * `setConversations`; each `conversationUpdated` broadcast (#275) fires `refreshOnChange` to re-request
- * the authoritative list, keeping the Channel List live on a promote/rename/archive without a
- * reconnect. Every unrelated event no-ops. Still exactly one subscription (AC4). Returns the
+ * `setConversations`; each refresh-trigger event — a `conversationUpdated` broadcast (#275) or a
+ * `conversationDeleted` reply (#376) — fires `refreshOnChange` to re-request the authoritative list,
+ * keeping the Channel List live on a promote/rename/archive/delete without a reconnect. Every unrelated
+ * event no-ops. Still exactly one subscription (AC4). Returns the
  * unsubscribe handle (the daemonEventBridge off-handle idiom) so the React binding can use it as its
  * effect cleanup. The `list !== null` guard (not `if (list)`) is deliberate: an empty array is truthy
  * either way, but the explicit `!== null` makes "an empty list still writes — loaded-zero, not
@@ -77,7 +81,7 @@ export function subscribeConversations(
   return onDaemonEvent((event) => {
     const list = translateConversationsEvent(event)
     if (list !== null) setConversations(list)
-    if (isConversationUpdated(event)) refreshOnChange()
+    if (shouldRefreshList(event)) refreshOnChange()
   })
 }
 

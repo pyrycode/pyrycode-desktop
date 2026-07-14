@@ -15,6 +15,7 @@ import {
   InterruptButton,
   ScreenSnapshotView,
   ThreadOverflowMenuView,
+  ChannelInfoSheetView,
   relayLeg,
   daemonLeg,
   ConnectionStatusIndicator
@@ -1002,6 +1003,118 @@ describe('ThreadOverflowMenuView — the thread overflow menu (#276)', () => {
     expect(markup).toContain('role="menu"')
     expect(markup).toContain('role="menuitem"')
     expect(markup).toContain('Channel info')
+  })
+})
+
+// #365: the Channel Info sheet. ChannelInfoSheetView is the pure, exported view (the StatusSheet /
+// ThreadOverflowMenuView pattern) — server-render it with an injected conversation to prove the chrome,
+// the populated About / Channel ID footer, the null-conversation placeholder, the empty Actions slot,
+// the untrusted-string escaping, and the absence of the deferred Figma rows. `now` is injected so the
+// Last-activity relative time is deterministic. The interaction shell (open toggle from the overflow
+// menu, the Escape document-listener in the ChannelInfoSheet container) is untested reviewed glue —
+// exactly like StatusSheet's open-on-StatusRow-click wiring and ThreadOverflowMenu's Escape effect —
+// since the `node` env fires no clicks and runs no effects.
+describe('ChannelInfoSheetView — the Channel Info sheet (#365)', () => {
+  const noop = (): void => {}
+
+  it('renders the bottom-sheet dialog chrome — handle, labelled dialog, close control (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
+    )
+    // The StatusSheet chrome, reused verbatim: a modal dialog labelled by its own title id, a scrim,
+    // the drag handle, and the icon-only close control carrying its client-owned accessible name.
+    expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('aria-modal="true"')
+    expect(markup).toContain('aria-labelledby="channel-info-sheet-title"')
+    expect(markup).toContain('id="channel-info-sheet-title"')
+    expect(markup).toContain('status-sheet__handle')
+    expect(markup).toContain('aria-label="Close"')
+  })
+
+  it('renders the conversation name, the Workspace + Last-activity rows, and the Channel ID footer (AC3/AC4)', () => {
+    // now = last_used_at + 2h → formatLastActivity yields the deterministic "2h ago" bucket.
+    const now = Date.parse('2026-07-12T00:00:00Z') + 2 * 60 * 60 * 1000
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView
+        conversation={createdPayload({
+          id: 'ch_abc123',
+          name: 'kitchenclaw refactor',
+          cwd: '/home/pyry/scratch',
+          last_used_at: '2026-07-12T00:00:00Z'
+        })}
+        now={now}
+        onClose={noop}
+      />
+    )
+    // Header shows the daemon-derived name as inert auto-escaped text (AC3).
+    expect(markup).toContain('kitchenclaw refactor')
+    // About section header + the two supported detail rows.
+    expect(markup).toContain('About')
+    expect(markup).toContain('Workspace')
+    expect(markup).toContain('/home/pyry/scratch')
+    expect(markup).toContain('Last activity')
+    expect(markup).toContain('2h ago')
+    // The Channel ID footer carries the opaque daemon id behind a client-owned prefix.
+    expect(markup).toContain('Channel ID: ch_abc123')
+  })
+
+  it('falls back to the unnamed-conversation label when name is null (no crash, no empty title)', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload({ name: null })} onClose={noop} />
+    )
+    expect(markup).toContain('Unnamed conversation')
+  })
+
+  it('opens gracefully with a placeholder About when the active conversation is null (AC4)', () => {
+    const markup = renderToStaticMarkup(<ChannelInfoSheetView conversation={null} onClose={noop} />)
+    // Chrome + the empty-About placeholder + the Actions header still render…
+    expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('No conversation details yet')
+    expect(markup).toContain('Actions')
+    // …but no detail rows and no Channel ID footer (there is no id when conversation is null).
+    expect(markup).not.toContain('Workspace')
+    expect(markup).not.toContain('Last activity')
+    expect(markup).not.toContain('Channel ID')
+  })
+
+  it('renders the Actions section header over an empty slot — no action buttons this ticket (AC5)', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
+    )
+    expect(markup).toContain('Actions')
+    // The Archive / Delete / Rename / Change-workspace tickets fill the slot; none exist here (AC5/AC6).
+    expect(markup).not.toContain('Rename')
+    expect(markup).not.toContain('Archive')
+    expect(markup).not.toContain('Delete')
+    expect(markup).not.toContain('Change workspace')
+  })
+
+  it('renders untrusted name / cwd strings escaped, never as live markup (AC3)', () => {
+    // No bare apostrophes rendered raw — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView
+        conversation={createdPayload({ name: "Ada & Bob's <b>chan</b>", cwd: '<b>root</b>' })}
+        onClose={noop}
+      />
+    )
+    // The daemon strings reach the DOM only as auto-escaped React children — the sink is inert.
+    expect(markup).toContain('&lt;b&gt;chan&lt;/b&gt;')
+    expect(markup).toContain('&lt;b&gt;root&lt;/b&gt;')
+    expect(markup).toContain('&#x27;')
+    expect(markup).not.toContain('<b>chan</b>')
+    expect(markup).not.toContain('<b>root</b>')
+  })
+
+  it('does not invent the deferred Figma rows that have no desktop wire field', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelInfoSheetView conversation={createdPayload()} onClose={noop} />
+    )
+    // Created / Total sessions / Total messages / Memory are Figma 20-48 content with no field on
+    // ConversationCreatedPayload — deferred, not fabricated.
+    expect(markup).not.toContain('Created')
+    expect(markup).not.toContain('Total sessions')
+    expect(markup).not.toContain('Total messages')
+    expect(markup).not.toContain('Memory')
   })
 })
 

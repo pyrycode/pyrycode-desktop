@@ -1567,3 +1567,87 @@
 .conversation__overflow-item:focus-visible {
   outline: 1px solid var(--color-outline);
 }
+
+/* #365 — the Channel Info sheet's content classes (Figma node 20-48). The sheet reuses the
+   .status-sheet__* chrome + .status-sheet__section-header verbatim (the ticket sanctions the reuse);
+   only the About detail rows, the empty Actions slot, the empty-About placeholder, and the Channel ID
+   footer are new. All token-based — no color/size literals. */
+
+/* An About detail row: label left, value right (Figma 20:59 — px 16 / py 8). */
+.channel-info__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+}
+
+/* The row label — on-surface body-large (Figma 20:60). */
+.channel-info__row-label {
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* The row value — muted body-medium, right-aligned (Figma 20:67). min-width: 0 lets it shrink. */
+.channel-info__row-value {
+  min-width: 0;
+  text-align: right;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The mono row value — the Workspace cwd (Figma 20:61): --font-mono + body-small, truncating rather
+   than overflowing (the .conversation__workspace-chip-cwd treatment). */
+.channel-info__row-value--mono {
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The empty Actions slot #366/#367/#368 fill (Figma 20:87 — a column, pt 4 / px 16; the .log-data
+   shape). Empty in this shell, so it renders as a zero-height mount point. */
+.channel-info__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4) 0;
+}
+
+/* The graceful-empty About placeholder (conversation === null) — muted body-medium, the row padding. */
+.channel-info__empty {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The Channel ID footer (Figma 20:98 — pt 24 / px 24) — mono body-small at 55% (opacity, not a color
+   literal — the scrim/handle idiom). */
+.channel-info__footer {
+  margin: 0;
+  padding: var(--space-6) var(--space-6) 0;
+  opacity: 0.55;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}

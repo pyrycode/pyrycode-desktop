@@ -15,6 +15,7 @@ import type {
   ModalCancelPayload,
   CreateConversationPayload,
   PromoteConversationPayload,
+  ArchiveConversationPayload,
   UnarchiveConversationPayload,
   RenameConversationPayload,
   SetSessionSettingsPayload,
@@ -374,6 +375,28 @@ describe('isRendererCommand', () => {
 
   it('rejects an unarchiveConversation whose conversation_id is missing, null, or non-string (#346)', () => {
     const t = 'unarchiveConversation'
+    expect(isRendererCommand({ type: t, payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 3 } })).toBe(false)
+  })
+
+  it('accepts a well-formed archiveConversation command with a conversation_id string (#363)', () => {
+    // The mirror-image twin of unarchiveConversation: a single required-string field, no constructor
+    // (the renderer in #366 builds the literal inline). A structurally-extra field is harmless (structural
+    // minimum); the main-side fresh literal drops it.
+    const payload: ArchiveConversationPayload = { conversation_id: 'c1' }
+    const command: RendererCommand = { type: 'archiveConversation', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    expect(isRendererCommand({ type: 'archiveConversation', payload, extra: 1 })).toBe(true)
+  })
+
+  it('rejects an archiveConversation with a missing/null payload (#363)', () => {
+    expect(isRendererCommand({ type: 'archiveConversation' })).toBe(false)
+    expect(isRendererCommand({ type: 'archiveConversation', payload: null })).toBe(false)
+  })
+
+  it('rejects an archiveConversation whose conversation_id is missing, null, or non-string (#363)', () => {
+    const t = 'archiveConversation'
     expect(isRendererCommand({ type: t, payload: {} })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { conversation_id: null } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { conversation_id: 3 } })).toBe(false)

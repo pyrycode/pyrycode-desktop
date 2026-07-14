@@ -73,6 +73,7 @@ export type EnvelopeType =
   | 'create_conversation'
   | 'conversation_created'
   | 'promote_conversation'
+  | 'archive_conversation'
   | 'unarchive_conversation'
   | 'rename_conversation'
   | 'conversation_updated'
@@ -584,6 +585,25 @@ export interface PromoteConversationPayload {
   conversation_id: string
   name: string
   cwd: string
+}
+
+/**
+ * Outbound `archive_conversation` request body (client → daemon). The mirror-image twin of
+ * UnarchiveConversationPayload (archive SETS the durable archived flag; unarchive clears it). Mirrors the
+ * daemon's shared ArchiveConversationPayload{ConversationID string} field-for-field (pyrycode#881) — the
+ * one struct serving BOTH verbs — so this is its direct name-mirror. Kept a DISTINCT type (not an alias of
+ * UnarchiveConversationPayload) so each verb owns its own five-site wire surface and the two can evolve
+ * independently if the daemon ever forks them.
+ *
+ * **A single REQUIRED value-string.** JSON key `conversation_id`, a plain `string` (no pointer, no
+ * `omitempty`) — the id of an existing conversation row whose durable archived flag the daemon SETS (the
+ * opposite of unarchive's clear), persisting eagerly and confirming with a `conversation_updated` record
+ * reflecting the archived state. One required string, so no explicit-`null` concern. `conversation_id` is
+ * a routing id (an existing row's id), not a secret; the desktop never resolves it into a filesystem path.
+ * Do NOT drift it (CLAUDE.md no-drift): change only alongside a daemon/mobile change. See #363.
+ */
+export interface ArchiveConversationPayload {
+  conversation_id: string
 }
 
 /**

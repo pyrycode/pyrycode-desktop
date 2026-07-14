@@ -50,6 +50,17 @@ feature's now-complete command pathway. Its guard case is the same bare `return 
 outstanding-request state, mirroring `dequeueMessage`'s (#300) fire-and-forget posture rather than any
 payload shape.
 
+The union grew a twelfth member in [#391](../codebase/391.md): a **payload-carrying** `notify`
+command (`NotifyPayload{kind}`, `kind: 'turn-complete' | 'prompt'`) — the renderer-invokable trigger
+for the [push notifications](push-notifications.md) delivery primitive. Unlike every prior member,
+`NotifyPayload` is **defined in this file**, not imported from `../wire/types` — it is a **main-local
+side-effect command that never reaches the transport** (the `AnswerModalCommandPayload` precedent).
+Its guard, `isNotifyPayload`, is also the first to depart from the sibling `is*Payload` shape: every
+other guard checks `typeof value.field === 'string'` (accepting any string); this one tests
+**closed-set membership** (`kind === 'turn-complete' || kind === 'prompt'`) — the by-construction
+guarantee that no daemon-relayed text can ride into an OS notification. Ships dormant — #392 is the
+not-yet-built consumer.
+
 ## What it does
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge. `ipcRenderer` itself never crosses to the window.
@@ -205,5 +216,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Session settings send](session-settings-send.md) / [#263](../codebase/263.md) — the payload-carrying `setSessionSettings` member + `isSetSessionSettingsPayload` guard (the first optional-absent, rather than nullable-present, presence check) this channel's union gained; ships dormant, consumer is #257
 - [#261 codebase notes](../codebase/261.md) — widened `setSessionSettings` with the top-level-sibling `changeId: string` field + its untrusted-boundary guard clause, the renderer-minted correlation key the [daemon connection](daemon-connection.md) matches replies against
 - [Interrupt envelope](interrupt-envelope.md) / [#306 codebase notes](../codebase/306.md) — the bare `interrupt` member this channel's union gained; unlike its daemon-reply-bearing siblings, the daemon sends no correlated reply at all — the turn-stopped signal rides the pre-existing `turn_state`/`turn_end` stream instead
+- [Push notifications](push-notifications.md) / [#391 codebase notes](../codebase/391.md) — the payload-carrying `notify` member + `isNotifyPayload` guard this channel's union gained; the first member whose payload type is main-local (not wire-derived) and whose guard checks closed-set membership rather than `typeof`
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

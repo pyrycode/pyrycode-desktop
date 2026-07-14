@@ -1629,7 +1629,7 @@
 
 /* #368: the Rename action — a full-width Material 3 tonal pill (Figma 20:89): secondary-container fill,
    on-secondary-container label, fully-rounded, label-large centred text. Token-based only, no literals.
-   A generic base #366/#367 reuse (#367's destructive Delete layers an error-tinted variant on top).
+   A generic base #366/#367 reuse (#377's destructive Delete layers the `--danger` variant on top).
    min-height hits Figma's 40px button (its py-10 + 20px line-height); --space-2 vertical is the nearest
    token to that off-grid 10px. */
 .channel-info__action {
@@ -1647,6 +1647,29 @@
   line-height: var(--text-label-large-line);
   letter-spacing: var(--text-label-large-tracking);
   font-weight: var(--text-label-large-weight);
+}
+
+/* #377: the destructive Delete variant, layered on the base pill. Desktop has only --color-error (no
+   error-container fill token), so this is an error-tinted OUTLINED pill, not filled red: drop the base
+   tonal fill, tint the label with --color-error, and draw the 1px outline via an inset box-shadow. The
+   base is `border: none` and the pill has no `box-sizing: border-box`, so an inset shadow adds the outline
+   with zero layout shift (a border would resize the pill). Reuses only --color-error, no new token. */
+.channel-info__action--danger {
+  background: transparent;
+  color: var(--color-error);
+  box-shadow: inset 0 0 0 1px var(--color-error);
+}
+
+/* #377: the inline confirm prompt shown in place of the Delete pill while pending — error-tinted
+   body-medium at the actions-column padding (the .channel-info__empty token set). */
+.channel-info__confirm-text {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-error);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
 /* The graceful-empty About placeholder (conversation === null) — muted body-medium, the row padding. */

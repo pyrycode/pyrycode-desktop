@@ -2,16 +2,16 @@
 
 The **transport data path** that lets the desktop client ask the pyry daemon to **permanently**
 remove a conversation — outbound request, inbound decode of the correlated confirmation — so the
-Channel Info sheet's Delete action (#377) can send a hard-delete request that an explicit re-list
-(#376) will reflect as the row's absence.
+Channel Info sheet's Delete action ([#377](../codebase/377.md)) can send a hard-delete request that
+an explicit re-list ([#376](../codebase/376.md)) reflects as the row's absence.
 
 Introduced in [#364](../codebase/364.md) (outbound), split from #155 (the Channel Info sheet split:
 archive transport `#363` / delete transport `#364` / sheet shell `#365` / archive action `#366` /
 delete action+confirm `#367` / rename action `#368`). #367 later split 3-way into
 [#375](../codebase/375.md) (inbound decode, done) / [#376](../codebase/376.md) (list-reflect, done)
-/ #377 (Delete action + confirm UI, not yet built). Outbound shipped dormant — fully wired and
-tested, no caller yet; inbound decode also shipped dormant — decoded and emitted, no renderer
-subscriber until #376. Both halves are
+/ [#377](../codebase/377.md) (Delete action + confirm UI, done — the split's last piece). Outbound
+shipped dormant — fully wired and tested, no caller until #377; inbound decode also shipped
+dormant — decoded and emitted, no renderer subscriber until #376. Both halves are
 field-for-field clones of [conversation archive](conversation-archive.md) / [conversation
 unarchive](conversation-unarchive.md) (outbound) and `conversation_updated` decode (#273, inbound),
 narrowed to their single required field — differing only in the envelope `type` string and, unlike
@@ -38,8 +38,8 @@ requester via `Envelope.in_reply_to`. Unlike promote/archive/unarchive, there is
 so a delete does **not** get a free list-reflection from another client's re-list; the requester's
 own row leaves the list only on an **explicit** re-list. This slice does not decode that reply or
 correlate it. #367 (its intended caller) has since split 3-way: [#375](../codebase/375.md) decodes
-the reply (below), [#376](../codebase/376.md) triggers the explicit re-list (below), and #377 builds
-the Delete action + confirm UI.
+the reply (below), [#376](../codebase/376.md) triggers the explicit re-list (below), and
+[#377](../codebase/377.md) built the Delete action + confirm UI (below).
 
 ## The inbound decode ([#375](../codebase/375.md))
 
@@ -93,6 +93,22 @@ not because of any local remove-by-id mutation — the same whole-array-replacem
 already reflects promote/archive/unarchive/rename. See [#376 codebase notes](../codebase/376.md)
 for the full implementation summary.
 
+## The Delete action + confirm ([#377](../codebase/377.md))
+
+The Channel Info sheet's `.channel-info__actions` slot gained its third and final row, **Delete** —
+the live caller of the outbound half above. A new exported dispatch helper,
+`requestDeleteConversation(sendCommand, conversationId)` (a verbatim clone of
+`requestArchiveConversation`), fires the bare `{ type: 'deleteConversation', payload: {
+conversation_id } }` command. Because delete is permanent, the pill does not dispatch directly:
+activating it opens an inline two-step confirm (a client-owned invention, no Figma node — the #226
+second-confirm posture) that swaps in for the pill inside the same actions column; confirming
+dispatches and closes the sheet, cancelling returns to the pill with no wire effect. The confirm
+state (`deleteConfirmOpen`) is screen-local `useState` owned by the `ChannelInfoSheet` container
+(the `renameOpen` twin, ADR 0006); `window.pyry` is dereferenced only inside the confirm handler, so
+the pure view stays server-renderable across both sub-states. See [#377 codebase
+notes](../codebase/377.md) for the full implementation summary, including the `--danger` CSS
+variant.
+
 ## The five pieces
 
 | Piece | File | Role |
@@ -119,10 +135,11 @@ The guard is deliberately identical to archive/unarchive's despite delete being 
 destructive-action gate is the user-facing confirmation (#367, the #226 second-confirm pattern),
 not a second factor at the transport layer.
 
-## Data flow (wiring pending #377)
+## Data flow
 
 ```
-Delete action click (Channel Info sheet, #377, not yet built, gated by a confirm step)
+Delete pill click (Channel Info sheet, #377) → opens inline confirm, no wire effect yet
+  → confirm click → requestDeleteConversation(sendCommand, conversationId)  (#377)
   → { type: 'deleteConversation', payload: { conversation_id } }  (renderer, built inline, no constructor)
   → onCommand dispatch (src/main/index.ts)
   → connection.deleteConversation(payload)                        (fresh literal, fire-and-forget)
@@ -143,7 +160,10 @@ Delete action click (Channel Info sheet, #377, not yet built, gated by a confirm
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — re-lists on
   a `conversation_updated` broadcast (#275) and, since #376, on a `conversationDeleted` reply too —
   one widened `shouldRefreshList` trigger, not two separate paths.
+- [Conversation shell](conversation-shell.md#channel-info-sheet-365) / [#377 codebase
+  notes](../codebase/377.md) — the Channel Info sheet's Delete action, this transport's live caller.
 - [#155 codebase notes](../codebase/155.md) — parent split ticket, once it exists.
 - [#364 codebase notes](../codebase/364.md) — outbound transport implementation summary.
 - [#375 codebase notes](../codebase/375.md) — inbound decode implementation summary.
 - [#376 codebase notes](../codebase/376.md) — list-reflect implementation summary.
+- [#377 codebase notes](../codebase/377.md) — Delete action + confirm UI implementation summary.

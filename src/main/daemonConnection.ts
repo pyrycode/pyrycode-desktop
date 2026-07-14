@@ -36,6 +36,7 @@ import { buildCreateConversation } from './transport/createConversationEnvelope'
 import { buildPromoteConversation } from './transport/promoteConversationEnvelope'
 import { buildArchiveConversation } from './transport/archiveConversationEnvelope'
 import { buildUnarchiveConversation } from './transport/unarchiveConversationEnvelope'
+import { buildDeleteConversation } from './transport/deleteConversationEnvelope'
 import { buildRenameConversation } from './transport/renameConversationEnvelope'
 import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
@@ -62,6 +63,7 @@ import {
   type PromoteConversationPayload,
   type ArchiveConversationPayload,
   type UnarchiveConversationPayload,
+  type DeleteConversationPayload,
   type RenameConversationPayload,
   type SetSessionSettingsPayload,
   type ModalAnswerPayload,
@@ -225,6 +227,19 @@ export interface DaemonConnection {
    * of the module (parity #490).
    */
   unarchiveConversation(payload: UnarchiveConversationPayload): void
+  /**
+   * Encrypt a payload-carrying `delete_conversation` control envelope onto the live session — asks the
+   * daemon to PERMANENTLY delete a conversation (a single required field: the id must resolve to an
+   * existing row). Unlike archive/unarchive (which flip a durable soft-state flag on a surviving row),
+   * delete removes the row outright. The `send` TWIN, not `requestDebugBundle`: a delete request has no
+   * consumer to fail, so it is an inert no-op when not connected (`driver === null` → return).
+   * FIRE-AND-FORGET — no reply is correlated or awaited here: the daemon confirms with a DISTINCT
+   * `conversation_deleted { id }` record correlated to the requester (`in_reply_to`), with NO broadcast,
+   * so there is no free re-list reflection. Decoding that reply and reflecting the removal via an explicit
+   * re-list are owned by the Channel Info sheet's Delete action (#367), NOT here. This ticket ships the
+   * transport DORMANT (no caller). NEVER throws out of the module (parity #490).
+   */
+  deleteConversation(payload: DeleteConversationPayload): void
   /**
    * Encrypt a payload-carrying `rename_conversation` control envelope onto the live session — asks the
    * daemon to change one conversation's stored name (two required fields: the id must resolve to an
@@ -1029,6 +1044,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function deleteConversation(payload: DeleteConversationPayload): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A delete request has no consumer to fail; a request sent
+    // while disconnected simply produces no reply (the daemon's `conversation_deleted` confirmation never
+    // arrives, and there is no correlation memory to leave dangling).
+    if (driver === null) return
+    try {
+      // Build a FRESH literal naming exactly the one modeled field — never a spread of `payload`. This is
+      // the deterministic net that bounds the wire to exactly conversation_id, ignoring any renderer-
+      // smuggled extra field the structural-minimum guard let through (#236's fresh-literal posture).
+      // Shares the one monotonic nextEnvelopeId with send / unarchiveConversation / requestSnapshot — no
+      // second counter — so ids stay unique across interleaved calls.
+      const bytes = buildDeleteConversation({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          conversation_id: payload.conversation_id
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
+      // driver/wasm throw. The caught object is DROPPED — its message could echo the payload; no log,
+      // no event (classify-don't-forward, inherited #62).
+    }
+  }
+
   function renameConversation(payload: RenameConversationPayload): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A rename request has no consumer to fail; a request sent
@@ -1224,6 +1267,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     promoteConversation,
     archiveConversation,
     unarchiveConversation,
+    deleteConversation,
     renameConversation,
     setSessionSettings,
     answerModal,

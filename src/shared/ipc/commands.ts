@@ -23,6 +23,7 @@ import type {
   CreateConversationPayload,
   PromoteConversationPayload,
   UnarchiveConversationPayload,
+  RenameConversationPayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -87,6 +88,7 @@ export type RendererCommand =
   | { type: 'createConversation'; payload: CreateConversationPayload }
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'unarchiveConversation'; payload: UnarchiveConversationPayload }
+  | { type: 'renameConversation'; payload: RenameConversationPayload }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
   | { type: 'interrupt' }
@@ -174,6 +176,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isPromoteConversationPayload(value.payload)
     case 'unarchiveConversation':
       return 'payload' in value && isUnarchiveConversationPayload(value.payload)
+    case 'renameConversation':
+      return 'payload' in value && isRenameConversationPayload(value.payload)
     case 'setSessionSettings':
       // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
       // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.
@@ -281,6 +285,24 @@ function isPromoteConversationPayload(value: unknown): value is PromoteConversat
 function isUnarchiveConversationPayload(value: unknown): value is UnarchiveConversationPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
+}
+
+/** The untrusted renderer→main boundary guard for the renameConversation payload (#359) — the reason
+ *  the command half is security-sensitive. Clones isPromoteConversationPayload but DROPS the `cwd` check
+ *  (rename is a deliberate non-reuse of PromoteConversationPayload; #820): both `conversation_id` and
+ *  `name` must be present-and-string — a literal `null`, a missing key, and a non-string are all
+ *  rejected. Checks TYPE, not emptiness — an empty-string `name` passes (a valid wire value; the daemon's
+ *  trim-guard and #360's Save-disable handle blank). Structural minimum — a smuggled extra field is not
+ *  rejected here; the main-side sender's fresh-literal construction bounds the wire to exactly these two
+ *  fields. Pure; never throws. */
+function isRenameConversationPayload(value: unknown): value is RenameConversationPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    'name' in value &&
+    typeof value.name === 'string'
+  )
 }
 
 /** The untrusted renderer→main boundary guard for the setSessionSettings payload (#263) — the reason

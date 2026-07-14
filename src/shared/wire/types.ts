@@ -74,6 +74,7 @@ export type EnvelopeType =
   | 'conversation_created'
   | 'promote_conversation'
   | 'unarchive_conversation'
+  | 'rename_conversation'
   | 'conversation_updated'
   | 'ack'
   | 'error'
@@ -601,6 +602,27 @@ export interface PromoteConversationPayload {
  */
 export interface UnarchiveConversationPayload {
   conversation_id: string
+}
+
+/**
+ * Outbound `rename_conversation` request body (client → daemon). Mirrors the daemon's
+ * RenameConversationPayload{ConversationID, Name string} field-for-field (pyrycode#820), wire order
+ * `conversation_id, name`.
+ *
+ * **Two REQUIRED value-strings** — the same posture as PromoteConversationPayload (plain `string`, no
+ * pointer, no `omitempty`), but with **no `cwd`**: rename is a DELIBERATE non-reuse of
+ * PromoteConversationPayload (promote carries a third required `cwd`, which a rename neither has nor
+ * means; #820). Do NOT fold rename into the promote payload. `conversation_id` is a routing id (an
+ * existing row's id), not a secret, never resolved into a filesystem path; `name` is renderer-supplied
+ * display text that becomes the conversation's stored name SERVER-side — the desktop never resolves it
+ * anywhere. An empty/whitespace `name` is a valid string on the wire (the daemon's own trim-guard leaves
+ * a blank rename's stored name untouched); do NOT add a client-side emptiness check. Two required
+ * strings, so no explicit-`null` concern. Do NOT drift it (CLAUDE.md no-drift): change only alongside a
+ * daemon/mobile change. See #359.
+ */
+export interface RenameConversationPayload {
+  conversation_id: string
+  name: string
 }
 
 /**

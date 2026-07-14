@@ -16,6 +16,7 @@ import type {
   CreateConversationPayload,
   PromoteConversationPayload,
   UnarchiveConversationPayload,
+  RenameConversationPayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -376,6 +377,38 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ type: t, payload: {} })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { conversation_id: null } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { conversation_id: 3 } })).toBe(false)
+  })
+
+  it('accepts a well-formed renameConversation command with both string fields (#359)', () => {
+    // Clones the promote guard minus cwd: both fields are REQUIRED strings (a literal null, a missing
+    // key, and a non-string are all rejected). No constructor exists; #360 builds the literal inline.
+    const payload: RenameConversationPayload = { conversation_id: 'c1', name: 'weekly' }
+    const command: RendererCommand = { type: 'renameConversation', payload }
+    expect(isRendererCommand(command)).toBe(true)
+    // A structurally-extra field is harmless (structural minimum); the main-side fresh literal drops it.
+    expect(isRendererCommand({ type: 'renameConversation', payload, extra: 1 })).toBe(true)
+  })
+
+  it('accepts a renameConversation with an empty-string name — the guard checks type, not emptiness (#359)', () => {
+    // An empty/whitespace name is a valid wire string (the daemon's own trim-guard leaves the stored name
+    // untouched; #360 disables Save on blank). Pin that the guard does not over-reject.
+    const payload: RenameConversationPayload = { conversation_id: 'c1', name: '' }
+    expect(isRendererCommand({ type: 'renameConversation', payload })).toBe(true)
+  })
+
+  it('rejects a renameConversation with a missing/null payload (#359)', () => {
+    expect(isRendererCommand({ type: 'renameConversation' })).toBe(false)
+    expect(isRendererCommand({ type: 'renameConversation', payload: null })).toBe(false)
+  })
+
+  it('rejects a renameConversation whose fields are wrong-typed, a literal null, or missing (#359)', () => {
+    const t = 'renameConversation'
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', name: 3 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1', name: null } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { conversation_id: null, name: 'weekly' } })).toBe(false)
+    // A missing key is rejected.
+    expect(isRendererCommand({ type: t, payload: { conversation_id: 'c1' } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { name: 'weekly' } })).toBe(false)
   })
 
   it('accepts a setSessionSettings command with only session_id (all optionals omitted) (#263)', () => {

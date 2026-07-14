@@ -5,6 +5,10 @@ import {
   useConversationListStore,
   selectConversations
 } from '../../store/conversationListStore'
+import {
+  useDefaultWorkspaceStore,
+  selectDefaultWorkspace
+} from '../../store/defaultWorkspaceStore'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
@@ -37,6 +41,10 @@ export function ChannelList({
   onOpenArchive: () => void
 }): JSX.Element {
   const conversations = useConversationListStore(selectConversations)
+  // The client-owned default workspace (#403), read reactively so the FAB always closes over the current
+  // value — #404 changing the default re-renders the container. Mirrors the conversations store read above;
+  // safe under renderToStaticMarkup where the singleton hydrates to null (the typeof-window guard).
+  const defaultWorkspace = useDefaultWorkspaceStore(selectDefaultWorkspace)
   const now = Date.now()
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
   // that survives re-render, the PermissionModal `pendingOptionId` posture). `saveRow` is the row whose
@@ -60,7 +68,7 @@ export function ChannelList({
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
-        onNewConversation={() => requestNewConversation(window.pyry.sendCommand)}
+        onNewConversation={() => requestNewConversation(window.pyry.sendCommand, defaultWorkspace)}
         onSaveAsChannel={(row) => setSaveRow(row)}
         onRename={(row) => {
           // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the

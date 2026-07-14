@@ -171,8 +171,8 @@ existing null fall-through list. The real consumer is
 ## Data flow
 
 ```
-new-discussion FAB (#242) → requestNewConversation(window.pyry.sendCommand)
-  → sendCommand({type:'createConversation', payload:{is_promoted,name,cwd}})
+new-discussion FAB (#242) → requestNewConversation(window.pyry.sendCommand, defaultCwd)
+  → sendCommand({type:'createConversation', payload:{is_promoted,name,cwd:defaultCwd}})
   → COMMAND_CHANNEL → onCommand (isCreateConversationPayload ✓) → connection.createConversation(payload)
   → buildCreateConversation({id,ts,payload:{fresh literal}}) → driver.sendMessage  [inert no-op if not connected]
 
@@ -214,6 +214,9 @@ one.
 
 - [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
   renderer consumer: fires `createConversation`, navigates on `conversationCreated`.
+- [Default-workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) —
+  widened `requestNewConversation`'s `cwd` from a hardcoded `null` to the caller's saved default
+  (`null` still means "take the daemon default"); no wire/payload change.
 - [#241 codebase notes](../codebase/241.md) — implementation summary, patterns, lessons.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139 codebase notes](../codebase/139.md) —
   the read-side twin this transport slice mirrors (single-verb request/reply, both shared-file

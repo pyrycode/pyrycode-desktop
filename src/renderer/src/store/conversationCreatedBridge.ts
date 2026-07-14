@@ -14,12 +14,20 @@ import type { ConversationCreatedPayload } from '@shared/wire/types'
  * Fire the `createConversation` command (#241 wired the main side through to the daemon). An inline
  * literal typed as RendererCommand — no constructor added, keeping the change renderer-contained,
  * exactly as `requestConversationList` inlines `{ type: 'requestConversations' }`. The payload requests
- * a fresh ad-hoc discussion: `is_promoted: false`, and `name`/`cwd` `null` — the nullable-and-PRESENT
- * "take the daemon default" signal (CreateConversationPayload's contract; a `null` is on the wire, not an
- * omission). Fire-and-forget, like the composer's send: `sendCommand` is `void`, no result to await.
+ * a fresh ad-hoc discussion: `is_promoted: false`, `name: null`. `cwd` carries the caller's saved default
+ * workspace (#403) verbatim, or `null` — the nullable-and-PRESENT "take the daemon default" signal
+ * (CreateConversationPayload's contract; a `null` is on the wire, not an omission). `defaultCwd` is a
+ * REQUIRED parameter (not defaulted to `null`) so the one caller states its intent explicitly. Fire-and-
+ * forget, like the composer's send: `sendCommand` is `void`, no result to await.
  */
-export function requestNewConversation(sendCommand: (command: RendererCommand) => void): void {
-  sendCommand({ type: 'createConversation', payload: { is_promoted: false, name: null, cwd: null } })
+export function requestNewConversation(
+  sendCommand: (command: RendererCommand) => void,
+  defaultCwd: string | null
+): void {
+  sendCommand({
+    type: 'createConversation',
+    payload: { is_promoted: false, name: null, cwd: defaultCwd }
+  })
 }
 
 /**

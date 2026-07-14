@@ -42,13 +42,23 @@ function fakeBridge(): {
 }
 
 describe('requestNewConversation', () => {
-  it('fires exactly one createConversation command for an ad-hoc discussion, daemon-default name + cwd (AC2)', () => {
+  it('with no default set, fires createConversation with cwd null — the daemon-default signal, unchanged (AC3)', () => {
     const sendCommand = vi.fn()
-    requestNewConversation(sendCommand)
+    requestNewConversation(sendCommand, null)
     expect(sendCommand).toHaveBeenCalledTimes(1)
     expect(sendCommand).toHaveBeenCalledWith({
       type: 'createConversation',
       payload: { is_promoted: false, name: null, cwd: null }
+    })
+  })
+
+  it('with a saved default, carries it verbatim as cwd; is_promoted/name untouched (AC2)', () => {
+    const sendCommand = vi.fn()
+    requestNewConversation(sendCommand, '/home/pyry/project')
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'createConversation',
+      payload: { is_promoted: false, name: null, cwd: '/home/pyry/project' }
     })
   })
 })

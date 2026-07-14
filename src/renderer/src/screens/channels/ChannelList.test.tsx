@@ -34,6 +34,7 @@ const render = (conversations: readonly ConversationSummary[] | null): string =>
       onOpenArchive={noop}
       onNewConversation={noop}
       onSaveAsChannel={noop}
+      onRename={noop}
     />
   )
 
@@ -50,6 +51,10 @@ const ARCHIVE_ENTRY_MARKER = 'aria-label="Archive"'
 // The per-row Save-as-channel affordance's accessible name (#274) — present on Recent (unpromoted)
 // discussion rows, absent on saved Channel rows (AC1).
 const SAVE_MARKER = 'aria-label="Save as channel"'
+
+// The per-row Rename affordance's accessible name (#360) — the symmetric counterpart to Save-as-channel:
+// present on saved (promoted) Channel rows, absent on Recent (unpromoted) discussion rows (AC1).
+const RENAME_MARKER = 'aria-label="Rename"'
 
 describe('ChannelListView', () => {
   it('not-yet-loaded (null): renders the wrapper but no header and no empty message (AC4)', () => {
@@ -125,6 +130,16 @@ describe('ChannelListView', () => {
   it('omits the Save-as-channel affordance on a saved (promoted) Channel row (AC1)', () => {
     const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
     expect(markup).not.toContain(SAVE_MARKER)
+  })
+
+  it('renders the Rename affordance on a saved (promoted) Channel row (AC1)', () => {
+    const markup = render([row({ id: 'c1', name: 'a channel', is_promoted: true })])
+    expect(markup).toContain(RENAME_MARKER)
+  })
+
+  it('omits the Rename affordance on a Recent (unpromoted) discussion row (AC1)', () => {
+    const markup = render([row({ id: 'd1', name: 'a discussion', is_promoted: false })])
+    expect(markup).not.toContain(RENAME_MARKER)
   })
 
   it('renders the new-discussion FAB with its accessible name in all three list states (AC1/AC4)', () => {

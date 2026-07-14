@@ -99,6 +99,36 @@
   display: block;
 }
 
+/* The Rename affordance (#360) — an icon-only trailing button on saved Channel rows, the symmetric
+   counterpart to Save-as-channel on Recent rows. Identical icon-button treatment: de-emphasized
+   on-surface-variant, a round hover target, a focus-visible outline, --space-2 padding for a compact
+   ~40px touch target. */
+.channel-list__rename {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: var(--space-2);
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+}
+
+.channel-list__rename:hover {
+  background: var(--color-surface-container);
+}
+
+.channel-list__rename:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.channel-list__rename-icon {
+  display: block;
+}
+
 /* The title run (Figma 15:63) — title-medium, on-surface. Ellipsizes so an arbitrarily long untrusted
    name is bounded rather than blowing out the row. */
 .channel-list__title {
@@ -412,6 +442,134 @@
 /* Save disabled while the name is blank (AC3) — the M3 38% disabled emphasis (opacity, not a color
    literal — the #218 de-emphasis precedent) and a non-interactive cursor. */
 .save-as-channel__save:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+/* #360 — the Rename dialog (Figma 19:14), a token-identical twin of the Save-as-channel dialog (19:24):
+   the only visual differences are the title text and the prefilled Name field, so every rule below mirrors
+   its .save-as-channel* counterpart verbatim (overlay + scrim + centered M3 panel), only the selector
+   prefix changes. `position: fixed` (not absolute) so the overlay escapes the `.channel-list` scroll
+   column and covers the window; z-index lifts it above the sticky FAB (which sits at z-index: 1). */
+.rename-conversation-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+/* A dedicated scrim so the opaque panel sibling is never dimmed and no bare color literal is needed.
+   40% via opacity (not a color literal) — the save-as-channel-overlay__scrim idiom. */
+.rename-conversation-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+
+/* The centered M3 dialog panel (Figma 19:14): surface-container-high, 28px radius, 24px padding, a column
+   with 16px gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows; max-height +
+   overflow keep a long untrusted name field scrolling inside the panel rather than overflowing. */
+.rename-conversation {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 360px;
+  max-height: 90%;
+  overflow-y: auto;
+  padding: var(--space-6);
+  background: var(--color-surface-container-high);
+  border-radius: var(--radius-lg);
+  color: var(--color-on-surface);
+}
+
+/* The headline-small title (Figma 19:15). margin: 0 resets the heading default. */
+.rename-conversation__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-headline-small-size);
+  line-height: var(--text-headline-small-line);
+  letter-spacing: var(--text-headline-small-tracking);
+  font-weight: var(--text-headline-small-weight);
+}
+
+/* The outlined Name field (Figma 19:16) — a bordered frame stacking the label over the input value. The
+   wrapping <label> makes the whole frame focus the input. 1px border is structural geometry (the file's
+   carve-out). Figma's 4px corner maps to the nearest --radius-xs (6px, +2px) rather than a literal — the
+   .save-as-channel__field token-mapping precedent. */
+.rename-conversation__field {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-outline);
+  border-radius: var(--radius-xs);
+}
+
+/* The field label (Figma 19:17) is M3 label-medium (12px); the theme has no label-medium token, so map
+   to the nearest --text-label-small (11px — a 1px delta), the architect-noted gap-map. */
+.rename-conversation__label {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+}
+
+/* The input value (Figma 19:18) — body-large, on-surface. Reset to a borderless field so the frame's
+   border is the only chrome; the label above supplies the field's meaning. */
+.rename-conversation__input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* The action row (Figma 19:19) — Cancel + Save both right-aligned (the node's justify-end). 4px gap =
+   --space-1. */
+.rename-conversation__actions {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* The two text-button actions (Figma 19:20/19:22) — the M3 dialog text-button treatment (pill,
+   transparent fill, --color-primary label, label-large), mirroring save-as-channel__save. */
+.rename-conversation__cancel,
+.rename-conversation__save {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.rename-conversation__cancel:focus-visible,
+.rename-conversation__save:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* Save disabled while the name is blank (AC2) — the M3 38% disabled emphasis (opacity, not a color
+   literal — the #218 de-emphasis precedent) and a non-interactive cursor. */
+.rename-conversation__save:disabled {
   opacity: 0.38;
   cursor: default;
 }

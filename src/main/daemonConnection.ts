@@ -32,6 +32,7 @@ import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
+import { buildRecentWorkspaces } from './transport/recentWorkspacesEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
 import { buildPromoteConversation } from './transport/promoteConversationEnvelope'
 import { buildArchiveConversation } from './transport/archiveConversationEnvelope'
@@ -163,6 +164,16 @@ export interface DaemonConnection {
    * `requestSnapshot`). NEVER throws out of the module (parity #490).
    */
   requestConversations(): void
+  /**
+   * Encrypt a bare `recent_workspaces` control envelope onto the live session — asks the daemon for the
+   * recent-workspaces list (#888). The `send` TWIN, not `requestDebugBundle`: a list request has no
+   * consumer to fail, so it is an inert no-op when not connected (`driver === null` → return). The
+   * reply arrives asynchronously as one `recentWorkspacesReceived` DaemonEvent, consumed by the
+   * recent-workspaces store (#382), not the session store. Bare — no payload argument. It has no caller
+   * in this ticket; #382 triggers it via the command on connect (as #208 triggered `requestConversations`).
+   * NEVER throws out of the module (parity #490).
+   */
+  requestRecentWorkspaces(): void
   /**
    * Encrypt a payload-carrying `create_conversation` control envelope onto the live session — asks the
    * daemon to create a fresh conversation (all three fields nullable; `null` = let the daemon choose).
@@ -642,6 +653,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversations: inbound.conversations
             })
             return
+          case 'recent-workspaces':
+            // The recent-workspaces data path (#380). Verbatim passthrough (the `conversations`
+            // precedent): parseRecentWorkspace already stripped each row to its two known fields, nothing
+            // to drop (no secret field), so the RecentWorkspace[] reference passes through — no
+            // re-construction, field names stay snake_case (the event reuses the wire row type). The
+            // recent-workspaces store (#382), not the session store, consumes this. `path` is untrusted
+            // display text. Not compile-forced (this inner switch has no assertNever) — the round-trip
+            // test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'recentWorkspacesReceived',
+              recentWorkspaces: inbound.recentWorkspaces
+            })
+            return
           case 'conversation-created':
             // The conversation-created data path (#241). Verbatim passthrough (the `conversations`
             // precedent): parseConversationCreatedPayload already returned a fresh 5-field object with
@@ -901,6 +925,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Shares the one monotonic nextEnvelopeId with send / requestSnapshot / requestDebugBundle — no
       // second counter — so ids stay unique across interleaved calls (the daemon correlates by id).
       const bytes = buildListConversations({ id: nextEnvelopeId, ts: now() })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but
+      // driver.sendMessage can throw. The caught object is DROPPED (classify-don't-forward, inherited #62).
+    }
+  }
+
+  function requestRecentWorkspaces(): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A list request has no consumer to fail; a request sent
+    // while disconnected simply produces no reply.
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send / requestConversations / requestSnapshot — no
+      // second counter — so ids stay unique across interleaved calls (the daemon correlates by id).
+      const bytes = buildRecentWorkspaces({ id: nextEnvelopeId, ts: now() })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
     } catch {
@@ -1317,6 +1358,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     send,
     requestSnapshot,
     requestConversations,
+    requestRecentWorkspaces,
     createConversation,
     dequeueMessage,
     interrupt,

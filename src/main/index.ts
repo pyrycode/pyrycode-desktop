@@ -257,6 +257,13 @@ app.whenReady().then(() => {
         // has no consumer/reassembler. Inert no-op when not connected (#139).
         connection.requestConversations()
         return
+      case 'requestRecentWorkspaces':
+        // Direct to the connection method (mirrors requestConversations), no orchestrator — a bare
+        // recent-workspaces request has no consumer/reassembler. Sends recent_workspaces; the daemon
+        // replies with one recent_workspaces_list → recentWorkspacesReceived event (consumed by #382).
+        // Inert no-op when not connected (#380).
+        connection.requestRecentWorkspaces()
+        return
       case 'answerModal':
         // Direct to the connection method (mirrors requestSnapshot), no orchestrator. The method
         // mints the answer_token main-side and sends modal_answer. Inert no-op when not connected (#236).

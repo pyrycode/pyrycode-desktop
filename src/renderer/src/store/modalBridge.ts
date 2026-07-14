@@ -77,6 +77,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'conversationCreated':
     case 'conversationUpdated':
     case 'conversationDeleted':
+    case 'recentWorkspacesReceived':
     case 'sessionTransition':
     case 'sessionSettingsUpdated':
     case 'sessionSettingsRejected':
@@ -88,8 +89,9 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // conversation-list store (#208), timeline store (#202), create render slice (#242), the #259
       // session-id holder, the #261 / #256 session-settings consumers (confirmed + rejected #269),
       // the #293 queue store (queueState), the #317 stall-render slice (stallDetected), the #318
-      // display slice (screenSnapshotReceived), the #329 relay-link store (relayLinkChanged), and the
-      // #376 list-reflect slice (conversationDeleted) consume these — not the modal store.
+      // display slice (screenSnapshotReceived), the #329 relay-link store (relayLinkChanged), the
+      // #376 list-reflect slice (conversationDeleted), and the #382 recent-workspaces store
+      // (recentWorkspacesReceived) consume these — not the modal store.
       return null
     default:
       return assertNever(event)

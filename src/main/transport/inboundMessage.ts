@@ -43,6 +43,7 @@ import type {
   ConversationCreatedPayload,
   ConversationUpdatedPayload,
   ConversationDeletedPayload,
+  RecentWorkspace,
   ModalShownPayload,
   ModalDismissedPayload,
   WireModalOption
@@ -182,6 +183,7 @@ export type InboundDaemonMessage =
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }
   | { kind: 'conversation-updated'; conversationUpdated: ConversationUpdatedPayload }
   | { kind: 'conversation-deleted'; conversationDeleted: ConversationDeletedPayload }
+  | { kind: 'recent-workspaces'; recentWorkspaces: RecentWorkspace[] }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
 
@@ -568,6 +570,40 @@ function parseConversationsPayload(payload: unknown): ConversationSummary[] {
 }
 
 /**
+ * Narrow an opaque payload into one RecentWorkspace (#380). Fail-closed like parseConversationSummary
+ * but simpler — two plain required strings, no nullable / boolean / enum: `path` and `last_used_at`.
+ * `last_used_at` is checked for the string TYPE only, never parsed as a date (opaque RFC3339, formatted
+ * downstream). Returns only the two known fields; unknown server-added keys are tolerated
+ * (forward-compat) but NOT copied through. Its message names the failure category only — a `path` could
+ * echo a `$HOME` / username / project name, so it is never interpolated.
+ */
+function parseRecentWorkspace(payload: unknown): RecentWorkspace {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed recent workspace')
+  }
+  const path = requireString(payload, 'path')
+  const last_used_at = requireString(payload, 'last_used_at')
+  return { path, last_used_at }
+}
+
+/**
+ * Narrow an opaque payload into a recent_workspaces_list reply's row list (#380): `workspaces` must be
+ * an array, and every element must narrow as a RecentWorkspace — one bad row throws, failing the whole
+ * reply closed (mirroring parseConversationsPayload). Order is preserved from the wire — the daemon is
+ * the source of truth for ordering (most-recent-first). An empty array is valid (no recent workspaces).
+ */
+function parseRecentWorkspacesPayload(payload: unknown): RecentWorkspace[] {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed recent_workspaces payload')
+  }
+  const raw = payload.workspaces
+  if (!Array.isArray(raw)) {
+    throw new WireDecodeError('malformed recent_workspaces list')
+  }
+  return raw.map(parseRecentWorkspace)
+}
+
+/**
  * Narrow an opaque payload into a ConversationCreatedPayload (#241). Fail-closed like
  * parseConversationSummary, scaled to the create reply's OWN 5-field shape — `id` / `cwd` /
  * `last_used_at` required strings, `is_promoted` a required boolean (the `yolo` #180 idiom — the check
@@ -920,6 +956,21 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'conversations', conversations }
+    }
+    case 'recent_workspaces_list': {
+      // Narrow BEFORE logging so a malformed reply (a bad row, a non-array) throws first and leaves no
+      // record. No decoded field (path / last_used_at) is logged — only the frame's byte length + one-way
+      // hash. Deliberately NO `count` field (the conversations #139 posture): AC restricts the set to
+      // type/bytes/hash, and a workspace-count is more identifying than a message-batch size; a `path`
+      // could echo a $HOME / username, so nothing but the shape is recorded.
+      const recentWorkspaces = parseRecentWorkspacesPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'recent_workspaces_list',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'recent-workspaces', recentWorkspaces }
     }
     case 'conversation_created': {
       // Narrow BEFORE logging so a malformed reply (a missing / mistyped field) throws first and leaves

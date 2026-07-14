@@ -70,6 +70,8 @@ export type EnvelopeType =
   | 'modal_cancel'
   | 'list_conversations'
   | 'conversations'
+  | 'recent_workspaces'
+  | 'recent_workspaces_list'
   | 'create_conversation'
   | 'conversation_created'
   | 'promote_conversation'
@@ -530,6 +532,25 @@ export interface ConversationSummary {
  *  is the source of truth for ordering (e.g. most-recently-used first). See #139. */
 export interface ConversationsPayload {
   conversations: ConversationSummary[]
+}
+
+/**
+ * One row of a `recent_workspaces_list` reply (daemon → client). Mirrors the daemon's recent-workspace
+ * row field-for-field (pyrycode #888), wire order `path, last_used_at` — both always present, no
+ * `omitempty`. `path` is an untrusted daemon-supplied workspace path carried as OPAQUE DISPLAY TEXT:
+ * this client never resolves it into a filesystem path (the ConversationSummary.cwd #139 posture).
+ * `last_used_at` is an OPAQUE RFC3339 string left UNPARSED — relative-time formatting is a downstream
+ * (#382) UI concern, so no parser is ever fed this untrusted value here. See #380. */
+export interface RecentWorkspace {
+  path: string
+  last_used_at: string
+}
+
+/** Inbound `recent_workspaces_list` reply body (daemon → client). `workspaces` is ALWAYS present
+ *  (empty → `[]`, never absent, never null). Order preserved from the wire — the daemon is the source
+ *  of truth for ordering (distinct paths, most-recent-first). See #380. */
+export interface RecentWorkspacesPayload {
+  workspaces: RecentWorkspace[]
 }
 
 /**

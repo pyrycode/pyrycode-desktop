@@ -1825,3 +1825,146 @@
   letter-spacing: var(--text-body-large-tracking);
   font-weight: var(--text-body-large-weight);
 }
+
+/* #398 — the Create-folder dialog (Figma node 19-44). Cloned from the Rename dialog's .rename-conversation*
+   block (channels.css) into this file, co-located with its consumer: the same M3 dialog chrome (overlay,
+   scrim, surface-container-high panel, outlined field, right-aligned text-button actions), differing only
+   in the title/label copy and the added .create-folder__error line. All token-based — opacity is the only
+   de-emphasis device. */
+.create-folder-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+/* A dedicated scrim so the opaque panel sibling is never dimmed — the rename-conversation-overlay__scrim
+   idiom. 40% via opacity, not a color literal. */
+.create-folder-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+  opacity: 0.4;
+}
+
+/* The centered M3 dialog panel (Figma 19:44): surface-container-high, 28px radius, 24px padding, a column
+   with 16px gaps. Painted above the scrim by DOM order. max-width bounds it on wide windows; max-height +
+   overflow keep long content scrolling inside the panel rather than overflowing. */
+.create-folder {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 360px;
+  max-height: 90%;
+  overflow-y: auto;
+  padding: var(--space-6);
+  background: var(--color-surface-container-high);
+  border-radius: var(--radius-lg);
+  color: var(--color-on-surface);
+}
+
+/* The headline-small title (Figma 19:45). margin: 0 resets the heading default. */
+.create-folder__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-headline-small-size);
+  line-height: var(--text-headline-small-line);
+  letter-spacing: var(--text-headline-small-tracking);
+  font-weight: var(--text-headline-small-weight);
+}
+
+/* The outlined field (Figma 19:46) — a bordered frame stacking the label over the input value. The wrapping
+   <label> makes the whole frame focus the input. 1px border is structural geometry (the file's carve-out).
+   Figma's 4px corner maps to the nearest --radius-xs (6px), the .rename-conversation__field precedent. */
+.create-folder__field {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-outline);
+  border-radius: var(--radius-xs);
+}
+
+/* The field label (Figma 19:47) is M3 label-medium (12px); the theme has no label-medium token, so map to
+   the nearest --text-label-small (11px — a 1px delta), the .rename-conversation__label gap-map. */
+.create-folder__label {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+}
+
+/* The input value (Figma 19:48) — body-large, on-surface. Reset to a borderless field so the frame's border
+   is the only chrome; the label above supplies the field's meaning. */
+.create-folder__input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* Input disabled while in-flight (AC3) — the M3 disabled emphasis (opacity, not a color literal). */
+.create-folder__input:disabled {
+  opacity: 0.38;
+}
+
+/* The rejected failure line (AC5) — spec-added, not in the Figma. Muted body-medium in the error role
+   (the only error-role token on desktop; the .bubble--stall error-text precedent). */
+.create-folder__error {
+  margin: 0;
+  color: var(--color-error);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}
+
+/* The action row (Figma 19:49) — Cancel + Create both right-aligned (the node's justify-end). 4px gap =
+   --space-1. */
+.create-folder__actions {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* The two text-button actions (Figma 19:50/19:52) — the M3 dialog text-button treatment (pill, transparent
+   fill, --color-primary label, label-large), mirroring .rename-conversation__save. */
+.create-folder__cancel,
+.create-folder__create {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.create-folder__cancel:focus-visible,
+.create-folder__create:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* Create disabled while the name is blank (AC2) or the request is in-flight (AC3) — the M3 38% disabled
+   emphasis (opacity, not a color literal) and a non-interactive cursor. */
+.create-folder__create:disabled {
+  opacity: 0.38;
+  cursor: default;
+}

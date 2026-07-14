@@ -6,6 +6,7 @@ import { ArchiveScreen } from './screens/archive/ArchiveScreen'
 import { PairingScreen } from './screens/pairing/PairingScreen'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
+import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { useActiveConversationStore } from './store/activeConversationStore'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
@@ -91,6 +92,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     setActiveConversation(created)
     dispatch({ type: 'open' })
   })
+  // #393: a notification click drives the same list→thread `open` nav (focus the window + show the
+  // active conversation's thread). Crucially NO setActiveConversation — the nullary arm carries no
+  // payload; in the single-active model "open" means "show the existing active conversation", so this
+  // reuses the existing transition (absolute → thread from any paired view, AC2) with no new route or arm.
+  useNotificationActivatedNav(() => dispatch({ type: 'open' }))
   return (
     <PairedShellView
       route={route}

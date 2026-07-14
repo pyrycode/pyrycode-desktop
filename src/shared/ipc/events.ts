@@ -255,6 +255,16 @@ export type DaemonEvent =
   // or wire id). Consumed by #397 (round-trip store, not yet built), so all three exhaustive bridges no-op
   // it for now — the workspaceFolderCreated-was-a-no-op precedent.
   | { type: 'workspaceFolderRejected' }
+  // The notification-click arm (#393). UNLIKE every other arm, this is the FIRST MAIN-LOCAL signal on
+  // the channel: it is NOT derived from a validated wire envelope — it is emitted by the main-process
+  // notification click handler (index.ts) when the user clicks a fired OS notification, so the
+  // emitDaemonEvent "nothing else sends on the channel" nuance now has exactly one main-local sender,
+  // noted here rather than editing that helper. NULLARY by construction (AC3): it carries NO payload,
+  // so no daemon-relayed content, conversation id, or wire field can ride it (mirroring stallDetected /
+  // workspaceFolderRejected). Consumed by the notificationActivatedBridge (#393), which drives the
+  // paired `open` nav (focus the window + show the single active conversation's thread) — a consume-only
+  // filter bridge, so all three exhaustive bridges (session / timeline / modal) no-op it.
+  | { type: 'notificationActivated' }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
   // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is

@@ -95,6 +95,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // rejection, not the session store. Present only because the assertNever guard below makes a new arm
       // a compile error (the workspaceFolderCreated-is-a-no-op precedent).
       return null
+    case 'notificationActivated':
+      // No session-store action: the notificationActivatedBridge (#393) consumes the click and drives the
+      // paired `open` nav, not the session store. Present only because the assertNever guard below makes a
+      // new arm a compile error (the workspaceFolderRejected-is-a-no-op precedent).
+      return null
     case 'modalShown':
     case 'modalDismissed':
       // No session-store action: the modal store + bridge (#223), not the session store, consumes

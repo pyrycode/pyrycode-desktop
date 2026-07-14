@@ -11,12 +11,16 @@
 import type { NotifyKind } from '../shared/ipc/commands'
 
 /**
- * The minimal surface an OS notification exposes — just `show()`. Electron's real Notification
- * instance satisfies this structurally (as a BrowserWindow satisfies DaemonEventSink), so the
- * wiring site injects the real class and the unit test injects a fake, with no Electron harness.
+ * The minimal surface an OS notification exposes — `show()` plus a `'click'` listener registration
+ * (#393). Electron's real Notification instance satisfies this structurally (it is an EventEmitter
+ * whose `on('click', …)` overload returns `this`, assignable to this `void`-returning method, and a
+ * zero-arg listener is assignable to its wider one-arg listener), so the wiring site injects the real
+ * class and the unit test injects a fake, with no Electron harness. `on` is typed to the single
+ * `'click'` event this slice uses — the fire-decision and the OS call stay main-only.
  */
 export interface OsNotification {
   show(): void
+  on(event: 'click', listener: () => void): void
 }
 
 /**
@@ -42,13 +46,48 @@ const NOTIFICATION_COPY: Record<NotifyKind, { title: string; body: string }> = {
 /**
  * Raise the OS notification for `kind` — but only when the window is unfocused. Synchronous, no
  * return value: if `deps.isWindowFocused()` is true, return without firing; otherwise construct a
- * Notification with the kind's copy and `show()` it. The text comes solely from the closed enum via
- * NOTIFICATION_COPY, so no command field can supply notification content.
+ * Notification with the kind's copy, register `deps.onClick` as its `'click'` listener BEFORE showing
+ * (a click could arrive the instant the notification is shown), and `show()` it. The text comes solely
+ * from the closed enum via NOTIFICATION_COPY, so no command field can supply notification content;
+ * `onClick` is opaque to this module (the composition root supplies window activation + the nav
+ * signal), keeping this unit free of any window/IPC knowledge (#393).
  */
 export function fireNotification(
   kind: NotifyKind,
-  deps: { isWindowFocused: () => boolean; Notification: OsNotificationConstructor }
+  deps: {
+    isWindowFocused: () => boolean
+    Notification: OsNotificationConstructor
+    onClick: () => void
+  }
 ): void {
   if (deps.isWindowFocused()) return
-  new deps.Notification(NOTIFICATION_COPY[kind]).show()
+  const notification = new deps.Notification(NOTIFICATION_COPY[kind])
+  notification.on('click', deps.onClick)
+  notification.show()
+}
+
+/**
+ * The minimal main-window surface `activateWindow` drives (#393). A real Electron BrowserWindow
+ * satisfies this structurally (as it satisfies DaemonEventSink), so no `electron` import reaches this
+ * unit and the test injects a fake. `isVisible` is deliberately absent — `show()` is safe to call
+ * unconditionally, so there is nothing to branch on for the hidden case.
+ */
+export interface ActivatableWindow {
+  isMinimized(): boolean
+  restore(): void
+  show(): void
+  focus(): void
+}
+
+/**
+ * Bring the main window to the front on a notification click (#393, AC1). After this call the window
+ * is un-minimized (if it was minimized), visible, and focused: `restore()` un-minimizes, `show()`
+ * covers the hidden case (and reveals a restored window), and an explicit `focus()` covers the
+ * already-visible-but-behind case. The main concern lives HERE, injected, so the wiring site composes
+ * it into the click handler without any Electron import reaching the tested unit.
+ */
+export function activateWindow(win: ActivatableWindow): void {
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
 }

@@ -156,4 +156,16 @@ describe('PairedShell', () => {
   it('PairingScreen onPaired → pairServerPaired lands on the new server’s list (#152, AC3)', () => {
     expect(nextPairedRoute('pairServer', { type: 'pairServerPaired' })).toBe('list')
   })
+
+  // #393: a notification click reuses the existing `open` transition (no new route or nav arm). The
+  // list→thread leg is already asserted above for #242; these two prove AC2's "regardless of which
+  // paired view was showing" — `open` is absolute, so it lands on `thread` from settings and archive
+  // just as it does from the list.
+  it('a notification-activated → open dispatch lands on thread from settings (#393, AC2)', () => {
+    expect(nextPairedRoute('settings', { type: 'open' })).toBe('thread')
+  })
+
+  it('a notification-activated → open dispatch lands on thread from archive (#393, AC2)', () => {
+    expect(nextPairedRoute('archive', { type: 'open' })).toBe('thread')
+  })
 })

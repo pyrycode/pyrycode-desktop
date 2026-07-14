@@ -87,14 +87,16 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'stallDetected':
     case 'screenSnapshotReceived':
     case 'relayLinkChanged':
+    case 'notificationActivated':
       // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
       // conversation-list store (#208), timeline store (#202), create render slice (#242), the #259
       // session-id holder, the #261 / #256 session-settings consumers (confirmed + rejected #269),
       // the #293 queue store (queueState), the #317 stall-render slice (stallDetected), the #318
       // display slice (screenSnapshotReceived), the #329 relay-link store (relayLinkChanged), the
       // #376 list-reflect slice (conversationDeleted), the #382 recent-workspaces store
-      // (recentWorkspacesReceived), the #157 Create-folder dialog (workspaceFolderCreated), and the #397
-      // round-trip store (workspaceFolderRejected) consume these — not the modal store.
+      // (recentWorkspacesReceived), the #157 Create-folder dialog (workspaceFolderCreated), the #397
+      // round-trip store (workspaceFolderRejected), and the #393 notificationActivatedBridge
+      // (notificationActivated → the paired `open` nav) consume these — not the modal store.
       return null
     default:
       return assertNever(event)

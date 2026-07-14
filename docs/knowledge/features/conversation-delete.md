@@ -8,9 +8,10 @@ Channel Info sheet's Delete action (#377) can send a hard-delete request that an
 Introduced in [#364](../codebase/364.md) (outbound), split from #155 (the Channel Info sheet split:
 archive transport `#363` / delete transport `#364` / sheet shell `#365` / archive action `#366` /
 delete action+confirm `#367` / rename action `#368`). #367 later split 3-way into
-[#375](../codebase/375.md) (inbound decode, this doc, done) / #376 (list-reflect) / #377 (Delete
-action + confirm UI). Outbound shipped dormant — fully wired and tested, no caller yet; inbound
-decode also ships dormant — decoded and emitted, no renderer subscriber yet. Both halves are
+[#375](../codebase/375.md) (inbound decode, done) / [#376](../codebase/376.md) (list-reflect, done)
+/ #377 (Delete action + confirm UI, not yet built). Outbound shipped dormant — fully wired and
+tested, no caller yet; inbound decode also shipped dormant — decoded and emitted, no renderer
+subscriber until #376. Both halves are
 field-for-field clones of [conversation archive](conversation-archive.md) / [conversation
 unarchive](conversation-unarchive.md) (outbound) and `conversation_updated` decode (#273, inbound),
 narrowed to their single required field — differing only in the envelope `type` string and, unlike
@@ -37,8 +38,8 @@ requester via `Envelope.in_reply_to`. Unlike promote/archive/unarchive, there is
 so a delete does **not** get a free list-reflection from another client's re-list; the requester's
 own row leaves the list only on an **explicit** re-list. This slice does not decode that reply or
 correlate it. #367 (its intended caller) has since split 3-way: [#375](../codebase/375.md) decodes
-the reply (below), [#376](../codebase/376.md) triggers the explicit re-list, and #377 builds the
-Delete action + confirm UI.
+the reply (below), [#376](../codebase/376.md) triggers the explicit re-list (below), and #377 builds
+the Delete action + confirm UI.
 
 ## The inbound decode ([#375](../codebase/375.md))
 
@@ -70,6 +71,28 @@ export interface ConversationDeletedPayload {
   gained a `conversationDeleted` no-op case, forced by their `assertNever` guards. #376 is the real
   consumer.
 
+## The list-reflect ([#376](../codebase/376.md))
+
+The `conversationDeleted{id}` event is now consumed. [Conversation list store](conversation-list-store.md)'s
+`conversationListBridge.ts` renames and widens its refresh-trigger predicate,
+`isConversationUpdated → shouldRefreshList`, so it matches both `conversationUpdated` (the
+`conversation_updated` broadcast, #275) and `conversationDeleted`:
+
+```ts
+export function shouldRefreshList(event: DaemonEvent): boolean {
+  return event.type === 'conversationUpdated' || event.type === 'conversationDeleted'
+}
+```
+
+`subscribeConversations` fires `refreshOnChange()` (the existing bare `requestConversations`
+re-request) on either arm — id-blind by design, same as the existing `conversationUpdated` trigger:
+it reacts to the event's *occurrence*, never inspects `event.id`. No new store write path exists for
+a delete; `setConversations` stays the sole writer, invoked only from the `conversationsReceived`
+arm. The deleted row leaves the list because the daemon's fresh `list_conversations` reply omits it,
+not because of any local remove-by-id mutation — the same whole-array-replacement mechanism that
+already reflects promote/archive/unarchive/rename. See [#376 codebase notes](../codebase/376.md)
+for the full implementation summary.
+
 ## The five pieces
 
 | Piece | File | Role |
@@ -96,7 +119,7 @@ The guard is deliberately identical to archive/unarchive's despite delete being 
 destructive-action gate is the user-facing confirmation (#367, the #226 second-confirm pattern),
 not a second factor at the transport layer.
 
-## Data flow (wiring pending #376/#377)
+## Data flow (wiring pending #377)
 
 ```
 Delete action click (Channel Info sheet, #377, not yet built, gated by a confirm step)
@@ -106,7 +129,8 @@ Delete action click (Channel Info sheet, #377, not yet built, gated by a confirm
   → buildDeleteConversation → encodeEnvelope → driver.sendMessage  (main process only)
   ⋯ daemon permanently removes the row, replies conversation_deleted{id} correlated by in_reply_to
   → parseConversationDeletedPayload → conversation-deleted → conversationDeleted{id}  (#375, done)
-  → (#376, not built here) explicit re-list → row disappears
+  → shouldRefreshList(event) → true → refreshOnChange() → {type:'requestConversations'}  (#376, done)
+  → daemon's fresh conversationsReceived omits the deleted row → setConversations → row disappears
 ```
 
 ## Related
@@ -117,8 +141,9 @@ Delete action click (Channel Info sheet, #377, not yet built, gated by a confirm
   the reply contract; both get a free re-list reflection off a `conversation_updated` broadcast,
   which delete deliberately does not.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — re-lists on
-  a `conversation_updated` broadcast today; #376's explicit re-list after `conversation_deleted` is
-  a distinct trigger, not this same broadcast path.
+  a `conversation_updated` broadcast (#275) and, since #376, on a `conversationDeleted` reply too —
+  one widened `shouldRefreshList` trigger, not two separate paths.
 - [#155 codebase notes](../codebase/155.md) — parent split ticket, once it exists.
 - [#364 codebase notes](../codebase/364.md) — outbound transport implementation summary.
 - [#375 codebase notes](../codebase/375.md) — inbound decode implementation summary.
+- [#376 codebase notes](../codebase/376.md) — list-reflect implementation summary.

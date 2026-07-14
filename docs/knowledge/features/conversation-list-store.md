@@ -60,13 +60,15 @@ requestConversationList(sendCommand: (c: RendererCommand) => void): void
 subscribeConversations(onDaemonEvent, setConversations, refreshOnChange): () => void
 // onDaemonEvent(event => {
 //   const list = translateConversationsEvent(event); if (list !== null) setConversations(list)
-//   if (isConversationUpdated(event)) refreshOnChange()   // #275
+//   if (shouldRefreshList(event)) refreshOnChange()   // #275, widened #376
 // })
 // returns the off-handle (the subscribeRunConfig idiom)
 
-isConversationUpdated(event: DaemonEvent): boolean
-// event.type === 'conversationUpdated' — a plain boolean, not a type guard: the payload is never
-// consulted (#275)
+shouldRefreshList(event: DaemonEvent): boolean
+// event.type === 'conversationUpdated' || event.type === 'conversationDeleted' — a plain boolean,
+// not a type guard: the payload (id/name/cwd) is never consulted (#275, widened #376). Renamed from
+// isConversationUpdated when #376 added the second arm — one predicate answering "should this event
+// re-request the list?", not two isX predicates OR'd at the call site.
 
 ConversationListData(): null
 // headless component, two effects: subscribe on mount ([]), request on the rising edge to `connected` ([isConnected])
@@ -124,9 +126,15 @@ daemon → conversations frame → parseInboundMessage → conversationsReceived
 
 daemon → conversation_updated frame (BROADCAST, e.g. a promote #274) → conversationUpdated DaemonEvent [#273]
   → DAEMON_EVENT_CHANNEL → subscribeConversations listener
-    → isConversationUpdated(event) → true → refreshOnChange()
+    → shouldRefreshList(event) → true → refreshOnChange()
     → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#275]
     → … re-enters the flow above; the arriving conversationsReceived lands the flipped row
+
+daemon → conversation_deleted frame (CORRELATED reply, no broadcast) → conversationDeleted{id} DaemonEvent [#375]
+  → DAEMON_EVENT_CHANNEL → subscribeConversations listener
+    → shouldRefreshList(event) → true (id-blind — the id is never consulted) → refreshOnChange()
+    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#376]
+    → … re-enters the flow above; the arriving conversationsReceived omits the deleted row
 ```
 
 ## Configuration and usage
@@ -154,6 +162,15 @@ daemon → conversation_updated frame (BROADCAST, e.g. a promote #274) → conve
   `refreshOnChange`, re-requests the list on that event so the affected row's flip (e.g.
   `is_promoted`) lands without a reconnect. No coalescing of rapid successive updates — each fires
   its own re-request — deferred as an optimization, not required for correctness.
+- **A permanent delete is not a `conversation_updated` broadcast, so it needed its own trigger arm —
+  landed in [#376](../codebase/376.md).** Unlike archive/unarchive/promote/rename, a
+  `delete_conversation` is confirmed with a distinct, *correlated* `conversation_deleted{id}` reply
+  and **no broadcast** ([conversation delete](conversation-delete.md), #375). `isConversationUpdated`
+  was renamed to `shouldRefreshList` and widened to also match `conversationDeleted` — one predicate
+  covering both "a conversation changed" arms, rather than a second `isX` predicate OR'd at the call
+  site. The trigger never inspects the event's `id`, so it fires the same re-request whether or not
+  the deleted id is present in the current list; the deleted row's absence from the fresh
+  `conversationsReceived` reply is what actually removes it — no local remove-by-id path exists.
 - **No correlation, no request tracking.** Any `conversationsReceived` that arrives — solicited or
   not — is written unconditionally; safe because only the authenticated daemon can produce one (see
   [conversation list fetch § Correlation is deliberately absent](conversation-list-fetch.md#correlation-is-deliberately-absent)).
@@ -189,3 +206,7 @@ daemon → conversation_updated frame (BROADCAST, e.g. a promote #274) → conve
   notes](../codebase/273.md) — the `conversationUpdated` broadcast this store's `refreshOnChange`
   reacts to; [#275 codebase notes](../codebase/275.md) — implementation summary and patterns for the
   re-request trigger.
+- [Conversation delete (transport)](conversation-delete.md) / [#375 codebase
+  notes](../codebase/375.md) — the `conversationDeleted` correlated reply this store's
+  `refreshOnChange` also reacts to since #376; [#376 codebase notes](../codebase/376.md) —
+  implementation summary and patterns for the `isConversationUpdated → shouldRefreshList` widening.

@@ -9,7 +9,7 @@ import type {
 } from '@shared/wire/types'
 import {
   translateConversationsEvent,
-  isConversationUpdated,
+  shouldRefreshList,
   requestConversationList,
   subscribeConversations,
   ConversationListData
@@ -89,10 +89,15 @@ describe('requestConversationList', () => {
   })
 })
 
-describe('isConversationUpdated', () => {
-  it('returns true for a conversationUpdated broadcast (the refresh trigger)', () => {
+describe('shouldRefreshList', () => {
+  it('returns true for a conversationUpdated broadcast (the existing refresh trigger)', () => {
     const event: DaemonEvent = { type: 'conversationUpdated', conversation: updated() }
-    expect(isConversationUpdated(event)).toBe(true)
+    expect(shouldRefreshList(event)).toBe(true)
+  })
+
+  it('returns true for a conversationDeleted correlated reply (the new arm)', () => {
+    const event: DaemonEvent = { type: 'conversationDeleted', id: 'a' }
+    expect(shouldRefreshList(event)).toBe(true)
   })
 
   it('returns false for a sample of unrelated daemon events', () => {
@@ -104,7 +109,7 @@ describe('isConversationUpdated', () => {
         conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts' }
       }
     ]
-    for (const event of others) expect(isConversationUpdated(event)).toBe(false)
+    for (const event of others) expect(shouldRefreshList(event)).toBe(false)
   })
 })
 
@@ -198,6 +203,80 @@ describe('subscribeConversations', () => {
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     // An update event carries no rows to land — it only triggers the authoritative re-request.
     expect(setConversations).not.toHaveBeenCalled()
+  })
+
+  it('re-requests (refreshOnChange) on a conversationDeleted — and does NOT write rows', () => {
+    const bridge = fakeBridge()
+    const setConversations = vi.fn()
+    const refreshOnChange = vi.fn()
+    subscribeConversations(bridge.onDaemonEvent, setConversations, refreshOnChange)
+
+    bridge.emit({ type: 'conversationDeleted', id: 'a' })
+    expect(refreshOnChange).toHaveBeenCalledTimes(1)
+    // A delete event carries no rows to land — it only triggers the authoritative re-request.
+    expect(setConversations).not.toHaveBeenCalled()
+  })
+
+  it('a conversationDeleted while not-loaded fires the re-request but leaves the store null (AC2)', () => {
+    const bridge = fakeBridge()
+    const store = createConversationListStore()
+    const refreshOnChange = vi.fn()
+    subscribeConversations(
+      bridge.onDaemonEvent,
+      (list) => store.getState().setConversations(list),
+      refreshOnChange
+    )
+
+    expect(selectConversations(store.getState())).toBeNull()
+    bridge.emit({ type: 'conversationDeleted', id: 'a' })
+    expect(refreshOnChange).toHaveBeenCalledTimes(1)
+    // The delete cannot fabricate an empty loaded list — the store stays not-loaded (null).
+    expect(selectConversations(store.getState())).toBeNull()
+  })
+
+  it('a delete leaves the row absent once the authoritative re-request lands (AC1 + AC3)', () => {
+    const bridge = fakeBridge()
+    const store = createConversationListStore()
+    const refreshOnChange = vi.fn()
+    subscribeConversations(
+      bridge.onDaemonEvent,
+      (list) => store.getState().setConversations(list),
+      refreshOnChange
+    )
+
+    // Seed: two rows.
+    bridge.emit({ type: 'conversationsReceived', conversations: [row({ id: 'a' }), row({ id: 'b' })] })
+    expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a', 'b'])
+
+    // The correlated delete triggers exactly one re-request; it writes no rows itself.
+    bridge.emit({ type: 'conversationDeleted', id: 'a' })
+    expect(refreshOnChange).toHaveBeenCalledTimes(1)
+    expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a', 'b'])
+
+    // The daemon's authoritative reply omits the deleted id; the whole-array replace lands the shorter list.
+    bridge.emit({ type: 'conversationsReceived', conversations: [row({ id: 'b' })] })
+    expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['b'])
+  })
+
+  it('a delete for an id not in the list is harmless — one re-request, no observable change (AC3)', () => {
+    const bridge = fakeBridge()
+    const store = createConversationListStore()
+    const refreshOnChange = vi.fn()
+    subscribeConversations(
+      bridge.onDaemonEvent,
+      (list) => store.getState().setConversations(list),
+      refreshOnChange
+    )
+
+    bridge.emit({ type: 'conversationsReceived', conversations: [row({ id: 'a' }), row({ id: 'b' })] })
+
+    // The trigger is id-blind: an absent id still fires exactly one re-request.
+    bridge.emit({ type: 'conversationDeleted', id: 'zzz' })
+    expect(refreshOnChange).toHaveBeenCalledTimes(1)
+
+    // The identical authoritative reply leaves the rows unchanged.
+    bridge.emit({ type: 'conversationsReceived', conversations: [row({ id: 'a' }), row({ id: 'b' })] })
+    expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a', 'b'])
   })
 
   it('does NOT re-request on a conversationsReceived — the two concerns never cross-fire', () => {

@@ -26,6 +26,7 @@ import type {
   UnarchiveConversationPayload,
   DeleteConversationPayload,
   RenameConversationPayload,
+  ChangeWorkspacePayload,
   SetSessionSettingsPayload,
   DequeueMessagePayload
 } from '../wire/types'
@@ -67,7 +68,12 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * not a secret — asking the daemon to restore an archived conversation); `deleteConversation` (#364), whose
  * `payload` reuses the wire DeleteConversationPayload (a single REQUIRED `conversation_id` string — a routing
  * id, not a secret — asking the daemon to PERMANENTLY delete a conversation; the daemon replies with a
- * distinct `conversation_deleted { id }` record, not decoded here — #367 owns it); and `setSessionSettings` (#263), whose `payload` reuses the wire
+ * distinct `conversation_deleted { id }` record, not decoded here — #367 owns it); `renameConversation` (#359),
+ * whose `payload` reuses the wire RenameConversationPayload (two REQUIRED strings — `conversation_id` +
+ * `name`, no secret — asking the daemon to change a conversation's stored name); `changeWorkspace` (#379),
+ * whose `payload` reuses the wire ChangeWorkspacePayload (two REQUIRED strings — `conversation_id` + `cwd`,
+ * no secret — asking the daemon to move a conversation's workspace to a different folder; `cwd` is
+ * renderer-supplied text the daemon resolves SERVER-side, never a local path here); and `setSessionSettings` (#263), whose `payload` reuses the wire
  * SetSessionSettingsPayload (`session_id` + optional-absent `model`/`effort`/`yolo` — the omitempty
  * presence contract is applied main-side by the builder, not carried here) and additionally carries a
  * `changeId` (#261): a renderer-minted, client-internal correlation string riding ALONGSIDE `payload` (a
@@ -99,6 +105,7 @@ export type RendererCommand =
   | { type: 'unarchiveConversation'; payload: UnarchiveConversationPayload }
   | { type: 'deleteConversation'; payload: DeleteConversationPayload }
   | { type: 'renameConversation'; payload: RenameConversationPayload }
+  | { type: 'changeWorkspace'; payload: ChangeWorkspacePayload }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
   | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
   | { type: 'interrupt' }
@@ -192,6 +199,8 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isDeleteConversationPayload(value.payload)
     case 'renameConversation':
       return 'payload' in value && isRenameConversationPayload(value.payload)
+    case 'changeWorkspace':
+      return 'payload' in value && isChangeWorkspacePayload(value.payload)
     case 'setSessionSettings':
       // The renderer-minted `changeId` (#261) is validated at the untrusted boundary exactly as
       // `message_id` is — a top-level string sibling of `payload`, never carried onto the wire.
@@ -341,6 +350,24 @@ function isRenameConversationPayload(value: unknown): value is RenameConversatio
     typeof value.conversation_id === 'string' &&
     'name' in value &&
     typeof value.name === 'string'
+  )
+}
+
+/** The untrusted renderer→main boundary guard for the changeWorkspace payload (#379) — the reason the
+ *  command half is security-sensitive. A clone of isRenameConversationPayload with the second field's key
+ *  `name` → `cwd`: both `conversation_id` and `cwd` must be present-and-string — a literal `null`, a
+ *  missing key, and a non-string are all rejected. Checks TYPE, not emptiness — an empty-string `cwd`
+ *  passes (a valid wire value; the daemon polices the path server-side, #823). `cwd` is filesystem-shaped
+ *  but is never resolved into a local path here (only serialized onto the wire). Structural minimum — a
+ *  smuggled extra field is not rejected here; the main-side sender's fresh-literal construction bounds the
+ *  wire to exactly these two fields. Pure; never throws. */
+function isChangeWorkspacePayload(value: unknown): value is ChangeWorkspacePayload {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    'conversation_id' in value &&
+    typeof value.conversation_id === 'string' &&
+    'cwd' in value &&
+    typeof value.cwd === 'string'
   )
 }
 

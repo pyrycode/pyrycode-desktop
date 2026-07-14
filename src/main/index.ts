@@ -320,6 +320,14 @@ app.whenReady().then(() => {
         // list by #275 (consumed by #360), not correlated here. Inert no-op when not connected (#359).
         connection.renameConversation(command.payload)
         return
+      case 'changeWorkspace':
+        // Direct to the connection method (mirrors renameConversation), no orchestrator — a fire-and-
+        // forget request has no consumer/reassembler. Sends change_workspace; the daemon confirms by
+        // replying with the existing conversation_updated record, decoded by the existing path and
+        // reflected in the list for free, not correlated here (the Workspace Picker reads the new
+        // workspace from the re-list). Inert no-op when not connected (#379).
+        connection.changeWorkspace(command.payload)
+        return
       case 'setSessionSettings':
         // Direct to the connection method (mirrors requestSnapshot), no orchestrator. Sends
         // set_session_settings; the daemon replies with one session_settings_updated (decoded by #264,

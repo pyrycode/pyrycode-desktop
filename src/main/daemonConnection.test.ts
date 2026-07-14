@@ -27,6 +27,7 @@ import {
   type UnarchiveConversationPayload,
   type DeleteConversationPayload,
   type RenameConversationPayload,
+  type ChangeWorkspacePayload,
   type SetSessionSettingsPayload,
   type DequeueMessagePayload
 } from '../shared/wire/types'
@@ -2547,6 +2548,74 @@ describe('createDaemonConnection — renameConversation (outbound rename_convers
     const payload = decodeEnvelope(drivers[0].sent[0]).payload
     expect(payload).toEqual(RENAME)
     expect(JSON.stringify(payload)).not.toContain('cwd')
+  })
+})
+
+describe('createDaemonConnection — changeWorkspace (outbound change_workspace, #379)', () => {
+  const CHANGE: ChangeWorkspacePayload = { conversation_id: 'conv-9', cwd: '/home/user/project' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.changeWorkspace(CHANGE)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one change_workspace envelope with id 2, ts, and the payload', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.changeWorkspace(CHANGE)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('change_workspace')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    expect(envelope.payload).toEqual(CHANGE)
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.changeWorkspace(CHANGE)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.changeWorkspace(CHANGE)).not.toThrow()
+  })
+
+  it('strips a smuggled extra field — the sent payload is exactly the two modeled fields (fresh literal)', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer could smuggle an extra key past the structural-minimum guard. The
+    // fresh-literal construction in changeWorkspace must bound the wire to conversation_id + cwd.
+    connection.changeWorkspace({
+      conversation_id: 'conv-9',
+      cwd: '/home/user/project',
+      name: 'smuggled'
+    } as unknown as ChangeWorkspacePayload)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual(CHANGE)
+    expect(JSON.stringify(payload)).not.toContain('smuggled')
   })
 })
 

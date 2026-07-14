@@ -77,6 +77,7 @@ export type EnvelopeType =
   | 'unarchive_conversation'
   | 'delete_conversation'
   | 'rename_conversation'
+  | 'change_workspace'
   | 'conversation_updated'
   | 'ack'
   | 'error'
@@ -665,6 +666,29 @@ export interface DeleteConversationPayload {
 export interface RenameConversationPayload {
   conversation_id: string
   name: string
+}
+
+/**
+ * Outbound `change_workspace` request body (client → daemon). Mirrors the daemon's
+ * ChangeWorkspacePayload{ConversationID, Cwd string} field-for-field (pyrycode #823), wire order
+ * `conversation_id, cwd`.
+ *
+ * **Two REQUIRED value-strings** — the same posture as RenameConversationPayload (plain `string`, no
+ * pointer, no `omitempty`), but the second field is `cwd` (the target workspace path), NOT `name`. The
+ * field tag is **`cwd`, not `workspace`** — the daemon flagged this as the single `cwd`-vs-`workspace`
+ * reconcile point and the merged daemon uses `cwd`, matching PromoteConversationPayload /
+ * ConversationCreatedPayload. Do NOT drift it (CLAUDE.md no-drift): change only alongside a daemon/mobile
+ * change. `conversation_id` is a routing id (an existing row's id), not a secret. `cwd` is a
+ * renderer-supplied string that becomes a working directory SERVER-side — the desktop never resolves it
+ * into a filesystem path (reuses the PromoteConversationPayload.cwd posture). An empty `cwd` is a valid
+ * string on the wire (the daemon polices the path server-side); do NOT add a client-side emptiness check.
+ * Two required strings, so no explicit-`null` concern. Kept a DISTINCT type (not an alias of any sibling)
+ * so the verb owns its own wire surface. The daemon confirms with the existing `conversation_updated`
+ * record (already decoded — no new inbound type here). See #379.
+ */
+export interface ChangeWorkspacePayload {
+  conversation_id: string
+  cwd: string
 }
 
 /**

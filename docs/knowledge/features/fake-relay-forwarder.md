@@ -24,6 +24,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder>
 export interface FakeRelayForwarder {
   url: string                                   // ws://127.0.0.1:<port> — NO trailing path
   whenReady(timeoutMs?: number): Promise<void>  // resolves once BOTH legs are registered
+  dropClientLeg(): void                          // terminate the current client leg; a re-dial re-splices (#416)
   close(): Promise<void>                         // terminates both legs + server; idempotent
 }
 ```
@@ -50,6 +51,32 @@ The `ws` upgrade's 101 response unblocks the dialer's `connect` **before** the s
 
 This is the JS analog of the Go harness's `WaitBinary` gate (which polls a map every 2ms because Go lacks a cheap awaitable) — the deferred resolves directly from the `'connection'` handler, no ticker.
 
+### Reconnect capability — `dropClientLeg` + leg-null-on-close ([#416](../codebase/416.md))
+
+The forwarder gained a mid-session drop + re-splice, both **content-blind** (no codec/Noise import — the
+capability terminates and re-registers sockets, never inspects a frame) and **modal-agnostic** (the
+forwarder has zero knowledge of what rides the leg):
+
+- **`dropClientLeg(): void`** — `clientLeg.terminate()`, forcing an abnormal 1006 close that a supervised
+  client (`noiseRelayDriver`, [#149](../codebase/149.md)) treats as retryable and auto-reconnects from.
+  No-op when no client leg is connected. The server leg (the fake daemon) is never touched.
+- **Leg-null-on-`close`, identity-guarded.** Each leg socket's `close` handler nulls its slot **only if
+  that socket is still the current occupant** (`clientLeg === socket` / `serverLeg === socket`). The
+  guard is load-bearing: without it, a *late* close of an already-superseded old socket (e.g. a slow
+  `terminate()` callback firing after a fresh re-dial already filled the slot) would null the freshly
+  re-spliced new leg instead of the stale one it actually belongs to. With the leg nulled, the next
+  `/v1/client` upgrade re-fills the slot exactly as the first dial did, re-splicing to the still-connected
+  server leg — `settleReady()` on that path is a no-op (already settled). The `dest` the message handler
+  forwards to is resolved **dynamically per frame** (`leg === 'client' ? serverLeg : clientLeg`), so a
+  re-spliced leg receives forwarded frames with no stale-capture risk.
+
+This is the plumbing half of a reconnect; the [fake daemon](fake-daemon.md) gained the matching
+content-aware half (a fresh responder handshake on the reconnect `noise_init`) so a re-dial through this
+re-splice actually completes instead of MAC-failing. The consuming genuine-reconnect e2e is
+[#416](../codebase/416.md); it is the drop/re-dial trigger a future queue-reconnect e2e (the store-level
+twin already built in [#197](../codebase/197.md)) can reuse unchanged, since neither this capability nor
+the fake daemon's reconnect handshake carries any modal-specific coupling.
+
 ### Teardown — idempotent
 
 `close()` is guarded by a cached `closePromise`. First call: reject a still-pending readiness deferred, clear the readiness timer, `terminate()` both leg sockets (no-op if null/already closed), `wss.close(cb)`, resolve when the server callback fires. Second and later calls return the **same** promise — no throw, no double `wss.close`. Deterministic idempotency (a cached promise, not best-effort), mirroring `startRelay`'s close contract.
@@ -64,6 +91,8 @@ This is the JS analog of the Go harness's `WaitBinary` gate (which polls a map e
 | Only one leg ever connects | `whenReady` rejects at `timeoutMs` with the static message. |
 | `close()` before both legs up | Pending `whenReady` rejects; teardown proceeds; idempotent. |
 | Double `close()` | Second call resolves the same promise; no throw, no double close. |
+| `dropClientLeg()` with no client leg connected | Silent no-op ([#416](../codebase/416.md)). |
+| A dropped client leg's late `close` fires after a fresh re-dial already re-spliced | Identity-guarded — the late close cannot null the new leg ([#416](../codebase/416.md)). |
 
 - **Deliberately far simpler than the Go `fakerelay`.** No routing envelope, no `server-id`/token headers, no first-claim-wins grace, no `close_code` honouring, no token injection. It is a raw two-leg byte pipe — none of the Go surface is ported. That dropped surface now lives in the sibling [fake routing relay](fake-routing-relay.md) (#251), which bridges a *real* daemon's routing-envelope leg instead of a fake raw one.
 - **Log-free** — mirrors `relayConnection.ts`'s log-free construction; a stray `console.log` in shared test infra pollutes every consumer's output. All observable behaviour is via the returned handle and the spliced frames.
@@ -77,5 +106,6 @@ This is the JS analog of the Go harness's `WaitBinary` gate (which polls a map e
 - Consumers: [fake daemon](fake-daemon.md) / [#91](../codebase/91.md) (the Noise responder that answers on `/v1/server`, **landed**) → [#89](../codebase/89.md) (the round-trip test that drives both, **landed**).
 - Cross-project prior art: pyrycode `fakerelay-harness.md` (Go, `internal/e2e/internal/fakerelay`, #295) — the same ship-the-forwarder-alone phasing and the `WaitBinary` readiness rationale `whenReady` mirrors. The desktop forwarder deliberately drops the Go harness's routing/header/close-code surface.
 - [Fake routing relay](fake-routing-relay.md) / [#251](../codebase/251.md) — the routing-aware sibling that ports the dropped Go surface back in, for bridging a *real* daemon instead of the fake one this module bridges.
+- [#416 codebase notes](../codebase/416.md) — adds `dropClientLeg` + identity-guarded leg-null-on-close (the reconnect capability, § above) and the genuine-reconnect e2e that drives it; blocked-on [#415](../codebase/415.md)'s renderer reconcile.
 </content>
 </invoke>

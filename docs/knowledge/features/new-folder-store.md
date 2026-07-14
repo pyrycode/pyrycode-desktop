@@ -2,16 +2,15 @@
 
 The renderer's single source of truth for an in-flight `create_workspace_folder` request — a
 dedicated Zustand store holding the round-trip status (`idle` / `in-flight` / `created` / `rejected`)
-plus a headless bridge that folds the two typed daemon replies into it, so the not-yet-built
-Create-folder dialog ([#398](https://github.com/pyrycode/pyrycode-desktop/issues/398)) can watch a
-request resolve without polling.
+plus a headless bridge that folds the two typed daemon replies into it, so the
+[Create-folder dialog](../codebase/398.md) can watch a request resolve without polling.
 
-Introduced in [#397](../codebase/397.md), split-child B of [#384](../codebase/384.md) (Create-folder
-dialog). Depends on the transport split-children that shipped first: [#381](../codebase/381.md) (send
+Introduced in [#397](../codebase/397.md), split-child B of #384 (Create-folder dialog). Depends on the
+transport split-children that shipped first: [#381](../codebase/381.md) (send
 `create_workspace_folder`, decode success `workspaceFolderCreated{path}`) and
-[#396](../codebase/396.md) (correlate the bare rejection into `workspaceFolderRejected`). Ships
-**dormant** — purely additive, zero edits to existing files, nothing mounts the bridge or dispatches a
-request until #398 wires the dialog.
+[#396](../codebase/396.md) (correlate the bare rejection into `workspaceFolderRejected`). Shipped
+**dormant** in #397 — purely additive, zero edits to existing files — until
+[#398](../codebase/398.md) mounted the bridge dialog-scoped and became its first real consumer.
 
 ## What it does
 
@@ -73,7 +72,8 @@ survives.
 filesystem operation. It is a remote daemon-side path (the inherited warning at
 `workspaceFolderCreated` in `src/shared/ipc/events.ts`, the `RecentWorkspace`/`cwd` posture carried
 forward from [#380](../codebase/380.md)/[#382](recent-workspaces-store.md)). This store has no DOM
-sink; the constraint is inherited by #398, which must render it as plain text, never HTML.
+sink; [#398](../codebase/398.md) inherited the constraint and renders it as a plain, auto-escaped
+React child, never HTML.
 
 ### The bridge (`src/renderer/src/store/newFolderBridge.ts`)
 
@@ -90,14 +90,14 @@ subscribeNewFolder(onDaemonEvent, dispatch): () => void
 // the store's reducer, not the bridge, applies the in-flight gate. Returns the off-handle.
 
 NewFolderData(): null
-// headless leaf, dormant — no consumer mounts it in #397
+// headless leaf; mounted dialog-scoped by CreateFolderDialog (#398)
 ```
 
 Clones the [`recentWorkspacesBridge`](recent-workspaces-store.md) / `runSettingsWriteBridge` dedicated-
 bridge idiom, but **inbound-only** — unlike `recentWorkspacesBridge` there is no request/outbound half
-here at all. The outbound `createWorkspaceFolder` command (already shipped, #381) belongs to #398,
-which sends it after dispatching `createRequested` (record-before-send, so the store is in-flight
-before a reply can race back).
+here at all. The outbound `createWorkspaceFolder` command (already shipped, #381) is sent by
+[#398](../codebase/398.md)'s `CreateFolderDialog`, after dispatching `createRequested`
+(record-before-send, so the store is in-flight before a reply can race back).
 
 `translateNewFolderEvent` uses the same **soft** `default: null` as `translateRecentWorkspacesEvent` /
 `translateWriteEvent` — this path permanently consumes only its two owned arms, everything else no-ops.
@@ -106,7 +106,7 @@ server-renders to empty markup without a bridge mock (the `RecentWorkspacesData`
 returns the `subscribeNewFolder` off-handle as its cleanup so a StrictMode double-mount nets exactly
 one live listener.
 
-### Data flow (once #398 wires the dialog)
+### Data flow
 
 ```
 Create-folder dialog opens, mounts <NewFolderData /> (dialog-scoped, #398)
@@ -131,13 +131,13 @@ daemon rejects → correlated daemon-error → workspaceFolderRejected DaemonEve
 - **Import surface:** `import { useNewFolderStore, selectNewFolderRoundTrip } from
   '@renderer/store/newFolderStore'` and `import { NewFolderData } from
   '@renderer/store/newFolderBridge'`.
-- **Mount lifecycle — dialog-scoped, decided.** `NewFolderData` is meant to be mounted **by the #398
-  dialog**, not app-level in `App.tsx` — the `RecentWorkspacesData`-is-picker-scoped posture, not
-  `RunSettingsWriteData`'s app-level one. The dialog is the sole consumer and stays mounted for the
-  whole round-trip; an app-level always-on subscription was considered and rejected as buying nothing
-  (the in-flight gate already makes any late/stray reply a harmless no-op, and a reset-on-close leaves
-  the store idle between dialog openings). #397 ships the binding dormant and does not touch
-  `App.tsx`.
+- **Mount lifecycle — dialog-scoped.** `NewFolderData` is mounted by
+  [`CreateFolderDialog`](../codebase/398.md), not app-level in `App.tsx` — the
+  `RecentWorkspacesData`-is-picker-scoped posture, not `RunSettingsWriteData`'s app-level one. The
+  dialog is the sole consumer and stays mounted for the whole round-trip; an app-level always-on
+  subscription was considered and rejected as buying nothing (the in-flight gate already makes any
+  late/stray reply a harmless no-op, and a reset-on-unmount leaves the store idle between dialog
+  openings). `App.tsx` is untouched.
 - **`daemonEventBridge.ts`'s pre-existing `workspaceFolderCreated`/`workspaceFolderRejected` no-ops are
   untouched** — that bridge is the *session-store* translator and its no-ops for these two arms are
   correct and stay in place (the [#382](recent-workspaces-store.md) precedent: leave the session
@@ -146,8 +146,9 @@ daemon rejects → correlated daemon-error → workspaceFolderRejected DaemonEve
 ## Edge cases and limitations
 
 - **No async, no cancellation, no timer inside this slice.** The store is synchronous fold-state; the
-  bridge is a single event listener with an off-handle cleanup. Whether a request times out is #398's
-  UX concern, not this store's.
+  bridge is a single event listener with an off-handle cleanup. A request never times out on its own —
+  [#398](../codebase/398.md)'s dialog leaves an abandoned in-flight request to resolve or not; closing
+  the dialog unmounts the bridge and resets the store regardless of whether a reply ever arrives.
 - **A stale or unsolicited reply is a harmless no-op**, by construction of the in-flight gate — see
   above. This is deliberately the *only* defense on the renderer side; the security-sensitive
   correlation of the untrusted rejection frame already shipped main-side in #396.
@@ -170,6 +171,6 @@ daemon rejects → correlated daemon-error → workspaceFolderRejected DaemonEve
   simplified here from a `Map` to a single value since there is no correlation key.
 - [Recent-workspaces store](recent-workspaces-store.md) — the "pure renderer state, held verbatim,
   dedicated bridge, dormant until a consumer mounts it" posture this store mirrors.
-- [#384 — Create-folder dialog split](../codebase/384.md) — parent ticket; this is split-child B
-  (round-trip store), between #396 (rejection transport) and #398 (dialog UI, Figma 19-44), the
-  remaining consumer.
+- [#398 codebase notes](../codebase/398.md) — the Create-folder dialog UI, split-child C of #384, and
+  this store's first real consumer: mounts `NewFolderData` dialog-scoped, dispatches `createRequested`/
+  `reset`, and reads `selectNewFolderRoundTrip` to drive the dialog's in-flight/error states.

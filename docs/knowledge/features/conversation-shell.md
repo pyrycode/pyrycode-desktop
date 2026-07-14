@@ -441,7 +441,11 @@ No new command, no new transport plumbing, no store change.
                 ├── .workspace-picker__empty        "No recent workspaces" (workspaces === [])
                 │                                   — no row, no empty copy at all when workspaces === null
                 ├── "Other" section-header
-                └── .workspace-picker__other        "Create new folder…" — disabled (inert, #384 wires it)
+                └── .workspace-picker__other        "Create new folder under <cwd>" (#398) — disabled only
+                │                                     with no active conversation
+                    └── CreateFolderDialog           (#398, mounted picker-scoped when open)
+                        ├── NewFolderData             (#397's dormant bridge — mounted dialog-scoped)
+                        └── CreateFolderDialogView    "Create workspace" dialog (Figma 19-44)
 ```
 
 **Null-vs-empty store (AC1).** `workspaces` (from `useRecentWorkspacesStore(selectRecentWorkspaces)`)
@@ -470,12 +474,20 @@ itself does not live-update on that reply (`activeConversationStore` is written 
 `conversation_created`) — reopening the picker right after a change still marks the *old* `cwd` until
 the next create, a pre-existing #278 limitation, not fixed here.
 
-**"Other" entry present but inert (AC4).** The create-folder row is `disabled={!onCreateFolder}`; this
-ticket's container omits `onCreateFolder`, so it always renders disabled. Its label ships as the
-generic `'Create new folder…'` rather than Figma's parent-specific "…under &lt;parent&gt;" — the
-renderer has no clean source for the workspace-root basename here; #384 (the create-folder dialog)
-resolves the parent and supplies the real handler as a pure additive, the same seam shape as
-`WorkspaceChip.onChange` before this ticket.
+**"Other" entry — create-folder dialog (#398).** The create-folder row is `disabled={!onCreateFolder}`;
+the container now supplies `onCreateFolder` whenever `conversation !== null` (the same gating as
+`onChoose` — the dialog needs the `conversation_id` its switch reflects onto), opening a new
+`CreateFolderDialog` mounted picker-scoped. The label is now parent-specific — `` `Create new folder
+under ${activeCwd}` `` — falling back to the generic `'Create new folder…'` only when there is no active
+conversation to derive a parent from. The dialog is a near-clone of `RenameConversationDialog.tsx`
+(Figma 19-44: "Create workspace" title, "What should this workspace be called?" field, Cancel/Create
+actions), drives the [create-folder round-trip store](new-folder-store.md) (#397) — mounting its
+previously-dormant `NewFolderData` bridge dialog-scoped so the daemon reply actually resolves — and on
+the `created` outcome switches the conversation to the daemon's **returned** path verbatim via
+`requestChangeWorkspace` (never a client-reconstructed path — the #288 EvalSymlinks lesson), then closes
+both the dialog and the picker (`onCreated` is the picker's own `onClose`). A `rejected` outcome shows a
+generic, apostrophe-free failure line and stays open for retry. See [#398 codebase
+notes](../codebase/398.md) for the full implementation and lessons learned.
 
 **Untrusted strings.** `path` renders as auto-escaped React children, never
 `dangerouslySetInnerHTML`, never split/basenamed/otherwise resolved as a filesystem path — the
@@ -1308,7 +1320,8 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   workspace once the daemon's `conversation_updated` re-list arrives, and the picker's own "default"
   mark stays stale until the next `conversation_created` (`activeConversationStore` does not observe
   `conversation_updated`) — a pre-existing #278 limitation, not fixed here. The "Other" create-folder
-  entry is permanently inert until #384 supplies `onCreateFolder`.
+  entry now opens a working dialog ([#398](../codebase/398.md)) whenever a conversation is active; it
+  remains inert only in the same list-opened, no-active-conversation case as the rest of the sheet.
 
 ## Related
 

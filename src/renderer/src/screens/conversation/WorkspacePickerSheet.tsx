@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { ConversationCreatedPayload, RecentWorkspace } from '@shared/wire/types'
 import { formatLastActivity } from '../channels/channelListViewModel'
@@ -7,6 +7,7 @@ import {
   selectRecentWorkspaces
 } from '../../store/recentWorkspacesStore'
 import { RecentWorkspacesData } from '../../store/recentWorkspacesBridge'
+import { CreateFolderDialog } from './CreateFolderDialog'
 
 // #383: the Workspace Picker sheet — the UI slice of #157 (Figma node 20-2). A bottom sheet that lists
 // the recent-workspaces store, marks the active conversation's current workspace, and dispatches the
@@ -26,9 +27,13 @@ const WORKSPACE_PICKER_RECENT_HEADER = 'Recent'
 const WORKSPACE_PICKER_OTHER_HEADER = 'Other'
 const WORKSPACE_PICKER_DEFAULT_PILL = 'default'
 const WORKSPACE_PICKER_EMPTY_COPY = 'No recent workspaces'
-// The "under <parent>" suffix the Figma shows is deferred to #384 (the create-folder dialog owns the
-// parent resolution + the real handler). Generic here; U+2026 ellipsis, not three dots.
+// #398: the create-folder entry label. When an active conversation supplies a workspace, the entry names
+// the parent it will create under (WORKSPACE_PICKER_CREATE_PREFIX + activeCwd); with no active conversation
+// (the disabled state) it falls back to the generic label. Both apostrophe-free; U+2026 ellipsis, not three
+// dots. `activeCwd` is an untrusted daemon string rendered as auto-escaped React children, never resolved
+// as a path (the `row.path` posture).
 const WORKSPACE_PICKER_CREATE_LABEL = 'Create new folder…'
+const WORKSPACE_PICKER_CREATE_PREFIX = 'Create new folder under '
 const WORKSPACE_PICKER_LAST_USED_PREFIX = 'Last used '
 
 // Distinct from STATUS_SHEET_TITLE_ID / CHANNEL_INFO_SHEET_TITLE_ID so all three sheets can coexist
@@ -76,8 +81,9 @@ function FolderPlusIcon(): JSX.Element {
 // (a real "zero recent workspaces"), the #141/#324 distinction. `activeCwd`: the active conversation's cwd,
 // or null — the row whose `path` equals it carries the "default" pill (exact string equality, so a null
 // marks no row, AC2). `onChoose`: callback-gated — supplied ONLY for an active conversation, so absent it
-// yields inert (disabled) rows (AC3). `onCreateFolder`: omitted this ticket → the "Other" entry renders
-// disabled (present but inert, AC4; #384 supplies the handler as a pure additive).
+// yields inert (disabled) rows (AC3). `onCreateFolder`: supplied ONLY for an active conversation (#398) —
+// present ⇒ the "Other" entry is enabled and its label names `activeCwd`; absent ⇒ disabled + the generic
+// label (AC1).
 //
 // `path` is an untrusted daemon string rendered WHOLE and OPAQUE — auto-escaped React children, never
 // dangerouslySetInnerHTML, never split/basenamed/otherwise resolved as a filesystem path (the WorkspaceChip
@@ -168,10 +174,10 @@ export function WorkspacePickerSheetView({
             ))
           )}
           <p className="status-sheet__section-header">{WORKSPACE_PICKER_OTHER_HEADER}</p>
-          {/* The create-folder entry — present but inert this ticket: onCreateFolder is omitted by the
-              container, so `disabled={!onCreateFolder}` renders it disabled (AC4). #384 supplies the
-              handler and it un-disables, no other change (the WorkspaceChip.onChange disabled-until-wired
-              seam). */}
+          {/* #398: the create-folder entry — enabled only for an active conversation (onCreateFolder
+              supplied), whose label then names the workspace it will create under (AC1). With no active
+              conversation the container omits onCreateFolder, so `disabled={!onCreateFolder}` renders it
+              disabled and `activeCwd === null` shows the generic fallback label. */}
           <button
             type="button"
             className="workspace-picker__other"
@@ -181,7 +187,11 @@ export function WorkspacePickerSheetView({
             <span className="workspace-picker__other-icon" aria-hidden="true">
               <FolderPlusIcon />
             </span>
-            <span className="workspace-picker__other-label">{WORKSPACE_PICKER_CREATE_LABEL}</span>
+            <span className="workspace-picker__other-label">
+              {activeCwd === null
+                ? WORKSPACE_PICKER_CREATE_LABEL
+                : WORKSPACE_PICKER_CREATE_PREFIX + activeCwd}
+            </span>
           </button>
         </div>
       </div>
@@ -208,6 +218,9 @@ function WorkspacePickerSheet({
   // The "default" mark source: null for a list-opened thread (activeConversationStore is written only on
   // conversation_created), which marks no row (AC2).
   const activeCwd = conversation?.cwd ?? null
+  // #398: the Create-folder dialog's open-state — transient UI state → useState, not the store (ADR 0006,
+  // the sheet-open idiom). Resets for free on the picker's unmount (it only mounts while open).
+  const [createFolderOpen, setCreateFolderOpen] = useState(false)
   useEffect(() => {
     // Index the DOM event map — the ChannelInfoSheet Escape effect verbatim. The sheet only mounts while
     // open (gated in ConversationScreen), so the listener attaches on mount / detaches on cleanup — no
@@ -241,8 +254,22 @@ function WorkspacePickerSheet({
                 onClose()
               }
         }
-        // onCreateFolder omitted this ticket → the "Other" entry stays inert (AC4).
+        // #398: supply onCreateFolder ONLY for a non-null conversation (gated exactly like onChoose — the
+        // dialog needs the conversation_id the switch reflects onto). It just opens the dialog; no wire
+        // traffic here.
+        onCreateFolder={conversation === null ? undefined : () => setCreateFolderOpen(true)}
       />
+      {/* #398: the Create-folder dialog, mounted picker-scoped as a sibling (the ChannelInfoSheet-mounts-
+          RenameConversationDialog idiom). onDismiss closes the dialog alone (picker stays, AC2); onCreated
+          is the picker's own onClose — closing the picker unmounts this whole tree, so "both the dialog and
+          the picker close" (AC4) is one call. Gated on a non-null conversation so its prop is non-null. */}
+      {createFolderOpen && conversation !== null && (
+        <CreateFolderDialog
+          conversation={conversation}
+          onDismiss={() => setCreateFolderOpen(false)}
+          onCreated={onClose}
+        />
+      )}
     </>
   )
 }

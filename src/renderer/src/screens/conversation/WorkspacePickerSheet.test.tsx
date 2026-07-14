@@ -122,13 +122,30 @@ describe('WorkspacePickerSheetView — the Workspace Picker sheet (#383)', () =>
     expect(rowTag(enabledMarkup)).not.toContain('disabled')
   })
 
-  it('renders the "Other" create-folder entry present but inert this ticket (AC4)', () => {
+  it('keeps the generic create-folder label, disabled, when there is no active conversation (AC1)', () => {
     const markup = renderToStaticMarkup(
       <WorkspacePickerSheetView workspaces={[]} activeCwd={null} now={0} onClose={noop} />
     )
-    // The entry renders (its dialog is #384); with onCreateFolder omitted its button is disabled.
+    // No active conversation ⇒ the generic label and a disabled entry (onCreateFolder omitted).
     expect(markup).toContain('Create new folder')
+    expect(markup).not.toContain('Create new folder under')
     expect(otherTag(markup)).toContain('disabled')
+  })
+
+  it('names the current workspace and enables the create entry for an active conversation (AC1)', () => {
+    // #398: with onCreateFolder supplied and an activeCwd, the entry enables and its label names the
+    // workspace it will create under (the two track "active conversation" together in the container).
+    const markup = renderToStaticMarkup(
+      <WorkspacePickerSheetView
+        workspaces={[]}
+        activeCwd={'~/alpha'}
+        now={0}
+        onClose={noop}
+        onCreateFolder={noop}
+      />
+    )
+    expect(markup).toContain('Create new folder under ~/alpha')
+    expect(otherTag(markup)).not.toContain('disabled')
   })
 
   it('renders an HTML-ish path escaped, never as live markup (AC5)', () => {

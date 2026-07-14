@@ -31,6 +31,14 @@ export interface FakeRelayForwarder {
    */
   whenReady(timeoutMs?: number): Promise<void>
   /**
+   * Terminate the CURRENT client leg to simulate a mid-session relay drop (#416). The socket's
+   * abnormal 1006 close is retryable, so a supervised client auto-reconnects; the leg slot is nulled
+   * on the close so the fresh `/v1/client` dial RE-SPLICES to the still-connected server leg instead
+   * of being terminated. No-op when no client leg is connected. The server leg is unaffected.
+   * Content-blind and modal-agnostic: it terminates a socket, never inspecting a frame.
+   */
+  dropClientLeg(): void
+  /**
    * Terminates both legs and closes the server. Idempotent: a second call returns the same
    * promise and never re-closes. Mirrors the existing startRelay close contract.
    */
@@ -152,6 +160,18 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
       dest.send(toBytes(data), { binary: isBinary })
     })
 
+    // Free the leg slot on this socket's close so a re-dial can re-splice (#416). The identity guard
+    // (`slot === socket`) is load-bearing: a LATE close of an already-superseded old socket must NOT
+    // null the freshly re-spliced new leg. A closed leg drops nothing else — the opposite (still-open)
+    // leg is untouched, so a client-leg drop leaves the server leg (the fake daemon) connected.
+    socket.on('close', () => {
+      if (leg === 'client') {
+        if (clientLeg === socket) clientLeg = null
+      } else if (serverLeg === socket) {
+        serverLeg = null
+      }
+    })
+
     if (clientLeg !== null && serverLeg !== null) settleReady()
   })
 
@@ -167,6 +187,13 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
       }, timeoutMs)
     }
     return ready.promise
+  }
+
+  // Terminate the current client leg (the mid-session drop). `terminate()` forces an abnormal 1006
+  // close, which a supervised client treats as retryable; the leg is nulled by this socket's `close`
+  // handler so the ensuing re-dial re-splices. No-op when no client leg is connected.
+  function dropClientLeg(): void {
+    if (clientLeg !== null) clientLeg.terminate()
   }
 
   function close(): Promise<void> {
@@ -193,7 +220,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
         reject(new Error('fake relay: server address unavailable'))
         return
       }
-      resolve({ url: `ws://127.0.0.1:${address.port}`, whenReady, close })
+      resolve({ url: `ws://127.0.0.1:${address.port}`, whenReady, dropClientLeg, close })
     })
     wss.once('error', reject)
   })

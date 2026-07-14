@@ -27,7 +27,7 @@ import type { DaemonEvent } from '../shared/ipc/events'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeyPair } from './deviceKeypair'
 import type { PairedServerRecord } from './pairedServerStore'
-import { startFakeRelayForwarder } from './transport/fakeRelayForwarder'
+import { startFakeRelayForwarder, type FakeRelayForwarder } from './transport/fakeRelayForwarder'
 import { startFakeDaemon, type FakeDaemon } from './transport/fakeDaemon'
 import { loadNoiseLib } from './transport/noiseLib'
 import { base64StdEncode, encodeEnvelope, decodeEnvelope } from './transport/codec'
@@ -37,7 +37,12 @@ import { saveDebugBundle } from './saveDebugBundle'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import type { HelloAckPayload, MessagePayload, SendMessagePayload } from '../shared/wire/types'
+import type {
+  HelloAckPayload,
+  MessagePayload,
+  ModalShownPayload,
+  SendMessagePayload
+} from '../shared/wire/types'
 
 // A fixed clock for the fake-target run — the fake daemon decodes the `hello`/`send_message`
 // envelopes structurally (id/ts must be number/string) but never inspects the ts value, so a fixed
@@ -153,6 +158,7 @@ async function mintDeviceKeypair(): Promise<DeviceKeyPair> {
 interface RoundTripContext {
   connection: DaemonConnection
   daemon: FakeDaemon
+  forwarder: FakeRelayForwarder
   events: DaemonEvent[]
   waiter: ReturnType<typeof makeWaiter>
 }
@@ -165,7 +171,13 @@ interface RoundTripContext {
  */
 async function standUpRoundTrip(
   buildReply: () => Uint8Array,
-  daemonOpts?: { rekeyResumeMessage?: Uint8Array; buildReplyFrames?: (inbound: Uint8Array) => Uint8Array[] }
+  daemonOpts?: {
+    rekeyResumeMessage?: Uint8Array
+    buildReplyFrames?: (inbound: Uint8Array) => Uint8Array[]
+    // #416: plaintext envelopes the fake daemon re-seals + streams after a reconnect handshake, in
+    // order. Modal-agnostic on the harness side — the reconnect e2e passes the crafted modal frame here.
+    reconnectResendFrames?: Uint8Array[]
+  }
 ): Promise<RoundTripContext> {
   const forwarder = await startFakeRelayForwarder()
   cleanups.push(() => forwarder.close())
@@ -216,7 +228,7 @@ async function standUpRoundTrip(
     () => events.some((e) => e.type === 'connected' || e.type === 'failed'),
     CONNECT_TIMEOUT_MS
   )
-  return { connection, daemon, events, waiter }
+  return { connection, daemon, forwarder, events, waiter }
 }
 
 // --- fake-target run (unconditional under `npm test`) — AC1, AC2, AC3 ------------------------
@@ -675,6 +687,150 @@ describe('createDaemonConnection conversations round-trip (in-process fake targe
       expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
     },
     15_000
+  )
+})
+
+// --- reconnect modal reconcile through a GENUINE relay drop (#416, AC4/AC5) ------------------
+// A real reconnect: a mid-session relay drop (forwarder.dropClientLeg), a real supervisor re-dial, a
+// fresh Noise responder handshake (fakeDaemon.handleReconnect), and the daemon re-pushing (or not) an
+// outstanding modal_shown (reconnectResendFrames). This proves the #415 modal reconcile against a
+// genuine reconnect at the DaemonEvent sink — the layer reachable from a src/main test.
+//
+// AC4 also asks to assert at the RENDERER store (the real subscribeModal + reduceModal folding this
+// order into ModalState.outstanding). That half lives in src/renderer/src/store/modalBridge.test.ts:
+// the composite tsconfig.node.json walls src/main off from src/renderer (a main test importing renderer
+// code fails typecheck with TS6307/TS2307 — verified), so AC4 splits along that project boundary. This
+// file proves the ordered DaemonEvent stream a reconnect emits (the input the IPC channel delivers to
+// the renderer, in order); the renderer spec proves the reducer's clear-then-repopulate over that exact
+// order. Together they close the loop the single in-order daemon-event channel guarantees.
+//
+// AC5: the forwarder + fake-daemon reconnect capability carries ZERO modal coupling — only this e2e
+// crafts a modal frame. The sibling #197 queue-reconnect e2e reuses standUpRoundTrip + dropClientLeg +
+// reconnectResendFrames unchanged, swapping the crafted frame + the asserted event.
+describe('createDaemonConnection reconnect modal reconcile (in-process fake target, #416)', () => {
+  const MODAL_ID = 'mdl-reconnect-1'
+  // A well-formed modal_shown envelope: pushed mid-session and (variant 1) re-sent after the reconnect
+  // handshake with the SAME modal_id, so the renderer reducer's shown-idempotency is under test.
+  const modalPayload: ModalShownPayload = {
+    modal_id: MODAL_ID,
+    class: 'permission',
+    title: 'Allow Bash?',
+    prompt: 'run the command',
+    options: [
+      { id: 'allow', label: 'Allow' },
+      { id: 'deny', label: 'Deny' }
+    ],
+    default_option_id: 'deny'
+  }
+  const modalFrame = encodeEnvelope({ id: 500, type: 'modal_shown', ts: FIXED_TS, payload: modalPayload })
+  // The DaemonEvent the assembled stack emits for that frame (snake→camel at the transport). The
+  // renderer store folds exactly this into `outstanding` (mirrored in modalBridge.test.ts, #416).
+  const expectedModalShown = {
+    type: 'modalShown',
+    modalId: MODAL_ID,
+    class: 'permission',
+    title: 'Allow Bash?',
+    prompt: 'run the command',
+    options: [
+      { id: 'allow', label: 'Allow' },
+      { id: 'deny', label: 'Deny' }
+    ],
+    defaultOptionId: 'deny'
+  }
+  // The supervisor's first reconnect waits one backoff step (~1s ±20% jitter) before re-dialling, then
+  // the fresh handshake runs — comfortably inside this bound, which still fails fast on a real hang.
+  const RECONNECT_TIMEOUT_MS = 8_000
+
+  const connectedAcks = (events: DaemonEvent[]): HelloAckPayload[] =>
+    events
+      .filter((e): e is Extract<DaemonEvent, { type: 'connected' }> => e.type === 'connected')
+      .map((e) => e.ack)
+  const modalShownCount = (events: DaemonEvent[]): number =>
+    events.filter((e) => e.type === 'modalShown').length
+
+  it(
+    'variant 1: a still-held modal re-pushed after the reconnect surfaces exactly once, same modalId',
+    async () => {
+      const { daemon, forwarder, events, waiter } = await standUpRoundTrip(UNUSED_BUILD_REPLY, {
+        reconnectResendFrames: [modalFrame]
+      })
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+      expect(connectedAcks(events)).toHaveLength(1)
+
+      // Raise the modal mid-session (server-initiated push). It decodes to exactly one modalShown
+      // DaemonEvent carrying the intact options + defaultOptionId (the answerable precondition).
+      daemon.pushFrame(modalFrame)
+      await waiter.wait(() => events.some((e) => e.type === 'modalShown'), MESSAGE_TIMEOUT_MS)
+      expect(modalShownCount(events)).toBe(1)
+      expect(findEvent(events, 'modalShown')).toEqual(expectedModalShown)
+
+      // Drop the relay mid-session → the supervisor auto-reconnects, re-dials, re-handshakes, and the
+      // daemon re-sends the still-held modal after the reconnect hello_ack.
+      forwarder.dropClientLeg()
+
+      // Wait for the SECOND connected AND the re-delivered modalShown.
+      await waiter.wait(
+        () => connectedAcks(events).length >= 2 && modalShownCount(events) >= 2,
+        RECONNECT_TIMEOUT_MS
+      )
+
+      // Exactly two connected (initial + reconnect) and exactly two modalShown (initial push + the one
+      // reconnect re-send, same modalId) — no duplicate. The renderer reducer clears on the reconnect's
+      // `connected` then repopulates from the re-send → outstanding holds ONE prompt (see #416 spec).
+      const acks = connectedAcks(events)
+      expect(acks).toHaveLength(2)
+      const shown = events.filter((e) => e.type === 'modalShown')
+      expect(shown).toHaveLength(2)
+      for (const e of shown) expect(e).toEqual(expectedModalShown)
+
+      // The reconnect handshake sealed the SAME hello_ack as the initial one (reused static + helloAck).
+      expect(acks[1]).toEqual(acks[0])
+      expect(acks[0]).toEqual(EXPECTED_ACK)
+
+      // Load-bearing ordering: the reconnect's `connected` precedes the re-delivered `modalShown`, so the
+      // reducer clears BEFORE the re-send repopulates. Compared by last index in arrival order.
+      const kinds = events.map((e) => e.type)
+      expect(kinds.lastIndexOf('connected')).toBeLessThan(kinds.lastIndexOf('modalShown'))
+
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+    },
+    20_000
+  )
+
+  it(
+    'variant 2: a resolved-while-away modal (not re-pushed) is gone after the reconnect',
+    async () => {
+      const { daemon, forwarder, events, waiter } = await standUpRoundTrip(UNUSED_BUILD_REPLY, {
+        reconnectResendFrames: []
+      })
+      expect(findEvent(events, 'connected'), `expected connected; observed ${types(events)}`).toBeDefined()
+      expect(connectedAcks(events)).toHaveLength(1)
+
+      // Raise the modal mid-session, then drop the relay. On the reconnect the daemon streams hello_ack
+      // and NOTHING else (the modal was resolved while the client was away).
+      daemon.pushFrame(modalFrame)
+      await waiter.wait(() => events.some((e) => e.type === 'modalShown'), MESSAGE_TIMEOUT_MS)
+      expect(modalShownCount(events)).toBe(1)
+
+      forwarder.dropClientLeg()
+      await waiter.wait(() => connectedAcks(events).length >= 2, RECONNECT_TIMEOUT_MS)
+
+      // Give any (erroneous) post-reconnect modalShown a chance to arrive, then assert none did — only
+      // the pre-drop push remains. At the renderer store the reconnect `connected` clears outstanding to
+      // [] and nothing repopulates it (absence = resolved-while-away).
+      await waiter.wait(() => modalShownCount(events) >= 2, 500)
+      const acks = connectedAcks(events)
+      expect(acks).toHaveLength(2)
+      expect(modalShownCount(events)).toBe(1)
+      expect(acks[1]).toEqual(acks[0])
+
+      // The reconnect's `connected` is the last modal-relevant event; no `modalShown` follows it.
+      const kinds = events.map((e) => e.type)
+      expect(kinds.lastIndexOf('modalShown')).toBeLessThan(kinds.lastIndexOf('connected'))
+
+      expect(findEvent(events, 'failed'), `unexpected failed; observed ${types(events)}`).toBeUndefined()
+    },
+    20_000
   )
 })
 

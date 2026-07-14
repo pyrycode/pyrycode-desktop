@@ -19,6 +19,20 @@
 // swap signal (there is no wire ack). The crypto is faithful; every outbound frame stays tagged
 // `noise_msg` (the client reads by session state, never the inbound `type` — see sendNoise).
 //
+// It also gains a RECONNECT capability (#416): a supervised client, on a relay drop, re-dials and
+// starts a FRESH createNoiseSession carrying its `hello` — a full IK handshake whose first frame is
+// tagged `noise_init` (noiseRelayDriver.ts:189/203), NOT an in-session rekey. The inner `type` is
+// therefore consulted for ROUTING ONLY: in `transport` state a `noise_init` routes to handleReconnect
+// (handleMsg1's hello-recovery + hello_ack, plus handleRekeyInit's atomic cipher swap), reusing the
+// SAME responder static — exactly the routing signal the driver documents, so branching on it is
+// faithful. Transport-frame INTERPRETATION still relies solely on the Noise state machine + AEAD: a
+// hostile `type` cannot misroute a transport frame, and a hostile `noise_init` triggers only a fresh-
+// handshake attempt that FAILS CLOSED (`handshake-read-failed`) — never a downgrade or a transport
+// bypass. pushFrame() seals a server-initiated frame under the current send cipher (the initiateRekey
+// seal-and-stream minus the state transition); reconnectResendFrames stream after the reconnect
+// hello_ack under the new send cipher. All three are modal-agnostic — the modal specifics live only
+// in the tests.
+//
 // Split() send/recv role-mapping (AC4, load-bearing): `noise-c.wasm` returns the two transport
 // ciphers already role-adjusted as `[send, recv]` for BOTH roles (noise-c.wasm.d.ts:47-51,
 // confirmed against the 0.4.0 wrapper's `[send, receive]` doc + the noise-c C API), so the
@@ -105,6 +119,12 @@ export interface FakeDaemonOptions {
   /** Plaintext the daemon seals under the NEW send cipher right after a rekey swap (initiateRekey).
    *  Default: DEFAULT_REKEY_RESUME_MESSAGE — a canned `message` envelope. */
   rekeyResumeMessage?: Uint8Array
+  /** Ordered plaintext envelopes the daemon re-seals (under the NEW send cipher) and streams right
+   *  after a RECONNECT handshake's hello_ack (#416). Default `[]`. Generalises `rekeyResumeMessage` to
+   *  N frames. Modal-agnostic: the modal e2e passes `[modalShownEnvelope]` (a still-held modal re-send)
+   *  or `[]` (resolved-while-away); a queue e2e would pass a `queue_state` envelope. Streaming AFTER
+   *  hello_ack guarantees the client processes `connected` (→ reset) before the re-sends repopulate. */
+  reconnectResendFrames?: Uint8Array[]
 }
 
 /** Closed set of static reasons — NEVER carries key/token/frame/plaintext bytes. */
@@ -129,6 +149,11 @@ export interface FakeDaemon {
   /** As the daemon: seal a `rekey_request` under the current send cipher, stream it, and enter
    *  `awaiting-rekey-init` to answer the client's fresh `noise_init`. No-op unless in `transport`. */
   initiateRekey(): void
+  /** Server-initiated push (#416): seal `plaintext` under the CURRENT send cipher and stream it as a
+   *  `noise_msg`. The `initiateRekey` seal-and-stream pattern minus the state transition. No-op unless
+   *  in `transport` with a live send cipher. Modal-agnostic — any envelope (the modal e2e pushes a
+   *  crafted `modal_shown` to raise the initial modal mid-session). */
+  pushFrame(plaintext: Uint8Array): void
   /** Tear down the WS leg + free the wasm handshake/cipher state. Idempotent. */
   close(): Promise<void>
 }
@@ -168,6 +193,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
   const buildReply = options.buildReply ?? ((plaintext: Uint8Array) => plaintext)
   const buildReplyFrames = options.buildReplyFrames
   const rekeyResumeMessage = options.rekeyResumeMessage ?? DEFAULT_REKEY_RESUME_MESSAGE
+  const reconnectResendFrames = options.reconnectResendFrames ?? []
   const helloAck: HelloAckPayload = {
     protocol_version: 'v2',
     server_id: 'fake-daemon',
@@ -292,6 +318,54 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
     }
   }
 
+  // A supervised client's RECONNECT `noise_init` (#416): the driver re-dials after a relay drop and
+  // starts a FRESH createNoiseSession carrying its `hello` — a full IK handshake, NOT an in-session
+  // rekey. So this reuses handleMsg1's hello-recovery + hello_ack (the reconnect's `connected` ack must
+  // match the initial one) with handleRekeyInit's atomic swap (install BOTH new ciphers, free BOTH old,
+  // nothing fallible between). The reconnectResendFrames then stream under the NEW send cipher, in
+  // order, AFTER hello_ack — so the client processes `connected` (→ reset) before they repopulate. A
+  // malformed / wrong-suite reconnect msg1 fails closed to handshake-read-failed with both old ciphers
+  // still installed (no torn state), exactly as handleMsg1 / handleRekeyInit.
+  function handleReconnect(raw: Uint8Array): void {
+    if (sendCipher === null || recvCipher === null) return
+    try {
+      const fresh = lib.HandshakeState(NOISE_PROTOCOL, lib.constants.NOISE_ROLE_RESPONDER)
+      fresh.Initialize(null, staticPriv, null, null)
+      // Recover + validate the client `hello` early-data exactly as handleMsg1 — a malformed hello
+      // fail-closes (faithfulness: a lax fake must reject what the real daemon rejects).
+      const hello = fresh.ReadMessage(raw, true) ?? EMPTY_AD
+      decodeEnvelope(hello)
+      const msg2 = fresh.WriteMessage(
+        encodeEnvelope({ id: HELLO_ACK_ID, type: 'hello_ack', ts: HELLO_ACK_TS, payload: helloAck })
+      )
+      // noise-c returns [send, recv] role-adjusted for the responder — no swap (see the module note).
+      const pair = fresh.Split() // consumes + frees the fresh handshake
+      const prevSend = sendCipher
+      const prevRecv = recvCipher
+      sendCipher = pair[0]
+      recvCipher = pair[1]
+      const send = sendCipher // capture while narrowed, before the sendNoise calls below
+      for (const obj of [prevSend, prevRecv]) {
+        try {
+          obj?.free()
+        } catch {
+          /* already freed / teardown */
+        }
+      }
+      state = 'transport'
+      sendNoise(msg2)
+      // Re-send the still-held frames sealed under the NEW send cipher, in order (modal-agnostic).
+      for (const frame of reconnectResendFrames) {
+        sendNoise(send.EncryptWithAd(EMPTY_AD, frame))
+      }
+    } catch {
+      // Malformed / wrong-suite reconnect msg1: the library auto-freed the fresh handshake and NO cipher
+      // was reassigned (both still hold the old keys). Classify + tear down, mirroring handleMsg1.
+      settle({ ok: false, reason: 'handshake-read-failed' })
+      void close()
+    }
+  }
+
   function handleTransport(raw: Uint8Array): void {
     if (recvCipher === null || sendCipher === null) return
     const send = sendCipher
@@ -314,13 +388,20 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
   }
 
   // The one untrusted→trusted boundary. Inert after close so a frame arriving post-freeAll never
-  // touches a freed wasm object (mirrors noiseSession.onFrame). The inner `type` is NOT branched
-  // on — the Noise state machine + AEAD decide interpretation, so a hostile `type` can't misroute.
+  // touches a freed wasm object (mirrors noiseSession.onFrame). The inner `type` is consulted for
+  // ROUTING ONLY (#416): in `transport` state a `noise_init` is a supervised client's reconnect msg1,
+  // routed to a fresh responder handshake — exactly the driver's documented signal. Transport-frame
+  // INTERPRETATION still relies solely on the Noise state machine + AEAD, so a hostile `type` cannot
+  // misroute a transport frame, and a hostile `noise_init` only triggers a fresh-handshake attempt that
+  // FAILS CLOSED — never a downgrade or a transport bypass.
   function onMessage(data: RawData): void {
     if (state === 'closed') return
+    let innerType: string
     let raw: Uint8Array
     try {
-      raw = base64StdDecode(decodeInnerFrame(toBytes(data)).data)
+      const inner = decodeInnerFrame(toBytes(data))
+      innerType = inner.type
+      raw = base64StdDecode(inner.data)
     } catch {
       settle({ ok: false, reason: 'frame-decode-failed' }) // caught object dropped — no bytes
       void close()
@@ -328,7 +409,16 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
     }
     if (state === 'awaiting-msg1') handleMsg1(raw)
     else if (state === 'awaiting-rekey-init') handleRekeyInit(raw)
+    else if (innerType === 'noise_init') handleReconnect(raw)
     else handleTransport(raw)
+  }
+
+  // Server-initiated push (#416): seal `plaintext` under the CURRENT send cipher and stream it as a
+  // `noise_msg` — the initiateRekey seal-and-stream pattern minus the state transition. No-op unless a
+  // completed session is in `transport`. Modal-agnostic (any envelope).
+  function pushFrame(plaintext: Uint8Array): void {
+    if (state !== 'transport' || sendCipher === null) return
+    sendNoise(sendCipher.EncryptWithAd(EMPTY_AD, plaintext))
   }
 
   function close(): Promise<void> {
@@ -370,6 +460,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
     staticPublicKey: staticPub,
     whenSettled: () => settledPromise,
     initiateRekey,
+    pushFrame,
     close
   }
 }

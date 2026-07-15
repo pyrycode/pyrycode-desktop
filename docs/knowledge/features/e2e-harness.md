@@ -70,6 +70,16 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   a `testIgnore` in `playwright.config.ts` and runs only under its own
   `playwright.real-claude.config.ts` via `npm run e2e:real-claude` — the first scenario to need a
   second config rather than fitting inside the shared one.
+  - **Its spawn recipe was later extracted into its own shared fixture**, `e2e/fixtures/realDaemon.ts`
+    ([#420](../codebase/420.md)) — the real-stack counterpart of `launchPairedApp.ts` (#433): the
+    `relay → daemon → page` chain (binary resolution, skip-gating, `seedRegistry`, spawn args,
+    `waitForDaemonReady`, process-group reap) moved verbatim so the coming tier-2/tier-3 real-* specs
+    (real-daemon-actions, interrupt/queue, permission modal) reuse it. Both configs' `real-*`
+    partition widened together — `playwright.real-claude.config.ts`'s `testMatch` and
+    `playwright.config.ts`'s `testIgnore` both went from `/real-claude\.spec\.ts$/` to
+    `/real-.*\.spec\.ts$/` — so a future `real-*` spec can't leak into the daemon-less default
+    `npm run e2e`. Unlike `launchPairedApp`, the pairing/drive body stayed in the spec; only the spawn
+    recipe (AC1's scope) moved.
 
 ## Related
 
@@ -79,5 +89,6 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#105 codebase notes](../codebase/105.md) — made `smoke.spec.ts` hermetic on an unpaired boot (isolated `--user-data-dir` + `.pairing` assertion).
 - [#433 codebase notes](../codebase/433.md) — extracted `launchPairedApp`, the shared fake-daemon pairing fixture both #93 and #94 now import; the intended home for future fake-daemon UI scenarios.
 - [#435 codebase notes](../codebase/435.md) — repaired the list→thread drive #433 later extracted.
+- [#420 codebase notes](../codebase/420.md) — extracted `e2e/fixtures/realDaemon.ts`, the real-stack sibling of `launchPairedApp.ts`, from `real-claude.spec.ts`; the intended home for future real-* scenarios.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

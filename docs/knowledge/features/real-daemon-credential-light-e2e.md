@@ -24,10 +24,16 @@ the operator's other pre-ship gates.
 
 `e2e/real-daemon-rename.spec.ts` (#439) is the tier's liveness proof: pair against a claude-less spawned
 daemon, wait for the seeded conversation's Rename pencil to render, rename it through the product UI, and
-assert the new title lands in the channel list (old title gone). The four sibling action specs reuse the
-same harness: [#440](../codebase/440.md) (conversation lifecycle — archive/restore/delete, shipped),
-[#441](../codebase/441.md) (workspace — recent-workspaces + create-folder, shipped), #442
-(run-controls), #443 (promote).
+assert the new title lands in the channel list (old title gone). Three sibling action specs reused the
+same harness and shipped: [#440](../codebase/440.md) (conversation lifecycle — archive/restore/delete),
+[#441](../codebase/441.md) (workspace — recent-workspaces + create-folder), [#443](../codebase/443.md)
+(save-as-channel promote — the tier's **marquee case**, pins pyrycode/pyrycode#949 directly). A fourth
+candidate, #442 (dequeue + set-session-settings), was **demoted to Inbox without shipping**: both verbs
+proved DOM-invisible on this tier (dequeue needs a sustained turn this claude-less mode can't run;
+set-session-settings' confirmation never touches the DOM, optimistic-first) — an empty observable subset,
+not a partial one, so it never earned a spec. #442 is the tier's cleanest negative case, and #443 the
+cleanest positive one: **a verb is provable here only if its daemon reply gates a visible DOM transition
+with no optimistic pre-render.**
 
 [#440](../codebase/440.md) ran green against a live `pyry dev` build and confirmed all four registry
 handlers this tier depends on (`create_conversation`, `archive_conversation`, `unarchive_conversation`,
@@ -47,6 +53,17 @@ wired with no #949-class gap, and established that a real-daemon "picker/dialog 
 target a DOM element that renders unconditionally (here, `.workspace-picker__other`) rather than one
 whose presence depends on the same daemon-derived round-trip already under test — a row-count-0 check
 can pass vacuously if the daemon's reply content changes shape.
+
+[#443](../codebase/443.md), the marquee case, promotes the seed through `SaveAsChannelDialog`'s scratch
+("Keep in scratch") arm — the one path that sends `promote_conversation` alone, with no
+`create_workspace_folder` prelude — and asserts the row moves from the "Recent discussions" section to
+"Channels" only after the daemon's `conversation_updated` reply drives a re-list; the dedicated
+("Move to dedicated channel folder") branch was deliberately dropped from this tier since its
+`create_workspace_folder` prelude is already real-wire-proven by #441 and the daemon's #949 handler
+(Option B) ignores the promote payload's `cwd` entirely, leaving that branch's remaining contract a
+client-only concern already covered by the fake twin #423. This is the sibling that most directly proves
+#949 is fixed — a pre-#949 binary would answer `unsupported` and this spec's core assertion would time
+out.
 
 ## How it works
 
@@ -184,6 +201,13 @@ Prerequisites: only `pyry` on `PATH` (or `PYRY_BIN`), built from a **#820-inclus
 - [#441 codebase notes](../codebase/441.md) — the workspace-actions (recent-workspaces + create-folder)
   sibling spec, the second to ship and the first to use `seedPromoted:false`; ran green end-to-end on a
   live daemon, no #949-class gap.
+- [#443 codebase notes](../codebase/443.md) — the save-as-channel promote sibling, the tier's marquee
+  case; pins pyrycode/pyrycode#949 directly and states the tier's provability rule (visible DOM
+  transition, no optimistic pre-render) in its cleanest positive form. No `docs/knowledge/codebase/442.md`
+  exists — #442 was demoted without shipping, the rule's negative counterpart.
+- [Conversation promote](conversation-promote.md) / [#273 codebase notes](../codebase/273.md) — the
+  `promote_conversation` transport slice #443 exercises end-to-end against a real daemon for the first
+  time.
 - [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#252](../codebase/252.md) — the credentialed
   sibling tier that proves the send/stream turn; this tier proves the registry actions the credentialed
   tier never exercises.

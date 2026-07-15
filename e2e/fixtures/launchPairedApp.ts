@@ -87,17 +87,36 @@ export function seedConversationsFrame(): Uint8Array {
  *  daemon knobs) passes through, so a spec scripts daemon replies without editing the fixture. */
 export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'>
 
-/** The connected-thread handle a spec receives: the window, the launched app, and the full
- *  fake-daemon control surface (`staticPublicKey`, `pushFrame`, `initiateRekey`, `whenSettled`,
- *  `close`). The forwarder is intentionally not exposed — no in-scope spec needs its leg controls. */
+/** Launch-lifecycle control, orthogonal to the daemon-reply `options` (#466). One flag couples two
+ *  inseparable behaviours: a reused *paired* dir MUST skip the pairing drive (the paste→Pair→Confirm
+ *  drive would hang waiting for a pairing screen that never appears), so dir-reuse and drive-skip are
+ *  one option, not two. Used only by the relaunch-persistence spec; absent = the default fresh-dir,
+ *  full-drive behaviour every other consumer relies on. */
+export type LaunchControl = {
+  /** Reuse this exact `--user-data-dir` (typically a prior launch's `userDataDir`) instead of minting a
+   *  fresh throwaway. The persisted pairing blob in the dir boots the app straight to the ChannelList, so
+   *  the fixture skips the pairing drive and returns at the list (no row click, no Send-enabled wait —
+   *  the persisted launch-1 relay URL can't reconnect through this launch's fresh forwarder). No `rm`
+   *  teardown is registered here: the minting launch already registered one, so the dir is removed
+   *  exactly once, after every launch on it is closed (the end-of-test LIFO drain). */
+  reuseUserDataDir?: string
+}
+
+/** The handle a spec receives. On the default drive: the window on the connected conversation thread.
+ *  On a `reuseUserDataDir` launch: the window on the ChannelList (paired-from-persistence, no live
+ *  connection). Always carries the full fake-daemon control surface (`staticPublicKey`, `pushFrame`,
+ *  `initiateRekey`, `whenSettled`, `close`) and the `--user-data-dir` in use, so a relaunch spec can
+ *  hand launch 1's dir to launch 2. The forwarder is intentionally not exposed — no in-scope spec needs
+ *  its leg controls. */
 export type PairedApp = {
   page: Page
   app: ElectronApplication
   daemon: FakeDaemon
+  userDataDir: string
 }
 
 type PairedAppFixtures = {
-  launchPairedApp: (options?: LaunchPairedAppOptions) => Promise<PairedApp>
+  launchPairedApp: (options?: LaunchPairedAppOptions, control?: LaunchControl) => Promise<PairedApp>
 }
 
 /** Encode a QrPayload the way the daemon's `pair.Encode` does: JSON → URL-safe, no-pad base64url
@@ -120,12 +139,18 @@ export const test = base.extend<PairedAppFixtures>({
     testInfo.setTimeout(LAUNCH_TEST_TIMEOUT_MS)
     const teardown: Array<() => Promise<void>> = []
 
-    await use(async (options = {}) => {
-      // Isolated `--user-data-dir` for a guaranteed-unpaired start (the launch-time pairing-status
-      // query resolves `not-paired`, so the router shows the pairing screen) and to keep every
-      // persisted secret out of the developer's real userData.
-      const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-'))
-      teardown.push(() => rm(userDataDir, { recursive: true, force: true }))
+    await use(async (options = {}, control = {}) => {
+      // Isolated `--user-data-dir`. Default: `mkdtemp` a fresh throwaway for a guaranteed-unpaired start
+      // (the launch-time pairing-status query resolves `not-paired`, so the router shows the pairing
+      // screen) and to keep every persisted secret out of the developer's real userData. A `rm` teardown
+      // is registered so the dir is removed once. Reuse (#466): launch against the caller's dir and do
+      // NOT register a second `rm` — the minting launch's `rm` (pushed first, drained last) removes the
+      // dir exactly once, after every launch on it has closed.
+      const reuseUserDataDir = control.reuseUserDataDir
+      const userDataDir = reuseUserDataDir ?? (await mkdtemp(join(tmpdir(), 'pyry-e2e-')))
+      if (reuseUserDataDir === undefined) {
+        teardown.push(() => rm(userDataDir, { recursive: true, force: true }))
+      }
 
       const forwarder = await startFakeRelayForwarder()
       teardown.push(() => forwarder.close())
@@ -153,6 +178,18 @@ export const test = base.extend<PairedAppFixtures>({
       teardown.push(() => app.close())
 
       const page = await app.firstWindow()
+
+      // Reuse (#466): the persisted pairing blob in the reused dir routes the app straight to the
+      // ChannelList at mount (App.tsx → routeForStatus reads the persisted pairing record, not the Noise
+      // handshake). Skip the pairing drive — it would hang waiting for a pairing screen that never
+      // appears — and return at the list. NO row click and NO Send-enabled wait: the persisted launch-1
+      // relay URL can't reconnect through this launch's fresh forwarder, so `connected` may never fire;
+      // waiting for Send would hang. The forwarder + daemon are still started above (kept unconditional
+      // so `PairedApp.daemon` stays a non-optional `FakeDaemon`), but are vestigial on this launch.
+      if (reuseUserDataDir !== undefined) {
+        await expect(page.locator('section[aria-label="Conversations"]')).toBeVisible()
+        return { page, app, daemon, userDataDir }
+      }
 
       // --- Drive the real pairing UI → the connected conversation thread. All pairing/navigation
       // selectors live here; per-flow assertion selectors stay in the specs. ---
@@ -196,7 +233,7 @@ export const test = base.extend<PairedAppFixtures>({
         timeout: HANDSHAKE_TIMEOUT_MS
       })
 
-      return { page, app, daemon }
+      return { page, app, daemon, userDataDir }
     })
 
     for (const step of teardown.reverse()) {

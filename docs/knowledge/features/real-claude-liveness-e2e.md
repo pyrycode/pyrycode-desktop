@@ -30,6 +30,13 @@ archive, delete, …) that never touch claude. That tier shares this spec's fixt
 (`e2e/fixtures/realDaemon.ts`) via two additive option fixtures; this doc's spec continues to consume the
 fixture unmodified.
 
+[#445](../codebase/445.md) added the first **turn-coupled** sibling on this spec's own claude-spawning
+tier (`spawnClaude:true`, no `test.use(...)` needed): `e2e/real-claude-interrupt.spec.ts` clones this
+spec's precondition verbatim and swaps the two-turn body for an interrupt-mid-turn liveness proof — the
+real-stack net over the [interrupt envelope](interrupt-envelope.md)'s client wiring (#305–#307), which
+the fake-stack twins (#307, #427) can only prove against a scripted `daemon.pushFrame`, not a genuinely
+running turn. Split from #431; twin #446 (queue-drop under real claude) not yet shipped.
+
 ## How it works
 
 ### Gated out of the default run
@@ -190,6 +197,9 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
   ([#420](../codebase/420.md)), the real-stack sibling of `launchPairedApp.ts` (#433).
 - [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) / [#439](../codebase/439.md) —
   the credential-light sibling tier sharing this spec's fixture chain via additive option fixtures.
+- [Interrupt envelope](interrupt-envelope.md) / [#445 codebase notes](../codebase/445.md) — the
+  turn-coupled sibling spec (`real-claude-interrupt.spec.ts`) on this same claude-spawning tier; the
+  real-stack liveness net over the interrupt client wiring.
 - [Live e2e runbook](live-e2e-runbook.md) / [#13](../codebase/13.md) — the manual, live-**relay**
   operator gate; this scenario automates the real-daemon+real-claude half but still uses a local relay,
   so it does not replace the live-relay verification.

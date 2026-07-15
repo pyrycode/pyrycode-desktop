@@ -80,6 +80,11 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
     `/real-.*\.spec\.ts$/` — so a future `real-*` spec can't leak into the daemon-less default
     `npm run e2e`. Unlike `launchPairedApp`, the pairing/drive body stayed in the spec; only the spawn
     recipe (AC1's scope) moved.
+  - **The fixture then grew a second, credential-light spawn mode.** [#439](../codebase/439.md) added two
+    additive Playwright option fixtures (`spawnClaude`, `seedPromoted`) to `realDaemon.ts`, so a spec can
+    opt into a real `pyry` daemon with **no** `claude` and **no** Anthropic credential — see
+    [real-daemon credential-light e2e](real-daemon-credential-light-e2e.md). `real-claude.spec.ts` sets
+    neither option and keeps its exact prior behavior.
 
 ## Related
 
@@ -90,5 +95,6 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#433 codebase notes](../codebase/433.md) — extracted `launchPairedApp`, the shared fake-daemon pairing fixture both #93 and #94 now import; the intended home for future fake-daemon UI scenarios.
 - [#435 codebase notes](../codebase/435.md) — repaired the list→thread drive #433 later extracted.
 - [#420 codebase notes](../codebase/420.md) — extracted `e2e/fixtures/realDaemon.ts`, the real-stack sibling of `launchPairedApp.ts`, from `real-claude.spec.ts`; the intended home for future real-* scenarios.
+- [#439 codebase notes](../codebase/439.md) / [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) — added the claude-less spawn mode to `realDaemon.ts` and the first credential-light real-* scenario.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

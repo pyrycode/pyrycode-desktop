@@ -32,9 +32,17 @@ import type { QrPayload } from '../../src/shared/wire/types'
 // grandchild, reaped as a process GROUP) and its two temp dirs are reaped on setup failure, test failure,
 // AND success — no orphaned child, no leaked temp dir.
 //
+// #439 adds a claude-less spawn MODE via the `spawnClaude` option (default true = the original behavior
+// described here). With `spawnClaude:false` the harness gates on the `pyry` binary ALONE — no `claude`, no
+// Anthropic credential, no `.claude.json` — and points `-pyry-claude` at a harness-owned no-op placeholder
+// that is never invoked (rename runs no claude turn). That is the credential-light real-daemon tier for
+// registry-only actions (rename / archive / …). The `seedPromoted` option sets the seeded conversation's
+// `is_promoted`. Both are additive; real-claude.spec.ts sets neither and gets the exact behavior below.
+//
 // SKIP-GATING: the harness must SKIP cleanly (never FAIL) on a machine without the real stack. The daemon
-// fixture resolves `claude` / `pyry` / a credential and calls testInfo.skip on any miss BEFORE creating any
-// resource — an unrun test is the correct outcome on the agent machine (no daemon, no claude, no creds).
+// fixture resolves `pyry` (always) plus `claude` / a credential (claude-spawning mode only) and calls
+// testInfo.skip on any miss BEFORE creating any resource — an unrun test is the correct outcome on the
+// agent machine (no daemon, no claude, no creds).
 //
 // SECRET HYGIENE (the source spec carries a security-sensitive label): `pyry pair` stdout carries the
 // pairing token inside its payload, so it is NEVER echoed into an error — only the (content-free, #62)
@@ -66,6 +74,19 @@ export interface SpawnedDaemon {
   pairFields: Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>
 }
 
+/**
+ * Additive option fixtures (#439). `spawnClaude` selects the mode: `true` (default) is the original
+ * claude-spawning mode (real claude + a credential + `.claude.json`, gated on all three); `false` is the
+ * credential-light claude-less mode — a real `pyry` daemon with a no-op `-pyry-claude` placeholder, gated
+ * on the `pyry` binary ALONE. `seedPromoted` sets the seeded conversation's `is_promoted` (`false` default
+ * = a Recent discussion; `true` = a saved Channel, which renders the Rename pencil). Kept a per-spec
+ * option, not a shared default, so the sibling real-daemon-* specs (#440–#443) toggle both axes freely.
+ */
+export type RealDaemonOptions = {
+  spawnClaude: boolean
+  seedPromoted: boolean
+}
+
 export type RealDaemonFixtures = {
   relay: FakeRoutingRelay
   daemon: SpawnedDaemon
@@ -77,54 +98,68 @@ export type RealDaemonFixtures = {
 // supervisor cannot churn-reconnect on the daemon/relay drop, exactly as #94 enforces. The daemon fixture
 // wraps `use()` in try/finally so its subprocess + temp dirs are reaped on setup failure, test failure,
 // AND success — no orphaned real-claude child, no leaked temp dir.
-export const test = base.extend<RealDaemonFixtures>({
+export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
+  // Two additive option fixtures (#439). Defaults preserve the existing behavior byte-for-byte:
+  // real-claude.spec.ts sets neither, so it gets spawnClaude:true (the claude-spawning mode) and
+  // seedPromoted:false (an unpromoted seeded conversation) — exactly what it consumed before.
+  spawnClaude: [true, { option: true }],
+  seedPromoted: [false, { option: true }],
+
   relay: async ({}, use) => {
     const relay = await startFakeRoutingRelay()
     await use(relay)
     await relay.close()
   },
 
-  daemon: async ({ relay }, use, testInfo) => {
+  daemon: async ({ relay, spawnClaude, seedPromoted }, use, testInfo) => {
     // --- Skip-gating: resolve binaries + creds BEFORE creating any resource, so a skip never leaks. ---
-    const claudeBin = resolveOnPath('claude')
-    testInfo.skip(claudeBin === null, 'realclaude: `claude` not on PATH')
-
+    // `pyry` is the ONLY universal gate — both modes spawn the daemon. The claude binary, the Anthropic
+    // credential, and the operator's ~/.claude.json are resolved + gated ONLY in claude-spawning mode
+    // (#439): the claude-less mode runs a real daemon with no claude turn, so it must NOT skip when
+    // `claude` or a credential is absent, and it seeds no `.claude.json`.
     const pyryBin = resolvePyryBin()
     testInfo.skip(
       pyryBin === null,
-      'realclaude: `pyry` not found — set PYRY_BIN or put it on PATH, built from a #854-inclusive tree'
+      'real-daemon: `pyry` not found — set PYRY_BIN or put it on PATH, built from a #820+#854-inclusive tree'
     )
 
-    const apiKey = process.env.ANTHROPIC_API_KEY ?? ''
-    const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? ''
-    testInfo.skip(
-      apiKey === '' && oauthToken === '',
-      'realclaude: neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set. Max-only Mac: extract the ' +
-        "OAuth token via `security find-generic-password -s 'Claude Code-credentials' -w | " +
-        "jq -r '.claudeAiOauth.accessToken'` and export CLAUDE_CODE_OAUTH_TOKEN."
-    )
-
-    // On the OAuth path, seed <daemonHome>/.claude.json from the operator's real ~/.claude.json so
-    // interactive (PTY) claude skips the onboarding theme picker — without it ptyrunner reads the picker
-    // glyph as "ready" and the turn deadlocks (pyrycode #496). Read it BEFORE isolating HOME.
+    let claudeBin: string | null = null
     let claudeJsonBytes: Buffer | null = null
-    if (oauthToken !== '') {
-      const src = join(process.env.HOME ?? homedir(), '.claude.json')
-      try {
-        claudeJsonBytes = await readFile(src)
-      } catch {
-        testInfo.skip(
-          true,
-          `realclaude: CLAUDE_CODE_OAUTH_TOKEN is set but ${src} could not be read. Run \`claude\` once ` +
-            'directly to complete onboarding (writes ~/.claude.json), then re-run.'
-        )
+    if (spawnClaude) {
+      claudeBin = resolveOnPath('claude')
+      testInfo.skip(claudeBin === null, 'realclaude: `claude` not on PATH')
+
+      const apiKey = process.env.ANTHROPIC_API_KEY ?? ''
+      const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? ''
+      testInfo.skip(
+        apiKey === '' && oauthToken === '',
+        'realclaude: neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set. Max-only Mac: extract the ' +
+          "OAuth token via `security find-generic-password -s 'Claude Code-credentials' -w | " +
+          "jq -r '.claudeAiOauth.accessToken'` and export CLAUDE_CODE_OAUTH_TOKEN."
+      )
+
+      // On the OAuth path, seed <daemonHome>/.claude.json from the operator's real ~/.claude.json so
+      // interactive (PTY) claude skips the onboarding theme picker — without it ptyrunner reads the picker
+      // glyph as "ready" and the turn deadlocks (pyrycode #496). Read it BEFORE isolating HOME.
+      if (oauthToken !== '') {
+        const src = join(process.env.HOME ?? homedir(), '.claude.json')
+        try {
+          claudeJsonBytes = await readFile(src)
+        } catch {
+          testInfo.skip(
+            true,
+            `realclaude: CLAUDE_CODE_OAUTH_TOKEN is set but ${src} could not be read. Run \`claude\` once ` +
+              'directly to complete onboarding (writes ~/.claude.json), then re-run.'
+          )
+        }
       }
     }
 
-    // testInfo.skip returns void (not `never`), so TS cannot narrow the nulls away — re-assert once. Not
-    // reachable: every null above was skip-gated. (`throw` keeps the types honest without a blind cast.)
-    if (claudeBin === null || pyryBin === null) {
-      throw new Error('realclaude: unreachable — binaries were skip-gated above')
+    // testInfo.skip returns void (not `never`), so TS cannot narrow `pyryBin` away — re-assert once. Not
+    // reachable: it was skip-gated above. (`throw` keeps the types honest without a blind cast.) `claudeBin`
+    // is narrowed locally in the spawn-args branch below, its only consumer.
+    if (pyryBin === null) {
+      throw new Error('real-daemon: unreachable — pyry was skip-gated above')
     }
 
     // --- Resource creation, tracked so `cleanup` reaps everything on any exit path. ---
@@ -163,23 +198,42 @@ export const test = base.extend<RealDaemonFixtures>({
 
       // Seed the binding BEFORE spawn (the registry loads once at startup, no reload): bind 'default' →
       // the bootstrap pool session so router.Route('default') resolves and the reply stream binds.
-      await seedRegistry(daemonHome, workdir)
+      await seedRegistry(daemonHome, workdir, seedPromoted)
 
       socketDir = await mkdtemp('/tmp/pyry-sock-')
       const socketPath = join(socketDir, 'pyry.sock')
+
+      // What `-pyry-claude` points at. Claude-spawning mode: the resolved real `claude` (narrowed here,
+      // its sole consumer — no `!`). Claude-less mode (#439): a harness-owned no-op executable written
+      // into daemonHome (cleaned up with it). Rename triggers no `send_message`, and the daemon spawns
+      // claude lazily on the first turn, so the placeholder is never executed — it only has to be an
+      // executable path accepted at flag-parse time. Pointing the flag at our own file removes any
+      // dependence on the daemon's default claude resolution (which might fall back to a PATH `claude`
+      // a claude-less machine lacks). The daemon is designed to accept substitutable claude binaries
+      // (its own multi-session e2e uses `/bin/sleep`-style fakes as `-pyry-claude`).
+      let claudeArg: string
+      if (spawnClaude) {
+        if (claudeBin === null) {
+          throw new Error('real-daemon: unreachable — claude was skip-gated above')
+        }
+        claudeArg = claudeBin
+      } else {
+        claudeArg = join(daemonHome, 'noop-claude.sh')
+        await writeFile(claudeArg, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      }
+
       const args = [
         `-pyry-socket=${socketPath}`,
         '-pyry-name=test',
-        `-pyry-claude=${claudeBin}`,
+        `-pyry-claude=${claudeArg}`,
         '-pyry-idle-timeout=0',
         `-pyry-workdir=${workdir}`,
         // #251's relay identifies the daemon leg by the PATH /v1/server (NOT /v2/server, a Go-fake
         // convention its legFor() would reject). The daemon preserves an explicit relay path verbatim.
         `-pyry-relay=${relay.url}/v1/server`,
-        '--',
-        '--model',
-        'haiku',
-        '--dangerously-skip-permissions'
+        // The post-`--` claude flags run only in claude-spawning mode. Claude-less mode omits them: no
+        // claude turn ever runs, and the daemon appends `--session-id <uuid>` regardless.
+        ...(spawnClaude ? ['--', '--model', 'haiku', '--dangerously-skip-permissions'] : [])
       ]
       // detached: true puts pyry + its claude grandchild in one process group so teardown reaps the whole
       // group. stdout ignored; stderr piped for a startup-only, content-free diagnostic.
@@ -323,10 +377,15 @@ function decodePairFields(stdout: string): SpawnedDaemon['pairFields'] {
 
 /**
  * Seed <daemonHome>/.pyry/test/ with the bootstrap session + the 'default' binding, replicating #854's
- * seedBootstrapRegistry / seedBoundConversation field-for-field (the one change: convId = 'default', not a
- * UUID). Mode 0o600, matching the Go seeds. `workdir` goes through JSON.stringify for correct escaping.
+ * seedBootstrapRegistry / seedBoundConversation field-for-field (the changes: convId = 'default', not a
+ * UUID; `is_promoted` is the #439 `isPromoted` param, not a hardcoded false). Mode 0o600, matching the Go
+ * seeds. `workdir` goes through JSON.stringify for correct escaping.
  */
-async function seedRegistry(daemonHome: string, workdir: string): Promise<void> {
+async function seedRegistry(
+  daemonHome: string,
+  workdir: string,
+  isPromoted: boolean
+): Promise<void> {
   const regDir = join(daemonHome, '.pyry', 'test')
   await mkdir(regDir, { recursive: true, mode: 0o700 })
 
@@ -338,7 +397,7 @@ async function seedRegistry(daemonHome: string, workdir: string): Promise<void> 
 
   const conversationsJson =
     `{"conversations":[{"id":"${BOUND_CONVERSATION_ID}","cwd":${JSON.stringify(workdir)},` +
-    `"current_session_id":"${BOOTSTRAP_UUID}","is_promoted":false,` +
+    `"current_session_id":"${BOOTSTRAP_UUID}","is_promoted":${isPromoted},` +
     '"last_used_at":"2026-01-01T00:00:00Z"}]}'
   await writeFile(join(regDir, 'conversations.json'), conversationsJson, { mode: 0o600 })
 }

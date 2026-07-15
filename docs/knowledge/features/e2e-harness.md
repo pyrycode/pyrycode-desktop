@@ -191,6 +191,17 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   `debugBundleProgress` climbs to its final chunk count from streamed `debug_bundle_chunk` frames alone,
   deliberately never sending `debug_bundle_done` since the completed save writes a real archive to
   `app.getPath('downloads')` with no dialog to stub and no downloads-directory isolation in the fixture.
+- **[#465](../codebase/465.md) covers the paired region's inner navigation** — every `nextPairedRoute`
+  transition in `PairedShell` beyond the launcher's own `list → thread` click: the pair-another-server
+  round-trip (#152) and the back-navigation chain (`thread → list → settings → list → archive → list`), in
+  one `test()` block on one launch (the #425/#427/#428 precedent extended from server-push flows to five
+  pure client-nav transitions). Establishes that teardown-vs-in-shell-pair-another is provable **only** via
+  the Cancel→Settings round-trip, not an on-pairing-surface assertion — the `pairServer` route and the
+  app-root pairing route both render the identical `PairingScreen`, so the DOM is byte-identical whether the
+  session survived (the #440-realizability discipline applied to a same-component-two-routes case); the
+  Cancel destination (Settings re-renders) is the one observable that separates them. Also notes the three
+  back buttons (thread/settings/archive) share the identical accessible name `'Back'`, selected by
+  screen-scoped class rather than role-name.
 
 ## Related
 
@@ -215,5 +226,6 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#426 codebase notes](../codebase/426.md) — the permission/trust modal's five answer paths (default tap, confirm/Back, cancel, reject banner, remote dismiss); the FIFO-not-`in_reply_to` reject model that forces the two-block split.
 - [#427 codebase notes](../codebase/427.md) — the queued-backlog render, dequeue, and interrupt flows, all server-push-driven; establishes why a flow does NOT need #423/#426's two-block split (no one-way residue) and the two-part act/capture/push-reflect assertion shape for non-optimistic push-reflected mutations.
 - [#428 codebase notes](../codebase/428.md) — the stall indicator, screen snapshot, and debug-bundle download; the last of the reliability-affordance surfaces, covering a server push, a request→reply, and a chunked reply stream in a single launch.
+- [#465 codebase notes](../codebase/465.md) — the paired region's inner navigation: the pair-another-server round-trip and the thread/settings/archive back-chain, plus the Cancel→Settings round-trip as the only realizable teardown proof when two routes render the same component.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

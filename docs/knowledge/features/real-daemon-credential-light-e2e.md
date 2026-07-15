@@ -24,8 +24,18 @@ the operator's other pre-ship gates.
 
 `e2e/real-daemon-rename.spec.ts` (#439) is the tier's liveness proof: pair against a claude-less spawned
 daemon, wait for the seeded conversation's Rename pencil to render, rename it through the product UI, and
-assert the new title lands in the channel list (old title gone). The four sibling action specs — #440
-(conversation lifecycle), #441 (workspace), #442 (run-controls), #443 (promote) — reuse the same harness.
+assert the new title lands in the channel list (old title gone). The four sibling action specs reuse the
+same harness: [#440](../codebase/440.md) (conversation lifecycle — archive/restore/delete, shipped),
+#441 (workspace), #442 (run-controls), #443 (promote).
+
+[#440](../codebase/440.md) ran green against a live `pyry dev` build and confirmed all four registry
+handlers this tier depends on (`create_conversation`, `archive_conversation`, `unarchive_conversation`,
+`delete_conversation`) are wired — no #949-class gap found on that build. It also surfaced the tier's
+first seed/title collision: unlike #439's rename spec (whose seed identity doesn't matter), #440's
+`seedRegistry` seed and its FAB-created conversation can both render "Untitled" (the fixture writes no
+`name`), so #440 established scoping created-vs-seed rows by **section affordance**
+(`.channel-list__rename` on a promoted row vs. `.channel-list__save` on a non-promoted one) rather than
+title text whenever a spec's seed and test-created row could collide on display string.
 
 ## How it works
 
@@ -149,10 +159,17 @@ Prerequisites: only `pyry` on `PATH` (or `PYRY_BIN`), built from a **#820-inclus
   `conversation_updated`.** Both were confirmed working against a real #820-inclusive daemon (#439); a
   future daemon regression in either would surface as a timeout in this spec, which is the tier doing its
   job, not a flake to paper over.
+- **A fixture-seeded row and a spec-created row can render an identical title.** `seedRegistry` writes no
+  `name`, so the seed and any name-less FAB-created conversation both render "Untitled" — confirmed by
+  #440. A spec that needs to distinguish them (a re-entry click, a post-mutation survivor assertion) must
+  scope by a structural signal (section membership, an affordance class) rather than title text.
 
 ## Related
 
 - [#439 codebase notes](../codebase/439.md) — this tier's introduction, plus the rename liveness spec.
+- [#440 codebase notes](../codebase/440.md) — the conversation-lifecycle (archive/restore/delete) sibling
+  spec, the first of the four action specs to ship; confirmed all four registry handlers wired, no
+  #949-class gap on that build.
 - [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#252](../codebase/252.md) — the credentialed
   sibling tier that proves the send/stream turn; this tier proves the registry actions the credentialed
   tier never exercises.
@@ -161,4 +178,6 @@ Prerequisites: only `pyry` on `PATH` (or `PYRY_BIN`), built from a **#820-inclus
 - [#420 codebase notes](../codebase/420.md) — extracted `e2e/fixtures/realDaemon.ts`, the fixture this
   tier's option fixtures were added to.
 - pyrycode/pyrycode#949 — the `promote_conversation` gap this tier exists to catch.
+- pyrycode/pyrycode#881, #822, #677 — the archive/unarchive, delete, and create handlers #440 confirmed
+  registered against a live daemon.
 - pyrycode/pyrycode#820 — the daemon-side `rename_conversation` handler the liveness spec rides.

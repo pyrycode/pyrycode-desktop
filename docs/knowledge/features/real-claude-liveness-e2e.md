@@ -35,7 +35,16 @@ tier (`spawnClaude:true`, no `test.use(...)` needed): `e2e/real-claude-interrupt
 spec's precondition verbatim and swaps the two-turn body for an interrupt-mid-turn liveness proof — the
 real-stack net over the [interrupt envelope](interrupt-envelope.md)'s client wiring (#305–#307), which
 the fake-stack twins (#307, #427) can only prove against a scripted `daemon.pushFrame`, not a genuinely
-running turn. Split from #431; twin #446 (queue-drop under real claude) not yet shipped.
+running turn. Split from #431; its twin [#446](../codebase/446.md) shipped next on the same tier.
+
+[#446](../codebase/446.md), #445's twin, is `e2e/real-claude-queue-drop.spec.ts` — the same
+long-prompt precondition clone, but the body proves queue-while-busy-then-drop: a second send issued
+mid-turn enqueues as a `data-thread-role="queued"` [queue-store](queue-store.md) row (rather than
+starting a new turn, since `composerAvailability` gates only on connection, never turn phase), the drop
+removes it while turn 1 is still provably running (bracketing `interruptButton`-visible checks
+immediately before and after the drop, the DOM-only answer to the #442-class dequeue-before-drain
+hazard), and — reusing #445's two-signal-quiesce-plus-settle idiom verbatim — the turn drains to prove
+the dropped send produced no assistant turn at all.
 
 ## How it works
 
@@ -200,6 +209,9 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - [Interrupt envelope](interrupt-envelope.md) / [#445 codebase notes](../codebase/445.md) — the
   turn-coupled sibling spec (`real-claude-interrupt.spec.ts`) on this same claude-spawning tier; the
   real-stack liveness net over the interrupt client wiring.
+- [Queue store](queue-store.md) / [#446 codebase notes](../codebase/446.md) — #445's twin
+  (`real-claude-queue-drop.spec.ts`); the real-stack liveness net over the queue-while-busy-then-drop
+  client wiring.
 - [Live e2e runbook](live-e2e-runbook.md) / [#13](../codebase/13.md) — the manual, live-**relay**
   operator gate; this scenario automates the real-daemon+real-claude half but still uses a local relay,
   so it does not replace the live-relay verification.

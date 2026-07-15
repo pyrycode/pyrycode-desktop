@@ -1,12 +1,18 @@
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 
-// The real-claude UI e2e (#252) — the thin client-layer net over the daemon-side liveness test (#854).
-// Every OTHER Desktop e2e (#89 transport round-trip, #93/#94 UI pair/send/stream) drives a fake relay +
-// a fake daemon that ALWAYS answer, so they stay green even if the real daemon never responds. This spec
-// drives the REAL stack the operator ships: a freshly-spawned real `pyry` daemon running real claude on
-// `--model haiku`, bridged to the built Electron UI through #251's content-blind routing relay. The
-// window stands in for #854's headless phone.
+// The real-claude UI e2e (#252, reworked by #448) — the thin client-layer net over the daemon-side
+// liveness test (#854). Every OTHER Desktop e2e (#89 transport round-trip, #93/#94 UI pair/send/stream)
+// drives a fake relay + a fake daemon that ALWAYS answer, so they stay green even if the real daemon
+// never responds. This spec drives the REAL stack the operator ships: a freshly-spawned real `pyry`
+// daemon running real claude on `--model haiku`, bridged to the built Electron UI through #251's
+// content-blind routing relay. The window stands in for #854's headless phone.
+//
+// #448 rework: the drive now CREATES its conversation through the UI (the New-discussion FAB → the
+// daemon's conversation_created → nav) and sends into that real id. The old version sent into a
+// conversation the fixture had pre-bound under the client's placeholder id — an accommodation that hid
+// the placeholder from this gate entirely (the operator found the broken send live). The fixture's
+// seed keeps a plain-UUID conversation for the connected gate; nothing is bound to a client constant.
 //
 // The spawn harness — the relay/daemon/page fixture chain, binary resolution, skip-gating, seedRegistry,
 // waitForDaemonReady, and process-group reap — is extracted into e2e/fixtures/realDaemon.ts (#420) so the
@@ -63,7 +69,7 @@ function nonEmptyAssistantCount(page: Page): Promise<number> {
     )
 }
 
-test('real claude streams a reply into the thread for two consecutive sends', async ({
+test('real claude streams a reply into a UI-created conversation for two consecutive sends', async ({
   relay,
   daemon,
   page
@@ -97,9 +103,22 @@ test('real claude streams a reply into the thread for two consecutive sends', as
   await page.getByRole('button', { name: 'Pair', exact: true }).click()
   await expect(fingerprint).toBeVisible()
   await page.getByRole('button', { name: 'Confirm', exact: true }).click()
-  // Reaching .conversation proves the pairing record persisted; Send-enabled proves the Noise handshake
-  // completed and `interactive` was granted — the generous timeout absorbs real startup + a re-dial or two.
-  await expect(conversation).toBeVisible()
+
+  // --- Create the conversation THROUGH THE UI (#448) — the operator flow, not a pre-bound seed. ---
+  // Pairing lands on the Channel List. The fixture's seeded row renders only after the real daemon's
+  // `conversations` reply arrives on the connected edge, so its visibility IS the connected gate (the
+  // launchPairedApp idiom); the FAB itself is present in all list states, so it must not be clicked
+  // before this gate or the create command would fire into a not-yet-connected bridge.
+  await expect(page.locator('.channel-list__row-open')).toBeVisible({
+    timeout: HANDSHAKE_TIMEOUT_MS
+  })
+  // The FAB fires a real `create_conversation` at the real daemon; navigation is event-driven — the
+  // thread mounts ONLY when the daemon confirms with `conversation_created` (useConversationCreatedNav),
+  // which also records the created conversation as active. The composer then sends under THAT real id;
+  // a client regression to a placeholder id gets `send_message unknown conversation` from the real
+  // daemon and no reply ever streams (the exact live failure #448 fixed).
+  await page.getByRole('button', { name: 'New discussion' }).click()
+  await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 
   // --- Turn 1 (AC2): a fresh session — proves the reply bridge binds. ---

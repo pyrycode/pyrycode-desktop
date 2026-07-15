@@ -5,7 +5,7 @@ import {
   type Page
 } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, createWriteStream, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { connect } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
@@ -62,11 +62,16 @@ const PAIR_TIMEOUT_MS = 15_000
 // Reused from #854's liveBootstrapUUID for fidelity. Real claude still writes its transcript at its own
 // minted uuid — the merged #854 PID-probe resolves the reply, so nothing extra is seeded for that.
 const BOOTSTRAP_UUID = '77777777-7777-4777-8777-777777777777'
-// The desktop sends conversation_id 'default' verbatim (composerSend.ts MILESTONE_CONVERSATION_ID) and
-// cannot seed the daemon registry from the client side. A fresh real daemon does NOT auto-bind an ad-hoc
-// 'default' conversation (send_message rejects an unbound conv, pyrycode #678), so the fixture binds
-// 'default' → the seeded bootstrap session before spawn. 'default' is a legal opaque conversation id.
-const BOUND_CONVERSATION_ID = 'default'
+// One pre-existing conversation, bound to the seeded bootstrap session — legitimate daemon state (a
+// prior discussion) that renders as a list row, giving the specs a connected-gate signal and the
+// rename spec its target. Any valid v4-shaped id; it deliberately is NOT a client-known constant.
+//
+// #448 history: this used to be the literal 'default', seeded so the client's then-hardcoded
+// placeholder conversation id would have something to land on. That accommodation converted the
+// placeholder into a tested invariant and hid the bug from this gate — the operator found it live.
+// Rule (posted on #448): a fixture must never seed state whose only purpose is to fit a known client
+// placeholder; the daemon's reject-unknown-conversation behavior (pyrycode #678) must stay observable.
+const BOUND_CONVERSATION_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 
 export interface SpawnedDaemon {
   // Only the three credential fields decoded from `pyry pair` stdout. The QrPayload's `relay` is assembled
@@ -179,7 +184,39 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       const workdir = join(daemonHome, 'work')
       await mkdir(workdir, { recursive: true, mode: 0o700 })
       if (claudeJsonBytes !== null) {
-        await writeFile(join(daemonHome, '.claude.json'), claudeJsonBytes, { mode: 0o600 })
+        // Pre-trust the harness workdir in the seeded .claude.json — OPERATOR-STATE FIDELITY, not an
+        // accommodation (#448's fixture rule): live, the default workspace is a folder the operator
+        // trusted long ago, and without the entry claude shows the trust-folder dialog at startup,
+        // which tui-driver's readiness correctly fails loudly (UnexpectedModalError, #173). The daemon
+        // does NOT pre-trust interactive session workdirs today (only `pyry agent-run` calls
+        // MarkWorkdirTrusted, #469) — the untrusted-cwd case is a real daemon bug (silent msgqueue
+        // retry loop) tracked separately; when the daemon gains the pre-trust, this seed becomes
+        // redundant but stays harmless. Key must be the REALPATH (trust.go resolves symlinks; the
+        // /var/folders temp dir is a symlink to /private/var/folders on macOS).
+        const trusted = JSON.parse(claudeJsonBytes.toString('utf-8')) as {
+          projects?: Record<string, Record<string, unknown>>
+        }
+        const workdirReal = realpathSync(workdir)
+        trusted.projects = trusted.projects ?? {}
+        trusted.projects[workdirReal] = {
+          ...(trusted.projects[workdirReal] ?? {}),
+          hasTrustDialogAccepted: true
+        }
+        await writeFile(join(daemonHome, '.claude.json'), JSON.stringify(trusted), { mode: 0o600 })
+        // Suppress the Bypass-Permissions acceptance dialog — the SECOND startup dialog an isolated
+        // HOME hits (confirmed by hand 2026-07-15: a PTY claude in a fresh HOME renders "WARNING:
+        // Claude Code running in Bypass Permissions mode … Yes, I accept" before anything else).
+        // Operator-state fidelity again: the operator's real ~/.claude/settings.json carries
+        // skipDangerousModePermissionPrompt: true, accepted long ago, and every daemon and agent
+        // spawn on the host silently rides it. The daemon arguably should set this in its own
+        // generated session settings (it chooses bypass mode); tracked on pyrycode#988.
+        const claudeDir = join(daemonHome, '.claude')
+        await mkdir(claudeDir, { recursive: true, mode: 0o700 })
+        await writeFile(
+          join(claudeDir, 'settings.json'),
+          JSON.stringify({ skipDangerousModePermissionPrompt: true }),
+          { mode: 0o600 }
+        )
       }
 
       // The isolated HOME + creds env shared by `pyry pair` and the daemon. process.env already carries
@@ -242,6 +279,15 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         detached: true,
         stdio: ['ignore', 'ignore', 'pipe']
       })
+
+      // Debug affordance (#448 diagnosis): PYRY_E2E_DAEMON_LOG=<path> tees the daemon's full stderr to a
+      // file for the WHOLE run, not just startup. The transport is content-free by construction (#62), so
+      // this leaks no message plaintext; it is opt-in and off in every gate.
+      const daemonLogPath = process.env.PYRY_E2E_DAEMON_LOG
+      if (daemonLogPath) {
+        const daemonLog = createWriteStream(daemonLogPath, { flags: 'a' })
+        child.stderr?.pipe(daemonLog)
+      }
 
       await waitForDaemonReady(child, socketPath)
 
@@ -376,10 +422,10 @@ function decodePairFields(stdout: string): SpawnedDaemon['pairFields'] {
 }
 
 /**
- * Seed <daemonHome>/.pyry/test/ with the bootstrap session + the 'default' binding, replicating #854's
- * seedBootstrapRegistry / seedBoundConversation field-for-field (the changes: convId = 'default', not a
- * UUID; `is_promoted` is the #439 `isPromoted` param, not a hardcoded false). Mode 0o600, matching the Go
- * seeds. `workdir` goes through JSON.stringify for correct escaping.
+ * Seed <daemonHome>/.pyry/test/ with the bootstrap session + one bound conversation, replicating #854's
+ * seedBootstrapRegistry / seedBoundConversation field-for-field (`is_promoted` is the #439 `isPromoted`
+ * param, not a hardcoded false; the conversation id is a plain UUID — see BOUND_CONVERSATION_ID's #448
+ * note). Mode 0o600, matching the Go seeds. `workdir` goes through JSON.stringify for correct escaping.
  */
 async function seedRegistry(
   daemonHome: string,

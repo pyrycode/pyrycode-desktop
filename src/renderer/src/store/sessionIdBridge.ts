@@ -3,7 +3,7 @@
 // renaming `new_session_id` → `newSessionId`) and lands its id in the app-singleton `sessionIdStore`
 // the Run configuration controls (#257) read. Reactive-only — unlike conversationListBridge (#208)
 // and runConfigSnapshot (#187), the daemon *pushes* markers unsolicited, so there is NO request half:
-// no command sent, no connected-edge trigger, no MILESTONE_CONVERSATION_ID request. The two helpers
+// no command sent, no connected-edge trigger, no snapshot request. The two helpers
 // are React-free and injected, so the whole path is unit-testable with plain spies (the
 // conversationListBridge idiom); `SessionIdData` is the thin React glue over them. Nothing here
 // touches keys, sockets, ipcRenderer, or raw frames — it only subscribes through the preload bridge

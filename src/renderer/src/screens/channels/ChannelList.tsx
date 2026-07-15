@@ -36,7 +36,7 @@ export function ChannelList({
   onOpenSettings,
   onOpenArchive
 }: {
-  onOpen: () => void
+  onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
 }): JSX.Element {
@@ -120,7 +120,7 @@ export function ChannelListView({
 }: {
   conversations: readonly ConversationSummary[] | null
   now: number
-  onOpen: () => void
+  onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
   onNewConversation: () => void
@@ -233,7 +233,7 @@ function NewConversationFab({ onClick }: { onClick: () => void }): JSX.Element {
 function renderBody(
   conversations: readonly ConversationSummary[] | null,
   now: number,
-  onOpen: () => void,
+  onOpen: (row: ConversationSummary) => void,
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
@@ -254,7 +254,7 @@ function renderBody(
               only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
               AC1) — the symmetric counterpart to Save-as-channel on Recent rows. */}
           {channels.map((c) => (
-            <Row key={c.id} row={c} now={now} onOpen={onOpen} onRename={() => onRename(c)} />
+            <Row key={c.id} row={c} now={now} onOpen={() => onOpen(c)} onRename={() => onRename(c)} />
           ))}
         </>
       )}
@@ -270,7 +270,7 @@ function renderBody(
               key={d.id}
               row={d}
               now={now}
-              onOpen={onOpen}
+              onOpen={() => onOpen(d)}
               onSaveAsChannel={() => onSaveAsChannel(d)}
             />
           ))}
@@ -292,11 +292,10 @@ function renderBody(
 // `onSaveAsChannel` (→ Save-as renders, Rename absent); saved Channel rows pass `onRename` (→ Rename
 // renders, Save-as absent), so no row carries two trailing buttons (AC1).
 //
-// `onClick={onOpen}` is deliberate and interim: per the ticket's Out of Scope, opening a *specific*
-// tapped conversation needs a select-and-load transport path that does not exist, so every row invokes
-// the shell's existing conversation-agnostic onOpen (which opens the single active conversation),
-// preserving #140's list→thread round-trip with no new transport. The future select-and-load ticket
-// changes only *what* onClick passes (this row's id); the seam is already the row.
+// #448 resolved the old "conversation-agnostic onOpen" interim: each row now passes ITSELF up through
+// onOpen, and PairedShell records it as the active conversation before navigating — so the thread's
+// wire actions (send, snapshot, dequeue) target the clicked conversation's real id. The Row keeps a
+// nullary onOpen prop; the map site closes over the row (the onSaveAsChannel/onRename pattern).
 function Row({
   row,
   now,

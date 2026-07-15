@@ -1,6 +1,10 @@
-import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
-import type { AssistantDeltaPayload, TurnEndPayload } from '../src/shared/wire/types'
+import type {
+  AssistantDeltaPayload,
+  SendMessagePayload,
+  TurnEndPayload
+} from '../src/shared/wire/types'
 
 // The UI-level send→stream e2e scenario (#94) — the automated side of the Phase-1 milestone round-trip
 // (the manual live-stack version is runbook #13). It picks up where #93 (pair-to-conversation.spec.ts)
@@ -38,7 +42,7 @@ const assistantDeltaFrame = (): Uint8Array =>
     type: 'assistant_delta',
     ts: FIXED_TS,
     payload: {
-      conversation_id: 'default',
+      conversation_id: SEEDED_ROW.id,
       turn_id: TURN_ID,
       seq: 0,
       text: REPLY_TEXT
@@ -50,7 +54,7 @@ const turnEndFrame = (): Uint8Array =>
     type: 'turn_end',
     ts: FIXED_TS,
     payload: {
-      conversation_id: 'default',
+      conversation_id: SEEDED_ROW.id,
       turn_id: TURN_ID,
       stop_reason: 'end_turn'
     } satisfies TurnEndPayload
@@ -65,10 +69,20 @@ const turnEndFrame = (): Uint8Array =>
 // order. The `default` arm — not an explicit `list_conversations` case — mirrors constant-reply-with-dedup
 // robustness: only `send_message` must be explicit, so a regression to echoing it (the default-echo trap)
 // still fails the daemon-bubble assertion.
+//
+// #448 regression guard: the send arm replies ONLY when the inbound `conversation_id` is the OPENED
+// row's id (the fixture's drive clicks SEEDED_ROW). The real daemon validates conversation_id and
+// rejects an unknown one (KnownConversation), so a fake that answered any id would hide exactly the
+// placeholder-id bug #448 fixed — a client regression to a hardcoded id gets NO reply frames here and
+// the daemon-bubble assertion times out, mirroring the real daemon's behavior.
 const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
-  switch (decodeEnvelope(inbound).type) {
-    case 'send_message':
+  const envelope = decodeEnvelope(inbound)
+  switch (envelope.type) {
+    case 'send_message': {
+      const payload = envelope.payload as SendMessagePayload
+      if (payload.conversation_id !== SEEDED_ROW.id) return []
       return [assistantDeltaFrame(), turnEndFrame()]
+    }
     default:
       return [seedConversationsFrame()]
   }

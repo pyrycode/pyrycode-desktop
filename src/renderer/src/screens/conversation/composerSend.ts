@@ -8,15 +8,6 @@ import type { ConnectionStatus } from '../../store/sessionStore'
 import type { ThreadEvent } from '../../store/threadTimeline'
 
 /**
- * The single active conversation for this milestone. There is no conversation-selection surface
- * yet (the message list is empty until the first message; HelloAckPayload carries no conversation
- * id), so a stable constant is the correct source. This is the one place a future
- * conversation-selection ticket replaces. The daemon treats `conversation_id` as opaque and echoes
- * back whatever it is sent.
- */
-export const MILESTONE_CONVERSATION_ID = 'default'
-
-/**
  * The three effects submitMessage performs, injected so the helper stays pure and deterministic in
  * tests. `newMessageId` is `crypto.randomUUID()` in the container; tests inject a stub. `dispatch`
  * writes a `ThreadEvent` into `timelineStore` (#179): the user's message and the daemon's structured
@@ -29,8 +20,15 @@ export interface ComposerSendDeps {
 }
 
 /**
- * Submit the composer's current text. Returns `true` when a message was sent (the container clears
- * the input on `true`), `false` for whitespace-only input (no effect).
+ * Submit the composer's current text into the ACTIVE conversation (#448). `conversationId` is the
+ * id of the conversation this thread shows — the activeConversationStore's id at the container.
+ * Returns `true` when a message was sent (the container clears the input on `true`), `false` for
+ * whitespace-only input or a null conversation id (no effect either way).
+ *
+ * The null guard is #448's contract: the daemon validates `conversation_id` and rejects an unknown
+ * id with an error frame, so sending under a placeholder is never correct. No active conversation →
+ * no wire command AND no optimistic echo — an echo for a message that cannot be delivered would
+ * paint a lie into the timeline.
  *
  * The `message_id` is minted for the WIRE command only. The old "reuse the id for wire + echo so the
  * daemon's re-echo dedupes" rationale is retired (#179): in interactive mode the daemon streams no
@@ -40,14 +38,19 @@ export interface ComposerSendDeps {
  * dispatched regardless of the send outcome — "optimistic" means show-immediately, and this
  * milestone has no send-failure UI surface.
  */
-export function submitMessage(text: string, deps: ComposerSendDeps): boolean {
+export function submitMessage(
+  text: string,
+  conversationId: string | null,
+  deps: ComposerSendDeps
+): boolean {
   const trimmed = text.trim()
   if (trimmed.length === 0) return false
+  if (conversationId === null) return false
 
   const message_id = deps.newMessageId()
 
   const payload: SendMessagePayload = {
-    conversation_id: MILESTONE_CONVERSATION_ID,
+    conversation_id: conversationId,
     message_id,
     text: trimmed
   }

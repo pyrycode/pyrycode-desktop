@@ -57,7 +57,7 @@ const HANDSHAKE_TIMEOUT_MS = 15_000
 // gate (when the row is clickable, Send is already enabled). Fixed literals only, no Date.now()/
 // randomness — deterministic per the fakeDaemon convention. The row's fields are non-secret display
 // text; `id`/`ts` are structurally required by decodeEnvelope but never inspected by the drive.
-const SEEDED_ROW: ConversationSummary = {
+export const SEEDED_ROW: ConversationSummary = {
   id: 'seed-conversation',
   name: 'Seeded discussion',
   is_promoted: false,

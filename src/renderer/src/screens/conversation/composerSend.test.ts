@@ -3,8 +3,7 @@ import {
   submitMessage,
   composerAvailability,
   shouldOfferRepair,
-  shouldShowBanner,
-  MILESTONE_CONVERSATION_ID
+  shouldShowBanner
 } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { ThreadEvent } from '../../store/threadTimeline'
@@ -20,19 +19,33 @@ describe('submitMessage', () => {
       const sendCommand = vi.fn()
       const dispatch = vi.fn()
       const newMessageId = vi.fn(() => 'unused')
-      expect(submitMessage(blank, { sendCommand, dispatch, newMessageId })).toBe(false)
+      expect(submitMessage(blank, 'conv-1', { sendCommand, dispatch, newMessageId })).toBe(false)
       expect(sendCommand).not.toHaveBeenCalled()
       expect(dispatch).not.toHaveBeenCalled()
       expect(newMessageId).not.toHaveBeenCalled()
     }
   })
 
-  it('sends exactly one sendMessage command carrying a SendMessagePayload for the milestone conversation', () => {
+  // #448: sending without an active conversation is a no-op, NOT a send to a placeholder id. The
+  // daemon rejects an unknown conversation_id with an error frame, so a null active conversation
+  // must gate the send exactly like not-connected does: no wire command, no optimistic echo, input
+  // preserved (return false).
+  it('returns false and performs no effect when the active conversation id is null (#448)', () => {
+    const sendCommand = vi.fn()
+    const dispatch = vi.fn()
+    const newMessageId = vi.fn(() => 'unused')
+    expect(submitMessage('hello', null, { sendCommand, dispatch, newMessageId })).toBe(false)
+    expect(sendCommand).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(newMessageId).not.toHaveBeenCalled()
+  })
+
+  it('sends exactly one sendMessage command targeting the ACTIVE conversation id (#448)', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()
     const newMessageId = vi.fn(() => 'mint-1')
 
-    const result = submitMessage('hello', { sendCommand, dispatch, newMessageId })
+    const result = submitMessage('hello', '130648a8-real-id', { sendCommand, dispatch, newMessageId })
 
     expect(result).toBe(true)
     expect(newMessageId).toHaveBeenCalledTimes(1)
@@ -41,7 +54,7 @@ describe('submitMessage', () => {
     // timeline echo below, which carries only text.
     expect(sendCommand).toHaveBeenCalledWith(
       sendMessageCommand({
-        conversation_id: MILESTONE_CONVERSATION_ID,
+        conversation_id: '130648a8-real-id',
         message_id: 'mint-1',
         text: 'hello'
       })
@@ -51,7 +64,7 @@ describe('submitMessage', () => {
   it('dispatches exactly one userText timeline echo carrying the trimmed text (#179 AC3)', () => {
     const dispatch = vi.fn()
 
-    submitMessage('  hey there  ', {
+    submitMessage('  hey there  ', 'conv-1', {
       sendCommand: vi.fn(),
       dispatch,
       newMessageId: () => 'echo-1'
@@ -68,7 +81,7 @@ describe('submitMessage', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()
 
-    submitMessage('\n  spaced  \t', { sendCommand, dispatch, newMessageId: () => 't1' })
+    submitMessage('\n  spaced  \t', 'conv-1', { sendCommand, dispatch, newMessageId: () => 't1' })
 
     const command = sendCommand.mock.calls[0][0] as RendererCommand
     const sentText = command.type === 'sendMessage' ? command.payload.text : undefined
@@ -87,7 +100,7 @@ describe('submitMessage', () => {
 
     let result: boolean | undefined
     expect(() => {
-      result = submitMessage('hello', { sendCommand, dispatch, newMessageId: () => 'g1' })
+      result = submitMessage('hello', 'conv-1', { sendCommand, dispatch, newMessageId: () => 'g1' })
     }).not.toThrow()
 
     expect(result).toBe(true)

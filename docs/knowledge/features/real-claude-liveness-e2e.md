@@ -55,7 +55,14 @@ correct outcome, not a hard failure:
 
 ### Fixture chain and teardown
 
-Three file-local `test.extend` fixtures, chained `relay → daemon → page` so teardown is LIFO
+The `relay → daemon → page` chain lives in the shared `e2e/fixtures/realDaemon.ts` fixture
+([#420](../codebase/420.md)) — extracted verbatim from this spec's original file-local `test.extend`
+so the coming tier-2/tier-3 real-* specs (real-daemon-actions, interrupt/queue, permission modal)
+reuse it instead of re-transcribing the harness. The spec imports `test`, `expect`, and
+`encodePairingPayload` from the fixture and keeps only its streaming selectors, spec-body timeouts,
+`nonEmptyAssistantCount`, and the pairing drive (paste → Pair → Confirm → wait-for-Send) in the
+`test(...)` body — the drive itself stayed in the spec since #420 scoped the extraction to the spawn
+recipe only, mirroring `launchPairedApp`'s own extract-on-second precedent. Teardown is LIFO
 (`page → daemon → relay`) — the app closes first so its supervisor can't churn-reconnect on the
 daemon/relay dropping:
 
@@ -171,9 +178,9 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
   · PR [#258](https://github.com/pyrycode/pyrycode-desktop/pull/258).
 - [Fake routing relay](fake-routing-relay.md) / [#251](../codebase/251.md) — the bridge this spec
   dials; its `/v1/server` leg is where the spawned real daemon registers.
-- [E2E test harness](e2e-harness.md) / [#40](../codebase/40.md) — the launch/teardown primitive; this
-  scenario forks its own local fixtures rather than extending the shared one, following the established
-  pattern from [#93](../codebase/93.md)/[#94](../codebase/94.md).
+- [E2E test harness](e2e-harness.md) / [#40](../codebase/40.md) — the launch/teardown primitive. This
+  scenario's own fixture chain now lives in `e2e/fixtures/realDaemon.ts`
+  ([#420](../codebase/420.md)), the real-stack sibling of `launchPairedApp.ts` (#433).
 - [Live e2e runbook](live-e2e-runbook.md) / [#13](../codebase/13.md) — the manual, live-**relay**
   operator gate; this scenario automates the real-daemon+real-claude half but still uses a local relay,
   so it does not replace the live-relay verification.

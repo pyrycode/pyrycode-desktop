@@ -159,3 +159,8 @@ bespoke stop/error visual is a deferred follow-up flagged to Juhana).
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § interrupt; pyrycode #707 (bare
   `interrupt` → single claude Esc, `interactive`-gated, fire-and-forget,
   `TestV2Session_Interrupt_RoutesEscByCapability`).
+- [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#445 codebase notes](../codebase/445.md) —
+  the tier-3 real-stack liveness net over this chain: `e2e/real-claude-interrupt.spec.ts` interrupts a
+  genuinely running turn (real daemon + real claude), proving the retract-on-`turn_state{idle}` /
+  clear-on-`turn_end` contract against a real turn lifecycle, not the fake-stack twins' (#307, #427)
+  scripted `daemon.pushFrame`.

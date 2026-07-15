@@ -142,3 +142,6 @@ Two behaviors:
 - [Settings screen](settings-screen.md) / [#409 codebase notes](../codebase/409.md) — the Notifications
   section's push-toggle row, the write consumer (shipped).
 - [#392 codebase notes](../codebase/392.md) — the renderer trigger, the read consumer (shipped).
+- [E2E test harness](e2e-harness.md) / [#466 codebase notes](../codebase/466.md) — the fake-stack e2e
+  that proves this store's persisted value survives a full app relaunch, driving the `reuseUserDataDir`
+  affordance added to `launchPairedApp` for exactly this purpose.

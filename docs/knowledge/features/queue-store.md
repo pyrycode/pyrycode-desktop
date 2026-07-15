@@ -222,3 +222,7 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, before 
   contract (bare trigger, one slice cleared, same-reference no-op when already empty), applied
   through a translator arm there vs. a listener branch here, since the modal bridge already had an
   event union to extend and the queue bridge doesn't.
+- [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#446 codebase notes](../codebase/446.md) —
+  the real-stack (real daemon + real claude) liveness net over this store's inbound `queue_state` path
+  and the [dequeue message envelope](dequeue-message-envelope.md) drop path, proving both against a
+  genuinely running turn rather than a scripted `daemon.pushFrame`.

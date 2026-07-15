@@ -23,6 +23,13 @@ It is **not** a live-relay test. The relay leg is still the local, in-process
 the actual `pyrycode-relay.pyryco.de` relay remains the manual
 [live e2e runbook](live-e2e-runbook.md) (#13) — see that doc's "Automated coverage" note.
 
+It is also not the only real-daemon tier. [#439](../codebase/439.md) added a **credential-light**
+sibling — [real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) — that spawns a real
+`pyry` with no `claude` and no Anthropic credential, for the registry-backed user actions (rename,
+archive, delete, …) that never touch claude. That tier shares this spec's fixture chain
+(`e2e/fixtures/realDaemon.ts`) via two additive option fixtures; this doc's spec continues to consume the
+fixture unmodified.
+
 ## How it works
 
 ### Gated out of the default run
@@ -181,6 +188,8 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - [E2E test harness](e2e-harness.md) / [#40](../codebase/40.md) — the launch/teardown primitive. This
   scenario's own fixture chain now lives in `e2e/fixtures/realDaemon.ts`
   ([#420](../codebase/420.md)), the real-stack sibling of `launchPairedApp.ts` (#433).
+- [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) / [#439](../codebase/439.md) —
+  the credential-light sibling tier sharing this spec's fixture chain via additive option fixtures.
 - [Live e2e runbook](live-e2e-runbook.md) / [#13](../codebase/13.md) — the manual, live-**relay**
   operator gate; this scenario automates the real-daemon+real-claude half but still uses a local relay,
   so it does not replace the live-relay verification.

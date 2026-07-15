@@ -165,6 +165,21 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   (asserting `change_workspace` was never sent) is race-free when placed *after* a positive poll on the
   same in-order Noise channel, since any earlier frame is already captured by the time the later one
   arrives.
+- **[#426](../codebase/426.md) covers the permission/trust modal's (`PermissionModal`) five answer
+  paths** — default one-tap, non-default → confirm sub-step (Back vs Confirm), cancel, a rejected
+  answer's dismissible banner, and a remote `modal_dismissed` clear. `e2e/permission-modal-answer-paths.spec.ts`
+  surfaces each prompt via `daemon.pushFrame(modal_shown)` after launch (the #425 push-after-launch
+  technique) since `PermissionModal` renders straight off `modalStore.outstanding[0]`, with no
+  interactive-timeline gate to un-inert first. Two `test()` blocks, split by a load-bearing subtlety
+  rather than convenience: the modal reject correlates by **FIFO send order, not `in_reply_to`** — a bare
+  daemon `error` dequeues the *oldest* `outstandingAnswers` entry — so block 1 (answer/confirm/cancel/
+  dismiss, one launch) never triggers a reject and its un-drained answer residue stays inert, while block
+  2 (reject, a fresh launch) starts from an empty queue so its one answer is unambiguously what the reject
+  dequeues. `answer_token` is main-minted (`crypto.randomUUID`), so the captured `modal_answer` is matched
+  on `modal_id` + `option_id` with the token asserted present-but-opaque, not deep-equalled like #425's
+  `set_session_settings` payload. AC3's "exactly one `modal_answer`" after Back → re-select → Confirm is
+  the negative guard proving Back sends nothing; AC6's zero-frame check proves a remote dismiss sends
+  neither `modal_answer` nor `modal_cancel`.
 
 ## Related
 
@@ -186,5 +201,6 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#425 codebase notes](../codebase/425.md) — the run-config sheet's model/effort/YOLO round-trip; the spec-local capturing-fake precedent applied to `set_session_settings`, plus the session-id + snapshot preconditions any future run-config scenario needs.
 - [#457 codebase notes](../codebase/457.md) — the default-workspace preference reaching `create_conversation`'s `cwd`; the split twin of [#456](../codebase/456.md), reusing its shared `recent_workspaces` fake answer with a zero-verb-handling capturing wrapper and the race-free negative-guard-after-positive-poll pattern.
 - [Default workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) — the `localStorage`-backed store [#457](../codebase/457.md) is the first e2e to drive.
+- [#426 codebase notes](../codebase/426.md) — the permission/trust modal's five answer paths (default tap, confirm/Back, cancel, reject banner, remote dismiss); the FIFO-not-`in_reply_to` reject model that forces the two-block split.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

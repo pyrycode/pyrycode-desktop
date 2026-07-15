@@ -73,8 +73,9 @@ Workspace Picker sheet — choosing a recent-workspace row (#383)
   ⋯ daemon updates the recorded workspace, replies conversation_updated
   → existing conversation_updated decode + conversationListStore re-list  (#273 / conversation-list-store.md)
   → the conversation's cwd updates on the next render (the list's; the picker's own "default" mark
-    does not — activeConversationStore is written only on conversation_created, a pre-existing #278
-    limitation the picker inherits, not fixed by this slice)
+    does not — activeConversationStore is written only on conversation_created and, since #448, on a
+    channel-list row-open; a change_workspace's conversation_updated reply is still not one of its
+    writers, so the chip's snapshotted cwd stays stale post-change — see #456's realizability note)
 ```
 
 ## Related

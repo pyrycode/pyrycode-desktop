@@ -84,12 +84,17 @@ export interface SpawnedDaemon {
  * claude-spawning mode (real claude + a credential + `.claude.json`, gated on all three); `false` is the
  * credential-light claude-less mode — a real `pyry` daemon with a no-op `-pyry-claude` placeholder, gated
  * on the `pyry` binary ALONE. `seedPromoted` sets the seeded conversation's `is_promoted` (`false` default
- * = a Recent discussion; `true` = a saved Channel, which renders the Rename pencil). Kept a per-spec
- * option, not a shared default, so the sibling real-daemon-* specs (#440–#443) toggle both axes freely.
+ * = a Recent discussion; `true` = a saved Channel, which renders the Rename pencil). `skipPermissions`
+ * (#432) gates the single post-`--` `--dangerously-skip-permissions` claude flag: `true` (default)
+ * preserves the current auto-run behavior byte-for-byte; `false` (the permission-modal spec's single
+ * consumer) makes a tool call BLOCK on a per-tool permission decision, which is what surfaces the
+ * `modal_shown` this ticket proves live. Kept per-spec options, not shared defaults, so the sibling
+ * real-* specs toggle the axes freely.
  */
 export type RealDaemonOptions = {
   spawnClaude: boolean
   seedPromoted: boolean
+  skipPermissions: boolean
 }
 
 export type RealDaemonFixtures = {
@@ -104,11 +109,13 @@ export type RealDaemonFixtures = {
 // wraps `use()` in try/finally so its subprocess + temp dirs are reaped on setup failure, test failure,
 // AND success — no orphaned real-claude child, no leaked temp dir.
 export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
-  // Two additive option fixtures (#439). Defaults preserve the existing behavior byte-for-byte:
-  // real-claude.spec.ts sets neither, so it gets spawnClaude:true (the claude-spawning mode) and
-  // seedPromoted:false (an unpromoted seeded conversation) — exactly what it consumed before.
+  // Additive option fixtures. Defaults preserve the existing behavior byte-for-byte: real-claude.spec.ts
+  // (and every sibling) sets none, so it gets spawnClaude:true (the claude-spawning mode), seedPromoted:false
+  // (an unpromoted seeded conversation), and skipPermissions:true (the `--dangerously-skip-permissions` flag
+  // present) — exactly the args every prior real-* spec consumed. Only #432 overrides skipPermissions:false.
   spawnClaude: [true, { option: true }],
   seedPromoted: [false, { option: true }],
+  skipPermissions: [true, { option: true }],
 
   relay: async ({}, use) => {
     const relay = await startFakeRoutingRelay()
@@ -116,7 +123,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
     await relay.close()
   },
 
-  daemon: async ({ relay, spawnClaude, seedPromoted }, use, testInfo) => {
+  daemon: async ({ relay, spawnClaude, seedPromoted, skipPermissions }, use, testInfo) => {
     // --- Skip-gating: resolve binaries + creds BEFORE creating any resource, so a skip never leaks. ---
     // `pyry` is the ONLY universal gate — both modes spawn the daemon. The claude binary, the Anthropic
     // credential, and the operator's ~/.claude.json are resolved + gated ONLY in claude-spawning mode
@@ -270,7 +277,11 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         `-pyry-relay=${relay.url}/v1/server`,
         // The post-`--` claude flags run only in claude-spawning mode. Claude-less mode omits them: no
         // claude turn ever runs, and the daemon appends `--session-id <uuid>` regardless.
-        ...(spawnClaude ? ['--', '--model', 'haiku', '--dangerously-skip-permissions'] : [])
+        // `--dangerously-skip-permissions` is gated on `skipPermissions` (#432, default true): dropping it
+        // makes a tool call block on a per-tool permission decision, surfacing the `modal_shown` under test.
+        ...(spawnClaude
+          ? ['--', '--model', 'haiku', ...(skipPermissions ? ['--dangerously-skip-permissions'] : [])]
+          : [])
       ]
       // detached: true puts pyry + its claude grandchild in one process group so teardown reaps the whole
       // group. stdout ignored; stderr piped for a startup-only, content-free diagnostic.

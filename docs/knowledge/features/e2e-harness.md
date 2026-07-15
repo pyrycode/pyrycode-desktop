@@ -133,6 +133,23 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   `activeConversationStore` — the same #440 unrealizable-active-list trap), both flows assert the
   **outbound wire frame** the fake captured, `expect.poll`ed for async loopback arrival, rather than a
   rendered reflection.
+- **[#425](../codebase/425.md) covers the run-config sheet's (#257) `set_session_settings` write family** —
+  model / effort / YOLO, plus one rejection — in a single `test()` block on a single launch (unlike #423's
+  two: nothing here is one-way, and the session persists across all three controls). Its spec-local
+  `capturingRunConfigFake` confirms the parent premise was stale: `conversationStateFake` (#434) only
+  answers the seven conversation-list verbs, so `set_session_settings` / `request_snapshot` /
+  `session_transition` all fall to its `default` (no reply) — this scenario needed its own factory, not an
+  extension of the shared one. It also surfaces two preconditions `launchPairedApp` doesn't provide that any
+  future run-config or session-id scenario will need again: a session id (fed only by an *unsolicited*
+  `session_transition` marker via the App-level `sessionIdBridge`, required before the controls' `onChange`
+  is built at all — absent it, #188's inert markup renders and clicks no-op) and a seeded `screen_snapshot`
+  baseline (answering `RunConfigData`'s one `request_snapshot` on sheet open). Because the view renders no
+  pending/disabled state (`selectEffectiveSettings` composes `pending` and `confirmed` to the same displayed
+  value), a landed confirm is DOM-indistinguishable from a still-pending optimistic overlay — so the send
+  half of each change is proven from the **captured outbound** `set_session_settings` frame
+  (`isDeepStrictEqual` + `expect.poll(...).toBe(1)`, proving send-once and only-the-changed-field together),
+  while the one scripted rejection (a correlated `error`) is the visually distinct outcome asserted in the
+  DOM (control reverts + `.run-config__error[role="alert"]`).
 
 ## Related
 
@@ -151,5 +168,6 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#456 codebase notes](../codebase/456.md) — the Workspace Picker sheet's recent-pick + create-folder round-trips; adds the shared `recent_workspaces` fake answer split sibling #457 reuses.
 - [Conversation workspace change](conversation-workspace-change.md) / [#379 codebase notes](../codebase/379.md) — the `change_workspace` transport slice [#456](../codebase/456.md) drives and asserts on the wire, since its reply has no DOM reflection.
 - [Recent-workspaces store](recent-workspaces-store.md) / [#382 codebase notes](../codebase/382.md) — the renderer store + bridge [#456](../codebase/456.md) exercises end-to-end via the picker's `recent_workspaces` request.
+- [#425 codebase notes](../codebase/425.md) — the run-config sheet's model/effort/YOLO round-trip; the spec-local capturing-fake precedent applied to `set_session_settings`, plus the session-id + snapshot preconditions any future run-config scenario needs.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

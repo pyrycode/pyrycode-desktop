@@ -26,7 +26,8 @@ the operator's other pre-ship gates.
 daemon, wait for the seeded conversation's Rename pencil to render, rename it through the product UI, and
 assert the new title lands in the channel list (old title gone). The four sibling action specs reuse the
 same harness: [#440](../codebase/440.md) (conversation lifecycle — archive/restore/delete, shipped),
-#441 (workspace), #442 (run-controls), #443 (promote).
+[#441](../codebase/441.md) (workspace — recent-workspaces + create-folder, shipped), #442
+(run-controls), #443 (promote).
 
 [#440](../codebase/440.md) ran green against a live `pyry dev` build and confirmed all four registry
 handlers this tier depends on (`create_conversation`, `archive_conversation`, `unarchive_conversation`,
@@ -36,6 +37,16 @@ first seed/title collision: unlike #439's rename spec (whose seed identity doesn
 `name`), so #440 established scoping created-vs-seed rows by **section affordance**
 (`.channel-list__rename` on a promoted row vs. `.channel-list__save` on a non-promoted one) rather than
 title text whenever a spec's seed and test-created row could collide on display string.
+
+[#441](../codebase/441.md) is the first sibling to use `seedPromoted:false` (a Recent discussion, not a
+Channel) — its `.channel-list__save` affordance doubles as the readiness gate, generalizing #440's
+section-affordance idiom to a non-promoted seed. It drives the `WorkspacePickerSheet`'s (#383)
+recent-workspaces and create-folder round-trips against the real daemon, ran green end-to-end on a live
+`pyry` (2.4s, not just skip-clean), confirmed both `recent_workspaces` and `create_workspace_folder` are
+wired with no #949-class gap, and established that a real-daemon "picker/dialog closed" assertion should
+target a DOM element that renders unconditionally (here, `.workspace-picker__other`) rather than one
+whose presence depends on the same daemon-derived round-trip already under test — a row-count-0 check
+can pass vacuously if the daemon's reply content changes shape.
 
 ## How it works
 
@@ -170,6 +181,9 @@ Prerequisites: only `pyry` on `PATH` (or `PYRY_BIN`), built from a **#820-inclus
 - [#440 codebase notes](../codebase/440.md) — the conversation-lifecycle (archive/restore/delete) sibling
   spec, the first of the four action specs to ship; confirmed all four registry handlers wired, no
   #949-class gap on that build.
+- [#441 codebase notes](../codebase/441.md) — the workspace-actions (recent-workspaces + create-folder)
+  sibling spec, the second to ship and the first to use `seedPromoted:false`; ran green end-to-end on a
+  live daemon, no #949-class gap.
 - [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#252](../codebase/252.md) — the credentialed
   sibling tier that proves the send/stream turn; this tier proves the registry actions the credentialed
   tier never exercises.
@@ -180,4 +194,6 @@ Prerequisites: only `pyry` on `PATH` (or `PYRY_BIN`), built from a **#820-inclus
 - pyrycode/pyrycode#949 — the `promote_conversation` gap this tier exists to catch.
 - pyrycode/pyrycode#881, #822, #677 — the archive/unarchive, delete, and create handlers #440 confirmed
   registered against a live daemon.
+- pyrycode/pyrycode#982, #887, #981 — the `recent_workspaces` and `create_workspace_folder` handlers
+  #441 confirmed registered and live-verified against a real daemon.
 - pyrycode/pyrycode#820 — the daemon-side `rename_conversation` handler the liveness spec rides.

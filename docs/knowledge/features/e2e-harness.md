@@ -150,6 +150,21 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   (`isDeepStrictEqual` + `expect.poll(...).toBe(1)`, proving send-once and only-the-changed-field together),
   while the one scripted rejection (a correlated `error`) is the visually distinct outcome asserted in the
   DOM (control reverts + `.run-config__error[role="alert"]`).
+- **[#457](../codebase/457.md), split from #424 (#456's twin), covers the Settings "Default workspace"
+  preference reaching `create_conversation`.** `e2e/default-workspace.spec.ts` drives
+  `DefaultWorkspaceRow` (#404) → `WorkspacePickerSheet` (#383) → `defaultWorkspaceStore` (#403) → the
+  channel-list FAB (#242) in **one** `test()` block on one launch — the choose writes the store with
+  **no wire traffic** (unlike #456's thread picker, which dispatches `change_workspace`), so the only
+  load-bearing wire assertion is the FAB's own `create_conversation { is_promoted:false, name:null,
+  cwd:CHOSEN }`, `expect.poll`ed on the spec-captured inbound frames (the same #440/#456 unrealizable-
+  active-list trap: the chosen `cwd` has no DOM reflection). Its capturing wrapper reuses #456's shared
+  `recentWorkspaces` fake answer with **zero spec-local verb handling** — strictly simpler than #456's
+  own wrapper, since every verb this drive sends is already answered by the shared fake. Corrects #456's
+  seed-promotion constraint as irrelevant to this flow (the Settings picker has no active-conversation
+  gate, unlike the thread `WorkspaceChip`), and establishes a reusable pattern: a negative wire guard
+  (asserting `change_workspace` was never sent) is race-free when placed *after* a positive poll on the
+  same in-order Noise channel, since any earlier frame is already captured by the time the later one
+  arrives.
 
 ## Related
 
@@ -169,5 +184,7 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [Conversation workspace change](conversation-workspace-change.md) / [#379 codebase notes](../codebase/379.md) — the `change_workspace` transport slice [#456](../codebase/456.md) drives and asserts on the wire, since its reply has no DOM reflection.
 - [Recent-workspaces store](recent-workspaces-store.md) / [#382 codebase notes](../codebase/382.md) — the renderer store + bridge [#456](../codebase/456.md) exercises end-to-end via the picker's `recent_workspaces` request.
 - [#425 codebase notes](../codebase/425.md) — the run-config sheet's model/effort/YOLO round-trip; the spec-local capturing-fake precedent applied to `set_session_settings`, plus the session-id + snapshot preconditions any future run-config scenario needs.
+- [#457 codebase notes](../codebase/457.md) — the default-workspace preference reaching `create_conversation`'s `cwd`; the split twin of [#456](../codebase/456.md), reusing its shared `recent_workspaces` fake answer with a zero-verb-handling capturing wrapper and the race-free negative-guard-after-positive-poll pattern.
+- [Default workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) — the `localStorage`-backed store [#457](../codebase/457.md) is the first e2e to drive.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

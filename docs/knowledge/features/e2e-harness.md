@@ -107,6 +107,18 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   and surfaces a harness-adjacent UI lesson: the Channel-info sheet is a full-surface
   `.status-sheet-overlay` scrim that blocks `.conversation__back` until the sheet's own
   `.status-sheet__close` is clicked first — relevant to any future scenario that opens the sheet.
+- **#451's independent sibling, the destructive-lifecycle scenario, landed too.**
+  [#452](../codebase/452.md) added `e2e/conversation-archive-lifecycle.spec.ts` — the fake-stack twin of
+  the real-daemon lifecycle spec [#440](../codebase/440.md), driving one FAB-created conversation through
+  archive → restore → delete on the same single `launchPairedApp` launch. It hits the same Gaps A/B as
+  #440 and lands on the same ruling: assert the Archive view's `role=tab` count deltas (`Discussions
+  0→1→0` for archive/restore) rather than active-Channel-List departure/return, since Gap B means an
+  archived row never actually leaves the active list. Delete is asserted as gone from **both** surfaces —
+  it splices the row from the fake's held state rather than tagging it, so that's the one step where
+  "gone" holds everywhere. Also nuances the #451 sheet-scrim lesson: whether `.status-sheet__close` is
+  needed before `.conversation__back` depends on the specific action's callback wiring, not the sheet shell
+  itself — here `onArchive` and `onDeleteConfirm` both call `onClose()` themselves, so the sheet is already
+  unmounted and clicking `.status-sheet__close` would fail (the button no longer exists).
 
 ## Related
 
@@ -120,5 +132,6 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#439 codebase notes](../codebase/439.md) / [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) — added the claude-less spawn mode to `realDaemon.ts` and the first credential-light real-* scenario.
 - [#434 codebase notes](../codebase/434.md) — `conversationStateFake`, the stateful fake-daemon sibling of `realDaemon.ts`'s credential-light mode; holds and mutates a conversation list across a real UI drive for the #422–#429 per-flow family.
 - [#451 codebase notes](../codebase/451.md) — first `conversationStateFake`-riding per-flow scenario: FAB create-nav, the Channel-info sheet rename entry point, and the grown two-row Channel List.
+- [#452 codebase notes](../codebase/452.md) — #451's independent sibling: the destructive archive → restore → delete lifecycle, fake-stack twin of [#440](../codebase/440.md).
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

@@ -119,6 +119,20 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   needed before `.conversation__back` depends on the specific action's callback wiring, not the sheet shell
   itself — here `onArchive` and `onDeleteConfirm` both call `onClose()` themselves, so the sheet is already
   unmounted and clicking `.status-sheet__close` would fail (the button no longer exists).
+- **[#456](../codebase/456.md) covers the Workspace Picker sheet's (#383) two wire round-trips.**
+  `e2e/workspace-picker.spec.ts` adds a `recent_workspaces` answer to `conversationStateFake` (shared,
+  since split sibling #457 reuses it) and, spec-locally, a `create_workspace_folder` answer (single
+  consumer, the #423 precedent), in two isolated `test()` blocks (also the #423 shape): recent-pick
+  (`change_workspace` carrying the chosen path) and create-folder (`create_workspace_folder` chaining
+  `change_workspace` with the daemon-**returned** path, verbatim — never a client preview, the #288
+  proof). Both blocks assert the "Change workspace" button is enabled before driving the picker, pinning
+  the [#448](https://github.com/pyrycode/pyrycode-desktop/pull/450) precondition that a
+  `launchPairedApp` row-open now sets the active conversation (so the `WorkspaceChip` gate is
+  satisfiable straight from the landed thread, given an `is_promoted: false` seed and no message sent).
+  Since the changed `cwd` has no DOM reflection (`change_workspace`'s reply is a no-op for
+  `activeConversationStore` — the same #440 unrealizable-active-list trap), both flows assert the
+  **outbound wire frame** the fake captured, `expect.poll`ed for async loopback arrival, rather than a
+  rendered reflection.
 
 ## Related
 
@@ -133,5 +147,9 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#434 codebase notes](../codebase/434.md) — `conversationStateFake`, the stateful fake-daemon sibling of `realDaemon.ts`'s credential-light mode; holds and mutates a conversation list across a real UI drive for the #422–#429 per-flow family.
 - [#451 codebase notes](../codebase/451.md) — first `conversationStateFake`-riding per-flow scenario: FAB create-nav, the Channel-info sheet rename entry point, and the grown two-row Channel List.
 - [#452 codebase notes](../codebase/452.md) — #451's independent sibling: the destructive archive → restore → delete lifecycle, fake-stack twin of [#440](../codebase/440.md).
+- [#423 codebase notes](../codebase/423.md) — the third #422-family sibling: the save-as-channel promote dialog's scratch/dedicated branches; the two-block shape and captured-envelope compose-over idiom [#456](../codebase/456.md) reuses.
+- [#456 codebase notes](../codebase/456.md) — the Workspace Picker sheet's recent-pick + create-folder round-trips; adds the shared `recent_workspaces` fake answer split sibling #457 reuses.
+- [Conversation workspace change](conversation-workspace-change.md) / [#379 codebase notes](../codebase/379.md) — the `change_workspace` transport slice [#456](../codebase/456.md) drives and asserts on the wire, since its reply has no DOM reflection.
+- [Recent-workspaces store](recent-workspaces-store.md) / [#382 codebase notes](../codebase/382.md) — the renderer store + bridge [#456](../codebase/456.md) exercises end-to-end via the picker's `recent_workspaces` request.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

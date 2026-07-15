@@ -11,7 +11,9 @@ import type {
   UnarchiveConversationPayload,
   DeleteConversationPayload,
   PromoteConversationPayload,
-  ChangeWorkspacePayload
+  ChangeWorkspacePayload,
+  RecentWorkspace,
+  RecentWorkspacesPayload
 } from '../../src/shared/wire/types'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
@@ -66,6 +68,11 @@ const DEFAULT_SEED: ConversationSummary = {
 export interface ConversationStateFakeOptions {
   /** Initial held list, in wire order. Default: a single promoted, named row (DEFAULT_SEED). */
   conversations?: ConversationSummary[]
+  /** Seeded recent-workspaces list answered on a `recent_workspaces` request (#456). Default `[]` — a
+   *  valid loaded-empty reply. READ-ONLY (recent_workspaces has no mutation verb), so it is captured as a
+   *  plain const, unlike the mutable `list`. Reused by the split sibling #457, which is why it lives here
+   *  in the shared fixture rather than spec-local. */
+  recentWorkspaces?: RecentWorkspace[]
 }
 
 /**
@@ -89,6 +96,9 @@ export function conversationStateFake(
   const list: ConversationSummary[] = (options.conversations ?? [DEFAULT_SEED]).map((row) => ({
     ...row
   }))
+  // The seeded recent-workspaces answer — read-only (no mutation verb touches it), so a plain const, not
+  // the mutable `list`. Default `[]` = a valid loaded-empty `recent_workspaces_list` reply (#456).
+  const recents: RecentWorkspace[] = options.recentWorkspaces ?? []
   // Monotonic id source for minted rows — deterministic, no clock/random.
   let nextCreatedId = 1
 
@@ -157,6 +167,12 @@ export function conversationStateFake(
         return [conversationUpdatedFrame(row)]
       }
 
+      case 'recent_workspaces':
+        // Read-only: answer the seeded list verbatim (broadcast-shaped, no in_reply_to). The app consumes
+        // it via the correlation-free `recentWorkspacesReceived` event and the decoder requires no
+        // correlation. A fresh one-shot per picker open re-hits this arm; the answer is stable (#456).
+        return [recentWorkspacesListFrame(recents)]
+
       case 'delete_conversation': {
         const payload = env.payload as DeleteConversationPayload
         const index = list.findIndex((row) => row.id === payload.conversation_id)
@@ -189,6 +205,18 @@ function conversationsFrame(list: ConversationSummary[]): Uint8Array {
     type: 'conversations',
     ts: FIXED_TS,
     payload: { conversations: list } satisfies ConversationsPayload
+  })
+}
+
+/** `recent_workspaces_list` reply — the seeded rows in wire order (RecentWorkspacesPayload). BROADCAST-
+ *  shaped: no `in_reply_to` (like `conversation_updated`), since the app consumes it via the
+ *  correlation-free `recentWorkspacesReceived` event and the production decoder needs no correlation (#380). */
+function recentWorkspacesListFrame(workspaces: RecentWorkspace[]): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'recent_workspaces_list',
+    ts: FIXED_TS,
+    payload: { workspaces } satisfies RecentWorkspacesPayload
   })
 }
 

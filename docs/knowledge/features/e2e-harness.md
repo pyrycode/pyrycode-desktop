@@ -202,6 +202,25 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   Cancel destination (Settings re-renders) is the one observable that separates them. Also notes the three
   back buttons (thread/settings/archive) share the identical accessible name `'Back'`, selected by
   screen-scoped class rather than role-name.
+- **[#466](../codebase/466.md) is the first #422-family scenario that needs two launches**, since its
+  target — the push-notification preference (#408) surviving a relaunch — is only observable across a
+  process boundary. Added `LaunchControl` to `launchPairedApp`: an optional second parameter carrying one
+  `reuseUserDataDir?: string` flag, plus an additive `PairedApp.userDataDir` return field. Dir-reuse and
+  pairing-drive-skip are deliberately one flag, not two — a reused *paired* dir must skip the drive, or the
+  paste→Pair→Confirm steps hang waiting for a pairing screen that never appears on an already-paired boot.
+  On a reuse launch the forwarder + daemon still start (unconditionally, so `PairedApp.daemon` stays
+  non-optional and no possibly-undefined check ripples through the `daemon.pushFrame` consumer family) but
+  are vestigial — the app dials the *persisted* launch-1 relay URL, not the fresh forwarder port — and the
+  fixture returns at the **list**, skipping both the row-click and the Send-enabled wait that would hang on
+  a connection that will never establish (`routeForStatus` reads the persisted pairing record at mount,
+  independent of the Noise handshake). No second `rm` teardown is registered on a reuse launch; the minting
+  launch's `rm` (pushed first, drained last by Playwright's LIFO teardown) removes the dir exactly once,
+  after every launch on it has closed. The spec itself: launch 1 flips the toggle from its default-ENABLED
+  state to DISABLED, `app.close()` (barrier — releases the `SingletonLock` *and* flushes renderer
+  `localStorage` on graceful exit, both required before a same-dir relaunch) + `daemon.close()` (kills
+  daemon 1 so launch 2 provably cannot reconnect through the stale persisted relay URL), then launch 2
+  reuses the dir and asserts the switch is still unchecked — the only assertion in the spec, and the whole
+  point of it.
 
 ## Related
 
@@ -227,5 +246,7 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#427 codebase notes](../codebase/427.md) — the queued-backlog render, dequeue, and interrupt flows, all server-push-driven; establishes why a flow does NOT need #423/#426's two-block split (no one-way residue) and the two-part act/capture/push-reflect assertion shape for non-optimistic push-reflected mutations.
 - [#428 codebase notes](../codebase/428.md) — the stall indicator, screen snapshot, and debug-bundle download; the last of the reliability-affordance surfaces, covering a server push, a request→reply, and a chunked reply stream in a single launch.
 - [#465 codebase notes](../codebase/465.md) — the paired region's inner navigation: the pair-another-server round-trip and the thread/settings/archive back-chain, plus the Cancel→Settings round-trip as the only realizable teardown proof when two routes render the same component.
+- [#466 codebase notes](../codebase/466.md) — the push-notification toggle's relaunch persistence; the first two-launch scenario in the family, and the `reuseUserDataDir` fixture affordance (dir-reuse + drive-skip as one flag) it added to `launchPairedApp`.
+- [Push-notification preference store](push-notification-preference-store.md) / [#408 codebase notes](../codebase/408.md) — the `pyry.pushNotificationsEnabled` `localStorage` contract [#466](../codebase/466.md) is the first e2e to prove survives a full app relaunch.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

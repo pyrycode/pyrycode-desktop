@@ -46,6 +46,19 @@ immediately before and after the drop, the DOM-only answer to the #442-class deq
 hazard), and — reusing #445's two-signal-quiesce-plus-settle idiom verbatim — the turn drains to prove
 the dropped send produced no assistant turn at all.
 
+[#432](../codebase/432.md), the third sibling on this tier, is `e2e/real-claude-permission-modal.spec.ts`
+— the deepest liveness net in the suite. It clones the same precondition and swaps the turn body for a
+prompt engineered to force exactly one deterministic, permission-gated tool call, waits for
+`page.getByRole('dialog')` (the real daemon relaying claude's per-tool prompt as `modal_shown` — a
+timeout is a genuine liveness signal, not a flake), answers "allow" via a helper that absorbs two
+daemon-supplied unknowns (the affirmative option's label, matched by a start-anchored
+case-insensitive regex, and whether it is the default, resolved by a conditional `Confirm` click),
+then reuses #445/#446's two-signal quiesce to prove the turn completes. Unlike #445's "long prompt"
+mitigation, this spec's causation proof is structural: `turn_end` cannot fire without the tool
+running, which cannot happen without the allow. Adds a single-consumer `skipPermissions` fixture
+option (default `true` = current args byte-for-byte) that drops `--dangerously-skip-permissions` for
+this spec alone, mirroring the #439 `seedPromoted` single-consumer precedent.
+
 ## How it works
 
 ### Gated out of the default run
@@ -212,6 +225,9 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - [Queue store](queue-store.md) / [#446 codebase notes](../codebase/446.md) — #445's twin
   (`real-claude-queue-drop.spec.ts`); the real-stack liveness net over the queue-while-busy-then-drop
   client wiring.
+- [#432 codebase notes](../codebase/432.md) — the third tier sibling
+  (`real-claude-permission-modal.spec.ts`); the real-stack liveness net over the permission-modal
+  chain, contrasted with the fake-stack twin #426.
 - [Live e2e runbook](live-e2e-runbook.md) / [#13](../codebase/13.md) — the manual, live-**relay**
   operator gate; this scenario automates the real-daemon+real-claude half but still uses a local relay,
   so it does not replace the live-relay verification.

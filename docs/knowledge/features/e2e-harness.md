@@ -85,6 +85,19 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
     opt into a real `pyry` daemon with **no** `claude` and **no** Anthropic credential — see
     [real-daemon credential-light e2e](real-daemon-credential-light-e2e.md). `real-claude.spec.ts` sets
     neither option and keeps its exact prior behavior.
+  - **A stateful sibling to `launchPairedApp` landed for the fake-daemon side.** [#434](../codebase/434.md)
+    added `e2e/fixtures/conversationStateFake.ts` — a `conversationStateFake(options)` factory that returns
+    a `buildReplyFrames` closure **holding** a seeded `ConversationSummary[]` and mutating it across a real
+    UI drive, instead of the stateless per-call `buildReplyFrames` dispatch `send-and-stream.spec.ts` uses.
+    It answers `list_conversations` from current state and applies all seven list-mutation verbs
+    (create/rename/archive/unarchive/promote/change_workspace/delete), matching the app's two real reflect
+    paths — a `conversation_updated` broadcast that triggers `shouldRefreshList` re-listing, and a
+    correlated `conversation_deleted { id }` echoing `in_reply_to`. Consumed through `launchPairedApp`
+    exactly like any other `buildReplyFrames` option. Its demonstrating spec,
+    `e2e/conversation-state-fake.spec.ts`, clones `real-daemon-rename.spec.ts`'s drive against the fake
+    (rename, not archive — `partitionByPromotion` does not filter `is_archived`, so an archived row never
+    leaves the active list; see [#440](../codebase/440.md)). This is the fixture the #422–#429 per-flow
+    family (blocked-by #434) rides for list-mutation state instead of re-transcribing the wire per spec.
 
 ## Related
 
@@ -96,5 +109,6 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#435 codebase notes](../codebase/435.md) — repaired the list→thread drive #433 later extracted.
 - [#420 codebase notes](../codebase/420.md) — extracted `e2e/fixtures/realDaemon.ts`, the real-stack sibling of `launchPairedApp.ts`, from `real-claude.spec.ts`; the intended home for future real-* scenarios.
 - [#439 codebase notes](../codebase/439.md) / [Real-daemon credential-light e2e](real-daemon-credential-light-e2e.md) — added the claude-less spawn mode to `realDaemon.ts` and the first credential-light real-* scenario.
+- [#434 codebase notes](../codebase/434.md) — `conversationStateFake`, the stateful fake-daemon sibling of `realDaemon.ts`'s credential-light mode; holds and mutates a conversation list across a real UI drive for the #422–#429 per-flow family.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

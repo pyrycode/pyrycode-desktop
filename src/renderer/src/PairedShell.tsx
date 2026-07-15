@@ -1,4 +1,5 @@
 import { useReducer } from 'react'
+import type { ConversationSummary } from '@shared/wire/types'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { ChannelList } from './screens/channels/ChannelList'
 import { SettingsScreen } from './screens/settings/SettingsScreen'
@@ -32,7 +33,7 @@ function assertNever(route: never): never {
  */
 export function PairedShellView(props: {
   route: PairedRoute
-  onOpen: () => void
+  onOpen: (conversation: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
   onBack: () => void
@@ -87,8 +88,6 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   const setActiveConversation = useActiveConversationStore((s) => s.setActiveConversation)
   // The created-event → list→thread nav. #278: also record the created payload (its `cwd` feeds the
   // empty-thread workspace chip) — the callback already receives this payload and previously dropped it.
-  // The `open` nav stays conversation-agnostic (it opens the single active conversation, the same interim
-  // as the row's onClick), reusing the existing transition with no new route or nav arm.
   useConversationCreatedNav((created) => {
     setActiveConversation(created)
     dispatch({ type: 'open' })
@@ -105,7 +104,15 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   return (
     <PairedShellView
       route={route}
-      onOpen={() => dispatch({ type: 'open' })}
+      // #448: opening a row records THAT conversation as active before navigating, the same
+      // record-then-open the created-event path above performs — so the thread's wire actions (send,
+      // snapshot, dequeue) target the clicked conversation's real id, not a placeholder. A
+      // ConversationSummary carries every ConversationCreatedPayload field (plus two more), so the
+      // store accepts it structurally; most-recent-wins replacement is the store's contract.
+      onOpen={(conversation) => {
+        setActiveConversation(conversation)
+        dispatch({ type: 'open' })
+      }}
       onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onOpenArchive={() => dispatch({ type: 'openArchive' })}
       onBack={() => dispatch({ type: 'back' })}

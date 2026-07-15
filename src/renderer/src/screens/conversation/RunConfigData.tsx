@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { runConfigStore } from '../../store/runConfigStore'
+import { useActiveConversationStore } from '../../store/activeConversationStore'
 import { requestRunConfigSnapshot, subscribeRunConfig } from './runConfigSnapshot'
 
 // The Run configuration sheet's data-path binding (#187) — a headless container mounted inside the
@@ -13,6 +14,10 @@ export function RunConfigData(): null {
   // makes the StrictMode dev double-invoke fire the request exactly once. A genuine close→reopen is a
   // new component instance with a fresh ref (false), so it re-requests — exactly one per open.
   const requested = useRef(false)
+  // #448: the request targets the ACTIVE conversation — the daemon validates conversation_id and
+  // rejects an unknown id, so the old placeholder constant could never get a snapshot back. The sheet
+  // mounts this component per open, so the id is stable for the component's lifetime.
+  const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
 
   useEffect(() => {
     // Subscribe first (declared before the request effect, so it runs first on mount): the listener
@@ -28,8 +33,8 @@ export function RunConfigData(): null {
     // Request once per open. Guarded so the StrictMode double-invoke fires exactly one request (AC2).
     if (requested.current) return
     requested.current = true
-    requestRunConfigSnapshot(window.pyry.sendCommand)
-  }, [])
+    requestRunConfigSnapshot(activeConversationId, window.pyry.sendCommand)
+  }, [activeConversationId])
 
   return null
 }

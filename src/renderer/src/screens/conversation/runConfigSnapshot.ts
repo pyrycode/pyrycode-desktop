@@ -10,7 +10,6 @@
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { RunConfigSnapshot } from '../../store/runConfigStore'
-import { MILESTONE_CONVERSATION_ID } from './composerSend'
 
 /**
  * The toDownloadAction analogue: map a `snapshotReceived` event to the three fields, and every other
@@ -40,16 +39,22 @@ export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | nul
 }
 
 /**
- * Fire exactly one `requestSnapshot` for the milestone conversation (AC1). The command is an inline
- * literal typed as RendererCommand (no constructor added — keeps the change renderer-contained, per
- * the ticket's "no main-process or IPC change here"). `MILESTONE_CONVERSATION_ID` is imported from
- * the composer — the single source of truth a future conversation-selection ticket replaces.
+ * Fire exactly one `requestSnapshot` for the ACTIVE conversation (#448). `conversationId` is the
+ * activeConversationStore's id at the container; a null id is a no-op — the daemon validates
+ * `conversation_id` (KnownConversation) and replies conversation_not_found for an unknown one, so
+ * the readout keeps its "inherited daemon default" placeholders instead of firing a doomed request.
+ * The command is an inline literal typed as RendererCommand (no constructor added — keeps the change
+ * renderer-contained, per the ticket's "no main-process or IPC change here").
  * Fire-and-forget, like the composer's send: `sendCommand` is `void`, so there is no result to await.
  */
-export function requestRunConfigSnapshot(sendCommand: (command: RendererCommand) => void): void {
+export function requestRunConfigSnapshot(
+  conversationId: string | null,
+  sendCommand: (command: RendererCommand) => void
+): void {
+  if (conversationId === null) return
   sendCommand({
     type: 'requestSnapshot',
-    payload: { conversation_id: MILESTONE_CONVERSATION_ID }
+    payload: { conversation_id: conversationId }
   })
 }
 

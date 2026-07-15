@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type Ref
+} from 'react'
 import './conversation.css'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
@@ -17,8 +25,7 @@ import {
   composerAvailability,
   shouldOfferRepair,
   shouldShowBanner,
-  CONNECTION_BANNER_COPY,
-  MILESTONE_CONVERSATION_ID
+  CONNECTION_BANNER_COPY
 } from './composerSend'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
@@ -650,11 +657,16 @@ export function ScreenSnapshotView({
 function ScreenSnapshotControl(): JSX.Element {
   const status = useSessionStore(selectStatus)
   const snapshot = useScreenSnapshotStore(selectScreenSnapshot)
+  // #448: the request targets the ACTIVE conversation — the daemon validates conversation_id and
+  // rejects an unknown one, so the helper no-ops when no conversation is active.
+  const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
   return (
     <ScreenSnapshotView
       snapshot={snapshot}
       canRequest={composerAvailability(status).canSend}
-      onRequest={() => requestScreenSnapshot({ sendCommand: window.pyry.sendCommand })}
+      onRequest={() =>
+        requestScreenSnapshot(activeConversationId, { sendCommand: window.pyry.sendCommand })
+      }
     />
   )
 }
@@ -728,30 +740,36 @@ export function QueuedBacklog({
   )
 }
 
-// The store-bound container for the queued backlog (#294). Reads the single active conversation's
-// backlog under MILESTONE_CONVERSATION_ID (the constant the composer sends under; no nav plumbing to
-// thread a conversation id — that is a separate future concern). The selector is hoisted to module
-// scope so it is created once; because selectBacklogFor returns the same array reference (or the stable
-// EMPTY_BACKLOG) for a given id, a snapshot for a DIFFERENT conversation is Object.is-stable here → no
-// re-render churn (AC3 free-of-noise). A pure store read — no window.pyry, no IPC, no effects (AC5).
+// The store-bound container for the queued backlog (#294, re-keyed by #448). Reads the ACTIVE
+// conversation's backlog — the id the composer now sends under — via a useMemo-stable selector per id.
+// selectBacklogFor returns the same array reference (or the stable EMPTY_BACKLOG) for a given id, so a
+// snapshot for a DIFFERENT conversation is Object.is-stable here → no re-render churn (AC3
+// free-of-noise). With no active conversation the sentinel '' matches nothing and yields the stable
+// empty backlog. A pure store read — no window.pyry, no IPC, no effects (AC5).
 //
-// #296: binds onDrop to the pure dropQueuedMessage helper, supplying MILESTONE_CONVERSATION_ID (the
-// conversation-id wall — the row has none). window.pyry.sendCommand is dereferenced ONLY inside the
-// click closure (interaction time, never render — the Composer.handleSubmit / PermissionModal
-// discipline), so the empty-backlog container smoke test stays bridge-free. No optimistic mutation: the
-// helper only sends (AC3); the dropped row leaves on the next queue_state snapshot via this subscription.
-const selectMilestoneBacklog = selectBacklogFor(MILESTONE_CONVERSATION_ID)
-
+// #296: binds onDrop to the pure dropQueuedMessage helper, supplying the active conversation id (the
+// conversation-id wall — the row has none). A populated row implies an active id (the daemon queues
+// under real ids only), so the null case cannot reach onDrop; the guard is belt-and-braces.
+// window.pyry.sendCommand is dereferenced ONLY inside the click closure (interaction time, never
+// render — the Composer.handleSubmit / PermissionModal discipline), so the empty-backlog container
+// smoke test stays bridge-free. No optimistic mutation: the helper only sends (AC3); the dropped row
+// leaves on the next queue_state snapshot via this subscription.
 function QueuedBacklogControl(): JSX.Element | null {
-  const items = useQueueStore(selectMilestoneBacklog)
+  const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
+  const selectActiveBacklog = useMemo(
+    () => selectBacklogFor(activeConversationId ?? ''),
+    [activeConversationId]
+  )
+  const items = useQueueStore(selectActiveBacklog)
   return (
     <QueuedBacklog
       items={items}
-      onDrop={(queuedMsgId) =>
-        dropQueuedMessage(MILESTONE_CONVERSATION_ID, queuedMsgId, {
+      onDrop={(queuedMsgId) => {
+        if (activeConversationId === null) return
+        dropQueuedMessage(activeConversationId, queuedMsgId, {
           sendCommand: window.pyry.sendCommand
         })
-      }
+      }}
     />
   )
 }
@@ -1149,6 +1167,9 @@ function Composer(): JSX.Element {
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
   const status = useSessionStore(selectStatus)
   const { canSend, hint } = composerAvailability(status)
+  // #448: the send targets the ACTIVE conversation. submitMessage no-ops on a null id (the daemon
+  // rejects an unknown conversation_id with an error frame, so a placeholder is never sent).
+  const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
 
   const handleSubmit = (): void => {
     // AC1: the authoritative gate. Return before touching submitMessage so no sendCommand and no
@@ -1157,7 +1178,7 @@ function Composer(): JSX.Element {
     if (!canSend) return
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge.
-    const sent = submitMessage(text, {
+    const sent = submitMessage(text, activeConversationId, {
       sendCommand: window.pyry.sendCommand,
       dispatch,
       newMessageId: () => crypto.randomUUID()

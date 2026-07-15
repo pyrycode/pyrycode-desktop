@@ -6,7 +6,6 @@ import {
   requestRunConfigSnapshot,
   subscribeRunConfig
 } from './runConfigSnapshot'
-import { MILESTONE_CONVERSATION_ID } from './composerSend'
 
 // Framework-free data-path tests with injected spies (the composerSend / logDataDownload idiom):
 // no React, no store, no Electron.
@@ -87,14 +86,23 @@ describe('toRunConfigSnapshot', () => {
 })
 
 describe('requestRunConfigSnapshot', () => {
-  it('fires exactly one requestSnapshot for the milestone conversation (AC1)', () => {
+  it('fires exactly one requestSnapshot for the ACTIVE conversation (#448)', () => {
     const sendCommand = vi.fn()
-    requestRunConfigSnapshot(sendCommand)
+    requestRunConfigSnapshot('130648a8-real-id', sendCommand)
     expect(sendCommand).toHaveBeenCalledTimes(1)
     expect(sendCommand).toHaveBeenCalledWith({
       type: 'requestSnapshot',
-      payload: { conversation_id: MILESTONE_CONVERSATION_ID }
+      payload: { conversation_id: '130648a8-real-id' }
     })
+  })
+
+  // #448: the daemon validates conversation_id on request_snapshot (KnownConversation) and replies
+  // conversation_not_found for an unknown id — so with no active conversation the request must not
+  // fire at all. The readout keeps its defaults; nothing is sent.
+  it('performs no send when the active conversation id is null (#448)', () => {
+    const sendCommand = vi.fn()
+    requestRunConfigSnapshot(null, sendCommand)
+    expect(sendCommand).not.toHaveBeenCalled()
   })
 })
 

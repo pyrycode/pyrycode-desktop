@@ -11,7 +11,6 @@
 // fire-from-useEffect, because this is a click-driven, fire-and-forget send that must never crash the
 // window on a bridge failure.
 import type { RendererCommand } from '@shared/ipc/commands'
-import { MILESTONE_CONVERSATION_ID } from './composerSend'
 
 /**
  * The single effect requestScreenSnapshot performs, injected so the helper stays pure and deterministic
@@ -22,19 +21,25 @@ export interface RequestScreenSnapshotDeps {
 }
 
 /**
- * Fire exactly one `requestSnapshot` for the milestone conversation (AC1). The command is an inline literal
- * typed as RendererCommand — no constructor added, exactly as requestRunConfigSnapshot fires it, keeping
- * the change renderer-contained (no main-process or IPC change here). `MILESTONE_CONVERSATION_ID` is the
- * single source of truth a future conversation-selection ticket replaces. Guarded send ONLY, no local
+ * Fire exactly one `requestSnapshot` for the ACTIVE conversation (#448). `conversationId` is the
+ * activeConversationStore's id at the container; a null id is a no-op — the daemon validates
+ * `conversation_id` (KnownConversation) and replies conversation_not_found for an unknown one, so
+ * requesting under a placeholder is never correct. The command is an inline literal typed as
+ * RendererCommand — no constructor added, exactly as requestRunConfigSnapshot fires it, keeping
+ * the change renderer-contained (no main-process or IPC change here). Guarded send ONLY, no local
  * dispatch: a bridge failure is swallowed (`console.error`), never rethrown — a failed request must not
  * crash the window (the sendInterrupt / submitMessage posture). Fire-and-forget: `sendCommand` is `void`,
  * so there is nothing to await; the reply arrives on the store's own path.
  */
-export function requestScreenSnapshot(deps: RequestScreenSnapshotDeps): void {
+export function requestScreenSnapshot(
+  conversationId: string | null,
+  deps: RequestScreenSnapshotDeps
+): void {
+  if (conversationId === null) return
   try {
     deps.sendCommand({
       type: 'requestSnapshot',
-      payload: { conversation_id: MILESTONE_CONVERSATION_ID }
+      payload: { conversation_id: conversationId }
     })
   } catch (error) {
     // A send-bridge failure must not crash the window. No local dispatch (fire-and-forget request).

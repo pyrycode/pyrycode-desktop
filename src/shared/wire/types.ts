@@ -297,8 +297,8 @@ export type WireSessionTransitionReason = 'clear' | 'idle_evict' | 'workspace_ch
  * `omitempty`). A session-boundary event the daemon emits when a conversation's session rotates (a `/clear`,
  * an idle eviction, a workspace change); it carries `new_session_id`, the addressing key a client needs to
  * change per-session settings (model / effort / YOLO). **There is NO `conversation_id`** — a session
- * boundary is attributed by the connection it arrives on, and desktop targets a single active conversation
- * (MILESTONE_CONVERSATION_ID). `reason` is a plain wire string like `MessagePayload.role`, closed to the
+ * boundary is attributed by the connection it arrives on, and desktop targets the single active conversation
+ * (activeConversationStore, #448). `reason` is a plain wire string like `MessagePayload.role`, closed to the
  * three WireSessionTransitionReason values. `occurred_at` is RFC3339Nano (a plain string on the wire; the
  * decoder requires a string but does not parse the timestamp). `workspace_cwd` is `string | null` (the
  * `ConversationSummary.name` valid-`null` idiom): the new workspace dir, non-null iff

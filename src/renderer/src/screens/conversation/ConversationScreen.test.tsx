@@ -560,7 +560,7 @@ describe('ScreenSnapshotView — the screen-snapshot action & display (#324)', (
 // #294: the held queued backlog. QueuedBacklog is the pure, exported view (the ThinkingIndicator
 // pattern) — server-render it with an injected QueuedItem[] to prove the empty→null posture and the
 // populated rows without touching the queue store. The store-bound QueuedBacklogControl reads
-// selectBacklogFor(MILESTONE_CONVERSATION_ID); its populated branch is NOT server-render-reachable
+// selectBacklogFor(the active conversation id, #448); its populated branch is NOT server-render-reachable
 // (zustand v5's useStore reads getInitialState() = empty backlog), so the populated assertions live
 // here, exactly like Timeline / ThinkingIndicator; the empty container smoke lives in the block below.
 describe('QueuedBacklog — the held queued backlog (#294)', () => {

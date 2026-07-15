@@ -180,6 +180,17 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   `set_session_settings` payload. AC3's "exactly one `modal_answer`" after Back → re-select → Confirm is
   the negative guard proving Back sends nothing; AC6's zero-frame check proves a remote dismiss sends
   neither `modal_answer` nor `modal_cancel`.
+- **[#428](../codebase/428.md) covers the three reliability affordances an operator reaches for when a
+  session misbehaves** — the stall indicator, the "Show daemon screen" screen snapshot, and the
+  debug-bundle download — each exercising a distinct daemon-interaction shape (server push, request→reply,
+  chunked reply stream) in one `test()` block on one launch, the #425/#427 precedent. Confirms the stall
+  event is a `daemon.pushFrame`, never a bundled reply (the same stale-premise correction as #426/#427);
+  defuses a most-recent-wins overwrite trap where the Run-config sheet's own `request_snapshot` on mount
+  would clobber the scripted snapshot text if the fake answered it differently, by answering every
+  `request_snapshot` identically and asserting the `<pre>` before that sheet opens; and proves
+  `debugBundleProgress` climbs to its final chunk count from streamed `debug_bundle_chunk` frames alone,
+  deliberately never sending `debug_bundle_done` since the completed save writes a real archive to
+  `app.getPath('downloads')` with no dialog to stub and no downloads-directory isolation in the fixture.
 
 ## Related
 
@@ -203,5 +214,6 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [Default workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) — the `localStorage`-backed store [#457](../codebase/457.md) is the first e2e to drive.
 - [#426 codebase notes](../codebase/426.md) — the permission/trust modal's five answer paths (default tap, confirm/Back, cancel, reject banner, remote dismiss); the FIFO-not-`in_reply_to` reject model that forces the two-block split.
 - [#427 codebase notes](../codebase/427.md) — the queued-backlog render, dequeue, and interrupt flows, all server-push-driven; establishes why a flow does NOT need #423/#426's two-block split (no one-way residue) and the two-part act/capture/push-reflect assertion shape for non-optimistic push-reflected mutations.
+- [#428 codebase notes](../codebase/428.md) — the stall indicator, screen snapshot, and debug-bundle download; the last of the reliability-affordance surfaces, covering a server push, a request→reply, and a chunked reply stream in a single launch.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

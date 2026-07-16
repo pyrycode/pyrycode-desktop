@@ -39,6 +39,16 @@ export interface FakeRelayForwarder {
    */
   dropClientLeg(): void
   /**
+   * Cleanly close the CURRENT client leg with a caller-chosen WS close code (#464) — contrast
+   * `dropClientLeg`'s abnormal 1006 `terminate()`. Content-agnostic: the forwarder never interprets
+   * the code. A code in the client's `DEFAULT_FATAL_CLOSE_CODES` (`4401`/`4421`/`4426`) drives the
+   * supervised client to a TERMINAL (non-retryable) failure — surfacing the Re-pair affordance —
+   * instead of the re-dial a retryable close (1006) would trigger. No-op when no client leg is
+   * connected. The server leg is unaffected. The numeric code is an opaque argument, never a decoded
+   * frame, so the module's content-blind import discipline holds.
+   */
+  closeClientLeg(code: number): void
+  /**
    * Terminates both legs and closes the server. Idempotent: a second call returns the same
    * promise and never re-closes. Mirrors the existing startRelay close contract.
    */
@@ -196,6 +206,14 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
     if (clientLeg !== null) clientLeg.terminate()
   }
 
+  // Cleanly close the current client leg with a caller-chosen code (#464). Unlike dropClientLeg's
+  // abnormal 1006 terminate(), a clean close with a fatal WS code (4401/4421/4426) drives the
+  // supervised client to a terminal, non-retryable failure. The leg is nulled by this socket's `close`
+  // handler, same as dropClientLeg. No-op when no client leg is connected; the server leg is untouched.
+  function closeClientLeg(code: number): void {
+    if (clientLeg !== null) clientLeg.close(code)
+  }
+
   function close(): Promise<void> {
     if (closePromise !== null) return closePromise
     closed = true
@@ -220,7 +238,13 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
         reject(new Error('fake relay: server address unavailable'))
         return
       }
-      resolve({ url: `ws://127.0.0.1:${address.port}`, whenReady, dropClientLeg, close })
+      resolve({
+        url: `ws://127.0.0.1:${address.port}`,
+        whenReady,
+        dropClientLeg,
+        closeClientLeg,
+        close
+      })
     })
     wss.once('error', reject)
   })

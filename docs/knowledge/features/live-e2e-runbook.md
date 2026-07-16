@@ -93,6 +93,18 @@ to the app** — a separate, environment-specific gap left after #448 (PR#450) f
 `conversation_id: 'default'` root cause. So do **not** treat `npm run e2e:real-claude` as a working
 pre-ship gate until it lands an actual live green there; the live diagnosis is tracked on #449.
 
+**`npm run e2e:real:gate` is the exit-code-safe form of this `real-*` harness**
+([#479](https://github.com/pyrycode/pyrycode-desktop/issues/479)). It runs the same specs against the same
+`playwright.real-claude.config.ts` as `e2e:real-claude`, adding only an exit-code enforcement layer: when
+every spec skips for a missing prerequisite (`pyry` / `claude` / a credential) the run "passes" with **zero
+tests executed**, and the gate turns that silent-nothing-ran into a **non-zero exit** that names the missing
+prerequisite (surfaced verbatim from the fixture's own skip reason). Prefer it over the raw `e2e:real-claude`
+for operator use — the plain command exits **0** on all-skip and so cannot tell an under-provisioned machine
+apart from a genuine live pass (that green-on-all-skip stays load-bearing on the pipeline, which is why the
+plain command is left untouched). The gate closes only the *silent-zero* hazard: it still dials a **local**
+fake relay, so it does **not** supersede `scripts/live-drive.mjs` below, and it does **not** resolve the #449
+live reply-fan-out gap — a real green still needs the real stack, and #449 must land first.
+
 **The current interim operator pre-ship gate is `scripts/live-drive.mjs`** (built app → production relay →
 live Mac daemon → vault workdir). `npm run build && node scripts/live-drive.mjs .` pairs a throwaway
 device, creates a conversation through the UI, sends a message, waits for the real claude reply to stream

@@ -14,7 +14,8 @@
     "test": "vitest run --passWithNoTests",
     "check:electron-digest": "ELECTRON_RUN_AS_NODE=1 electron scripts/electron-digest-check.mjs",
     "e2e": "npm run build && playwright test",
-    "e2e:real-claude": "npm run build && playwright test --config playwright.real-claude.config.ts"
+    "e2e:real-claude": "npm run build && playwright test --config playwright.real-claude.config.ts",
+    "e2e:real:gate": "npm run build && playwright test --config playwright.real-claude.config.ts --reporter=list,./e2e/reporters/zeroExecutedGate.ts"
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",

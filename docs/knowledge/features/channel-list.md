@@ -70,7 +70,12 @@ the store:
 
 - `titleFor(name: string | null): string` — `name` when present and non-blank
   (`name.trim() !== ''`), else `UNNAMED_LABEL = 'Untitled'`.
-- `partitionByPromotion(rows)` — two order-preserving `Array#filter`s on `is_promoted`. No sort.
+- `partitionByPromotion(rows)` — two order-preserving `Array#filter`s on `is_promoted`. No sort. The
+  neutral shared primitive both `partitionActive` (below) and [`archiveViewModel.partitionArchived`](archive-screen.md)
+  wrap, each pre-filtering on `is_archived` from opposite ends before delegating to it.
+- `partitionActive(rows)` — filters `!r.is_archived` first, then delegates to `partitionByPromotion`.
+  The active list's row source since [#469](../codebase/469.md); the exact dual of
+  `archiveViewModel.partitionArchived`.
 - `formatLastActivity(iso: string, now: number): string` — `now` is **injected**, not `Date.now()`
   inside, so the function stays pure and deterministic under test. Bucket contract:
 
@@ -134,9 +139,13 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
 - **Every row opens the single active conversation, not that row's conversation.** Per-row
   select-and-load needs a transport path that doesn't exist yet (a select-and-load ticket, not yet
   filed as of #141). The seam is already the row — a future ticket changes only what `onClick` passes.
-- **`is_archived` is not filtered.** Every row the store holds renders, partitioned only by
-  `is_promoted`. Correct if the daemon already excludes archived conversations from its `conversations`
-  response; otherwise a scoped one-line filter is a future follow-up.
+- **Archived rows are filtered out.** `renderBody` partitions via `partitionActive`, which drops
+  `is_archived` rows before the promotion split — archived conversations render only in the
+  [Archive screen](archive-screen.md), never here. Fixed by [#469](../codebase/469.md); before that fix,
+  every row the store held rendered here regardless of `is_archived` (a latent #366 regression, "Gap B"
+  in [#440](../codebase/440.md)/[#452](../codebase/452.md)). The empty-state guard
+  (`channels.length === 0 && discussions.length === 0`) is evaluated on the *active* partition, so a
+  store holding only archived rows shows "No conversations yet" rather than a blank body.
 - **Relative times don't tick.** `now` is captured once per render at the container — a live-updating
   interval is a deferred enhancement.
 - **Deferred visual elements** (documented as intentionally absent, not missing): the top app bar
@@ -169,6 +178,8 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
   sibling shape described above.
 - [Rename dialog](rename-conversation-dialog.md) / [#360](../codebase/360.md) — the per-row rename
   affordance on saved Channel rows, the symmetric counterpart of Save-as-channel.
+- [Archive screen](archive-screen.md) / [#469 codebase notes](../codebase/469.md) — `partitionActive`,
+  the dual of `partitionArchived`, fixing archived rows leaking into this list.
 - [#141 codebase notes](../codebase/141.md) · Spec: `docs/specs/architecture/141-channel-list-screen.md`
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open).

@@ -25,6 +25,7 @@ export interface FakeRelayForwarder {
   url: string                                   // ws://127.0.0.1:<port> — NO trailing path
   whenReady(timeoutMs?: number): Promise<void>  // resolves once BOTH legs are registered
   dropClientLeg(): void                          // terminate the current client leg; a re-dial re-splices (#416)
+  closeClientLeg(code: number): void             // CLEAN close of the current client leg with a caller-chosen WS code (#464)
   close(): Promise<void>                         // terminates both legs + server; idempotent
 }
 ```
@@ -77,6 +78,24 @@ re-splice actually completes instead of MAC-failing. The consuming genuine-recon
 twin already built in [#197](../codebase/197.md)) can reuse unchanged, since neither this capability nor
 the fake daemon's reconnect handshake carries any modal-specific coupling.
 
+### Terminal-close capability — `closeClientLeg` ([#464](../codebase/464.md))
+
+A second, **clean**-close client-leg control, added alongside `dropClientLeg` rather than replacing it —
+the two drive opposite classifications on the client side:
+
+- **`closeClientLeg(code: number): void`** — `clientLeg.close(code)` (a graceful WS close, not
+  `terminate()`). No-op when no client leg is connected; the server leg is untouched. Still content-blind
+  (no codec/Noise import) and content-agnostic about the code itself — the forwarder never interprets it,
+  just passes it to `ws`'s `close`.
+- **The caller picks the code to pick the client's classification.** A code in the client's
+  `DEFAULT_FATAL_CLOSE_CODES` (`4401`/`4421`/`4426`, `relaySupervisor.ts:40`) drives the supervised client
+  to a **terminal, non-retryable** failure (no re-dial armed) — the opposite of `dropClientLeg`'s abnormal
+  1006, which the client treats as retryable and auto-reconnects from. This is what #464 needed: driving
+  the client to the terminal `error` status that surfaces the `Re-pair` affordance ([#167](../codebase/167.md))
+  without accidentally triggering a reconnect.
+- **Reuses the existing identity-guarded leg-null-on-`close` handler unchanged** — a clean close fires the
+  same socket `close` event `dropClientLeg`'s `terminate()` does, so no new nulling logic was needed.
+
 ### Teardown — idempotent
 
 `close()` is guarded by a cached `closePromise`. First call: reject a still-pending readiness deferred, clear the readiness timer, `terminate()` both leg sockets (no-op if null/already closed), `wss.close(cb)`, resolve when the server callback fires. Second and later calls return the **same** promise — no throw, no double `wss.close`. Deterministic idempotency (a cached promise, not best-effort), mirroring `startRelay`'s close contract.
@@ -93,6 +112,8 @@ the fake daemon's reconnect handshake carries any modal-specific coupling.
 | Double `close()` | Second call resolves the same promise; no throw, no double close. |
 | `dropClientLeg()` with no client leg connected | Silent no-op ([#416](../codebase/416.md)). |
 | A dropped client leg's late `close` fires after a fresh re-dial already re-spliced | Identity-guarded — the late close cannot null the new leg ([#416](../codebase/416.md)). |
+| `closeClientLeg(code)` with no client leg connected | Silent no-op, same guard as `dropClientLeg` ([#464](../codebase/464.md)). |
+| `closeClientLeg(code)` with a code in `DEFAULT_FATAL_CLOSE_CODES` | Client classifies terminal, non-retryable — no re-dial armed, contrast `dropClientLeg`'s retryable 1006 ([#464](../codebase/464.md)). |
 
 - **Deliberately far simpler than the Go `fakerelay`.** No routing envelope, no `server-id`/token headers, no first-claim-wins grace, no `close_code` honouring, no token injection. It is a raw two-leg byte pipe — none of the Go surface is ported. That dropped surface now lives in the sibling [fake routing relay](fake-routing-relay.md) (#251), which bridges a *real* daemon's routing-envelope leg instead of a fake raw one.
 - **Log-free** — mirrors `relayConnection.ts`'s log-free construction; a stray `console.log` in shared test infra pollutes every consumer's output. All observable behaviour is via the returned handle and the spliced frames.
@@ -107,5 +128,6 @@ the fake daemon's reconnect handshake carries any modal-specific coupling.
 - Cross-project prior art: pyrycode `fakerelay-harness.md` (Go, `internal/e2e/internal/fakerelay`, #295) — the same ship-the-forwarder-alone phasing and the `WaitBinary` readiness rationale `whenReady` mirrors. The desktop forwarder deliberately drops the Go harness's routing/header/close-code surface.
 - [Fake routing relay](fake-routing-relay.md) / [#251](../codebase/251.md) — the routing-aware sibling that ports the dropped Go surface back in, for bridging a *real* daemon instead of the fake one this module bridges.
 - [#416 codebase notes](../codebase/416.md) — adds `dropClientLeg` + identity-guarded leg-null-on-close (the reconnect capability, § above) and the genuine-reconnect e2e that drives it; blocked-on [#415](../codebase/415.md)'s renderer reconcile.
+- [#464 codebase notes](../codebase/464.md) — adds `closeClientLeg` (the terminal-close capability, § above), the clean-close counterpart that drives a *terminal* failure instead of a retryable one; first consumer to expose the forwarder through [`launchPairedApp`](e2e-harness.md), surfacing the [`Re-pair`](../codebase/167.md) affordance on the fake stack.
 </content>
 </invoke>

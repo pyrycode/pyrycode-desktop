@@ -158,6 +158,30 @@ describe('ChannelListView', () => {
     expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(SETTINGS_ENTRY_MARKER)
   })
 
+  it('does not render an archived row in the active list — regression for #366 AC (#469)', () => {
+    // #366's AC "the archived conversation leaves the active channel list" was assumed free via the
+    // #275 re-list, but the re-list returns the row still tagged is_archived. The active list must now
+    // drop it: the live row's name renders, the archived row's name does not.
+    const markup = render([
+      row({ id: 'live', name: 'live-one', is_archived: false }),
+      row({ id: 'gone', name: 'archived-one', is_archived: true })
+    ])
+    expect(markup).toContain('live-one')
+    expect(markup).not.toContain('archived-one')
+  })
+
+  it('renders the empty state when every row is archived, not a blank body (#469)', () => {
+    // A non-empty store where every row is archived: the raw-length guard would pass but the active
+    // partition is empty. The empty state must show rather than a blank body (spec § 2).
+    const markup = render([
+      row({ id: 'a', name: 'archived-a', is_archived: true, is_promoted: true }),
+      row({ id: 'b', name: 'archived-b', is_archived: true, is_promoted: false })
+    ])
+    expect(markup).toContain('No conversations yet')
+    expect(markup).not.toContain('archived-a')
+    expect(markup).not.toContain('archived-b')
+  })
+
   it('renders the Archive entry with its accessible name in all three list states (#347 AC1)', () => {
     // Like the FAB and the Settings entry, the Archive entry lives in the top-right actions cluster — a
     // sibling of the list body — so it is reachable whether the list is not-loaded, empty, or populated.

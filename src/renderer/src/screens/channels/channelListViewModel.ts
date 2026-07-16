@@ -33,6 +33,21 @@ export function partitionByPromotion(rows: readonly ConversationSummary[]): {
   }
 }
 
+/**
+ * The active Channel List's row source: drop archived rows first, then split the survivors by
+ * promotion via the shared primitive. The exact dual of `archiveViewModel.partitionArchived`
+ * (which keeps `r.is_archived`) — the two symmetric callers of `partitionByPromotion`, which itself
+ * stays the neutral shared split. Order-preserving (no sort). Fixes #469: `list_conversations`
+ * returns archived rows tagged `is_archived` (pyrycode#880) and the active list never filtered them,
+ * so archived conversations leaked into both the active list and the Archive screen.
+ */
+export function partitionActive(rows: readonly ConversationSummary[]): {
+  channels: readonly ConversationSummary[]
+  discussions: readonly ConversationSummary[]
+} {
+  return partitionByPromotion(rows.filter((r) => !r.is_archived))
+}
+
 const MS_MINUTE = 60_000
 const MS_HOUR = 3_600_000
 const MS_DAY = 86_400_000

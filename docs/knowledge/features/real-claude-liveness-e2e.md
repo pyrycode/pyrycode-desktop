@@ -76,13 +76,8 @@ operator's **pre-ship gate**, documented in `README.md` alongside `npm run build
 there is no CI (org policy), so an unrun real-claude test earns nothing until an operator actually
 runs it before shipping.
 
-> **As of [#449](../codebase/449.md) this spec is red on the live stack**, for a reason unrelated to
-> anything documented below: the isolated-HOME harness daemon delivers the turn (claude completes it
-> in an identical manual PTY probe) but no reply event ever fans back to the app. It still SKIPs
-> cleanly under the pipeline's `npm run e2e` (`testIgnore`, unaffected by this). Until the #449
-> diagnosis lands a fixture fix with a live-verified green, do not treat `npm run e2e:real-claude` as
-> a working pre-ship gate — **`scripts/live-drive.mjs` is the current interim gate**; see the
-> [live e2e runbook](live-e2e-runbook.md)'s "Automated coverage" note.
+For the current pass/fail state of this gate, see the [live e2e runbook](live-e2e-runbook.md)
+§ Current real-claude gate state — the single page that carries it.
 
 ### Skip-gating, not failing, when the real stack is unavailable
 
@@ -210,11 +205,10 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - **`pyry pair` stdout is never echoed.** It carries the pairing token; a decode failure surfaces only
   a static error string, never the scanned stdout.
 - **No `screenshot`/`trace`/`video`** on this config — a trace could capture more than DOM text.
-- **RED/GREEN is a manual PR observation, not automated.** The agent env has no Anthropic credentials
+- **Pass/fail is a manual PR observation, not automated.** The agent env has no Anthropic credentials
   and there is no CI, so the "fails on a pre-#854 daemon, passes on a #854 daemon" proof is recorded
-  once by the operator in the PR description, mirroring `pyrycode#854`'s own convention. Per #449,
-  the current live-stack observation is RED for a different, still-open reason (isolated-HOME
-  reply-fan-out) — see the callout above.
+  once by the operator in the PR description, mirroring `pyrycode#854`'s own convention. The current
+  observed state lives in the [live e2e runbook](live-e2e-runbook.md) § Current real-claude gate state.
 - **Turn timeout is 120s per turn** to absorb a cold PTY claude (spawn + model load + first reply);
   the whole-spec timeout is 300s (handshake + 2×turn + headroom).
 
@@ -241,8 +235,9 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - [Live e2e runbook](live-e2e-runbook.md) / [#13](../codebase/13.md) — the manual, live-**relay**
   operator gate; this scenario automates the real-daemon+real-claude half but still uses a local relay,
   so it does not replace the live-relay verification.
-- [#449 codebase notes](../codebase/449.md) — the isolated-HOME reply-fan-out diagnosis that currently
-  keeps this spec red on the live stack; `scripts/live-drive.mjs` is the interim gate until it resolves.
+- [#449 codebase notes](../codebase/449.md) — the isolated-HOME reply-fan-out diagnosis (since
+  resolved); for the current gate state see the [live e2e runbook](live-e2e-runbook.md) § Current
+  real-claude gate state.
 - [Loopback relay dev affordance](loopback-relay-affordance.md) / [#97](../codebase/97.md) +
   [Secret-backend dev affordance](secret-backend-affordance.md) / [#99](../codebase/99.md) — the two
   dev flags this scenario consumes without relaxing.

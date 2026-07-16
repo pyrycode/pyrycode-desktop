@@ -26,24 +26,17 @@ There is no CI (by policy), so before shipping run the gate locally:
 ```bash
 npm run build            # typecheck + build main/preload/renderer
 npm test                 # unit tests
-npm run e2e:real-claude  # real-daemon + real-claude UI liveness (see below)
+npm run e2e:real-claude  # real-daemon + real-claude UI liveness
+npm run e2e:real:gate    # the same specs, exit-code-safe (non-zero if nothing ran)
 ```
 
-`npm run e2e:real-claude` launches the built app and drives a real round-trip: it pairs against a
-freshly-spawned real `pyry` daemon running real `claude` on `--model haiku`, bridged through an
-in-process, content-blind routing relay, and asserts a reply streams into the thread for two
-consecutive sends. Every other e2e (`npm run e2e`) runs against fakes that always answer; this is the
-one net that catches "the real daemon never replied". It is gated out of `npm run e2e` so the agent
-pipeline never trips on it.
+The real-claude gate drives a real `pyry` daemon running real `claude --model haiku` through an
+in-process, content-blind **local** fake relay; it is gated out of `npm run e2e` and **skips
+cleanly** when `claude`, `pyry`, or an Anthropic credential is missing.
 
-Prerequisites (the test **skips cleanly** — never fails — when any is missing):
-
-- `claude` on `PATH`.
-- `pyry` on `PATH`, or `PYRY_BIN=/path/to/pyry`. Build it from a tree that includes the
-  interactive-bootstrap fix (`pyrycode#854`); an older daemon deadlocks on a fresh session and turn 1
-  times out (that is the RED this test exists to catch).
-- An Anthropic credential in the environment: `ANTHROPIC_API_KEY`, or (Max-only) a
-  `CLAUDE_CODE_OAUTH_TOKEN` plus a readable `~/.claude.json` from a completed `claude` onboarding.
+See the [live e2e runbook](docs/knowledge/features/live-e2e-runbook.md)
+§ Current real-claude gate state for the current pass/fail state, the full prerequisite list, the
+exit-code-safe `npm run e2e:real:gate`, and the live-relay `scripts/live-drive.mjs` gate.
 
 ## License
 

@@ -25,6 +25,11 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 // When the real stack is unavailable the spec SKIPS cleanly (missing binaries/creds) — an unrun test is
 // the correct outcome there, not a hard failure.
 //
+// TODO(#449): on the live stack this spec is currently RED — the isolated-HOME daemon delivers the turn
+// but no reply ever fans back to the app (a separate, environment-specific gap left after #448's
+// client-side conversation_id fix). It SKIPs cleanly in the pipeline (testIgnore) and must NOT be seeded
+// green; the interim operator pre-ship gate is scripts/live-drive.mjs. Live diagnosis is tracked on #449.
+//
 // SCOPE: zero production `src/` change. The app, as built, already works against the real daemon+relay
 // (#179 advertises `interactive` and renders the structured reply as data-thread-role="assistant"; #251
 // is the routing bridge). The whole deliverable is this spec + its config + gating wiring.

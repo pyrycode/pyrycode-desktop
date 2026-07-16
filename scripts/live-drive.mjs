@@ -4,6 +4,11 @@
 // for a real claude reply to stream into the thread, then revokes the pairing. Run it next to the
 // harness gate before a ship: `npm run build && node scripts/live-drive.mjs .`
 //
+// Exits non-zero on any failure (RED/timeout, a thrown step, or a pre-launch early exit) so the
+// chain above actually stops on RED — the failure is not visible to a human alone (#480). The exit
+// code is deferred via `process.exitCode` (not `process.exit`) so the `finally` cleanup — closing
+// the app, removing the temp dir, and revoking the LIVE pairing — always runs to completion.
+//
 // First green 2026-07-15 ("Standby.", 4s round-trip) — the first real end-to-end desktop send ever.
 // Prints progress lines only; never prints the pairing payload or token.
 import { _electron as electron } from '@playwright/test'
@@ -20,13 +25,16 @@ function log(msg) {
 }
 
 // --- 1. Pair a fresh device on the live daemon (CLI writes the registry; #786 reloads at handshake).
-const pyry = join(homedir(), '.local/bin/pyry')
+// PYRY_BIN lets an operator point at a different binary to force the pair-failure branch
+// deterministically (e.g. PYRY_BIN=/nonexistent) — same idiom as #479. Default is unchanged.
+const pyry = process.env.PYRY_BIN ?? join(homedir(), '.local/bin/pyry')
 let pairStdout = ''
 try {
   pairStdout = execFileSync(pyry, ['pair', '--name', DEVICE, '--allow-remote-permissions'], {
     encoding: 'utf-8'
   })
 } catch (e) {
+  // No device and no temp dir exist yet → nothing to clean up → an immediate exit is correct.
   console.error('[drive] pyry pair failed:', e.message)
   process.exit(1)
 }
@@ -46,24 +54,29 @@ for (const line of pairStdout.split('\n')) {
     /* not the payload line */
   }
 }
-if (!payload) {
-  console.error('[drive] no pairing payload found in pyry pair output')
-  process.exit(1)
-}
 
-// --- 2. Launch the built app with an isolated user-data dir (fresh → pairing screen).
-const userDataDir = mkdtempSync(join(tmpdir(), 'pyry-live-drive-'))
-const env = { ...process.env }
-delete env.ELECTRON_RENDERER_URL
-const app = await electron.launch({
-  cwd: APP_DIR,
-  args: ['.', `--user-data-dir=${userDataDir}`],
-  env
-})
-const page = await app.firstWindow()
-log('app launched')
-
+// From here on a device EXISTS: every terminating path must reach the `finally` revoke. The temp dir
+// and app handle are created inside the guarded region and null-checked in `finally` so a failure
+// before they exist still runs the revoke.
+let userDataDir = null
+let app = null
 try {
+  // A missing payload is a failure of a device that was already created → throw so `finally` revokes
+  // it (a bare early exit here would leak a live credential — #480).
+  if (!payload) throw new Error('no pairing payload found in pyry pair output')
+
+  // --- 2. Launch the built app with an isolated user-data dir (fresh → pairing screen).
+  userDataDir = mkdtempSync(join(tmpdir(), 'pyry-live-drive-'))
+  const env = { ...process.env }
+  delete env.ELECTRON_RENDERER_URL
+  app = await electron.launch({
+    cwd: APP_DIR,
+    args: ['.', `--user-data-dir=${userDataDir}`],
+    env
+  })
+  const page = await app.firstWindow()
+  log('app launched')
+
   // --- 3. Pair through the real UI.
   const pasteBox = page.locator('textarea[aria-label="Pairing code"]')
   await pasteBox.waitFor({ state: 'visible', timeout: 15000 })
@@ -104,14 +117,31 @@ try {
     const text = await page.locator('[data-thread-role="assistant"]').first().textContent()
     log(`REPLY STREAMED: "${(text ?? '').replace('▎', '').trim().slice(0, 80)}"`)
     log('LIVE DRIVE GREEN')
+    // GREEN leaves process.exitCode at its default 0.
   } else {
+    // RED is a measured "no reply in 150s" outcome, not an exception: screenshot first, then defer a
+    // non-zero exit and fall through to `finally`.
     await page.screenshot({ path: '/tmp/live-drive-448-fail.png' })
     log('NO REPLY within 150s — screenshot at /tmp/live-drive-448-fail.png')
     log('LIVE DRIVE RED')
+    process.exitCode = 1
   }
+} catch (e) {
+  // A thrown step (no payload, launch, connect, create, send). Log the framework error text only —
+  // never the pairing payload, which is never carried on any thrown Error.
+  console.error(`[drive] ${e.message}`)
+  process.exitCode = 1
 } finally {
-  await app.close().catch(() => {})
-  rmSync(userDataDir, { recursive: true, force: true })
+  // Each step is independently guarded so no single failure prevents the others — most importantly a
+  // failing rmSync must not skip the revoke. Order: close app → remove temp dir → revoke.
+  if (app) await app.close().catch(() => {})
+  if (userDataDir) {
+    try {
+      rmSync(userDataDir, { recursive: true, force: true })
+    } catch {
+      log(`could not remove temp dir ${userDataDir} — remove by hand`)
+    }
+  }
   try {
     execFileSync(pyry, ['pair', 'revoke', DEVICE], { encoding: 'utf-8' })
     log(`pairing "${DEVICE}" revoked`)

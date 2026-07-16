@@ -8,7 +8,10 @@ import {
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startFakeRelayForwarder } from '../../src/main/transport/fakeRelayForwarder'
+import {
+  startFakeRelayForwarder,
+  type FakeRelayForwarder
+} from '../../src/main/transport/fakeRelayForwarder'
 import { startFakeDaemon, type FakeDaemon, type FakeDaemonOptions } from '../../src/main/transport/fakeDaemon'
 import { encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
@@ -106,12 +109,14 @@ export type LaunchControl = {
  *  On a `reuseUserDataDir` launch: the window on the ChannelList (paired-from-persistence, no live
  *  connection). Always carries the full fake-daemon control surface (`staticPublicKey`, `pushFrame`,
  *  `initiateRekey`, `whenSettled`, `close`) and the `--user-data-dir` in use, so a relaunch spec can
- *  hand launch 1's dir to launch 2. The forwarder is intentionally not exposed — no in-scope spec needs
- *  its leg controls. */
+ *  hand launch 1's dir to launch 2. The forwarder is exposed for its leg controls — #464 is the first
+ *  in-scope consumer (its Re-pair case fires `forwarder.closeClientLeg(4401)` to drive the supervised
+ *  client to a terminal failure); on the default drive its client leg is live when this resolves. */
 export type PairedApp = {
   page: Page
   app: ElectronApplication
   daemon: FakeDaemon
+  forwarder: FakeRelayForwarder
   userDataDir: string
 }
 
@@ -188,7 +193,7 @@ export const test = base.extend<PairedAppFixtures>({
       // so `PairedApp.daemon` stays a non-optional `FakeDaemon`), but are vestigial on this launch.
       if (reuseUserDataDir !== undefined) {
         await expect(page.locator('section[aria-label="Conversations"]')).toBeVisible()
-        return { page, app, daemon, userDataDir }
+        return { page, app, daemon, forwarder, userDataDir }
       }
 
       // --- Drive the real pairing UI → the connected conversation thread. All pairing/navigation
@@ -233,7 +238,7 @@ export const test = base.extend<PairedAppFixtures>({
         timeout: HANDSHAKE_TIMEOUT_MS
       })
 
-      return { page, app, daemon, userDataDir }
+      return { page, app, daemon, forwarder, userDataDir }
     })
 
     for (const step of teardown.reverse()) {

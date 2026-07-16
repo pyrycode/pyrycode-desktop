@@ -69,6 +69,22 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 - **Single active conversation.** Everything uses `MILESTONE_CONVERSATION_ID = 'default'` ([#66](https://github.com/pyrycode/pyrycode-desktop/issues/66)) — there is no conversation-selection surface this milestone.
 - **Dark scheme only, mobile layout stretched to the window** — the desktop-specific layout is deferred until the app is fully functioning.
 
+## Current real-claude gate state
+
+**Last run: 2026-07-16** — first full `npm run e2e:real-claude` run: **5 passed / 3 failed**.
+
+- **#449 send/stream is CURED.** The core send/stream spec (`real-claude.spec.ts`) streamed a real
+  reply and went **green for the first time (~7.7s)**, fixed by the 2026-07-15 daemon repairs. The
+  isolated-HOME reply-fan-out gap that had kept it red is resolved.
+- **Three specs still red**, all on daemon bug
+  **[pyrycode#1050](https://github.com/pyrycode/pyrycode/issues/1050)**:
+  `real-claude-interrupt.spec.ts`, `real-claude-queue-drop.spec.ts`, and
+  `real-claude-permission-modal.spec.ts`.
+
+This section is the **single** authoritative record of real-claude gate state. README, the feature
+doc (`real-claude-liveness-e2e.md`), and the spec header point here instead of restating it — so the
+next state change updates one place, not four.
+
 ## Automated coverage is deferred
 
 There is **no automated live-*relay* e2e**, by design — pairing against the actual
@@ -85,13 +101,9 @@ claude actually replies (as opposed to a fake daemon that always answers). It st
 fake relay, not the live one, so it does not verify the live-relay allowlist/network path — this
 runbook remains the only check for that.
 
-**As of [#449](https://github.com/pyrycode/pyrycode-desktop/issues/449) that harness spec is red on the
-live stack**, and it SKIPs cleanly in the pipeline (the `testIgnore` gate in `playwright.config.ts` — it
-never runs, and is never seeded green, under the agent's `npm run e2e`). The isolated-HOME harness daemon
-*delivers* the turn (claude completes it in an identical manual probe) but **no reply event ever fans back
-to the app** — a separate, environment-specific gap left after #448 (PR#450) fixed the client-side
-`conversation_id: 'default'` root cause. So do **not** treat `npm run e2e:real-claude` as a working
-pre-ship gate until it lands an actual live green there; the live diagnosis is tracked on #449.
+The harness spec **SKIPs cleanly in the pipeline** (the `testIgnore` gate in `playwright.config.ts` — it
+never runs, and is never seeded green, under the agent's `npm run e2e`). For the current pass/fail result
+of a real operator run, see § Current real-claude gate state above — the single page that carries it.
 
 **`npm run e2e:real:gate` is the exit-code-safe form of this `real-*` harness**
 ([#479](https://github.com/pyrycode/pyrycode-desktop/issues/479)). It runs the same specs against the same
@@ -102,15 +114,15 @@ prerequisite (surfaced verbatim from the fixture's own skip reason). Prefer it o
 for operator use — the plain command exits **0** on all-skip and so cannot tell an under-provisioned machine
 apart from a genuine live pass (that green-on-all-skip stays load-bearing on the pipeline, which is why the
 plain command is left untouched). The gate closes only the *silent-zero* hazard: it still dials a **local**
-fake relay, so it does **not** supersede `scripts/live-drive.mjs` below, and it does **not** resolve the #449
-live reply-fan-out gap — a real green still needs the real stack, and #449 must land first.
+fake relay, so it does **not** supersede `scripts/live-drive.mjs` below.
 
-**The current interim operator pre-ship gate is `scripts/live-drive.mjs`** (built app → production relay →
-live Mac daemon → vault workdir). `npm run build && node scripts/live-drive.mjs .` pairs a throwaway
-device, creates a conversation through the UI, sends a message, waits for the real claude reply to stream
-in, then revokes the pairing (first green 2026-07-15, ~4s round-trip). It prints progress lines only —
-never the pairing payload or token. Run it before a ship in place of the still-red `e2e:real-claude`
-harness spec.
+**`scripts/live-drive.mjs` is the live-RELAY pre-ship gate** (built app → *production* relay → live Mac
+daemon → vault workdir) — the path `e2e:real-claude` never exercises, since that harness dials a *local*
+fake relay. `npm run build && node scripts/live-drive.mjs .` pairs a throwaway device, creates a
+conversation through the UI, sends a message, waits for the real claude reply to stream in, then revokes
+the pairing (first green 2026-07-15, ~4s round-trip). It prints progress lines only — never the pairing
+payload or token. It is complementary to `e2e:real-claude`, not a stand-in — run it before a ship to
+cover the live-relay path the harness cannot.
 
 **It is now safe to chain** (`npm run build && node scripts/live-drive.mjs .` actually stops on RED):
 as of [#480](https://github.com/pyrycode/pyrycode-desktop/issues/480), the script exits **non-zero** on
@@ -123,10 +135,10 @@ rather than `process.exit`, so the `finally` cleanup (close the app, remove the 
 ## Cross-references
 
 - [E2E harness](e2e-harness.md) / [#40](https://github.com/pyrycode/pyrycode-desktop/issues/40) — the automated fake-transport sibling this runbook is the manual counterpart of.
-- [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#252](../codebase/252.md) — aims to automate the real-daemon+real-claude half of this runbook (still a local relay, not the live one), but is **currently red for [#449](https://github.com/pyrycode/pyrycode-desktop/issues/449)** pending the isolated-HOME reply-fan-out diagnosis — see § Automated coverage is deferred.
+- [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#252](../codebase/252.md) — aims to automate the real-daemon+real-claude half of this runbook (still a local relay, not the live one); for its current pass/fail state see § Current real-claude gate state above.
 - [App shell](app-shell.md) / [#80](https://github.com/pyrycode/pyrycode-desktop/issues/80) — the launch router: fresh install → pairing screen; `onPaired` → conversation, no restart (steps 1–2).
 - [Pairing input screen](pairing-input-screen.md) / [#55](https://github.com/pyrycode/pyrycode-desktop/issues/55) + [Daemon connection](daemon-connection.md) / [#82](https://github.com/pyrycode/pyrycode-desktop/issues/82) — the pair → connect path: paste → fingerprint-verify → confirm → connect-on-pair dials the live relay.
 - [Composer send](composer-send.md) / [#31](https://github.com/pyrycode/pyrycode-desktop/issues/31) + [#66](https://github.com/pyrycode/pyrycode-desktop/issues/66) and [Conversation shell](conversation-shell.md) / [#69](https://github.com/pyrycode/pyrycode-desktop/issues/69) — the send → stream path: the connection-status gate (the `connected` observable) and the thread render.
 - `src/main/pairingPayload.ts` / [#52](https://github.com/pyrycode/pyrycode-desktop/issues/52) — the relay-allowlist gate (`RELAY_ALLOWLIST`, line 55), the load-bearing prerequisite.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — remote head over the relay; the wire types match mobile field-for-field, which is why this is the desktop equivalent of mobile's live-e2e runbook.
-- `scripts/live-drive.mjs` / [#449](https://github.com/pyrycode/pyrycode-desktop/issues/449) — the current interim operator pre-ship gate: built app → production relay → live Mac daemon → vault workdir, the automated companion to this manual live-relay runbook while `e2e:real-claude` stays red.
+- `scripts/live-drive.mjs` / [#480](https://github.com/pyrycode/pyrycode-desktop/issues/480) — the live-RELAY pre-ship gate: built app → production relay → live Mac daemon → vault workdir, the automated companion to this manual live-relay runbook, covering the live-relay path `e2e:real-claude` never touches.

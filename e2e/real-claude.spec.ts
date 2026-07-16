@@ -25,10 +25,9 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 // When the real stack is unavailable the spec SKIPS cleanly (missing binaries/creds) — an unrun test is
 // the correct outcome there, not a hard failure.
 //
-// TODO(#449): on the live stack this spec is currently RED — the isolated-HOME daemon delivers the turn
-// but no reply ever fans back to the app (a separate, environment-specific gap left after #448's
-// client-side conversation_id fix). It SKIPs cleanly in the pipeline (testIgnore) and must NOT be seeded
-// green; the interim operator pre-ship gate is scripts/live-drive.mjs. Live diagnosis is tracked on #449.
+// Current gate state (which real-claude specs pass/fail) lives in the live e2e runbook —
+// docs/knowledge/features/live-e2e-runbook.md § Current real-claude gate state — the single page
+// that carries it. This header stays state-free so it never drifts.
 //
 // SCOPE: zero production `src/` change. The app, as built, already works against the real daemon+relay
 // (#179 advertises `interactive` and renders the structured reply as data-thread-role="assistant"; #251

@@ -112,6 +112,14 @@ in, then revokes the pairing (first green 2026-07-15, ~4s round-trip). It prints
 never the pairing payload or token. Run it before a ship in place of the still-red `e2e:real-claude`
 harness spec.
 
+**It is now safe to chain** (`npm run build && node scripts/live-drive.mjs .` actually stops on RED):
+as of [#480](https://github.com/pyrycode/pyrycode-desktop/issues/480), the script exits **non-zero** on
+RED/timeout, on any thrown step (pairing, connect, create-conversation, send), and on the two pre-launch
+early exits — only GREEN (a real reply streamed) exits 0. The exit code is deferred via `process.exitCode`
+rather than `process.exit`, so the `finally` cleanup (close the app, remove the temp user-data dir, and
+`pyry pair revoke` the throwaway device) always runs to completion first — a skipped revoke would leak a
+**live** credential, since the device was paired with `--allow-remote-permissions` against the real daemon.
+
 ## Cross-references
 
 - [E2E harness](e2e-harness.md) / [#40](https://github.com/pyrycode/pyrycode-desktop/issues/40) — the automated fake-transport sibling this runbook is the manual counterpart of.

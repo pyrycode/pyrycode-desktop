@@ -12,7 +12,7 @@ import {
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
-import { titleFor, partitionByPromotion, formatLastActivity } from './channelListViewModel'
+import { titleFor, partitionActive, formatLastActivity } from './channelListViewModel'
 
 // The Channel List home screen (#141) — the paired shell's `list` view, replacing the throwaway
 // PlaceholderList (#140). A pure render slice over the already-shipped #208 conversationListStore: the
@@ -237,14 +237,18 @@ function renderBody(
   onSaveAsChannel: (row: ConversationSummary) => void,
   onRename: (row: ConversationSummary) => void
 ): JSX.Element | null {
-  // Not-yet-loaded: neither rows nor the empty state (distinct from loaded-zero, per #208).
+  // Not-yet-loaded: neither rows nor the empty state (distinct from loaded-zero, per #208). Stays the
+  // first check to preserve the null-vs-loaded-zero tri-state.
   if (conversations === null) return null
-  // Loaded-zero: the empty state. Mobile #312's "Tap + to start a conversation" is adapted — the +
-  // FAB is #142, so this copy references no affordance that isn't here yet.
-  if (conversations.length === 0) {
+  // Filter archived rows out of the active list (#469) — they live only in the Archive screen.
+  const { channels, discussions } = partitionActive(conversations)
+  // The empty state decided from the ACTIVE partition, not the raw store count: a store holding only
+  // archived rows has rows but zero active rows to show. This one check covers both loaded-zero ([])
+  // and all-archived. Mobile #312's "Tap + to start a conversation" is adapted — the + FAB is #142,
+  // so this copy references no affordance that isn't here yet.
+  if (channels.length === 0 && discussions.length === 0) {
     return <p className="channel-list__empty">No conversations yet</p>
   }
-  const { channels, discussions } = partitionByPromotion(conversations)
   return (
     <>
       {channels.length > 0 && (

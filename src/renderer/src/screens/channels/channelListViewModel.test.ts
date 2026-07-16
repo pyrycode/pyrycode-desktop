@@ -4,6 +4,7 @@ import {
   UNNAMED_LABEL,
   titleFor,
   partitionByPromotion,
+  partitionActive,
   formatLastActivity
 } from './channelListViewModel'
 
@@ -69,6 +70,50 @@ describe('partitionByPromotion', () => {
     const { channels, discussions } = partitionByPromotion([row({ is_promoted: false })])
     expect(channels).toHaveLength(0)
     expect(discussions).toHaveLength(1)
+  })
+})
+
+// The exact dual of archiveViewModel.partitionArchived: the active list keeps only non-archived rows.
+describe('partitionActive', () => {
+  it('drops archived rows — only non-archived rows survive across both sections (#469)', () => {
+    const rows = [
+      row({ id: 'live', is_archived: false }),
+      row({ id: 'gone', is_archived: true }),
+      row({ id: 'live2', is_archived: false })
+    ]
+    const { channels, discussions } = partitionActive(rows)
+    expect([...channels, ...discussions].map((r) => r.id).sort()).toEqual(['live', 'live2'])
+  })
+
+  it('splits the non-archived subset into channels (promoted) / discussions (unpromoted)', () => {
+    const rows = [
+      row({ id: 'c1', is_archived: false, is_promoted: true }),
+      row({ id: 'd1', is_archived: false, is_promoted: false }),
+      // An archived promoted row must NOT leak into channels.
+      row({ id: 'archived-channel', is_archived: true, is_promoted: true }),
+      row({ id: 'c2', is_archived: false, is_promoted: true })
+    ]
+    const { channels, discussions } = partitionActive(rows)
+    expect(channels.map((r) => r.id)).toEqual(['c1', 'c2'])
+    expect(discussions.map((r) => r.id)).toEqual(['d1'])
+  })
+
+  it('preserves the store array order within each section (no re-sort)', () => {
+    const rows = [
+      row({ id: 'c-late', is_archived: false, is_promoted: true }),
+      row({ id: 'c-early', is_archived: false, is_promoted: true })
+    ]
+    const { channels } = partitionActive(rows)
+    expect(channels.map((r) => r.id)).toEqual(['c-late', 'c-early'])
+  })
+
+  it('yields both sections empty when every row is archived', () => {
+    const { channels, discussions } = partitionActive([
+      row({ id: 'a', is_archived: true, is_promoted: true }),
+      row({ id: 'b', is_archived: true, is_promoted: false })
+    ])
+    expect(channels).toHaveLength(0)
+    expect(discussions).toHaveLength(0)
   })
 })
 

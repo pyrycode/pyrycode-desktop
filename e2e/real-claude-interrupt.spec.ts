@@ -95,12 +95,19 @@ test('real claude quiesces a genuinely running turn when interrupted', async ({
 }) => {
   test.setTimeout(SPEC_TIMEOUT_MS)
 
-  // A deliberately-long, cheap haiku prompt that keeps claude streaming long enough to interrupt mid-turn.
-  // Err LONG — a turn that finishes before the interrupt window is the primary flakiness risk (OQ-a): if
-  // live runs show the turn completing at/before the click, raise the count. A per-run nonce defeats any
-  // accidental reply caching; content is NEVER asserted on (Date.now() is fine in a Playwright spec).
+  // A TOOL-DRIVEN turn that stays GENUINELY RUNNING for a controlled window, independent of model speed.
+  // Long text output does NOT work on `--model haiku`: it streams the whole reply in well under the ~2s
+  // claude cold-start, so `responding`→`idle` collapse into one burst and no running-turn window is ever
+  // observable (the failed "count to 300" premise this replaces — see OQ-a). The command is a FOREGROUND
+  // loop that echoes once per second, NOT a bare `sleep`: a bare `sleep` is non-deterministic on haiku
+  // (claude may set run_in_background:true and the turn returns at once) and a silent multi-second command
+  // trips the ptyrunner's 30s PTY-quiet watchdog. Per-second output keeps the PTY active and the
+  // run_in_background ban keeps the turn blocking in `responding` — a real, interruptible turn. Per-run
+  // nonce defeats reply caching; content is NEVER asserted on (Date.now() is fine in a Playwright spec).
   const runNonce = Date.now()
-  const message = `Count from 1 to 300, one number per line, and nothing else. run=${runNonce}`
+  const message =
+    `Use the Bash tool to run this exact command in the foreground; do NOT run it in the background. ` +
+    `Command: for i in $(seq 20); do echo $i; sleep 1; done. Do nothing else. run=${runNonce}`
 
   // --- Precondition (AC1): pair against the real daemon, dial the test relay's /v1/client leg. ---
   // Verbatim from real-claude.spec.ts: the app dials `${relay.url}/v1/client` unchanged (NOT pyry's emitted
@@ -145,12 +152,11 @@ test('real claude quiesces a genuinely running turn when interrupted', async ({
   // --- Gate on the turn genuinely running (AC3). ---
   // The interrupt affordance is visible only while the turn runs (thinking || responding).
   await expect(interruptButton).toBeVisible({ timeout: TURN_TIMEOUT_MS })
-  // Strengthen "running" to "streaming": a live cursor proves claude reached the `responding` phase (real
-  // output), not merely `thinking`. Safe here because the prompt is deliberately long, so the cursor appears
-  // well before natural completion. (OQ-c: if live timing ever shows the cursor too transient to catch on a
-  // fast responding→idle path, fall back to the interruptButton-visible gate alone — interrupt is valid
-  // against a thinking turn too.)
-  await expect(page.locator(CURSOR_SELECTOR).first()).toBeVisible({ timeout: TURN_TIMEOUT_MS })
+  // The interrupt affordance above IS the running-turn proof (visible only while isTurnRunning === thinking
+  // || responding). A tool-driven turn (a running `sleep`) sits in `responding` but streams NO assistant
+  // text, so there is no `.bubble__cursor` to strengthen the gate with — this is exactly the OQ-c fallback
+  // the original text prompt anticipated. The tool keeps the turn genuinely running for ~20s, the real,
+  // model-speed-independent window this spec needs to interrupt within.
 
   // --- Activate interrupt (AC3). ---
   await interruptButton.click()

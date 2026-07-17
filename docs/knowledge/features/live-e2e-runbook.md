@@ -71,15 +71,51 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Last run: 2026-07-16** — first full `npm run e2e:real-claude` run: **5 passed / 3 failed**.
+**Last run: 2026-07-17** — `npm run e2e:real:gate` against `~/.local/bin/pyry` rebuilt from main
+`bf4705e` (carries the pyrycode#1050 split children #1062 + #1065): still **5 passed / 3 failed**,
+identical to 2026-07-16. The daemon fixes did NOT flip the three specs green.
 
-- **#449 send/stream is CURED.** The core send/stream spec (`real-claude.spec.ts`) streamed a real
-  reply and went **green for the first time (~7.7s)**, fixed by the 2026-07-15 daemon repairs. The
-  isolated-HOME reply-fan-out gap that had kept it red is resolved.
-- **Three specs still red**, all on daemon bug
-  **[pyrycode#1050](https://github.com/pyrycode/pyrycode/issues/1050)**:
-  `real-claude-interrupt.spec.ts`, `real-claude-queue-drop.spec.ts`, and
-  `real-claude-permission-modal.spec.ts`.
+- **#449 send/stream stays green** (`real-claude.spec.ts`, ~11.5s, two consecutive turns), and all
+  four claude-less `real-daemon-*` specs pass (<2s each).
+- **The same three specs are still red**: `real-claude-interrupt.spec.ts`,
+  `real-claude-queue-drop.spec.ts`, `real-claude-permission-modal.spec.ts`. Each times out at 120s.
+  Interrupt/queue-drop wait for the "Stop the running turn" affordance (driven by `turn_state`);
+  permission-modal waits for the permission dialog (driven by `modal_shown`). The reply streams
+  (deltas + `turn_end` arrive) but neither `turn_state` nor `modal_shown` reaches the client.
+- **The daemon is NOT the cause — the gap is in the Electron client.** The pyrycode#1062 real-claude
+  liveness gate `TestInteractivePerConversationTurnStateLiveness` is exactly this base case (one
+  per-conversation conversation, one send, assert `thinking/responding` fans). Run live against the
+  same `bf4705e` daemon on `--model haiku`, it **PASSES**: `turn_state "responding"` observed plus the
+  assistant_delta, 5.31s. So the daemon fans base-case per-conversation `turn_state` correctly (one
+  emitter drives deltas and turn_state on the same `emit()` fan-out — they cannot diverge daemon-side).
+  A Go `fakephone` sees the frame; the Electron client does not surface it.
+- **Pinned cause: the turn COLLAPSES into one burst — no live running-turn window.** Instrumenting the
+  client inbound decode (temporary, reverted) and re-running `real-claude-interrupt.spec.ts` gave this
+  client-receive timeline: message sent at +1466ms, then a ~6s gap with no events, then at +7218-7220ms
+  `turn_state responding` → the full 1091-char reply as ONE `assistant_delta` → `turn_end` →
+  `turn_state idle`, all within ~2ms. Zero dropped frames. So the frames parse and reach the client's
+  unconditional emit (the earlier client-drop hypothesis is also wrong). The turn bridge binds the
+  transcript ~6s after send — at/after the fast haiku turn completes — so the whole turn replays in one
+  burst; `responding` and `idle` collapse, the interrupt affordance mounts and retracts in the same
+  tick, and Playwright never sees it. Deltas render (send/stream passes); interrupt/queue-drop need a
+  sustained running window a post-completion bind never gives. This is the turn-bridge **binding-latency**
+  family (#528/#996/#989), NOT a fan-out or client-parse bug.
+- **Settled (daemon timeline captured): test-realism, NOT a daemon bug.** `PYRY_E2E_DAEMON_LOG` shows
+  claude spawns for the fresh conversation session, then the daemon retries `resolve session jsonl` for
+  ~1.7s because the transcript file does not exist yet — claude **cold-start**. The bridge cannot bind
+  before the file exists, and by then haiku has written the whole reply, so the turn collapses. Every
+  failing spec drives the **first turn of a fresh conversation** (fresh session → fresh spawn → fresh
+  cold-start). On a real slow Opus turn the `responding` window lasts the turn's duration and a user
+  sees it and can interrupt — the product works. The specs are red because **haiku generates
+  near-instantly, so no observable running-turn window exists**; the "long text prompt keeps haiku
+  streaming" premise is false, and faster daemon polling would not help (the turn ends before the file
+  appears).
+- **Recommended fix (test-side):** make these three turns take genuine wall-clock time via a slow
+  **tool call** (e.g. prompt "run the bash command `sleep 15`") rather than long text output — a
+  genuinely running, interruptible turn, still on cheap haiku, and for the permission spec it naturally
+  surfaces the Bash permission prompt. Alternatives: run just these three on a slower model, or assert
+  on the `responding` event rather than sustained DOM visibility. Must be verified with a live run.
+  Tracked on desktop#483.
 
 This section is the **single** authoritative record of real-claude gate state. README, the feature
 doc (`real-claude-liveness-e2e.md`), and the spec header point here instead of restating it — so the

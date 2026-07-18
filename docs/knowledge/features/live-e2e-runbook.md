@@ -93,22 +93,26 @@ drive a genuinely-running turn, not to change the daemon.
   loop stays foreground but floods the ordered frame stream so the msg2 `queue_state` control frame
   lands tens of seconds late. Needs a deterministic-hold design (e.g. a test-owned gate file, which
   needs the fixture to expose the daemon workdir). Follow-up.
-- **`real-claude-permission-modal.spec.ts` — still red, a REAL daemon gap (not a test issue).** On the
-  skipPermissions=false path the daemon correctly spawns claude without `--dangerously-skip-permissions`
-  and writes no auto-approve settings, yet the log shows the transcript bind then **120s of total
-  silence** — no reply, no `turn_end`, no `modal_shown`. A direct PTY probe CONFIRMS claude 2.1.199
-  without skip-permissions calls the Write tool and **blocks on a real permission dialog** (`Do you want
-  to create probe.txt? / 1. Yes / 2. Yes, allow all edits / 3. No`) — it does not auto-approve. So the
-  daemon→client modal path genuinely fails to surface a confirmed, blocking dialog. The failing layer is
-  downstream of detection: I fed claude's REAL captured dialog bytes to the daemon's actual detector
-  `tuidriver.DetectModalClass` and it returns `"permission"` (verified on multiple real captures) — so
-  the detector is NOT the failing layer, contra an earlier guess. The modal stream is wired
-  (`relay.go:564`) and follows-active like the turn stream. The remaining candidates are per-conversation
-  modal-stream screen wiring (does the bound session feed its live PTY to the tracker, or does it stay on
-  the idle bootstrap PTY?), the event firing, the #1065 conversation_id emit-scoping, the relay, or the
-  client rendering a real `modal_shown` (only the fake twin proves that). Isolating which needs a live
-  daemon run with modal-stream debug logging. A real user answering a prompt from the desktop app would
-  hang. Needs a daemon/tui-driver ticket; layer-isolation is its first task. Tracked on desktop#483.
+- **`real-claude-permission-modal.spec.ts` — still red. Two daemon layers, pinned by in-situ daemon
+  instrumentation; one fixed today, one open.** A PTY probe confirms claude 2.1.199 without skip-permissions
+  calls Write and **blocks on a real permission dialog** (`Do you want to create …? / 1. Yes / 2. Yes,
+  allow all edits / 3. No`), so this is a real daemon bug, not a test issue.
+  - **Layer 1 — subscription. FIXED today by the pipeline (`#1066/#1070`, pyrycode `deb41fe`, PR #1071,
+    ~21:25 2026-07-18).** The modal stream used a transcript-gated subscription; a per-conversation session
+    blocked on a permission prompt writes no transcript, so the subscription never opened — deadlocking the
+    modal. #1070 switches to a screen-only subscriber. The installed daemon `bf4705e` predates it.
+  - **Layer 2 — detection on the live buffer. STILL BROKEN on current `main`.** Built `deb41fe` (with
+    #1070) and instrumented `Session.ScreenEvents`: the screen-only subscription opens, follows the correct
+    per-conversation session, and its tracker buffer (`s.buffer.Snapshot`) **contains the modal** (logged:
+    `1. Yes / 2. … / 3. No / Esc to cancel`), yet `DetectModalClass` returns **Unknown** on that live buffer
+    (at session dims 120×40 AND default 0×0). So `EventKindPtyModalShown` never fires, no `modal_shown` is
+    emitted. A clean build of `main` still fails the spec (2.1m). The detector succeeds on an isolated
+    captured snapshot but fails on the daemon's live buffer — the format difference (scrollback / trailing
+    cursor moves / the #242 option-row shape gate) is the fix's open question.
+  - **Corrections:** the detector is not unconditionally fine (fails on the live buffer), and it is not a
+    pure wiring gap (that half is #1070). Next: rebuild the daemon from `deb41fe` for #1070, then a
+    tui-driver detection ticket for `DetectModalClass` robustness on the live session buffer. Tracked on
+    desktop#483.
 
 This section is the **single** authoritative record of real-claude gate state. README, the feature
 doc (`real-claude-liveness-e2e.md`), and the spec header point here instead of restating it — so the

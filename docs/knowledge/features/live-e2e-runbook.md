@@ -99,11 +99,16 @@ drive a genuinely-running turn, not to change the daemon.
   silence** — no reply, no `turn_end`, no `modal_shown`. A direct PTY probe CONFIRMS claude 2.1.199
   without skip-permissions calls the Write tool and **blocks on a real permission dialog** (`Do you want
   to create probe.txt? / 1. Yes / 2. Yes, allow all edits / 3. No`) — it does not auto-approve. So the
-  daemon→client modal path genuinely fails to surface a confirmed, blocking dialog. The exact failing
-  layer is NOT yet pinned (most likely the daemon's screen-based modal detector not matching this dialog
-  shape — the tui-driver 2.1.199 detection family — but it could be relay or client-render of a real
-  frame; not isolated). A real user answering a prompt from the desktop app would hang. Needs a
-  daemon/tui-driver ticket. Tracked on desktop#483.
+  daemon→client modal path genuinely fails to surface a confirmed, blocking dialog. The failing layer is
+  downstream of detection: I fed claude's REAL captured dialog bytes to the daemon's actual detector
+  `tuidriver.DetectModalClass` and it returns `"permission"` (verified on multiple real captures) — so
+  the detector is NOT the failing layer, contra an earlier guess. The modal stream is wired
+  (`relay.go:564`) and follows-active like the turn stream. The remaining candidates are per-conversation
+  modal-stream screen wiring (does the bound session feed its live PTY to the tracker, or does it stay on
+  the idle bootstrap PTY?), the event firing, the #1065 conversation_id emit-scoping, the relay, or the
+  client rendering a real `modal_shown` (only the fake twin proves that). Isolating which needs a live
+  daemon run with modal-stream debug logging. A real user answering a prompt from the desktop app would
+  hang. Needs a daemon/tui-driver ticket; layer-isolation is its first task. Tracked on desktop#483.
 
 This section is the **single** authoritative record of real-claude gate state. README, the feature
 doc (`real-claude-liveness-e2e.md`), and the spec header point here instead of restating it — so the

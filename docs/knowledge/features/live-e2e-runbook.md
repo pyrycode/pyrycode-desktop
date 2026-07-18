@@ -110,9 +110,11 @@ drive a genuinely-running turn, not to change the daemon.
     captured snapshot but fails on the daemon's live buffer — the format difference (scrollback / trailing
     cursor moves / the #242 option-row shape gate) is the fix's open question.
   - **Corrections:** the detector is not unconditionally fine (fails on the live buffer), and it is not a
-    pure wiring gap (that half is #1070). Next: rebuild the daemon from `deb41fe` for #1070, then a
-    tui-driver detection ticket for `DetectModalClass` robustness on the live session buffer. Tracked on
-    desktop#483.
+    pure wiring gap (that half is #1070). The installed daemon is ALREADY on `deb41fe`/#1070 — the
+    run-clone updater rebuilt `~/.local/bin/pyry` (built 21:28) and launchd restarted onto it (PID up
+    21:28:44) automatically mid-session, so no rebuild is needed and #1070 is already live. The one open
+    item is a tui-driver detection ticket for `DetectModalClass` robustness on the live session buffer.
+    Tracked on desktop#483.
 
 This section is the **single** authoritative record of real-claude gate state. README, the feature
 doc (`real-claude-liveness-e2e.md`), and the spec header point here instead of restating it — so the

@@ -1,4 +1,6 @@
 import { type Page } from '@playwright/test'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 
 // Tier-3 real-claude e2e (#446, split from #431, twin of #445) — the LIVENESS NET for queue-while-busy-
@@ -8,8 +10,24 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 // clones real-claude.spec.ts's precondition (pair against a freshly-spawned real `pyry` on `--model haiku`,
 // bridged to the built Electron window through #251's content-blind routing relay, then CREATE the
 // conversation through the New-discussion FAB and reach the connected `.conversation` with Send enabled)
-// and swaps only the turn body: start a long turn, enqueue a second send while it streams, drop the queued
-// row before drain, then let the turn finish and prove the dropped send produced no assistant turn.
+// and swaps only the turn body: start a turn, enqueue a second send while it runs, drop the queued row
+// before drain, then release the turn and prove the dropped send produced no assistant turn.
+//
+// THE HOLD IS A TEST-OWNED GATE FILE (#487), not a long prompt. A long TEXT turn is not viable on
+// `--model haiku`: it streams the whole reply in under the ~2s transcript-bind cold-start, so the turn
+// collapses into one burst and no running-turn window is observable (the same root the interrupt fix #483
+// hit). A bare `sleep` is non-deterministic (haiku may set run_in_background:true and the turn returns at
+// once). A chatty per-second loop stays foreground but FLOODS the ordered frame stream, so the msg2
+// `queue_state` control frame lands tens of seconds late (measured ~60s on 2026-07-18), racing the turn.
+// So turn 1 runs an ORDINARY Bash tool that blocks on a file the test owns —
+// `until [ -f <gate> ]; do sleep 0.2; done` — and the spec creates `<gate>` only AFTER it has enqueued
+// msg2, asserted the queued row, dropped it, and asserted the dequeue. The turn is then a real, ordinary
+// tool-running turn (no permission path), held open deterministically and released by a filesystem event,
+// with no `sleep`/timing anywhere. The poll loop is SILENT (no per-second echo) precisely so it does NOT
+// flood the frame stream; it stays under the ptyrunner 30s PTY-quiet watchdog because the test releases it
+// within a few seconds. A permission-block hold would also be deterministic, but it routes turn 1 through
+// the special permission code path and would blind-spot the ORDINARY turn lifecycle — the common, more
+// important case; that path is `real-claude-permission-modal.spec.ts`'s job, not this one.
 //
 // The client wiring is already shipped and fake-stack-proven; this adds NO production `src/` change. The
 // fake-stack twin (#427 queued-backlog-interrupt.spec.ts, over the #145/#292..#296 chain) proves the client
@@ -19,8 +37,8 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 // .conversation__queued), each with a drop control (aria-label "Drop queued message" → dropQueuedMessage,
 // firing the ungated dequeueMessage command). But in #427 that queue_state / turn_state is driven by
 // `daemon.pushFrame` — a scripted state, not claude actually running a turn. This spec is the liveness
-// proof: on the real stack the enqueue-then-dequeue must come from the REAL daemon holding a REAL, streaming
-// turn's second send and then removing it on the drop.
+// proof: on the real stack the enqueue-then-dequeue must come from the REAL daemon holding a REAL turn's
+// second send and then removing it on the drop.
 //
 // REAL-CLAUDE DIVERGENCES from the fake twin #427 (the only deltas — mirrors the real-claude-interrupt.spec.ts
 // and real-daemon-workspace.spec.ts doc discipline):
@@ -32,12 +50,11 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 //     in-process outbound capture (capturingQueueInterruptFake, dequeueFramesMatching, interruptFrames, the
 //     expect.poll on captured envelopes) is unavailable — the SAME divergence the sibling real-* specs
 //     document. Every assertion reads DOM text / visibility / counts only.
-//   - Accepted limitation (OQ-a): DOM-only over the real wire cannot DETERMINISTICALLY distinguish "drop won
-//     the race" from "drain won" in the adversarial continuous-busy timing (turn 1 ends and drains msg2
-//     within the drop-reflect window). The mitigation is a turn-1 prompt long enough that the drop lands
-//     with tens of seconds of runway remaining (steps 5/8 assert turn 1 is still running around the drop, so
-//     the row left because of the drop, not a drain). Step 11 is a best-effort confirmation, not a causation
-//     proof; do NOT try to strengthen it into one by asserting reply content.
+//   - DROP-vs-DRAIN is now DETERMINISTIC (#487, supersedes the old OQ-a limitation): because turn 1 is held
+//     on the gate file and the file is created only AFTER the dequeue is asserted, turn 1 CANNOT drain to
+//     msg2 before the drop. Turn 1 is provably still running around both the enqueue and the drop (the
+//     interrupt affordance stays visible), so the row left because of the drop, not a coincidental drain.
+//     No adversarial timing, no "raise the count if it flakes" — the hold is released by a file event.
 //
 // It inherits the real-claude harness for free: `spawnClaude` defaults to true (claude on `--model haiku`),
 // so setting NO `test.use(...)` gives the claude-spawning mode AND the full skip-gate (resolves `pyry` +
@@ -48,9 +65,10 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 // cleanly — an unrun test is the correct outcome there, not a hard failure.
 //
 // SECRET HYGIENE (AC5): every assertion reads DOM text / visibility / counts only; both prompts are
-// non-secret nonce literals, model output NEVER asserted; the pairing payload is built the real-claude.spec.ts
-// way and never echoed into a message. No failure diagnostic serialises the token, keys, or the transcript;
-// trace / screenshot / video stay disabled (the real-claude config already disables all three).
+// non-secret nonce literals (the gate path is an isolated temp path, not a secret), model output NEVER
+// asserted; the pairing payload is built the real-claude.spec.ts way and never echoed into a message. No
+// failure diagnostic serialises the token, keys, or the transcript; trace / screenshot / video stay
+// disabled (the real-claude config already disables all three).
 
 // --- Selectors (verbatim from real-claude.spec.ts) ---------------------------
 // A real v2 daemon fans the STRUCTURED stream to interactive conns, rendered into the timeline as
@@ -67,9 +85,9 @@ const CURSOR_SELECTOR = '.bubble__cursor'
 // handshake re-dial or two; Send-enabled is the readiness signal.
 const HANDSHAKE_TIMEOUT_MS = 45_000
 // One turn = cold PTY claude (spawn + model load + first reply). Also bounds the enqueue/dequeue waits and
-// the drain-to-quiesce wait — turn 1 must both start streaming AND fully complete within this budget.
+// the drain-to-quiesce wait — turn 1 must both start AND, once the gate is released, fully complete within it.
 const TURN_TIMEOUT_MS = 120_000
-// Whole spec: handshake + one long turn (streamed AND drained) + the enqueue/drop round-trips + headroom.
+// Whole spec: handshake + one gate-held turn + the enqueue/drop round-trips + drain + headroom.
 const SPEC_TIMEOUT_MS = 300_000
 
 // --- New constant (from #445) ------------------------------------------------
@@ -101,14 +119,20 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   test.setTimeout(SPEC_TIMEOUT_MS)
 
   // A per-run nonce so reruns differ (defeats any accidental reply caching); content is NEVER asserted on
-  // (Date.now() is fine in a Playwright spec). msg1 is a deliberately-long, cheap haiku prompt kept LONG so
-  // turn 1 is still streaming when msg2 enqueues AND is dropped — a turn that finishes before the drop lands
-  // is the primary flakiness risk (OQ-b): if step 8 shows turn 1 finishing coincidentally in the drop-reflect
-  // window, raise the count; if step 9 flakes on a drain-timeout, halve it. msg2 is a short, distinct queued
-  // send whose text is matched only to scope the drop control (routing/display content we control, not model
+  // (Date.now() is fine in a Playwright spec). The gate file lives in the daemon workdir (#487, exposed by
+  // the fixture) — the daemon spawns claude with cwd = that workdir, and the test shares the same filesystem,
+  // so a file the test writes here is exactly what claude's Bash `[ -f ... ]` polls. msg1 drives a real,
+  // ordinary tool-running turn that BLOCKS on the gate file: it stays genuinely running (interrupt affordance
+  // visible) until the spec creates the gate, independent of model speed. Foreground is instructed explicitly
+  // — haiku will otherwise sometimes background a long command and the turn returns at once. The poll loop is
+  // SILENT so it does not flood the ordered frame stream and delay msg2's queue_state. msg2 is a short,
+  // distinct queued send whose text is matched only to scope the drop control (content we control, not model
   // output).
   const runNonce = Date.now()
-  const msg1 = `Count from 1 to 300, one number per line, and nothing else. run=${runNonce}`
+  const gatePath = join(daemon.workdir, `queue-drop-gate-${runNonce}`)
+  const msg1 =
+    `Use the Bash tool to run this exact command in the foreground; do NOT run it in the background. ` +
+    `Command: until [ -f "${gatePath}" ]; do sleep 0.2; done. Do nothing else. run=${runNonce}`
   const msg2 = `A queued task to drop. run=${runNonce}`
 
   // --- Precondition (AC1): pair against the real daemon, dial the test relay's /v1/client leg. ---
@@ -155,18 +179,18 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   await expect(conversation).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
   await expect(sendButton).toBeEnabled({ timeout: HANDSHAKE_TIMEOUT_MS })
 
-  // --- Start turn 1 (AC2 setup) — a real, streaming turn to enqueue against. ---
+  // --- Start turn 1 (AC2 setup) — a real, gate-held tool turn to enqueue against. ---
   await composer.fill(msg1)
   await sendButton.click()
 
   // --- Gate turn 1 genuinely running (AC2). ---
-  // The interrupt affordance is visible only while the turn runs (thinking || responding); a live cursor
-  // strengthens "running" to "streaming" (claude reached `responding`, real output). Safe because the prompt
-  // is deliberately long. (OQ-c: if live timing ever shows the cursor too transient to catch on a fast
-  // responding→idle path, fall back to the interruptButton-visible gate alone — enqueue is valid against a
-  // `thinking` turn too.)
+  // The interrupt affordance is visible only while the turn runs (thinking || responding) — the running-turn
+  // proof. A tool-driven turn (the running poll loop) sits in `responding` but streams NO assistant text, so
+  // there is no `.bubble__cursor` to strengthen the gate with; the affordance alone is the correct signal
+  // here (enqueue is valid against a thinking/responding turn — the same OQ-c fallback the interrupt spec
+  // took). The gate file does not exist yet, so once claude reaches the tool it blocks and the turn stays
+  // running until the spec releases it below.
   await expect(interruptButton).toBeVisible({ timeout: TURN_TIMEOUT_MS })
-  await expect(page.locator(CURSOR_SELECTOR).first()).toBeVisible({ timeout: TURN_TIMEOUT_MS })
 
   // --- Send msg2 mid-turn (AC2) — Send is enabled (canSend on `connected`, no turn-phase gate), so the frame
   // goes to the daemon while turn 1 runs. submitMessage ALSO dispatches an unconditional optimistic userText
@@ -197,21 +221,29 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   await expect(queuedBubbles).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
   // --- Drop-before-drain proof, post-drop (AC4 support). ---
-  // Turn 1 is STILL running after the row left. Because msg2 left the queue WHILE turn 1 was running, turn 1
-  // cannot later drain to it (drain happens only at turn end) → the row left because of the drop, not a
-  // drain. (If this flakes, turn 1 finished too early — raise msg1's count; see OQ-b.)
+  // Turn 1 is STILL running after the row left (the gate file has not been created yet, so the poll loop is
+  // still blocking). Because msg2 left the queue WHILE turn 1 was running, turn 1 cannot later drain to it
+  // (drain happens only at turn end) → the row left because of the drop, not a drain.
   await expect(interruptButton).toBeVisible()
 
-  // --- Let turn 1 drain, wait for quiesce (AC4 setup) — do NOT interrupt; turn 1 finishes naturally. ---
+  // --- Release turn 1 (AC4 setup) — create the gate file the poll loop is blocking on. ---
+  // Only now, strictly AFTER the dequeue is asserted, does turn 1 stop being held: claude's `[ -f <gate> ]`
+  // becomes true, the tool returns, and the turn drains naturally (no interrupt). This is the deterministic
+  // release that replaces the old timing-dependent long prompt.
+  await writeFile(gatePath, '')
+
+  // --- Wait for quiesce (AC4). ---
   // Two independent DOM reflections of the turn ending, different fabric: the button retracts from the real
-  // daemon's turn_state{idle}; the cursor drops from turn_end. This gate also ABSORBS any trailing chunk of
-  // turn 1, which is why the settled baseline is captured AFTER it, not before.
+  // daemon's turn_state{idle}; the cursor drops from turn_end (claude's own post-tool acknowledgment streams
+  // and then clears). This gate also ABSORBS that trailing chunk of turn 1, which is why the settled baseline
+  // is captured AFTER it, not before.
   await expect(interruptButton).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
   // --- Capture the settled baseline STRICTLY AFTER the quiesce gate (AC4). ---
   // Both quiesce signals have fired, so turn 1 is over — no further chunks arrive for it — making this
-  // baseline race-free. At least turn 1's own reply must have streamed.
+  // baseline race-free. A naturally-completing foreground tool turn ends with claude's own post-tool
+  // acknowledgment, so at least one assistant row exists.
   const settled = await nonEmptyAssistantCount(page)
   expect(settled).toBeGreaterThanOrEqual(1)
 

@@ -77,6 +77,12 @@ export interface SpawnedDaemon {
   // Only the three credential fields decoded from `pyry pair` stdout. The QrPayload's `relay` is assembled
   // test-side from the #251 relay's /v1/client leg, never from pyry's output (which points at prod).
   pairFields: Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>
+  // The daemon's working directory (`-pyry-workdir`, `<daemonHome>/work`), created and reaped by the
+  // fixture. Exposed (#487) so a real-claude spec can write a test-OWNED gate file into it and have claude
+  // poll that file to hold a turn open deterministically — a real, ordinary tool-running turn released by a
+  // filesystem event, with no `sleep`/timing race. The test and the daemon share one filesystem, so a file
+  // the test writes here is visible to claude's Bash tool at that absolute path.
+  workdir: string
 }
 
 /**
@@ -302,7 +308,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
 
       await waitForDaemonReady(child, socketPath)
 
-      await use({ pairFields })
+      await use({ pairFields, workdir })
     } finally {
       await cleanup()
     }

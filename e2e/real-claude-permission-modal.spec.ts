@@ -1,4 +1,6 @@
-import { type Locator, type Page } from '@playwright/test'
+import { type Locator } from '@playwright/test'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 
 // Tier-3 real-claude e2e (#432) — the DEEPEST liveness net in the suite: the permission modal proven over
@@ -51,19 +53,22 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 // and never echoed into a message. No failure diagnostic serialises the token, keys, or the transcript;
 // trace / screenshot / video stay disabled (the real-claude config already disables all three).
 
-// The single-consumer #432 fixture option: drop `--dangerously-skip-permissions` so the tool call blocks
-// on a per-tool permission decision and the daemon relays a `modal_shown` to this interactive client. Every
-// sibling spec sets no override → default true → identical args as today.
-test.use({ skipPermissions: false })
+// The fixture overrides that make the modal reach — and be answerable by — this desktop client:
+//   - skipPermissions:false (#432) drops `--dangerously-skip-permissions`, so the tool call blocks on a
+//     per-tool permission decision instead of auto-running.
+//   - interactiveRunner:'stream-json' (#483/T9) routes the daemon's interactive path onto the streamsup
+//     runner. On the PTY path the daemon read the permission dialog by screen-scraping and misclassified it
+//     on the live buffer (desktop#483), so the modal never surfaced. The stream runner instead wires
+//     claude's approval tool to the daemon, which emits the modal_shown deterministically.
+//   - allowRemotePermissions:true (#483/T9) pairs the device with the remote-permission grant. The daemon
+//     fail-closes the answer on that grant, so without it the dialog would render but "allow" would be
+//     denied and the turn would never complete — the second gate the PTY red masked.
+// Every sibling spec sets none of these → PTY default, plain pairing, identical args as today.
+test.use({ skipPermissions: false, interactiveRunner: 'stream-json', allowRemotePermissions: true })
 
 // --- Selectors (verbatim from real-claude.spec.ts) ---------------------------
-// A real v2 daemon fans the STRUCTURED stream to interactive conns, rendered into the timeline as
-// data-thread-role="assistant".
-const ASSISTANT_ROW = '[data-thread-role="assistant"]'
-// The streaming cursor ▎ (U+258E) is a child <span> INSIDE the assistant bubble, so a row's textContent
-// includes it even while the reply text is still empty. Strip it before the non-empty check.
-const CURSOR_CHAR = '▎'
-// turn_end appends a turnBoundary that drops the cursor — its absence is the per-turn quiesce signal.
+// turn_end appends a turnBoundary that drops the streaming cursor ▎ (U+258E) — its absence is the per-turn
+// quiesce signal.
 const CURSOR_SELECTOR = '.bubble__cursor'
 
 // --- Timeouts (verbatim from real-claude.spec.ts) ----------------------------
@@ -79,21 +84,6 @@ const SPEC_TIMEOUT_MS = 300_000
 // The wait for the first permission dialog after Send. Cold PTY claude must spawn, load the model, and reach
 // the tool call before it blocks on the permission, so bound it as generously as a whole turn.
 const MODAL_TIMEOUT_MS = 120_000
-
-/**
- * Count assistant rows whose text is non-empty once the streaming cursor ▎ is stripped. Runs in the page
- * context. Content-agnostic liveness: a naive "row exists" or unstripped-textContent check would pass on an
- * empty streaming bubble (the cursor span is inside the row).
- */
-function nonEmptyAssistantCount(page: Page): Promise<number> {
-  return page
-    .locator(ASSISTANT_ROW)
-    .evaluateAll(
-      (els, cursor) =>
-        els.filter((el) => (el.textContent ?? '').split(cursor).join('').trim().length > 0).length,
-      CURSOR_CHAR
-    )
-}
 
 /**
  * Answer the relayed permission dialog "allow". Over the real stack the affirmative label + which option is
@@ -195,6 +185,10 @@ test('real claude relays a per-tool permission modal that answering "allow" clea
   // here means the answer never closed the loop (daemon stuck on the permission, or the tool hung) — a
   // genuine red, do NOT soften.
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
-  // AC4's stated signal: a non-empty assistant reply is present after the dialog clears.
-  expect(await nonEmptyAssistantCount(page)).toBeGreaterThanOrEqual(1)
+  // AC4 completion signal — tool EFFECT, not reply content. The permission-gated Write lands its file in the
+  // daemon's shared workdir (claude's cwd, exposed by the fixture per #487). The file can only exist if the
+  // tool ran, which can only follow the "allow", so its presence is the deterministic proof the answer closed
+  // the loop. This supersedes the old nonEmptyAssistantCount text-reply check: the prompt forces a single
+  // tool-only turn to keep exactly one modal, and real haiku emits no assistant TEXT on such a turn.
+  expect(existsSync(join(daemon.workdir, `${runNonce}.txt`))).toBe(true)
 })

@@ -101,6 +101,17 @@ export type RealDaemonOptions = {
   spawnClaude: boolean
   seedPromoted: boolean
   skipPermissions: boolean
+  // #483/T9 — select the daemon's interactive runner. "" (default) writes no config file, so the
+  // daemon keeps its built-in default (the PTY / terminal-driven supervisor), byte-identical to today.
+  // "stream-json" routes the interactive path onto the streamsup runner, which surfaces a per-tool
+  // permission prompt as an answerable modal_shown — the desktop#483 gap the PTY live-buffer path
+  // cannot close. "pty" pins the default explicitly. Config-file only; the daemon has no runner flag.
+  interactiveRunner: '' | 'pty' | 'stream-json'
+  // #483/T9 — pair the device WITH `pyry pair --allow-remote-permissions`. The daemon fail-closes a
+  // remote permission answer on the device's grant (modal_resolve_v2.go: MayAnswerRemotePermission),
+  // so without it a relayed modal renders but the "allow" is denied and the turn never completes. The
+  // PTY path masked this second gate by never showing the modal at all. Default false = today.
+  allowRemotePermissions: boolean
 }
 
 export type RealDaemonFixtures = {
@@ -122,6 +133,8 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   spawnClaude: [true, { option: true }],
   seedPromoted: [false, { option: true }],
   skipPermissions: [true, { option: true }],
+  interactiveRunner: ['', { option: true }],
+  allowRemotePermissions: [false, { option: true }],
 
   relay: async ({}, use) => {
     const relay = await startFakeRoutingRelay()
@@ -129,7 +142,11 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
     await relay.close()
   },
 
-  daemon: async ({ relay, spawnClaude, seedPromoted, skipPermissions }, use, testInfo) => {
+  daemon: async (
+    { relay, spawnClaude, seedPromoted, skipPermissions, interactiveRunner, allowRemotePermissions },
+    use,
+    testInfo
+  ) => {
     // --- Skip-gating: resolve binaries + creds BEFORE creating any resource, so a skip never leaks. ---
     // `pyry` is the ONLY universal gate — both modes spawn the daemon. The claude binary, the Anthropic
     // credential, and the operator's ~/.claude.json are resolved + gated ONLY in claude-spawning mode
@@ -232,6 +249,21 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         )
       }
 
+      // #483/T9 — select the interactive runner for THIS spawned daemon. resolveConfigPath() is
+      // $HOME/.pyry/config.json and HOME is daemonHome below, so a config here is the daemon's own.
+      // Written only when a runner is requested; "" leaves the file absent → the daemon's PTY default,
+      // byte-identical to today. The `-pyry-relay` flag overrides relay_url, so the file needs only the
+      // one field (config.Load overlays it onto DefaultConfig).
+      if (interactiveRunner !== '') {
+        const pyryDir = join(daemonHome, '.pyry')
+        await mkdir(pyryDir, { recursive: true, mode: 0o700 })
+        await writeFile(
+          join(pyryDir, 'config.json'),
+          JSON.stringify({ interactive_runner: interactiveRunner }),
+          { mode: 0o600 }
+        )
+      }
+
       // The isolated HOME + creds env shared by `pyry pair` and the daemon. process.env already carries
       // the credential var(s); HOME is overridden to the fresh daemon home.
       const daemonEnv: NodeJS.ProcessEnv = {
@@ -243,7 +275,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
 
       // Pair BEFORE the daemon starts (mints the bearer token + responder static pubkey, writes the
       // registry the daemon loads at startup). `-pyry-name=test` → registry dir <home>/.pyry/test/.
-      const pairStdout = await runPyryPair(pyryBin, daemonEnv)
+      const pairStdout = await runPyryPair(pyryBin, daemonEnv, allowRemotePermissions)
       const pairFields = decodePairFields(pairStdout)
 
       // Seed the binding BEFORE spawn (the registry loads once at startup, no reload): bind 'default' →
@@ -372,9 +404,16 @@ function resolvePyryBin(): string | null {
  * control socket). Rejects on non-zero exit / launch failure / timeout — NEVER echoing stdout, which
  * carries the pairing token; only the (content-free, #62) stderr is surfaced.
  */
-function runPyryPair(pyryBin: string, env: NodeJS.ProcessEnv): Promise<string> {
+function runPyryPair(
+  pyryBin: string,
+  env: NodeJS.ProcessEnv,
+  allowRemotePermissions: boolean
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(pyryBin, ['pair', '-pyry-name=test', '--name=realclaude-e2e'], { env })
+    const pairArgs = ['pair', '-pyry-name=test', '--name=realclaude-e2e']
+    // #483/T9 — grant this device the remote-permission answer capability (default OFF, per #702).
+    if (allowRemotePermissions) pairArgs.push('--allow-remote-permissions')
+    const child = spawn(pyryBin, pairArgs, { env })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => {

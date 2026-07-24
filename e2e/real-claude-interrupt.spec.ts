@@ -1,6 +1,11 @@
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 
+// #483/T9 — exercise the stream-json interactive runner, matching production (the Mac daemon runs
+// interactive_runner: stream-json). PTY-mode interrupt is broken on the current binary (the turn never
+// quiesces); stream is where per-conversation interrupt routing is fixed, and it is what ships.
+test.use({ interactiveRunner: 'stream-json' })
+
 // Tier-3 real-claude e2e (#445, split from #431) — the LIVENESS NET for interrupt-mid-turn over the real
 // stack. Interrupt only means something against a GENUINELY running turn: the daemon's turn lifecycle +
 // claude's actual streaming + the client-side quiesce when the interrupt frame lands. It clones

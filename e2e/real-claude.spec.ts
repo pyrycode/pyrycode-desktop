@@ -1,6 +1,11 @@
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 
+// #483/T9 — exercise the stream-json interactive runner, matching production (the Mac daemon runs
+// interactive_runner: stream-json). The PTY path is the rollback, not what ships; the interactive gate
+// tracks production. skipPermissions stays default (yolo), so no approval tool / no modal here.
+test.use({ interactiveRunner: 'stream-json' })
+
 // The real-claude UI e2e (#252, reworked by #448) — the thin client-layer net over the daemon-side
 // liveness test (#854). Every OTHER Desktop e2e (#89 transport round-trip, #93/#94 UI pair/send/stream)
 // drives a fake relay + a fake daemon that ALWAYS answer, so they stay green even if the real daemon

@@ -190,5 +190,10 @@ test('real claude relays a per-tool permission modal that answering "allow" clea
   // tool ran, which can only follow the "allow", so its presence is the deterministic proof the answer closed
   // the loop. This supersedes the old nonEmptyAssistantCount text-reply check: the prompt forces a single
   // tool-only turn to keep exactly one modal, and real haiku emits no assistant TEXT on such a turn.
-  expect(existsSync(join(daemon.workdir, `${runNonce}.txt`))).toBe(true)
+  await expect
+    .poll(() => existsSync(join(daemon.workdir, `${runNonce}.txt`)), {
+      timeout: TURN_TIMEOUT_MS,
+      message: 'permission-gated Write never landed its file in the daemon workdir after "allow"'
+    })
+    .toBe(true)
 })

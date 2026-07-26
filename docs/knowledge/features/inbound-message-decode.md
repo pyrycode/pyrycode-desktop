@@ -90,6 +90,17 @@ never coerced or treated as absent. The consumer arm drops only `conversation_id
 first consumer, feeding a new `apiRetry: ApiRetryStatus | null` timeline-store scalar — `stalled`'s peer
 with the clearing semantics inverted (an explicit falling edge, not a client-derived self-clear).
 
+[#495](../codebase/495.md) added a fifteenth kind, `compacting` → `compacting` — the PTY-derived status
+peer of `stall`/`api_retry` the daemon fans out while claude auto-compacts the conversation (pyrycode
+#1074; detector tui-driver #298). Unlike `api_retry` it is **banner-only**: `CompactingPayload{
+conversation_id, active}` carries the explicit falling edge (`active: false`) but no counter, percentage,
+or elapsed time — there is nothing on the wire to invent one from. `parseCompactingPayload` is
+`parseApiRetryPayload` minus its two `requireNumber` lines; both remaining fields map onto existing
+helpers (`requireString` / `requireBoolean`), so no new helper and no numeric-range question arises at
+all. The consumer arm drops `conversation_id`, carrying only `active` onward — a fresh two-field decode,
+one-field emit, `stall`'s content-drop shape rather than `api_retry`'s carry-three-fields one. Ships
+dormant; the render slice #496 is the first consumer.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -114,6 +125,7 @@ export type InboundDaemonMessage =
   | { kind: 'turn-state'; turnState: TurnStatePayload }         // #214, additive
   | { kind: 'stall'; stall: StallPayload }                      // #315, additive
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }            // #492, additive — NOT nullary
+  | { kind: 'compacting'; compacting: CompactingPayload }       // #495, additive — banner-only
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -125,7 +137,7 @@ export type InboundDaemonMessage =
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`stall`/
-//                            `api_retry`/`tool_use`/`modal_shown`/`modal_dismissed`/`tool_result`/
+//                            `api_retry`/`compacting`/`tool_use`/`modal_shown`/`modal_dismissed`/`tool_result`/
 //                            `conversation_created`/`session_transition`/`session_settings_updated`
 //                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
@@ -269,6 +281,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `turn_state` ([#214](../codebase/214.md)) | `inbound-decoded` | `code: 'turn_state'`, `bytes`, `hash` — never `state`/`conversation_id` |
 | modeled `stall` ([#315](../codebase/315.md)) | `inbound-decoded` | `code: 'stall'`, `bytes`, `hash` — never `conversation_id` |
 | modeled `api_retry` ([#492](../codebase/492.md)) | `inbound-decoded` | `code: 'api_retry'`, `bytes`, `hash` — never `conversation_id`/`active`/`current`/`total` |
+| modeled `compacting` ([#495](../codebase/495.md)) | `inbound-decoded` | `code: 'compacting'`, `bytes`, `hash` — never `conversation_id`/`active` |
 | modeled `tool_use` ([#217](../codebase/217.md)) | `inbound-decoded` | `code: 'tool_use'`, `bytes`, `hash` — never `name`/`input_summary`/`tool_use_id`/`turn_id`/`conversation_id` |
 | modeled `modal_shown` / `modal_dismissed` ([#201](../codebase/201.md)) | `inbound-decoded` | `code: 'modal_shown' \| 'modal_dismissed'`, `bytes`, `hash` — never `modal_id`/`class`/`title`/`prompt`/any `options[].label`/`default_option_id`/`outcome`/`source` |
 | modeled `tool_result` ([#229](../codebase/229.md)) | `inbound-decoded` | `code: 'tool_result'`, `bytes`, `hash` — never `result_summary`/`is_error`/`tool_use_id`/`turn_id`/`conversation_id` |
@@ -469,6 +482,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [#317 codebase notes](../codebase/317.md) — the render slice: consumes `stallDetected` as the timeline bridge's sixth owned arm, feeding the new `stalled` scalar `StallIndicator` renders.
 - [#492 codebase notes](../codebase/492.md) — the fourteenth additive extension: the `api_retry` kind, `parseApiRetryPayload` (`parseStallPayload`'s one-field template scaled to four, every field mapping onto an existing helper — `requireString`/`requireBoolean`/two `requireNumber` calls, no new check invented), and the not-onset-only, not-deduped peer of `stall` — the consumer arm carries `active`/`current`/`total` onward instead of emitting a nullary literal.
 - [#493 codebase notes](../codebase/493.md) — the render slice: the first consumer of `api_retry`, feeding a new `apiRetry: ApiRetryStatus | null` timeline-store scalar cleared only by the decoded `active: false` falling edge.
+- [#495 codebase notes](../codebase/495.md) — the fifteenth additive extension: the `compacting` kind, `parseCompactingPayload` (`parseApiRetryPayload` minus its two `requireNumber` lines), the banner-only peer of `api_retry` with no counter to carry, and the `stall` content-drop shape (one field dropped, one field carried) rather than `api_retry`'s three-field carry. Ships dormant; the render slice #496 is the first consumer.
 - [Conversation timeline store](conversation-timeline-store.md) / [#217 codebase notes](../codebase/217.md) — the seventh additive extension: the `tool_use` kind, `parseToolUsePayload`, and the required-string-presence idiom scaled to five fields with no enum.
 - [Modal-prompt model](modal-prompt-model.md) / [#201 codebase notes](../codebase/201.md) — the eighth additive extension: the `modal_shown`/`modal_dismissed` kinds, `parseModalShownPayload`/`parseModalDismissedPayload`/`parseModalOption`, the closed-enum idiom's third and fourth instances (`class`/`source`), and the array-of-structs narrower's second use (`options`).
 - [Conversation timeline store](conversation-timeline-store.md) / [#229 codebase notes](../codebase/229.md) — the ninth and last additive extension of the v2 interactive-stream family: the `tool_result` kind, `parseToolResultPayload`, and `requireBoolean`'s second use (`is_error`, after `yolo` #180) alongside four `requireString` calls.

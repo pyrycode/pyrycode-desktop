@@ -615,6 +615,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               total: inbound.apiRetry.total
             })
             return
+          case 'compacting':
+            // The compaction-status data path (#495). Emit a fresh literal carrying only the edge,
+            // copied BY NAME from the already-decoded, already-validated payload — never a spread of
+            // inbound.compacting (the assistant-delta idiom), so a decoder that later grows a field
+            // cannot smuggle it across IPC. `conversation_id` is DROPPED (never referenced — single
+            // active conversation, the turnState convention). Deliberately stateless: no dedup, no
+            // coalescing, no timer, no last-value memo, which is what gives the wire's "a repeated
+            // same-edge frame emits its own event" contract for free — #496 is idempotent on it. Not
+            // compile-forced (this inner switch has no assertNever) — the round-trip test guards this
+            // emit.
+            emitDaemonEvent(sink, { type: 'compacting', active: inbound.compacting.active })
+            return
           case 'session-transition':
             // The session-boundary data path (#254, widened #285). Emit a fresh literal carrying the four
             // fields the delimiter slice (#286) reads — `newSessionId`, `reason`, `occurredAt`,

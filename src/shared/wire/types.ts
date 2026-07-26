@@ -56,6 +56,7 @@ export type EnvelopeType =
   | 'turn_state'
   | 'stall'
   | 'api_retry'
+  | 'compacting'
   | 'session_transition'
   | 'tool_use'
   | 'tool_result'
@@ -303,6 +304,29 @@ export interface ApiRetryPayload {
   active: boolean
   current: number
   total: number
+}
+
+/**
+ * Inbound `compacting` event (daemon → client). Mirrors the daemon's CompactingPayload field-for-field
+ * (pyrycode #1074; detector upstream tui-driver #298), whose two fields are always present (no
+ * `omitempty`). A PTY-derived status peer of StallPayload / ApiRetryPayload, fanned out ONLY to
+ * `interactive`-capable clients: claude is auto-compacting the conversation and goes silent on the
+ * content channel for tens of seconds, which without this frame reads as a frozen thinking state.
+ *
+ * BANNER-ONLY. tui-driver streams no compaction progress, so beyond the conversation id and the edge
+ * bool there is nothing to carry: no counter, no percentage, no elapsed time. The deliberate contrast
+ * with ApiRetryPayload, which does carry `current` / `total`. Do not invent one client-side — a progress
+ * field would be a wire change with a matching daemon peer (ADR 0002), not a client invention.
+ *
+ * NOT ONSET-ONLY — the contrast with `stall`. `active: true` is compaction starting, `active: false` the
+ * explicit falling edge (compaction finished), so the client clears the indicator on that frame rather
+ * than deriving a self-clear from turn activity. Like `stall` it is conversation-level, so there is no
+ * `turn_id`, and receiving it never opens, closes, or alters a turn. See #495 (this decode) and #496
+ * (the render).
+ */
+export interface CompactingPayload {
+  conversation_id: string
+  active: boolean
 }
 
 /**

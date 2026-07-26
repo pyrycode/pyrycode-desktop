@@ -124,6 +124,14 @@ purpose-built for it — the [relay-link store](relay-link-store.md)'s own `Rela
 ([#329](../codebase/329.md)), not any of the three switches below. The sixth arm to force a case in
 all three exhaustive `assertNever`-guarded switches at once.
 
+[#495](../codebase/495.md) added a further no-store-action member, `compacting` — `apiRetry`'s peer on the
+same v2 stream, but **banner-only**: it carries only `active` (`conversation_id` dropped at the emit),
+since the wire streams no compaction progress for a render slice to carry a counter from. Like `apiRetry`,
+the daemon frame is **not** onset-only and **not** deduped. Consumed by **none** of the three existing
+bridges; this bridge's `null`-returning case discards a real (if minimal) payload — a further arm to force
+a case in all three exhaustive `assertNever`-guarded switches at once. The render slice #496 is the first
+consumer.
+
 ## What it does
 
 Turns each `DaemonEvent` arriving from the background process into the matching `SessionAction` (or `null`, for events the session store doesn't model) and dispatches non-null results into the one store the UI reads. Two exported symbols:

@@ -93,6 +93,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'relayLinkChanged':
     case 'notificationActivated':
     case 'apiRetry':
+    case 'compacting':
       // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
       // conversation-list store (#208), timeline store (#202), create render slice (#242), the #259
       // session-id holder, the #261 / #256 session-settings consumers (confirmed + rejected #269),
@@ -103,6 +104,8 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // round-trip store (workspaceFolderRejected), and the #393 notificationActivatedBridge
       // (notificationActivated → the paired `open` nav) consume these — not the modal store. apiRetry
       // (#492) ships dormant; its render consumer is #493 — a retry status line is not a modal.
+      // compacting (#495) ships dormant likewise; its render consumer is #496 — a compaction banner is
+      // not a modal either.
       return null
     default:
       return assertNever(event)

@@ -127,6 +127,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'screenSnapshotReceived':
     case 'relayLinkChanged':
     case 'notificationActivated':
+    case 'compacting':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -146,6 +147,9 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // nav, not the timeline store; a notification click is not a turn-stream item.
       // (apiRetry #492 is now an owned arm — #493 wired its `apiRetry` status scalar above; like the
       // stall onset it is thread chrome, not a timeline row.)
+      // compacting (#495) ships dormant — its consumer is the render slice #496, which decides then
+      // whether the compaction banner is a timeline row at all; that call is not this decode slice's to
+      // make.
       return null
     default:
       return assertNever(event)

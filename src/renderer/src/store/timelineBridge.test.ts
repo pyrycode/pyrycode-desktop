@@ -228,7 +228,10 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       { type: 'relayLinkChanged', status: 'connected' },
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // timeline store — it is not a turn-stream item.
-      { type: 'workspaceFolderRejected' }
+      { type: 'workspaceFolderRejected' },
+      // compaction status ships dormant (#495); its consumer is the render slice #496, which decides
+      // then whether the compacting banner is a timeline row at all — that call is not this slice's.
+      { type: 'compacting', active: true }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })

@@ -247,6 +247,11 @@ function stallPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'stall', ts: FIXED_TS, payload })
 }
 
+/** An `api_retry` plaintext, wrapping an arbitrary payload (#492). */
+function apiRetryPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'api_retry', ts: FIXED_TS, payload })
+}
+
 /** A `tool_use` plaintext, wrapping an arbitrary payload (#217). */
 function toolUsePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'tool_use', ts: FIXED_TS, payload })
@@ -1378,6 +1383,138 @@ describe('createDaemonConnection — stall stream (#315)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: stallPlaintext({ conversation_id: 42 })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — api_retry stream (#492)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes a rising-edge api_retry into exactly one apiRetry event (conversation_id dropped)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: apiRetryPlaintext({
+        conversation_id: 'conv-1',
+        active: true,
+        current: 3,
+        total: 10
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([{ type: 'apiRetry', active: true, current: 3, total: 10 }])
+    // conversation_id is dropped at the choke point (single active conversation, the turnState rule).
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('carries 0/0 through verbatim — "count unknown" is neither coerced nor dropped', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: apiRetryPlaintext({
+        conversation_id: 'conv-1',
+        active: true,
+        current: 0,
+        total: 0
+      })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'apiRetry', active: true, current: 0, total: 0 }
+    ])
+  })
+
+  it('emits the falling edge with active false and the last-known counter', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: apiRetryPlaintext({
+        conversation_id: 'conv-1',
+        active: false,
+        current: 4,
+        total: 10
+      })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'apiRetry', active: false, current: 4, total: 10 }
+    ])
+  })
+
+  it('does NOT dedup: a climbing counter and a verbatim repeat each emit their own event', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (const current of [3, 4, 4]) {
+      drivers[0].emit({
+        type: 'message',
+        plaintext: apiRetryPlaintext({
+          conversation_id: 'conv-1',
+          active: true,
+          current,
+          total: 10
+        })
+      })
+    }
+
+    // Three frames, three events, in wire order — no coalescing, no suppression of the repeat. This
+    // pins the "no dedup" wire contract against a future optimiser adding edge-tracking state here.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'apiRetry', active: true, current: 3, total: 10 },
+      { type: 'apiRetry', active: true, current: 4, total: 10 },
+      { type: 'apiRetry', active: true, current: 4, total: 10 }
+    ])
+  })
+
+  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: apiRetryPlaintext({
+        conversation_id: 'conv-1',
+        active: true,
+        current: 3,
+        total: 10,
+        smuggled: 'must-not-cross'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual(['active', 'current', 'total', 'type'])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('drops a malformed api_retry without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: apiRetryPlaintext({
+          conversation_id: 'conv-1',
+          active: true,
+          current: '3',
+          total: 10
+        })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

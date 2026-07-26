@@ -202,7 +202,10 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       { type: 'relayLinkChanged', status: 'connected' },
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // timeline store — it is not a turn-stream item.
-      { type: 'workspaceFolderRejected' }
+      { type: 'workspaceFolderRejected' },
+      // api-retry ships dormant (#492); its consumer is the render slice #493, which decides then whether
+      // the retry indicator is a timeline row at all — that call is not this slice's.
+      { type: 'apiRetry', active: true, current: 3, total: 10 }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })

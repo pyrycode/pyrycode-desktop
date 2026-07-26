@@ -55,6 +55,7 @@ export type EnvelopeType =
   | 'turn_end'
   | 'turn_state'
   | 'stall'
+  | 'api_retry'
   | 'session_transition'
   | 'tool_use'
   | 'tool_result'
@@ -278,6 +279,30 @@ export interface TurnStatePayload {
  */
 export interface StallPayload {
   conversation_id: string
+}
+
+/**
+ * Inbound `api_retry` event (daemon → client). Mirrors the daemon's ApiRetryPayload field-for-field
+ * (pyrycode #1074; detector upstream tui-driver #303), whose four fields are always present (no
+ * `omitempty`). A PTY-derived status peer of StallPayload, fanned out ONLY to `interactive`-capable
+ * clients: claude hit an API error and is retrying, rendering `API error · Retrying in Ns · attempt N/M`.
+ *
+ * NOT ONSET-ONLY — the deliberate contrast with `stall`. `active: true` is the rising edge, `active:
+ * false` the explicit falling edge (claude recovered), so the client never derives "cleared" from turn
+ * activity. The counter rides BOTH edges; the falling edge repeats the last-known value verbatim so the
+ * final render stays coherent. The rising edge RE-FIRES as the count climbs (`3/10` → `4/10`), one frame
+ * per actual count change, with no dedup on the wire — so a consumer must not dedup or coalesce either.
+ *
+ * `current: 0` alongside `total: 0` is a LEGITIMATE "retrying, count unknown" state (claude's on-screen
+ * counter did not parse) — not an error, and not a sentinel to coerce away. Like `stall` it is
+ * conversation-level, so there is no `turn_id`, and receiving it never opens, closes, or alters a turn.
+ * See #492 (this decode) and #493 (the render).
+ */
+export interface ApiRetryPayload {
+  conversation_id: string
+  active: boolean
+  current: number
+  total: number
 }
 
 /**

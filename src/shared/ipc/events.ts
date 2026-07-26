@@ -119,6 +119,19 @@ export type DaemonEvent =
   // activity is the render slice's concern (#317). Consumed by the render slice #317 (not yet built), so
   // all three exhaustive bridges no-op it for now — the sessionSettingsRejected-was-a-no-op precedent.
   | { type: 'stallDetected' }
+  // The api-retry arm (#492) — claude is retrying against an API error. Unlike stallDetected this arm is
+  // NOT nullary: it carries the edge (`active` — true is the rising edge, false the explicit falling one)
+  // and the attempt counter (`current` / `total`), because the render slice #493 shows "attempt N/M" and
+  // the wire gives it nowhere else. `conversation_id` is dropped at the emit (single active conversation,
+  // matching turnState / stallDetected), so what crosses IPC is one bool and two integers and nothing
+  // else — no token, key, raw frame, or conversation content can ride an arm with no string field on it.
+  // NOT onset-only and NOT deduped: the daemon re-fires the rising edge as the count climbs, and the
+  // transport holds no state, so a consumer sees exactly one event per daemon frame (including a verbatim
+  // repeat). `current: 0` with `total: 0` is the legitimate "retrying, count unknown" value — #493 must
+  // format it defensively (never a literal "0/0", never `current / total` without handling the NaN) since
+  // the decoder type-checks but does not range-check. Ships dormant: all three exhaustive bridges no-op
+  // it until #493 — the stallDetected-was-a-no-op-until-#317 precedent.
+  | { type: 'apiRetry'; active: boolean; current: number; total: number }
   // The session-boundary arm (#254, widened #285). Carries the four render fields the delimiter slice
   // (#286) needs: `newSessionId` (the addressing key the #259 holder retains), `reason` (the closed
   // WireSessionTransitionReason enum, carried so #286's title switch stays exhaustive — NOT a bare

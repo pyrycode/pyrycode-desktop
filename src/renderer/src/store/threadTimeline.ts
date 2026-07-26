@@ -82,14 +82,40 @@ export type ThreadEvent =
   // either. That is what makes AC4 ("no daemon-supplied string is ever rendered") true by construction:
   // there is no field to render. Onset-only; the reducer derives the self-clear on the next turn activity.
   | { type: 'stallDetected' }
+  // #493: the daemon's api-retry edge (#492 decodes it). Field-for-field identical to the `apiRetry`
+  // DaemonEvent, so the bridge is a filter + fresh copy (the `toolUse` / `sessionBoundary` discipline),
+  // not a remap. The EVENT carries `active` — a faithful renderer-local re-declaration of the wire edge
+  // (true rising, false the explicit falling one); the reducer is the single place that translates that
+  // edge into the state's presence-or-absence. Two integers and a bool, no string field: AC1 ("no
+  // daemon-supplied string is ever rendered") stays true by construction, as with `stallDetected`.
+  | { type: 'apiRetry'; active: boolean; current: number; total: number }
 
-/** The whole timeline state: ordered content + the coarse lifecycle phase + the onset-only stall flag. */
+/**
+ * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
+ *
+ * A record rather than a flag because the render shows "attempt N/M", and `| null` rather than carrying
+ * the wire's `active` because it collapses "not retrying" into ONE representation: the render gate is a
+ * presence check, and the wire's "the falling edge repeats the last-known counter verbatim; the counter
+ * is ignored once `active` is false" is true BY CONSTRUCTION — the falling edge stores `null`, so there
+ * is nowhere for a stale counter to leak from. `{ current: 0, total: 0 }` is a PRESENT status meaning
+ * "retrying, count unknown" — distinct from `null`, which means no retry at all.
+ */
+export interface ApiRetryStatus {
+  current: number
+  total: number
+}
+
+/** The whole timeline state: ordered content + the coarse lifecycle phase + the two problem-state scalars. */
 export interface TimelineState {
   items: readonly ThreadItem[]
   phase: TurnPhase
   // #317: a coarse, onset-only stall scalar (the `phase`-beside-`items` precedent — NOT a ThreadItem row).
   // Set by `stallDetected`, self-cleared by the reducer on the next turn-activity event.
   stalled: boolean
+  // #493: the live api-retry status — the `stalled` twin with the clear semantics INVERTED. `api_retry`
+  // has an explicit falling edge on the wire, so this is NEVER self-cleared by turn activity: only an
+  // `active: false` event clears it. Chrome beside `items`, never a ThreadItem row.
+  apiRetry: ApiRetryStatus | null
 }
 
 /** Compile-time exhaustiveness guard: a new ThreadEvent arm without a case is a type error. */
@@ -156,7 +182,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       return {
         items: appendDelta(state.items, event.turnId, event.text),
         phase: state.phase,
-        stalled: false
+        stalled: false,
+        apiRetry: state.apiRetry
       }
     case 'toolUse':
       // Turn activity — clears a live stall (AC2). Already appends a fresh `items`, so just carry
@@ -174,7 +201,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
           }
         ],
         phase: state.phase,
-        stalled: false
+        stalled: false,
+        apiRetry: state.apiRetry
       }
     case 'toolResult': {
       const items = fillResult(state.items, event.toolUseId, {
@@ -185,17 +213,22 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // nothing AND no stall is live; an orphan/duplicate result against a live stall must still clear
       // it, so the guard widens with `&& !state.stalled`. From `initialTimelineState` (stalled already
       // false) the orphan path still returns the same reference — the regression guard the test asserts.
+      // #493: the guard deliberately does NOT widen for `apiRetry` — that status has an explicit wire
+      // falling edge, so turn activity must LEAVE it showing (the inverse of `stalled`); it is carried
+      // through unchanged on both paths.
       return items === state.items && !state.stalled
         ? state
-        : { items, phase: state.phase, stalled: false }
+        : { items, phase: state.phase, stalled: false, apiRetry: state.apiRetry }
     }
     case 'turnState':
       // Turn activity — clears a live stall (AC2, "any state, including idle"). No-churn ONLY when the
       // phase is unchanged AND no stall is live; an idle-when-already-idle turnState against a live stall
       // must still clear it, so the guard widens with `&& !state.stalled`.
+      // #493: the guard deliberately does NOT widen for `apiRetry` — a turn-state change arriving mid-retry
+      // is expected and must leave the status showing (the inverse of `stalled`); it is carried unchanged.
       return event.state === state.phase && !state.stalled
         ? state
-        : { items: state.items, phase: event.state, stalled: false }
+        : { items: state.items, phase: event.state, stalled: false, apiRetry: state.apiRetry }
     case 'turnEnd':
       // Appends a boundary; does NOT reset phase — the daemon emits `turn_state: 'idle'` separately.
       // NOT in AC2's clear set: a turn boundary is not turn activity; the paired `turn_state: idle` is
@@ -206,7 +239,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
           { kind: 'turnBoundary', turnId: event.turnId, stopReason: event.stopReason }
         ],
         phase: state.phase,
-        stalled: state.stalled
+        stalled: state.stalled,
+        apiRetry: state.apiRetry
       }
     case 'userText':
       // A whole user message: fresh tail-append (never coalesced), `phase` untouched — the `turnEnd`
@@ -215,7 +249,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       return {
         items: [...state.items, { kind: 'userText', text: event.text }],
         phase: state.phase,
-        stalled: state.stalled
+        stalled: state.stalled,
+        apiRetry: state.apiRetry
       }
     case 'sessionBoundary':
       // A whole boundary marker: fresh tail-append (never coalesced), `phase` untouched — the `userText` /
@@ -232,21 +267,55 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
           }
         ],
         phase: state.phase,
-        stalled: state.stalled
+        stalled: state.stalled,
+        apiRetry: state.apiRetry
       }
     case 'stallDetected':
       // #317: onset-only stall — set the scalar, leave `items`/`phase` untouched. A redundant onset (the
       // stall is already live) is a same-reference no-op, mirroring the pure-duplicate discipline of the
-      // other arms.
-      return state.stalled ? state : { items: state.items, phase: state.phase, stalled: true }
+      // other arms. `apiRetry` is an independent fact and is carried through unchanged.
+      return state.stalled
+        ? state
+        : { items: state.items, phase: state.phase, stalled: true, apiRetry: state.apiRetry }
+    case 'apiRetry': {
+      // #493: the two-edged api-retry status — set from the rising edge, cleared ONLY by the falling one.
+      // `items`/`phase`/`stalled` are untouched on every path: the retry status is chrome, and it neither
+      // clears nor is cleared by the stall scalar (two independent problem facts, the #317 posture).
+      if (!event.active) {
+        // The falling edge. `event.current` / `event.total` are deliberately NOT read — the wire repeats
+        // the last-known counter here and it is ignored. A falling edge against no live retry is a
+        // same-reference no-op.
+        return state.apiRetry === null
+          ? state
+          : { items: state.items, phase: state.phase, stalled: state.stalled, apiRetry: null }
+      }
+      // The rising edge re-fires as the count climbs and the daemon may repeat an identical frame (no
+      // wire-side dedup), so an unchanged counter returns the SAME state reference — the status never
+      // stacks, duplicates, or flickers (AC2) — while a climbing count swaps in a fresh status record.
+      // `{ current: 0, total: 0 }` is held as a PRESENT status ("retrying, count unknown"), never null.
+      const held = state.apiRetry
+      if (held !== null && held.current === event.current && held.total === event.total) return state
+      return {
+        items: state.items,
+        phase: state.phase,
+        stalled: state.stalled,
+        apiRetry: { current: event.current, total: event.total }
+      }
+    }
     default:
       return assertNever(event)
   }
 }
 
-export const initialTimelineState: TimelineState = { items: [], phase: 'idle', stalled: false }
+export const initialTimelineState: TimelineState = {
+  items: [],
+  phase: 'idle',
+  stalled: false,
+  apiRetry: null
+}
 
 /** Selectors — the read surface, mirroring `sessionStore`'s. */
 export const selectItems = (s: TimelineState): readonly ThreadItem[] => s.items
 export const selectPhase = (s: TimelineState): TurnPhase => s.phase
 export const selectStalled = (s: TimelineState): boolean => s.stalled
+export const selectApiRetry = (s: TimelineState): ApiRetryStatus | null => s.apiRetry

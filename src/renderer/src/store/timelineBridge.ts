@@ -20,9 +20,9 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the seven timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
- * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317);
- * each is reconstructed
+ * timeline state. Owns exactly the eight timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317 /
+ * `apiRetry` #493); each is reconstructed
  * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
@@ -89,6 +89,18 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // selection), never a pass-through of the DaemonEvent object. reduceTimeline sets the `stalled`
       // scalar; the render slice's self-clear is derived there on the next turn activity.
       return { type: 'stallDetected' }
+    case 'apiRetry':
+      // #493: the api-retry arm (#492 decodes it, this slice gives it a consumer). The DaemonEvent and
+      // the ThreadEvent are field-for-field identical, so this is a filter + fresh literal (arm
+      // selection), never a pass-through of the DaemonEvent object. The falling edge's counter is copied
+      // verbatim — discarding it is reduceTimeline's job (it stores `null`), not the bridge's, so the
+      // translator stays a pure rename with no normalization of its own.
+      return {
+        type: 'apiRetry',
+        active: event.active,
+        current: event.current,
+        total: event.total
+      }
     case 'connecting':
     case 'connected':
     case 'disconnected':
@@ -115,7 +127,6 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'screenSnapshotReceived':
     case 'relayLinkChanged':
     case 'notificationActivated':
-    case 'apiRetry':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -133,8 +144,8 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // two-dot indicator), not the timeline store; the relay socket leg is not a turn-stream item.
       // notificationActivated (#393) is consumed by the notificationActivatedBridge → the paired `open`
       // nav, not the timeline store; a notification click is not a turn-stream item.
-      // apiRetry (#492) ships dormant — its consumer is the render slice #493, which decides then whether
-      // the retry indicator is a timeline row at all; that call is not this decode slice's to make.
+      // (apiRetry #492 is now an owned arm — #493 wired its `apiRetry` status scalar above; like the
+      // stall onset it is thread chrome, not a timeline row.)
       return null
     default:
       return assertNever(event)

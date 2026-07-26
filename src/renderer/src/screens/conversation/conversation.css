@@ -374,6 +374,35 @@
   border-left: 4px solid var(--color-error);
 }
 
+/* #493 — the api-retry-indicator wrapper. The .conversation__stall shape verbatim (flex: 0 0 auto so it
+   never claims a competing flex region beside the timeline; the thread's --space-4 inset keeps the bubble
+   left-aligned and thread-consistent), since the retry status sits in the same message-list region. No
+   Figma node (the mobile file draws only the connected thread — the documented #148 gap); a dedicated
+   degraded-state visual is a Figma-side follow-up. */
+.conversation__api-retry {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-start;
+  padding: var(--space-2) var(--space-4);
+}
+
+/* The retry affordance reuses the daemon bubble's fill / radius / measure (via .bubble--daemon) but
+   diverges to the error role so it reads as a DEGRADING session, not normal progress — distinct from the
+   muted .bubble--thinking (AC1). Deliberately NO left accent bar: that is .bubble--stall's distinguishing
+   mark, so omitting it keeps the two problem states visually separable while both stay distinct from the
+   thinking treatment. --color-error is the only error role token on desktop. Token names only — no color
+   literal, no new theme token. */
+.bubble--api-retry {
+  color: var(--color-error);
+}
+
+/* The attempt counter — emphasis within the bubble's inherited error color and body-medium type, so the
+   "how far into the retry budget" digits read as the load-bearing part of the status. Within-token: a
+   weight token, no color literal and no type-scale override. */
+.api-retry__counter {
+  font-weight: var(--text-title-medium-weight);
+}
+
 /* #294 — the held queued backlog region: the messages queued while the daemon is busy, rendered as
    the not-yet-run tail below the delivered thread. flex: 0 0 auto (like .conversation__thinking, NOT
    the thread's 1 1 auto) so it never competes with the timeline's flex region; column + --space-3 gap

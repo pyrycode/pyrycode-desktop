@@ -140,6 +140,11 @@ function encodeStall(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 22, type: 'stall', ts: FIXED_TS, payload })
 }
 
+/** An `api_retry` envelope's plaintext bytes, wrapping an arbitrary payload (#492). */
+function encodeApiRetry(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 23, type: 'api_retry', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -176,6 +181,14 @@ const TURN_STATE = {
 /** A fully-populated, well-formed stall payload — `conversation_id` only (#315). */
 const STALL = {
   conversation_id: 'conv-1'
+}
+
+/** A well-formed api_retry payload on the rising edge — the daemon's canonical fixture (#492). */
+const API_RETRY = {
+  conversation_id: 'c1',
+  active: true,
+  current: 3,
+  total: 10
 }
 
 /** A fully-populated, well-formed tool_use payload (#217). */
@@ -1465,6 +1478,95 @@ describe('parseInboundMessage — stall fail-closed (#315)', () => {
   })
 })
 
+describe('parseInboundMessage — api_retry recognition (#492, additive)', () => {
+  it('narrows a full rising-edge api_retry into { kind: api-retry } carrying all four fields', () => {
+    expect(parseInboundMessage(encodeApiRetry(API_RETRY))).toEqual({
+      kind: 'api-retry',
+      apiRetry: API_RETRY
+    })
+  })
+
+  it('decodes 0/0 — the legitimate "retrying, count unknown" state, neither a failure nor coerced', () => {
+    const unknownCount = { ...API_RETRY, current: 0, total: 0 }
+    expect(parseInboundMessage(encodeApiRetry(unknownCount))).toEqual({
+      kind: 'api-retry',
+      apiRetry: unknownCount
+    })
+  })
+
+  it('decodes the falling edge — active false is a VALUE, not an absence (counter repeated)', () => {
+    const falling = { ...API_RETRY, active: false }
+    const decoded = parseInboundMessage(encodeApiRetry(falling))
+    expect(decoded).toEqual({ kind: 'api-retry', apiRetry: falling })
+  })
+
+  it('drops unknown server keys, keeping exactly the four known fields (forward-compat)', () => {
+    const withExtras = { ...API_RETRY, turn_id: 'turn-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeApiRetry(withExtras))).toEqual({
+      kind: 'api-retry',
+      apiRetry: API_RETRY
+    })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — api_retry fail-closed (#492)', () => {
+  it('throws when conversation_id is absent, a non-string, or null', () => {
+    const bad: unknown[] = [
+      { active: true, current: 3, total: 10 }, // absent
+      { ...API_RETRY, conversation_id: 42 },
+      { ...API_RETRY, conversation_id: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeApiRetry(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when active is absent or a non-boolean (TYPE-checked, never truthiness)', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'c1', current: 3, total: 10 }, // absent
+      { ...API_RETRY, active: 'true' },
+      { ...API_RETRY, active: 1 },
+      { ...API_RETRY, active: 0 },
+      { ...API_RETRY, active: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeApiRetry(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when current is absent or a non-number', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'c1', active: true, total: 10 }, // absent
+      { ...API_RETRY, current: '3' },
+      { ...API_RETRY, current: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeApiRetry(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when total is absent or a non-number', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'c1', active: true, current: 3 }, // absent
+      { ...API_RETRY, total: '10' },
+      { ...API_RETRY, total: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeApiRetry(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when an api_retry payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeApiRetry('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeApiRetry(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — tool_use recognition (#217, additive)', () => {
   it('narrows a full tool_use into { kind: tool-use } carrying all five fields verbatim', () => {
     expect(parseInboundMessage(encodeToolUse(TOOL_USE))).toEqual({
@@ -2232,6 +2334,41 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() => parseInboundMessage(encodeStall({ conversation_id: 42 }), log)).toThrow(
       WireDecodeError
     )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs an api_retry content-free, never the conversation_id or the counter (#492)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const plaintext = encodeApiRetry({
+      conversation_id: SECRET_CONV,
+      active: true,
+      current: 3,
+      total: 10
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('api_retry')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field (conversation_id / active / current / total)
+    // reaches the log, and no new DiagnosticEvent field is introduced (reuses the existing set).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+  })
+
+  it('does NOT log on a malformed api_retry throw path (#492)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeApiRetry({ conversation_id: 'c1', active: true, current: '3', total: 10 }),
+        log
+      )
+    ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })
 

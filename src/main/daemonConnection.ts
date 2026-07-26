@@ -599,6 +599,22 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // (this inner switch has no assertNever) — the round-trip test guards this emit.
             emitDaemonEvent(sink, { type: 'stallDetected' })
             return
+          case 'api-retry':
+            // The api-retry status data path (#492). Emit a fresh literal carrying the edge + the counter,
+            // copied BY NAME from the already-decoded, already-validated payload — never a spread of
+            // inbound.apiRetry (the assistant-delta idiom), so a decoder that later grows a field cannot
+            // smuggle it across IPC. `conversation_id` is DROPPED (never referenced — single active
+            // conversation, the turnState convention). Deliberately stateless: no dedup, no coalescing, no
+            // timer, no last-value memo, which is what gives the wire's "re-fires as the count climbs"
+            // contract for free — adding edge tracking here would swallow a legitimate count change. Not
+            // compile-forced (this inner switch has no assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'apiRetry',
+              active: inbound.apiRetry.active,
+              current: inbound.apiRetry.current,
+              total: inbound.apiRetry.total
+            })
+            return
           case 'session-transition':
             // The session-boundary data path (#254, widened #285). Emit a fresh literal carrying the four
             // fields the delimiter slice (#286) reads — `newSessionId`, `reason`, `occurredAt`,

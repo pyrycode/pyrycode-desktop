@@ -135,6 +135,12 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // session store. Present only because the assertNever guard below makes a new arm a compile error
       // (the snapshotReceived-was-a-no-op-until-#187 precedent).
       return null
+    case 'apiRetry':
+      // No session-store action: the render slice (#493, not yet built) surfaces the retry indicator and
+      // its attempt counter, not the session store — which holds no retry state at all. Present only
+      // because the assertNever guard below makes a new arm a compile error (the
+      // stallDetected-was-a-no-op-until-#317 precedent).
+      return null
     case 'relayLinkChanged':
       // No session-store action: the relay-link store + bridge (#329, not yet built) holds the relay-leg
       // status, not the session store. Present only because the assertNever guard below makes a new arm a

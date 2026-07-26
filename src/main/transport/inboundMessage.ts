@@ -33,6 +33,7 @@ import type {
   TurnEndPayload,
   TurnStatePayload,
   StallPayload,
+  ApiRetryPayload,
   SessionTransitionPayload,
   SessionSettingsUpdatedPayload,
   ToolUsePayload,
@@ -101,6 +102,15 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * a NULLARY `stallDetected` event (the payload's only field is not carried); the fail-closed required
  * `conversation_id` string here is the boundary this slice defends. Ships dormant — the render slice
  * (#317) is the first consumer.
+ *
+ * The `api-retry` kind (#492) carries the decoded ApiRetryPayload — the PTY-derived status peer of
+ * `stall` the daemon fans out to interactive clients while claude retries against an API error. Unlike
+ * `stall` this arm is NOT nullary: the consumer carries the edge (`active`) and the counter (`current` /
+ * `total`) onward, dropping only `conversation_id`. The fail-closed defence here is four required fields
+ * — one string, one BOOLEAN (whose `false` is the falling edge, a value not an absence) and two NUMBERS
+ * (whose `0` is the legitimate "count unknown" value, so nothing may consult truthiness). NOT onset-only
+ * and NOT deduped: N frames narrow to N values. Ships dormant — the render slice (#493) is the first
+ * consumer.
  *
  * The `session-transition` kind (#254) carries the decoded SessionTransitionPayload — the session-boundary
  * marker whose `new_session_id` is the addressing key the #259 holder will retain. The consumer carries
@@ -171,6 +181,7 @@ export type InboundDaemonMessage =
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
   | { kind: 'stall'; stall: StallPayload }
+  | { kind: 'api-retry'; apiRetry: ApiRetryPayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
   | {
       kind: 'session-settings-updated'
@@ -400,6 +411,35 @@ function parseStallPayload(payload: unknown): StallPayload {
   }
   const conversation_id = requireString(payload, 'conversation_id')
   return { conversation_id }
+}
+
+/**
+ * Narrow an opaque payload into an ApiRetryPayload (#492). Fail-closed like parseStallPayload, scaled
+ * from one field to four — and every one of them maps onto an existing helper, so no new number check is
+ * invented here. `requireBoolean` gives the falling edge for free (its check is on the TYPE, so a literal
+ * `false` passes while `0` / `'true'` / `null` fail), and `requireNumber` gives the `0/0` "count unknown"
+ * state for free (a plain `typeof === 'number'`, never a truthiness test). It deliberately does NOT
+ * range-check or integer-check `current` / `total`: there is no house precedent for range-validating a
+ * wire integer (`seq` / `total` / `used_tokens` / `window_tokens` / `queued_msg_id` are all bare
+ * requireNumber since #116), and a client-invented bound would silently drop VALID future frames — the
+ * drift risk CLAUDE.md / ADR 0002 rank above cosmetic robustness. The render slice (#493) formats the
+ * counter defensively instead (in particular `current / total` must handle the legitimate `0/0`).
+ *
+ * Any missing / mistyped field throws WireDecodeError (never a partial value); the frame-level
+ * MAX_PLAINTEXT_BYTES guard in parseInboundMessage covers the oversized case. Returns a fresh four-field
+ * literal, so unknown server-added keys (e.g. a spurious `turn_id`) are tolerated (forward-compat) but
+ * NOT copied through — which also makes it prototype-pollution-safe. Its messages name the failure
+ * CATEGORY only, never interpolating a value.
+ */
+function parseApiRetryPayload(payload: unknown): ApiRetryPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed api_retry payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const active = requireBoolean(payload, 'active')
+  const current = requireNumber(payload, 'current')
+  const total = requireNumber(payload, 'total')
+  return { conversation_id, active, current, total }
 }
 
 /**
@@ -885,6 +925,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'stall', stall }
+    }
+    case 'api_retry': {
+      // Narrow BEFORE logging so a malformed frame (an absent boolean `active`, a string `current`)
+      // throws first and leaves no record. No decoded field (conversation_id / active / current / total)
+      // is logged — only the frame's byte length + one-way hash, reusing the existing content-free field
+      // set (no new DiagnosticEvent field, so #131's renderer pin is untouched).
+      const apiRetry = parseApiRetryPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'api_retry',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'api-retry', apiRetry }
     }
     case 'session_transition': {
       // Narrow BEFORE logging so a malformed frame (a `reason` outside the closed enum, an

@@ -115,6 +115,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'screenSnapshotReceived':
     case 'relayLinkChanged':
     case 'notificationActivated':
+    case 'apiRetry':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -132,6 +133,8 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // two-dot indicator), not the timeline store; the relay socket leg is not a turn-stream item.
       // notificationActivated (#393) is consumed by the notificationActivatedBridge → the paired `open`
       // nav, not the timeline store; a notification click is not a turn-stream item.
+      // apiRetry (#492) ships dormant — its consumer is the render slice #493, which decides then whether
+      // the retry indicator is a timeline row at all; that call is not this decode slice's to make.
       return null
     default:
       return assertNever(event)

@@ -267,6 +267,11 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'relayLinkChanged', status: 'daemon-absent' })).toBeNull()
   })
 
+  it('apiRetry → null (consumed by the render slice #493, not the session store)', () => {
+    expect(translateDaemonEvent({ type: 'apiRetry', active: true, current: 3, total: 10 })).toBeNull()
+    expect(translateDaemonEvent({ type: 'apiRetry', active: false, current: 0, total: 0 })).toBeNull()
+  })
+
   it('workspaceFolderRejected → null (consumed by the #397 round-trip store, not the session store)', () => {
     expect(translateDaemonEvent({ type: 'workspaceFolderRejected' })).toBeNull()
   })

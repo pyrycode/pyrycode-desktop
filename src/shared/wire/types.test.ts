@@ -9,6 +9,7 @@ import type {
   TurnStatePayload,
   WireTurnState,
   StallPayload,
+  ApiRetryPayload,
   WireSessionTransitionReason,
   SessionTransitionPayload,
   ToolUsePayload,
@@ -122,6 +123,41 @@ describe('stall wire vocabulary (#315)', () => {
   it('shapes StallPayload as { conversation_id } only — no turn_id, no clear field', () => {
     const payload: StallPayload = { conversation_id: 'conv-1' }
     expect(payload).toEqual({ conversation_id: 'conv-1' })
+  })
+})
+
+describe('api-retry wire vocabulary (#492)', () => {
+  it('admits the api_retry inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const apiRetry: EnvelopeType = 'api_retry'
+    expect(apiRetry).toBe('api_retry')
+  })
+
+  it('shapes ApiRetryPayload as its four fields — the edge plus the counter, no turn_id', () => {
+    const payload: ApiRetryPayload = {
+      conversation_id: 'c1',
+      active: true,
+      current: 3,
+      total: 10
+    }
+    expect(payload).toEqual({ conversation_id: 'c1', active: true, current: 3, total: 10 })
+  })
+
+  it('admits the falling edge and the 0/0 "count unknown" state (both legitimate wire values)', () => {
+    const falling: ApiRetryPayload = {
+      conversation_id: 'c1',
+      active: false,
+      current: 3,
+      total: 10
+    }
+    const unknownCount: ApiRetryPayload = {
+      conversation_id: 'c1',
+      active: true,
+      current: 0,
+      total: 0
+    }
+    expect(falling.active).toBe(false)
+    expect([unknownCount.current, unknownCount.total]).toEqual([0, 0])
   })
 })
 

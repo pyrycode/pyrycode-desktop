@@ -159,7 +159,9 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       { type: 'relayLinkChanged', status: 'connected' },
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // modal store.
-      { type: 'workspaceFolderRejected' }
+      { type: 'workspaceFolderRejected' },
+      // api-retry ships dormant (#492); its render consumer is #493, not the modal store.
+      { type: 'apiRetry', active: true, current: 3, total: 10 }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()
   })

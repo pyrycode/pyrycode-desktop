@@ -76,6 +76,19 @@ drops the one decoded field (`conversation_id`, the `turnState` convention) and 
 `stallDetected` `DaemonEvent` — the only kind in this file whose event carries no field at all, since
 its one decoded field is the one dropped. Ships dormant; the render slice #317 is the first consumer, feeding a new `stalled` timeline-store scalar.
 
+[#492](../codebase/492.md) added a fourteenth kind, `api_retry` → `api-retry` — the PTY-derived status peer
+of `stall` the daemon fans out while claude retries against an API error (pyrycode #1074). Unlike `stall`
+this is **not** onset-only: `ApiRetryPayload{conversation_id, active, current, total}` carries an explicit
+falling edge (`active: false`) as well as the rising one, and the rising edge **re-fires as the count
+climbs** with no wire dedup, so the decoder (and everything downstream) must not dedup or coalesce either.
+`parseApiRetryPayload` scales `parseStallPayload` from one field to four, but invents no new check: all
+four map onto existing helpers (`requireString` / `requireBoolean` / two `requireNumber` calls), so
+`current: 0` / `total: 0` ("count unknown") and `active: false` (the falling edge) both decode as values,
+never coerced or treated as absent. The consumer arm drops only `conversation_id`, carrying `active` /
+`current` / `total` onward — the first payload since `turn_state` to survive the emit as more than a bare
+`conversation_id`-dropped scalar or a nullary literal. Ships dormant; the render slice #493 is the first
+consumer.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -99,6 +112,7 @@ export type InboundDaemonMessage =
   | { kind: 'conversations'; conversations: ConversationSummary[] }  // #139, additive
   | { kind: 'turn-state'; turnState: TurnStatePayload }         // #214, additive
   | { kind: 'stall'; stall: StallPayload }                      // #315, additive
+  | { kind: 'api-retry'; apiRetry: ApiRetryPayload }            // #492, additive — NOT nullary
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -110,7 +124,7 @@ export type InboundDaemonMessage =
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`stall`/
-//                            `tool_use`/`modal_shown`/`modal_dismissed`/`tool_result`/
+//                            `api_retry`/`tool_use`/`modal_shown`/`modal_dismissed`/`tool_result`/
 //                            `conversation_created`/`session_transition`/`session_settings_updated`
 //                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
@@ -221,6 +235,7 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
    - `'conversations'` → `{ kind: 'conversations', conversations }` ([#139](../codebase/139.md)) — narrowed via `parseConversationsPayload`, content-free-logged as `inbound-decoded(code: 'conversations')` before the `default` branch — **deliberately no `count` field**, unlike `message_chunk`'s log (a conversation count is more identifying than a message-batch size).
    - `'turn_state'` → `{ kind: 'turn-state', turnState }` ([#214](../codebase/214.md)) — narrowed via `parseTurnStatePayload` (the `role`-style closed-enum check on `state`), content-free-logged as `inbound-decoded(code: 'turn_state')` before the `default` branch. The third v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`.
    - `'stall'` → `{ kind: 'stall', stall }` ([#315](../codebase/315.md)) — narrowed via `parseStallPayload` (one `requireString` call, no enum), content-free-logged as `inbound-decoded(code: 'stall')` before the `default` branch. The onset-only liveness signal on the same v2 interactive stream as `turn_state`/`tool_use`; shipped dormant, the render slice #317 is now the first consumer (a sixth owned arm on the timeline bridge).
+   - `'api_retry'` → `{ kind: 'api-retry', apiRetry }` ([#492](../codebase/492.md)) — narrowed via `parseApiRetryPayload` (four required fields: one `requireString`, one `requireBoolean`, two `requireNumber` calls, no enum), content-free-logged as `inbound-decoded(code: 'api_retry')` before the `default` branch. The PTY-derived status peer of `stall`, but **not** onset-only (an explicit `active: false` falling edge) and **not** deduped (the rising edge re-fires as the count climbs); shipped dormant, the render slice #493 is the first consumer.
    - `'tool_use'` → `{ kind: 'tool-use', toolUse }` ([#217](../codebase/217.md)) — narrowed via `parseToolUsePayload` (five `requireString` calls, no enum), content-free-logged as `inbound-decoded(code: 'tool_use')` before the `default` branch. The fourth v2 interactive-stream kind to graduate out of `inbound-unmodeled`.
    - `'modal_shown'` → `{ kind: 'modal-shown', modalShown }` / `'modal_dismissed'` → `{ kind: 'modal-dismissed', modalDismissed }` ([#201](../codebase/201.md)) — narrowed via `parseModalShownPayload` (the `class` closed-enum check + the `parseModalOption`-mapped `options` array) / `parseModalDismissedPayload` (the `source` closed-enum check), each content-free-logged as `inbound-decoded(code: 'modal_shown' | 'modal_dismissed')` before the `default` branch. Not part of the same v2 interactive-stream family as `assistant_delta`/`turn_state`/`tool_use` — a modal is the permission/trust prompt `claude` raises, gated behind the same `interactive` capability but carrying no `conversation_id`.
    - `'tool_result'` → `{ kind: 'tool-result', toolResult }` ([#229](../codebase/229.md)) — narrowed via `parseToolResultPayload` (four `requireString` calls plus one `requireBoolean` call on `is_error`), content-free-logged as `inbound-decoded(code: 'tool_result')` before the `default` branch. The fifth and last v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`/`turn_state`/`tool_use`.
@@ -252,6 +267,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `conversations` ([#139](../codebase/139.md)) | `inbound-decoded` | `code: 'conversations'`, `bytes`, `hash` — never `id`/`name`/`cwd`/`is_promoted`/`is_archived`/`last_message_ts`/`last_used_at`, and deliberately **no `count`** |
 | modeled `turn_state` ([#214](../codebase/214.md)) | `inbound-decoded` | `code: 'turn_state'`, `bytes`, `hash` — never `state`/`conversation_id` |
 | modeled `stall` ([#315](../codebase/315.md)) | `inbound-decoded` | `code: 'stall'`, `bytes`, `hash` — never `conversation_id` |
+| modeled `api_retry` ([#492](../codebase/492.md)) | `inbound-decoded` | `code: 'api_retry'`, `bytes`, `hash` — never `conversation_id`/`active`/`current`/`total` |
 | modeled `tool_use` ([#217](../codebase/217.md)) | `inbound-decoded` | `code: 'tool_use'`, `bytes`, `hash` — never `name`/`input_summary`/`tool_use_id`/`turn_id`/`conversation_id` |
 | modeled `modal_shown` / `modal_dismissed` ([#201](../codebase/201.md)) | `inbound-decoded` | `code: 'modal_shown' \| 'modal_dismissed'`, `bytes`, `hash` — never `modal_id`/`class`/`title`/`prompt`/any `options[].label`/`default_option_id`/`outcome`/`source` |
 | modeled `tool_result` ([#229](../codebase/229.md)) | `inbound-decoded` | `code: 'tool_result'`, `bytes`, `hash` — never `result_summary`/`is_error`/`tool_use_id`/`turn_id`/`conversation_id` |
@@ -450,6 +466,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [Conversation timeline store](conversation-timeline-store.md) / [#214 codebase notes](../codebase/214.md) — the sixth additive extension: the `turn_state` kind, `parseTurnStatePayload`, and the closed-enum idiom's second instance (cloned from `role`, not `requireString`).
 - [#315 codebase notes](../codebase/315.md) — the thirteenth additive extension: the `stall` kind, `parseStallPayload` (`turn_state`'s decode shape scaled to one field, no enum), and the onset-only liveness signal whose consumer arm emits a nullary `stallDetected` — the strongest content-minimisation posture in the file, since the one decoded field is the one dropped.
 - [#317 codebase notes](../codebase/317.md) — the render slice: consumes `stallDetected` as the timeline bridge's sixth owned arm, feeding the new `stalled` scalar `StallIndicator` renders.
+- [#492 codebase notes](../codebase/492.md) — the fourteenth additive extension: the `api_retry` kind, `parseApiRetryPayload` (`parseStallPayload`'s one-field template scaled to four, every field mapping onto an existing helper — `requireString`/`requireBoolean`/two `requireNumber` calls, no new check invented), and the not-onset-only, not-deduped peer of `stall` — the consumer arm carries `active`/`current`/`total` onward instead of emitting a nullary literal.
 - [Conversation timeline store](conversation-timeline-store.md) / [#217 codebase notes](../codebase/217.md) — the seventh additive extension: the `tool_use` kind, `parseToolUsePayload`, and the required-string-presence idiom scaled to five fields with no enum.
 - [Modal-prompt model](modal-prompt-model.md) / [#201 codebase notes](../codebase/201.md) — the eighth additive extension: the `modal_shown`/`modal_dismissed` kinds, `parseModalShownPayload`/`parseModalDismissedPayload`/`parseModalOption`, the closed-enum idiom's third and fourth instances (`class`/`source`), and the array-of-structs narrower's second use (`options`).
 - [Conversation timeline store](conversation-timeline-store.md) / [#229 codebase notes](../codebase/229.md) — the ninth and last additive extension of the v2 interactive-stream family: the `tool_result` kind, `parseToolResultPayload`, and `requireBoolean`'s second use (`is_error`, after `yolo` #180) alongside four `requireString` calls.

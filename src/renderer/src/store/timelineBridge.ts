@@ -20,9 +20,9 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the eight timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * timeline state. Owns exactly the nine timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
  * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317 /
- * `apiRetry` #493); each is reconstructed
+ * `apiRetry` #493 / `compacting` #496); each is reconstructed
  * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
@@ -101,6 +101,13 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
         current: event.current,
         total: event.total
       }
+    case 'compacting':
+      // #496: the compaction arm (#495 decodes it, this slice gives it a consumer). The DaemonEvent and
+      // the ThreadEvent are field-for-field identical, so this is a filter + fresh literal (arm
+      // selection), never a pass-through of the DaemonEvent object. Both edges translate verbatim —
+      // deciding what `active: false` means is reduceTimeline's job, not the bridge's, so the translator
+      // stays a pure rename with no normalization of its own.
+      return { type: 'compacting', active: event.active }
     case 'connecting':
     case 'connected':
     case 'disconnected':
@@ -127,7 +134,6 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'screenSnapshotReceived':
     case 'relayLinkChanged':
     case 'notificationActivated':
-    case 'compacting':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -147,9 +153,8 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // nav, not the timeline store; a notification click is not a turn-stream item.
       // (apiRetry #492 is now an owned arm — #493 wired its `apiRetry` status scalar above; like the
       // stall onset it is thread chrome, not a timeline row.)
-      // compacting (#495) ships dormant — its consumer is the render slice #496, which decides then
-      // whether the compaction banner is a timeline row at all; that call is not this decode slice's to
-      // make.
+      // (compacting #495 is now an owned arm — #496 wired its `compacting` scalar above, answering the
+      // question #495 deferred: transient thread chrome, NOT a timeline row.)
       return null
     default:
       return assertNever(event)

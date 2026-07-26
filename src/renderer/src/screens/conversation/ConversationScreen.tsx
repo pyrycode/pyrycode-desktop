@@ -18,7 +18,8 @@ import {
   selectItems,
   selectPhase,
   selectStalled,
-  selectApiRetry
+  selectApiRetry,
+  selectCompacting
 } from '../../store/timelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
@@ -106,6 +107,12 @@ export function ConversationScreen({
   // repeated rising edge returns the same state, so a repeated frame produces zero re-renders under
   // zustand's Object.is comparison.
   const apiRetry = useTimelineStore(selectApiRetry)
+  // #496: the compaction scalar, read beside `apiRetry` (the selectApiRetry line above). A plain boolean
+  // the container passes straight down, so AC1 ("no daemon-supplied string is ever rendered") stays a
+  // type-level guarantee — the compacting frame carries no string field at all. `compacting` flips at most
+  // twice per compaction, and the reducer returns the same state reference on a verbatim repeated frame,
+  // so it adds no re-render churn beyond the items delta already here.
+  const compacting = useTimelineStore(selectCompacting)
   // #278: the conversation the thread is showing, snapshotted when the new discussion was created
   // (PairedShell's conversation_created callback). The container derives it and passes it down; the
   // pure WorkspaceChip self-gates to null. A narrow single-slice read — activeConversation changes
@@ -153,15 +160,21 @@ export function ConversationScreen({
         onChange={() => setPickerOpen(true)}
       />
       <Timeline items={items} now={now} />
-      {/* #493: the thinking gate NARROWS — a live api-retry supersedes the generic thinking indicator
-          (AC5). With no retry in flight the predicate is exactly the pre-#493 `phase === 'thinking'`, so
-          thinking behaviour is unchanged. */}
-      <ThinkingIndicator isThinking={shouldShowThinking({ phase, apiRetry })} />
+      {/* #493/#496: the thinking gate NARROWS — a live api-retry, or a live compaction, supersedes the
+          generic thinking indicator. With neither in flight the predicate is exactly the pre-#493
+          `phase === 'thinking'`, so thinking behaviour is unchanged. */}
+      <ThinkingIndicator isThinking={shouldShowThinking({ phase, apiRetry, compacting })} />
       {/* #493: the api-error retry status — mounted directly after its supersede peer, before the stall
           indicator. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge (turn
           activity leaves it showing — the deliberate inverse of the stall indicator). Renders nothing at
           rest. It may still co-render with the stall indicator: AC5 scopes mutual exclusion to thinking. */}
       <ApiRetryIndicator retry={apiRetry} />
+      {/* #496: the auto-compaction status — mounted beside its fellow thinking-superseder, still above the
+          stall indicator. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge
+          (turn activity leaves it showing — the deliberate inverse of the stall indicator). Renders
+          nothing at rest, and adds no timeline row while live: it is transient chrome (AC5). It may still
+          co-render with the retry and stall statuses: AC4 scopes mutual exclusion to thinking. */}
+      <CompactingIndicator isCompacting={compacting} />
       {/* #317: the stalled-turn problem-state indicator — a sibling of the thinking indicator in the
           message-list region. Shows on a daemon stall onset and self-clears (in the reducer) on the next
           turn activity. Renders nothing at rest. */}
@@ -537,12 +550,13 @@ export function StallIndicator({ isStalled }: { isStalled: boolean }): JSX.Eleme
 export const API_RETRY_COPY = 'API error — retrying…'
 
 // #493: the coarse thread-chrome scalars the indicator-precedence rule reads. A record, not a positional
-// scalar (the one place this departs from `isTurnRunning`): #496 is specced to extend this rule with the
-// compaction status, and a record grows by one field where a positional signature would break every call
-// site. #496 adds `compacting` HERE and one clause below — no parallel rule, no second gate.
+// scalar (the one place this departs from `isTurnRunning`): a record grows by one field where a positional
+// signature would break every call site. #496 took exactly that route — one field here, one clause below,
+// no parallel rule and no second gate — so a third superseding status extends it the same way.
 export interface ThreadStatus {
   phase: TurnPhase
   apiRetry: ApiRetryStatus | null
+  compacting: boolean
 }
 
 // #493: whether the generic thinking indicator shows — thinking, and nothing supersedes it (AC5). This
@@ -554,8 +568,13 @@ export interface ThreadStatus {
 // contract untouched and both views pure and independently unit-testable — the isTurnRunning precedent of
 // extracting the named predicate. Presence supersedes, not the counter: an unknown-count retry
 // (`{ current: 0, total: 0 }`) hides thinking exactly like a known one.
+//
+// #496: the second superseder — a live compaction hides thinking too. Claude is not thinking about the
+// user's request while compacting, it is rewriting its own context, so "thinking" would be a false
+// reading of a silent screen (the premise of #496). The exclusion is scoped to the thinking indicator
+// ONLY: compaction, retry, and stall may all co-render, since they are independent daemon facts.
 export function shouldShowThinking(status: ThreadStatus): boolean {
-  return status.phase === 'thinking' && status.apiRetry === null
+  return status.phase === 'thinking' && status.apiRetry === null && !status.compacting
 }
 
 // #493: the api-retry indicator — the StallIndicator twin over the `apiRetry` status record. The daemon
@@ -589,6 +608,41 @@ export function ApiRetryIndicator({ retry }: { retry: ApiRetryStatus | null }): 
           <span className="api-retry__counter">{` attempt ${retry.current}/${retry.total}`}</span>
         )}
       </div>
+    </div>
+  )
+}
+
+// #496: the compaction copy — a module-level, client-owned constant (the API_RETRY_COPY / STALL_COPY /
+// 'Thinking…' idiom). Names the work AND its object, so a silent screen reads as claude rewriting its own
+// context rather than a wedged session (the premise of #496) — and reads as progress, never as an error.
+// Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson) and using the
+// U+2026 ellipsis character (matching 'Thinking…' / STALL_COPY / API_RETRY_COPY). Never a daemon string —
+// the arm carries no string field, so the plain-text-never-HTML guarantee holds by construction. Exported
+// so the tests assert against the constant rather than a duplicated literal.
+export const COMPACTING_COPY = 'Compacting the conversation…'
+
+// #496: the compaction indicator — the StallIndicator twin over the `compacting` scalar. The daemon sends
+// an explicit falling edge when compaction ends, so (unlike the stall) the reducer never self-clears it and
+// turn activity leaves it showing; this view just renders the current boolean. Pure props-in/markup-out and
+// exported so tests server-render an injected boolean with no store.
+//
+// Takes `isCompacting: boolean`, NOT the store type — the boolean makes AC1 ("no daemon-supplied string is
+// ever rendered") a type-level guarantee: the view structurally cannot receive, hence cannot render, a
+// daemon string. ApiRetryIndicator needed a record only because it renders daemon-derived digits; the wire
+// carries no compaction progress, so there is nothing numeric here and none may be invented (banner-only).
+// A plain boolean guard, no switch / assertNever (there is no union to discriminate).
+//
+// false → null (zero layout footprint — the StallIndicator / ThinkingIndicator posture, and AC5: while
+// live it adds no timeline row, and once cleared it leaves nothing behind). true → the client-owned copy in
+// a wrapper + bubble carrying compaction-distinct classes (see conversation.css): the daemon bubble's
+// fill/radius with .bubble--thinking's muted text — compaction IS a working state — plus a primary-role
+// accent bar for distinctness. Deliberately NOT the error role both problem states use: compaction is
+// claude working normally, and painting routine housekeeping as a failure would be a design bug.
+export function CompactingIndicator({ isCompacting }: { isCompacting: boolean }): JSX.Element | null {
+  if (!isCompacting) return null
+  return (
+    <div className="conversation__compacting">
+      <div className="bubble bubble--daemon bubble--compacting">{COMPACTING_COPY}</div>
     </div>
   )
 }

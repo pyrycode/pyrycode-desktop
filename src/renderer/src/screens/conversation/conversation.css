@@ -403,6 +403,32 @@
   font-weight: var(--text-title-medium-weight);
 }
 
+/* #496 — the compaction-indicator wrapper. The .conversation__api-retry shape verbatim (flex: 0 0 auto so
+   it never claims a competing flex region beside the timeline; the thread's --space-4 inset keeps the
+   bubble left-aligned and thread-consistent), since the compaction status sits in the same message-list
+   region. No Figma node (the mobile file draws only the connected thread — the documented #148 gap); a
+   dedicated transient-status visual is a Figma-side follow-up. */
+.conversation__compacting {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-start;
+  padding: var(--space-2) var(--space-4);
+}
+
+/* The compaction affordance reuses the daemon bubble's fill / radius / measure (via .bubble--daemon) and
+   deliberately does NOT reach for the error role that .bubble--stall and .bubble--api-retry both use:
+   compaction is claude working normally, so painting routine housekeeping as a failure would be a design
+   bug. It takes .bubble--thinking's muted text (a working state, not a problem state) plus .bubble--stall's
+   leading accent bar with the role swapped to --color-primary, which is where distinctness from the
+   bare-muted thinking treatment comes from (AC1). That yields a fully separable four-way matrix — thinking:
+   muted/no bar, stall: error/error bar, api-retry: error/no bar, compaction: muted/primary bar. Placed
+   after .bubble--daemon in source order (equal specificity, so source order decides). Token names only —
+   no color literal, no new theme token. */
+.bubble--compacting {
+  color: var(--color-on-surface-variant);
+  border-left: 4px solid var(--color-primary);
+}
+
 /* #294 — the held queued backlog region: the messages queued while the daemon is busy, rendered as
    the not-yet-run tail below the delivered thread. flex: 0 0 auto (like .conversation__thinking, NOT
    the thread's 1 1 auto) so it never competes with the timeline's flex region; column + --space-3 gap

@@ -3,6 +3,14 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 
+// #483/T9 — exercise the stream-json interactive runner, matching production (the Mac daemon runs
+// interactive_runner: stream-json). KNOWN RED on stream, left as the live oracle for pyrycode#1189: the
+// stream runner emits no queue_state, so a mid-turn send never renders as a queued/droppable row and the
+// "queued row count == 1" assertion (line ~212) times out. The message is NOT lost — it is held and runs
+// after turn 1 — only the queued-backlog UI is missing. Do NOT revert this to PTY or soften the assertion:
+// it must stay red until the daemon emits queue_state on the stream path, at which point desktop#483 hits 8/8.
+test.use({ interactiveRunner: 'stream-json' })
+
 // Tier-3 real-claude e2e (#446, split from #431, twin of #445) — the LIVENESS NET for queue-while-busy-
 // then-drop over the real stack. The queued backlog only means something against a GENUINELY running turn:
 // a second send arrives while the real daemon is mid-turn, the daemon HOLDS it and pushes `queue_state`,

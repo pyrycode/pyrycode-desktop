@@ -66,13 +66,27 @@ since `api_retry` has an explicit wire falling edge (`active: false`) and `stall
 edge sets the scalar to `null` unconditionally, discarding any counter on that event by construction.
 `selectApiRetry` joins `selectItems`/`selectPhase`/`selectStalled` as the read surface.
 
+[#496](../codebase/496.md) added an eighth owned arm, `compacting` — the daemon's compaction-liveness
+signal ([#495](../codebase/495.md)), also moved out of the inverse-filter `null` list it shipped dormant
+in. Like `apiRetry`, this arm carries data (`active`), so `DaemonEvent.compacting` and
+`ThreadEvent.compacting` are field-for-field identical — a filter-and-copy, not `stallDetected`'s
+arm-selection-only shape. `reduceTimeline`'s new arm sets a fourth scalar, **`compacting: boolean`**,
+beside `phase`/`stalled`/`apiRetry` — deliberately **not** `| null`: unlike `apiRetry` there is no
+counter to hide on clear, so a plain boolean is the honest representation and `boolean | null` would
+invent a state the wire cannot produce. The clear semantics match `apiRetry`'s inversion of `stalled`:
+the four turn-activity arms carry it through unchanged, and it clears only on its own explicit falling
+edge (`active: false`). Both edges collapse into one same-reference-or-fresh-state ternary — simpler
+than `apiRetry`'s two-branch body, since there's no counter to compare. `selectCompacting` joins
+`selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry` as the read surface.
+
 ## What it does
 
-Turns the seven owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
-via `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry` as the only
-read surface. A stream arrival (an `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its
-`tool_result` outcome, a `stall` onset, an `api_retry` edge) re-renders only components selecting a
-timeline slice — orthogonal to `sessionStore` and `runConfigStore`.
+Turns the eight owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
+via `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
+`selectCompacting` as the only read surface. A stream arrival (an `assistant_delta` chunk, a `turn_end`
+marker, a `tool_use` call, its `tool_result` outcome, a `stall` onset, an `api_retry` edge, a
+`compacting` edge) re-renders only components selecting a timeline slice — orthogonal to `sessionStore`
+and `runConfigStore`.
 
 ## How it works
 
@@ -84,7 +98,7 @@ export type TimelineStore = TimelineState & { dispatch: (event: ThreadEvent) => 
 createTimelineStore(init?)   // vanilla createStore — one isolated instance per test (DI seam)
 timelineStore                 // app-wide singleton
 useTimelineStore(selector)    // narrow-slice React binding: useStore(timelineStore, selector)
-export { selectItems, selectPhase, selectStalled, selectApiRetry } from './threadTimeline'   // re-exported, never redefined
+export { selectItems, selectPhase, selectStalled, selectApiRetry, selectCompacting } from './threadTimeline'   // re-exported, never redefined
 ```
 
 Mirrors `createSessionStore`'s DI-factory → singleton → hook → selectors structure (ADR 0004), but
@@ -98,10 +112,11 @@ speculative observer here would defend an unobserved need.
 ```ts
 translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
 // Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229) / stallDetected
-// (#317) / apiRetry (#493), each rebuilt as a fresh named-field literal (never `return event`, never a
-// spread — for stallDetected, both sides are nullary, so the "literal" is arm-selection only; apiRetry
-// carries data, so it is a filter-and-copy like toolUse/toolResult). Every other arm -> null via
-// explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
+// (#317) / apiRetry (#493) / compacting (#496), each rebuilt as a fresh named-field literal (never
+// `return event`, never a spread — for stallDetected, both sides are nullary, so the "literal" is
+// arm-selection only; apiRetry and compacting carry data, so each is a filter-and-copy like
+// toolUse/toolResult). Every other arm -> null via explicit fall-through, then default:
+// assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te) })
@@ -145,21 +160,27 @@ and `ThreadEvent.apiRetry` are field-for-field identical (`active`/`current`/`to
 status-liveness arm (after `stallDetected`) whose `reduceTimeline` handling translates an **edge into a
 presence**: the event always carries `active`, but the state holds `ApiRetryStatus | null`, collapsing
 the wire's rising/falling edges into one representation with no field left over to leak a stale counter.
+`compacting` ([#496](../codebase/496.md)) is `apiRetry`'s structural twin minus the counter — also
+filter-and-copy (`active` only), but the state holds a plain `boolean` rather than `Status | null`, since
+there's no counter to discard on the falling edge. The reducer arm collapses to a single
+`state.compacting === event.active ? state : {…}` ternary — the edge *is* the state, with no
+rising/falling branch split needed.
 
 ### Data flow
 
 ```
-daemon frame ─(#199/#214/#217/#229/#315/#492 transport, snake→camel, conversation_id dropped)→
-   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult|stallDetected|apiRetry}
+daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel, conversation_id dropped)→
+   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult|stallDetected|apiRetry|compacting}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
    → timelineStore.dispatch → reduceTimeline → TimelineState
-   → selectItems / selectPhase / selectStalled / selectApiRetry   (selectItems read by #203's Timeline
-                                   view, now also carrying pending toolCall items from #217 with results
-                                   resolved by #229; selectPhase read by #215's ThinkingIndicator view,
-                                   narrowed by #493's shouldShowThinking; selectStalled read by #317's
-                                   StallIndicator view; selectApiRetry read by #493's ApiRetryIndicator
-                                   view)
+   → selectItems / selectPhase / selectStalled / selectApiRetry / selectCompacting
+                                   (selectItems read by #203's Timeline view, now also carrying pending
+                                   toolCall items from #217 with results resolved by #229; selectPhase
+                                   read by #215's ThinkingIndicator view, narrowed by #493's and #496's
+                                   shouldShowThinking clauses; selectStalled read by #317's StallIndicator
+                                   view; selectApiRetry read by #493's ApiRetryIndicator view;
+                                   selectCompacting read by #496's CompactingIndicator view)
 ```
 
 ## Configuration and usage
@@ -182,8 +203,13 @@ daemon frame ─(#199/#214/#217/#229/#315/#492 transport, snake→camel, convers
   `useTimelineStore(selectApiRetry)` directly, and the same screen's `shouldShowThinking` predicate,
   which reads it alongside `phase` to narrow `ThinkingIndicator`'s gate. See
   [Conversation shell § Api-retry indicator](conversation-shell.md#api-retry-indicator-493).
-- Import surface: `import { useTimelineStore, selectItems, selectPhase, selectStalled, selectApiRetry }
-  from '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
+  `selectCompacting` has a real source as of [#495](../codebase/495.md) (`compacting`) and its first
+  reader as of [#496](../codebase/496.md) — `ConversationScreen`'s `CompactingIndicator`, reading
+  `useTimelineStore(selectCompacting)` directly, and the same screen's `shouldShowThinking` predicate,
+  which reads it alongside `phase`/`apiRetry` to narrow `ThinkingIndicator`'s gate a second time. See
+  [Conversation shell § Compacting indicator](conversation-shell.md#compacting-indicator-496).
+- Import surface: `import { useTimelineStore, selectItems, selectPhase, selectStalled, selectApiRetry,
+  selectCompacting } from '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
   '@renderer/store/timelineBridge'`.
 - No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
   transport (single active conversation); the bridge translates and dispatches unconditionally.
@@ -216,6 +242,11 @@ daemon frame ─(#199/#214/#217/#229/#315/#492 transport, snake→camel, convers
   clearing it — a retry stays shown across intervening `assistantDelta`/`toolUse`/`toolResult`/
   `turnState` events, and clears only on its own falling edge. Copying `stalled`'s guard-widening
   pattern here would silently swallow a live retry on the next stream event.
+- **`compacting` follows the same inversion as `apiRetry`, a plain `boolean` rather than a `| null`
+  record ([#496](../codebase/496.md)).** The wire's `compacting` frame also carries an explicit falling
+  edge, so it too survives turn activity and clears only on its own signal — the two `&& !state.stalled`
+  guards did not gain a compaction term either. Unlike `apiRetry` there is no counter to discard on
+  clear, so the state is a bare liveness flag, not a status record.
 
 ## Related
 
@@ -285,3 +316,10 @@ daemon frame ─(#199/#214/#217/#229/#315/#492 transport, snake→camel, convers
   and `selectApiRetry` — with the clear semantics deliberately inverted from `stalled` — and gives it
   its first reader, `ConversationScreen`'s `ApiRetryIndicator` plus the `shouldShowThinking` supersede
   predicate.
+- [#495 codebase notes](../codebase/495.md) — the `compacting` transport slice: wire type, decode, and
+  the non-nullary `compacting` `DaemonEvent` arm, shipped dormant (all three bridges nulled it).
+- [#496 codebase notes](../codebase/496.md) — the render slice: moves `compacting` from this bridge's
+  inverse-filter `null` list to an eighth owned arm, adds the `compacting: boolean` scalar and
+  `selectCompacting` — `apiRetry`'s clear-semantics inversion again, minus the counter — and gives it
+  its first reader, `ConversationScreen`'s `CompactingIndicator` plus a second `shouldShowThinking`
+  clause.

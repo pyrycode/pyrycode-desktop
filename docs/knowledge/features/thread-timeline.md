@@ -70,8 +70,9 @@ type ThreadEvent =
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
+  | { type: 'compacting'; active: boolean }
 
-interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null }
+interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean }
 interface ApiRetryStatus { current: number; total: number }
 ```
 
@@ -86,7 +87,12 @@ scalar**, but a record rather than a flag (`ApiRetryStatus | null`, not `boolean
 live `{ current, total }` attempt counter, `null` means no retry in flight. Unlike `stalled`, it does
 **not** self-clear on turn activity: the wire's `api_retry` frame has an explicit falling edge
 (`active: false`), so the reducer clears it only on that edge, carrying it through unchanged on every
-other arm — the deliberate inverse of `stalled`'s clearing rule.
+other arm — the deliberate inverse of `stalled`'s clearing rule. **`compacting` ([#496](../codebase/496.md))
+is a fourth such scalar**, back to a plain flag like `stalled` — but with `apiRetry`'s inverted clearing
+rule, not `stalled`'s: the wire's `compacting` frame also carries an explicit falling edge, so it clears
+only on that edge and survives turn activity. It stays `boolean` rather than `apiRetry`'s `| null`
+record because the wire carries no counter to discard on clear — there is nothing for a `| null` shape
+to make "true by construction."
 
 ### The reducer
 
@@ -105,6 +111,7 @@ other arm — the deliberate inverse of `stalled`'s clearing rule.
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
+| `compacting` | `state.compacting === event.active` → same reference (no-churn on a verbatim repeat of either edge); otherwise fresh state with `compacting: event.active`. `items`/`phase`/`stalled`/`apiRetry` untouched — [#496](../codebase/496.md) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
 `items`. **`stalled` ([#317](../codebase/317.md)) is a third, independent axis**: the four
@@ -120,8 +127,14 @@ turn-activity arms that clear `stalled` — since `api_retry` clears only on its
 edge, never on turn activity. The two `&& !state.stalled` guards above deliberately do **not** gain a
 matching `&& apiRetry === null`-style clause; doing so would silently clear a live retry on ordinary
 turn activity.
-`initialTimelineState = { items: [], phase: 'idle', stalled: false, apiRetry: null }`; pure selectors
-`selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry` are the only read surface.
+**`compacting` ([#496](../codebase/496.md)) is a fifth, independent axis, the same inverted-clearing
+shape as `apiRetry`**: every other arm carries it through unchanged, and the two `&& !state.stalled`
+guards do not gain a compaction term either — `compacting` clears only on its own explicit falling
+edge. Unlike `apiRetry`, there's no counter to carry, so the arm collapses to a single
+same-reference-or-fresh-state ternary rather than a two-branch rising/falling split.
+`initialTimelineState = { items: [], phase: 'idle', stalled: false, apiRetry: null, compacting: false }`;
+pure selectors `selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry`, `selectCompacting` are
+the only read surface.
 
 ### Internal helpers (unexported)
 
@@ -216,6 +229,13 @@ Nothing imports this module yet.
   `shouldShowThinking(ThreadStatus)` predicate that narrows `ThinkingIndicator`'s gate whenever a retry
   is live — closing the mutual-exclusion question #317 deferred. Like #317, this touches every existing
   arm's carry-through, but with the **clearing rule inverted** — see Edge cases below.
+- **[#496](../codebase/496.md) (shipped)** added the `compacting: boolean` scalar and the `compacting`
+  arm — the render consumer of [#495](../codebase/495.md)'s dormant, non-nullary `DaemonEvent`.
+  `timelineBridge.ts` moved `compacting` from its inverse-filter `null` group to a ninth owned arm
+  (field-for-field, like `apiRetry`); `ConversationScreen.tsx` gained `CompactingIndicator` (also
+  `StallIndicator`'s twin) and a second `shouldShowThinking` clause, extending the seam #493 built by
+  name for this ticket — one field, one clause, no new gate. `apiRetry`'s clearing-rule inversion, minus
+  the counter — see Edge cases below.
 
 ## Edge cases and limitations
 
@@ -253,6 +273,10 @@ Nothing imports this module yet.
   "retrying, count unknown" state — a **present** `ApiRetryStatus` with both fields zero, not `null`.
   The falling edge discards any counter it carries; the state's `| null` shape makes that true by
   construction rather than a convention to maintain.
+- **`compacting` clears only on its own explicit falling edge — turn activity never clears it**
+  ([#496](../codebase/496.md)), `apiRetry`'s clearing inversion again. Unlike `apiRetry`, the wire
+  carries no progress data at all — banner-only, no counter, no percentage — so the state is a plain
+  `boolean` rather than a `| null` record; there is nothing for a falling edge to discard.
 - **Strangler Fig, cut over in [#179](../codebase/179.md).** `sessionStore`, `messageViewModel.ts`,
   and the coarse `message`/`message_chunk` path were completely untouched by this module through
   #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
@@ -305,6 +329,12 @@ Nothing imports this module yet.
   arm (clearing semantics inverted from `stalled`), `ApiRetryIndicator`, and the `shouldShowThinking`
   supersede predicate (see [Conversation shell § Api-retry
   indicator](conversation-shell.md#api-retry-indicator-493)).
+- [#495 codebase notes](../codebase/495.md) — the transport slice: decodes `compacting` into the
+  non-nullary `compacting` `DaemonEvent` (`active`), shipped dormant.
+- [#496 codebase notes](../codebase/496.md) — the render slice: the `compacting` scalar, the
+  `compacting` arm (`apiRetry`'s clearing inversion, minus the counter), `CompactingIndicator`, and the
+  second `shouldShowThinking` clause (see [Conversation shell § Compacting
+  indicator](conversation-shell.md#compacting-indicator-496)).
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

@@ -145,6 +145,11 @@ function encodeApiRetry(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 23, type: 'api_retry', ts: FIXED_TS, payload })
 }
 
+/** A `compacting` envelope's plaintext bytes, wrapping an arbitrary payload (#495). */
+function encodeCompacting(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 24, type: 'compacting', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -189,6 +194,12 @@ const API_RETRY = {
   active: true,
   current: 3,
   total: 10
+}
+
+/** A well-formed compacting payload on the rising edge — the daemon's canonical fixture (#495). */
+const COMPACTING = {
+  conversation_id: 'c1',
+  active: true
 }
 
 /** A fully-populated, well-formed tool_use payload (#217). */
@@ -1567,6 +1578,67 @@ describe('parseInboundMessage — api_retry fail-closed (#492)', () => {
   })
 })
 
+describe('parseInboundMessage — compacting recognition (#495, additive)', () => {
+  it('narrows a rising-edge compacting into { kind: compacting } carrying both fields', () => {
+    expect(parseInboundMessage(encodeCompacting(COMPACTING))).toEqual({
+      kind: 'compacting',
+      compacting: COMPACTING
+    })
+  })
+
+  it('decodes the falling edge — active false is a VALUE, not an absence', () => {
+    const falling = { ...COMPACTING, active: false }
+    expect(parseInboundMessage(encodeCompacting(falling))).toEqual({
+      kind: 'compacting',
+      compacting: falling
+    })
+  })
+
+  it('drops unknown server keys, keeping exactly the two known fields (forward-compat)', () => {
+    const withExtras = { ...COMPACTING, turn_id: 'turn-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeCompacting(withExtras))).toEqual({
+      kind: 'compacting',
+      compacting: COMPACTING
+    })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — compacting fail-closed (#495)', () => {
+  it('throws when conversation_id is absent, a non-string, or null', () => {
+    const bad: unknown[] = [
+      { active: true }, // absent
+      { ...COMPACTING, conversation_id: 42 },
+      { ...COMPACTING, conversation_id: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeCompacting(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when active is absent or a non-boolean (TYPE-checked, never truthiness)', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'c1' }, // absent
+      { ...COMPACTING, active: 'true' },
+      { ...COMPACTING, active: 1 },
+      { ...COMPACTING, active: 0 },
+      { ...COMPACTING, active: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeCompacting(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a compacting payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeCompacting('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeCompacting(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — tool_use recognition (#217, additive)', () => {
   it('narrows a full tool_use into { kind: tool-use } carrying all five fields verbatim', () => {
     expect(parseInboundMessage(encodeToolUse(TOOL_USE))).toEqual({
@@ -2368,6 +2440,33 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
         encodeApiRetry({ conversation_id: 'c1', active: true, current: '3', total: 10 }),
         log
       )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a compacting content-free, never the conversation_id or the edge (#495)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const plaintext = encodeCompacting({ conversation_id: SECRET_CONV, active: true })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('compacting')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field (conversation_id / active) reaches the log,
+    // and no new DiagnosticEvent field is introduced (reuses the existing set).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+  })
+
+  it('does NOT log on a malformed compacting throw path (#495)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeCompacting({ conversation_id: 'c1', active: 'true' }), log)
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

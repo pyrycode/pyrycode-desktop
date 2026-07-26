@@ -272,6 +272,11 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'apiRetry', active: false, current: 0, total: 0 })).toBeNull()
   })
 
+  it('compacting → null (consumed by the render slice #496, not the session store)', () => {
+    expect(translateDaemonEvent({ type: 'compacting', active: true })).toBeNull()
+    expect(translateDaemonEvent({ type: 'compacting', active: false })).toBeNull()
+  })
+
   it('workspaceFolderRejected → null (consumed by the #397 round-trip store, not the session store)', () => {
     expect(translateDaemonEvent({ type: 'workspaceFolderRejected' })).toBeNull()
   })

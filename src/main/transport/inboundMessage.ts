@@ -34,6 +34,7 @@ import type {
   TurnStatePayload,
   StallPayload,
   ApiRetryPayload,
+  CompactingPayload,
   SessionTransitionPayload,
   SessionSettingsUpdatedPayload,
   ToolUsePayload,
@@ -112,6 +113,14 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * and NOT deduped: N frames narrow to N values. Ships dormant — the render slice (#493) is the first
  * consumer.
  *
+ * The `compacting` kind (#495) carries the decoded CompactingPayload — the PTY-derived status peer of
+ * `stall` / `api-retry` the daemon fans out to interactive clients while claude auto-compacts the
+ * conversation. BANNER-ONLY: the wire carries no progress at all, so the consumer carries just the edge
+ * (`active`) onward, dropping `conversation_id`. The fail-closed defence here is two required fields —
+ * one string and one BOOLEAN (whose `false` is the explicit falling edge, a value not an absence, so
+ * nothing may consult truthiness). NOT onset-only and NOT deduped: N frames narrow to N values. Ships
+ * dormant — the render slice (#496) is the first consumer.
+ *
  * The `session-transition` kind (#254) carries the decoded SessionTransitionPayload — the session-boundary
  * marker whose `new_session_id` is the addressing key the #259 holder will retain. The consumer carries
  * ONLY `new_session_id` onward (dropping the other four decoded fields — the #180 content-drop model); the
@@ -182,6 +191,7 @@ export type InboundDaemonMessage =
   | { kind: 'turn-state'; turnState: TurnStatePayload }
   | { kind: 'stall'; stall: StallPayload }
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }
+  | { kind: 'compacting'; compacting: CompactingPayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
   | {
       kind: 'session-settings-updated'
@@ -440,6 +450,29 @@ function parseApiRetryPayload(payload: unknown): ApiRetryPayload {
   const current = requireNumber(payload, 'current')
   const total = requireNumber(payload, 'total')
   return { conversation_id, active, current, total }
+}
+
+/**
+ * Narrow an opaque payload into a CompactingPayload (#495). Fail-closed like parseApiRetryPayload,
+ * scaled down to the frame's TWO fields — and both map onto an existing helper, so nothing new is
+ * invented here. `requireBoolean` gives the explicit falling edge for free (its check is on the TYPE, so
+ * a literal `false` passes while `0` / `'true'` / `null` fail). The frame is BANNER-ONLY — the wire
+ * carries no counter or percentage — so unlike parseApiRetryPayload there is no numeric field at all,
+ * and the range-check question does not arise.
+ *
+ * Any missing / mistyped field throws WireDecodeError (never a partial value); the frame-level
+ * MAX_PLAINTEXT_BYTES guard in parseInboundMessage covers the oversized case. Returns a fresh two-field
+ * literal, so unknown server-added keys (e.g. a spurious `turn_id`) are tolerated (forward-compat) but
+ * NOT copied through — which also makes it prototype-pollution-safe. Its messages name the failure
+ * CATEGORY only, never interpolating a value (a `conversation_id` is conversation-correlating).
+ */
+function parseCompactingPayload(payload: unknown): CompactingPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed compacting payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const active = requireBoolean(payload, 'active')
+  return { conversation_id, active }
 }
 
 /**
@@ -939,6 +972,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'api-retry', apiRetry }
+    }
+    case 'compacting': {
+      // Narrow BEFORE logging so a malformed frame (an absent / non-boolean `active`, a non-string
+      // conversation_id) throws first and leaves no record. No decoded field (conversation_id / active)
+      // is logged — only the frame's byte length + one-way hash, reusing the existing content-free field
+      // set (no new DiagnosticEvent field, so #131's renderer pin is untouched).
+      const compacting = parseCompactingPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'compacting',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'compacting', compacting }
     }
     case 'session_transition': {
       // Narrow BEFORE logging so a malformed frame (a `reason` outside the closed enum, an

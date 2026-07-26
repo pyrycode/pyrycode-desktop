@@ -10,6 +10,7 @@ import type {
   WireTurnState,
   StallPayload,
   ApiRetryPayload,
+  CompactingPayload,
   WireSessionTransitionReason,
   SessionTransitionPayload,
   ToolUsePayload,
@@ -158,6 +159,30 @@ describe('api-retry wire vocabulary (#492)', () => {
     }
     expect(falling.active).toBe(false)
     expect([unknownCount.current, unknownCount.total]).toEqual([0, 0])
+  })
+})
+
+describe('compacting wire vocabulary (#495)', () => {
+  it('admits the compacting inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const compacting: EnvelopeType = 'compacting'
+    expect(compacting).toBe('compacting')
+  })
+
+  it('shapes CompactingPayload as its two fields — banner-only, no counter and no turn_id', () => {
+    const payload: CompactingPayload = {
+      conversation_id: 'c1',
+      active: true
+    }
+    expect(payload).toEqual({ conversation_id: 'c1', active: true })
+  })
+
+  it('admits the explicit falling edge — active false is a wire VALUE, not an absence', () => {
+    const falling: CompactingPayload = {
+      conversation_id: 'c1',
+      active: false
+    }
+    expect(falling.active).toBe(false)
   })
 })
 

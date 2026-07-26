@@ -132,6 +132,16 @@ export type DaemonEvent =
   // the decoder type-checks but does not range-check. Ships dormant: all three exhaustive bridges no-op
   // it until #493 — the stallDetected-was-a-no-op-until-#317 precedent.
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
+  // The compaction-status arm (#495) — claude is auto-compacting the conversation. Like apiRetry it
+  // carries the edge (`active` — true is compaction starting, false the explicit falling edge), but
+  // BANNER-ONLY: the wire streams no compaction progress, so there is no counter to carry and #496 must
+  // not invent one. `conversation_id` is dropped at the emit (single active conversation, matching
+  // turnState / stallDetected / apiRetry), so what crosses IPC is one bool and nothing else — no token,
+  // key, raw frame, or conversation content can ride an arm with no string field on it. NOT onset-only
+  // and NOT deduped: the transport holds no state, so a consumer sees exactly one event per daemon
+  // frame (including a verbatim repeat), and #496 is idempotent on the repeat. Ships dormant: all three
+  // exhaustive bridges no-op it until #496 — the apiRetry-was-a-no-op-until-#493 precedent.
+  | { type: 'compacting'; active: boolean }
   // The session-boundary arm (#254, widened #285). Carries the four render fields the delimiter slice
   // (#286) needs: `newSessionId` (the addressing key the #259 holder retains), `reason` (the closed
   // WireSessionTransitionReason enum, carried so #286's title switch stays exhaustive — NOT a bare

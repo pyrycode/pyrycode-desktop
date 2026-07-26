@@ -252,6 +252,11 @@ function apiRetryPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'api_retry', ts: FIXED_TS, payload })
 }
 
+/** A `compacting` plaintext, wrapping an arbitrary payload (#495). */
+function compactingPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'compacting', ts: FIXED_TS, payload })
+}
+
 /** A `tool_use` plaintext, wrapping an arbitrary payload (#217). */
 function toolUsePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'tool_use', ts: FIXED_TS, payload })
@@ -1515,6 +1520,94 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
           current: '3',
           total: 10
         })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — compacting stream (#495)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes a rising-edge compacting into exactly one compacting event (conversation_id dropped)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: compactingPlaintext({ conversation_id: 'conv-1', active: true })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([{ type: 'compacting', active: true }])
+    // conversation_id is dropped at the choke point (single active conversation, the turnState rule).
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('emits the falling edge with active false — the explicit clear, not a derived one', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: compactingPlaintext({ conversation_id: 'conv-1', active: false })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([{ type: 'compacting', active: false }])
+  })
+
+  it('does NOT dedup: two consecutive identical rising edges each emit their own event', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (let i = 0; i < 2; i++) {
+      drivers[0].emit({
+        type: 'message',
+        plaintext: compactingPlaintext({ conversation_id: 'conv-1', active: true })
+      })
+    }
+
+    // Two frames, two events, in wire order — no coalescing, no suppression of the repeat. This pins
+    // the "no dedup" contract against a future optimiser adding edge-tracking state to this leg.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'compacting', active: true },
+      { type: 'compacting', active: true }
+    ])
+  })
+
+  it('emits exactly the two modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: compactingPlaintext({
+        conversation_id: 'conv-1',
+        active: true,
+        smuggled: 'must-not-cross'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual(['active', 'type'])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('drops a malformed compacting without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: compactingPlaintext({ conversation_id: 'conv-1', active: 'true' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

@@ -13,13 +13,19 @@ import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import type { RelayLinkStatus } from '@shared/ipc/events'
 import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
 import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkStore'
-import { useTimelineStore, selectItems, selectPhase, selectStalled } from '../../store/timelineStore'
+import {
+  useTimelineStore,
+  selectItems,
+  selectPhase,
+  selectStalled,
+  selectApiRetry
+} from '../../store/timelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
   useActiveConversationStore,
   selectActiveConversation
 } from '../../store/activeConversationStore'
-import type { ThreadItem, TurnPhase } from '../../store/threadTimeline'
+import type { ThreadItem, TurnPhase, ApiRetryStatus } from '../../store/threadTimeline'
 import {
   submitMessage,
   composerAvailability,
@@ -93,6 +99,13 @@ export function ConversationScreen({
   // type-level guarantee, and the stall frame carries no daemon content anyway. `stalled` flips at most
   // twice per stall, so it adds no meaningful re-render churn beyond the items delta already here.
   const stalled = useTimelineStore(selectStalled)
+  // #493: the api-retry status, read beside `stalled` (the selectStalled line above). A narrow single-slice
+  // read of a record the container passes straight down; the view's prop carries two integers and no string
+  // field, so AC1 stays a type-level guarantee. Re-render churn is bounded by the reducer's
+  // same-reference discipline: every carry-through arm passes the SAME status object and a verbatim
+  // repeated rising edge returns the same state, so a repeated frame produces zero re-renders under
+  // zustand's Object.is comparison.
+  const apiRetry = useTimelineStore(selectApiRetry)
   // #278: the conversation the thread is showing, snapshotted when the new discussion was created
   // (PairedShell's conversation_created callback). The container derives it and passes it down; the
   // pure WorkspaceChip self-gates to null. A narrow single-slice read — activeConversation changes
@@ -140,7 +153,15 @@ export function ConversationScreen({
         onChange={() => setPickerOpen(true)}
       />
       <Timeline items={items} now={now} />
-      <ThinkingIndicator isThinking={phase === 'thinking'} />
+      {/* #493: the thinking gate NARROWS — a live api-retry supersedes the generic thinking indicator
+          (AC5). With no retry in flight the predicate is exactly the pre-#493 `phase === 'thinking'`, so
+          thinking behaviour is unchanged. */}
+      <ThinkingIndicator isThinking={shouldShowThinking({ phase, apiRetry })} />
+      {/* #493: the api-error retry status — mounted directly after its supersede peer, before the stall
+          indicator. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge (turn
+          activity leaves it showing — the deliberate inverse of the stall indicator). Renders nothing at
+          rest. It may still co-render with the stall indicator: AC5 scopes mutual exclusion to thinking. */}
+      <ApiRetryIndicator retry={apiRetry} />
       {/* #317: the stalled-turn problem-state indicator — a sibling of the thinking indicator in the
           message-list region. Shows on a daemon stall onset and self-clears (in the reducer) on the next
           turn activity. Renders nothing at rest. */}
@@ -503,6 +524,71 @@ export function StallIndicator({ isStalled }: { isStalled: boolean }): JSX.Eleme
   return (
     <div className="conversation__stall">
       <div className="bubble bubble--daemon bubble--stall">{STALL_COPY}</div>
+    </div>
+  )
+}
+
+// #493: the api-retry copy — a module-level, client-owned constant (the STALL_COPY / 'Thinking…' idiom).
+// Conveys BOTH facts AC1 asks for: claude hit an API error, and it is retrying. Apostrophe-free
+// (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson) and using the U+2026 ellipsis
+// character (matching 'Thinking…' / STALL_COPY). Never a daemon string — the arm carries no string field,
+// so the plain-text-never-HTML guarantee holds by construction. Exported so the tests assert against the
+// constant rather than a duplicated literal.
+export const API_RETRY_COPY = 'API error — retrying…'
+
+// #493: the coarse thread-chrome scalars the indicator-precedence rule reads. A record, not a positional
+// scalar (the one place this departs from `isTurnRunning`): #496 is specced to extend this rule with the
+// compaction status, and a record grows by one field where a positional signature would break every call
+// site. #496 adds `compacting` HERE and one clause below — no parallel rule, no second gate.
+export interface ThreadStatus {
+  phase: TurnPhase
+  apiRetry: ApiRetryStatus | null
+}
+
+// #493: whether the generic thinking indicator shows — thinking, and nothing supersedes it (AC5). This
+// closes the mutual-exclusion question #317 deferred: a stall and thinking are compatible facts ("working"
+// and "may be stuck") and still co-render, but retrying against an API error is NOT compatible — claude is
+// not making progress on the request, it is re-attempting a failed call, so the retry status replaces the
+// thinking indicator rather than sitting beside it. Narrowing the gate (rather than deriving a
+// mutually-exclusive status union in the container) keeps ThinkingIndicator's tested `isThinking: boolean`
+// contract untouched and both views pure and independently unit-testable — the isTurnRunning precedent of
+// extracting the named predicate. Presence supersedes, not the counter: an unknown-count retry
+// (`{ current: 0, total: 0 }`) hides thinking exactly like a known one.
+export function shouldShowThinking(status: ThreadStatus): boolean {
+  return status.phase === 'thinking' && status.apiRetry === null
+}
+
+// #493: the api-retry indicator — the StallIndicator twin over the `apiRetry` status record. The daemon
+// re-fires the rising edge as the attempt count climbs and sends an explicit falling edge when the retry
+// ends, so (unlike the stall) the reducer never self-clears it; this view just renders the held status.
+// Pure props-in/markup-out and exported so tests server-render an injected status with no store.
+//
+// Takes `ApiRetryStatus | null` — two numbers, NO string field. That preserves the ThinkingIndicator /
+// StallIndicator type-level guarantee for AC1 ("no daemon-supplied string is ever rendered") in the only
+// way open to a view that must show daemon-derived digits: it structurally cannot receive a daemon string.
+// Do NOT widen the prop to the ThreadEvent or to a preformatted string.
+//
+// null → null (zero layout footprint — the ThinkingIndicator / StallIndicator posture). Present → the
+// client-owned copy in a wrapper + bubble carrying retry-distinct classes (see conversation.css): the
+// daemon bubble's fill/radius diverged to the error role so it reads as a DEGRADING session, distinct from
+// both the muted .bubble--thinking and the accent-barred .bubble--stall (AC1).
+export function ApiRetryIndicator({ retry }: { retry: ApiRetryStatus | null }): JSX.Element | null {
+  if (!retry) return null
+  // The counter shows iff `total > 0`. That covers AC3's unknown-count case (`0/0` → omitted entirely, no
+  // "0/0" in the markup) and additionally suppresses a meaningless denominator on an undocumented `N/0`.
+  // Two client-formatted integers interpolated as digits — NEVER `current / total`, which is NaN at 0/0.
+  // This is one comparison, not a validator: the transport type-checks but deliberately does not
+  // range-check an inbound wire integer (ADR 0002 drift), and inventing a bound here would be
+  // unprecedented scope. `{ current: 0, total: 10 }` is not the unknown sentinel — it renders as 0/10.
+  const showCounter = retry.total > 0
+  return (
+    <div className="conversation__api-retry">
+      <div className="bubble bubble--daemon bubble--api-retry">
+        {API_RETRY_COPY}
+        {showCounter && (
+          <span className="api-retry__counter">{` attempt ${retry.current}/${retry.total}`}</span>
+        )}
+      </div>
     </div>
   )
 }

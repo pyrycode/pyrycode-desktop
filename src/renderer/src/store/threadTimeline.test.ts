@@ -5,6 +5,7 @@ import {
   selectItems,
   selectPhase,
   selectStalled,
+  selectApiRetry,
   type ThreadEvent,
   type ThreadItem,
   type TimelineState
@@ -47,6 +48,10 @@ function sessionBoundary(
 
 function stall(): ThreadEvent {
   return { type: 'stallDetected' }
+}
+
+function apiRetry(active: boolean, current = 0, total = 0): ThreadEvent {
+  return { type: 'apiRetry', active, current, total }
 }
 
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
@@ -323,6 +328,118 @@ describe('reduceTimeline — stall indicator (#317)', () => {
   it('the toolResult-orphan same-reference no-op survives the widened guard (regression, AC)', () => {
     // items unchanged AND !stalled → the reducer returns the exact same reference.
     expect(reduceTimeline(initialTimelineState, toolResult('A', 't1'))).toBe(initialTimelineState)
+  })
+})
+
+// #493: the api-retry status — the stall scalar's structural twin with the clear semantics INVERTED.
+// `api_retry` has an explicit falling edge on the wire, so the reducer never self-clears it: turn
+// activity leaves it showing (the deliberate inverse of the #317 clearing tests above). Held as
+// `ApiRetryStatus | null` — presence IS "a retry is in flight", so the falling edge discards the
+// counter with nowhere to leak it from.
+describe('reduceTimeline — api-retry status (#493)', () => {
+  it('starts absent on the initial state, and selectApiRetry reads the slice', () => {
+    expect(initialTimelineState.apiRetry).toBeNull()
+    expect(selectApiRetry(initialTimelineState)).toBeNull()
+  })
+
+  it('a rising edge holds the attempt counter, leaving items/phase untouched (AC1)', () => {
+    const state = run([apiRetry(true, 3, 10)])
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+    expect(selectApiRetry(state)).toEqual({ current: 3, total: 10 })
+    // Chrome, never a ThreadItem row — the `phase`-beside-`items` precedent.
+    expect(state.items).toEqual([])
+    expect(state.phase).toBe('idle')
+  })
+
+  it('a climbing rising edge replaces the held counter in place (AC2)', () => {
+    const state = run([apiRetry(true, 3, 10), apiRetry(true, 4, 10)])
+    expect(state.apiRetry).toEqual({ current: 4, total: 10 })
+    // Still one status, never stacked.
+    expect(state.items).toEqual([])
+  })
+
+  it('a verbatim repeated rising edge is a same-reference no-op — no churn, no flicker (AC2)', () => {
+    // The wire has no dedup, so the daemon may repeat an identical frame; an identical repeat must not
+    // churn the selector into a re-render.
+    const retrying = run([apiRetry(true, 3, 10)])
+    expect(reduceTimeline(retrying, apiRetry(true, 3, 10))).toBe(retrying)
+  })
+
+  it('a 0/0 rising edge yields a PRESENT status with both zeros, never null (AC3)', () => {
+    // "retrying, count unknown" — a live retry, not the absence of one. Conflating the two would lose
+    // the distinction the view needs to omit the counter.
+    const state = run([apiRetry(true, 0, 0)])
+    expect(state.apiRetry).toEqual({ current: 0, total: 0 })
+    expect(state.apiRetry).not.toBeNull()
+  })
+
+  it('a falling edge clears the status (AC4)', () => {
+    const state = run([apiRetry(true, 3, 10), apiRetry(false, 3, 10)])
+    expect(state.apiRetry).toBeNull()
+  })
+
+  it('a falling edge carrying a non-zero counter still clears — the counter is ignored (AC4)', () => {
+    // The wire repeats the last-known counter verbatim on the falling edge; `null` discards it.
+    const state = run([apiRetry(true, 3, 10), apiRetry(false, 4, 10)])
+    expect(state.apiRetry).toBeNull()
+  })
+
+  it('a redundant falling edge against no live retry is a same-reference no-op', () => {
+    expect(reduceTimeline(initialTimelineState, apiRetry(false, 0, 0))).toBe(initialTimelineState)
+  })
+
+  // AC4 — the inverse of #317: each of the four turn-activity arms leaves a live retry SHOWING. These
+  // four are the cases a copied `stalled: false` clear-set (or a widened no-op guard) would break.
+  it('assistantDelta leaves a live retry showing (AC4)', () => {
+    const state = run([apiRetry(true, 3, 10), delta('A', 'hi')])
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText'])
+  })
+
+  it('toolUse leaves a live retry showing (AC4)', () => {
+    const state = run([apiRetry(true, 3, 10), toolUse('A', 't1')])
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+  })
+
+  it('an orphan toolResult leaves a live retry showing — the no-op guard must NOT widen (AC4)', () => {
+    const state = run([apiRetry(true, 3, 10), toolResult('A', 'nope')])
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+  })
+
+  it('a toolResult that fills a pending call leaves a live retry showing (AC4)', () => {
+    const state = run([toolUse('A', 't1'), apiRetry(true, 3, 10), toolResult('A', 't1')])
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+  })
+
+  it('turnState leaves a live retry showing for a non-idle state (AC4)', () => {
+    const state = run([apiRetry(true, 3, 10), { type: 'turnState', state: 'thinking' }])
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+    expect(state.phase).toBe('thinking')
+  })
+
+  it('an idle turnState leaves a live retry showing — the second guard that must NOT widen (AC4)', () => {
+    const state = run([apiRetry(true, 3, 10), { type: 'turnState', state: 'idle' }])
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+    expect(state.phase).toBe('idle')
+  })
+
+  it('turnEnd / userText / sessionBoundary carry a live retry through unchanged', () => {
+    expect(run([apiRetry(true, 3, 10), turnEnd('A')]).apiRetry).toEqual({ current: 3, total: 10 })
+    expect(run([apiRetry(true, 3, 10), userText('typed')]).apiRetry).toEqual({ current: 3, total: 10 })
+    expect(run([apiRetry(true, 3, 10), sessionBoundary()]).apiRetry).toEqual({ current: 3, total: 10 })
+  })
+
+  // The two problem-state scalars are independent facts — neither clears the other.
+  it('a stall onset leaves a live retry showing, and both scalars coexist', () => {
+    const state = run([apiRetry(true, 3, 10), stall()])
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+    expect(state.stalled).toBe(true)
+  })
+
+  it('an api-retry event leaves `stalled` unchanged in both directions', () => {
+    expect(run([stall(), apiRetry(true, 3, 10)]).stalled).toBe(true)
+    expect(run([stall(), apiRetry(false, 3, 10)]).stalled).toBe(true)
+    expect(run([apiRetry(true, 3, 10)]).stalled).toBe(false)
   })
 })
 

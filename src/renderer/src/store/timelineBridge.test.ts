@@ -2,7 +2,13 @@ import { describe, it, expect, vi } from 'vitest'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { HelloAckPayload, MessagePayload, ErrorPayload } from '@shared/wire/types'
 import { translateTimelineEvent, subscribeTimeline } from './timelineBridge'
-import { createTimelineStore, selectItems, selectPhase, selectStalled } from './timelineStore'
+import {
+  createTimelineStore,
+  selectItems,
+  selectPhase,
+  selectStalled,
+  selectApiRetry
+} from './timelineStore'
 import type { ThreadItem } from './threadTimeline'
 
 // Fixtures — plain wire-shaped data, mirroring daemonEventBridge.test.ts. No transport involved.
@@ -121,6 +127,26 @@ describe('translateTimelineEvent — the two owned arms', () => {
     expect(translated).not.toBe(event)
   })
 
+  it('apiRetry → a ThreadEvent apiRetry with the same four fields, a fresh object (#493)', () => {
+    const event: DaemonEvent = { type: 'apiRetry', active: true, current: 3, total: 10 }
+    const translated = translateTimelineEvent(event)
+    expect(translated).toEqual({ type: 'apiRetry', active: true, current: 3, total: 10 })
+    // A fresh literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
+
+  it('apiRetry translates the falling edge verbatim — nothing normalized at the bridge (#493)', () => {
+    // The wire repeats the last-known counter on the falling edge; discarding it is the reducer's job,
+    // not the bridge's. This is a filter + fresh copy, never a remap.
+    const event: DaemonEvent = { type: 'apiRetry', active: false, current: 4, total: 10 }
+    expect(translateTimelineEvent(event)).toEqual({
+      type: 'apiRetry',
+      active: false,
+      current: 4,
+      total: 10
+    })
+  })
+
   it('sessionTransition preserves a null workspaceCwd for clear / idle_evict (wire nullability)', () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',
@@ -202,10 +228,7 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       { type: 'relayLinkChanged', status: 'connected' },
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // timeline store — it is not a turn-stream item.
-      { type: 'workspaceFolderRejected' },
-      // api-retry ships dormant (#492); its consumer is the render slice #493, which decides then whether
-      // the retry indicator is a timeline row at all — that call is not this slice's.
-      { type: 'apiRetry', active: true, current: 3, total: 10 }
+      { type: 'workspaceFolderRejected' }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })
@@ -421,5 +444,19 @@ describe('subscribeTimeline', () => {
     expect(selectStalled(store.getState())).toBe(false)
     bridge.emit({ type: 'stallDetected' })
     expect(selectStalled(store.getState())).toBe(true)
+  })
+
+  it('#493: an apiRetry rising edge drives the store status, and the falling edge clears it, no React', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    expect(selectApiRetry(store.getState())).toBeNull()
+    bridge.emit({ type: 'apiRetry', active: true, current: 3, total: 10 })
+    expect(selectApiRetry(store.getState())).toEqual({ current: 3, total: 10 })
+
+    // The falling edge repeats the last-known counter; the status still clears.
+    bridge.emit({ type: 'apiRetry', active: false, current: 3, total: 10 })
+    expect(selectApiRetry(store.getState())).toBeNull()
   })
 })

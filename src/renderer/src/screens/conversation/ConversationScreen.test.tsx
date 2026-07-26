@@ -6,6 +6,9 @@ import {
   Timeline,
   ThinkingIndicator,
   StallIndicator,
+  ApiRetryIndicator,
+  API_RETRY_COPY,
+  shouldShowThinking,
   QueuedBacklog,
   StatusSheet,
   RepairPrompt,
@@ -444,6 +447,78 @@ describe('StallIndicator — the stalled-turn problem-state affordance (#317)', 
     expect(markup).toContain('The turn seems to have stalled…')
     // Visually distinct from the thinking indicator (AC4) — a problem state, not normal progress.
     expect(markup).not.toContain('bubble--thinking')
+  })
+})
+
+// #493: the api-retry indicator bound to the `apiRetry` status record. ApiRetryIndicator is the
+// StallIndicator twin over `ApiRetryStatus | null` rather than a boolean — pure (status in, markup out).
+// The prop carries two numbers and no string field, so the view structurally cannot receive, hence
+// cannot render, a daemon-supplied string (AC1). Injected props: no store, no IPC — the container's
+// showing branch is unreachable under server render (zustand v5 reads getInitialState() → apiRetry:
+// null), so the "showing" assertions live here.
+describe('ApiRetryIndicator — the api-error retry affordance (#493)', () => {
+  it('is inert with no live retry — renders nothing (zero layout footprint)', () => {
+    expect(renderToStaticMarkup(<ApiRetryIndicator retry={null} />)).toBe('')
+  })
+
+  it('shows a retry-distinct affordance with the attempt counter as digits (AC1, AC2)', () => {
+    const markup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 3, total: 10 }} />)
+    // The retry-distinct wrapper + bubble classes (the problem-state treatment, built from --color-error).
+    expect(markup).toContain('conversation__api-retry')
+    expect(markup).toContain('bubble--api-retry')
+    // The client-owned copy — apostrophe-free, U+2026 ellipsis (survives renderToStaticMarkup escaping),
+    // never a daemon string. Conveys both the API error and the retrying.
+    expect(markup).toContain(API_RETRY_COPY)
+    expect(API_RETRY_COPY).not.toContain("'")
+    // Client-formatted digits, never a daemon string and never a computed fraction.
+    expect(markup).toContain('3')
+    expect(markup).toContain('10')
+    expect(markup).toContain('api-retry__counter')
+    // Visually distinct from BOTH the thinking treatment and the stall treatment (AC1).
+    expect(markup).not.toContain('bubble--thinking')
+    expect(markup).not.toContain('bubble--stall')
+  })
+
+  it('renders a known zero attempt verbatim — 0/10 is not the unknown sentinel', () => {
+    const markup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 0, total: 10 }} />)
+    expect(markup).toContain('api-retry__counter')
+    expect(markup).toContain('0/10')
+  })
+
+  it('omits the counter entirely when the count is unknown — never renders 0/0 (AC3)', () => {
+    const markup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 0, total: 0 }} />)
+    // Still a visible retry status…
+    expect(markup).toContain('conversation__api-retry')
+    expect(markup).toContain(API_RETRY_COPY)
+    // …with no counter at all.
+    expect(markup).not.toContain('api-retry__counter')
+    expect(markup).not.toContain('0/0')
+    // Never a computed fraction — 0/0 is NaN.
+    expect(markup).not.toContain('NaN')
+  })
+})
+
+// #493: the indicator-precedence predicate. The thinking gate NARROWS rather than the container deriving
+// a mutually-exclusive status union, so both indicator views stay pure and unchanged in their own props
+// (the isTurnRunning precedent of extracting the named gate). #496 extends `ThreadStatus` with one field
+// and this predicate with one clause.
+describe('shouldShowThinking — the retry-supersedes-thinking rule (#493)', () => {
+  it('shows the thinking indicator while thinking with no retry in flight (AC5)', () => {
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null })).toBe(true)
+  })
+
+  it('hides the thinking indicator while a retry is in flight — the supersede rule (AC5)', () => {
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 } })).toBe(false)
+  })
+
+  it('hides it for a retry with an unknown count too — presence supersedes, not the counter (AC5)', () => {
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: { current: 0, total: 0 } })).toBe(false)
+  })
+
+  it('leaves thinking-indicator behaviour unchanged when no retry is in flight (AC5)', () => {
+    // The pre-#493 gate was exactly `phase === 'thinking'`.
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null })).toBe(false)
+    expect(shouldShowThinking({ phase: 'responding', apiRetry: null })).toBe(false)
   })
 })
 
@@ -1320,6 +1395,15 @@ describe('ConversationScreen — store binding', () => {
   it('mounts the initial timeline with no stall indicator (the inert render slice)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__stall')
+  })
+
+  // #493: the api-retry indicator mounts against the initial timeline store (getInitialState apiRetry:
+  // null), so ApiRetryIndicator returns nothing — the inert render slice (the StallIndicator-smoke
+  // analog). The showing path is proven on the pure ApiRetryIndicator describe above.
+  it('mounts the initial timeline with no api-retry indicator (the inert render slice)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('conversation__api-retry')
+    expect(markup).not.toContain(API_RETRY_COPY)
   })
 
   // #294: the queued-backlog control mounts against the empty queue store (getInitialState backlogs:

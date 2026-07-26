@@ -55,13 +55,24 @@ copy. `reduceTimeline`'s new arm sets a second scalar, `stalled: boolean`, besid
 other owned arms (`assistantDelta`/`toolUse`/`toolResult`/`turnState`) now also clear it as a side
 effect of being turn activity. `selectStalled` joins `selectItems`/`selectPhase` as the read surface.
 
+[#493](../codebase/493.md) added a seventh owned arm, `apiRetry` — the daemon's api-retry status signal
+([#492](../codebase/492.md)), also moved out of the inverse-filter `null` list it shipped dormant in.
+Unlike `stallDetected`, this arm carries data, so `DaemonEvent.apiRetry` and `ThreadEvent.apiRetry` are
+field-for-field identical (a filter-and-copy, the `toolUse`/`toolResult` shape) rather than
+arm-selection-only. `reduceTimeline`'s new arm sets a third scalar, `apiRetry: ApiRetryStatus | null`,
+beside `phase`/`stalled` — but with the **clear semantics inverted** from `stalled`: the four
+turn-activity arms carry it through unchanged (compile-forced, one line each) rather than clearing it,
+since `api_retry` has an explicit wire falling edge (`active: false`) and `stall` does not. The falling
+edge sets the scalar to `null` unconditionally, discarding any counter on that event by construction.
+`selectApiRetry` joins `selectItems`/`selectPhase`/`selectStalled` as the read surface.
+
 ## What it does
 
-Turns the six owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
-via `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled` as the only read surface. A
-stream arrival (an `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result`
-outcome, a `stall` onset) re-renders only components selecting a timeline slice — orthogonal to
-`sessionStore` and `runConfigStore`.
+Turns the seven owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
+via `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry` as the only
+read surface. A stream arrival (an `assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its
+`tool_result` outcome, a `stall` onset, an `api_retry` edge) re-renders only components selecting a
+timeline slice — orthogonal to `sessionStore` and `runConfigStore`.
 
 ## How it works
 
@@ -73,7 +84,7 @@ export type TimelineStore = TimelineState & { dispatch: (event: ThreadEvent) => 
 createTimelineStore(init?)   // vanilla createStore — one isolated instance per test (DI seam)
 timelineStore                 // app-wide singleton
 useTimelineStore(selector)    // narrow-slice React binding: useStore(timelineStore, selector)
-export { selectItems, selectPhase, selectStalled } from './threadTimeline'   // re-exported, never redefined
+export { selectItems, selectPhase, selectStalled, selectApiRetry } from './threadTimeline'   // re-exported, never redefined
 ```
 
 Mirrors `createSessionStore`'s DI-factory → singleton → hook → selectors structure (ADR 0004), but
@@ -87,10 +98,10 @@ speculative observer here would defend an unobserved need.
 ```ts
 translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
 // Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229) / stallDetected
-// (#317), each rebuilt as a fresh named-field literal (never `return event`, never a spread — for
-// stallDetected, both sides are nullary, so the "literal" is arm-selection only). Every other arm ->
-// null via explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft
-// catch-all default.
+// (#317) / apiRetry (#493), each rebuilt as a fresh named-field literal (never `return event`, never a
+// spread — for stallDetected, both sides are nullary, so the "literal" is arm-selection only; apiRetry
+// carries data, so it is a filter-and-copy like toolUse/toolResult). Every other arm -> null via
+// explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te) })
@@ -129,19 +140,26 @@ the pending `toolCall` by `toolUseId` and fills `result` in place, a same-refere
 duplicate. `stallDetected` ([#317](../codebase/317.md)) is the first arm where **both** sides of the
 mapping are nullary — `DaemonEvent.stallDetected` and `ThreadEvent.stallDetected` are both
 `{ type: 'stallDetected' }`, so the case is pure arm-selection with no field to filter or copy.
+`apiRetry` ([#493](../codebase/493.md)) returns to the filter-and-copy shape — `DaemonEvent.apiRetry`
+and `ThreadEvent.apiRetry` are field-for-field identical (`active`/`current`/`total`) — but is the first
+status-liveness arm (after `stallDetected`) whose `reduceTimeline` handling translates an **edge into a
+presence**: the event always carries `active`, but the state holds `ApiRetryStatus | null`, collapsing
+the wire's rising/falling edges into one representation with no field left over to leak a stale counter.
 
 ### Data flow
 
 ```
-daemon frame ─(#199/#214/#217/#229/#315 transport, snake→camel, conversation_id dropped)→
-   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult|stallDetected}
+daemon frame ─(#199/#214/#217/#229/#315/#492 transport, snake→camel, conversation_id dropped)→
+   DaemonEvent{assistantDelta|turnEnd|turnState|toolUse|toolResult|stallDetected|apiRetry}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeTimeline listener → translateTimelineEvent → ThreadEvent (or null → skip)
    → timelineStore.dispatch → reduceTimeline → TimelineState
-   → selectItems / selectPhase / selectStalled   (selectItems read by #203's Timeline view, now also
-                                   carrying pending toolCall items from #217 with results resolved by
-                                   #229; selectPhase read by #215's ThinkingIndicator view; selectStalled
-                                   read by #317's StallIndicator view)
+   → selectItems / selectPhase / selectStalled / selectApiRetry   (selectItems read by #203's Timeline
+                                   view, now also carrying pending toolCall items from #217 with results
+                                   resolved by #229; selectPhase read by #215's ThinkingIndicator view,
+                                   narrowed by #493's shouldShowThinking; selectStalled read by #317's
+                                   StallIndicator view; selectApiRetry read by #493's ApiRetryIndicator
+                                   view)
 ```
 
 ## Configuration and usage
@@ -159,8 +177,13 @@ daemon frame ─(#199/#214/#217/#229/#315 transport, snake→camel, conversation
   of [#317](../codebase/317.md) — `ConversationScreen`'s `StallIndicator`, reading
   `useTimelineStore(selectStalled)` to derive `isStalled`. See
   [Conversation shell § Stall indicator](conversation-shell.md#stall-indicator-317).
-- Import surface: `import { useTimelineStore, selectItems, selectPhase, selectStalled } from
-  '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
+  `selectApiRetry` has a real source as of [#492](../codebase/492.md) (`api_retry`) and its first reader
+  as of [#493](../codebase/493.md) — `ConversationScreen`'s `ApiRetryIndicator`, reading
+  `useTimelineStore(selectApiRetry)` directly, and the same screen's `shouldShowThinking` predicate,
+  which reads it alongside `phase` to narrow `ThinkingIndicator`'s gate. See
+  [Conversation shell § Api-retry indicator](conversation-shell.md#api-retry-indicator-493).
+- Import surface: `import { useTimelineStore, selectItems, selectPhase, selectStalled, selectApiRetry }
+  from '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
   '@renderer/store/timelineBridge'`.
 - No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
   transport (single active conversation); the bridge translates and dispatches unconditionally.
@@ -187,6 +210,12 @@ daemon frame ─(#199/#214/#217/#229/#315 transport, snake→camel, conversation
 - **`stalled` is onset-only — no daemon "cleared" frame exists ([#317](../codebase/317.md)).** The
   reducer derives the clear entirely client-side, on the next `assistantDelta`/`toolUse`/`toolResult`/
   `turnState` arm; a stall with no following turn activity stays shown indefinitely, by design.
+- **`apiRetry` is the deliberate inverse of `stalled`: it does NOT clear on turn activity
+  ([#493](../codebase/493.md)).** The wire's `api_retry` frame carries an explicit falling edge
+  (`active: false`), so the four turn-activity arms carry the scalar through unchanged instead of
+  clearing it — a retry stays shown across intervening `assistantDelta`/`toolUse`/`toolResult`/
+  `turnState` events, and clears only on its own falling edge. Copying `stalled`'s guard-widening
+  pattern here would silently swallow a live retry on the next stream event.
 
 ## Related
 
@@ -249,3 +278,10 @@ daemon frame ─(#199/#214/#217/#229/#315 transport, snake→camel, conversation
 - [#317 codebase notes](../codebase/317.md) — the render slice: moves `stallDetected` from this
   bridge's inverse-filter `null` list to a sixth owned arm, adds the `stalled` scalar and
   `selectStalled`, and gives it its first reader, `ConversationScreen`'s `StallIndicator`.
+- [#492 codebase notes](../codebase/492.md) — the `api_retry` transport slice: wire type, decode, and
+  the non-nullary `apiRetry` `DaemonEvent` arm, shipped dormant (all three bridges nulled it).
+- [#493 codebase notes](../codebase/493.md) — the render slice: moves `apiRetry` from this bridge's
+  inverse-filter `null` list to a seventh owned arm, adds the `apiRetry: ApiRetryStatus | null` scalar
+  and `selectApiRetry` — with the clear semantics deliberately inverted from `stalled` — and gives it
+  its first reader, `ConversationScreen`'s `ApiRetryIndicator` plus the `shouldShowThinking` supersede
+  predicate.

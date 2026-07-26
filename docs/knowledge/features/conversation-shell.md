@@ -799,6 +799,58 @@ it appearing/disappearing — still unaddressed (not part of #179's scope), defe
 desktop-design pass. See [#215 codebase notes](../codebase/215.md) for the full design, patterns
 established, and open questions.
 
+**Gate narrowed in [#493](../codebase/493.md):** `isThinking` is no longer the bare
+`phase === 'thinking'` — it is `shouldShowThinking({ phase, apiRetry })`, which additionally requires
+`apiRetry === null`. With no retry in flight the predicate reduces to exactly the pre-#493 comparison,
+so thinking behaviour is unchanged; while a retry is live, the api-retry status below supersedes it. See
+[Api-retry indicator](#api-retry-indicator-493) below.
+
+### Api-retry indicator (#493)
+
+`ThinkingIndicator`'s twin over a third timeline-store scalar (`apiRetry: ApiRetryStatus | null`),
+mounted immediately after it — its supersede peer — and before `StallIndicator`:
+
+```
+.conversation
+├── Timeline                   items={useTimelineStore(selectItems)}
+├── ThinkingIndicator           isThinking={shouldShowThinking({ phase, apiRetry })}
+├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)}
+└── StallIndicator              isStalled={useTimelineStore(selectStalled)}
+```
+
+The daemon emits `api_retry` when claude hits an API error and retries, carrying an explicit
+`active`/`current`/`total` counter ([#492](../codebase/492.md) decodes it into a non-nullary `apiRetry`
+`DaemonEvent`). Unlike `stall`, the frame has an **explicit falling edge** (`active: false`) and no
+wire-side dedup — the rising edge re-fires as the count climbs, and a verbatim repeat is a same-state
+no-op rather than a re-render. `reduceTimeline` holds the live counter as `ApiRetryStatus | null`,
+cleared only by the falling edge — turn activity (`assistantDelta`/`toolUse`/`toolResult`/`turnState`)
+leaves it showing, the deliberate inverse of `stalled`'s self-clear.
+
+`ApiRetryIndicator({ retry })` is `StallIndicator`'s structural twin: pure, exported, in-file,
+server-rendered from an injected `ApiRetryStatus | null`. `retry === null` → `null` (zero footprint);
+present → a `flex: 0 0 auto` `.conversation__api-retry` wrapper (`.conversation__stall`'s shape) holding
+`<div className="bubble bubble--daemon bubble--api-retry">API error — retrying…</div>`, plus, when
+`retry.total > 0`, a nested `<span className="api-retry__counter"> attempt {current}/{total}</span>`.
+When the counter is unknown (`current`/`total` both `0`) the span is omitted entirely — no `"0/0"` is
+ever rendered, and the count is never computed as a fraction (`current / total` would be `NaN` at
+`0/0`).
+
+**Record input, not a boolean — the same AC1 posture as #215/#317, adapted for a counter.** The prop is
+`ApiRetryStatus | null` (two numbers, no string field), never the store's `TimelineState` or the raw
+`ThreadEvent`, so "no daemon-supplied string is ever rendered" stays a type-level guarantee even though
+this view — unlike `StallIndicator` — does render daemon-derived digits.
+
+**Visually distinct from both siblings.** `.bubble--api-retry` reuses `.bubble--daemon`'s fill/radius
+and diverges to `--color-error` text (the same error role as `.bubble--stall`) but **omits** the left
+accent bar that is `.bubble--stall`'s distinguishing mark — keeping the two problem states separable
+from each other, and both distinct from the muted `.bubble--thinking`. No new design token.
+
+May still co-render with `StallIndicator` — AC5 scopes mutual exclusion to `ThinkingIndicator` only,
+#317's "distinct facts, adjacent flex rows" posture for stall is unchanged. No Figma node (same
+documented gap as #215/#277/#279/#305/#317); a dedicated degraded-state visual is a Figma-side follow-up
+for Juhana, pairing naturally with the compaction status (#496). See
+[#493 codebase notes](../codebase/493.md) for the full design, patterns established, and open questions.
+
 ### Stall indicator (#317)
 
 `ThinkingIndicator`'s own twin, over a second timeline-store scalar (`stalled: boolean`), mounted
@@ -807,7 +859,8 @@ immediately after it:
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-├── ThinkingIndicator           isThinking={useTimelineStore(selectPhase) === 'thinking'}
+├── ThinkingIndicator           isThinking={shouldShowThinking({ phase, apiRetry })} — narrowed by #493
+├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)} — #493, see above
 └── StallIndicator              isStalled={useTimelineStore(selectStalled)}
 ```
 
@@ -835,9 +888,13 @@ is the only error-role token on desktop.
 
 Both indicators can show at once (a stall onset arriving mid-`thinking`) — accepted as correct, since
 they occupy adjacent flex rows and convey different facts; no mutual-exclusion coordination was built.
-No Figma node (same documented gap as #215/#277/#279/#305 — the mobile file draws only the populated
-steady-state thread, node `16-8`). See [#317 codebase notes](../codebase/317.md) for the full design,
-patterns established, and open questions.
+**[#493](../codebase/493.md) narrowed `ThinkingIndicator`'s own gate to also exclude a live api-retry
+status (see [Api-retry indicator](#api-retry-indicator-493) above), but left this stall/thinking
+co-render posture untouched** — AC5 scoped mutual exclusion to thinking only, so `StallIndicator` and
+`ApiRetryIndicator` may also both show at once. No Figma node (same documented gap as
+#215/#277/#279/#305 — the mobile file draws only the populated steady-state thread, node `16-8`). See
+[#317 codebase notes](../codebase/317.md) for the full design, patterns established, and open
+questions.
 
 `Timeline`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md): a compact chip —
 tool name and one-line input summary — replaces the earlier `case 'toolCall': return null` no-op, at
@@ -1335,7 +1392,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`; also the `requestSnapshot` command `<ScreenSnapshotControl/>`'s `requestScreenSnapshot` fires and the `screenSnapshotReceived` event its display renders (#316, #324)
 - [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323) `<ScreenSnapshotControl/>` reads via `selectScreenSnapshot`, its only consumer (#324)
 - [Relay-link store](relay-link-store.md) — the dedicated store (#329) `<ConnectionStatusIndicatorControl/>` reads via `selectRelayLinkStatus`, its first real consumer; combined at render time with [session store](session-store.md)'s `ConnectionStatus` (#330)
-- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` now also writes to this store's `dispatch` as the `userText` producer, and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is now translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` reads the store's new `selectStalled` (#317, transport #315)
+- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` now also writes to this store's `dispatch` as the `userText` producer, and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is now translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` reads the store's new `selectStalled` (#317, transport #315); `<ApiRetryIndicator/>` reads the store's new `selectApiRetry`, and the exported `shouldShowThinking` predicate reads it alongside `selectPhase` to narrow `<ThinkingIndicator/>`'s gate (#493, transport #492)
 - [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224) and now also `dispatch` (#237); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, live since [#179](../codebase/179.md) flipped `interactive` (dormant #223–#178)
 - [Modal resolution envelope](modal-resolution-envelope.md) / [Command channel](command-channel.md) — the `answerModalCommand`/`cancelModalCommand` this screen's `PermissionModal` now dispatches through `modalResolution.ts` (#237), routed main-side by [Daemon connection](daemon-connection.md)'s `answerModal`/`cancelModal` (#236); gated behind a `selectOption` client-side second-confirm on `defaultOptionId` for any non-default answer (#226) — no wire/envelope change, the gate lives entirely in `modalResolution.ts`/`PermissionModal.tsx`
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — `class` is `permission | trust` only, no `destructive` wire class; the premise #226's second-confirm gate is a client-side stand-in for
@@ -1346,4 +1403,4 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Recent-workspaces store](recent-workspaces-store.md) — the dedicated store + dormant bridge `WorkspacePickerSheet` reads via `selectRecentWorkspaces` and mounts (`RecentWorkspacesData`), its first real consumer (#382, consumed in #383)
 - [Conversation workspace change](conversation-workspace-change.md) — the `changeWorkspace` command `requestChangeWorkspace` dispatches on a row choice, its first real caller (#379, consumed in #383)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#492 codebase notes](../codebase/492.md) · [#493 codebase notes](../codebase/493.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

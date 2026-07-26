@@ -69,8 +69,10 @@ type ThreadEvent =
   | { type: 'userText'; text: string }
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
   | { type: 'stallDetected' }
+  | { type: 'apiRetry'; active: boolean; current: number; total: number }
 
-interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean }
+interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null }
+interface ApiRetryStatus { current: number; total: number }
 ```
 
 `ThreadItem` is the durable, ordered content; `ThreadEvent` is the renderer-local (camelCase,
@@ -79,7 +81,12 @@ interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalle
 indicator), so it's carried as `phase` beside `items` rather than interleaved as a timeline row.
 **`stalled` ([#317](../codebase/317.md)) is a second such scalar** — a coarse, onset-only stall flag
 set by the nullary `stallDetected` arm and self-cleared by the reducer on the next turn-activity
-arm, likewise never a `ThreadItem` row.
+arm, likewise never a `ThreadItem` row. **`apiRetry` ([#493](../codebase/493.md)) is a third such
+scalar**, but a record rather than a flag (`ApiRetryStatus | null`, not `boolean`) — present holds the
+live `{ current, total }` attempt counter, `null` means no retry in flight. Unlike `stalled`, it does
+**not** self-clear on turn activity: the wire's `api_retry` frame has an explicit falling edge
+(`active: false`), so the reducer clears it only on that edge, carrying it through unchanged on every
+other arm — the deliberate inverse of `stalled`'s clearing rule.
 
 ### The reducer
 
@@ -97,6 +104,7 @@ arm, likewise never a `ThreadItem` row.
 | `userText` | append a fresh `userText` item (never coalesced); does **not** touch `phase` — the user's own message, sourced from the composer echo since [#179](../codebase/179.md) |
 | `sessionBoundary` | append a fresh `sessionBoundary` item (never coalesced); does **not** touch `phase` — the `/clear`/idle-eviction/workspace-change marker, sourced from the daemon's `sessionTransition` event via the bridge since [#286](../codebase/286.md) |
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
+| `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
 `items`. **`stalled` ([#317](../codebase/317.md)) is a third, independent axis**: the four
@@ -106,8 +114,14 @@ marker, a renderer-sourced echo, and a session rotation are none of them daemon 
 pre-existing same-reference no-op guards (`toolResult`'s orphan/duplicate check, `turnState`'s
 same-phase check) widen to `&& !state.stalled`, since an orphan result or an idle-when-already-idle
 `turnState` is still turn activity and must still clear a live stall.
-`initialTimelineState = { items: [], phase: 'idle', stalled: false }`; pure selectors `selectItems`,
-`selectPhase`, `selectStalled` are the only read surface.
+**`apiRetry` ([#493](../codebase/493.md)) is a fourth, independent axis with inverted clearing
+rules**: every one of the nine other arms carries it through unchanged — including the four
+turn-activity arms that clear `stalled` — since `api_retry` clears only on its own explicit falling
+edge, never on turn activity. The two `&& !state.stalled` guards above deliberately do **not** gain a
+matching `&& apiRetry === null`-style clause; doing so would silently clear a live retry on ordinary
+turn activity.
+`initialTimelineState = { items: [], phase: 'idle', stalled: false, apiRetry: null }`; pure selectors
+`selectItems`, `selectPhase`, `selectStalled`, `selectApiRetry` are the only read surface.
 
 ### Internal helpers (unexported)
 
@@ -194,6 +208,14 @@ Nothing imports this module yet.
   literal, since both sides are nullary); `ConversationScreen.tsx` gained `StallIndicator`, `Timeline`/
   `ThinkingIndicator`'s twin. Unlike every prior extension, this one touches an **existing** scalar's
   clearing logic rather than only adding a new arm — see Edge cases below for the widened no-op guards.
+- **[#493](../codebase/493.md) (shipped)** added the `apiRetry: ApiRetryStatus | null` scalar and the
+  `apiRetry` arm — the render consumer of [#492](../codebase/492.md)'s dormant, non-nullary
+  `DaemonEvent`. `timelineBridge.ts` moved `apiRetry` from its inverse-filter `null` group to an owned
+  arm (a field-for-field literal, since this event carries data unlike `stallDetected`);
+  `ConversationScreen.tsx` gained `ApiRetryIndicator` (`StallIndicator`'s twin) and a named
+  `shouldShowThinking(ThreadStatus)` predicate that narrows `ThinkingIndicator`'s gate whenever a retry
+  is live — closing the mutual-exclusion question #317 deferred. Like #317, this touches every existing
+  arm's carry-through, but with the **clearing rule inverted** — see Edge cases below.
 
 ## Edge cases and limitations
 
@@ -224,6 +246,13 @@ Nothing imports this module yet.
   sends a one-shot `stall` frame and never repeats it or clears it, so the reducer derives the clear
   entirely client-side on the next turn-activity arm. A stall with no following activity stays shown
   indefinitely; this is by design, mirroring mobile's ADR-025 Phase 2 self-clear contract.
+- **`apiRetry` clears only on its own explicit falling edge — turn activity never clears it**
+  ([#493](../codebase/493.md)), the deliberate inverse of `stalled`. The daemon's `api_retry` frame
+  re-fires the rising edge as the attempt count climbs with no wire-side dedup (a repeated identical
+  frame is a same-reference no-op, never a re-render), and `current: 0, total: 0` is a legitimate
+  "retrying, count unknown" state — a **present** `ApiRetryStatus` with both fields zero, not `null`.
+  The falling edge discards any counter it carries; the state's `| null` shape makes that true by
+  construction rather than a convention to maintain.
 - **Strangler Fig, cut over in [#179](../codebase/179.md).** `sessionStore`, `messageViewModel.ts`,
   and the coarse `message`/`message_chunk` path were completely untouched by this module through
   #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
@@ -270,6 +299,12 @@ Nothing imports this module yet.
 - [#317 codebase notes](../codebase/317.md) — the render slice: the `stalled` scalar, the
   `stallDetected` arm, and `StallIndicator` (see [Conversation shell § Stall
   indicator](conversation-shell.md#stall-indicator-317)).
+- [#492 codebase notes](../codebase/492.md) — the transport slice: decodes `api_retry` into the
+  non-nullary `apiRetry` `DaemonEvent` (`active`/`current`/`total`), shipped dormant.
+- [#493 codebase notes](../codebase/493.md) — the render slice: the `apiRetry` scalar, the `apiRetry`
+  arm (clearing semantics inverted from `stalled`), `ApiRetryIndicator`, and the `shouldShowThinking`
+  supersede predicate (see [Conversation shell § Api-retry
+  indicator](conversation-shell.md#api-retry-indicator-493)).
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

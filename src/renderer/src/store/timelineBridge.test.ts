@@ -147,6 +147,21 @@ describe('translateTimelineEvent — the two owned arms', () => {
     })
   })
 
+  it('compacting → a ThreadEvent compacting carrying the edge, a fresh object (#496)', () => {
+    const event: DaemonEvent = { type: 'compacting', active: true }
+    const translated = translateTimelineEvent(event)
+    expect(translated).toEqual({ type: 'compacting', active: true })
+    // A fresh literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
+
+  it('compacting translates the falling edge verbatim — the reducer owns the clear (#496)', () => {
+    const event: DaemonEvent = { type: 'compacting', active: false }
+    const translated = translateTimelineEvent(event)
+    expect(translated).toEqual({ type: 'compacting', active: false })
+    expect(translated).not.toBe(event)
+  })
+
   it('sessionTransition preserves a null workspaceCwd for clear / idle_evict (wire nullability)', () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',
@@ -228,10 +243,7 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       { type: 'relayLinkChanged', status: 'connected' },
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // timeline store — it is not a turn-stream item.
-      { type: 'workspaceFolderRejected' },
-      // compaction status ships dormant (#495); its consumer is the render slice #496, which decides
-      // then whether the compacting banner is a timeline row at all — that call is not this slice's.
-      { type: 'compacting', active: true }
+      { type: 'workspaceFolderRejected' }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })

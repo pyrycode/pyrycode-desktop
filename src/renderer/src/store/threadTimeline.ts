@@ -89,6 +89,13 @@ export type ThreadEvent =
   // edge into the state's presence-or-absence. Two integers and a bool, no string field: AC1 ("no
   // daemon-supplied string is ever rendered") stays true by construction, as with `stallDetected`.
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
+  // #496: the daemon's compaction edge (#495 decodes it). Field-for-field identical to the `compacting`
+  // DaemonEvent, so the bridge is a filter + fresh copy (the `apiRetry` discipline), not a remap. The
+  // EVENT carries `active` (true rising, false the explicit falling one); the reducer is the single place
+  // that translates that edge into state. BANNER-ONLY: the wire streams no compaction progress, so there
+  // is no counter here and none may be invented (the one delta from `apiRetry`). One bool, no string
+  // field: AC1 ("no daemon-supplied string is ever rendered") stays true by construction.
+  | { type: 'compacting'; active: boolean }
 
 /**
  * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
@@ -105,7 +112,7 @@ export interface ApiRetryStatus {
   total: number
 }
 
-/** The whole timeline state: ordered content + the coarse lifecycle phase + the two problem-state scalars. */
+/** The whole timeline state: ordered content + the coarse lifecycle phase + the three chrome scalars. */
 export interface TimelineState {
   items: readonly ThreadItem[]
   phase: TurnPhase
@@ -116,6 +123,12 @@ export interface TimelineState {
   // has an explicit falling edge on the wire, so this is NEVER self-cleared by turn activity: only an
   // `active: false` event clears it. Chrome beside `items`, never a ThreadItem row.
   apiRetry: ApiRetryStatus | null
+  // #496: whether claude is auto-compacting the conversation. `apiRetry`'s clear semantics (an explicit
+  // wire falling edge, never self-cleared by turn activity) over `stalled`'s plain-boolean SHAPE: a plain
+  // `boolean`, not a record and not `| null`, because `compacting` is a pure liveness fact with no counter
+  // to hold — `| null` would invent a third state the wire cannot produce, and a record would cargo-cult
+  // #493's structure past the reason for it. Chrome beside `items`, never a ThreadItem row.
+  compacting: boolean
 }
 
 /** Compile-time exhaustiveness guard: a new ThreadEvent arm without a case is a type error. */
@@ -183,7 +196,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         items: appendDelta(state.items, event.turnId, event.text),
         phase: state.phase,
         stalled: false,
-        apiRetry: state.apiRetry
+        apiRetry: state.apiRetry,
+        compacting: state.compacting
       }
     case 'toolUse':
       // Turn activity — clears a live stall (AC2). Already appends a fresh `items`, so just carry
@@ -202,7 +216,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         ],
         phase: state.phase,
         stalled: false,
-        apiRetry: state.apiRetry
+        apiRetry: state.apiRetry,
+        compacting: state.compacting
       }
     case 'toolResult': {
       const items = fillResult(state.items, event.toolUseId, {
@@ -213,22 +228,35 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // nothing AND no stall is live; an orphan/duplicate result against a live stall must still clear
       // it, so the guard widens with `&& !state.stalled`. From `initialTimelineState` (stalled already
       // false) the orphan path still returns the same reference — the regression guard the test asserts.
-      // #493: the guard deliberately does NOT widen for `apiRetry` — that status has an explicit wire
-      // falling edge, so turn activity must LEAVE it showing (the inverse of `stalled`); it is carried
-      // through unchanged on both paths.
+      // #493/#496: the guard deliberately does NOT widen for `apiRetry` or `compacting` — both have an
+      // explicit wire falling edge, so turn activity must LEAVE them showing (the inverse of `stalled`);
+      // both are carried through unchanged on both paths.
       return items === state.items && !state.stalled
         ? state
-        : { items, phase: state.phase, stalled: false, apiRetry: state.apiRetry }
+        : {
+            items,
+            phase: state.phase,
+            stalled: false,
+            apiRetry: state.apiRetry,
+            compacting: state.compacting
+          }
     }
     case 'turnState':
       // Turn activity — clears a live stall (AC2, "any state, including idle"). No-churn ONLY when the
       // phase is unchanged AND no stall is live; an idle-when-already-idle turnState against a live stall
       // must still clear it, so the guard widens with `&& !state.stalled`.
-      // #493: the guard deliberately does NOT widen for `apiRetry` — a turn-state change arriving mid-retry
-      // is expected and must leave the status showing (the inverse of `stalled`); it is carried unchanged.
+      // #493/#496: the guard deliberately does NOT widen for `apiRetry` or `compacting` — a turn-state
+      // change arriving mid-retry or mid-compaction is expected and must leave the status showing (the
+      // inverse of `stalled`); both are carried unchanged.
       return event.state === state.phase && !state.stalled
         ? state
-        : { items: state.items, phase: event.state, stalled: false, apiRetry: state.apiRetry }
+        : {
+            items: state.items,
+            phase: event.state,
+            stalled: false,
+            apiRetry: state.apiRetry,
+            compacting: state.compacting
+          }
     case 'turnEnd':
       // Appends a boundary; does NOT reset phase — the daemon emits `turn_state: 'idle'` separately.
       // NOT in AC2's clear set: a turn boundary is not turn activity; the paired `turn_state: idle` is
@@ -240,7 +268,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         ],
         phase: state.phase,
         stalled: state.stalled,
-        apiRetry: state.apiRetry
+        apiRetry: state.apiRetry,
+        compacting: state.compacting
       }
     case 'userText':
       // A whole user message: fresh tail-append (never coalesced), `phase` untouched — the `turnEnd`
@@ -250,7 +279,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         items: [...state.items, { kind: 'userText', text: event.text }],
         phase: state.phase,
         stalled: state.stalled,
-        apiRetry: state.apiRetry
+        apiRetry: state.apiRetry,
+        compacting: state.compacting
       }
     case 'sessionBoundary':
       // A whole boundary marker: fresh tail-append (never coalesced), `phase` untouched — the `userText` /
@@ -268,26 +298,40 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         ],
         phase: state.phase,
         stalled: state.stalled,
-        apiRetry: state.apiRetry
+        apiRetry: state.apiRetry,
+        compacting: state.compacting
       }
     case 'stallDetected':
       // #317: onset-only stall — set the scalar, leave `items`/`phase` untouched. A redundant onset (the
       // stall is already live) is a same-reference no-op, mirroring the pure-duplicate discipline of the
-      // other arms. `apiRetry` is an independent fact and is carried through unchanged.
+      // other arms. `apiRetry` and `compacting` are independent facts, carried through unchanged.
       return state.stalled
         ? state
-        : { items: state.items, phase: state.phase, stalled: true, apiRetry: state.apiRetry }
+        : {
+            items: state.items,
+            phase: state.phase,
+            stalled: true,
+            apiRetry: state.apiRetry,
+            compacting: state.compacting
+          }
     case 'apiRetry': {
       // #493: the two-edged api-retry status — set from the rising edge, cleared ONLY by the falling one.
-      // `items`/`phase`/`stalled` are untouched on every path: the retry status is chrome, and it neither
-      // clears nor is cleared by the stall scalar (two independent problem facts, the #317 posture).
+      // `items`/`phase`/`stalled`/`compacting` are untouched on every path: the retry status is chrome,
+      // and it neither clears nor is cleared by the other two scalars (three independent daemon facts,
+      // the #317 posture).
       if (!event.active) {
         // The falling edge. `event.current` / `event.total` are deliberately NOT read — the wire repeats
         // the last-known counter here and it is ignored. A falling edge against no live retry is a
         // same-reference no-op.
         return state.apiRetry === null
           ? state
-          : { items: state.items, phase: state.phase, stalled: state.stalled, apiRetry: null }
+          : {
+              items: state.items,
+              phase: state.phase,
+              stalled: state.stalled,
+              apiRetry: null,
+              compacting: state.compacting
+            }
       }
       // The rising edge re-fires as the count climbs and the daemon may repeat an identical frame (no
       // wire-side dedup), so an unchanged counter returns the SAME state reference — the status never
@@ -299,9 +343,27 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         items: state.items,
         phase: state.phase,
         stalled: state.stalled,
-        apiRetry: { current: event.current, total: event.total }
+        apiRetry: { current: event.current, total: event.total },
+        compacting: state.compacting
       }
     }
+    case 'compacting':
+      // #496: the two-edged compaction status — set from the rising edge, cleared ONLY by the falling one
+      // (turn activity must NOT clear it; see the two deliberately un-widened guards above). The state IS
+      // the event's payload, so both edges collapse into one expression: an edge that changes nothing —
+      // a verbatim repeat of EITHER edge, the wire has no dedup — returns the SAME state reference, so
+      // the status never stacks, duplicates, or flickers (AC3). `items`/`phase` are untouched on every
+      // path: compaction is transient chrome, and it neither opens, closes, nor alters a turn (AC5).
+      // `stalled` and `apiRetry` are independent daemon facts, carried through unchanged.
+      return state.compacting === event.active
+        ? state
+        : {
+            items: state.items,
+            phase: state.phase,
+            stalled: state.stalled,
+            apiRetry: state.apiRetry,
+            compacting: event.active
+          }
     default:
       return assertNever(event)
   }
@@ -311,7 +373,8 @@ export const initialTimelineState: TimelineState = {
   items: [],
   phase: 'idle',
   stalled: false,
-  apiRetry: null
+  apiRetry: null,
+  compacting: false
 }
 
 /** Selectors — the read surface, mirroring `sessionStore`'s. */
@@ -319,3 +382,4 @@ export const selectItems = (s: TimelineState): readonly ThreadItem[] => s.items
 export const selectPhase = (s: TimelineState): TurnPhase => s.phase
 export const selectStalled = (s: TimelineState): boolean => s.stalled
 export const selectApiRetry = (s: TimelineState): ApiRetryStatus | null => s.apiRetry
+export const selectCompacting = (s: TimelineState): boolean => s.compacting

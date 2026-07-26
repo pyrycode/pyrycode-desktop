@@ -6,6 +6,7 @@ import {
   selectPhase,
   selectStalled,
   selectApiRetry,
+  selectCompacting,
   type ThreadEvent,
   type ThreadItem,
   type TimelineState
@@ -52,6 +53,10 @@ function stall(): ThreadEvent {
 
 function apiRetry(active: boolean, current = 0, total = 0): ThreadEvent {
   return { type: 'apiRetry', active, current, total }
+}
+
+function compacting(active: boolean): ThreadEvent {
+  return { type: 'compacting', active }
 }
 
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
@@ -443,6 +448,112 @@ describe('reduceTimeline — api-retry status (#493)', () => {
   })
 })
 
+// #496: the compaction status — the api-retry scalar's clear semantics (an explicit wire falling edge,
+// never self-cleared by turn activity) over the `stalled` scalar's plain-boolean shape. Banner-only: the
+// wire carries no progress payload, so there is no counter to hold and nothing numeric to invent. Both
+// edges collapse into one same-reference-or-fresh-state expression, so idempotency is symmetric.
+describe('reduceTimeline — compaction status (#496)', () => {
+  it('starts false on the initial state, and selectCompacting reads the slice', () => {
+    expect(initialTimelineState.compacting).toBe(false)
+    expect(selectCompacting(initialTimelineState)).toBe(false)
+  })
+
+  it('a rising edge shows the status, leaving items/phase untouched (AC1, AC5)', () => {
+    const state = run([compacting(true)])
+    expect(state.compacting).toBe(true)
+    expect(selectCompacting(state)).toBe(true)
+    // Transient chrome, never a ThreadItem row — the `phase`-beside-`items` precedent.
+    expect(state.items).toEqual([])
+    expect(state.phase).toBe('idle')
+  })
+
+  it('a falling edge clears the status (AC2)', () => {
+    const state = run([compacting(true), compacting(false)])
+    expect(state.compacting).toBe(false)
+  })
+
+  it('a verbatim repeated rising edge is a same-reference no-op — no stacking, no flicker (AC3)', () => {
+    // The wire has no dedup, so the daemon may repeat an identical frame; an identical repeat must not
+    // churn the selector into a re-render.
+    const live = run([compacting(true)])
+    expect(reduceTimeline(live, compacting(true))).toBe(live)
+  })
+
+  it('a repeated falling edge is a same-reference no-op too — idempotency is symmetric (AC3)', () => {
+    const cleared = run([compacting(true), compacting(false)])
+    expect(reduceTimeline(cleared, compacting(false))).toBe(cleared)
+  })
+
+  it('a falling edge against no live compaction is a same-reference no-op', () => {
+    expect(reduceTimeline(initialTimelineState, compacting(false))).toBe(initialTimelineState)
+  })
+
+  // AC3 — the inverse of #317, and the trap this ticket had to resist: each of the four turn-activity
+  // arms leaves a live compaction SHOWING. These are the cases a copied `stalled: false` clear-set (or a
+  // widened same-reference no-op guard) would break.
+  it('assistantDelta leaves a live compaction showing (AC3)', () => {
+    const state = run([compacting(true), delta('A', 'hi')])
+    expect(state.compacting).toBe(true)
+    expect(state.items.map((i) => i.kind)).toEqual(['assistantText'])
+  })
+
+  it('toolUse leaves a live compaction showing (AC3)', () => {
+    expect(run([compacting(true), toolUse('A', 't1')]).compacting).toBe(true)
+  })
+
+  it('an orphan toolResult leaves a live compaction showing — the no-op guard must NOT widen (AC3)', () => {
+    expect(run([compacting(true), toolResult('A', 'nope')]).compacting).toBe(true)
+  })
+
+  it('a toolResult that fills a pending call leaves a live compaction showing (AC3)', () => {
+    expect(run([toolUse('A', 't1'), compacting(true), toolResult('A', 't1')]).compacting).toBe(true)
+  })
+
+  it('turnState leaves a live compaction showing for a non-idle state (AC3)', () => {
+    const state = run([compacting(true), { type: 'turnState', state: 'thinking' }])
+    expect(state.compacting).toBe(true)
+    expect(state.phase).toBe('thinking')
+  })
+
+  it('an idle turnState leaves a live compaction showing — the second guard that must NOT widen (AC3)', () => {
+    const state = run([compacting(true), { type: 'turnState', state: 'idle' }])
+    expect(state.compacting).toBe(true)
+    expect(state.phase).toBe('idle')
+  })
+
+  it('turnEnd / userText / sessionBoundary carry a live compaction through unchanged', () => {
+    expect(run([compacting(true), turnEnd('A')]).compacting).toBe(true)
+    expect(run([compacting(true), userText('typed')]).compacting).toBe(true)
+    expect(run([compacting(true), sessionBoundary()]).compacting).toBe(true)
+  })
+
+  // The three chrome scalars are independent daemon facts — none clears another.
+  it('a stall onset and an api-retry edge leave a live compaction showing, and all three coexist', () => {
+    const state = run([compacting(true), stall(), apiRetry(true, 3, 10)])
+    expect(state.compacting).toBe(true)
+    expect(state.stalled).toBe(true)
+    expect(state.apiRetry).toEqual({ current: 3, total: 10 })
+  })
+
+  it('a compaction edge leaves stalled / apiRetry / phase unchanged in both directions', () => {
+    // The stall goes LAST: a turnState is turn activity and would clear it (the #317 semantics).
+    const live = run([{ type: 'turnState', state: 'thinking' }, apiRetry(true, 3, 10), stall()])
+    expect(live.stalled).toBe(true)
+    for (const edge of [compacting(true), compacting(false)]) {
+      const after = reduceTimeline(live, edge)
+      expect(after.stalled).toBe(true)
+      expect(after.apiRetry).toBe(live.apiRetry)
+      expect(after.phase).toBe('thinking')
+    }
+  })
+
+  it('leaves items untouched by reference across a full rising→falling cycle (AC5)', () => {
+    const state = run([compacting(true), compacting(false)])
+    expect(state.items).toBe(initialTimelineState.items)
+    expect(state.items).toEqual([])
+  })
+})
+
 describe('reduceTimeline — purity', () => {
   it('does not mutate the input state, its items array, or an existing item on coalesce', () => {
     const start = run([delta('A', 'Hel')])
@@ -472,16 +583,18 @@ describe('reduceTimeline — purity', () => {
 })
 
 describe('initial state + selectors', () => {
-  it('initialTimelineState is an empty, idle, un-stalled timeline', () => {
+  it('initialTimelineState is an empty, idle, un-stalled, un-compacting timeline', () => {
     expect(initialTimelineState.items).toEqual([])
     expect(initialTimelineState.phase).toBe('idle')
     expect(initialTimelineState.stalled).toBe(false)
+    expect(initialTimelineState.compacting).toBe(false)
   })
 
-  it('selectItems / selectPhase / selectStalled return the current slices', () => {
-    const state = run([delta('A', 'hi'), stall()])
+  it('selectItems / selectPhase / selectStalled / selectCompacting return the current slices', () => {
+    const state = run([delta('A', 'hi'), stall(), compacting(true)])
     expect(selectItems(state)).toBe(state.items)
     expect(selectPhase(state)).toBe(state.phase)
     expect(selectStalled(state)).toBe(true)
+    expect(selectCompacting(state)).toBe(true)
   })
 })

@@ -8,6 +8,8 @@ import {
   StallIndicator,
   ApiRetryIndicator,
   API_RETRY_COPY,
+  CompactingIndicator,
+  COMPACTING_COPY,
   shouldShowThinking,
   QueuedBacklog,
   StatusSheet,
@@ -498,27 +500,83 @@ describe('ApiRetryIndicator — the api-error retry affordance (#493)', () => {
   })
 })
 
+// #496: the compaction indicator bound to the `compacting` scalar. CompactingIndicator is the
+// StallIndicator twin — pure (isCompacting in, markup out) over a plain boolean, NOT the store type, so
+// the view structurally cannot receive, hence cannot render, a daemon-supplied string (AC1 — the
+// compacting frame carries no string field at all). Injected boolean: no store, no IPC — the container's
+// showing branch is unreachable under server render (zustand v5 reads getInitialState() → compacting:
+// false), so the "showing" assertions live here.
+describe('CompactingIndicator — the auto-compaction affordance (#496)', () => {
+  it('is inert with no compaction in flight — renders nothing (zero layout footprint)', () => {
+    expect(renderToStaticMarkup(<CompactingIndicator isCompacting={false} />)).toBe('')
+  })
+
+  it('shows a compaction-distinct affordance while compacting (AC1)', () => {
+    const markup = renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)
+    // The compaction-distinct wrapper + bubble classes (the working-state treatment: muted text plus a
+    // primary-role accent bar, never the error role the two problem states use).
+    expect(markup).toContain('conversation__compacting')
+    expect(markup).toContain('bubble--compacting')
+    // The client-owned copy — never a daemon string.
+    expect(markup).toContain(COMPACTING_COPY)
+    // Visually distinct from all three sibling indicators (AC1).
+    expect(markup).not.toContain('bubble--thinking')
+    expect(markup).not.toContain('bubble--stall')
+    expect(markup).not.toContain('bubble--api-retry')
+  })
+
+  it('carries client-owned copy that is textually distinct from its sibling indicators (AC1)', () => {
+    // Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson).
+    expect(COMPACTING_COPY).not.toContain("'")
+    expect(COMPACTING_COPY).not.toBe('Thinking…')
+    // STALL_COPY is module-private (#317) — asserted against its literal, as the StallIndicator describe does.
+    expect(COMPACTING_COPY).not.toBe('The turn seems to have stalled…')
+    expect(COMPACTING_COPY).not.toBe(API_RETRY_COPY)
+    // Reads as work on the conversation itself, so a silent screen is legible as progress.
+    expect(COMPACTING_COPY.toLowerCase()).toContain('compacting')
+  })
+})
+
 // #493: the indicator-precedence predicate. The thinking gate NARROWS rather than the container deriving
 // a mutually-exclusive status union, so both indicator views stay pure and unchanged in their own props
 // (the isTurnRunning precedent of extracting the named gate). #496 extends `ThreadStatus` with one field
-// and this predicate with one clause.
-describe('shouldShowThinking — the retry-supersedes-thinking rule (#493)', () => {
-  it('shows the thinking indicator while thinking with no retry in flight (AC5)', () => {
-    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null })).toBe(true)
+// and this predicate with one clause — the second proof the seam grows by one of each.
+describe('shouldShowThinking — the retry- and compaction-supersede-thinking rule (#493, #496)', () => {
+  it('shows the thinking indicator while thinking with nothing superseding it (AC4)', () => {
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: false })).toBe(true)
   })
 
-  it('hides the thinking indicator while a retry is in flight — the supersede rule (AC5)', () => {
-    expect(shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 } })).toBe(false)
+  it('hides the thinking indicator while a retry is in flight — the supersede rule (#493)', () => {
+    expect(
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: false })
+    ).toBe(false)
   })
 
-  it('hides it for a retry with an unknown count too — presence supersedes, not the counter (AC5)', () => {
-    expect(shouldShowThinking({ phase: 'thinking', apiRetry: { current: 0, total: 0 } })).toBe(false)
+  it('hides it for a retry with an unknown count too — presence supersedes, not the counter (#493)', () => {
+    expect(
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 0, total: 0 }, compacting: false })
+    ).toBe(false)
   })
 
-  it('leaves thinking-indicator behaviour unchanged when no retry is in flight (AC5)', () => {
+  it('hides the thinking indicator while compacting — the second supersede rule (AC4)', () => {
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: true })).toBe(false)
+  })
+
+  it('hides it while both compacting and retrying (AC4)', () => {
+    expect(
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: true })
+    ).toBe(false)
+  })
+
+  it('never shows thinking outside the thinking phase, compacting or not (AC4)', () => {
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: true })).toBe(false)
+    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: true })).toBe(false)
+  })
+
+  it('leaves thinking-indicator behaviour unchanged when nothing is in flight (AC4)', () => {
     // The pre-#493 gate was exactly `phase === 'thinking'`.
-    expect(shouldShowThinking({ phase: 'idle', apiRetry: null })).toBe(false)
-    expect(shouldShowThinking({ phase: 'responding', apiRetry: null })).toBe(false)
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false })).toBe(false)
+    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: false })).toBe(false)
   })
 })
 
@@ -1404,6 +1462,15 @@ describe('ConversationScreen — store binding', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__api-retry')
     expect(markup).not.toContain(API_RETRY_COPY)
+  })
+
+  // #496: the compaction indicator mounts against the initial timeline store (getInitialState compacting:
+  // false), so CompactingIndicator returns nothing — the inert render slice (the ApiRetryIndicator-smoke
+  // analog). The showing path is proven on the pure CompactingIndicator describe above.
+  it('mounts the initial timeline with no compaction indicator (the inert render slice)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('conversation__compacting')
+    expect(markup).not.toContain(COMPACTING_COPY)
   })
 
   // #294: the queued-backlog control mounts against the empty queue store (getInitialState backlogs:

@@ -132,6 +132,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'modalAnswerRejected':
     case 'queueState':
     case 'screenSnapshotReceived':
+    case 'unrecognizedMessage':
     case 'relayLinkChanged':
     case 'notificationActivated':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge

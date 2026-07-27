@@ -257,6 +257,11 @@ function compactingPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'compacting', ts: FIXED_TS, payload })
 }
 
+/** An `unrecognized_message` plaintext, wrapping an arbitrary payload. */
+function unrecognizedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'unrecognized_message', ts: FIXED_TS, payload })
+}
+
 /** A `tool_use` plaintext, wrapping an arbitrary payload (#217). */
 function toolUsePlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'tool_use', ts: FIXED_TS, payload })
@@ -1608,6 +1613,117 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: compactingPlaintext({ conversation_id: 'conv-1', active: 'true' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — unrecognized_message stream', () => {
+  const UNRECOGNIZED = {
+    conversation_id: 'conv-1',
+    site: 'line_type',
+    message_type: 'some_future_event',
+    raw: '{"type":"some_future_event","detail":"something new"}',
+    truncated: false
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('emits an unrecognizedMessage carrying the four display fields, dropping conversation_id', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: unrecognizedPlaintext(UNRECOGNIZED) })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([
+      {
+        type: 'unrecognizedMessage',
+        site: 'line_type',
+        messageType: 'some_future_event',
+        raw: '{"type":"some_future_event","detail":"something new"}',
+        truncated: false
+      }
+    ])
+    // conversation_id is dropped at the choke point (single active conversation, the turnState rule).
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('carries an empty messageType through — the undecodable site read no type at all', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: unrecognizedPlaintext({
+        ...UNRECOGNIZED,
+        site: 'undecodable',
+        message_type: '',
+        raw: '{"type":"assist'
+      })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'unrecognizedMessage',
+        site: 'undecodable',
+        messageType: '',
+        raw: '{"type":"assist',
+        truncated: false
+      }
+    ])
+  })
+
+  it('does NOT dedup: two identical frames each emit their own event', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (let i = 0; i < 2; i++) {
+      drivers[0].emit({ type: 'message', plaintext: unrecognizedPlaintext(UNRECOGNIZED) })
+    }
+
+    // A repeat is a REAL repeat. Collapsing repeats would hide how often this fires, which is exactly
+    // the number that tells an operator to go fix something. This pins the contract against a future
+    // optimiser adding edge-tracking state to this leg.
+    expect(emitted(sink).slice(before)).toHaveLength(2)
+  })
+
+  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: unrecognizedPlaintext({ ...UNRECOGNIZED, smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'messageType',
+      'raw',
+      'site',
+      'truncated',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('drops a malformed unrecognized_message without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: unrecognizedPlaintext({ ...UNRECOGNIZED, site: 'bogus_site' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

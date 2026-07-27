@@ -35,6 +35,7 @@ import type {
   StallPayload,
   ApiRetryPayload,
   CompactingPayload,
+  UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsUpdatedPayload,
   ToolUsePayload,
@@ -121,6 +122,19 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * nothing may consult truthiness). NOT onset-only and NOT deduped: N frames narrow to N values. Ships
  * dormant — the render slice (#496) is the first consumer.
  *
+ * The `unrecognized-message` kind carries the decoded UnrecognizedMessagePayload — the daemon's report
+ * that its stream parser met claude output it has no mapping for. NOT a claude sub-state like its
+ * `stall` / `api-retry` / `compacting` neighbours: it reports a gap in the daemon's own mapping. The
+ * consumer carries `site`, `message_type`, `raw` and `truncated` onward, dropping `conversation_id` (the
+ * turnState convention).
+ *
+ * This is the ONE inbound kind whose whole point is to carry an unbounded, unstructured daemon string,
+ * so the fail-closed defence matters more here than anywhere else on this file: a closed-enum `site`
+ * (literal comparison, never requireString), two required strings, and a required BOOLEAN whose `false`
+ * is a value not an absence. The daemon caps `raw` at construction and the frame-level
+ * MAX_PLAINTEXT_BYTES guard backstops the oversized case, so no length check is duplicated here. Ships
+ * dormant — the render slice is the first consumer.
+ *
  * The `session-transition` kind (#254) carries the decoded SessionTransitionPayload — the session-boundary
  * marker whose `new_session_id` is the addressing key the #259 holder will retain. The consumer carries
  * ONLY `new_session_id` onward (dropping the other four decoded fields — the #180 content-drop model); the
@@ -192,6 +206,7 @@ export type InboundDaemonMessage =
   | { kind: 'stall'; stall: StallPayload }
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }
   | { kind: 'compacting'; compacting: CompactingPayload }
+  | { kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
   | {
       kind: 'session-settings-updated'
@@ -473,6 +488,47 @@ function parseCompactingPayload(payload: unknown): CompactingPayload {
   const conversation_id = requireString(payload, 'conversation_id')
   const active = requireBoolean(payload, 'active')
   return { conversation_id, active }
+}
+
+/**
+ * Narrow an opaque payload into an UnrecognizedMessagePayload. Fail-closed like its neighbours, over
+ * five fields: two required strings, a required BOOLEAN (`truncated`, whose `false` is a value not an
+ * absence, so nothing may consult truthiness), and a `site` closed-enum check cloned from
+ * parseSessionTransitionPayload's `reason` check — a bare requireString would accept any string and
+ * defeat exactly the boundary that keeps a daemon-supplied value out of a render branch.
+ *
+ * `message_type` is required but MAY BE EMPTY, and that is a wire-level fact rather than sloppiness: the
+ * `undecodable` site means nothing decoded, so no type was ever read. requireString admits `''`, which
+ * is the wanted behaviour; the decoder does NOT cross-validate the empty-⟺-`undecodable` invariant
+ * (daemon-guaranteed, and enforcing it here would defend an unobserved failure).
+ *
+ * `raw` gets NO length check. The daemon truncates at construction — that is why `truncated` exists —
+ * and parseInboundMessage's frame-level MAX_PLAINTEXT_BYTES guard backstops the oversized case, so a
+ * third bound here would be a defence against a failure that cannot reach this line.
+ *
+ * Returns a fresh five-field literal, so unknown server-added keys (e.g. a spurious `turn_id`) are
+ * tolerated (forward-compat) but NOT copied through — which also makes it prototype-pollution-safe.
+ * Its messages name the failure CATEGORY only: never the `raw` blob (unbounded, model-adjacent) and
+ * never the conversation-correlating id.
+ */
+function parseUnrecognizedMessagePayload(payload: unknown): UnrecognizedMessagePayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed unrecognized_message payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const message_type = requireString(payload, 'message_type')
+  const raw = requireString(payload, 'raw')
+  const truncated = requireBoolean(payload, 'truncated')
+  const site = payload.site
+  if (
+    site !== 'line_type' &&
+    site !== 'assistant_block' &&
+    site !== 'user_block' &&
+    site !== 'undecodable'
+  ) {
+    throw new WireDecodeError('missing required field: site')
+  }
+  return { conversation_id, site, message_type, raw, truncated }
 }
 
 /**
@@ -986,6 +1042,22 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'compacting', compacting }
+    }
+    case 'unrecognized_message': {
+      // Narrow BEFORE logging so a malformed frame (an unknown `site`, an absent `raw`, a non-boolean
+      // `truncated`) throws first and leaves no record. The no-content-in-the-log rule binds hardest
+      // here: `raw` is the most untrusted string on this wire, so NOTHING decoded is logged — only the
+      // frame's byte length + one-way hash, reusing the existing content-free field set. Note the
+      // asymmetry that makes this frame worth having: the DAEMON deliberately logs nothing useful about
+      // the drop either, which is why it now crosses the wire instead.
+      const unrecognized = parseUnrecognizedMessagePayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'unrecognized_message',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'unrecognized-message', unrecognized }
     }
     case 'session_transition': {
       // Narrow BEFORE logging so a malformed frame (a `reason` outside the closed enum, an

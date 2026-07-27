@@ -11,6 +11,8 @@ import type {
   StallPayload,
   ApiRetryPayload,
   CompactingPayload,
+  WireUnrecognizedSite,
+  UnrecognizedMessagePayload,
   WireSessionTransitionReason,
   SessionTransitionPayload,
   ToolUsePayload,
@@ -183,6 +185,68 @@ describe('compacting wire vocabulary (#495)', () => {
       active: false
     }
     expect(falling.active).toBe(false)
+  })
+})
+
+describe('unrecognized-message wire vocabulary', () => {
+  it('admits the unrecognized_message inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const unrecognized: EnvelopeType = 'unrecognized_message'
+    expect(unrecognized).toBe('unrecognized_message')
+  })
+
+  it('shapes UnrecognizedMessagePayload as its five fields — no turn_id', () => {
+    const payload: UnrecognizedMessagePayload = {
+      conversation_id: 'c1',
+      site: 'line_type',
+      message_type: 'some_future_event',
+      raw: '{"type":"some_future_event"}',
+      truncated: false
+    }
+    expect(payload).toEqual({
+      conversation_id: 'c1',
+      site: 'line_type',
+      message_type: 'some_future_event',
+      raw: '{"type":"some_future_event"}',
+      truncated: false
+    })
+    // No turn_id: the daemon could not parse the message well enough to attribute a turn to it.
+    expect(payload).not.toHaveProperty('turn_id')
+  })
+
+  it('closes the site enum over exactly the four drop sites', () => {
+    const sites: WireUnrecognizedSite[] = [
+      'line_type',
+      'assistant_block',
+      'user_block',
+      'undecodable'
+    ]
+    expect(sites).toHaveLength(4)
+  })
+
+  it('admits an empty message_type — the undecodable site read no type at all', () => {
+    const undecodable: UnrecognizedMessagePayload = {
+      conversation_id: 'c1',
+      site: 'undecodable',
+      message_type: '',
+      raw: '{"type":"assist',
+      truncated: false
+    }
+    expect(undecodable.message_type).toBe('')
+  })
+
+  it('carries raw as a plain string, since a truncated blob is no longer valid JSON', () => {
+    const cut: UnrecognizedMessagePayload = {
+      conversation_id: 'c1',
+      site: 'line_type',
+      message_type: 'huge_event',
+      raw: '{"type":"huge_event","blob":"xxxxx',
+      truncated: true
+    }
+    expect(typeof cut.raw).toBe('string')
+    expect(cut.truncated).toBe(true)
+    // The point of the string typing: this would throw if the field claimed to be JSON.
+    expect(() => JSON.parse(cut.raw)).toThrow()
   })
 })
 

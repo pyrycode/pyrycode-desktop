@@ -277,6 +277,18 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'compacting', active: false })).toBeNull()
   })
 
+  it('unrecognizedMessage → null (consumed by the timeline render slice, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'unrecognizedMessage',
+        site: 'line_type',
+        messageType: 'some_future_event',
+        raw: '{"type":"some_future_event"}',
+        truncated: false
+      })
+    ).toBeNull()
+  })
+
   it('workspaceFolderRejected → null (consumed by the #397 round-trip store, not the session store)', () => {
     expect(translateDaemonEvent({ type: 'workspaceFolderRejected' })).toBeNull()
   })

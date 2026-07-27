@@ -40,12 +40,30 @@ export const initialSessionIdState: SessionIdState = { sessionId: null }
 
 /**
  * DI-friendly, React-free store — one isolated instance per test. `setSessionId` replaces the whole
- * `sessionId` unconditionally (AC2 "most recent marker wins" — no merge, no coercion, no validation).
+ * `sessionId` unconditionally (AC2 "most recent value wins" — no merge, no coercion, no validation).
  * The stored value is the daemon's, as-is (AC4). `clearSessionId` (#529) returns the state to
  * `initialSessionIdState` for when the pairing context that scoped the id ends — sourced from that
  * exported constant rather than a fresh literal, so it keeps resetting everything if the state ever
  * gains a second field. It is unconditional, which is what makes clearing an already-clear store a
  * no-op by construction rather than by a guard.
+ *
+ * TWO writers, both landing the daemon's value verbatim (#491): sessionIdBridge, from the unsolicited
+ * session_transition marker, and runConfigSnapshot, from the sheet's own request_session_settings
+ * reply. Neither is preferred — arrival order wins — because neither dominates. Preferring the
+ * marker is wrong after an eviction, where the wire mirrors the PREVIOUS id onto it so the next read
+ * is the only correct value; preferring the read is wrong after a /clear, where the marker carries
+ * the genuinely newer id while an open sheet holds a stale one.
+ *
+ * Arrival order also governs the interaction with `clearSessionId`: a reply that lands after a clear
+ * repopulates the id, because every write here is unconditional and last-write-wins. That is not new
+ * with #491 — the marker writer has always had the same property — but #491 adds a second source, so
+ * the window widens from "a marker arrives after unpair" to "either source does". Left as-is
+ * deliberately: guarding it belongs with the pairing lifecycle that owns the clear, not in a store
+ * whose whole contract is to record what it was told.
+ *
+ * A held `''` is a real value meaning "the daemon has no session to address", NOT an absence. Whether
+ * that value can be written to is a separate question, answered in one place by
+ * isAddressableSessionId (runSettingsControls) — this store only records what it was told.
  */
 export function createSessionIdStore(init: SessionIdState = initialSessionIdState) {
   return createStore<SessionIdStore>((set) => ({

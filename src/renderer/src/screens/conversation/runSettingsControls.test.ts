@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { changeSetting } from './runSettingsControls'
+import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 
 // changeSetting is the pure, React-free session-id gate over #256's submitSettingsChange (the
 // modalResolution.ts idiom): its two effects — sendCommand + dispatch — are injected, so it is
@@ -7,12 +7,41 @@ import { changeSetting } from './runSettingsControls'
 // `node` test environment cannot get by firing clicks on the view. The optimistic/rollback behaviour
 // of submitSettingsChange itself is #256's; only the null-guard + single-field forwarding is tested.
 
+describe('isAddressableSessionId', () => {
+  // The single definition of the sheet's operability rule, used by both gate sites. null is "never
+  // observed"; '' is the daemon explicitly saying it has no session to address. Both are inert, for
+  // different reasons that reach the same conclusion: there is nothing to write to (#491).
+  it('rejects null — never observed', () => {
+    expect(isAddressableSessionId(null)).toBe(false)
+  })
+
+  it('rejects the empty string — the daemon says there is no session to address', () => {
+    expect(isAddressableSessionId('')).toBe(false)
+  })
+
+  it('accepts a real id', () => {
+    expect(isAddressableSessionId('sess-a')).toBe(true)
+  })
+})
+
 describe('changeSetting — the AC5 session-id gate', () => {
   it('no-ops when sessionId is null: neither sends a command nor dispatches (AC5)', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()
 
     changeSetting({ sessionId: null, sendCommand, dispatch }, { field: 'model', value: 'opus' })
+
+    expect(sendCommand).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('no-ops when sessionId is the empty string: nothing sent, nothing dispatched (#491)', () => {
+    // The daemon has told us it cannot resolve a session. Sending anyway would put an empty address
+    // on the wire for it to reject, and would leave an optimistic overlay that never confirms.
+    const sendCommand = vi.fn()
+    const dispatch = vi.fn()
+
+    changeSetting({ sessionId: '', sendCommand, dispatch }, { field: 'model', value: 'opus' })
 
     expect(sendCommand).not.toHaveBeenCalled()
     expect(dispatch).not.toHaveBeenCalled()

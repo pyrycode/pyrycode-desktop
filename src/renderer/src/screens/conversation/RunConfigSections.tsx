@@ -6,7 +6,7 @@ import {
   selectError,
   type SettingsChange
 } from '../../store/runSettingsWriteStore'
-import { changeSetting } from './runSettingsControls'
+import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 
 // The Run configuration sheet's Model / Effort / YOLO sections (Figma node 20-100 subtree
 // 20:111/20:130/20:143). #188 rendered them read-only; #257 makes them INTERACTIVE — selecting a
@@ -330,7 +330,9 @@ export function RunConfigSections(): JSX.Element {
   const errorField = selectError(writeState)
 
   const onChange =
-    sessionId !== null
+    // Both null and '' withhold the handler: null is "never observed", '' is the daemon saying it
+    // has no session to address. See isAddressableSessionId (#491).
+    isAddressableSessionId(sessionId)
       ? (change: SettingsChange): void =>
           changeSetting(
             { sessionId, sendCommand: window.pyry.sendCommand, dispatch: writeState.dispatch },

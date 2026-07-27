@@ -502,9 +502,10 @@ function parseCompactingPayload(payload: unknown): CompactingPayload {
  * is the wanted behaviour; the decoder does NOT cross-validate the empty-⟺-`undecodable` invariant
  * (daemon-guaranteed, and enforcing it here would defend an unobserved failure).
  *
- * `raw` gets NO length check. The daemon truncates at construction — that is why `truncated` exists —
- * and parseInboundMessage's frame-level MAX_PLAINTEXT_BYTES guard backstops the oversized case, so a
- * third bound here would be a defence against a failure that cannot reach this line.
+ * `raw` gets NO length check. The daemon truncates at construction to 16 KiB — that is why `truncated`
+ * exists — and parseInboundMessage's frame-level MAX_PLAINTEXT_BYTES guard (65519) backstops the
+ * oversized case with roughly four times headroom over the daemon's cap. A third bound here would be a
+ * defence against a failure that cannot reach this line.
  *
  * Returns a fresh five-field literal, so unknown server-added keys (e.g. a spurious `turn_id`) are
  * tolerated (forward-compat) but NOT copied through — which also makes it prototype-pollution-safe.

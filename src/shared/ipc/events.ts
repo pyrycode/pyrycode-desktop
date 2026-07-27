@@ -153,8 +153,9 @@ export type DaemonEvent =
   // does — the raw text IS the render payload, and there is no summary that could replace it, because
   // the whole point is showing an operator the bytes we could not interpret. The boundary defended is
   // the fail-closed decode upstream (parseUnrecognizedMessagePayload: closed-enum `site`, required
-  // strings, required boolean), not this internal channel. The daemon caps `raw` at construction and the
-  // frame-level MAX_PLAINTEXT_BYTES guard backstops it, so the string is bounded before it gets here.
+  // strings, required boolean), not this internal channel. The daemon caps `raw` at 16 KiB and the
+  // frame-level MAX_PLAINTEXT_BYTES guard (65519) backstops it, so the string is bounded before it gets
+  // here — twice, by two independent limits.
   //
   // `raw` and `messageType` are UNTRUSTED daemon-relayed content: the consumer must render them as PLAIN
   // TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML) and never into an attribute or a URL —

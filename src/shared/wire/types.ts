@@ -342,16 +342,6 @@ export interface CompactingPayload {
  * decoder is widened — the correct no-drift posture for a wire enum.
  */
 /**
- * The four places the daemon's stream parser can meet claude output it has no mapping for. A closed
- * wire enum like WireSessionTransitionReason, so the decoder compares against literals rather than
- * accepting any string. `line_type` is a whole top-level message; `assistant_block` / `user_block` are
- * one content block of an otherwise-fine message; `undecodable` is a line or block that would not
- * JSON-decode at all, and is the one value for which `message_type` is empty (nothing decoded, so no
- * type was ever read).
- */
-export type WireUnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block' | 'undecodable'
-
-/**
  * Inbound `unrecognized_message` diagnostic (daemon → client). Mirrors the daemon's
  * UnrecognizedMessagePayload field-for-field, wire order `conversation_id, site, message_type, raw,
  * truncated` — all always present (no `omitempty`).
@@ -369,10 +359,11 @@ export type WireUnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block
  * receiving it never opens, closes, or alters a turn.
  *
  * `raw` IS THE RENDER PAYLOAD, and it is the only interactive frame carrying unbounded model-adjacent
- * JSON. It is a plain string, NOT parsed JSON, because the daemon truncates it at a fixed byte cap and a
- * truncated blob is no longer valid JSON — `truncated` says whether that happened. Treat it as the most
- * untrusted string on this wire: it must be rendered as PLAIN TEXT only, never through an HTML sink
- * (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL.
+ * JSON. It is a plain string, NOT parsed JSON, because the daemon truncates it at 16 KiB and a truncated
+ * blob is no longer valid JSON — `truncated` says whether that happened. That cap is roughly a quarter of
+ * MAX_PLAINTEXT_BYTES (65519), so the frame guard is a backstop here rather than the live constraint.
+ * Treat `raw` as the most untrusted string on this wire: it must be rendered as PLAIN TEXT only, never
+ * through an HTML sink (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL.
  */
 export interface UnrecognizedMessagePayload {
   conversation_id: string
@@ -383,6 +374,16 @@ export interface UnrecognizedMessagePayload {
 }
 
 export type WireSessionTransitionReason = 'clear' | 'idle_evict' | 'workspace_change'
+
+/**
+ * The four places the daemon's stream parser can meet claude output it has no mapping for. A closed
+ * wire enum like WireSessionTransitionReason, so the decoder compares against literals rather than
+ * accepting any string. `line_type` is a whole top-level message; `assistant_block` / `user_block` are
+ * one content block of an otherwise-fine message; `undecodable` is a line or block that would not
+ * JSON-decode at all, and is the one value for which `message_type` is empty (nothing decoded, so no
+ * type was ever read).
+ */
+export type WireUnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block' | 'undecodable'
 
 /**
  * Inbound `session_transition` marker (daemon → client). Mirrors the daemon's SessionTransitionPayload

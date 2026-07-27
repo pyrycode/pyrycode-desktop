@@ -59,6 +59,15 @@ function compacting(active: boolean): ThreadEvent {
   return { type: 'compacting', active }
 }
 
+function unrecognized(
+  site: 'line_type' | 'assistant_block' | 'user_block' | 'undecodable' = 'line_type',
+  messageType = 'some_future_event',
+  raw = '{"type":"some_future_event"}',
+  truncated = false
+): ThreadEvent {
+  return { type: 'unrecognizedMessage', site, messageType, raw, truncated }
+}
+
 /** Fold a sequence of events over the initial state — the reducer's natural exercise shape. */
 function run(events: readonly ThreadEvent[]): TimelineState {
   return events.reduce(reduceTimeline, initialTimelineState)
@@ -596,5 +605,82 @@ describe('initial state + selectors', () => {
     expect(selectPhase(state)).toBe(state.phase)
     expect(selectStalled(state)).toBe(true)
     expect(selectCompacting(state)).toBe(true)
+  })
+})
+
+describe('reduceTimeline — the unrecognized-message row', () => {
+  it('appends a row carrying all four fields', () => {
+    const state = run([unrecognized()])
+    expect(state.items).toEqual([
+      {
+        kind: 'unrecognizedMessage',
+        site: 'line_type',
+        messageType: 'some_future_event',
+        raw: '{"type":"some_future_event"}',
+        truncated: false
+      }
+    ])
+  })
+
+  it('carries an empty messageType and a truncated payload through verbatim', () => {
+    const state = run([unrecognized('undecodable', '', '{"type":"assist', true)])
+    expect(state.items).toEqual([
+      {
+        kind: 'unrecognizedMessage',
+        site: 'undecodable',
+        messageType: '',
+        raw: '{"type":"assist',
+        truncated: true
+      }
+    ])
+  })
+
+  it('does NOT coalesce identical repeats — each one is its own row', () => {
+    // The design decision worth defending: everything else repeat-prone in this reducer collapses,
+    // this must not. How often it fires is the number that tells an operator to go fix something, and
+    // collapsing repeats would hide exactly that.
+    const state = run([unrecognized(), unrecognized(), unrecognized()])
+    expect(state.items).toHaveLength(3)
+  })
+
+  it('does not coalesce into an adjacent assistant delta, or absorb one after it', () => {
+    const state = run([delta('t1', 'before'), unrecognized(), delta('t1', 'after')])
+    expect(state.items.map((i) => i.kind)).toEqual([
+      'assistantText',
+      'unrecognizedMessage',
+      'assistantText'
+    ])
+    // The delta after the row opens a FRESH run rather than appending to the one before it.
+    expect(state.items[0]).toMatchObject({ text: 'before' })
+    expect(state.items[2]).toMatchObject({ text: 'after' })
+  })
+
+  it('opens and closes no turn — phase is untouched', () => {
+    const idle = run([unrecognized()])
+    expect(idle.phase).toBe('idle')
+    const thinking = run([{ type: 'turnState', state: 'thinking' }, unrecognized()])
+    expect(thinking.phase).toBe('thinking')
+  })
+
+  it('is not turn activity — it clears neither stall, api-retry, nor compaction', () => {
+    const state = run([stall(), apiRetry(true, 2, 5), compacting(true), unrecognized()])
+    expect(state.stalled).toBe(true)
+    expect(state.apiRetry).toEqual({ current: 2, total: 5 })
+    expect(state.compacting).toBe(true)
+  })
+
+  it('appends in arrival order among other items', () => {
+    const state = run([userText('hi'), unrecognized(), delta('t1', 'reply'), turnEnd('t1')])
+    expect(state.items.map((i) => i.kind)).toEqual([
+      'userText',
+      'unrecognizedMessage',
+      'assistantText',
+      'turnBoundary'
+    ])
+  })
+
+  it('carries no turnId — the daemon could not attribute one', () => {
+    const [item] = run([unrecognized()]).items
+    expect(item).not.toHaveProperty('turnId')
   })
 })

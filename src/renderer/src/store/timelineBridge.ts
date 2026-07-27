@@ -20,9 +20,9 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the nine timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * timeline state. Owns exactly the ten timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
  * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317 /
- * `apiRetry` #493 / `compacting` #496); each is reconstructed
+ * `apiRetry` #493 / `compacting` #496 / `unrecognizedMessage`); each is reconstructed
  * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
@@ -108,6 +108,20 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // deciding what `active: false` means is reduceTimeline's job, not the bridge's, so the translator
       // stays a pure rename with no normalization of its own.
       return { type: 'compacting', active: event.active }
+    case 'unrecognizedMessage':
+      // The parser-gap diagnostic. The DaemonEvent and the ThreadEvent are field-for-field identical,
+      // so this is a filter + fresh literal (arm selection), never a pass-through of the DaemonEvent
+      // object — the `compacting` discipline. No normalization: deciding what an unrecognized message
+      // means is reduceTimeline's job, and deciding how it looks is the row's, so the translator stays
+      // a pure rename. `site` assigns with no cast because UnrecognizedSite and WireUnrecognizedSite
+      // are the same literal union by construction.
+      return {
+        type: 'unrecognizedMessage',
+        site: event.site,
+        messageType: event.messageType,
+        raw: event.raw,
+        truncated: event.truncated
+      }
     case 'connecting':
     case 'connected':
     case 'disconnected':
@@ -132,7 +146,6 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'modalAnswerRejected':
     case 'queueState':
     case 'screenSnapshotReceived':
-    case 'unrecognizedMessage':
     case 'relayLinkChanged':
     case 'notificationActivated':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge

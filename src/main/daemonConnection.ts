@@ -31,6 +31,7 @@ import { buildClientHello, parseHelloAck } from './transport/helloExchange'
 import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
 import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
+import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildRecentWorkspaces } from './transport/recentWorkspacesEnvelope'
 import { buildCreateConversation } from './transport/createConversationEnvelope'
@@ -156,6 +157,11 @@ export interface DaemonConnection {
    * `error` that is dropped today — see #180 Out of scope). NEVER throws out of the module (parity #490).
    */
   requestSnapshot(payload: RequestSnapshotPayload): void
+  /**
+   * Ask the daemon for the current run configuration (#491). Bare — no payload — because the reply
+   * is daemon-wide. Inert no-op when not connected, like requestSnapshot.
+   */
+  requestSessionSettings(): void
   /**
    * Encrypt a bare `list_conversations` control envelope onto the live session — asks the daemon for
    * the current conversation list. The `send` TWIN, not `requestDebugBundle`: a list request has no
@@ -589,6 +595,27 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               type: 'screenSnapshotReceived',
               text: inbound.snapshot.text,
               ts: inbound.snapshot.ts
+            })
+            return
+          case 'session-settings':
+            // The run-configuration data path (#491). A fresh literal with named fields, never a
+            // spread of inbound.sessionSettings — so a future decoder that grew a field cannot
+            // smuggle it across. snake→camel for the id only (`sessionId`), matching the
+            // sessionTransition arm; the five value fields keep their wire names, matching
+            // snapshotReceived, so a consumer reading either arm reads the same shape.
+            //
+            // `session_id: ''` crosses VERBATIM. It is the daemon saying "I have no session to
+            // address", which the sheet's gate must be able to see; coercing it to null here would
+            // make it indistinguishable from "no reply yet" and re-open the inert-sheet defect one
+            // layer down.
+            emitDaemonEvent(sink, {
+              type: 'runConfigReceived',
+              sessionId: inbound.sessionSettings.session_id,
+              model: inbound.sessionSettings.model,
+              effort: inbound.sessionSettings.effort,
+              yolo: inbound.sessionSettings.yolo,
+              used_tokens: inbound.sessionSettings.used_tokens,
+              window_tokens: inbound.sessionSettings.window_tokens
             })
             return
           case 'assistant-delta':
@@ -1055,6 +1082,24 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Shares the one monotonic nextEnvelopeId with send / requestSnapshot / requestDebugBundle — no
       // second counter — so ids stay unique across interleaved calls (the daemon correlates by id).
       const bytes = buildListConversations({ id: nextEnvelopeId, ts: now() })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): the fixed-shape envelope cannot over-cap, but
+      // driver.sendMessage can throw. The caught object is DROPPED (classify-don't-forward, inherited #62).
+    }
+  }
+
+  function requestSessionSettings(): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
+    // mid-bootstrap, or bootstrap-failed). A read request has no consumer to fail; a request sent
+    // while disconnected simply produces no reply, and the sheet re-requests on its next open.
+    if (driver === null) return
+    try {
+      // Shares the one monotonic nextEnvelopeId with send / requestSnapshot / requestDebugBundle —
+      // no second counter — so ids stay unique across interleaved calls (the daemon correlates the
+      // session_settings reply by in_reply_to).
+      const bytes = buildRequestSessionSettings({ id: nextEnvelopeId, ts: now() })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
     } catch {
@@ -1532,6 +1577,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     },
     send,
     requestSnapshot,
+    requestSessionSettings,
     requestConversations,
     requestRecentWorkspaces,
     createConversation,

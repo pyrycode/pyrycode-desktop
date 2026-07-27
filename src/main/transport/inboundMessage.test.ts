@@ -48,6 +48,27 @@ function encodeSnapshot(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 9, type: 'screen_snapshot', ts: FIXED_TS, payload })
 }
 
+/** A `session_settings` envelope's plaintext bytes, wrapping an arbitrary payload (#491). */
+function encodeSessionSettings(payload: unknown, inReplyTo = 812): Uint8Array {
+  return encodeEnvelope({
+    id: 45,
+    type: 'session_settings',
+    ts: FIXED_TS,
+    in_reply_to: inReplyTo,
+    payload
+  })
+}
+
+/** A fully-populated, well-formed session_settings payload (#491). */
+const RUN_CONFIG = {
+  session_id: 'sess-a',
+  model: 'claude-opus-4-8',
+  effort: 'high',
+  yolo: false,
+  used_tokens: 12480,
+  window_tokens: 200000
+}
+
 /** An `assistant_delta` envelope's plaintext bytes, wrapping an arbitrary payload (#199). */
 function encodeAssistantDelta(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 10, type: 'assistant_delta', ts: FIXED_TS, payload })
@@ -3223,6 +3244,94 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
     const dismissedMsg = (dismissedErr as Error).message
     for (const leak of ['admin', 'secret-outcome']) {
       expect(dismissedMsg).not.toContain(leak)
+    }
+  })
+})
+
+describe('parseInboundMessage — session_settings recognition (#491)', () => {
+  it('narrows a full session_settings into { kind: session-settings } with all six fields', () => {
+    expect(parseInboundMessage(encodeSessionSettings(RUN_CONFIG))).toEqual({
+      kind: 'session-settings',
+      sessionSettings: RUN_CONFIG,
+      inReplyTo: 812
+    })
+  })
+
+  it('decodes an empty session_id as the value "", never as absent', () => {
+    // '' is the daemon saying "I have no session to address". The run-config sheet's gate must be
+    // able to see it: defaulting or dropping it would make it indistinguishable from "no reply
+    // yet", which is exactly the ambiguity that let the inert-sheet defect hide (#491).
+    const noSession = { ...RUN_CONFIG, session_id: '' }
+    expect(parseInboundMessage(encodeSessionSettings(noSession))).toEqual({
+      kind: 'session-settings',
+      sessionSettings: noSession,
+      inReplyTo: 812
+    })
+  })
+
+  it('decodes empty model/effort, yolo:false and zero usage as those values, never as absent', () => {
+    const zeros = {
+      session_id: 'sess-a',
+      model: '',
+      effort: '',
+      yolo: false,
+      used_tokens: 0,
+      window_tokens: 0
+    }
+    expect(parseInboundMessage(encodeSessionSettings(zeros))).toEqual({
+      kind: 'session-settings',
+      sessionSettings: zeros,
+      inReplyTo: 812
+    })
+  })
+
+  it('drops unknown server keys, keeping only the six known fields (forward-compat)', () => {
+    const withExtras = { ...RUN_CONFIG, conversation_id: 'conv-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeSessionSettings(withExtras))).toEqual({
+      kind: 'session-settings',
+      sessionSettings: RUN_CONFIG,
+      inReplyTo: 812
+    })
+  })
+})
+
+describe('parseInboundMessage — session_settings fail-closed (#491)', () => {
+  it('throws when any of the three string fields is missing or non-string', () => {
+    const bad: unknown[] = [
+      { ...RUN_CONFIG, session_id: undefined },
+      { ...RUN_CONFIG, model: undefined },
+      { ...RUN_CONFIG, effort: null },
+      { ...RUN_CONFIG, session_id: 42 }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionSettings(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when yolo is missing or non-boolean', () => {
+    const bad: unknown[] = [
+      { session_id: 's', model: 'm', effort: 'e', used_tokens: 0, window_tokens: 0 },
+      { ...RUN_CONFIG, yolo: 'true' },
+      { ...RUN_CONFIG, yolo: 1 }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionSettings(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when either usage int is missing or non-number', () => {
+    const bad: unknown[] = [
+      { ...RUN_CONFIG, used_tokens: undefined },
+      { ...RUN_CONFIG, window_tokens: '200000' }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionSettings(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on a non-record payload', () => {
+    for (const payload of [null, 42, 'nope', []]) {
+      expect(() => parseInboundMessage(encodeSessionSettings(payload))).toThrow(WireDecodeError)
     }
   })
 })

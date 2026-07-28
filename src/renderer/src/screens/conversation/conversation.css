@@ -2023,3 +2023,103 @@
   opacity: 0.38;
   cursor: default;
 }
+
+/* --- the unrecognized-message diagnostic row ------------------------------------------------------
+   The daemon's stream parser met claude output it has no mapping for. Its own visually-distinct row
+   (no data-thread-role in the markup — claude did not say this, the daemon did), collapsed to one line
+   and expanding in place. No Figma node: this surfaces a condition the design never anticipated, so it
+   is built from existing tokens and the neighbouring rows' conventions. Token names only — no colour
+   literal, no new theme token. */
+.unrecognized-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+}
+
+/* The collapsed line: a REAL button (keyboard + screen-reader support for free), reset to look like a
+   row rather than a control. The single-line ellipsis behaviour is .tool-row__summary's, since both
+   solve the same problem — an unbounded untrusted string on one line. */
+.unrecognized-row__summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-outline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  text-align: left;
+  cursor: pointer;
+}
+
+.unrecognized-row__summary:hover {
+  background: var(--color-surface-container-highest);
+}
+
+/* The warning glyph. Decorative (aria-hidden in the markup) — the label carries the meaning. */
+.unrecognized-row__glyph {
+  flex: 0 0 auto;
+  color: var(--color-error);
+}
+
+/* The fixed client-owned label. Never shrinks below its content, so the daemon-supplied type beside it
+   is what ellipsizes under pressure. */
+.unrecognized-row__label {
+  flex: 0 0 auto;
+}
+
+/* The offending message/block type — mono so it reads as a literal, and the run that absorbs the
+   ellipsis: min-width: 0 + the .tool-row__summary treatment, because it is the one unbounded untrusted
+   string on this line. */
+.unrecognized-row__type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--color-on-surface-variant);
+}
+
+/* The drop-site label, pushed to the trailing edge. Client-owned copy from a closed enum, so it is
+   bounded and never needs to ellipsize. */
+.unrecognized-row__site {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--color-on-surface-variant);
+}
+
+/* The expanded payload — .screen-snapshot__screen's treatment, which already solves this exact problem:
+   a bounded height with internal scroll so a large dump cannot shove the composer off screen, and
+   overflow-x for a long unwrapped line. `raw` is untrusted daemon-relayed content rendered as
+   auto-escaped React children — never an HTML sink. */
+.unrecognized-row__raw {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--space-3) var(--space-bubble-x);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  white-space: pre;
+}
+
+/* The truncation note, shown only when the daemon actually cut the payload. */
+.unrecognized-row__truncated {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}

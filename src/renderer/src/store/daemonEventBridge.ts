@@ -147,6 +147,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // assertNever guard below makes a new arm a compile error (the
       // apiRetry-was-a-no-op-until-#493 precedent).
       return null
+    case 'unrecognizedMessage':
+      // No session-store action: the parser-gap diagnostic becomes a timeline row (the render slice),
+      // not connection state — the session store holds nothing about the daemon's own mapping gaps.
+      // Present only because the assertNever guard below makes a new arm a compile error.
+      return null
     case 'relayLinkChanged':
       // No session-store action: the relay-link store + bridge (#329, not yet built) holds the relay-leg
       // status, not the session store. Present only because the assertNever guard below makes a new arm a

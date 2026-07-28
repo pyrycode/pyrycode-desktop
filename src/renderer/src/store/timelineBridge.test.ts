@@ -155,6 +155,43 @@ describe('translateTimelineEvent — the two owned arms', () => {
     expect(translated).not.toBe(event)
   })
 
+  it('unrecognizedMessage → a ThreadEvent carrying all four fields, a fresh object', () => {
+    const event: DaemonEvent = {
+      type: 'unrecognizedMessage',
+      site: 'line_type',
+      messageType: 'some_future_event',
+      raw: '{"type":"some_future_event"}',
+      truncated: false
+    }
+    const translated = translateTimelineEvent(event)
+    expect(translated).toEqual({
+      type: 'unrecognizedMessage',
+      site: 'line_type',
+      messageType: 'some_future_event',
+      raw: '{"type":"some_future_event"}',
+      truncated: false
+    })
+    // A fresh literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
+
+  it('unrecognizedMessage translates an empty messageType and a truncated payload verbatim', () => {
+    const event: DaemonEvent = {
+      type: 'unrecognizedMessage',
+      site: 'undecodable',
+      messageType: '',
+      raw: '{"type":"assist',
+      truncated: true
+    }
+    expect(translateTimelineEvent(event)).toEqual({
+      type: 'unrecognizedMessage',
+      site: 'undecodable',
+      messageType: '',
+      raw: '{"type":"assist',
+      truncated: true
+    })
+  })
+
   it('compacting translates the falling edge verbatim — the reducer owns the clear (#496)', () => {
     const event: DaemonEvent = { type: 'compacting', active: false }
     const translated = translateTimelineEvent(event)

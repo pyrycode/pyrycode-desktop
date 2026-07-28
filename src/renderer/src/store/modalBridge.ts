@@ -94,6 +94,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'notificationActivated':
     case 'apiRetry':
     case 'compacting':
+    case 'unrecognizedMessage':
       // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
       // conversation-list store (#208), timeline store (#202), create render slice (#242), the #259
       // session-id holder, the #261 / #256 session-settings consumers (confirmed + rejected #269),
@@ -105,7 +106,9 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // (notificationActivated → the paired `open` nav) consume these — not the modal store. apiRetry
       // (#492) ships dormant; its render consumer is #493 — a retry status line is not a modal.
       // compacting (#495) ships dormant likewise; its render consumer is #496 — a compaction banner is
-      // not a modal either.
+      // not a modal either. unrecognizedMessage ships dormant too; its render consumer is the timeline
+      // row — a diagnostic the operator reads at leisure is emphatically not a modal, since nothing is
+      // waiting on an answer.
       return null
     default:
       return assertNever(event)

@@ -26,7 +26,12 @@ import {
   useActiveConversationStore,
   selectActiveConversation
 } from '../../store/activeConversationStore'
-import type { ThreadItem, TurnPhase, ApiRetryStatus } from '../../store/threadTimeline'
+import type {
+  ThreadItem,
+  TurnPhase,
+  ApiRetryStatus,
+  UnrecognizedSite
+} from '../../store/threadTimeline'
 import {
   submitMessage,
   composerAvailability,
@@ -302,9 +307,10 @@ export function Timeline({
 }
 
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
-// over the five kinds (only turnBoundary null), so a future sixth ThreadItem kind makes it
+// over the six kinds (only turnBoundary null), so a future seventh ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
-// while a structural-only kind (turnBoundary) still degrades to nothing rather than throwing.
+// while a structural-only kind (turnBoundary) still degrades to nothing rather than throwing. That
+// guard did its job on the unrecognizedMessage row below: the arm arrived as a compile error here.
 // #286: `now` (ms, defaulted to Date.now()) is consulted only by the sessionBoundary case, to format its
 // relative time at render — kept out of the item so the label stays fresh (the channel-list precedent).
 function TimelineRow({
@@ -398,6 +404,93 @@ function TimelineRow({
           </div>
         </div>
       )
+    case 'unrecognizedMessage':
+      // The parser-gap diagnostic — the daemon's stream parser met claude output it has no mapping
+      // for. Its own visually-distinct row: NO data-thread-role (not attributed to
+      // assistant/user/tool — claude did not say this, the daemon did), identified by class, like
+      // .session-delimiter.
+      return <UnrecognizedRow item={item} />
+  }
+}
+
+// The collapsed/expanded diagnostic row. Built SPECIFIC, not generic: this is the first and only
+// expand-and-collapse in the repo, there is no <details> anywhere to reuse, and a reusable collapsible
+// with no second caller would be speculative work. When a second one arrives, extract then.
+//
+// A real <button> with aria-expanded, not a div with a click handler, so keyboard activation (Enter and
+// Space) and screen-reader semantics come for free rather than being re-implemented and half-missed.
+//
+// State is component-local useState — a single transient boolean, which ADR 0006 puts in the component
+// and never in the store. It resets to collapsed on remount for free, which is the wanted behaviour: a
+// diagnostic should not stay expanded across a screen remount.
+//
+// SAFETY. `raw` and `messageType` are the most untrusted strings the timeline holds — unbounded,
+// model-adjacent JSON the daemon could not interpret. Both reach the DOM ONLY as auto-escaped React
+// children: never dangerouslySetInnerHTML, never an attribute value, never a URL. React escapes text
+// children, so the JSON inside the <pre> is inert, and those two sinks are the only ways to break that.
+// Neither appears here.
+function UnrecognizedRow({
+  item
+}: {
+  item: Extract<ThreadItem, { kind: 'unrecognizedMessage' }>
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="unrecognized-row">
+      <button
+        type="button"
+        className="unrecognized-row__summary"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((open) => !open)}
+      >
+        <span className="unrecognized-row__glyph" aria-hidden="true">
+          ⚠
+        </span>
+        <span className="unrecognized-row__label">{UNRECOGNIZED_COPY}</span>
+        {/* The offending type, in mono so it reads as a literal. Empty for the `undecodable` site —
+            nothing decoded, so no type was ever read — in which case the slot is simply omitted rather
+            than rendering an empty pair of quotes. */}
+        {item.messageType !== '' && (
+          <span className="unrecognized-row__type">{item.messageType}</span>
+        )}
+        <span className="unrecognized-row__site">{unrecognizedSiteLabel(item.site)}</span>
+      </button>
+      {expanded && (
+        <>
+          <pre className="unrecognized-row__raw">{item.raw}</pre>
+          {/* Only shown when the daemon actually cut the payload, so the reader knows the JSON is
+              incomplete by design rather than malformed at the source. */}
+          {item.truncated && (
+            <p className="unrecognized-row__truncated">{UNRECOGNIZED_TRUNCATED_COPY}</p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/** The collapsed row's fixed label. Client-owned copy, never daemon-supplied. */
+export const UNRECOGNIZED_COPY = 'Unrecognized message'
+
+/** The note shown under an expanded payload the daemon had to cut. Client-owned copy. */
+export const UNRECOGNIZED_TRUNCATED_COPY = 'Payload truncated by the daemon.'
+
+/**
+ * A human label for each drop site. A total function over the closed union — CLIENT-OWNED copy, so the
+ * daemon's `site` value selects a string but never becomes one, which is what keeps a daemon-supplied
+ * value out of the rendered text here. Exhaustive by the union, so a future fifth site is a compile
+ * error rather than a blank slot.
+ */
+export function unrecognizedSiteLabel(site: UnrecognizedSite): string {
+  switch (site) {
+    case 'line_type':
+      return 'whole message'
+    case 'assistant_block':
+      return 'assistant block'
+    case 'user_block':
+      return 'user block'
+    case 'undecodable':
+      return 'could not be decoded'
   }
 }
 

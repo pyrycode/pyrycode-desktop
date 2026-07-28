@@ -22,6 +22,7 @@ import type {
   QueuedItem,
   WireTurnState,
   WireSessionTransitionReason,
+  WireUnrecognizedSite,
   WireModalClass,
   WireModalSource,
   WireModalOption
@@ -142,6 +143,37 @@ export type DaemonEvent =
   // frame (including a verbatim repeat), and #496 is idempotent on the repeat. Ships dormant: all three
   // exhaustive bridges no-op it until #496 — the apiRetry-was-a-no-op-until-#493 precedent.
   | { type: 'compacting'; active: boolean }
+  // The unrecognized-message arm — the daemon's stream parser met claude output it has no mapping for.
+  // Unlike its three status-peer neighbours above, this one is NOT a claude sub-state: it reports a gap
+  // in the DAEMON's own mapping, and it is the reason the drop is visible at all (the daemon's own debug
+  // log is not printed in production, so before this the drop left no trace anywhere).
+  //
+  // A DELIBERATE, security-reviewed WIDENING, and the widest on this union: `raw` is unbounded,
+  // unstructured, model-adjacent JSON. It crosses IPC for the same reason `screenSnapshotReceived.text`
+  // does — the raw text IS the render payload, and there is no summary that could replace it, because
+  // the whole point is showing an operator the bytes we could not interpret. The boundary defended is
+  // the fail-closed decode upstream (parseUnrecognizedMessagePayload: closed-enum `site`, required
+  // strings, required boolean), not this internal channel. The daemon caps `raw` at 16 KiB and the
+  // frame-level MAX_PLAINTEXT_BYTES guard (65519) backstops it, so the string is bounded before it gets
+  // here — twice, by two independent limits.
+  //
+  // `raw` and `messageType` are UNTRUSTED daemon-relayed content: the consumer must render them as PLAIN
+  // TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML) and never into an attribute or a URL —
+  // mirroring the identical warning on screenSnapshotReceived / conversationCreated / sessionTransition
+  // / queueState. React escapes text children, so a `<pre>{raw}</pre>` is inert; those two sinks are the
+  // only ways to break that, and neither appears in the consumer.
+  //
+  // `messageType` is deliberately allowed to be the empty string — the `undecodable` site means nothing
+  // decoded, so no type was ever read. `conversation_id` is dropped at the emit (single active
+  // conversation, the turnState convention). Ships dormant: all three exhaustive bridges no-op it until
+  // the render slice — the compacting-was-a-no-op-until-#496 precedent.
+  | {
+      type: 'unrecognizedMessage'
+      site: WireUnrecognizedSite
+      messageType: string
+      raw: string
+      truncated: boolean
+    }
   // The session-boundary arm (#254, widened #285). Carries the four render fields the delimiter slice
   // (#286) needs: `newSessionId` (the addressing key the #259 holder retains), `reason` (the closed
   // WireSessionTransitionReason enum, carried so #286's title switch stays exhaustive — NOT a bare

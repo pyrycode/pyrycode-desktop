@@ -10,6 +10,9 @@ import {
   API_RETRY_COPY,
   CompactingIndicator,
   COMPACTING_COPY,
+  UNRECOGNIZED_COPY,
+  UNRECOGNIZED_TRUNCATED_COPY,
+  unrecognizedSiteLabel,
   shouldShowThinking,
   QueuedBacklog,
   StatusSheet,
@@ -1642,5 +1645,77 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('conversation__overflow')
     // StatusRow keeps its own aria-haspopup="dialog"; only the menu popup must be absent.
     expect(markup).not.toContain('aria-haspopup="menu"')
+  })
+})
+
+describe('the unrecognized-message timeline row', () => {
+  const ITEM: ThreadItem = {
+    kind: 'unrecognizedMessage',
+    site: 'line_type',
+    messageType: 'some_future_event',
+    raw: '{"type":"some_future_event","detail":"something new"}',
+    truncated: false
+  }
+
+  it('renders collapsed: the label, the type, and the drop site on one line', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[ITEM]} />)
+    expect(markup).toContain('unrecognized-row')
+    expect(markup).toContain(UNRECOGNIZED_COPY)
+    expect(markup).toContain('some_future_event')
+    expect(markup).toContain('whole message')
+  })
+
+  it('is a real button carrying aria-expanded, closed at rest', () => {
+    // A <button>, not a div with a click handler, so keyboard activation and screen-reader
+    // semantics come for free rather than being re-implemented and half-missed.
+    const markup = renderToStaticMarkup(<Timeline items={[ITEM]} />)
+    expect(markup).toContain('<button')
+    expect(markup).toContain('aria-expanded="false"')
+  })
+
+  it('withholds the raw payload until expanded — it is not merely hidden in the DOM', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[ITEM]} />)
+    expect(markup).not.toContain('something new')
+    expect(markup).not.toContain('unrecognized-row__raw')
+  })
+
+  it('omits the type slot entirely when the site read no type at all', () => {
+    const undecodable: ThreadItem = { ...ITEM, site: 'undecodable', messageType: '' }
+    const markup = renderToStaticMarkup(<Timeline items={[undecodable]} />)
+    expect(markup).toContain('could not be decoded')
+    // An empty type renders no slot, rather than an empty pair of quotes.
+    expect(markup).not.toContain('unrecognized-row__type')
+  })
+
+  it('carries no thread role — claude did not say this, the daemon did', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[ITEM]} />)
+    expect(markup).not.toContain('data-thread-role')
+  })
+
+  it('escapes markup in the daemon-supplied type rather than rendering it', () => {
+    // The row's whole payload is content the daemon could NOT interpret, so it is the least
+    // trustworthy string on the timeline. React escapes text children; this pins that.
+    const hostile: ThreadItem = { ...ITEM, messageType: '<img src=x onerror=alert(1)>' }
+    const markup = renderToStaticMarkup(<Timeline items={[hostile]} />)
+    expect(markup).not.toContain('<img')
+    expect(markup).toContain('&lt;img')
+  })
+
+  it('labels every drop site, with client-owned copy the daemon never supplies', () => {
+    expect(unrecognizedSiteLabel('line_type')).toBe('whole message')
+    expect(unrecognizedSiteLabel('assistant_block')).toBe('assistant block')
+    expect(unrecognizedSiteLabel('user_block')).toBe('user block')
+    expect(unrecognizedSiteLabel('undecodable')).toBe('could not be decoded')
+  })
+
+  it('renders one row per repeat, never collapsing them', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[ITEM, ITEM, ITEM]} />)
+    expect(markup.split('unrecognized-row__summary').length - 1).toBe(3)
+  })
+
+  it('keeps the truncation note out of the collapsed row', () => {
+    const cut: ThreadItem = { ...ITEM, truncated: true }
+    const markup = renderToStaticMarkup(<Timeline items={[cut]} />)
+    expect(markup).not.toContain(UNRECOGNIZED_TRUNCATED_COPY)
   })
 })

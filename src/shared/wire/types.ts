@@ -57,6 +57,10 @@ export type EnvelopeType =
   | 'stall'
   | 'api_retry'
   | 'compacting'
+  // v2-only daemon→client diagnostic — the daemon's stream parser met claude output it has no
+  // mapping for. Not a claude sub-state like its neighbours above: it reports a gap in the
+  // DAEMON's own mapping. SSOT pyrycode `internal/protocol` UnrecognizedMessagePayload.
+  | 'unrecognized_message'
   | 'session_transition'
   | 'tool_use'
   | 'tool_result'
@@ -337,7 +341,49 @@ export interface CompactingPayload {
  * cannot yet emit — SSOT #656). A future fourth reason would fail closed here (the frame drops) until this
  * decoder is widened — the correct no-drift posture for a wire enum.
  */
+/**
+ * Inbound `unrecognized_message` diagnostic (daemon → client). Mirrors the daemon's
+ * UnrecognizedMessagePayload field-for-field, wire order `conversation_id, site, message_type, raw,
+ * truncated` — all always present (no `omitempty`).
+ *
+ * WHAT IT IS. The daemon's stream parser recognises three top-level message types from claude and a
+ * fixed set of content blocks. Anything outside a MEASURED known-ignored list used to be dropped into a
+ * debug log the production daemon does not print, so a claude version that moved something meaningful
+ * into a new message type would show nothing, anywhere, with nothing saying why. This frame is that
+ * drop, made visible. It is deliberately NOT emitted for the types the daemon knowingly ignores
+ * (`system/*`, `rate_limit_event`), which would otherwise put a row on every turn.
+ *
+ * NOT a claude sub-state, the contrast with its `stall` / `api_retry` / `compacting` neighbours: those
+ * report what claude is doing, this reports a gap in the daemon's own mapping. It is conversation-level
+ * (no `turn_id` — the daemon could not parse the message well enough to attribute a turn to it), and
+ * receiving it never opens, closes, or alters a turn.
+ *
+ * `raw` IS THE RENDER PAYLOAD, and it is the only interactive frame carrying unbounded model-adjacent
+ * JSON. It is a plain string, NOT parsed JSON, because the daemon truncates it at 16 KiB and a truncated
+ * blob is no longer valid JSON — `truncated` says whether that happened. That cap is roughly a quarter of
+ * MAX_PLAINTEXT_BYTES (65519), so the frame guard is a backstop here rather than the live constraint.
+ * Treat `raw` as the most untrusted string on this wire: it must be rendered as PLAIN TEXT only, never
+ * through an HTML sink (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL.
+ */
+export interface UnrecognizedMessagePayload {
+  conversation_id: string
+  site: WireUnrecognizedSite
+  message_type: string
+  raw: string
+  truncated: boolean
+}
+
 export type WireSessionTransitionReason = 'clear' | 'idle_evict' | 'workspace_change'
+
+/**
+ * The four places the daemon's stream parser can meet claude output it has no mapping for. A closed
+ * wire enum like WireSessionTransitionReason, so the decoder compares against literals rather than
+ * accepting any string. `line_type` is a whole top-level message; `assistant_block` / `user_block` are
+ * one content block of an otherwise-fine message; `undecodable` is a line or block that would not
+ * JSON-decode at all, and is the one value for which `message_type` is empty (nothing decoded, so no
+ * type was ever read).
+ */
+export type WireUnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block' | 'undecodable'
 
 /**
  * Inbound `session_transition` marker (daemon → client). Mirrors the daemon's SessionTransitionPayload

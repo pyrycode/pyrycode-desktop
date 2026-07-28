@@ -150,6 +150,11 @@ function encodeCompacting(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 24, type: 'compacting', ts: FIXED_TS, payload })
 }
 
+/** An `unrecognized_message` envelope's plaintext bytes, wrapping an arbitrary payload. */
+function encodeUnrecognized(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 25, type: 'unrecognized_message', ts: FIXED_TS, payload })
+}
+
 /** A fully-populated, well-formed screen_snapshot payload. */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
@@ -200,6 +205,15 @@ const API_RETRY = {
 const COMPACTING = {
   conversation_id: 'c1',
   active: true
+}
+
+/** A well-formed unrecognized_message payload — the daemon's canonical fixture. */
+const UNRECOGNIZED = {
+  conversation_id: 'c1',
+  site: 'line_type',
+  message_type: 'some_future_event',
+  raw: '{"type":"some_future_event","detail":"something new"}',
+  truncated: false
 }
 
 /** A fully-populated, well-formed tool_use payload (#217). */
@@ -1639,6 +1653,116 @@ describe('parseInboundMessage — compacting fail-closed (#495)', () => {
   })
 })
 
+describe('parseInboundMessage — unrecognized_message recognition', () => {
+  it('narrows a full unrecognized_message into { kind: unrecognized-message } carrying all five fields', () => {
+    const result = parseInboundMessage(encodeUnrecognized(UNRECOGNIZED))
+    expect(result).toEqual({ kind: 'unrecognized-message', unrecognized: UNRECOGNIZED })
+  })
+
+  it('accepts every one of the four drop sites', () => {
+    for (const site of ['line_type', 'assistant_block', 'user_block', 'undecodable']) {
+      const result = parseInboundMessage(encodeUnrecognized({ ...UNRECOGNIZED, site }))
+      expect(result).toMatchObject({ kind: 'unrecognized-message', unrecognized: { site } })
+    }
+  })
+
+  it('accepts an EMPTY message_type — the undecodable site read no type at all', () => {
+    const payload = { ...UNRECOGNIZED, site: 'undecodable', message_type: '' }
+    const result = parseInboundMessage(encodeUnrecognized(payload))
+    expect(result).toMatchObject({ unrecognized: { message_type: '', site: 'undecodable' } })
+  })
+
+  it('accepts truncated true — a cut blob is the case the flag exists for', () => {
+    const payload = { ...UNRECOGNIZED, raw: '{"type":"huge","blob":"xxx', truncated: true }
+    const result = parseInboundMessage(encodeUnrecognized(payload))
+    expect(result).toMatchObject({ unrecognized: { truncated: true } })
+  })
+
+  it('carries raw verbatim, never parsing or re-serializing it', () => {
+    // A truncated blob is not valid JSON, so any attempt to round-trip it as JSON would throw.
+    // Carrying it as an opaque string is what makes the diagnostic survivable.
+    const raw = '{"type":"huge_event","blob":"aaaa'
+    const result = parseInboundMessage(encodeUnrecognized({ ...UNRECOGNIZED, raw, truncated: true }))
+    expect(result).toMatchObject({ unrecognized: { raw } })
+  })
+
+  it('tolerates but does not copy an unknown server-added key', () => {
+    const result = parseInboundMessage(
+      encodeUnrecognized({ ...UNRECOGNIZED, turn_id: 'must-not-cross' })
+    )
+    expect(result).toEqual({ kind: 'unrecognized-message', unrecognized: UNRECOGNIZED })
+    expect(JSON.stringify(result)).not.toContain('must-not-cross')
+  })
+})
+
+describe('parseInboundMessage — unrecognized_message fail-closed', () => {
+  it('throws when site is absent, unknown, or a non-string (closed enum, not requireString)', () => {
+    const bad: unknown[] = [
+      { ...UNRECOGNIZED, site: undefined },
+      { ...UNRECOGNIZED, site: 'a_site_invented_later' },
+      { ...UNRECOGNIZED, site: '' },
+      { ...UNRECOGNIZED, site: 42 },
+      { ...UNRECOGNIZED, site: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeUnrecognized(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when conversation_id is absent, a non-string, or null', () => {
+    const bad: unknown[] = [
+      { ...UNRECOGNIZED, conversation_id: undefined },
+      { ...UNRECOGNIZED, conversation_id: 42 },
+      { ...UNRECOGNIZED, conversation_id: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeUnrecognized(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when message_type is absent or a non-string — empty is fine, missing is not', () => {
+    const bad: unknown[] = [
+      { ...UNRECOGNIZED, message_type: undefined },
+      { ...UNRECOGNIZED, message_type: 42 },
+      { ...UNRECOGNIZED, message_type: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeUnrecognized(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when raw is absent or a non-string — never coerced, never defaulted', () => {
+    const bad: unknown[] = [
+      { ...UNRECOGNIZED, raw: undefined },
+      { ...UNRECOGNIZED, raw: { type: 'some_future_event' } },
+      { ...UNRECOGNIZED, raw: 42 },
+      { ...UNRECOGNIZED, raw: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeUnrecognized(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when truncated is absent or a non-boolean (TYPE-checked, never truthiness)', () => {
+    const bad: unknown[] = [
+      { ...UNRECOGNIZED, truncated: undefined },
+      { ...UNRECOGNIZED, truncated: 'false' },
+      { ...UNRECOGNIZED, truncated: 0 },
+      { ...UNRECOGNIZED, truncated: 1 },
+      { ...UNRECOGNIZED, truncated: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeUnrecognized(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when an unrecognized_message payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeUnrecognized('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeUnrecognized(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeUnrecognized(null))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — tool_use recognition (#217, additive)', () => {
   it('narrows a full tool_use into { kind: tool-use } carrying all five fields verbatim', () => {
     expect(parseInboundMessage(encodeToolUse(TOOL_USE))).toEqual({
@@ -2467,6 +2591,43 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeCompacting({ conversation_id: 'c1', active: 'true' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs an unrecognized_message content-free — never the raw blob, type, or conversation_id', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_RAW = '{"type":"some_future_event","secret":"must-not-be-logged"}'
+    const plaintext = encodeUnrecognized({
+      conversation_id: SECRET_CONV,
+      site: 'line_type',
+      message_type: 'some_future_event',
+      raw: SECRET_RAW,
+      truncated: false
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('unrecognized_message')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set. This arm carries the most untrusted string on the wire, so the
+    // no-content-in-the-log rule binds hardest here: the whole point of the frame is that the daemon's
+    // own log could not be trusted to carry this safely either.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    expect(lines[0]).not.toContain('must-not-be-logged')
+    expect(lines[0]).not.toContain('some_future_event')
+  })
+
+  it('does NOT log on a malformed unrecognized_message throw path', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeUnrecognized({ ...UNRECOGNIZED, site: 'bogus_site' }), log)
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

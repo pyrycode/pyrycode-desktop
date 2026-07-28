@@ -627,6 +627,25 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // emit.
             emitDaemonEvent(sink, { type: 'compacting', active: inbound.compacting.active })
             return
+          case 'unrecognized-message':
+            // The parser-gap diagnostic data path. Emit a fresh literal carrying the four display
+            // fields, copied BY NAME from the already-decoded, already-validated payload — never a
+            // spread of inbound.unrecognized, so a decoder that later grows a field cannot smuggle it
+            // across IPC. That discipline earns its keep here more than anywhere: this is the arm whose
+            // payload is unbounded daemon-relayed JSON, so the field list must be the one an operator
+            // agreed to render, not whatever arrived. `conversation_id` is DROPPED (never referenced —
+            // single active conversation, the turnState convention). Deliberately stateless: no dedup
+            // and no coalescing, because a repeat is a REAL repeat and how often this fires is the
+            // number that tells you to go fix something. Not compile-forced (this inner switch has no
+            // assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'unrecognizedMessage',
+              site: inbound.unrecognized.site,
+              messageType: inbound.unrecognized.message_type,
+              raw: inbound.unrecognized.raw,
+              truncated: inbound.unrecognized.truncated
+            })
+            return
           case 'session-transition':
             // The session-boundary data path (#254, widened #285). Emit a fresh literal carrying the four
             // fields the delimiter slice (#286) reads — `newSessionId`, `reason`, `occurredAt`,

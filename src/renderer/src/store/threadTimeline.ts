@@ -18,6 +18,14 @@ export type TurnPhase = 'thinking' | 'responding' | 'idle'
  */
 export type SessionBoundaryReason = 'clear' | 'idle_evict' | 'workspace_change'
 
+/**
+ * Where the daemon's stream parser met claude output it has no mapping for, renderer-local. A
+ * deliberate re-declaration of `WireUnrecognizedSite` on the SessionBoundaryReason model, not an
+ * import: it keeps this reducer wire-free, lets the bridge assign `event.site` with no cast (the
+ * literal unions are identical), and turns a future fifth wire site into a compile error here.
+ */
+export type UnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block' | 'undecodable'
+
 /** The filled-in half of a `toolCall`, correlated to it by `toolUseId`. */
 export interface ToolResult {
   isError: boolean
@@ -55,6 +63,23 @@ export type ThreadItem =
       reason: SessionBoundaryReason
       workspaceCwd: string | null
       occurredAt: string
+    }
+  // The daemon's stream parser met claude output it has no mapping for. A durable ROW rather than a
+  // chrome scalar (the contrast with `stalled` / `apiRetry` / `compacting` beside `items`), because it
+  // is a discrete historical event with no clearing edge: it happened, at a point in the conversation,
+  // and it stays there. A whole marker, NEVER coalesced — a repeat is a real repeat, and collapsing
+  // repeats would hide how often this fires, which is the number that tells you to go fix it.
+  //
+  // No `turnId`, following `userText` and `sessionBoundary`: the daemon could not parse the message
+  // well enough to attribute a turn to it. `messageType` may be the empty string (the `undecodable`
+  // site read no type at all). `raw` and `messageType` are the most untrusted strings the timeline
+  // holds — rendered as auto-escaped React children only, never through an HTML sink.
+  | {
+      kind: 'unrecognizedMessage'
+      site: UnrecognizedSite
+      messageType: string
+      raw: string
+      truncated: boolean
     }
 
 /**
@@ -96,6 +121,15 @@ export type ThreadEvent =
   // is no counter here and none may be invented (the one delta from `apiRetry`). One bool, no string
   // field: AC1 ("no daemon-supplied string is ever rendered") stays true by construction.
   | { type: 'compacting'; active: boolean }
+  // The parser-gap diagnostic. Field-for-field identical to the `unrecognizedMessage` ThreadItem, so
+  // the bridge is a filter + fresh copy (the `sessionBoundary` discipline), not a remap.
+  | {
+      type: 'unrecognizedMessage'
+      site: UnrecognizedSite
+      messageType: string
+      raw: string
+      truncated: boolean
+    }
 
 /**
  * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
@@ -294,6 +328,34 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             reason: event.reason,
             workspaceCwd: event.workspaceCwd,
             occurredAt: event.occurredAt
+          }
+        ],
+        phase: state.phase,
+        stalled: state.stalled,
+        apiRetry: state.apiRetry,
+        compacting: state.compacting
+      }
+    case 'unrecognizedMessage':
+      // A whole diagnostic marker: fresh tail-append, `phase` untouched — the `sessionBoundary` /
+      // `userText` discipline. Always a new `items` array (a fresh append is always a change).
+      //
+      // DELIBERATELY NOT COALESCED, and this is the one design decision worth defending here. Every
+      // other repeat-prone thing in this reducer collapses; this one must not. A repeat is a real
+      // repeat, and how often it fires is precisely the number that tells an operator to go fix
+      // something — collapsing repeats would hide the signal the row exists to carry.
+      //
+      // NOT in the turn-activity clear set either: an unrecognized message is not turn activity, so
+      // `stalled`, `apiRetry` and `compacting` are all carried through unchanged. It neither opens nor
+      // closes a turn, matching the daemon, which cannot honestly attribute one.
+      return {
+        items: [
+          ...state.items,
+          {
+            kind: 'unrecognizedMessage',
+            site: event.site,
+            messageType: event.messageType,
+            raw: event.raw,
+            truncated: event.truncated
           }
         ],
         phase: state.phase,

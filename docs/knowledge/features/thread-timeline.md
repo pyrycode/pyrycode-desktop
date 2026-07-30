@@ -71,6 +71,7 @@ type ThreadEvent =
   | { type: 'stallDetected' }
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
   | { type: 'compacting'; active: boolean }
+  | { type: 'reset' }
 
 interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean }
 interface ApiRetryStatus { current: number; total: number }
@@ -112,6 +113,7 @@ to make "true by construction."
 | `stallDetected` | set `stalled: true`; `items`/`phase` untouched. Same reference if `stalled` is already `true` (no-churn) — [#317](../codebase/317.md) |
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
 | `compacting` | `state.compacting === event.active` → same reference (no-churn on a verbatim repeat of either edge); otherwise fresh state with `compacting: event.active`. `items`/`phase`/`stalled`/`apiRetry` untouched — [#496](../codebase/496.md) |
+| `reset` | returns `initialTimelineState` — all five fields at once, by returning the shared constant rather than a fresh literal. Idempotent by reference (a second reset is a no-op); `items` stays the same reference post-reset, so no `selectItems` subscriber churns — [#528](../codebase/528.md) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
 `items`. **`stalled` ([#317](../codebase/317.md)) is a third, independent axis**: the four
@@ -236,6 +238,16 @@ Nothing imports this module yet.
   `StallIndicator`'s twin) and a second `shouldShowThinking` clause, extending the seam #493 built by
   name for this ticket — one field, one clause, no new gate. `apiRetry`'s clearing-rule inversion, minus
   the counter — see Edge cases below.
+- **[#528](../codebase/528.md) (shipped)** added the nullary `reset` arm — the first `ThreadEvent`
+  that is neither daemon- nor user-content-derived, a renderer-lifecycle control event ported
+  verbatim from [`sessionStore`'s `reset` (#166)](../codebase/166.md). `reduceTimeline`'s new arm
+  returns `initialTimelineState` directly, clearing all five fields (`items`, `phase`, `stalled`,
+  `apiRetry`, `compacting`) in one step. Shipped **capability-only**: no dispatch site landed in this
+  ticket, and `timelineStore.ts`/`timelineBridge.ts` needed no edit — `dispatch` already accepted any
+  `ThreadEvent`, and `timelineBridge.ts` never produces a `reset` since no wire frame maps to it. The
+  call sites are [#530](https://github.com/pyrycode/pyrycode-desktop/issues/530) (conversation switch)
+  and [#531](https://github.com/pyrycode/pyrycode-desktop/issues/531) (unpair / pair-another-server),
+  both blocked on this ticket.
 
 ## Edge cases and limitations
 
@@ -277,6 +289,11 @@ Nothing imports this module yet.
   ([#496](../codebase/496.md)), `apiRetry`'s clearing inversion again. Unlike `apiRetry`, the wire
   carries no progress data at all — banner-only, no counter, no percentage — so the state is a plain
   `boolean` rather than a `| null` record; there is nothing for a falling edge to discard.
+- **`reset` has no dispatch site as of [#528](../codebase/528.md).** The arm exists and is fully
+  tested at the reducer level, but nothing in the renderer constructs a `{ type: 'reset' }` event yet
+  — the timeline stays populated for the rest of the process lifetime until
+  [#530](https://github.com/pyrycode/pyrycode-desktop/issues/530) or
+  [#531](https://github.com/pyrycode/pyrycode-desktop/issues/531) ships its call site.
 - **Strangler Fig, cut over in [#179](../codebase/179.md).** `sessionStore`, `messageViewModel.ts`,
   and the coarse `message`/`message_chunk` path were completely untouched by this module through
   #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
@@ -335,6 +352,8 @@ Nothing imports this module yet.
   `compacting` arm (`apiRetry`'s clearing inversion, minus the counter), `CompactingIndicator`, and the
   second `shouldShowThinking` clause (see [Conversation shell § Compacting
   indicator](conversation-shell.md#compacting-indicator-496)).
+- [#528 codebase notes](../codebase/528.md) — the nullary `reset` arm, ported from [`sessionStore`'s
+  `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

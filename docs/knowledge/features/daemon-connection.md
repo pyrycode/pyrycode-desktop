@@ -173,6 +173,32 @@ renderer confirm invoke ─▶ pairingHandler.listener
 
 The confirm reply (fingerprint/ok channel) and the daemon `connecting`/`connected` events are independent — the renderer already renders the latter (the [daemon-event bridge](daemon-event-bridge.md), [#19](../codebase/19.md)), so **no renderer change** (AC2). A failed persist takes the handler's `catch` → `persist-failed` reply, `onPaired` is never reached, no dial (**AC4**). `onPaired` carries no arguments, so no record field crosses (**AC5** by construction).
 
+## Teardown-on-unpair (`reconnect()`, [#504](../codebase/504.md))
+
+`reconnect()` gained a second caller: the [unpair channel](unpair-channel.md)'s handler now wires
+`onUnpaired: () => connection.reconnect()` at the composition root, the mirror image of the pairing
+handler's `onPaired: () => connection.reconnect()`. **Zero `daemonConnection.ts` changes were needed** —
+`reconnect()` already did everything the ticket needed, verified line by line:
+
+1. `dial()`'s first statement, `++generation`, fences every event the *superseded* driver emits from
+   this instant onward — `connected`, `messageReceived`, `messagesReceived`, `assistantDelta`,
+   `turnState`, `toolUse`, `toolResult` are all dropped upstream of any decode, at the same `onEvent`
+   wrapper the connect-on-pair fence already installs.
+2. `driver?.stop(); driver = null` closes the relay socket — the authenticated session ends, it is not
+   merely muted.
+3. `bootstrap`'s null-record branch (the store was just cleared) emits `failed('not-paired')` and
+   returns **before** `createDriver` — no replacement driver, no dial.
+4. `dial()` never touches `stopped` — only `stop()` does — so a later re-pair's `onPaired → reconnect()`
+   call is unaffected; teardown-then-re-pair connects exactly as before.
+
+The renderer sees a transient `connecting` then `failed{not-paired}` (accepted consequence — the route
+already flipped to the pairing screen by the time these arrive, and `appRoute.ts` derives the launch
+route from pairing status, never session status). This is why `reconnect()` reads as "re-dial from
+disk," not "disconnect": every caller — connect-on-pair, reload-per-dial's automatic reconnect, and now
+teardown-on-unpair — converges on the same "connect to whatever the store holds right now, or
+`not-paired` if it holds nothing" behaviour, which is also what makes a concurrent unpair/re-pair
+interleaving race-safe by construction (no interleaving needs its own handling).
+
 ## Reload-per-dial (`loadDialConfig`, [#82]/[#83])
 
 `reconnect()` re-sources the record on an **explicit** re-arm ([#82](../codebase/82.md)), but it deliberately left the [supervisor](relay-supervisor.md)'s *own* **automatic** transient-drop reconnect reusing the config snapshotted at construction — in **two** layers: the supervisor's captured `connection` (url + headers) and the driver's captured `session` (`server_static_pubkey` + `hello`). [#83](../codebase/83.md) closes that gap by extracting `bootstrap`'s inline record-load + derive (see § How it works) into a **provider** this module constructs and injects.
@@ -375,6 +401,7 @@ dormant — all three exhaustive renderer bridges no-op the new arm; the real co
   reset. No new method on this factory — `createWorkspaceFolder` (#381) is unchanged besides the
   pending-add after send.
 - [#62 codebase notes](../codebase/62.md) — implementation summary, patterns, lessons.
+- [#504 codebase notes](../codebase/504.md) / [Unpair channel](unpair-channel.md) — teardown-on-unpair: `reconnect()`'s second caller, wired from the unpair handler's new `onUnpaired` trigger. Zero changes to this file — the existing generation fence and driver-stop already covered it.
 - [#82 codebase notes](../codebase/82.md) / [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — connect-on-pair: the `reconnect()` re-arm + generation fence added here, fired by the pairing handler's `onPaired` trigger a confirm-success wires to `connection.reconnect()`.
 - [#83 codebase notes](../codebase/83.md) — reload-per-dial: the `loadDialConfig` provider constructed here and threaded to the driver so the supervisor's *automatic* reconnect re-sources the record too (see § Reload-per-dial).
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) + [#128 codebase notes](../codebase/128.md) — the injected logger this module is the daemon-leg consumer of; the three log sites (`daemon-dial`/`daemon-connected`/`daemon-failed`) added at pre-existing seams (see § Diagnostic logging). Complementary to [#127](../codebase/127.md)'s relay leg — this leg logs the classification, that leg logs the socket coordinates + close code.

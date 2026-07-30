@@ -51,6 +51,10 @@ function stall(): ThreadEvent {
   return { type: 'stallDetected' }
 }
 
+function reset(): ThreadEvent {
+  return { type: 'reset' }
+}
+
 function apiRetry(active: boolean, current = 0, total = 0): ThreadEvent {
   return { type: 'apiRetry', active, current, total }
 }
@@ -605,6 +609,62 @@ describe('initial state + selectors', () => {
     expect(selectPhase(state)).toBe(state.phase)
     expect(selectStalled(state)).toBe(true)
     expect(selectCompacting(state)).toBe(true)
+  })
+})
+
+describe('reduceTimeline — reset', () => {
+  /** A state dirty on all five fields. The stall goes LAST: a turnState is turn activity and
+   *  would clear it (the #317 semantics). */
+  function dirty(): TimelineState {
+    return run([
+      userText('typed'),
+      delta('A', 'hi'),
+      { type: 'turnState', state: 'thinking' },
+      apiRetry(true, 3, 10),
+      compacting(true),
+      stall()
+    ])
+  }
+
+  it('clears all five fields from a fully dirty state (AC2)', () => {
+    const state = dirty()
+    // Precondition: genuinely dirty on every field — otherwise reset proves nothing.
+    expect(state.items.length).toBeGreaterThan(0)
+    expect(state.phase).not.toBe(initialTimelineState.phase)
+    expect(state.stalled).toBe(true)
+    expect(state.apiRetry).not.toBeNull()
+    expect(state.compacting).toBe(true)
+
+    const next = reduceTimeline(state, reset())
+
+    expect(next.items).toEqual(initialTimelineState.items)
+    expect(next.phase).toBe(initialTimelineState.phase)
+    expect(next.stalled).toBe(initialTimelineState.stalled)
+    expect(next.apiRetry).toBe(initialTimelineState.apiRetry)
+    expect(next.compacting).toBe(initialTimelineState.compacting)
+  })
+
+  it('returns the shared initial constant, not a fresh literal', () => {
+    // The property scenarios below rest on: idempotence and the no-churn `items` reference both
+    // fall out of returning the constant, and a sixth TimelineState field is cleared for free.
+    expect(reduceTimeline(dirty(), reset())).toBe(initialTimelineState)
+  })
+
+  it('is idempotent — a second reset changes nothing (AC3)', () => {
+    const once = reduceTimeline(dirty(), reset())
+    expect(reduceTimeline(once, reset())).toBe(once)
+    // …and against an already-initial state it leaves that state at initialTimelineState.
+    expect(reduceTimeline(initialTimelineState, reset())).toBe(initialTimelineState)
+  })
+
+  it('leaves items un-churned by reference, so no selectItems subscriber re-renders', () => {
+    expect(reduceTimeline(dirty(), reset()).items).toBe(initialTimelineState.items)
+  })
+
+  it('does not corrupt the shared constant when a later event appends', () => {
+    const state = run([userText('a'), reset(), userText('b')])
+    expect(state.items).toEqual([{ kind: 'userText', text: 'b' }])
+    expect(initialTimelineState.items).toEqual([])
   })
 })
 

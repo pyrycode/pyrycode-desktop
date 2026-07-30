@@ -50,7 +50,7 @@ store](screen-snapshot-store.md), #323) — a "no snapshot yet" placeholder is s
 from a received blank screen. See [Screen-snapshot action & display](#screen-snapshot-action--display-324)
 below.
 
-The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249) below.
+The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)); the held-option marker is scoped to the exact prompt it was selected on via the prompt's `modalId`, closing a same-class-prompt collision ([#511](../codebase/511.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) below.
 
 ## How it works
 
@@ -1051,7 +1051,7 @@ Was dormant until [#179](../codebase/179.md) flipped `interactive`, the same pos
 structured-stream render slice; now live. See [#230 codebase notes](../codebase/230.md) for the full
 design, the token-provenance rationale, and patterns established.
 
-### Permission modal (#224, answerable since #237, second-confirm since #226, rejection surface since #249)
+### Permission modal (#224, answerable since #237, second-confirm since #226, rejection surface since #249, confirm marker scoped to its prompt since #511)
 
 The render half of the modal vertical (ADR [0009](../decisions/0009-modal-prompt-model.md)):
 [#223](../codebase/223.md) shipped the store + bridge but left `useModalBridge` dormant, so
@@ -1099,20 +1099,29 @@ daemon `error` (correlated by [#248](../codebase/248.md)) had nothing left on sc
 - **`PermissionModal()`** — the store-bound container: `useModalStore(selectOutstanding)` plus
   `useModalStore(s => s.dispatch)` (#237), renders `outstanding[0]` via `PermissionModalView`, or `null`
   when nothing is outstanding. One dialog at a time, oldest-first FIFO; no `selectCurrentModal` selector
-  (ADR 0009 defers it — the container derives `[0]` locally). Gained one `useState<string |
-  null>` (#226), `pendingOptionId` — declared **before** the early-return (rules-of-hooks) — and derives
-  `pendingOption = prompt.options.find(o => o.id === pendingOptionId) ?? null` against the **current**
-  prompt's options every render, not a cached snapshot: a deterministic safety net so a stale pending id
-  against a swapped-out prompt degrades to list mode rather than confirming the wrong prompt (a known,
-  currently-unreachable staleness gap remains when the swapped-in prompt reuses the same option id — see
-  [#226 codebase notes](../codebase/226.md)). `onSelect` routes through the pure `selectOption` gate in
-  `modalResolution.ts`: the default option answers straight through (`answerPrompt`, unchanged from
-  #237); any other option calls `setPendingOptionId` and holds. `onConfirm` calls `answerPrompt` then
-  clears the pending marker; `onBack` just clears it (no send). `onCancel` is unchanged from #237
-  (`cancelPrompt`, never gated). All handlers dereference `window.pyry.sendCommand` only inside the
-  closures (#237's discipline). Since [#249](../codebase/249.md), also reads
-  `useModalStore(selectRejections)` and renders `RejectionSurfaceView` alongside `PermissionModalView` —
-  see § Rejection surface below.
+  (ADR 0009 defers it — the container derives `[0]` locally). Gained one `useState<PendingConfirm |
+  null>` (#226, re-keyed by [#511](../codebase/511.md)), `pending` — declared **before** the
+  early-return (rules-of-hooks) — holding `{ modalId, optionId }`, not a bare option id. Daemon option
+  ids are a closed per-class vocabulary (`permission` → `allow_once`/`allow_always`/`reject_once`/
+  `reject_always`, `trust` → `proceed`/`exit`), not per-prompt nonces, so a bare-id marker was
+  guaranteed to match same-class prompts other than the one it was armed on — #511 fixed this. A new
+  pure `resolvePendingOption(prompt, pending)` in `modalResolution.ts` derives `pendingOption` every
+  render against the **current** prompt, not a cached snapshot: `null` unless `pending.modalId ===
+  prompt.modalId` (the correlation key, and the actual fix — `modalId` is a daemon-minted
+  `crypto/rand` UUIDv4, distinct per prompt) **and** `prompt.options` still contains that `optionId`
+  (retained as the within-prompt net for a `shown` re-delivery that changes the option set, and how the
+  `ModalOption` the confirm sentence names is obtained). Re-deriving rather than clearing on a prompt
+  change means a stale marker is inert — it can only ever match the prompt it was minted against — so
+  the empty-`outstanding` window (the container returns `null` but stays mounted, per
+  `ConversationScreen.tsx`) is structurally safe rather than defended. `onSelect` routes through the
+  pure `selectOption` gate in `modalResolution.ts` (unchanged by #511): the default option answers
+  straight through (`answerPrompt`, unchanged from #237); any other option calls `setPending({ modalId,
+  optionId })` — the identity captured from the click's own `modalId`, not re-read from a possibly-newer
+  store — and holds. `onConfirm` calls `answerPrompt` then clears the pending marker; `onBack` just
+  clears it (no send). `onCancel` is unchanged from #237 (`cancelPrompt`, never gated). All handlers
+  dereference `window.pyry.sendCommand` only inside the closures (#237's discipline). Since
+  [#249](../codebase/249.md), also reads `useModalStore(selectRejections)` and renders
+  `RejectionSurfaceView` alongside `PermissionModalView` — see § Rejection surface below.
 
 Mounted as the **last child** of `.conversation` in `ConversationScreen.tsx`, after the conditional
 `StatusSheet`, so it overlays the whole conversation surface. Selecting the default option or clicking
@@ -1120,13 +1129,14 @@ Cancel dispatches `answerModalCommand`/`cancelModalCommand` (#236) immediately, 
 it; selecting any other option now holds (#226) until `Confirm` dispatches the same
 `answerModalCommand` or `Back` returns to the list with no send. Either terminal path (answer or
 cancel) clears the prompt **locally and optimistically** via the existing `dismissed` reducer arm — no
-new store representation, no new event arm, no wire change for #226. Was inert in production until
-[#179](../codebase/179.md) flipped the `interactive` capability (previously no `modal_shown` frame
+new store representation, no new event arm, no wire change for #226 or #511. Was inert in production
+until [#179](../codebase/179.md) flipped the `interactive` capability (previously no `modal_shown` frame
 arrived, so nothing to answer); now live. See [#224 codebase notes](../codebase/224.md) for the
 original render design, [#237 codebase notes](../codebase/237.md) for the answer-path design and the
 still-open code-review items (Cancel placement, focus trap/`Escape`, programmatic default-option cue),
-and [#226 codebase notes](../codebase/226.md) for the second-confirm gate design and its own
-still-open code-review NIT (the pending-marker staleness gap).
+[#226 codebase notes](../codebase/226.md) for the second-confirm gate design, and [#511 codebase
+notes](../codebase/511.md) for the pending-marker fix — the staleness gap #226 and #510's code reviews
+both flagged against the bare-option-id key is now resolved, not still open.
 
 #### Rejection surface (#249)
 
@@ -1416,7 +1426,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **`StallIndicator({ isStalled })`** — **bound in [#317](../codebase/317.md).** `ThinkingIndicator`'s own twin over the store's new `selectStalled`, mounted as its sibling right after it. See [Stall indicator](#stall-indicator-317) above.
 - **`ApiRetryIndicator({ retry })`** — **bound in [#493](../codebase/493.md).** `ThinkingIndicator`'s supersede peer over the store's new `selectApiRetry`, mounted right after `ThinkingIndicator` and before `StallIndicator`; also narrows `ThinkingIndicator`'s own gate via the new `shouldShowThinking` predicate. See [Api-retry indicator](#api-retry-indicator-493) above.
 - **`CompactingIndicator({ isCompacting })`** — **bound in [#496](../codebase/496.md).** `ThinkingIndicator`'s second supersede peer over the store's new `selectCompacting`, mounted right after `ApiRetryIndicator` and before `StallIndicator`; extends `shouldShowThinking` by one field and one clause. See [Compacting indicator](#compacting-indicator-496) above.
-- **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md); gained a rejection surface in [#249](../codebase/249.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, `selectRejections`, and `dispatch`, mounted as the last child of `.conversation`. `null` only when both the outstanding prompt and the rejection list are empty; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first, and a round-tripped rejection renders a dismissible banner independent of the prompt. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249) above.
+- **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md); gained a rejection surface in [#249](../codebase/249.md); its second-confirm marker was re-keyed from a bare option id to `{modalId, optionId}` in [#511](../codebase/511.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, `selectRejections`, and `dispatch`, mounted as the last child of `.conversation`. `null` only when both the outstanding prompt and the rejection list are empty; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first scoped to the prompt it was selected on, and a round-tripped rejection renders a dismissible banner independent of the prompt. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) above.
 - **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
 - **`QueuedBacklog({ items, onDrop })` / `QueuedBacklogControl`** — **render bound in [#294](../codebase/294.md); `onDrop` (required) bound in [#296](../codebase/296.md).** `QueuedBacklogControl` reads the [queue store](queue-store.md)'s `selectBacklogFor(MILESTONE_CONVERSATION_ID)` and binds `onDrop` to the pure `dropQueuedMessage` (`dropQueuedMessage.ts`), which dispatches `dequeueMessageCommand` and nothing else — no local mutation. See [Queued backlog + drop affordance](#queued-backlog--drop-affordance-294-drop-since-296) above.
 - **`ScreenSnapshotView({ snapshot, canRequest, onRequest })` / `ScreenSnapshotControl`** — **bound in [#324](../codebase/324.md).** `ScreenSnapshotControl` reads `useSessionStore(selectStatus)` (for `canRequest`, via `composerAvailability`) and the [screen-snapshot store](screen-snapshot-store.md)'s `selectScreenSnapshot` (#323, this store's only reader), binds `onRequest` to the new `requestScreenSnapshot` helper, and mounts between `StatusRow` and `InterruptControl`. See [Screen-snapshot action & display](#screen-snapshot-action--display-324) above.

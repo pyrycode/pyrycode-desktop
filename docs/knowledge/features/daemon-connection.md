@@ -257,8 +257,9 @@ Small, additive changes inside the existing `app.whenReady().then(...)`:
 
 - `createWindow()` now **returns** the `BrowserWindow` (to capture the sink handle); its body is otherwise unchanged.
 - A `deviceKeypairStore` is built over the **already-constructed** `secureStore` (`createDeviceKeypairStore({ secureStore, generator: noiseKeyPairGenerator() })`); the `pairedServerStore` is **reused** (no second store).
-- `createDaemonConnection({ deviceKeypair, pairedServer, sink: mainWindow, deviceName: hostname(), clientVersion: app.getVersion() })`.
-- Started once on first load: `mainWindow.webContents.once('did-finish-load', () => connection.start())` — defers the connect until the renderer's `useDaemonEventBridge` subscription is in place before the load-bearing `connected` (which arrives only after a network round-trip). `.once`, not `.on`, so a dev HMR reload does not re-fire it.
+- `createDaemonConnection({ deviceKeypair, pairedServer, sink: live.sink, deviceName: hostname(), clientVersion: app.getVersion() })` — `sink: live.sink` since [#519](../codebase/519.md) (originally `sink: mainWindow`, a captured `BrowserWindow`).
+- Started via a root-local `openWindow()`, called once for the first window and once per dock-reopened
+  replacement ([#519](../codebase/519.md)): `window.webContents.on('did-finish-load', () => { live.replayStatus(); connection.start() })` — the connect still defers until the renderer's `useDaemonEventBridge` subscription is in place before the load-bearing `connected` (which arrives only after a network round-trip), and `replayStatus()` additionally re-delivers the connection's last known status so a reopened window converges immediately rather than sitting at `disconnected`. Now `.on`, not the original `.once`: safe because of `start()`'s idempotence (below), and it additionally converges a window that reloads without closing (dev HMR, Cmd-R). See [live window](live-window.md) for the holder itself.
 - Torn down on quit: `app.on('will-quit', () => connection.stop())` (a second `will-quit` listener alongside the existing pairing one — both fire).
 
 ## State + concurrency model
@@ -395,6 +396,11 @@ dormant — all three exhaustive renderer bridges no-op the new arm; the real co
 
 ## Related
 
+- [Live window](live-window.md) / [#519](../codebase/519.md) — the composition root's `sink: live.sink`
+  and the `openWindow()` load handler's `live.replayStatus()` call, which converges a dock-reopened
+  window on this module's connection status by re-delivering its last-seen status event. No changes
+  to this file; `start()`'s pre-existing idempotence (line 149 above) is what the replay-then-start
+  pairing relies on.
 - [#396 codebase notes](../codebase/396.md) — the `pendingCreateFolders` correlation set (see §
   Create-workspace-folder rejected correlation above), the new `workspaceFolderRejected` emit inserted
   into the existing `case 'daemon-error':` precedence gate alongside `pendingSettings`, and the `dial()`

@@ -199,6 +199,17 @@ describe('translateTimelineEvent — the two owned arms', () => {
     expect(translated).not.toBe(event)
   })
 
+  it('connected → a payload-free reconnected ThreadEvent, ignoring the ack (#538)', () => {
+    const event: DaemonEvent = { type: 'connected', ack }
+    const translated = translateTimelineEvent(event)
+    // The re-handshake reconcile — carries nothing from the HelloAckPayload; the clear needs no field
+    // off it.
+    expect(translated).toEqual({ type: 'reconnected' })
+    expect(translated?.type).toBe('reconnected')
+    // A fresh literal, not a pass-through of the DaemonEvent object.
+    expect(translated).not.toBe(event)
+  })
+
   it('sessionTransition preserves a null workspaceCwd for clear / idle_evict (wire nullability)', () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',
@@ -220,7 +231,7 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
   it('returns null for all non-stream DaemonEvent arms', () => {
     const others: DaemonEvent[] = [
       { type: 'connecting' },
-      { type: 'connected', ack },
+      // connected is no longer here — #538 flips it to a `reconnected` ThreadEvent (asserted above).
       { type: 'disconnected' },
       { type: 'failed', error: wireErr },
       { type: 'messageReceived', message },

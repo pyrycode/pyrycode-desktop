@@ -244,10 +244,11 @@ Nothing imports this module yet.
   returns `initialTimelineState` directly, clearing all five fields (`items`, `phase`, `stalled`,
   `apiRetry`, `compacting`) in one step. Shipped **capability-only**: no dispatch site landed in this
   ticket, and `timelineStore.ts`/`timelineBridge.ts` needed no edit — `dispatch` already accepted any
-  `ThreadEvent`, and `timelineBridge.ts` never produces a `reset` since no wire frame maps to it. The
-  call sites are [#530](https://github.com/pyrycode/pyrycode-desktop/issues/530) (conversation switch)
-  and [#531](https://github.com/pyrycode/pyrycode-desktop/issues/531) (unpair / pair-another-server),
-  both blocked on this ticket.
+  `ThreadEvent`, and `timelineBridge.ts` never produces a `reset` since no wire frame maps to it.
+  [#530](../codebase/530.md) (conversation switch, shipped) added the first dispatch site, via
+  [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx), gated on the active
+  conversation's id actually changing. #531 (unpair / pair-another-server) still owns a second, separate
+  site for the pairing-context-ends case.
 
 ## Edge cases and limitations
 
@@ -289,11 +290,19 @@ Nothing imports this module yet.
   ([#496](../codebase/496.md)), `apiRetry`'s clearing inversion again. Unlike `apiRetry`, the wire
   carries no progress data at all — banner-only, no counter, no percentage — so the state is a plain
   `boolean` rather than a `| null` record; there is nothing for a falling edge to discard.
-- **`reset` has no dispatch site as of [#528](../codebase/528.md).** The arm exists and is fully
-  tested at the reducer level, but nothing in the renderer constructs a `{ type: 'reset' }` event yet
-  — the timeline stays populated for the rest of the process lifetime until
-  [#530](https://github.com/pyrycode/pyrycode-desktop/issues/530) or
-  [#531](https://github.com/pyrycode/pyrycode-desktop/issues/531) ships its call site.
+- **`reset` had no dispatch site as of [#528](../codebase/528.md); [#530](../codebase/530.md) shipped
+  the first.** A conversation switch now clears the timeline via `activateConversation`, gated on the
+  active conversation's id actually changing — a re-open of the already-active conversation clears
+  nothing, since the timeline has no history backfill and a redundant reset would destroy rows that
+  never come back. #531 (unpair / pair-another-server) still owns a second call site.
+- **A late `sessionTransition`/timeline delta for the previous conversation is not suppressed by
+  [#530](../codebase/530.md)'s clear.** `ThreadEvent` carries no `conversation_id` (single-active model,
+  ADR 0004), so if the previous conversation is still streaming when the switch happens, its in-flight
+  deltas keep landing in the timeline the user now reads as the new conversation — the clear empties the
+  *accumulated* rows at the moment of the switch, it cannot stop an ongoing stream from the conversation
+  just left. Named as an open PO follow-up by the architect's security review on #530 (same root cause
+  and remedy as the equivalent gap on [`sessionIdStore`](session-id-store.md#edge-cases-and-limitations)),
+  not yet its own ticket.
 - **Strangler Fig, cut over in [#179](../codebase/179.md).** `sessionStore`, `messageViewModel.ts`,
   and the coarse `message`/`message_chunk` path were completely untouched by this module through
   #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
@@ -354,6 +363,10 @@ Nothing imports this module yet.
   indicator](conversation-shell.md#compacting-indicator-496)).
 - [#528 codebase notes](../codebase/528.md) — the nullary `reset` arm, ported from [`sessionStore`'s
   `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
+- [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation
+  switch, via [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+- [Paired shell](paired-shell.md) — the container `activateConversation` lives beside, and the nav sites
+  that now dispatch `reset` on an actual conversation switch.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)
   — the boundary and channel #199 extended to produce those two arms.
 - [ADR 0004 — Renderer session store](../decisions/0004-renderer-session-store-reducer-wire-types.md)

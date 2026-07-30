@@ -20,9 +20,9 @@ function assertNever(event: never): never {
 
 /**
  * Map one typed daemon event to the `ThreadEvent` it produces, or `null` when the event drives no
- * timeline state. Owns exactly the ten timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
+ * timeline state. Owns exactly the eleven timeline arms (`assistantDelta` / `turnEnd` / `turnState` /
  * `toolUse` #217 / `toolResult` #229 / `sessionTransition`→`sessionBoundary` #286 / `stallDetected` #317 /
- * `apiRetry` #493 / `compacting` #496 / `unrecognizedMessage`); each is reconstructed
+ * `apiRetry` #493 / `compacting` #496 / `unrecognizedMessage` / `connected`→`reconnected` #538); each is reconstructed
  * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
  * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
@@ -122,8 +122,15 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
         raw: event.raw,
         truncated: event.truncated
       }
-    case 'connecting':
     case 'connected':
+      // #538: every supervisor (re)handshake re-emits `connected`. Flip it to the payload-free reconcile
+      // that clears the transient thread chrome, so a retry or compaction banner whose falling edge was
+      // lost to the disconnect does not stick — the Mode B reset-on-reconnect half of the wire contract
+      // (`items` is Mode A and survives; reduceTimeline owns that split, not the bridge). Ignores
+      // `event.ack` (HelloAckPayload) — the reconcile needs no field off it. `daemonEventBridge` and
+      // `sessionStore` stay independent consumers of the same edge; this is a third, not a centralisation.
+      return { type: 'reconnected' }
+    case 'connecting':
     case 'disconnected':
     case 'failed':
     case 'messageReceived':
@@ -169,6 +176,8 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // stall onset it is thread chrome, not a timeline row.)
       // (compacting #495 is now an owned arm — #496 wired its `compacting` scalar above, answering the
       // question #495 deferred: transient thread chrome, NOT a timeline row.)
+      // (connected is now an owned arm — #538 flips it to the `reconnected` chrome reconcile above;
+      // `connecting` / `disconnected` stay here, since only the completed handshake reconciles.)
       return null
     default:
       return assertNever(event)

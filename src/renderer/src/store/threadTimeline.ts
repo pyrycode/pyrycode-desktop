@@ -136,6 +136,13 @@ export type ThreadEvent =
   // following `stallDetected` (:109): a reset carries no payload, so there is no field a caller can
   // get wrong. `sessionStore`'s `reset` (#166) is the same arm for the session facet.
   | { type: 'reset' }
+  // #538: the connection came back — reconcile the transient chrome against the fresh handshake. The
+  // SECOND non-content arm, and distinct from `reset` (:133) in where it comes from: `reset` is
+  // renderer lifecycle and `timelineBridge` never produces it, while this one is CONNECTION lifecycle
+  // — bridge-produced from the `connected` wire edge — but carries no daemon content of its own.
+  // Nullary following `reset`: the `connected` DaemonEvent's `HelloAckPayload` holds no field this
+  // arm needs, so there is none to get wrong.
+  | { type: 'reconnected' }
 
 /**
  * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
@@ -442,6 +449,42 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // Aliasing the shared `items` is safe because the reducer only ever spreads it into a new
       // array, never mutates it (pinned by the purity block). The `sessionStore.ts` #166 rationale.
       return initialTimelineState
+    case 'reconnected':
+      // #538: the reconnect reconcile — the narrower sibling of `reset` above, deliberately adjacent so
+      // the contrast (full wipe vs chrome-only) reads in one screen. `apiRetry` and `compacting` are
+      // cleared ONLY by a wire falling edge (the two un-widened guards at :271/:288 are why), so an edge
+      // lost to a disconnect leaves the banner stuck until the app restarts. `protocol-mobile.md`
+      // § Reconnect / Backfill splits reconnect by data type: Mode B (control state) resets and rebuilds
+      // from whatever the daemon re-asserts, while Mode A (the transcript) reconciles by cursor backfill.
+      // The four chrome scalars are Mode B; `items` is Mode A, which is exactly why it survives BY
+      // REFERENCE here — a fresh array would blank nothing but would re-render every `selectItems`
+      // subscriber, and the shared `initialTimelineState.items` would blank the transcript outright.
+      //
+      // Hand-written literal, NOT `{ ...initialTimelineState, items: state.items }`: the spread would
+      // clear a future sixth field for free, and "for free" is the wrong default here — a sixth field
+      // could be durable Mode A content (wrongly wiped) as easily as Mode B chrome (rightly cleared).
+      // The explicit five fields make a sixth a COMPILE ERROR in this arm, forcing that classification.
+      // (`reset` returning the shared constant is the deliberate opposite: it clears everything, so
+      // "for free" is unambiguously right there.) It is also this file's idiom — every arm writes all
+      // five out. The early-out predicate below is the one thing the compiler cannot keep in sync: a
+      // sixth chrome field must be added to it by hand.
+      //
+      // Nothing live to clear ⇒ the SAME state reference, so a first connect, or a reconnect with clean
+      // chrome, churns no subscriber (the #415 `modalPrompts` shape).
+      //
+      // Accepted residual: the daemon re-asserts only the outstanding modal (#877) and the queued
+      // backlog (#878) on connect — never `api_retry` / `compacting` / `turn_state` — so a status still
+      // genuinely live across the reconnect shows nothing until the daemon's next edge. A briefly-missing
+      // banner over a permanently-stuck one; do not engineer around it here.
+      return state.phase === 'idle' && !state.stalled && state.apiRetry === null && !state.compacting
+        ? state
+        : {
+            items: state.items,
+            phase: 'idle',
+            stalled: false,
+            apiRetry: null,
+            compacting: false
+          }
     default:
       return assertNever(event)
   }

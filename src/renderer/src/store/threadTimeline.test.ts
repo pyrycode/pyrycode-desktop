@@ -55,6 +55,10 @@ function reset(): ThreadEvent {
   return { type: 'reset' }
 }
 
+function reconnected(): ThreadEvent {
+  return { type: 'reconnected' }
+}
+
 function apiRetry(active: boolean, current = 0, total = 0): ThreadEvent {
   return { type: 'apiRetry', active, current, total }
 }
@@ -665,6 +669,96 @@ describe('reduceTimeline — reset', () => {
     const state = run([userText('a'), reset(), userText('b')])
     expect(state.items).toEqual([{ kind: 'userText', text: 'b' }])
     expect(initialTimelineState.items).toEqual([])
+  })
+})
+
+describe('reduceTimeline — reconnected', () => {
+  /** A state dirty on all five fields — the `reset` block's helper. The stall goes LAST: a
+   *  turnState is turn activity and would clear it (the #317 semantics). */
+  function dirty(): TimelineState {
+    return run([
+      userText('typed'),
+      delta('A', 'hi'),
+      { type: 'turnState', state: 'thinking' },
+      apiRetry(true, 3, 10),
+      compacting(true),
+      stall()
+    ])
+  }
+
+  it('clears all four chrome scalars in one step (AC1)', () => {
+    const state = dirty()
+    // Precondition: genuinely dirty on every scalar — otherwise the clear proves nothing.
+    expect(state.phase).toBe('thinking')
+    expect(state.stalled).toBe(true)
+    expect(state.apiRetry).not.toBeNull()
+    expect(state.compacting).toBe(true)
+
+    const next = reduceTimeline(state, reconnected())
+
+    expect(next.phase).toBe('idle')
+    expect(next.stalled).toBe(false)
+    expect(next.apiRetry).toBeNull()
+    expect(next.compacting).toBe(false)
+  })
+
+  it('leaves items untouched BY REFERENCE, so no selectItems subscriber re-renders (AC2)', () => {
+    const state = dirty()
+    expect(state.items.length).toBeGreaterThan(0)
+
+    const next = reduceTimeline(state, reconnected())
+
+    // `toBe` is the load-bearing assertion — `toEqual` alone would pass on a fresh copy and let a
+    // re-render regression through.
+    expect(next.items).toBe(state.items)
+    expect(next.items).toEqual(state.items)
+  })
+
+  it('returns the same state reference against already-clean chrome (AC3)', () => {
+    expect(reduceTimeline(initialTimelineState, reconnected())).toBe(initialTimelineState)
+    // The case that pins the early-out predicate rather than the trivial initial-state one: dirty on
+    // `items` (a real transcript), clean on all four chrome scalars — a first connect mid-transcript.
+    const contentOnly = run([userText('typed'), delta('A', 'hi'), turnEnd('A')])
+    expect(contentOnly.items.length).toBeGreaterThan(0)
+    expect(reduceTimeline(contentOnly, reconnected())).toBe(contentOnly)
+  })
+
+  it('is idempotent — a second reconnected returns the same reference', () => {
+    const once = reduceTimeline(dirty(), reconnected())
+    expect(reduceTimeline(once, reconnected())).toBe(once)
+  })
+
+  it('does not latch — a rising apiRetry edge after it sets the status again (AC5)', () => {
+    const state = run([apiRetry(true, 1, 3), reconnected(), apiRetry(true, 2, 3)])
+    expect(state.apiRetry).toEqual({ current: 2, total: 3 })
+  })
+
+  it('does not latch — a rising compacting edge after it sets the status again (AC5)', () => {
+    // The one that matters: the `compacting` arm early-outs on `state.compacting === event.active`,
+    // so had the clear never landed, the re-assert would be swallowed as a same-reference no-op and
+    // the banner would be wrong in the OTHER direction.
+    const state = run([compacting(true), reconnected(), compacting(true)])
+    expect(state.compacting).toBe(true)
+  })
+
+  it('does not blank a live transcript mid-turn (Mode A survives the Mode B clear)', () => {
+    const state = run([
+      delta('t1', 'hello'),
+      apiRetry(true, 1, 3),
+      reconnected(),
+      delta('t1', ' world')
+    ])
+    expect(state.items).toEqual([{ kind: 'assistantText', turnId: 't1', text: 'hello world' }])
+    expect(state.apiRetry).toBeNull()
+  })
+
+  it('is distinct from reset — reset empties items, reconnected keeps them', () => {
+    // The ticket's central claim: `reset` is NOT reusable here, because it would blank the transcript
+    // on every reconnect. The invariant a future refactor is most likely to break.
+    const state = dirty()
+    expect(reduceTimeline(state, reconnected()).items).toBe(state.items)
+    expect(reduceTimeline(state, reset()).items).toEqual([])
+    expect(reduceTimeline(state, reconnected())).not.toBe(initialTimelineState)
   })
 })
 

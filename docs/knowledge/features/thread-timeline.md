@@ -72,6 +72,7 @@ type ThreadEvent =
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
   | { type: 'compacting'; active: boolean }
   | { type: 'reset' }
+  | { type: 'reconnected' }
 
 interface TimelineState { items: readonly ThreadItem[]; phase: TurnPhase; stalled: boolean; apiRetry: ApiRetryStatus | null; compacting: boolean }
 interface ApiRetryStatus { current: number; total: number }
@@ -114,6 +115,7 @@ to make "true by construction."
 | `apiRetry` | `active: true` → hold `{ current, total }` (same reference if unchanged, no-churn); `active: false` → `null`, discarding the event's counter unconditionally. `items`/`phase`/`stalled` untouched — [#493](../codebase/493.md) |
 | `compacting` | `state.compacting === event.active` → same reference (no-churn on a verbatim repeat of either edge); otherwise fresh state with `compacting: event.active`. `items`/`phase`/`stalled`/`apiRetry` untouched — [#496](../codebase/496.md) |
 | `reset` | returns `initialTimelineState` — all five fields at once, by returning the shared constant rather than a fresh literal. Idempotent by reference (a second reset is a no-op); `items` stays the same reference post-reset, so no `selectItems` subscriber churns — [#528](../codebase/528.md) |
+| `reconnected` | clears `phase`→`idle`, `stalled`→`false`, `apiRetry`→`null`, `compacting`→`false` via a hand-written five-field literal (not a spread of `initialTimelineState`); `items` preserved **by reference**. Same reference if all four are already clean (no-churn on a first connect, or a reconnect with nothing live) — [#538](../codebase/538.md) |
 
 `items` and `phase` are orthogonal: content events never touch `phase`, `turnState` never touches
 `items`. **`stalled` ([#317](../codebase/317.md)) is a third, independent axis**: the four
@@ -249,6 +251,15 @@ Nothing imports this module yet.
   [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx), gated on the active
   conversation's id actually changing. #531 (unpair / pair-another-server) still owns a second, separate
   site for the pairing-context-ends case.
+- **[#538](../codebase/538.md) (shipped)** added a twelfth arm, the nullary `reconnected` — the second
+  arm that is neither daemon- nor user-content-derived, but unlike `reset` it **is** bridge-produced:
+  `timelineBridge.ts` maps the `connected` daemon edge onto it (moved out of the null fall-through
+  cluster into an owned case), implementing `docs/protocol-mobile.md`'s Mode B reset-on-reconnect
+  contract for the two two-edged chrome scalars (`apiRetry`, `compacting`) that were otherwise stuck
+  forever once their falling edge was lost to a disconnect. Clears `phase`/`stalled`/`apiRetry`/
+  `compacting` in one step while preserving `items` **by reference** — the Mode A/Mode B split held on
+  the same connect. The [`modalStore` #415](../codebase/415.md) / `queueStore` #197 reconcile shape,
+  applied a third time.
 
 ## Edge cases and limitations
 
@@ -295,6 +306,13 @@ Nothing imports this module yet.
   active conversation's id actually changing — a re-open of the already-active conversation clears
   nothing, since the timeline has no history backfill and a redundant reset would destroy rows that
   never come back. #531 (unpair / pair-another-server) still owns a second call site.
+- **A retry or compaction genuinely still live across a reconnect shows no banner until the daemon's
+  next edge** ([#538](../codebase/538.md)), an accepted residual, not a bug to engineer around. The
+  daemon's connect-time re-assertion set is the outstanding modal (#877) and the queued backlog (#878)
+  only — never `api_retry`/`compacting`/`turn_state` — so `reconnected`'s clear has nothing to
+  re-populate from. A briefly-missing banner (until the next rising edge, or for a compaction possibly
+  only the closing falling edge, landing as a no-op) trades against a permanently-stuck one, which is
+  the worse failure this arm exists to fix.
 - **A late `sessionTransition`/timeline delta for the previous conversation is not suppressed by
   [#530](../codebase/530.md)'s clear.** `ThreadEvent` carries no `conversation_id` (single-active model,
   ADR 0004), so if the previous conversation is still streaming when the switch happens, its in-flight
@@ -365,6 +383,10 @@ Nothing imports this module yet.
   `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
 - [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation
   switch, via [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+- [#538 codebase notes](../codebase/538.md) — the nullary `reconnected` arm: `timelineBridge.ts` maps
+  the `connected` daemon edge onto it, clearing `phase`/`stalled`/`apiRetry`/`compacting` while
+  preserving `items` by reference — the Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md)
+  and `queueStore` #197 already got.
 - [Paired shell](paired-shell.md) — the container `activateConversation` lives beside, and the nav sites
   that now dispatch `reset` on an actual conversation switch.
 - [Inbound message decode](inbound-message-decode.md) / [Daemon-event channel](daemon-event-channel.md)

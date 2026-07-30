@@ -55,8 +55,9 @@ export type ModalEvent =
   | { type: 'rejectionDismissed'; modalId: string }
   // #415: the transport (re)connected. Fires on EVERY supervisor (re)handshake, including the first
   // connect. Reconciles `outstanding` against the daemon's connect-time re-sends by clearing it; the
-  // daemon then repopulates via `shown`, and absence = resolved-while-away. Carries no payload — the
-  // reset needs nothing from the connect ack. First-connect is the empty-`outstanding` no-op (AC4).
+  // daemon then repopulates via `shown`, and absence = resolved-while-away. #510: it clears `resolved`
+  // too — both slices are per-connection truth. Carries no payload — the reset needs nothing from the
+  // connect ack. A reconnect with neither slice to clear is a same-reference no-op (AC4).
   | { type: 'reconnected' }
 
 /**
@@ -72,10 +73,14 @@ export interface ModalState {
   rejections: readonly string[]
   // #195: the `modalId`s that have LEFT `outstanding` via `dismissed` (answer/cancel/remote/timeout).
   // Internal reducer bookkeeping — no selector, no consumer reads it. It lets the `shown` arm tell a
-  // never-seen id (→ append) from a seen-then-resolved one (→ no-op), so the daemon's reconcile-on-
-  // connect re-send of a still-outstanding prompt updates the one prompt already shown rather than
-  // re-surfacing an already-answered one. Disjoint from `outstanding` by construction. `modalId`s are
-  // one-time nonces (never reused), so a retained id is never legitimately re-shown — retain forever.
+  // never-seen id (→ append) from a seen-then-resolved one (→ no-op), so a duplicate delivery within one
+  // connection updates the prompt already shown rather than re-surfacing an already-answered one.
+  // Disjoint from `outstanding` by construction. #510: PER-CONNECTION state, not permanent — the
+  // `reconnected` arm clears it. An answer is dispatched optimistically even when the transport is down
+  // and the send is swallowed (`answerModal` early-returns on a null driver), so a recorded id means
+  // "resolved as far as THIS connection saw" — never "the daemon has it". The daemon's connect-time
+  // reconcile re-sends only STILL-OUTSTANDING prompts, so anything re-sent after a handshake is
+  // genuinely unanswered and must re-surface.
   resolved: readonly string[]
 }
 
@@ -116,17 +121,21 @@ function removeRejection(rejections: readonly string[], modalId: string): readon
 
 /**
  * Pure reducer — no mutation, returns fresh state. `shown` is idempotent on `modalId` (#195): a
- * never-seen id appends, a re-delivered still-outstanding id updates in place, a re-delivered
- * already-resolved id is a same-reference no-op — so the daemon's reconcile-on-connect re-send never
- * double-shows. `dismissed` removes by id (recording it as resolved), or no-ops on an unknown id.
- * Mirrors `reduceTimeline`: a `switch` on the sealed union with an `assertNever` default, and a
- * same-reference return when nothing changes so an unchanged slice does not churn selectors.
+ * never-seen id appends, a re-delivered still-outstanding id updates in place, and a re-delivered
+ * already-resolved id is a same-reference no-op WITHIN THE CURRENT CONNECTION — so a duplicate delivery
+ * never double-shows. #510 scopes that last clause: `reconnected` clears `resolved`, so the same id
+ * re-sent after a handshake DOES re-surface. `dismissed` removes by id (recording it as resolved), or
+ * no-ops on an unknown id. Mirrors `reduceTimeline`: a `switch` on the sealed union with an
+ * `assertNever` default, and a same-reference return when nothing changes so an unchanged slice does
+ * not churn selectors.
  */
 export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
   switch (event.type) {
     case 'shown': {
-      // Check `resolved` first — the cheap reconnect-race early-out: a re-delivered prompt the client
-      // already answered/dismissed (optimistically, #237) must NOT re-surface. Same-reference no-op.
+      // Check `resolved` first — the cheap duplicate-delivery early-out: a prompt the client already
+      // answered/dismissed (optimistically, #237) must NOT re-surface WITHIN THE CURRENT CONNECTION.
+      // Same-reference no-op. #510: ACROSS a reconnect it must re-surface, and does — the `reconnected`
+      // arm clears `resolved`, so this check simply finds nothing after a handshake.
       if (state.resolved.includes(event.modalId)) return state
       const prompt: ModalPrompt = {
         modalId: event.modalId,
@@ -169,10 +178,21 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
     case 'reconnected': {
       // #415: on every (re)handshake, clear `outstanding` so the daemon's connect-time re-sends are the
       // sole repopulation truth (a still-held prompt re-appends via `shown`, absence = resolved-while-away).
-      // Spread preserves `resolved` — keeping the `shown` arm's resolved-first early-out suppressing an
-      // optimistically-answered prompt the daemon re-sends — and `rejections`, which has no repopulation path.
-      if (state.outstanding.length === 0) return state // AC4: no churn on first / held-nothing connect
-      return { ...state, outstanding: [] }
+      // #510 DELIBERATELY REVERSES #415 AC3 and clears `resolved` too: both slices are per-CONNECTION
+      // truth. Retaining `resolved` guarded nothing — the daemon's reconcile enumerates only STILL-
+      // OUTSTANDING modals, so a prompt it already resolved is never re-sent — while costing the bug it
+      // was meant to prevent: an answer clicked while the link was down is swallowed by the transport,
+      // yet the retained id suppressed the daemon's re-delivery, so the user's explicit Allow decayed
+      // into a deny-on-timeout with no way to re-answer. `rejections` still passes through the spread —
+      // it has no daemon repopulation path.
+      // Each slice is guarded independently so the same-reference-on-no-change discipline survives:
+      // an already-empty `outstanding` keeps its reference (PermissionModal selects it under Object.is,
+      // so a fresh [] would re-render for no state change), and a reconnect with nothing at all to clear
+      // returns the same state (AC4: no churn on the first / held-nothing connect).
+      const outstanding = state.outstanding.length === 0 ? state.outstanding : []
+      const resolved = state.resolved.length === 0 ? state.resolved : []
+      if (outstanding === state.outstanding && resolved === state.resolved) return state
+      return { ...state, outstanding, resolved }
     }
     default:
       return assertNever(event)

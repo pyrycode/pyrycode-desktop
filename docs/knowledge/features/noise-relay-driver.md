@@ -89,7 +89,7 @@ Supervisor events are **synchronous**, but `createNoiseSession` is **async**. A 
 
 - `generation: number` — bumped on every `connected`, and on `terminal`/`stop`. Each session and each per-connection closure captures the `gen` it was created under; a mismatch means it has been superseded and must no-op.
 - `session: NoiseSession | null` — the live session for the current generation; `null` during the async-create gap, before first connect, and after terminal.
-- `pending: Uint8Array[]` — raw Noise frames that arrived during the async-create gap, replayed **in order** once the session resolves. **Bounded** at `MAX_PENDING_FRAMES` (excess dropped fail-safe).
+- `pending: Array<{ raw: Uint8Array; type: string }>` — raw Noise frames (with their decoded inner `type`, since [#532](../codebase/532.md)) that arrived during the async-create gap, replayed **in order** once the session resolves. **Bounded** at `MAX_PENDING_FRAMES` (excess dropped fail-safe; the count cap, not the added string, is what bounds the flood vector). Before #532 this held bare `Uint8Array`s — the type widened so a buffered frame replays with its real tag instead of `undefined`, keeping the buffered and live delivery paths indistinguishable to the session's new label-reading contract.
 
 Guarantees: **exactly one live session**, ever. A stale in-flight `createSession` that resolves after a superseding `connected`/`terminal`/`stop` sees `gen !== generation`, closes itself **before** `start()` (so it never sends a spurious `noise_init`), and no-ops — it never installs, never `start()`s, never sends. The `sendFrame` gen-guard is a deterministic second layer: belt (don't start a superseded session), suspenders (drop its writes if it somehow does). Both `.then` **and** `.catch` are fenced, so a stale rejection cannot surface a spurious `session-load-failed`.
 
@@ -124,7 +124,27 @@ construct ─▶ supervisor dials
   fatal close / stop() ─▶ terminal{code} ─▶ close session ─▶ sink terminal
 ```
 
-The **outbound tagger** is **two** closure-local latches created **inside** the `connected` handler, both `false`/`true`-reset per connection with no shared mutable state across reconnects, both **one-shot** (`type = firstFrame || rekeyInitPending ? 'noise_init' : 'noise_msg'`, both cleared after each send): `let firstFrame = true` — the connection's very first `sendFrame`, always handshake message 1 — and `let rekeyInitPending = false` — the fresh `msg1` of an in-session rekey (see § Rekey `noise_init` re-arm). The **inbound `inner.type` label is deliberately not branched on** — the session's state machine plus Noise AEAD decide interpretation, so a hostile `type` cannot misroute.
+The **outbound tagger** is **two** closure-local latches created **inside** the `connected` handler, both `false`/`true`-reset per connection with no shared mutable state across reconnects, both **one-shot** (`type = firstFrame || rekeyInitPending ? 'noise_init' : 'noise_msg'`, both cleared after each send): `let firstFrame = true` — the connection's very first `sendFrame`, always handshake message 1 — and `let rekeyInitPending = false` — the fresh `msg1` of an in-session rekey (see § Rekey `noise_init` re-arm). The **inbound `inner.type` label is forwarded to the session verbatim but the driver itself branches on none of it** (since [#532](../codebase/532.md); pre-#532 it was discarded outright) — see § The untrusted→trusted boundary below.
+
+### The untrusted→trusted boundary — the inner `type` label, forwarded not branched ([#532](../codebase/532.md))
+
+`onMessage` decodes one inbound frame through the #5 codec (fail-closed on any malformed input) and
+routes its raw Noise bytes to the session, or buffers them if the session is still resolving. Since
+[#532](../codebase/532.md) it keeps the decoded `InnerFrameV2.type` alongside `.data` instead of
+discarding it, and passes both to `session.onFrame(raw, type)` — and to the `pending` buffer entry
+if the session isn't ready yet (§ generation model above).
+
+**The driver makes zero routing decisions on the label — it is pure pass-through.** The label is
+relay-controlled and stays untrusted at this layer; it is consulted downstream by the
+[Noise session](noise-session.md#rekey-window-routing-by-inner-frame-type-532), in exactly one
+state (`awaiting-rekey-reply`), for routing only — never to select a key. Interpretation stays with
+the Noise state machine + AEAD, so a hostile `type` cannot misroute a frame past authentication: it
+only picks which of two pre-existing rejections an already-doomed frame receives
+(`transport-decrypt-failed` vs. `handshake-read-failed`), never a downgrade or a transport bypass.
+This mirrors the daemon's own dispatch on the inner type (pyrycode `v2session.go:664-669`), matched
+on the fake side in [#524](../codebase/524.md) — the same argument in the mirror direction. The
+label is deliberately never logged (relay-controlled attacker-typed data); the static reason code
+already distinguishes the two rejection paths.
 
 ### Rekey `noise_init` re-arm ([#112](../codebase/112.md))
 
@@ -150,7 +170,7 @@ Every `catch` maps to a **static reason** and **drops** the caught error object 
 Ticket carries `security-sensitive`; the architect's security-review verdict is **PASS** (see the spec's `## Security review`) and code review confirmed it on the diff.
 
 - **Fresh-handshake-per-connect is a security invariant, not just correctness.** A new ephemeral and no carried cipher state per `connected` is precisely what prevents `(key, nonce)` reuse across connections. The generation model enforces it: old session `close()`d on every `connected`, `firstFrame`/cipher/pending state never carried, and the `sendFrame` gen-guard drops any stale session's writes. The re-handshake test is therefore both the AC4 check and the nonce-freshness guard.
-- **One fail-closed untrusted→trusted boundary.** The supervisor `message{frame}` handler decodes through the #5 codec's fail-closed `decodeInnerFrame`→`base64StdDecode` (both throw, never return partial/truncated); the downstream `session.onFrame(raw)` bytes are then AEAD-verified by Noise — a hostile on-path relay cannot forge past the session, and a spoofed inner `type` cannot misroute (the label is never branched on).
+- **One fail-closed untrusted→trusted boundary.** The supervisor `message{frame}` handler decodes through the #5 codec's fail-closed `decodeInnerFrame`→`base64StdDecode` (both throw, never return partial/truncated); the downstream `session.onFrame(raw, type)` bytes are then AEAD-verified by Noise — a hostile on-path relay cannot forge past the session. The inner `type` label is forwarded to the session verbatim (since [#532](../codebase/532.md)) but the driver itself branches on none of it, and a spoofed label still cannot misroute past authentication — see § The untrusted→trusted boundary above.
 - **Bounded pending buffer closes a memory-exhaustion vector.** The async-create gap between a synchronous `connected` and the async `createNoiseSession` would otherwise let a hostile relay flood inbound frames into an unbounded queue. `pending` is capped at `MAX_PENDING_FRAMES = 8` (the legitimate daemon sends nothing before it receives message 1, so any deep pre-session queue is anomalous); excess is dropped fail-safe.
 - **Content-free logging by construction; static reasons only (was log-free; #133 added the one exception).** No `console.*`; sink `error` payloads carry only enum reason strings — never keys, tokens, plaintext, frames, or headers. Pinned by a six-method `console`-spy assertion across connect → handshake → transport → error. The one exception: the `onMessage` framing catch now logs the capped raw pre-decryption inbound frame through an optional injected [`DiagnosticLog`](diagnostic-log.md) (§ *Pre-decryption framing-failure byte logging*, [#133](../codebase/133.md)) — safe because a frame that fails to decode is still base64-wrapped ciphertext, never plaintext.
 - **No renderer/IPC surface.** Main-process only; no `BrowserWindow`, `contextBridge`, `ipcMain`, preload, or navigation surface. The static private key and the `hello` (which carries the device token as Noise early-data) are injected `Uint8Array`s held in main-process memory only, passed straight to `createNoiseSession`, never persisted, never logged.
@@ -168,6 +188,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 
 - [#50 codebase notes](../codebase/50.md) — implementation summary, patterns, lessons.
 - [#112 codebase notes](../codebase/112.md) — the `rekeyInitPending` latch that re-arms `noise_init` for the fresh rekey `msg1` (§ Rekey `noise_init` re-arm) + the assembled-stack e2e that drives this driver through a daemon-initiated rekey.
+- [#532 codebase notes](../codebase/532.md) / [Noise session](noise-session.md#rekey-window-routing-by-inner-frame-type-532) — the rekey-window desync fix this driver's label plumbing (§ The untrusted→trusted boundary) exists to serve: forwards the decoded inner `type` through both live delivery and the `pending` replay buffer, taking no routing decision itself.
 - [#328 codebase notes](../codebase/328.md) / [Relay supervisor](relay-supervisor.md) / [Daemon connection](daemon-connection.md) — the `relay-link-up`/`relay-link-down{code}` members added here as a thin, unclassified forward of the supervisor's `connected`/`relay-closed`; `daemonConnection`'s choke point classifies the code into the renderer-facing `relayLinkChanged` `DaemonEvent`. First of three slices toward a two-dot connection-status indicator.
 - [Content-free diagnostic log](diagnostic-log.md) / [#133 codebase notes](../codebase/133.md) — the optional injected `diagnosticLog` this driver uses at the `onMessage` framing catch and forwards into every [Noise session](noise-session.md) it builds (§ *Pre-decryption framing-failure byte logging*), carrying the capped raw ciphertext via the branded `safeBytes` field.
 - [Relay supervisor](relay-supervisor.md) / [#22](../codebase/22.md) — the self-healing byte-pipe the driver constructs and drives; explicitly names this driver as its "future Noise-handshake layer" consumer, and owns the reconnect loop / backoff / fatal-code classification the driver does **not**. Its `resolveConnection` provider ([#83](../codebase/83.md)) is the driver's wrapper over `loadDialConfig`.

@@ -223,8 +223,11 @@ async function driveClient(opts: {
   // frame goes through exactly the decode the live path uses.
   const deliverFrame = (frame: Uint8Array): void => {
     try {
-      const { data } = decodeInnerFrame(frame)
-      initiator.onFrame(base64StdDecode(data))
+      const inner = decodeInnerFrame(frame)
+      // #532: hand the inner `type` down with the raw bytes, exactly as the production driver now
+      // does (noiseRelayDriver.onMessage). Discarding it here would leave this whole suite blind to
+      // the client's rekey-window routing while claiming to drive the real client faithfully.
+      initiator.onFrame(base64StdDecode(inner.data), inner.type)
     } catch {
       /* fail-closed on a malformed frame; the bounded wait converts it to a timeout */
     }
@@ -624,6 +627,111 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     // interleave test above uses the identical gate and DOES capture a served reply as held[1].
     await client.waiter.wait(() => client.held.length >= 2, 300)
     expect(client.held).toHaveLength(1)
+  })
+
+  it('decrypts a daemon frame interleaved into the CLIENT rekey window, then completes the swap (#532, AC1/AC2/AC3)', async () => {
+    // The mirror of the #524 test above: there the daemon's rekey window had to keep serving, here
+    // the CLIENT's window has to keep receiving. This is the whole production stack — real codec,
+    // real socket, real createNoiseSession — so it is the end-to-end proof that the inner-frame tag
+    // survives the wire and reaches the session's routing decision.
+    const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    try {
+      const { forwarderUrl, whenReady, daemon } = await standUp()
+      const client = await driveClient({
+        forwarderUrl,
+        remoteStaticPublicKey: daemon.staticPublicKey,
+        hello: buildTestHello()
+      })
+      await whenReady()
+      await client.waiter.wait(() => client.events.some((e) => e.type === 'handshake-complete'))
+
+      // Deliberately NO baseline round-trip: settle() is first-wins, so a baseline { ok: true }
+      // would swallow any later daemon-side failure reason (the #524 tests' rationale, unchanged).
+
+      // Hold both daemon frames at the relay boundary so the TEST, not the wire, fixes their
+      // ordering against the client's state. The client stays in `transport` while both are captured.
+      client.holdInbound()
+      daemon.initiateRekey() // held[0] — the sealed `rekey_request`
+      await client.waiter.wait(() => client.held.length >= 1)
+
+      // The interleaved app frame: the daemon fans it out DURING its own rekey window, sealed under
+      // the still-live old send cipher and tagged `noise_msg` (pushFrame, now permitted in
+      // `awaiting-rekey-init`). Nonce-lockstep forbids sealing it earlier and delivering it late, so
+      // it has to be produced here.
+      const interleaved = encodeEnvelope({
+        id: 55,
+        type: 'message',
+        ts: '2026-01-01T00:00:11Z',
+        payload: {
+          conversation_id: 'c1',
+          message_id: 'interleaved-1',
+          role: 'assistant',
+          text: 'fanned out before the rekey noise_init landed'
+        }
+      })
+      daemon.pushFrame(interleaved) // held[1]
+      await client.waiter.wait(() => client.held.length >= 2)
+      expect(client.held, 'the fake must serve a pushFrame inside its own rekey window').toHaveLength(2)
+
+      // Release, then deliver both held frames in ONE synchronous turn: the daemon's rekey msg2 is a
+      // full network round-trip away, so it cannot land between them. deliverHeld(0) parks the client
+      // in `awaiting-rekey-reply` (its `noise_init` goes out in flight); deliverHeld(1) is then the
+      // interleaved frame arriving in exactly the window this ticket is about.
+      client.resumeInbound()
+      client.deliverHeld(0)
+      client.deliverHeld(1)
+
+      // AC1 — the must-fail-first assertion. Pre-#532 the client consumes held[1] as its handshake
+      // reply, ReadMessage MAC-fails, and this surfaces `error{handshake-read-failed}` and zero
+      // messages instead.
+      const inWindow = client.events.filter((e) => e.type === 'message')
+      expect(inWindow).toHaveLength(1)
+      expect(bytes((inWindow[0] as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(interleaved))
+
+      // AC2: the genuine `noise_resp` reply still drives the swap — proven by the post-swap resume
+      // frame, which only the client's NEW recv cipher can open.
+      await client.waiter.wait(() => client.events.filter((e) => e.type === 'message').length >= 2)
+      const resume = client.events.filter((e) => e.type === 'message')[1]
+      expect(bytes((resume as { plaintext: Uint8Array }).plaintext)).toEqual(
+        bytes(DEFAULT_REKEY_RESUME_MESSAGE)
+      )
+
+      // …and the other direction under K1: the client's send opens under the daemon's new recv
+      // cipher and the echo comes back sealed under the new send cipher.
+      const probe = encodeEnvelope({
+        id: 3,
+        type: 'send_message',
+        ts: '2026-01-01T00:00:12Z',
+        payload: { conversation_id: 'c1', message_id: 'm2', text: 'k1 probe' }
+      })
+      client.initiator.sendMessage(probe)
+      await client.waiter.wait(() => client.events.filter((e) => e.type === 'message').length >= 3)
+      const echo = client.events.filter((e) => e.type === 'message')[2]
+      expect(bytes((echo as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(probe))
+
+      // AC3: no error of any reason reached the client, and the daemon never classified a failure.
+      expect(client.events.some((e) => e.type === 'error')).toBe(false)
+      expect(client.events.filter((e) => e.type === 'rekey-requested')).toHaveLength(1)
+      expect(await daemon.whenSettled()).toEqual({ ok: true })
+
+      // The ordered tag sequence across the whole interleave (#525's oracle): the initial IK msg2,
+      // the `rekey_request`, the interleaved app frame, the rekey msg2, the resume frame, the K1
+      // echo. Only the two handshake replies are `noise_resp`. Whole-array equality catches a
+      // handshake site regressing to `noise_msg` AND a transport site wrongly becoming `noise_resp`
+      // in one assertion — and element 2 is precisely the tag the client's window routing reads.
+      expect(client.inboundTypes).toEqual([
+        'noise_resp',
+        'noise_msg',
+        'noise_msg',
+        'noise_resp',
+        'noise_msg',
+        'noise_msg'
+      ])
+
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
   })
 
   it('survives a client drop and runs a fresh responder handshake on the reconnect noise_init (#416, AC2/AC3/AC4)', async () => {

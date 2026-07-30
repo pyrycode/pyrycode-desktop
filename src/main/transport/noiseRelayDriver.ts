@@ -142,8 +142,11 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
   // first connect, and after terminal.
   let session: NoiseSession | null = null
   // Raw Noise frames that arrived during the async-create gap, replayed in order once the session
-  // resolves. Bounded at MAX_PENDING_FRAMES (excess dropped fail-safe).
-  let pending: Uint8Array[] = []
+  // resolves. Bounded at MAX_PENDING_FRAMES (excess dropped fail-safe). Each entry carries its inner
+  // `type` alongside the bytes (#532): onFrame's contract now reads that label, so a buffer that
+  // dropped it would feed `undefined` where live delivery feeds the real tag. The COUNT cap is what
+  // bounds the flood vector and is unchanged; the added string is bounded by the codec's frame cap.
+  let pending: Array<{ raw: Uint8Array; type: string }> = []
   // #83 reload-per-dial state. `firstConnect` gates the first connect onto config.session (no reason
   // to reload the record microseconds after the consumer already loaded it). `pendingSession` is the
   // session material the LATEST resolveConnection reload stashed, consumed by the next onConnected.
@@ -251,7 +254,7 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
         s.start() // sends message 1 first…
         const buffered = pending
         pending = []
-        for (const raw of buffered) s.onFrame(raw) // …then buffered frames replay as its replies
+        for (const f of buffered) s.onFrame(f.raw, f.type) // …then buffered frames replay as its replies
       })
       .catch(() => {
         if (gen === generation) emit({ type: 'error', reason: 'session-load-failed' })
@@ -261,12 +264,26 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
   // The untrusted→trusted boundary: decode one inbound frame through the #5 codec (fail-closed on
   // any malformed input — the caught error is dropped, never forwarded, as its message could echo
   // transcript bytes) and route its raw Noise bytes to the session, or buffer them if the session
-  // is still resolving. The inner `type` label is NOT branched on: the session state machine +
-  // Noise AEAD decide interpretation, so a hostile `type` cannot misroute.
+  // is still resolving.
+  //
+  // The inner `type` label is FORWARDED VERBATIM and the driver branches on none of it (#532). It is
+  // relay-controlled, so it stays untrusted: the session consults it in exactly one state,
+  // `awaiting-rekey-reply`, where a daemon handshake reply and an old-cipher app frame are
+  // legitimately in flight at once and nothing else can tell them apart — and there it decides a
+  // ROUTE, never a key. Interpretation still belongs to the Noise state machine + AEAD, so a hostile
+  // `type` cannot misroute a frame: relabelling only picks which of two pre-existing rejections an
+  // already-doomed frame receives (`transport-decrypt-failed` rather than `handshake-read-failed`),
+  // never a downgrade, a transport bypass, or a plaintext leak. This mirrors the daemon side, whose
+  // own dispatch switches purely on the label (pyrycode v2session.go:664-669; fakeDaemon.ts's
+  // routing note is the same argument in the opposite direction). The label is never logged — it is
+  // attacker-typed data, and the static reason code already distinguishes the two paths.
   function onMessage(frame: Uint8Array): void {
     let raw: Uint8Array
+    let type: string
     try {
-      raw = base64StdDecode(decodeInnerFrame(frame).data)
+      const inner = decodeInnerFrame(frame)
+      type = inner.type
+      raw = base64StdDecode(inner.data)
     } catch {
       // The caught WireDecodeError object is still dropped (its message could echo more than the
       // bounded prefix); only the static code + the capped raw pre-decryption frame are logged (#133).
@@ -280,9 +297,9 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
       return
     }
     if (session) {
-      session.onFrame(raw)
+      session.onFrame(raw, type)
     } else if (pending.length < MAX_PENDING_FRAMES) {
-      pending.push(raw)
+      pending.push({ raw, type })
     }
     // else: bounded — drop the excess fail-safe.
   }

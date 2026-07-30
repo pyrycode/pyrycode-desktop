@@ -38,7 +38,7 @@ export interface FakeDaemon {
   staticPublicKey: Uint8Array          // responder static X25519 pubkey (32B) — the client pins it as remoteStaticPublicKey
   whenSettled(): Promise<FakeDaemonOutcome>   // resolves once (cached); never rejects
   initiateRekey(): void                // as the daemon: seal a rekey_request + answer the client's fresh noise_init (#112); no-op unless in `transport`
-  pushFrame(plaintext: Uint8Array): void  // server-initiated push (#416): seal under the CURRENT send cipher + stream; no-op unless in `transport`
+  pushFrame(plaintext: Uint8Array): void  // server-initiated push (#416): seal under the CURRENT send cipher + stream; serves in `transport` AND `awaiting-rekey-init` (#532), no-op otherwise or without a send cipher
   close(): Promise<void>               // tear down leg + free wasm state; idempotent
 }
 
@@ -122,8 +122,15 @@ ordering the [#416 e2e](../codebase/416.md) pins.
 
 **`pushFrame(plaintext: Uint8Array): void`** is the complementary server-initiated push: seal `plaintext`
 under the **current** send cipher and stream it — `initiateRekey`'s seal-and-stream pattern minus the
-state transition. No-op unless a completed session is in `transport`. This is how a test raises an
-out-of-band event (e.g. a modal) mid-session, independent of any reconnect.
+state transition. This is how a test raises an out-of-band event (e.g. a modal) mid-session,
+independent of any reconnect. Originally a no-op outside `transport`; since [#532](../codebase/532.md)
+it also serves in `awaiting-rekey-init` (`closed` and a null send cipher stay excluded), because that
+is faithfulness rather than laxity — the fake's cipher swap happens only inside `handleRekeyInit`, so
+throughout that window the send cipher is still the live OLD one, exactly matching the real daemon's
+behaviour of continuing to fan out transport frames under the old ciphers for the whole awaiting-reply
+window (pyrycode #450). Without this arm no test could produce the one frame [#532](../codebase/532.md)'s
+client-side fix needed to prove itself against: an app frame interleaved into the client's own rekey
+window.
 
 Both `handleReconnect` and `reconnectResendFrames`/`pushFrame` are **modal-agnostic** — they move opaque
 `Uint8Array` envelopes only. The modal specifics (a crafted `modal_shown` frame) live entirely in the
@@ -167,6 +174,7 @@ store, [#197](../codebase/197.md)) can reuse this capability unchanged.
 - Consumer: [#89](../codebase/89.md) — the round-trip test that drives this daemon, overriding `buildReply` to return `message`/`message_chunk` envelopes (the richer reply this doc forecast). **Landed.**
 - Consumer: [#435](../codebase/435.md) — the milestone UI e2e specs (#93/#94) use a per-run `buildReply`/`buildReplyFrames` to seed a one-row `conversations` reply, giving ChannelList a clickable row so the drive can reach the conversation thread through real product UI; #94 additionally dispatches `buildReplyFrames` on the decoded inbound type (`send_message` → `[assistant_delta, turn_end]`, everything else → the row seed).
 - [#416 codebase notes](../codebase/416.md) — adds the reconnect capability (`handleReconnect`, `pushFrame`, `reconnectResendFrames`, § above), narrows the leg-boundary module-header claim to "routing only," and the genuine-reconnect e2e that proves [#415](../codebase/415.md)'s renderer reconcile against a real supervisor re-dial through this daemon + the [fake relay forwarder](fake-relay-forwarder.md)'s matching `dropClientLeg` capability.
-- [#524 codebase notes](../codebase/524.md) — closes the last routing gap in `awaiting-rekey-init`: a non-`noise_init` frame in that window is now served under the old ciphers instead of tearing the leg down, reproducing the realistic interleaved-frame rekey collision **#507** needs. Also fixed a latent `driveClient` test-harness bug (the client's in-session rekey msg1 was mis-tagged `noise_msg`, invisible under the old state-based routing) and added an inbound-gate harness (`holdInbound`/`resumeInbound`/`held`/`deliverHeld`/`sendRaw`) for deterministic ordering without timers.
+- [#524 codebase notes](../codebase/524.md) — closes the last routing gap in `awaiting-rekey-init`: a non-`noise_init` frame in that window is now served under the old ciphers instead of tearing the leg down, reproducing the realistic interleaved-frame rekey collision **#507** needs. Also fixed a latent `driveClient` test-harness bug (the client's in-session rekey msg1 was mis-tagged `noise_msg`, invisible under the old state-based routing) and added an inbound-gate harness (`holdInbound`/`resumeInbound`/`held`/`deliverHeld`/`sendRaw`) for deterministic ordering without timers. Flagged `pushFrame`'s `state === 'transport'`-only gate as a pre-existing, out-of-scope-for-#524 gap; closed by [#532](../codebase/532.md), see below.
 - [#525 codebase notes](../codebase/525.md) — the last outbound-tagging gap #524 flagged as pre-existing: `sendNoise` gains a defaulted `OutboundInnerType` tag parameter so the three handshake replies carry `noise_resp` while the five non-handshake sites keep `noise_msg`, matching the real daemon's `TypeNoiseResp`/`TypeNoiseMsg` split. Behaviour-preserving today since the client still discards the inbound type; the fake is now correct ahead of #507's client change rather than drifted against it.
+- [#532 codebase notes](../codebase/532.md) / [Noise session](noise-session.md#rekey-window-routing-by-inner-frame-type-532) — the client-side rekey-desync fix #524/#525 set up: `pushFrame` now also serves in `awaiting-rekey-init` (§ above), the harness relaxation that let a test daemon emit the one frame kind the client-side fix needed to prove itself against. `driveClient.deliverFrame` was also threaded to pass the decoded inner type down to the real client session, where before it discarded `type` entirely and would have left the whole suite blind to the new client-side routing.
 - Cross-project prior art: pyrycode `fakerelay-harness.md` + the fake-phone peer (`internal/e2e`, #295 tree) — the same forwarder → fake-peer → consuming-test phasing; the desktop daemon deliberately drops the Go surface and ports only the structuring rationale.

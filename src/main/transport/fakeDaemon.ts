@@ -168,9 +168,10 @@ export interface FakeDaemon {
    *  inbound transport frames under the CURRENT (pre-swap) ciphers (#524). No-op unless in `transport`. */
   initiateRekey(): void
   /** Server-initiated push (#416): seal `plaintext` under the CURRENT send cipher and stream it as a
-   *  `noise_msg`. The `initiateRekey` seal-and-stream pattern minus the state transition. No-op unless
-   *  in `transport` with a live send cipher. Modal-agnostic — any envelope (the modal e2e pushes a
-   *  crafted `modal_shown` to raise the initial modal mid-session). */
+   *  `noise_msg`. The `initiateRekey` seal-and-stream pattern minus the state transition. Serves in
+   *  `transport` AND in `awaiting-rekey-init` (#532 — the old send cipher is still live across the
+   *  rekey window, per spec #450); no-op otherwise or without a send cipher. Modal-agnostic — any
+   *  envelope (the modal e2e pushes a crafted `modal_shown` to raise the initial modal mid-session). */
   pushFrame(plaintext: Uint8Array): void
   /** Tear down the WS leg + free the wasm handshake/cipher state. Idempotent. */
   close(): Promise<void>
@@ -443,10 +444,18 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
   }
 
   // Server-initiated push (#416): seal `plaintext` under the CURRENT send cipher and stream it as a
-  // `noise_msg` — the initiateRekey seal-and-stream pattern minus the state transition. No-op unless a
-  // completed session is in `transport`. Modal-agnostic (any envelope).
+  // `noise_msg` — the initiateRekey seal-and-stream pattern minus the state transition.
+  // Modal-agnostic (any envelope).
+  //
+  // `awaiting-rekey-init` serves too (#532), which is faithfulness, not laxity: the cipher swap
+  // happens ONLY inside handleRekeyInit, so throughout that window `sendCipher` is still the live OLD
+  // cipher and the real daemon keeps fanning out transport frames under it for the whole
+  // awaiting-reply window (pyrycode #450). The tag is unchanged — sendNoise's `noise_msg` default,
+  // exactly what the real daemon emits for a transport frame there. That frame is precisely the one
+  // the client's rekey window has to decrypt, so without this arm no test could produce it.
+  // `closed` and a null send cipher stay excluded.
   function pushFrame(plaintext: Uint8Array): void {
-    if (state !== 'transport' || sendCipher === null) return
+    if ((state !== 'transport' && state !== 'awaiting-rekey-init') || sendCipher === null) return
     sendNoise(sendCipher.EncryptWithAd(EMPTY_AD, plaintext))
   }
 

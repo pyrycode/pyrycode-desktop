@@ -38,6 +38,9 @@ interface FakeSession {
   config: NoiseSessionConfig
   calls: string[]
   received: Uint8Array[]
+  /** The inner-frame `type` the driver forwarded with each frame (#532), positionally aligned with
+   *  `received`. `undefined` means the driver passed no label at all. */
+  receivedTypes: Array<string | undefined>
   closed: boolean
   handle: NoiseSession
 }
@@ -47,15 +50,17 @@ function makeFakeSession(config: NoiseSessionConfig, sealed: Uint8Array): FakeSe
     config,
     calls: [],
     received: [],
+    receivedTypes: [],
     closed: false,
     handle: {
       start() {
         fake.calls.push('start')
         config.sendFrame(FAKE_MSG1) // msg 1 → the driver tags it noise_init
       },
-      onFrame(frame) {
+      onFrame(frame, innerType) {
         fake.calls.push('onFrame')
         fake.received.push(frame)
+        fake.receivedTypes.push(innerType)
       },
       sendMessage() {
         fake.calls.push('sendMessage')
@@ -495,6 +500,26 @@ describe('createNoiseRelayDriver', () => {
     expect(errorsOf(sink.events)).toContainEqual({ type: 'error', reason: 'outbound-frame-encode-failed' })
   })
 
+  it('forwards each inbound frame\'s inner type to the session verbatim (#532)', async () => {
+    const factory = resolvedSessionFactory()
+    const { supervisor } = setup({ createSession: factory.createSession })
+
+    supervisor().emit({ type: 'connected' })
+    await tick()
+    const session = factory.sessions[0]
+
+    // Pass-through ONLY: the driver takes no routing decision on the label and adds no branch. It
+    // hands the decoded InnerFrameV2 `type` down so the session can disambiguate its rekey window,
+    // where a transport frame and a handshake reply are legitimately in flight at once.
+    const appRaw = new Uint8Array([0x71, 0x72])
+    const replyRaw = new Uint8Array([0x73, 0x74])
+    supervisor().emit({ type: 'message', frame: wrapInbound('noise_msg', appRaw) })
+    supervisor().emit({ type: 'message', frame: wrapInbound('noise_resp', replyRaw) })
+
+    expect(session.received).toEqual([appRaw, replyRaw])
+    expect(session.receivedTypes).toEqual(['noise_msg', 'noise_resp'])
+  })
+
   it('buffers frames during the async-create gap and replays them after start() (ordering)', async () => {
     const factory = deferredSessionFactory()
     const { supervisor } = setup({ createSession: factory.createSession })
@@ -510,6 +535,10 @@ describe('createNoiseRelayDriver', () => {
     // start() (msg 1 out) ran BEFORE the buffered frame replayed to onFrame — order preserved.
     expect(session.calls).toEqual(['start', 'onFrame'])
     expect(session.received).toEqual([bufferedRaw])
+    // #532: the label survives BUFFERING too. onFrame's contract now reads it, so a replay path that
+    // dropped it would feed `undefined` where live delivery feeds the real tag — the two delivery
+    // paths must be indistinguishable to the session.
+    expect(session.receivedTypes).toEqual(['noise_init'])
   })
 
   it('bounds the pending buffer during the async-create gap (security)', async () => {

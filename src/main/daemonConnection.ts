@@ -407,8 +407,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // The single per-connection debug-bundle reassembly slot (#116). The desktop has at most ONE
   // bundle request in flight (daemon-global bundle, one UI action), so a lone slot keyed by
   // liveness — replaced on each requestDebugBundle — is the whole state model: no in_reply_to map.
-  // `null` before/between requests; a settled reassembler stays referenced but inert (its own
-  // `settled` flag absorbs stray late frames) until the next request replaces it.
+  // `null` before/between requests AND after any connection teardown (#505); a settled reassembler
+  // stays referenced but inert (its own `settled` flag absorbs stray late frames) until the next
+  // request replaces it, or until failBundleStream() releases it.
   let reassembler: BundleReassembler | null = null
   // modal_ids whose modal_answer (#236) is awaiting the daemon's reply (#248). FIFO: the wire `error`
   // (#116) carries no modal_id (ADR 0009), so a rejection dequeues the OLDEST outstanding answer.
@@ -439,6 +440,31 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // The single failure choke point (all five classifications) shadows onto the log — the static
     // `code` only, never the `message` param (which interpolates the numeric close code, #127's leg).
     deps.diagnosticLog?.event({ event: 'daemon-failed', code })
+  }
+
+  // The connection-teardown net for an in-flight bundle stream (#116, extended to the two
+  // lifecycle events it missed by #505). A teardown is stream-fatal: the supervisor re-dials into a
+  // FRESH Noise session with no resume, so the daemon-side request dies and the remaining chunks
+  // never arrive — with no timeout in the reassembler, an unfailed consumer never settles and the
+  // orchestrator's single-in-flight flag wedges the feature for the process lifetime.
+  //
+  // Release-then-fail, not fail-then-release: `consumer.fail` runs synchronously inside this call,
+  // so clearing the field first means the module holds no reference to a stream it has already
+  // abandoned while that consumer runs (and a re-entrant requestDebugBundle could not have its
+  // freshly-armed slot nulled out from under it — it cannot re-enter today, since the real
+  // consumer's fail is an asynchronous webContents.send, but the ordering costs nothing).
+  //
+  // Idempotent and total: `?.` absorbs an empty slot and the reassembler's own `settled` flag
+  // absorbs a second fail, so calling it twice or with nothing armed is a no-op. That is what keeps
+  // "exactly one terminal" a property of construction rather than of a guard here.
+  //
+  // Nulling is byte-release hygiene, NOT terminal correctness (`settled` already owns that): it
+  // drops the abandoned stream's accumulated decrypted chunk bytes, which otherwise stay referenced
+  // until the next request replaces the slot.
+  function failBundleStream(): void {
+    const abandoned = reassembler
+    reassembler = null
+    abandoned?.fail('connection-lost')
   }
 
   // The single choke point: RelaySessionEvent → DaemonEvent. Nothing else emits.
@@ -846,6 +872,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitDaemonEvent(sink, { type: 'relayLinkChanged', status: 'connected' })
         return
       case 'relay-link-down': {
+        // A retryable close is stream-fatal too (#505): the supervisor auto-re-dials into a fresh
+        // session the daemon-side request does not survive. Fail first, then emit — the terminal
+        // arm's order. Above the classification below, so the emitted bundle failure is identical
+        // for every close code and discloses nothing about it.
+        failBundleStream()
         // The relay socket dropped with a retryable close (#328). This is the single classification
         // choke point (untrusted WS close code → closed RelayLinkStatus category): 4404 is the
         // relay's "reachable, no daemon registered" close → 'daemon-absent'; every other retryable
@@ -859,7 +890,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       case 'terminal':
         // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
         // Deterministic code, safe unconditionally: fail on a settled/absent reassembler is inert.
-        reassembler?.fail('connection-lost')
+        failBundleStream()
         // A clean local stop() drives terminal{1000,'stopped'}; suppress it (the window is
         // tearing down on quit). Every other fatal close is an authoritative drop the user sees.
         // The supervisor's `reason` string is deliberately NOT forwarded (conservative).
@@ -868,7 +899,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       case 'error':
         // Same teardown net for a connection-level driver error mid-stream.
-        reassembler?.fail('connection-lost')
+        failBundleStream()
         // The driver's reason is a static enum string — safe to surface as the category code.
         emitFailed(event.reason)
         return
@@ -1462,6 +1493,11 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // reconnected one (which recycles ids from 2). The pendingSettings.clear() rationale, applied to the
     // create-folder set.
     pendingCreateFolders.clear()
+    // Abandon any in-flight bundle stream (#505), the fourth per-connection reset: its daemon-side
+    // request does not survive the fresh Noise session, so the consumer is failed HERE rather than
+    // via the stopped driver's terminal — `gen = ++generation` above already fenced that terminal
+    // out of onDriverEvent, so #116's net would never fire and the consumer would never settle.
+    failBundleStream()
     // Emitted synchronously, before any await, so status leaves "connecting" the moment the connect
     // begins (AC2). On the first start() the driver is null so the stop above is a no-op — no
     // behavior change from the original once-only start.

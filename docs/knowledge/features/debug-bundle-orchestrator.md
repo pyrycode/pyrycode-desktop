@@ -69,8 +69,13 @@ and one added `case` in the existing switch: `case 'requestDebugBundle': downloa
 ## Out of scope
 
 - **No queue.** A second request while one is active is *ignored*, not queued — unobserved need, deliberately deferred.
-- **No stream timeout.** A never-terminating or slow-dribble bundle stream from an authenticated daemon leaves the download wedged (`active` never clears). The architect's security review flagged this explicitly as out of scope: the correct fix is a per-message idle deadline at the transport layer (`relayConnection`), not a stochastic timeout guessed in this module. No hang has been observed; a real socket drop still resolves cleanly via the existing `connection-lost` net.
+- **No stream timeout.** A never-terminating or slow-dribble bundle stream from an authenticated daemon leaves the download wedged (`active` never clears). The architect's security review flagged this explicitly as out of scope: the correct fix is a per-message idle deadline at the transport layer (`relayConnection`), not a stochastic timeout guessed in this module. No hang has been observed; a real socket drop still resolves cleanly via the connection-teardown net (originally `terminal`/`error` only, extended by [#505](../codebase/505.md) below to `relay-link-down` and `dial()`).
 - **`onCommand`'s switch has no `assertNever` default arm** (code-review NIT, non-blocking) — a future third `RendererCommand` member without a matching `case` here would silently no-op instead of failing to compile. Carried forward for whenever `index.ts`'s switch is next touched.
+- **A driver that is non-null but not live can still wedge a request.** `requestDebugBundle`'s guard is `driver === null`, not "driver is connected." Retrying the download in the window between `dial()` clearing the old driver and the new handshake completing arms a reassembler that never settles. Reachable from [#505](../codebase/505.md)'s own scenario; flagged to the PO for its own ticket rather than fixed there — needs a driver-liveness flag, not a two-line change.
+
+### [#505](../codebase/505.md) — the teardown net originally only covered `terminal`/`error`
+
+[#169](../codebase/169.md)'s own "Deferred / carried forward" reasoned that "a real socket drop already resolves via the existing `connection-lost` teardown net (#116)." That held for a *fatal* close (`terminal`) but not for a *retryable* close (`relay-link-down`, which the supervisor auto-re-dials from) or for a superseded driver's `terminal` fenced out by `dial()`'s generation bump during a `reconnect()`. Both left `active` wedged for the rest of the process lifetime after a single relay hiccup or a re-pair/unpair. [#505](../codebase/505.md) closed both gaps in [debug-bundle reassembly](debug-bundle-reassembly.md)'s teardown net — no change was needed in this module itself, since `active` was always correctly *responsive* to the reassembler's consumer callbacks; it was the callbacks that were sometimes never firing.
 
 ## Testing
 
@@ -80,6 +85,7 @@ and one added `case` in the existing switch: `case 'requestDebugBundle': downloa
 ## Related
 
 - [#169 codebase notes](../codebase/169.md) — implementation summary, patterns, and lessons learned.
+- [#505 codebase notes](../codebase/505.md) — closed the two connection-teardown gaps (`relay-link-down`, `dial()`) that could leave `active` wedged; corrects #169's original scoping of the wedge to "an unterminated stream only."
 - [Live window](live-window.md) / [#519](../codebase/519.md) — the injected `emit` closes over
   `live.sink`, the process-lifetime channel that replaced a captured `mainWindow` reference so the
   emitter keeps working after a dock reopen.

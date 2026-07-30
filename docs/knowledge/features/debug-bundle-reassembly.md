@@ -107,7 +107,7 @@ function requestDebugBundle(consumer: BundleConsumer): void {
 
 A bundle frame with no active (or an already-settled) reassembler is a no-op — preserving the pre-#116 drop behavior when no request is in flight, and keeping an unrelated `error` harmless.
 
-**Connection-teardown net:** the `terminal` and connection-level `error` cases in `onDriverEvent` unconditionally call `reassembler?.fail('connection-lost')` before their existing handling, so a socket drop mid-stream always resolves the consumer — no hang, no lingering accumulated bytes. Safe unconditionally because `fail` on a settled/absent reassembler is a no-op; this is deterministic code, not a stochastic guard (Belt-and-Suspenders Means Different Fabric).
+**Connection-teardown net:** a module-local `failBundleStream()` — release the slot, then fail what was released with `'connection-lost'` — is called from **four** sites: the `terminal` arm, the connection-level `error` arm, the `relay-link-down` arm, and `dial()` (alongside its sibling per-connection resets), so any connection teardown always resolves the consumer — no hang, no lingering accumulated bytes. Safe unconditionally because `fail` on a settled/absent reassembler is a no-op, and nulling the slot first makes a second call to `failBundleStream()` a pure no-op too; this is deterministic code, not a stochastic guard (Belt-and-Suspenders Means Different Fabric). Originally just `terminal`/`error` ([#116](../codebase/116.md)); extended to `relay-link-down` and `dial()` by [#505](../codebase/505.md), which closed a gap where a *retryable* close or a superseded driver's *fenced* terminal (during `reconnect()`) left the consumer unresolved and wedged the [orchestrator](debug-bundle-orchestrator.md)'s single-in-flight flag for the process lifetime.
 
 ## Data flow
 
@@ -131,7 +131,8 @@ daemon streams (decrypted by driver → onDriverEvent 'message'):
 | Reorder / gap / duplicate `seq` | reassembler | `consumer.fail('seq-mismatch')`, settled |
 | `done.total` ≠ chunks received | reassembler | `consumer.fail('total-mismatch')`, settled |
 | Single daemon `error` reply | recognition → routing → reassembler | `consumer.fail('daemon-error')`, settled — never the daemon's error text |
-| Connection drops mid-stream | `onDriverEvent` terminal/error | `consumer.fail('connection-lost')`, settled |
+| Connection drops mid-stream (`terminal`, connection-level `error`, `relay-link-down`) | `onDriverEvent` → `failBundleStream()` | `consumer.fail('connection-lost')`, settled |
+| `reconnect()` abandons an in-flight stream, including a superseded driver's fenced `terminal` | `dial()` → `failBundleStream()` | `consumer.fail('connection-lost')`, settled ([#505](../codebase/505.md)) |
 | Requested while disconnected | `requestDebugBundle` | `consumer.fail('not-connected')` |
 
 All five reasons are static enum strings — no wire value, byte, or daemon message is ever interpolated into a reason, a log, or an `Error`.
@@ -160,10 +161,12 @@ All five reasons are static enum strings — no wire value, byte, or daemon mess
 - **`error` correlation is "any inbound `error` while a bundle is in flight," not `in_reply_to`-matched.** Correct for the single-in-flight, daemon-global bundle today. If the desktop ever multiplexes concurrent id-correlated request/reply streams, this needs revisiting with an `in_reply_to`→slot map — not an observed failure mode today, deferred (Evidence-Based Fix Selection).
 - **No explicit reassembly memory cap.** Matches the daemon's own accepted stance for a paired, Noise-authenticated peer. `done.total` × chunk-size-cap would give an upper bound to reject early if a hardened cap is ever wanted — flagged for a future hardening ticket, not this slice.
 - **Bundle frames emit no `DaemonEvent`.** A completion/failure surfaces only through the injected `BundleConsumer`'s callbacks, never through the [daemon-event channel](daemon-event-channel.md) — a consumer of this feature that also waits on daemon events must drive its own wait/notify from `complete`/`fail`, not from the event sink.
+- **A third, adjacent wedge is known and deliberately not fixed.** `requestDebugBundle` gates only on `driver === null`. After `dial()`'s bootstrap microtask resolves — and after a `terminal`/`error` — the driver is non-null but not yet live: the reassembler arms, `driver.sendMessage` is silently inert pre-handshake, and nothing ever settles the consumer. Flagged to the PO for its own ticket by [#505](../codebase/505.md); needs a driver-liveness flag, not a two-line fix.
 
 ## Related
 
 - [#116 codebase notes](../codebase/116.md) — implementation summary, patterns, and lessons learned.
+- [#505 codebase notes](../codebase/505.md) — extended the connection-teardown net to `relay-link-down` and `dial()`, closing the two gaps that could wedge the [orchestrator](debug-bundle-orchestrator.md) for the process lifetime.
 - [Debug-bundle request (outbound)](debug-bundle-request.md) / [#115](../codebase/115.md) — the sibling that sends the bare `request_debug_bundle` frame this feature's stream responds to.
 - [Save debug bundle (persistence)](save-debug-bundle.md) / [#117](../codebase/117.md) — the independent persistence leaf that consumes `consumer.complete(bytes)` verbatim, wired by the [orchestrator](debug-bundle-orchestrator.md) (#169).
 - [Command channel](command-channel.md) / [Daemon-event channel](daemon-event-channel.md) / [#168](../codebase/168.md) — the typed IPC contract (`requestDebugBundle` command + `debugBundleProgress`/`debugBundleSaved`/`debugBundleFailed` events + `DebugBundleFailure`) that the [orchestrator](debug-bundle-orchestrator.md) (#169) uses to expose this ticket's `BundleConsumer` result to the renderer, mapping this ticket's `BundleFailReason` onto #168's coarser `DebugBundleFailure`.

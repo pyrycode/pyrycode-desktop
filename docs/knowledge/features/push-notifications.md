@@ -17,8 +17,9 @@ feature is now **live end-to-end**.
 
 Given a `notify` command carrying a closed `kind` (`'turn-complete' | 'prompt'`), the main process:
 
-1. Reads `mainWindow.isFocused()` **at fire-time** — no separate stateful focus tracker. Focused →
-   no-op.
+1. Reads the window's focus state via `windowHasFocus(mainWindow)` **at fire-time** — no separate
+   stateful focus tracker. Focused → no-op. (Destroyed-safe since [#518](../codebase/518.md): a
+   destroyed window reports unfocused without touching `isFocused()`.)
 2. Unfocused → looks up `kind` in a main-owned copy table, constructs an Electron `Notification` with
    that title/body, registers the [click handler](#clicking-the-notification-393) on it, then calls
    `.show()`.
@@ -79,7 +80,7 @@ supplies it:
 
 ```ts
 fireNotification(command.payload.kind, {
-  isWindowFocused: () => mainWindow.isFocused(),
+  isWindowFocused: () => windowHasFocus(mainWindow), // #518 — was `() => mainWindow.isFocused()`
   Notification,
   onClick: () => {
     activateWindow(mainWindow)
@@ -94,12 +95,14 @@ Two effects, composed in one place:
 
    ```ts
    export interface ActivatableWindow {
+     isDestroyed(): boolean // #518 — checked first; every member below throws once destroyed
      isMinimized(): boolean
      restore(): void
      show(): void
      focus(): void
    }
    export function activateWindow(win: ActivatableWindow): void {
+     if (win.isDestroyed()) return // #518
      if (win.isMinimized()) win.restore()
      win.show()
      win.focus()
@@ -111,7 +114,33 @@ Two effects, composed in one place:
    safe to call unconditionally. `mainWindow` (a real `BrowserWindow`) satisfies `ActivatableWindow`
    structurally, so no `electron` import reaches this unit.
 
-2. **Renderer navigation** — a new bare `DaemonEvent` arm, `{ type: 'notificationActivated' }`
+   [#518](../codebase/518.md) added the `isDestroyed()` guard: on macOS, closing the window destroys
+   it without quitting the app, so a notification click arriving afterward would otherwise throw out
+   of `isMinimized()`. `activateWindow` on a destroyed window is now a total no-op.
+
+2. **Focus query, made destroyed-safe ([#518](../codebase/518.md))** — the inline
+   `mainWindow.isFocused()` closure above was replaced with a new `windowHasFocus` helper, extracted
+   into `fireNotification.ts` (co-located with `activateWindow`) because `index.ts` has no peer
+   `.test.ts`:
+
+   ```ts
+   export interface FocusableWindow {
+     isDestroyed(): boolean
+     isFocused(): boolean
+   }
+   export function windowHasFocus(win: FocusableWindow): boolean {
+     if (win.isDestroyed()) return false
+     return win.isFocused()
+   }
+   ```
+
+   A destroyed window reports **unfocused** without ever calling `isFocused()` (which throws
+   post-destruction) — the semantically correct answer, not a fudge: a closed window cannot hold
+   focus, and that is exactly the condition under which a notification should fire. Whether the
+   resulting click can then surface a window is [#519](https://github.com/pyrycode/pyrycode-desktop/issues/519)'s
+   concern; here it is a safe no-op via `activateWindow` above.
+
+3. **Renderer navigation** — a new bare `DaemonEvent` arm, `{ type: 'notificationActivated' }`
    (`src/shared/ipc/events.ts`). This is the **first main-local signal** on the `DaemonEvent`
    channel: unlike every other arm, it is not derived from a validated wire envelope — it is emitted
    directly by this click handler. Nullary by construction, so no daemon-relayed content, conversation
@@ -210,6 +239,11 @@ navigating to the thread.
 - **No `Notification.isSupported()` gate** and **no try/catch around construct/`show()`** —
   deliberate, evidence-based omissions. No unsupported-platform failure has been observed; add the
   gate only if one surfaces.
+- **Destroyed-window safe ([#518](../codebase/518.md)).** On macOS, closing the window destroys it
+  without quitting the app. Before #518, a `notify` or a notification click arriving afterward threw
+  out of `isFocused()`/`isMinimized()` — an uncaught main-process exception. Now `windowHasFocus`
+  reports unfocused and `activateWindow` no-ops, both without touching a member that throws
+  post-destruction. Reviving a closed window into a usable one is [#519](https://github.com/pyrycode/pyrycode-desktop/issues/519)'s job, not this feature's.
 - **Focus is read synchronously at fire-time**, not tracked. `isFocused()` is already `false` when
   the window is blurred, minimized, or hidden — exactly the notify condition — so there is nothing a
   separate tracker would add.

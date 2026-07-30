@@ -296,16 +296,19 @@ export type DaemonEvent =
 
 ```ts
 export interface DaemonEventSink {
+  isDestroyed(): boolean // #518 — required; the ONE member safe to call post-destruction
   webContents: { send(channel: string, event: DaemonEvent): void }
 }
 export function emitDaemonEvent(sink: DaemonEventSink, event: DaemonEvent): void {
+  if (sink.isDestroyed()) return // #518
   sink.webContents.send(DAEMON_EVENT_CHANNEL, event)
 }
 ```
 
 - **The one and only path an event takes to the renderer.** Transport code (#10/#12) calls this after building a `DaemonEvent` from a validated wire envelope; nothing else sends on the channel.
 - **A pure forwarder** — no transform, no clone, no logging. (A `console.log(event)` would leak `MessagePayload.text` message bodies to main-process stdout.)
-- **Typed against a structural `DaemonEventSink`, not `BrowserWindow`.** A real `mainWindow` satisfies it structurally, and the unit test passes `{ webContents: { send: vi.fn() } }` — so the helper needs **no `electron` import and no Electron harness**. Typing `send`'s second parameter as `DaemonEvent` also stops any non-event payload reaching the channel.
+- **Typed against a structural `DaemonEventSink`, not `BrowserWindow`.** A real `mainWindow` satisfies it structurally, and the unit tests pass fakes — so the helper needs **no `electron` import and no Electron harness**. Typing `send`'s second parameter as `DaemonEvent` also stops any non-event payload reaching the channel.
+- **`isDestroyed()` guard ([#518](../codebase/518.md)).** On macOS, closing the window destroys the `BrowserWindow` without quitting the app, and the connection keeps emitting into it; the `webContents` **accessor itself** throws once destroyed, before `send` is ever reached. The guard is checked first, above any `sink.webContents` access — nothing may hoist or alias `webContents` above it, since the property read *is* the throw. Required rather than optional, so an unguardable sink literal fails to compile. This one guard covers all 32 `daemonConnection.ts` call sites plus the debug-bundle orchestrator's injected `emit`.
 
 ### 3. The preload subscription (`src/preload/index.ts`)
 
@@ -343,7 +346,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 
 ## Edge cases and limitations
 
-- **No destroyed-window guard.** Once a real `mainWindow` exists (#10/#12), `webContents.send` on a torn-down window throws. #18 has no live emitter to observe this, so per evidence-based-fix no `isDestroyed()` guard is added — the helper stays a pure forwarder that lets the throw propagate to its caller, which owns window lifecycle. Flag when #10 wires the first emitter.
+- **Destroyed-window guard — closed by [#518](../codebase/518.md).** #18 deliberately deferred this (no live emitter to observe it at the time). Once the window was wired, closing it on macOS left the connection emitting into a destroyed `BrowserWindow` with nothing catching the throw. `emitDaemonEvent` now drops the event and returns on a destroyed sink instead of propagating.
 - **Renderer-side cleanup is the subscriber's job.** `onDaemonEvent` returns the unsubscribe; #18 does not build the `useEffect` teardown that calls it. [#19](../codebase/19.md)'s `useDaemonEventBridge` now owns that teardown (returns the handle as effect cleanup — StrictMode-safe).
 - **No runtime shape validation at the preload.** The producer is our own trusted main process; a `zod`-style validator would add a dependency to defend against a bug, not an attacker (a compromised main process is already game-over). Revisit only if a less-trusted producer ever sends on this channel.
 - **`connected.ack` carries the whole `HelloAckPayload`.** Narrow to `{ server_id, conn_id }` later only if #19/#12 prove the UI needs less — mirrors [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)'s deferral.

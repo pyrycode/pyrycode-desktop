@@ -1,10 +1,11 @@
 // The renderer data path for the Run configuration write machine — framework-free helpers plus one
 // headless App-level component, mirroring sessionIdBridge.ts. It is bidirectional: an OUTBOUND submit
 // helper (mint a correlation id → dispatch the optimistic change → send the `setSessionSettings`
-// command) and an INBOUND path (observe the two correlated daemon replies and fold them back into the
-// store). The three helpers are React-free and injected, so the whole path is unit-testable with plain
-// spies (the sessionIdBridge idiom); `RunSettingsWriteData` is the thin React glue over the inbound
-// half. Nothing here touches keys, sockets, ipcRenderer, or raw frames — it subscribes through the
+// command) and an INBOUND path (observe the two correlated daemon replies, plus the reconnect edge that
+// strands them, and fold them back into the store). The three helpers are React-free and injected, so
+// the whole path is unit-testable with plain spies (the sessionIdBridge idiom); `RunSettingsWriteData`
+// is the thin React glue over the inbound half.
+// Nothing here touches keys, sockets, ipcRenderer, or raw frames — it subscribes through the
 // preload bridge and sends one already-typed command; `changeId` is a client-minted, IPC-internal
 // correlation key, never a secret and never serialized onto the wire.
 import { useEffect } from 'react'
@@ -23,12 +24,13 @@ function assertNever(x: never): never {
 }
 
 /**
- * The inbound filter: map each owned daemon reply to its store event, every other DaemonEvent to
+ * The inbound filter: map each owned daemon event to its store event, every other DaemonEvent to
  * `null`. `default: null` — not an `assertNever` — because ignoring the rest is the intended,
- * permanent behavior (this path consumes only the two correlated write replies), mirroring
- * `translateSessionTransition`. Each returns a fresh event carrying only the `changeId` correlation
- * key; a rename of either arm is still caught (a `case` label that no longer overlaps the union is a
- * type error). React-free → unit-testable without a DOM.
+ * permanent behavior (this path consumes three of them: the two correlated write replies plus the
+ * connection edge), mirroring `translateSessionTransition`. Each returns a fresh event; the two replies
+ * carry only the `changeId` correlation key and the connection edge carries nothing at all. A rename of
+ * any arm is still caught (a `case` label that no longer overlaps the union is a type error).
+ * React-free → unit-testable without a DOM.
  */
 export function translateWriteEvent(event: DaemonEvent): RunSettingsWriteEvent | null {
   switch (event.type) {
@@ -36,6 +38,13 @@ export function translateWriteEvent(event: DaemonEvent): RunSettingsWriteEvent |
       return { type: 'settingsConfirmed', changeId: event.changeId }
     case 'sessionSettingsRejected':
       return { type: 'settingsRejected', changeId: event.changeId }
+    case 'connected':
+      // #539: main abandons its envelope-id → changeId correlation on every re-dial and emits no
+      // rejections, so an in-flight change's reply can never arrive. Flip the (re)handshake edge to the
+      // payload-free clear that drops the stranded pending markers before they outlive a later confirmed
+      // change. Ignores `event.ack` (HelloAckPayload) — the clear needs no field off it. `connected` and
+      // not `disconnected`, which is emitted nowhere in src/main (the modalBridge.ts:61 precedent).
+      return { type: 'reconnected' }
     default:
       return null
   }
@@ -112,7 +121,8 @@ export function submitSettingsChange(deps: SubmitSettingsChangeDeps, change: Set
  * The write-machine's inbound data-path binding — a headless component mounted app-level in App.tsx,
  * alongside SessionIdData: one stable, app-lifetime listener, because a confirm/reject reply can arrive
  * AFTER the Run config sheet (#257) closes — a sheet-scoped listener would miss it and strand the
- * pending marker. A component (not a hook) isolates the subscription in its own leaf so it never
+ * pending marker. That rationale now covers the `connected` clear (#539) for free: the reconnect edge
+ * fires whether or not the sheet is open. A component (not a hook) isolates the subscription so it never
  * cascades a re-render into App; it renders nothing. `window.pyry` is dereferenced only inside the
  * effect, never during render, so it server-renders to `''` without a bridge mock (the SessionIdData
  * invariant). The returned off handle is the effect cleanup, so a StrictMode double-mount nets exactly

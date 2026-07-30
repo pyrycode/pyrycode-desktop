@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { DaemonEvent } from '@shared/ipc/events'
-import type { MessagePayload } from '@shared/wire/types'
+import type { HelloAckPayload, MessagePayload } from '@shared/wire/types'
 import {
   translateWriteEvent,
   subscribeRunSettingsWrite,
@@ -23,6 +23,14 @@ const message: MessagePayload = {
   text: 't'
 }
 
+// The `connected` arm's payload, which this path deliberately ignores (mirrors modalBridge.test.ts).
+const ack: HelloAckPayload = {
+  protocol_version: 'v2',
+  server_id: 'srv-1',
+  conn_id: 'conn-1',
+  capabilities: ['interactive']
+}
+
 describe('translateWriteEvent', () => {
   it('maps sessionSettingsUpdated to settingsConfirmed carrying its changeId', () => {
     const event: DaemonEvent = { type: 'sessionSettingsUpdated', sessionId: 's1', changeId: 'c1' }
@@ -32,6 +40,14 @@ describe('translateWriteEvent', () => {
   it('maps sessionSettingsRejected to settingsRejected carrying its changeId', () => {
     const event: DaemonEvent = { type: 'sessionSettingsRejected', changeId: 'c2' }
     expect(translateWriteEvent(event)).toEqual({ type: 'settingsRejected', changeId: 'c2' })
+  })
+
+  it('maps connected to a payload-free reconnected, ignoring the ack (#539)', () => {
+    const event: DaemonEvent = { type: 'connected', ack }
+    const translated = translateWriteEvent(event)
+    // Uncorrelated by construction — it carries no changeId, because its job is to abandon them all.
+    expect(translated).toEqual({ type: 'reconnected' })
+    expect(translated).not.toBe(event)
   })
 
   it('returns null for a sample of unrelated daemon events (the filter)', () => {
@@ -97,6 +113,16 @@ describe('subscribeRunSettingsWrite', () => {
 
     bridge.emit({ type: 'sessionSettingsRejected', changeId: 'c2' })
     expect(dispatch).toHaveBeenCalledWith({ type: 'settingsRejected', changeId: 'c2' })
+  })
+
+  it('routes a connected into dispatch as reconnected (#539)', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    subscribeRunSettingsWrite(bridge.onDaemonEvent, dispatch)
+
+    bridge.emit({ type: 'connected', ack })
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(dispatch).toHaveBeenCalledWith({ type: 'reconnected' })
   })
 
   it('does not dispatch for an unrelated event', () => {

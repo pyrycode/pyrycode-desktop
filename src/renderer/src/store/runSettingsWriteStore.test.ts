@@ -187,6 +187,141 @@ describe('runSettingsWriteStore reducer', () => {
   })
 })
 
+describe('runSettingsWriteStore reconnected (#539)', () => {
+  it('clears every outstanding pending entry, however many were in flight (AC1)', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'model', value: 'opus' })
+    })
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c2',
+      change: change({ field: 'effort', value: 'high' })
+    })
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c3',
+      change: change({ field: 'yolo', value: true })
+    })
+    // Precondition — without it this passes on a store that never recorded anything.
+    expect(store.getState().pending.size).toBe(3)
+
+    store.getState().dispatch({ type: 'reconnected' })
+    expect(store.getState().pending.size).toBe(0)
+  })
+
+  it('rolls the display back to the last confirmed value — the rollback is by deletion, not a new mutation (AC3)', () => {
+    const store = createRunSettingsWriteStore({
+      pending: new Map([['c1', { field: 'model', value: 'opus' }]]),
+      confirmed: { model: 'haiku' },
+      error: null
+    })
+    expect(selectEffectiveSettings(snap, store.getState()).model).toBe('opus')
+
+    store.getState().dispatch({ type: 'reconnected' })
+    expect(selectEffectiveSettings(snap, store.getState()).model).toBe('haiku')
+  })
+
+  it('rolls back to the snapshot base when there is no confirmed override (AC3)', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'yolo', value: true })
+    })
+    expect(selectEffectiveSettings(snap, store.getState()).yolo).toBe(true)
+
+    store.getState().dispatch({ type: 'reconnected' })
+    expect(selectEffectiveSettings(snap, store.getState()).yolo).toBe(snap.yolo)
+  })
+
+  it('leaves confirmed and error untouched: a standing rejection is still true and a confirmed override is still what the daemon has (AC3)', () => {
+    const store = createRunSettingsWriteStore({
+      pending: new Map([['c1', { field: 'model', value: 'opus' }]]),
+      confirmed: { effort: 'high' },
+      error: 'yolo'
+    })
+    store.getState().dispatch({ type: 'reconnected' })
+    const s = store.getState()
+    expect(s.pending.size).toBe(0)
+    expect(s.confirmed).toEqual({ effort: 'high' })
+    expect(selectError(s)).toBe('yolo')
+  })
+
+  it('is a same-reference no-op when nothing is pending, even with a dirty confirmed + error (AC4)', () => {
+    // The dirty-but-not-pending state is the case that pins the predicate on `pending.size` rather
+    // than on the whole state being empty. #257 selects the WHOLE raw write state
+    // (RunConfigSections.tsx:327), so the same reference is what suppresses the re-render.
+    const store = createRunSettingsWriteStore({
+      pending: new Map(),
+      confirmed: { model: 'opus' },
+      error: 'effort'
+    })
+    const before = store.getState()
+    store.getState().dispatch({ type: 'reconnected' })
+    expect(store.getState()).toBe(before)
+  })
+
+  it('is idempotent: a second reconnected returns the same reference as the first', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'model', value: 'opus' })
+    })
+    store.getState().dispatch({ type: 'reconnected' })
+    const cleared = store.getState()
+    store.getState().dispatch({ type: 'reconnected' })
+    expect(store.getState()).toBe(cleared)
+  })
+
+  it('does not latch the store: a change dispatched after the clear confirms normally', () => {
+    const store = createRunSettingsWriteStore()
+    store.getState().dispatch({ type: 'reconnected' })
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'effort', value: 'high' })
+    })
+    store.getState().dispatch({ type: 'settingsConfirmed', changeId: 'c1' })
+    const s = store.getState()
+    expect(s.confirmed.effort).toBe('high')
+    expect(s.pending.size).toBe(0)
+  })
+
+  it('the compounding regression: a change stranded by a reconnect cannot shadow a later confirmed one (AC2)', () => {
+    // A base distinct from both changed values, so the effective read below can only come from
+    // `confirmed` — never from the snapshot fallback.
+    const base: RunConfigSnapshot = { ...snap, model: 'haiku' }
+    const store = createRunSettingsWriteStore()
+    // The user sets opus; the connection drops before the reply, so main abandons the correlation.
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c1',
+      change: change({ field: 'model', value: 'opus' })
+    })
+    store.getState().dispatch({ type: 'reconnected' })
+    // Later the user sets sonnet and the daemon confirms it.
+    store.getState().dispatch({
+      type: 'changeDispatched',
+      changeId: 'c2',
+      change: change({ field: 'model', value: 'sonnet' })
+    })
+    store.getState().dispatch({ type: 'settingsConfirmed', changeId: 'c2' })
+    expect(selectEffectiveSettings(base, store.getState()).model).toBe('sonnet')
+    expect(store.getState().pending.size).toBe(0)
+
+    // Cannot RESURFACE, not merely currently absent: a late reply for the stranded change hits the
+    // no-match fail-closed guard and commits nothing.
+    store.getState().dispatch({ type: 'settingsConfirmed', changeId: 'c1' })
+    const s = store.getState()
+    expect(selectEffectiveSettings(base, s).model).toBe('sonnet')
+    expect(s.confirmed.model).toBe('sonnet')
+  })
+})
+
 describe('selectEffectiveSettings composition', () => {
   it('precedence per field: pending overlay > confirmed override > snapshot base', () => {
     const state: RunSettingsWriteState = {

@@ -9,7 +9,7 @@ import type { ConnectionError, SessionAction } from '../../store/sessionStore'
 /**
  * The three effects runUnpair performs, injected to keep it pure:
  *  - `unpair`     — window.pyry.unpair in the container: clears the stored pairing in main (#173).
- *  - `dispatch`   — the session store dispatch: {reset} on success, {failed} on error.
+ *  - `dispatch`   — the session store dispatch: {failed} on error. Error-path only since #531.
  *  - `onUnpaired` — the App route flip → 'pairing', mirroring onPaired's flip in reverse.
  */
 export interface UnpairDeps {
@@ -36,8 +36,17 @@ const UNPAIR_FAILED_ERROR: ConnectionError = {
  * Fail-safe by construction: the route flips (via onUnpaired) ONLY on `result: 'ok'`. A `result:
  * 'error'` or a rejected invoke (handler absent) is coerced to the error path — dispatch `failed`,
  * stay on the conversation screen, never flip. This upholds AC5's "no cleared-in-UI-but-still-on-
- * disk half-state". On success, the store is reset BEFORE the route flips so neither the pairing
- * screen nor an immediate relaunch observes stale session state (AC4).
+ * disk half-state".
+ *
+ * #531 moved the success-path clear OUT of here. The ok branch's contract is now exactly "flip the
+ * route via onUnpaired", whose PairedShell wrapper runs the shared clearPairingScopedState — the
+ * session store plus the thread rows, the active conversation and the daemon session id — before App
+ * re-routes, so neither the pairing screen nor an immediate relaunch observes the ended pairing's
+ * state. Keeping a duplicate reset here would be runtime-harmless (the arm returns the shared
+ * `initialSessionState` by reference) but would give the session store two owners on one path, and the
+ * pair-another-server path would silently lose its clear the moment someone deleted the "redundant"
+ * one from the helper. That the flip is ok-only is also what extends this fail-safe posture to the new
+ * clears at zero cost: no `onUnpaired`, no wrapper, no clear — which the error tests below already pin.
  */
 export async function runUnpair(deps: UnpairDeps): Promise<'ok' | 'error'> {
   let result: UnpairResult
@@ -50,7 +59,6 @@ export async function runUnpair(deps: UnpairDeps): Promise<'ok' | 'error'> {
   }
 
   if (result.result === 'ok') {
-    deps.dispatch({ type: 'reset' })
     deps.onUnpaired()
     return 'ok'
   }

@@ -13,11 +13,15 @@ mutation* — the destructive-action counterpart in the same family as the [diag
 channel](diagnostics-channel.md) (#131), which established the general "ship the IPC boundary ahead
 of its UI consumer" shape this ticket reuses a second time.
 
-**First caller: [#166](../codebase/166.md).** The conversation screen's unpair control now invokes
+**First caller: [#166](../codebase/166.md).** The conversation screen's unpair control invokes
 `window.pyry.unpair()` through the pure `runUnpair` helper — a confirm-guarded manual "forget this
-pairing" action that, on `ok`, resets the renderer's session state and routes back to pairing. A
-second caller (an offer-re-pair-on-connection-failure prompt) may still ship in
-[#167](https://github.com/pyrycode/pyrycode-desktop/issues/167).
+pairing" action that, on `ok`, routes back to pairing via `onUnpaired`. `runUnpair` itself reset the
+renderer's session state on that branch until [#531](../codebase/531.md) moved the clear upstream: the
+route flip now runs through a `PairedShell` wrapper that clears the session store alongside the
+timeline, the active conversation, and the daemon session id in one shared step (see [Paired
+shell](paired-shell.md#the-pure-view--container-pairedshelltsx)) — `runUnpair`'s ok branch is left as
+"flip the route," nothing more. A second caller (an offer-re-pair-on-connection-failure prompt) may
+still ship in [#167](https://github.com/pyrycode/pyrycode-desktop/issues/167).
 
 ## Why this exists
 
@@ -167,6 +171,11 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
 - **Confirmation gate lives in the caller, not here.** This channel ships only the mechanism; the
   "are you sure?" UI gate is [#166](../codebase/166.md)'s concern — a two-step confirm phase in the
   conversation screen's `UnpairControl`, ahead of the `unpair()` invoke.
+- **Renderer-side state clear lives in the caller too, and moved once.** [#166](../codebase/166.md)
+  originally had `runUnpair` reset `sessionStore` directly on the `ok` branch;
+  [#531](../codebase/531.md) moved that reset (plus three more clears this channel has no visibility
+  into) to a `PairedShell`-level wrapper around the `onUnpaired` callback `runUnpair` calls — this
+  channel's contract (erase the stored pairing, report `ok`/`error`) is unaffected either way.
 - **Live-session teardown, closed by [#504](../codebase/504.md).** A successful `clear()` now also
   fires an optional `onUnpaired?: () => void` dep — value-free, mirroring the pairing handler's
   `onPaired` — wired at the composition root to `connection.reconnect()`. This used to be deferred (see
@@ -198,7 +207,10 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
   — the three renderer-side seams [#166](../codebase/166.md) wires together as this channel's first caller.
 - [#173 codebase notes](../codebase/173.md) — implementation summary, patterns established, lessons
   learned.
-- [#166 codebase notes](../codebase/166.md) — the first consumer: confirm-guarded control, session
-  reset, and route flip.
+- [#166 codebase notes](../codebase/166.md) — the first consumer: confirm-guarded control and route
+  flip (originally also the session reset, moved upstream by [#531](../codebase/531.md)).
+- [#531 codebase notes](../codebase/531.md) / [Paired shell](paired-shell.md) — moved the ok-branch
+  session reset out of `runUnpair` and into a shared four-store clear wrapped around `onUnpaired`,
+  shared with the pair-another-server path this channel has no part in.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model this
   channel's value-free contract enforces (token/keys never reach the renderer).

@@ -10,8 +10,13 @@ import { useConversationCreatedNav } from './store/conversationCreatedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { usePushNotify } from './store/pushNotifyBridge'
 import { activateConversation, type ActivateConversationDeps } from './activateConversation'
+import {
+  clearPairingScopedState,
+  type ClearPairingScopedStateDeps
+} from './clearPairingScopedState'
 import { activeConversationStore } from './store/activeConversationStore'
 import { sessionIdStore } from './store/sessionIdStore'
+import { sessionStore } from './store/sessionStore'
 import { timelineStore } from './store/timelineStore'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
@@ -33,6 +38,20 @@ const activateDeps: ActivateConversationDeps = {
     activeConversationStore.getState().setActiveConversation(conversation),
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearSessionId: () => sessionIdStore.getState().clearSessionId()
+}
+
+/**
+ * #531: the store wiring for the pairing-ended clear, module scope for the same reason as
+ * `activateDeps` above — each effect reaches its singleton through `getState()` inside the arrow body,
+ * so nothing is dereferenced at module load, nothing is read during render, and the object closes over
+ * no per-render value. `sessionStore` appears here and nowhere else in this file; PairedShell still
+ * subscribes to no store at all and stays server-renderable.
+ */
+const clearPairingDeps: ClearPairingScopedStateDeps = {
+  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
+  clearSessionId: () => sessionIdStore.getState().clearSessionId(),
+  dispatchSession: (action) => sessionStore.getState().dispatch(action)
 }
 
 /**
@@ -91,8 +110,9 @@ export function PairedShellView(props: {
 /**
  * The paired region's inner router container. Owns the ephemeral nav state via useReducer over the
  * pure nextPairedRoute — ADR 0006 (screen-local, resets on remount, never the session store; AC5).
- * Enters at `list` (AC2); the view calls onOpen/onBack and this dispatches. onUnpaired threads
- * straight through to ConversationScreen unchanged (#166). The FAB's create is confirmed asynchronously:
+ * Enters at `list` (AC2); the view calls onOpen/onBack and this dispatches. onUnpaired reaches
+ * ConversationScreen through the #531 pairing-ended clear (below) and is otherwise the same App route
+ * flip it has been since #166. The FAB's create is confirmed asynchronously:
  * useConversationCreatedNav subscribes to the daemon's `conversationCreated` event (#242) and drives the
  * same `open` transition, so a create the daemon never confirms simply does not navigate. The hook
  * dereferences `window.pyry` only inside its effect, so this container stays server-renderable and the
@@ -136,9 +156,26 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onOpenArchive={() => dispatch({ type: 'openArchive' })}
       onBack={() => dispatch({ type: 'back' })}
-      onUnpaired={onUnpaired}
+      // #531: the two paths that END a pairing, and the one place both clear the same set. They are
+      // NOT symmetric, which is why neither can be left to the other: unpair flips App's route to
+      // `pairing` and unmounts this shell, while pair-another transitions `pairServer` → `list` INSIDE
+      // it (pairedRoute.ts:62-65), so the shell never unmounts and nothing a remount would have
+      // cleared gets cleared. Wrapping the props here rather than threading a dep into runUnpair puts
+      // both wirings on adjacent lines and leaves ConversationScreen untouched — and it inherits the
+      // unpair fail-safe posture verbatim, because runUnpair calls `onUnpaired` only on `result: 'ok'`
+      // (unpairAction.ts:61-64), so a failed unpair reaches neither this wrapper nor the clear.
+      // Clear-then-navigate on both: no observer may see the new pairing's view against the ended
+      // pairing's rows, conversation id or session. `onPairServerCancelled` is deliberately NOT
+      // wrapped — cancelling out of pair-another ends no pairing, so it must clear nothing.
+      onUnpaired={() => {
+        clearPairingScopedState(clearPairingDeps)
+        onUnpaired()
+      }}
       onOpenPairServer={() => dispatch({ type: 'openPairServer' })}
-      onPairServerPaired={() => dispatch({ type: 'pairServerPaired' })}
+      onPairServerPaired={() => {
+        clearPairingScopedState(clearPairingDeps)
+        dispatch({ type: 'pairServerPaired' })
+      }}
       onPairServerCancelled={() => dispatch({ type: 'pairServerCancelled' })}
     />
   )

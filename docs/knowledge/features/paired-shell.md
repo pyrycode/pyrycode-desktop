@@ -170,18 +170,30 @@ affordance, preserved), since per-conversation selection needs a transport path 
 `PairedShell` is the container — the only new state owner:
 
 ```ts
+// #530: the store wiring for the conversation-switch clear, module-scope — each effect reaches its
+// singleton via getState() inside the arrow body, so nothing is read during render.
+const activateDeps: ActivateConversationDeps = {
+  getActiveConversation: () => activeConversationStore.getState().activeConversation,
+  setActiveConversation: (conversation) =>
+    activeConversationStore.getState().setActiveConversation(conversation),
+  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearSessionId: () => sessionIdStore.getState().clearSessionId()
+}
+
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
-  const setActiveConversation = useActiveConversationStore((s) => s.setActiveConversation)
   useConversationCreatedNav((created) => {   // #242, widened #278
-    setActiveConversation(created)            // #278 — snapshot cwd for the workspace chip
+    activateConversation(activateDeps, created)   // #530 — clear-then-set, see below
     dispatch({ type: 'open' })
   })
   useNotificationActivatedNav(() => dispatch({ type: 'open' }))   // #393 — no setActiveConversation
   return (
     <PairedShellView
       route={route}
-      onOpen={() => dispatch({ type: 'open' })}
+      onOpen={(conversation) => {
+        activateConversation(activateDeps, conversation)   // #530 — clear-then-set, see below
+        dispatch({ type: 'open' })
+      }}
       onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onOpenArchive={() => dispatch({ type: 'openArchive' })}
       onBack={() => dispatch({ type: 'back' })}
@@ -212,11 +224,30 @@ neutral-first-paint invariant is untouched (`PairedShell` only mounts once the a
 
 **[#278](../codebase/278.md) widened the callback**, not the hook: `useConversationCreatedNav` already
 delivered the decoded `created: ConversationCreatedPayload` argument, and the callback used to ignore
-it (`() => dispatch(...)`). It now also calls `setActiveConversation(created)` — a store setter read via
-`useActiveConversationStore`, the `Composer`/`UnpairControl` store-write idiom — before dispatching the
-same `open` transition. No new subscription: this is the one existing `conversation_created` listener
-PairedShell already mounted, doing one more thing on the event it already receives. See [Workspace
+it (`() => dispatch(...)`). It now also records `created` before dispatching the same `open` transition.
+No new subscription: this is the one existing `conversation_created` listener PairedShell already
+mounted, doing one more thing on the event it already receives. See [Workspace
 chip](conversation-shell.md#workspace-chip-278) for the store and the render it feeds.
+
+**[#530](../codebase/530.md) replaced the direct `setActiveConversation(created)` call** — and the
+matching one in `onOpen` above — with `activateConversation(activateDeps, …)`. Both nav sites used to
+write `activeConversationStore` unconditionally and nothing else, so opening conversation B rendered
+A's rows with B's stream appended, and a Run configuration write made while looking at B could still
+address A's daemon session. `activateConversation` reads the previous active conversation through
+`activateDeps.getActiveConversation` — a **getter**, not a value closed over at render time, because
+`useConversationCreatedNav`'s callback ref only refreshes in a bare effect *after* commit, and two
+`conversationCreated` events landing before that effect runs would otherwise both compare against the
+same stale previous. Only when the id actually changes does it dispatch the timeline's `reset`
+([#528](../codebase/528.md)) and `clearSessionId()` ([#529](../codebase/529.md)) before recording the
+new conversation; a re-open of the already-active conversation (a re-click, or `onOpen` firing again for
+a row that's already open) clears nothing. The notification-activated `open` (#393, below) still calls
+neither `setActiveConversation` nor `activateConversation` — it carries no conversation, so there is no
+call site to route through the helper. `activateDeps` is a module-scope object reaching each store via
+`getState()` inside its arrow bodies (the `timelineBridge.ts`/`sessionIdBridge.ts` idiom), which is what
+lets `PairedShell` drop `useActiveConversationStore` entirely — it now holds **zero** store
+subscriptions and re-renders only on its own `useReducer` nav dispatch. See [#530 codebase
+notes](../codebase/530.md) for the full design rationale (the getter, the id-not-event gate, why
+`clearActiveConversation` stays out of this path).
 
 ### The app-shell seam (`App.tsx`)
 
@@ -245,16 +276,25 @@ interim, not an oversight.
 AppView (route='conversation')
   └─ PairedShell            useReducer(nextPairedRoute, 'list')  ← nav state (ADR 0006)
        │                    useConversationCreatedNav((created) => {
-       │                      setActiveConversation(created)       ← #278, into activeConversationStore
+       │                      activateConversation(activateDeps, created)   ← #530, see below
        │                      dispatch({type:'open'})              ← #242
        │                    })
-       │                    useNotificationActivatedNav(() => dispatch({type:'open'}))  ← #393, no setActiveConversation
-       └─ PairedShellView   route='list'     → ChannelList (store-backed) — any row → dispatch{open}
+       │                    useNotificationActivatedNav(() => dispatch({type:'open'}))  ← #393, no activateConversation
+       └─ PairedShellView   route='list'     → ChannelList (store-backed) — any row → onOpen(conversation):
+                                                  activateConversation(activateDeps, conversation) ← #530
+                                                  dispatch{open}                                    ← #448
                                                 new-discussion FAB → createConversation command (#242)
                                                 SettingsButton → dispatch{openSettings} (#333)
                                                 ArchiveButton → dispatch{openArchive} (#347)
                             route='thread'   → ConversationScreen (store-backed) + BackControl — [←] → dispatch{back}
                                                 → WorkspaceChip reads activeConversationStore (#278)
+
+  activateConversation(activateDeps, conversation):  ← #530 (src/renderer/src/activateConversation.ts)
+    previous = activateDeps.getActiveConversation()
+    if previous?.id !== conversation.id:
+      activateDeps.dispatchTimeline({type:'reset'})   ← #528, clears timelineStore
+      activateDeps.clearSessionId()                    ← #529, clears sessionIdStore
+    activateDeps.setActiveConversation(conversation)    ← unconditional, both branches
                             route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
                                                 PairAnotherServerRow → dispatch{openPairServer} (#152)
                             route='pairServer' → PairingScreen (window.pyry default) — (#152)
@@ -301,6 +341,19 @@ navigation, and hence no remount, before this ticket).
   time; server-rendering `<PairedShellView route="pairServer" …/>` in the `node` vitest env throws
   without `globalThis.window = { pyry: {} }` (`beforeEach`/`afterEach`), the same stub `App.test.tsx`
   uses for its `pairing` route.
+- **A late `sessionTransition` for the previous conversation can re-stale the session id after a switch**
+  ([#530](../codebase/530.md)). `sessionIdBridge` is `conversation_id`-free per ADR 0004, so if
+  conversation A is still streaming when the user switches to B, a marker meant for A that arrives after
+  the switch is indistinguishable from B's first marker and gets written. `activateConversation` narrows
+  this from "the entire time the user is in B" to "only if a late marker arrives" — it does not close it
+  fully. Not fixable at this layer; needs either the daemon tagging `sessionTransition` with a
+  conversation id, or main-process suppression of non-active-conversation events. Flagged by the
+  architect's security review as a PO follow-up, not yet filed as its own ticket. The timeline has the
+  identical exposure for A's still-streaming deltas (`ThreadEvent` is equally `conversation_id`-free).
+- **`PairedShell.test.tsx` cannot exercise `activateConversation`'s branch behavior.** No jsdom harness
+  (`renderToStaticMarkup` only), so its nav coverage is limited to `nextPairedRoute` reducer assertions.
+  The branch logic (clear-iff-id-changed, clear-then-set ordering) is unit-tested directly on the pure
+  helper in `activateConversation.test.ts` — see [#530 codebase notes](../codebase/530.md).
 
 ## Related
 
@@ -314,9 +367,15 @@ navigation, and hence no remount, before this ticket).
 - [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
 - [Session store](session-store.md) — untouched by this ticket; the store-backed messages that survive navigation
+- [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) — `timelineStore`'s `reset` arm ([#528](../codebase/528.md)) gets its first production dispatch site here, via `activateConversation`
+- [Session-id store](session-id-store.md) / [#530](../codebase/530.md) — `clearSessionId` ([#529](../codebase/529.md)) gets its first production caller here
+- [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the single-active-conversation, `conversation_id`-free event model that is why `activateConversation` has to gate on the id rather than filter by conversation
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the ephemeral-state rule `PairedShell`'s `useReducer` follows
 - [#140 codebase notes](../codebase/140.md) · Spec: `docs/specs/architecture/140-list-thread-navigation-shell.md`
 - [#152 codebase notes](../codebase/152.md) · Spec: `docs/specs/architecture/152-pair-another-server-from-settings.md`
   — adds the `pairServer` route and its two dedicated exit arms.
 - [#347 codebase notes](../codebase/347.md) · Spec: `docs/specs/architecture/347-archive-screen-scaffold.md`
   — adds the `archive` route (chrome-only scaffold; tab bodies are #348's mount point).
+- [#530 codebase notes](../codebase/530.md) · Spec: `docs/specs/architecture/530-clear-per-conversation-context-on-switch.md`
+  — replaces both carrying nav sites' direct `setActiveConversation` with `activateConversation`, clearing
+  the timeline and session id on an actual conversation switch.

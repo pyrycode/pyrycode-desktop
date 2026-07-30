@@ -8,8 +8,10 @@
 // arrive after the sheet closes), whereas runConfigStore's subscriber is sheet-scoped; (b) the write
 // state (pending changes + client-confirmed overrides + last error) is orthogonal to the snapshot's
 // { model, effort, yolo, usedTokens, windowTokens }. A REDUCER (a sealed event union + one `dispatch`)
-// rather than sessionIdStore's single setter, because there are three real transitions
-// (dispatch / confirm / reject), not one "record the latest value" mutation.
+// rather than sessionIdStore's named setters, because its three transitions (dispatch / confirm /
+// reject) are CORRELATED and each reads prior state — a confirm or reject is a no-op without a matching
+// pending record — whereas sessionIdStore's set and clear (#529) are independent whole-value writes
+// that read nothing. The contrast is the coupling, not the count.
 //
 // Why the confirmed value is client-side, not a daemon re-read: the daemon's `set_session_settings`
 // reply carries only `session_id` and the change lands on the NEXT session spawn (daemon ADR 031), so

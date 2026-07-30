@@ -116,6 +116,18 @@ describe('reduceModal — re-delivery / reconcile-on-connect (#195)', () => {
     expect(after.outstanding).toEqual([])
   })
 
+  it('answered locally, then daemon-dismissed, then re-shown stays suppressed in one connection (#510 AC2)', () => {
+    // The second required ordering, WITHOUT a reconnect: the user's local answer records `resolved`; the
+    // daemon's own `dismissed` for the same id hits the never-outstanding early-out (records nothing);
+    // the re-delivered `shown` is still suppressed by the within-connection dedupe #510 keeps intact.
+    // `'local'` is passed explicitly on the user's answer — the fixture defaults to `'remote'`.
+    const base = run([shown('m1'), dismissed('m1', 'allow', 'local'), dismissed('m1')])
+    expect(base.outstanding).toEqual([])
+    const after = reduceModal(base, shown('m1'))
+    expect(after).toBe(base) // same-reference no-op — no re-append, no selector churn
+    expect(after.outstanding).toEqual([])
+  })
+
   it('a dismiss for a never-outstanding id does not suppress a later legitimate shown (ordering edge)', () => {
     // The never-outstanding `dismissed('ghost')` must NOT record `ghost` as resolved, or the later
     // real `shown('ghost')` would be wrongly no-op'd (Technical Notes ordering edge).
@@ -203,6 +215,20 @@ describe('reduceModal — purity', () => {
     expect(start.outstanding).toHaveLength(2)
     expect(next.outstanding[0]).toBe(survivor)
   })
+
+  it('does not mutate the input state or its resolved array on the reconnect reset (#510)', () => {
+    const start = run([shown('m1'), dismissed('m1')])
+    const startResolved = start.resolved
+
+    const next = reduceModal(start, reconnected())
+
+    // A real change: a freshly emptied resolved array.
+    expect(next.resolved).not.toBe(start.resolved)
+    expect(next.resolved).toEqual([])
+    // Old references intact and unmutated.
+    expect(start.resolved).toBe(startResolved)
+    expect(start.resolved).toEqual(['m1'])
+  })
 })
 
 describe('reduceModal — rejection surface (#249)', () => {
@@ -268,13 +294,15 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     expect(state.outstanding).toEqual([])
   })
 
-  it('preserves the resolved slice by reference across the reset (AC3)', () => {
-    // A prompt answered before the drop records its id in resolved (#195); the reset must keep it so a
-    // daemon re-send stays suppressed — see the exactly-once-suppressed case below.
+  it('clears the resolved slice across the reset (#510 — deliberate reversal of #415 AC3)', () => {
+    // #510: `resolved` is per-CONNECTION truth, not permanent. #415 AC3 retained it across the reset
+    // believing that prevented a double-show — but the daemon's connect-time reconcile enumerates only
+    // STILL-OUTSTANDING modals, so retention guarded nothing and cost the swallowed-answer bug.
     const before = run([shown('m1'), dismissed('m1')])
     expect(before.resolved).toEqual(['m1'])
     const after = reduceModal(before, reconnected())
-    expect(after.resolved).toBe(before.resolved)
+    expect(after.resolved).toEqual([])
+    expect(after.resolved).not.toBe(before.resolved)
   })
 
   it('preserves the rejections surface by reference across the reset (AC3)', () => {
@@ -292,11 +320,17 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     expect(after).toBe(initialModalState)
   })
 
-  it('returns the same state reference on a reconnect after everything already resolved (AC4)', () => {
+  it('a reconnect with only resolved to clear returns a new state, outstanding by reference (#510)', () => {
+    // #510 shifts #415 AC4's no-churn invariant to "same reference when the reconnect has NOTHING to
+    // clear". Here `resolved` is non-empty, so a new state IS returned — but `outstanding` was already
+    // empty and keeps its reference: PermissionModal selects it under Object.is, so minting a fresh []
+    // would re-render the container for no state change.
     const before = run([shown('m1'), dismissed('m1')])
     expect(before.outstanding).toEqual([])
     const after = reduceModal(before, reconnected())
-    expect(after).toBe(before)
+    expect(after).not.toBe(before)
+    expect(after.outstanding).toBe(before.outstanding)
+    expect(after.resolved).toEqual([])
   })
 
   it('a still-held prompt re-sent after the reset surfaces exactly once (AC2)', () => {
@@ -305,10 +339,48 @@ describe('reduceModal — reconnect reconcile (#415)', () => {
     expect(state.outstanding).toHaveLength(1)
   })
 
-  it('an optimistically-answered prompt stays suppressed if re-sent after the reset (AC3)', () => {
-    // The resolved-first early-out in the shown arm fires because the reset preserved resolved.
-    const state = run([shown('m1'), dismissed('m1'), reconnected(), shown('m1')])
-    expect(state.outstanding).toEqual([])
+  it('a prompt answered while disconnected RE-SURFACES when re-sent after the reset (#510 AC1)', () => {
+    // #510, the bug and the deliberate reversal of #415 AC3: the Allow clicked while the link was down
+    // never reached the daemon (`answerModal` early-returns on a null driver), so the daemon re-sends the
+    // still-outstanding prompt. The reset cleared `resolved`, so it re-surfaces instead of the user's
+    // explicit answer decaying into a deny-on-timeout.
+    const state = run([shown('m1'), dismissed('m1', 'allow', 'local'), reconnected(), shown('m1')])
+    expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1'])
+  })
+
+  it('the re-surfaced prompt carries the RE-DELIVERED fields, not the stale ones (#510 AC1)', () => {
+    const state = run([
+      shown('m1'),
+      dismissed('m1', 'allow', 'local'),
+      reconnected(),
+      shown('m1', { title: 'Re-delivered' })
+    ])
+    expect(state.outstanding).toHaveLength(1)
+    expect(state.outstanding[0].title).toBe('Re-delivered')
+  })
+
+  it('the re-surfaced prompt can be answered again, re-recording resolved (#510 AC1)', () => {
+    const before = run([shown('m1'), dismissed('m1', 'allow', 'local'), reconnected(), shown('m1')])
+    expect(before.outstanding).toHaveLength(1) // precondition: it really did re-surface
+    // A live, answerable entry — not a display artefact: the re-answer genuinely REMOVES it (a new state,
+    // not a no-op) and re-records `resolved`, which the NEXT reconnect clears again — so the fix
+    // self-heals across repeated drops rather than working exactly once.
+    const after = reduceModal(before, dismissed('m1', 'allow', 'local'))
+    expect(after).not.toBe(before)
+    expect(after.outstanding).toEqual([])
+    expect(after.resolved).toEqual(['m1'])
+  })
+
+  it('re-surfaces the answered prompt alongside a sibling still held, exactly once each (#510 AC1)', () => {
+    const state = run([
+      shown('m1'),
+      shown('m2'),
+      dismissed('m1', 'allow', 'local'),
+      reconnected(),
+      shown('m1'),
+      shown('m2')
+    ])
+    expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1', 'm2'])
   })
 })
 

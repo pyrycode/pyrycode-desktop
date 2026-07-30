@@ -53,14 +53,15 @@ type ModalEvent =
   | { type: 'rejectionDismissed'; modalId: string }
   // #415: the transport (re)connected — fires on EVERY supervisor (re)handshake, including the first
   // connect. Payload-free; produced by the bridge from the `connected` DaemonEvent, ignoring its ack.
+  // #510: also clears `resolved` — see below.
   | { type: 'reconnected' }
 
 interface ModalState {
   outstanding: readonly ModalPrompt[]
   rejections: readonly string[]   // #249: modalIds of round-tripped rejections, arrival order, deduped
   resolved: readonly string[]     // #195: modalIds that left `outstanding` via `dismissed` — internal
-                                   // bookkeeping only, no selector, retained forever (modalIds are
-                                   // one-time nonces, never reused)
+                                   // bookkeeping only, no selector. #510: PER-CONNECTION memory, cleared
+                                   // on `reconnected` — not permanent (see Edge cases)
 }
 ```
 
@@ -91,11 +92,11 @@ on `event.type` with an `assertNever` default — the same discipline as `reduce
 
 | event | effect |
 |---|---|
-| `shown` | idempotent on `modalId` ([#195](../codebase/195.md)), checked in this order: (1) `modalId ∈ resolved` → **same `state` reference**, a no-op (already answered/dismissed — the reconnect-race early-out); (2) `modalId ∈ outstanding` → replace that entry in place with the fresh `ModalPrompt` built from the **re-delivered** fields (match-and-replace takes the latest values), position and length preserved, no duplicate; (3) else → append, exactly as first-delivery always did. Always spreads `state` so `rejections`/`resolved` survive. |
-| `dismissed` | remove the `ModalPrompt` whose `modalId` matches (spreads `state` so `rejections` survives). No match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4) — and does **not** touch `resolved`, the ordering-edge guard ([#195](../codebase/195.md)): a `dismissed` for a never-outstanding id must not poison `resolved`, or a later legitimate `shown` of that id would be wrongly suppressed. A genuine removal also records the id into `resolved` via `appendUnique` — `dismissed` is the single choke point a prompt leaves `outstanding` through (answer/cancel/remote/timeout all dispatch it), so this one arm covers "already answered or dismissed." `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. |
+| `shown` | idempotent on `modalId` ([#195](../codebase/195.md)), checked in this order: (1) `modalId ∈ resolved` → **same `state` reference**, a no-op — already answered/dismissed **within the current connection** ([#510](../codebase/510.md) scopes this to per-connection; see below); (2) `modalId ∈ outstanding` → replace that entry in place with the fresh `ModalPrompt` built from the **re-delivered** fields (match-and-replace takes the latest values), position and length preserved, no duplicate; (3) else → append, exactly as first-delivery always did. Always spreads `state` so `rejections`/`resolved` survive. |
+| `dismissed` | remove the `ModalPrompt` whose `modalId` matches (spreads `state` so `rejections` survives). No match (unknown or already-dismissed id) → **same `state` reference**, a deterministic non-throwing no-op (AC4) — and does **not** touch `resolved`, the ordering-edge guard ([#195](../codebase/195.md)): a `dismissed` for a never-outstanding id must not poison `resolved`, or a later legitimate `shown` of that id would be wrongly suppressed. A genuine removal also records the id into `resolved` via `appendUnique` — `dismissed` is the single choke point a prompt leaves `outstanding` through (answer/cancel/remote/timeout all dispatch it), so this one arm covers "already answered or dismissed." `outcome`/`source` are carried on the event but not consulted by the reduce — only `modalId` drives the clear. Untouched by [#510](../codebase/510.md) — the rejected alternative shape would have had to relax this arm; that is why it was rejected (see Edge cases). |
 | `rejected` ([#249](../codebase/249.md)) | append `modalId` to `rejections`, de-duplicated (`appendUnique`). Repeat id → **same `state` reference** (no churn); `outstanding` is untouched. |
 | `rejectionDismissed` ([#249](../codebase/249.md)) | remove `modalId` from `rejections` (`removeRejection`). Unknown/already-dismissed id → **same `state` reference**, a non-throwing no-op; `outstanding` is untouched. |
-| `reconnected` ([#415](../codebase/415.md)) | clears `outstanding` so the daemon's connect-time re-sends become the sole repopulation truth; a still-held prompt re-appends via the `shown` arm exactly once, absence means resolved-while-away and stays cleared. Spreads `state` so `rejections` and `resolved` survive by reference untouched — `resolved` surviving is what keeps the `shown` arm's resolved-first early-out suppressing an optimistically-answered prompt the daemon re-sends. `outstanding` already empty (first connect, or reconnect after everything resolved) → **same `state` reference**, no selector churn. |
+| `reconnected` ([#415](../codebase/415.md); [#510](../codebase/510.md)) | clears **both** `outstanding` and `resolved` so the daemon's connect-time re-sends become the sole repopulation truth for the connection just started; a still-held prompt re-appends via the `shown` arm exactly once, and a prompt the client answered while disconnected (send swallowed, `resolved` recorded it anyway) now re-surfaces instead of staying suppressed — [#510](../codebase/510.md), reversing #415 AC3. `rejections` still survives by reference untouched (no daemon repopulation path). Each slice is guarded independently: an already-empty `outstanding` keeps its reference (`PermissionModal` selects it under `Object.is`), and a reconnect with **nothing at all** to clear returns the same `state` reference (AC4 — first connect, or reconnect after nothing was ever shown). |
 
 Note that `shown`/`dismissed` originally built their return value as `{ outstanding: … }` — #249 changed
 both to `{ ...state, outstanding: … }` so they stop silently dropping the (then-new) `rejections` field;
@@ -165,7 +166,14 @@ id-addressed from the start.
 [#196](https://github.com/pyrycode/pyrycode-desktop/issues/196) (reconnect reconcile) split 2-way:
 **[#415](../codebase/415.md) (shipped)** — the `reconnected` arm above, clearing `outstanding` on every
 supervisor (re)handshake and letting the daemon's connect-time re-sends repopulate through the existing
-`shown` arm; sibling #197 (`queue_state` replacement-truth on reconnect, a separate store) remains open.
+`shown` arm; sibling **[#197](../codebase/197.md) (shipped)** owns the separate `queue_state`
+replacement-truth reset on the same edge, a different store.
+
+**[#510](../codebase/510.md) (shipped)** — found #415 AC3's premise wrong (retaining `resolved` across
+the reset does not guard against a double-show; the daemon only ever re-sends still-outstanding
+prompts) and reversed it: the `reconnected` arm now clears `resolved` too, so a prompt answered while
+disconnected — its send swallowed by the transport, its id recorded into `resolved` anyway — re-surfaces
+instead of silently decaying into a deny-on-timeout.
 
 ## Edge cases and limitations
 
@@ -178,20 +186,28 @@ supervisor (re)handshake and letting the daemon's connect-time re-sends repopula
   [thread timeline](thread-timeline.md)'s orphan `tool_result`. It also deliberately does **not** record
   the id into `resolved` — the ordering-edge guard ([#195](../codebase/195.md)): recording an
   unknown-id dismiss would permanently suppress a later legitimate `shown` of that same id.
-- **`resolved` retains ids forever, with no eviction.** Correct rather than a leak: `modalId`s are
-  one-time nonces the daemon never reuses for a new prompt, so a retained resolved id can never
-  legitimately need to re-surface. Flagged as a deliberate, evidence-based choice in [#195](../codebase/195.md)
-  — no observed growth problem to defend against, and modals are human-gated and rare in practice.
+- **`resolved` is per-connection memory, cleared on every `reconnected` edge ([#510](../codebase/510.md)),
+  not retained forever.** #195 and #415 originally reasoned that `modalId`s are one-time nonces, so a
+  retained id could "never legitimately need to re-surface" — and shipped #415 AC3 preserving `resolved`
+  across the reset on that basis. [#510](../codebase/510.md) found the premise wrong: the outbound answer
+  send is fire-and-forget (`answerModal` early-returns on a null driver while disconnected), so a
+  `resolved` id can mean "the client *tried* to answer" rather than "the daemon has it." The daemon's
+  connect-time reconcile re-sends only **still-outstanding** modals (`Registry.Snapshot()`, pyrycode
+  #876/#877) — so retaining `resolved` across a reconnect suppressed exactly the case it needed to let
+  through: an Allow clicked while the link was down, decaying into a deny-on-timeout with no way to
+  re-answer. Within a single connection `resolved` still dedupes as before — it is deliberately **not**
+  removed outright, since it backstops duplicate within-connection delivery (AC2's ordering edge).
 - **`outcome`/`source` still have no home in this state.** A resolved prompt is removed outright, so
   that metadata is carried on the `dismissed` event but never lands in `ModalState`. The anticipated
   "resolution toast" this comment referred to shipped as [#249](../codebase/249.md)'s rejection surface
   — but it consumes a *different*, content-free event (`rejected`, carrying only `modalId`), not
   `dismissed`'s `outcome`/`source`; those two fields remain genuinely unconsumed.
-- **Reset-on-reconnect ([#415](../codebase/415.md)).** A fresh Noise handshake resetting client control
-  state (#879's third sub-rule) clears `outstanding` via the `reconnected` arm, produced by
-  `modalBridge.ts` from the `connected` `DaemonEvent` that fires on every supervisor (re)handshake. Only
-  `outstanding` resets; `resolved`/`rejections` survive by reference. The sibling `queue_state` reset
-  (a different store) is [#197](https://github.com/pyrycode/pyrycode-desktop/issues/197), still open.
+- **Reset-on-reconnect ([#415](../codebase/415.md); [#510](../codebase/510.md)).** A fresh Noise
+  handshake resetting client control state (#879's third sub-rule) clears **both** `outstanding` and
+  `resolved` via the `reconnected` arm, produced by `modalBridge.ts` from the `connected` `DaemonEvent`
+  that fires on every supervisor (re)handshake. `rejections` still survives by reference — it has no
+  daemon repopulation path. The sibling `queue_state` reset (a different store) shipped as
+  [#197](../codebase/197.md).
 - **Nothing to gate on here.** The `--allow-remote-permissions` grant is a daemon-side, per-device
   flag, not on the wire and not in `PairedServerRecord` — the desktop cannot self-gate. The follow-up
   renders and answers regardless; an ungranted answer round-trips to an `error` envelope.
@@ -231,5 +247,8 @@ supervisor (re)handshake and letting the daemon's connect-time re-sends repopula
 - [#195 codebase notes](../codebase/195.md) — match-and-replace by `modalId`: adds `resolved`, makes
   `shown` idempotent, confirms the ADR's "one-arm extension" prediction.
 - [#415 codebase notes](../codebase/415.md) — reconnect reconcile: the `reconnected` arm clearing
-  `outstanding` on every supervisor (re)handshake while preserving `resolved`/`rejections`, split-child A
-  of #196 (sibling #197 owns the separate `queue_state` reset).
+  `outstanding` on every supervisor (re)handshake, split-child A of #196 (sibling
+  [#197](../codebase/197.md) owns the separate `queue_state` reset).
+- [#510 codebase notes](../codebase/510.md) — the `reconnected` arm also clears `resolved`, reversing
+  #415 AC3: a prompt answered while disconnected re-surfaces after the reconnect instead of staying
+  suppressed.

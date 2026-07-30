@@ -79,14 +79,31 @@ edge (`active: false`). Both edges collapse into one same-reference-or-fresh-sta
 than `apiRetry`'s two-branch body, since there's no counter to compare. `selectCompacting` joins
 `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry` as the read surface.
 
+[#538](../codebase/538.md) added a ninth owned arm, `connected`→`reconnected` — unlike every arm before
+it, this one is **connection-lifecycle, not stream content**: it moves `connected` out of the null
+fall-through cluster into its own case, ahead of where the cluster opens, and returns a payload-free
+`{ type: 'reconnected' }`, ignoring the `connected` `DaemonEvent`'s `HelloAckPayload` entirely — there is
+no field to filter or copy, so like `stallDetected` this is arm-selection only. `reduceTimeline`'s new
+arm implements `docs/protocol-mobile.md`'s Mode B reset-on-reconnect contract for the timeline's two
+two-edged chrome scalars (`apiRetry`, `compacting`), which were otherwise stuck forever once their wire
+falling edge was lost to a disconnect: it clears `phase`/`stalled`/`apiRetry`/`compacting` in one step
+via a hand-written five-field literal (not a spread of `initialTimelineState`, so a future sixth field
+is a compile error here rather than cleared for free) while preserving `items` **by reference** — the
+same Mode A (cursor-backfill transcript) / Mode B (reset-and-rebuild control state) split the wire
+contract draws. `daemonEventBridge.ts` and `sessionStore.ts` remain independent consumers of the same
+`connected` edge, untouched by this ticket — this is the [`modalStore` #415](../codebase/415.md) /
+`queueStore` #197 reconcile shape applied a third time, not a centralisation of the edge.
+
 ## What it does
 
-Turns the eight owned `DaemonEvent` stream arms into `ThreadEvent`s and folds them into `TimelineState`
-via `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
+Turns the nine owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
+`reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
 `selectCompacting` as the only read surface. A stream arrival (an `assistant_delta` chunk, a `turn_end`
 marker, a `tool_use` call, its `tool_result` outcome, a `stall` onset, an `api_retry` edge, a
 `compacting` edge) re-renders only components selecting a timeline slice — orthogonal to `sessionStore`
-and `runConfigStore`.
+and `runConfigStore`. The ninth arm, `connected`→`reconnected` ([#538](../codebase/538.md)), is not
+stream content at all — it is the connection-lifecycle reconcile that clears the timeline's transient
+chrome on a fresh handshake.
 
 ## How it works
 
@@ -112,11 +129,11 @@ speculative observer here would defend an unobserved need.
 ```ts
 translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
 // Owns exactly assistantDelta / turnEnd / turnState / toolUse / toolResult (#229) / stallDetected
-// (#317) / apiRetry (#493) / compacting (#496), each rebuilt as a fresh named-field literal (never
-// `return event`, never a spread — for stallDetected, both sides are nullary, so the "literal" is
-// arm-selection only; apiRetry and compacting carry data, so each is a filter-and-copy like
-// toolUse/toolResult). Every other arm -> null via explicit fall-through, then default:
-// assertNever(event) — a HARD guard, not a soft catch-all default.
+// (#317) / apiRetry (#493) / compacting (#496) / connected->reconnected (#538), each rebuilt as a fresh
+// named-field literal (never `return event`, never a spread — for stallDetected and connected->
+// reconnected, both sides are nullary, so the "literal" is arm-selection only; apiRetry and compacting
+// carry data, so each is a filter-and-copy like toolUse/toolResult). Every other arm -> null via
+// explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te) })
@@ -181,6 +198,11 @@ daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel, co
                                    shouldShowThinking clauses; selectStalled read by #317's StallIndicator
                                    view; selectApiRetry read by #493's ApiRetryIndicator view;
                                    selectCompacting read by #496's CompactingIndicator view)
+
+fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{connected, ack}
+   → window.pyry.onDaemonEvent → subscribeTimeline → translateTimelineEvent → { type: 'reconnected' }
+   → timelineStore.dispatch → reduceTimeline → phase/stalled/apiRetry/compacting cleared, items untouched
+   (#538 — a separate, connection-lifecycle path alongside the stream path above, not a stream arrival)
 ```
 
 ## Configuration and usage
@@ -213,6 +235,11 @@ daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel, co
   '@renderer/store/timelineBridge'`.
 - No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
   transport (single active conversation); the bridge translates and dispatches unconditionally.
+- **`connected` → `reconnected` needs no reader wiring** ([#538](../codebase/538.md)) — it drives the
+  same `selectStalled`/`selectApiRetry`/`selectCompacting`/`selectPhase` selectors
+  [#317](../codebase/317.md)/[#493](../codebase/493.md)/[#496](../codebase/496.md)/[#215](../codebase/215.md)
+  already wired to `ConversationScreen`'s indicators; a reconnect just clears the value those existing
+  readers already subscribe to.
 
 ## Edge cases and limitations
 
@@ -247,6 +274,12 @@ daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel, co
   edge, so it too survives turn activity and clears only on its own signal — the two `&& !state.stalled`
   guards did not gain a compaction term either. Unlike `apiRetry` there is no counter to discard on
   clear, so the state is a bare liveness flag, not a status record.
+- **The relay never resumes a session and desktop advertises no replay cursor, so a reconnect cannot
+  recover a lost falling edge — it can only reconcile forward** ([#538](../codebase/538.md)). The daemon
+  re-asserts only the outstanding modal (#877) and the queued backlog (#878) on connect, never
+  `api_retry`/`compacting`/`turn_state`, so a status genuinely still live across the reconnect shows no
+  banner until the daemon's next edge. Accepted by design: a briefly-missing banner beats a
+  permanently-stuck one.
 
 ## Related
 
@@ -323,3 +356,8 @@ daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel, co
   `selectCompacting` — `apiRetry`'s clear-semantics inversion again, minus the counter — and gives it
   its first reader, `ConversationScreen`'s `CompactingIndicator` plus a second `shouldShowThinking`
   clause.
+- [#538 codebase notes](../codebase/538.md) — moves `connected` from this bridge's null fall-through
+  cluster to a ninth owned arm, mapping it to the nullary `reconnected` `ThreadEvent`; `reduceTimeline`'s
+  new arm clears `phase`/`stalled`/`apiRetry`/`compacting` while preserving `items` by reference — the
+  Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md) / `queueStore` #197 already have.
+  `daemonEventBridge.ts` and `sessionStore.ts` stay independent consumers of the same `connected` edge.

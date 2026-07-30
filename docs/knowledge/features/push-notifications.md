@@ -17,9 +17,11 @@ feature is now **live end-to-end**.
 
 Given a `notify` command carrying a closed `kind` (`'turn-complete' | 'prompt'`), the main process:
 
-1. Reads the window's focus state via `windowHasFocus(mainWindow)` **at fire-time** — no separate
+1. Reads the window's focus state via `windowHasFocus(live.window)` **at fire-time** — no separate
    stateful focus tracker. Focused → no-op. (Destroyed-safe since [#518](../codebase/518.md): a
-   destroyed window reports unfocused without touching `isFocused()`.)
+   destroyed window reports unfocused without touching `isFocused()`. Since [#519](../codebase/519.md),
+   `live.window` is the [live-window](live-window.md) holder's current-window face, not a captured
+   `BrowserWindow`, so a dock-reopened window is queried correctly instead of a destroyed original.)
 2. Unfocused → looks up `kind` in a main-owned copy table, constructs an Electron `Notification` with
    that title/body, registers the [click handler](#clicking-the-notification-393) on it, then calls
    `.show()`.
@@ -67,8 +69,9 @@ export function fireNotification(
 
 `fireNotification` is shaped like `emitDaemonEvent.ts`: a plain function with Electron dependencies
 **injected** as parameters, never `import 'electron'`, unit-tested entirely with fakes (no Electron
-harness). The composition root in `index.ts` closes `mainWindow.isFocused()` and Electron's real
-`Notification` into it, exactly as it closes `downloadsDir` into `saveDebugBundle`.
+harness). The composition root in `index.ts` closes the [live-window](live-window.md) holder's focus
+query and Electron's real `Notification` into it, exactly as it closes `downloadsDir` into
+`saveDebugBundle`.
 
 ## Clicking the notification (#393)
 
@@ -80,11 +83,11 @@ supplies it:
 
 ```ts
 fireNotification(command.payload.kind, {
-  isWindowFocused: () => windowHasFocus(mainWindow), // #518 — was `() => mainWindow.isFocused()`
+  isWindowFocused: () => windowHasFocus(live.window), // #518 guard, #519 live-window target
   Notification,
   onClick: () => {
-    activateWindow(mainWindow)
-    emitDaemonEvent(mainWindow, { type: 'notificationActivated' })
+    activateWindow(live.window)
+    emitDaemonEvent(live.sink, { type: 'notificationActivated' })
   }
 })
 ```
@@ -111,8 +114,10 @@ Two effects, composed in one place:
 
    `restore()` un-minimizes, `show()` covers the hidden case, and an explicit `focus()` covers
    already-visible-but-behind. `isVisible` is deliberately absent from the interface — `show()` is
-   safe to call unconditionally. `mainWindow` (a real `BrowserWindow`) satisfies `ActivatableWindow`
-   structurally, so no `electron` import reaches this unit.
+   safe to call unconditionally. A real `BrowserWindow` satisfies `ActivatableWindow` structurally, and
+   since [#519](../codebase/519.md) the caller passes the [live-window](live-window.md) holder's
+   `window` face (itself structurally satisfying it by delegation) rather than a captured window
+   reference, so no `electron` import reaches this unit either way.
 
    [#518](../codebase/518.md) added the `isDestroyed()` guard: on macOS, closing the window destroys
    it without quitting the app, so a notification click arriving afterward would otherwise throw out
@@ -136,9 +141,9 @@ Two effects, composed in one place:
 
    A destroyed window reports **unfocused** without ever calling `isFocused()` (which throws
    post-destruction) — the semantically correct answer, not a fudge: a closed window cannot hold
-   focus, and that is exactly the condition under which a notification should fire. Whether the
-   resulting click can then surface a window is [#519](https://github.com/pyrycode/pyrycode-desktop/issues/519)'s
-   concern; here it is a safe no-op via `activateWindow` above.
+   focus, and that is exactly the condition under which a notification should fire. [#519](../codebase/519.md)
+   made the resulting click actually surface the **current** window rather than safe-no-op on a
+   destroyed original — see [live window](live-window.md).
 
 3. **Renderer navigation** — a new bare `DaemonEvent` arm, `{ type: 'notificationActivated' }`
    (`src/shared/ipc/events.ts`). This is the **first main-local signal** on the `DaemonEvent`
@@ -239,11 +244,13 @@ navigating to the thread.
 - **No `Notification.isSupported()` gate** and **no try/catch around construct/`show()`** —
   deliberate, evidence-based omissions. No unsupported-platform failure has been observed; add the
   gate only if one surfaces.
-- **Destroyed-window safe ([#518](../codebase/518.md)).** On macOS, closing the window destroys it
-  without quitting the app. Before #518, a `notify` or a notification click arriving afterward threw
-  out of `isFocused()`/`isMinimized()` — an uncaught main-process exception. Now `windowHasFocus`
-  reports unfocused and `activateWindow` no-ops, both without touching a member that throws
-  post-destruction. Reviving a closed window into a usable one is [#519](https://github.com/pyrycode/pyrycode-desktop/issues/519)'s job, not this feature's.
+- **Destroyed-window safe ([#518](../codebase/518.md)), and reopen-correct ([#519](../codebase/519.md)).**
+  On macOS, closing the window destroys it without quitting the app. Before #518, a `notify` or a
+  notification click arriving afterward threw out of `isFocused()`/`isMinimized()` — an uncaught
+  main-process exception. #518 made that safe (`windowHasFocus` reports unfocused, `activateWindow`
+  no-ops). #519 then made a dock-reopened window actually reachable: both calls now route through the
+  [live-window](live-window.md) holder's `window` face, which is re-attached to whichever
+  `BrowserWindow` is current, rather than a captured reference that goes stale on close.
 - **Focus is read synchronously at fire-time**, not tracked. `isFocused()` is already `false` when
   the window is blurred, minimized, or hidden — exactly the notify condition — so there is nothing a
   separate tracker would add.
@@ -260,6 +267,8 @@ navigating to the thread.
 
 ## Related
 
+- [Live window](live-window.md) — the holder both `windowHasFocus`/`activateWindow` calls route
+  through since [#519](../codebase/519.md), and why its two faces answer `isDestroyed()` differently.
 - [Command channel](command-channel.md) — the `notify` `RendererCommand` member + `isNotifyPayload`
   guard this feature's command rides on.
 - [Paired shell](paired-shell.md) — the container both `notificationActivatedBridge`'s

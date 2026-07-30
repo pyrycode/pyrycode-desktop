@@ -20,6 +20,7 @@ import { createDaemonConnection } from './daemonConnection'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent } from './emitDaemonEvent'
+import { createLiveWindow } from './liveWindow'
 import { fireNotification, activateWindow, windowHasFocus } from './fireNotification'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
@@ -162,7 +163,15 @@ app.whenReady().then(() => {
     secureStore,
     generator: noiseKeyPairGenerator()
   })
-  const mainWindow = createWindow()
+  // The live-window holder (#519), constructed before the connection because the connection captures
+  // its sink for the process lifetime. It replaces the single captured `const mainWindow =
+  // createWindow()` this line used to hold: on macOS the app outlives its window and the connection
+  // keeps running, so a captured reference goes stale the moment the window is closed and every
+  // window-bound call quietly reaches the destroyed original instead of the dock-reopened
+  // replacement. After this line no BrowserWindow reference survives in this scope at all — the only
+  // `mainWindow` binding left in the file is createWindow's own local — so there is nothing left that
+  // CAN go stale. Window creation moves down to `openWindow` below, which needs `connection`.
+  const live = createLiveWindow()
   // The one content-free diagnostic logger (#126). Effectful sink chosen ONCE, here, false-first on
   // app.isPackaged: a packaged build rotates records under userData/logs; dev writes JSON lines to
   // stdout. Constructed at the root and injected so #127 (relay leg) and #128 (daemon leg) consume
@@ -179,7 +188,7 @@ app.whenReady().then(() => {
   const connection = createDaemonConnection({
     deviceKeypair: deviceKeypairStore,
     pairedServer: pairedServerStore,
-    sink: mainWindow,
+    sink: live.sink,
     deviceName: hostname(),
     clientVersion: app.getVersion(),
     diagnosticLog
@@ -227,10 +236,40 @@ app.whenReady().then(() => {
   })
   app.on('will-quit', () => unregisterUnpair())
 
-  // Defer the connect until the renderer document + scripts have loaded, so its daemon-event
-  // subscription (#19) is in place before the load-bearing `connected` event (which arrives only
-  // after a network round-trip). `.once`, not `.on`, so a dev HMR reload does not re-fire it.
-  mainWindow.webContents.once('did-finish-load', () => connection.start())
+  // Every window this app opens goes through here (#519): the first one below, and each dock-reopened
+  // replacement from the `activate` handler at the bottom. The two halves of #519 meet in this one
+  // function — routing (make the new window the live target) and convergence (bring it up to date).
+  //
+  // Attached at CREATION, not at load: between here and did-finish-load the new window is already the
+  // current one, so a notification click landing in that gap activates it. Daemon events arriving in
+  // the gap are forwarded into a renderer that has not subscribed yet and are dropped there —
+  // identical to the pre-existing behaviour of the very first window, and the reason the connect
+  // waits for the load in the first place. Status is not among the losses: replayStatus() runs at the
+  // load. (Recovering the non-status events dropped while no window existed is explicitly out of
+  // scope; the seam for it, when a ticket is filed, is replayStatus().)
+  const openWindow = (): void => {
+    const window = createWindow()
+    live.attach(window)
+    // Defer the connect until the renderer document + scripts have loaded, so its daemon-event
+    // subscription (#19) is in place before the load-bearing `connected` event (which arrives only
+    // after a network round-trip). ONE uniform path per window, with no "is this the first one?"
+    // branch: the first window has nothing recorded and dials, while a reopened window replays the
+    // live connection's status and start() returns at daemonConnection.ts:1479. The replay is what
+    // makes AC2 work — connection state reaches the renderer only as discrete events and a fresh
+    // session store starts at `{ type: 'disconnected' }`, so on a stable connection a merely
+    // subscribed window would sit at "disconnected" while this process holds a healthy session.
+    // `reconnect()` is deliberately NOT called here (AC4): it tears the session down and re-dials,
+    // which would kill an in-flight turn. `start()` is the idempotent one.
+    // `.on`, not the `.once` this used to be: the listener is registered per window on a fresh
+    // webContents, so the dev-HMR-reload concern `.once` guarded against is now answered by start()'s
+    // proven idempotence instead — and `.on` additionally converges a window that reloads (HMR, or
+    // Cmd-R via the default View menu), whose renderer store is just as empty as a new window's.
+    window.webContents.on('did-finish-load', () => {
+      live.replayStatus()
+      connection.start()
+    })
+  }
+  openWindow()
   app.on('will-quit', () => connection.stop())
 
   // The debug-bundle download orchestrator (#169): the sole slice that touches Electron + IPC for
@@ -243,7 +282,7 @@ app.whenReady().then(() => {
   const downloader = createDebugBundleDownload({
     requestDebugBundle: (consumer) => connection.requestDebugBundle(consumer),
     save: (bytes) => saveDebugBundle(downloadsDir, bytes),
-    emit: (event) => emitDaemonEvent(mainWindow, event)
+    emit: (event) => emitDaemonEvent(live.sink, event)
   })
 
   // The single onCommand registration for the app lifetime (#17 deferred this wiring). The command
@@ -368,20 +407,29 @@ app.whenReady().then(() => {
         // Main-local side effect, no connection method: raise an OS notification only when the window
         // is unfocused. Focus is queried at fire-time (one synchronous isFocused(), no stateful
         // tracker); the kind→copy mapping is owned by the module, so no command field supplies text.
-        // Dormant — no renderer sends `notify` yet (the trigger is #392). Closes mainWindow.isFocused()
-        // and Electron's Notification, exactly as the root closes downloadsDir into saveDebugBundle.
+        // Live since #392 shipped (pushNotifyBridge.ts sends it). The click path is reachable in one
+        // sequence: a notification raised while the window is open but unfocused, the window then
+        // closed, the notification clicked afterwards. The focus query with no window at all stays
+        // effectively unreachable, since the producer is a renderer bridge that cannot run without a
+        // window. Closes the live-window faces and Electron's Notification, exactly as the root closes
+        // downloadsDir into saveDebugBundle.
         // #393: the click is composed HERE (the sole composition site) — on click, activate the window
         // (AC1) and emit the nullary notificationActivated event (AC2/AC3) so the renderer navigates to
-        // the thread. `mainWindow` satisfies both ActivatableWindow and DaemonEventSink structurally.
+        // the thread.
         // #518: all three window touches in this closure are destroyed-safe — the guard lives in
-        // each callee (windowHasFocus, activateWindow, emitDaemonEvent), so on macOS a `notify`
-        // arriving after the window is closed is a no-op rather than an uncaught exception.
+        // each callee (windowHasFocus, activateWindow, emitDaemonEvent), so a `notify` arriving after
+        // the window is closed is a no-op rather than an uncaught exception.
+        // #519: they now point at whichever window is CURRENT, so a click after a dock reopen
+        // activates the new window instead of no-oping on the destroyed original. `live.window`
+        // satisfies FocusableWindow + ActivatableWindow and answers isDestroyed() honestly, which is
+        // what keeps the no-window case the total no-op #518 made it (creating a window from a click
+        // is out of scope); the paired emit rides the same sink as every other event.
         fireNotification(command.payload.kind, {
-          isWindowFocused: () => windowHasFocus(mainWindow),
+          isWindowFocused: () => windowHasFocus(live.window),
           Notification,
           onClick: () => {
-            activateWindow(mainWindow)
-            emitDaemonEvent(mainWindow, { type: 'notificationActivated' })
+            activateWindow(live.window)
+            emitDaemonEvent(live.sink, { type: 'notificationActivated' })
           }
         })
         return
@@ -399,8 +447,14 @@ app.whenReady().then(() => {
   const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog)
   app.on('will-quit', () => unregisterDiagnostics())
 
+  // macOS reopens the app from the dock without relaunching the process, so the replacement window
+  // goes through openWindow() (#519) rather than a bare createWindow() whose result was discarded.
+  // That is what makes the new window the live target and brings it up to date on the connection that
+  // has been running the whole time. The count condition is unchanged — at most one window exists, so
+  // there is no fan-out of duplicate deliveries. Never fires on non-darwin: `window-all-closed` quits
+  // there, so no reopen path is introduced.
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) openWindow()
   })
 })
 

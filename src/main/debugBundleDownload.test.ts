@@ -201,7 +201,7 @@ describe('createDebugBundleDownload — a destroyed window cannot strand the fla
   // The orchestrator gets NO guard of its own: every terminal emits BEFORE clearing `active`, so a
   // throw out of `emit` would leave the flag stuck true for the rest of the process lifetime. The
   // guard lives in emitDaemonEvent, which is why this one test composes the composition root's real
-  // wiring (`emit: e => emitDaemonEvent(mainWindow, e)`) instead of the plain collector every other
+  // wiring (`emit: e => emitDaemonEvent(live.sink, e)`, #519) instead of the plain collector every other
   // test here uses — it is the only place the second-order fault is observable.
   it('clears the flag when a terminal emits into a destroyed window, so a later request starts', () => {
     const destroyed: DaemonEventSink = {

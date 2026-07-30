@@ -48,7 +48,7 @@ const downloadsDir = app.getPath('downloads')
 const downloader = createDebugBundleDownload({
   requestDebugBundle: (c) => connection.requestDebugBundle(c),
   save: (b) => saveDebugBundle(downloadsDir, b),
-  emit: (e) => emitDaemonEvent(mainWindow, e)
+  emit: (e) => emitDaemonEvent(live.sink, e) // #519 — live.sink, not a captured mainWindow
 })
 ```
 
@@ -80,6 +80,9 @@ and one added `case` in the existing switch: `case 'requestDebugBundle': downloa
 ## Related
 
 - [#169 codebase notes](../codebase/169.md) — implementation summary, patterns, and lessons learned.
+- [Live window](live-window.md) / [#519](../codebase/519.md) — the injected `emit` closes over
+  `live.sink`, the process-lifetime channel that replaced a captured `mainWindow` reference so the
+  emitter keeps working after a dock reopen.
 - [Debug-bundle request (outbound)](debug-bundle-request.md) / [#115](../codebase/115.md) — sends the frame this ticket's `requestDebugBundle` dep triggers.
 - [Debug-bundle reassembly (inbound)](debug-bundle-reassembly.md) / [#116](../codebase/116.md) — source of `BundleConsumer`/`BundleFailReason`; owns the reassembler slot this ticket's single-in-flight guard protects.
 - [Save debug bundle (persistence)](save-debug-bundle.md) / [#117](../codebase/117.md) — the `save` dep, closed over `app.getPath('downloads')`.

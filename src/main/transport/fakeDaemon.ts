@@ -16,19 +16,29 @@
 // `awaiting-rekey-init`; the client's fresh `noise_init` (msg1) is then answered as a fresh RESPONDER
 // handshake (EMPTY early-data both ways, no `rekey_ack`) whose Split ciphers atomically replace the
 // old ones, after which a resume frame under the NEW send cipher gives the client a deterministic
-// swap signal (there is no wire ack). The crypto is faithful; every outbound frame stays tagged
-// `noise_msg` (the client reads by session state, never the inbound `type` — see sendNoise).
+// swap signal (there is no wire ack). Throughout that window the daemon KEEPS SERVING transport
+// frames under the OLD ciphers (#524) — see the routing note below. The crypto is faithful; every
+// outbound frame stays tagged `noise_msg` (the client reads by session state, never the inbound
+// `type` — see sendNoise).
 //
 // It also gains a RECONNECT capability (#416): a supervised client, on a relay drop, re-dials and
 // starts a FRESH createNoiseSession carrying its `hello` — a full IK handshake whose first frame is
 // tagged `noise_init` (noiseRelayDriver.ts:189/203), NOT an in-session rekey. The inner `type` is
-// therefore consulted for ROUTING ONLY: in `transport` state a `noise_init` routes to handleReconnect
-// (handleMsg1's hello-recovery + hello_ack, plus handleRekeyInit's atomic cipher swap), reusing the
-// SAME responder static — exactly the routing signal the driver documents, so branching on it is
-// faithful. Transport-frame INTERPRETATION still relies solely on the Noise state machine + AEAD: a
-// hostile `type` cannot misroute a transport frame, and a hostile `noise_init` triggers only a fresh-
-// handshake attempt that FAILS CLOSED (`handshake-read-failed`) — never a downgrade or a transport
-// bypass. pushFrame() seals a server-initiated frame under the current send cipher (the initiateRekey
+// therefore consulted for ROUTING ONLY — mirroring the real daemon, whose top-level dispatch switches
+// purely on it (pyrycode internal/relay/v2session.go:664-669). In `transport` state a `noise_init`
+// routes to handleReconnect (handleMsg1's hello-recovery + hello_ack, plus handleRekeyInit's atomic
+// cipher swap), reusing the SAME responder static. In `awaiting-rekey-init` (#524) the type — never
+// the state — picks the path too: a `noise_init` is the client's rekey msg1 (handleRekeyInit, the
+// swap); anything else is an app frame the daemon fanned out before that msg1 landed, so it is SERVED
+// by handleTransport under the OLD ciphers with the state held, per spec #450's "transport frames
+// continue flowing under the OLD CipherStates". Both are exactly the routing signal the driver
+// documents, so branching on it is faithful. Transport-frame INTERPRETATION still relies solely on
+// the Noise state machine + AEAD: a hostile `type` cannot misroute a transport frame — in the rekey
+// window it only redirects an undecryptable frame from `handshake-read-failed` to
+// `transport-decrypt-failed`, the AEAD remaining the sole authority on whether the frame opens — and
+// a hostile `noise_init` triggers only a fresh-handshake attempt that FAILS CLOSED
+// (`handshake-read-failed`) — never a downgrade or a transport bypass.
+// pushFrame() seals a server-initiated frame under the current send cipher (the initiateRekey
 // seal-and-stream minus the state transition); reconnectResendFrames stream after the reconnect
 // hello_ack under the new send cipher. All three are modal-agnostic — the modal specifics live only
 // in the tests.
@@ -147,7 +157,8 @@ export interface FakeDaemon {
    *  resolves it { ok:false, reason:'closed' }. Cached: repeated calls share one promise. */
   whenSettled(): Promise<FakeDaemonOutcome>
   /** As the daemon: seal a `rekey_request` under the current send cipher, stream it, and enter
-   *  `awaiting-rekey-init` to answer the client's fresh `noise_init`. No-op unless in `transport`. */
+   *  `awaiting-rekey-init` to answer the client's fresh `noise_init`. That window keeps serving
+   *  inbound transport frames under the CURRENT (pre-swap) ciphers (#524). No-op unless in `transport`. */
   initiateRekey(): void
   /** Server-initiated push (#416): seal `plaintext` under the CURRENT send cipher and stream it as a
    *  `noise_msg`. The `initiateRekey` seal-and-stream pattern minus the state transition. No-op unless
@@ -389,11 +400,15 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
 
   // The one untrusted→trusted boundary. Inert after close so a frame arriving post-freeAll never
   // touches a freed wasm object (mirrors noiseSession.onFrame). The inner `type` is consulted for
-  // ROUTING ONLY (#416): in `transport` state a `noise_init` is a supervised client's reconnect msg1,
-  // routed to a fresh responder handshake — exactly the driver's documented signal. Transport-frame
-  // INTERPRETATION still relies solely on the Noise state machine + AEAD, so a hostile `type` cannot
-  // misroute a transport frame, and a hostile `noise_init` only triggers a fresh-handshake attempt that
-  // FAILS CLOSED — never a downgrade or a transport bypass.
+  // ROUTING ONLY (#416, #524), as the real daemon does (v2session.go:664-669): a `noise_init` is a
+  // handshake init — a supervised client's reconnect msg1 in `transport`, its rekey msg1 in
+  // `awaiting-rekey-init` — and everything else is a transport frame, INCLUDING inside the rekey
+  // window, where an app frame the daemon fanned out before the msg1 landed is still served under the
+  // OLD ciphers with the state held. Transport-frame INTERPRETATION still relies solely on the Noise
+  // state machine + AEAD, so a hostile `type` cannot misroute a transport frame (in the rekey window
+  // it only picks which rejection an undecryptable frame takes — `transport-decrypt-failed` rather
+  // than `handshake-read-failed`), and a hostile `noise_init` only triggers a fresh-handshake attempt
+  // that FAILS CLOSED — never a downgrade or a transport bypass.
   function onMessage(data: RawData): void {
     if (state === 'closed') return
     let innerType: string
@@ -408,7 +423,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       return
     }
     if (state === 'awaiting-msg1') handleMsg1(raw)
-    else if (state === 'awaiting-rekey-init') handleRekeyInit(raw)
+    else if (state === 'awaiting-rekey-init' && innerType === 'noise_init') handleRekeyInit(raw)
     else if (innerType === 'noise_init') handleReconnect(raw)
     else handleTransport(raw)
   }

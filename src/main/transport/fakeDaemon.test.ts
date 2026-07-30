@@ -159,12 +159,32 @@ async function driveClient(opts: {
   events: NoiseSessionEvent[]
   waiter: ReturnType<typeof makeWaiter>
   clientPrivateKey: Uint8Array
+  /** Arm the inbound gate (#524): later inbound frames are captured in `held` instead of being fed
+   *  to the initiator, so a test can hold the client in `transport` while the daemon has already
+   *  entered `awaiting-rekey-init`. */
+  holdInbound(): void
+  /** Disarm the gate — later inbound frames flow to the initiator again. Already-held frames stay held. */
+  resumeInbound(): void
+  /** Raw InnerFrameV2 frames captured while the gate was armed, in arrival order. */
+  held: Uint8Array[]
+  /** Feed `held[i]` through the normal decode + initiator.onFrame path, as if it had just arrived. */
+  deliverHeld(i: number): void
+  /** Send `raw` as a `noise_msg` InnerFrameV2, bypassing the initiator's ciphers (#524, AC4). */
+  sendRaw(raw: Uint8Array): void
 }> {
   const lib = await loadNoiseLib()
   const clientPriv = opts.clientPrivateKey ?? lib.CreateKeyPair(lib.constants.NOISE_DH_CURVE25519)[0] // fresh in-process static
   const events: NoiseSessionEvent[] = []
   const waiter = makeWaiter()
   let firstOut = true
+  // Mirrors the production driver's SECOND init latch (noiseRelayDriver.ts:196/203/225-226): the
+  // session emits `rekey-requested` and then hands its fresh rekey msg1 to sendFrame synchronously
+  // within the same onFrame turn (noiseSession.ts:225-229), so arming here tags exactly that one
+  // frame `noise_init` — the routing signal the daemon's rekey window reads (#524).
+  let rekeyInitPending = false
+  // The inbound gate (#524): while armed, an inbound frame is captured raw instead of delivered.
+  let holdingInbound = false
+  const held: Uint8Array[] = []
   let initiator!: NoiseSession
 
   // Bounded transient re-dial for the pre-`connected` 404-upgrade race (#336). createRelayConnection
@@ -178,6 +198,16 @@ async function driveClient(opts: {
   let connectedOnce = false
   let dialAttemptsLeft = 5
   let activeRelay!: RelayConnection
+  // The single inbound delivery path — shared by live arrival and by a gated replay, so a released
+  // frame goes through exactly the decode the live path uses.
+  const deliverFrame = (frame: Uint8Array): void => {
+    try {
+      const { data } = decodeInnerFrame(frame)
+      initiator.onFrame(base64StdDecode(data))
+    } catch {
+      /* fail-closed on a malformed frame; the bounded wait converts it to a timeout */
+    }
+  }
   const makeRelay = (): RelayConnection =>
     createRelayConnection({
       url: `${opts.forwarderUrl}/v1/client`,
@@ -191,12 +221,12 @@ async function driveClient(opts: {
           connectedOnce = true
           initiator.start()
         } else if (e.type === 'message') {
-          try {
-            const { data } = decodeInnerFrame(e.frame)
-            initiator.onFrame(base64StdDecode(data))
-          } catch {
-            /* fail-closed on a malformed frame; the bounded wait converts it to a timeout */
+          if (holdingInbound) {
+            held.push(e.frame) // raw InnerFrameV2 bytes — the tests inspect `type` and the sealed length
+            waiter.notify()
+            return
           }
+          deliverFrame(e.frame)
         } else if (e.type === 'closed' && !connectedOnce && dialAttemptsLeft > 1) {
           dialAttemptsLeft -= 1
           setTimeout(() => {
@@ -213,20 +243,38 @@ async function driveClient(opts: {
     remoteStaticPublicKey: opts.remoteStaticPublicKey,
     prologue: EMPTY,
     hello: opts.hello,
-    // Tag the first outbound frame noise_init, the rest noise_msg; base64-std the raw Noise bytes
-    // into an InnerFrameV2 at the relay boundary (the codec, composed unchanged).
+    // Tag a handshake init noise_init, every other outbound noise_msg; base64-std the raw Noise
+    // bytes into an InnerFrameV2 at the relay boundary (the codec, composed unchanged). Both latches
+    // are one-shot, exactly as the production driver's (noiseRelayDriver.ts:203-205).
     sendFrame: (raw) => {
-      const type = firstOut ? 'noise_init' : 'noise_msg'
+      const type = firstOut || rekeyInitPending ? 'noise_init' : 'noise_msg'
       firstOut = false
+      rekeyInitPending = false
       activeRelay.send(encodeInnerFrame({ v: 2, type, data: base64StdEncode(raw) }))
     },
     onEvent: (e) => {
+      if (e.type === 'rekey-requested') rekeyInitPending = true
       events.push(e)
       waiter.notify()
     }
   })
   cleanups.push(() => initiator.close())
-  return { initiator, events, waiter, clientPrivateKey: clientPriv }
+  return {
+    initiator,
+    events,
+    waiter,
+    clientPrivateKey: clientPriv,
+    holdInbound: () => {
+      holdingInbound = true
+    },
+    resumeInbound: () => {
+      holdingInbound = false
+    },
+    held,
+    deliverHeld: (i) => deliverFrame(held[i]),
+    sendRaw: (raw) =>
+      activeRelay.send(encodeInnerFrame({ v: 2, type: 'noise_msg', data: base64StdEncode(raw) }))
+  }
 }
 
 /** Stand up a forwarder + fake daemon pair, registering teardown. */
@@ -417,6 +465,123 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     const streamed = events.filter((e) => e.type === 'message')[1]
     expect(bytes((streamed as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(resume))
     expect(events.some((e) => e.type === 'error')).toBe(false)
+  })
+
+  it('serves a non-noise_init frame inside the rekey window and still completes the swap (#524, AC2/AC3/AC5)', async () => {
+    // The whole interleave runs through the newly widened routing arm — a new path across the
+    // untrusted→trusted boundary, so it must stay as log-free as every other.
+    const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    try {
+      // Long enough that `canned.length + 16` cannot be confused with a 48-byte IK msg2 or an
+      // empty frame — the sealed length is what distinguishes a SERVED reply from a handshake reply.
+      const canned = encodeEnvelope({
+        id: 55,
+        type: 'message',
+        ts: '2026-01-01T00:00:11Z',
+        payload: {
+          conversation_id: 'c1',
+          message_id: 'interleaved-1',
+          role: 'assistant',
+          text: 'served under the old cipher while the daemon awaits the rekey init'
+        }
+      })
+      const { forwarderUrl, whenReady, daemon } = await standUp({ buildReply: () => canned })
+      const client = await driveClient({
+        forwarderUrl,
+        remoteStaticPublicKey: daemon.staticPublicKey,
+        hello: buildTestHello()
+      })
+      await whenReady()
+      await client.waiter.wait(() => client.events.some((e) => e.type === 'handshake-complete'))
+
+      // Deliberately NO baseline round-trip: settle() is first-wins (fakeDaemon.ts:212-216) and
+      // handleTransport settles { ok: true } on its first reply (:387), so a baseline would swallow
+      // every later reason and make this test's oracle unobservable. initiateRekey only requires
+      // `transport` (:271-272).
+
+      // Withhold the rekey_request from the initiator. The client therefore stays in `transport` (its
+      // sendMessage is not dropped by the session's state guard, noiseSession.ts:311) while the
+      // daemon is already in `awaiting-rekey-init` — initiateRekey assigns state synchronously
+      // BEFORE it sends (fakeDaemon.ts:280-281), so the ordering is exact with no timer.
+      client.holdInbound()
+      daemon.initiateRekey()
+      await client.waiter.wait(() => client.held.length >= 1)
+      expect(client.held, 'the rekey_request must be withheld from the initiator').toHaveLength(1)
+
+      // The interleaved old-cipher app frame — what the real daemon fans out after `rekey_request`
+      // but before the client's `noise_init` lands.
+      const probe = encodeEnvelope({
+        id: 2,
+        type: 'send_message',
+        ts: '2026-01-01T00:00:12Z',
+        payload: { conversation_id: 'c1', message_id: 'm1', text: 'interleaved probe' }
+      })
+      client.initiator.sendMessage(probe)
+      await client.waiter.wait(() => client.held.length >= 2)
+
+      // AC2 — the must-fail-first assertion. Under state-based routing this frame reaches
+      // handleRekeyInit, ReadMessage throws, and the run settles { ok:false,'handshake-read-failed' }.
+      // { ok: true } is reachable from exactly one line, handleTransport:387, and only after
+      // recvCipher.DecryptWithAd succeeded and the reply was sealed and streamed.
+      expect(await daemon.whenSettled()).toEqual({ ok: true })
+      expect(client.held).toHaveLength(2)
+      const served = decodeInnerFrame(client.held[1])
+      expect(served.type).toBe('noise_msg')
+      // Sealed under the CURRENT (pre-swap) send cipher: the canned reply plus the ChaChaPoly tag.
+      expect(base64StdDecode(served.data).length).toBe(canned.length + 16)
+
+      // AC3: release ONLY the withheld rekey_request and let the swap run to completion.
+      // held[1] is never delivered — a client in `awaiting-rekey-reply` consumes the next inbound
+      // frame as its handshake reply (noiseSession.ts:256-268), so feeding it the interleaved
+      // old-cipher frame desyncs the client. That is #507's bug, explicitly out of scope here.
+      client.resumeInbound()
+      client.deliverHeld(0)
+
+      // The post-swap resume frame decrypts under the client's NEW recv cipher. This is also the
+      // oracle for "the daemon stayed in `awaiting-rekey-init`": had the served frame reset the state
+      // to `transport`, the client's noise_init would route to handleReconnect, whose decodeEnvelope
+      // over the rekey's EMPTY early-data throws (fakeDaemon.ts:336-337) → handshake-read-failed +
+      // close → no resume frame at all.
+      await client.waiter.wait(() => client.events.some((e) => e.type === 'message'))
+      const resume = client.events.find((e) => e.type === 'message')
+      expect(resume, 'the post-swap resume frame must arrive under the new keys').toBeDefined()
+      expect(bytes((resume as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(DEFAULT_REKEY_RESUME_MESSAGE))
+      expect(client.events.filter((e) => e.type === 'rekey-requested')).toHaveLength(1)
+      expect(client.events.some((e) => e.type === 'error')).toBe(false)
+
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+  })
+
+  it('fails an undecryptable frame inside the rekey window via the transport path (#524, AC4)', async () => {
+    const { forwarderUrl, whenReady, daemon } = await standUp()
+    const client = await driveClient({
+      forwarderUrl,
+      remoteStaticPublicKey: daemon.staticPublicKey,
+      hello: buildTestHello()
+    })
+    await whenReady()
+    await client.waiter.wait(() => client.events.some((e) => e.type === 'handshake-complete'))
+
+    // No baseline round-trip — see the interleave test: settle() is first-wins, so a baseline would
+    // swallow the reason this test asserts.
+    client.holdInbound()
+    daemon.initiateRekey()
+    await client.waiter.wait(() => client.held.length >= 1)
+
+    // Garbage tagged `noise_msg`, sent past the initiator's ciphers so it is neither a valid
+    // noise_init nor decryptable under the daemon's current recv cipher.
+    client.sendRaw(new Uint8Array(48).fill(0x33))
+
+    // Must-fail-first: under state-based routing the reason is handshake-read-failed.
+    expect(await daemon.whenSettled()).toEqual({ ok: false, reason: 'transport-decrypt-failed' })
+
+    // And no reply: handleTransport's catch returns before sealing anything. Not vacuous — the
+    // interleave test above uses the identical gate and DOES capture a served reply as held[1].
+    await client.waiter.wait(() => client.held.length >= 2, 300)
+    expect(client.held).toHaveLength(1)
   })
 
   it('survives a client drop and runs a fresh responder handshake on the reconnect noise_init (#416, AC2/AC3/AC4)', async () => {

@@ -7,6 +7,7 @@ import type { HelloClientPayload, HelloAckPayload } from '../../shared/wire/type
 import { loadNoiseLib } from './noiseLib'
 import {
   createNoiseSession,
+  MAX_BUFFERED_SENDS,
   type NoiseSession,
   type NoiseSessionEvent
 } from './noiseSession'
@@ -530,6 +531,11 @@ describe('rekey re-handshake + atomic cipher swap (#111)', () => {
   const respErrors = (events: NoiseResponderEvent[]): string[] =>
     events.filter((e) => e.type === 'error').map((e) => (e as { reason: string }).reason)
 
+  // The mirror of `plaintexts` on the RESPONDER's collector — what actually reached the daemon side,
+  // which is the only honest oracle for an outbound-direction ticket (#533).
+  const respPlaintexts = (events: NoiseResponderEvent[]): Uint8Array[] =>
+    events.filter((e) => e.type === 'message').map((e) => (e as { plaintext: Uint8Array }).plaintext)
+
   // The daemon's control envelope, exactly its wire shape (protocol-mobile.md § Re-key).
   const rekeyRequest = (): Uint8Array =>
     enc({ id: 42, type: 'rekey_request', ts: '2026-07-07T12:00:00Z', payload: { reason: 'scheduled' } })
@@ -775,6 +781,190 @@ describe('rekey re-handshake + atomic cipher swap (#111)', () => {
     const got = plaintexts(init.events)
     expect(got).toHaveLength(1)
     expect(bytes(got[0])).toEqual(bytes(afterFail))
+  })
+
+  // --- #533: buffering OUTBOUND sends across the rekey window ------------------------------------
+  // The mirror direction of #532, and deliberately NOT the mirror fix. The client enters
+  // `awaiting-rekey-reply` only AFTER handing its own noise_init to sendFrame, so every send issued
+  // in the window is TCP-ordered BEHIND that frame; the daemon swaps BOTH ciphers the moment it
+  // processes it. Sealing under the old send cipher would therefore fail the daemon's new recv and
+  // take its tampered-frame branch (WS 4421 + session removal) — fatal, not lossy. So the session
+  // holds the PLAINTEXT and re-seals under the new cipher after the swap. The same hold-and-release
+  // gate #532 promoted into pair() parks both peers in the window, with no timers.
+
+  it('flushes sends issued in the rekey window after the swap, in issue order (#533 AC1)', async () => {
+    const { initiator, responder, init, resp, holdInitiatorFrames, releaseInitiatorFrames } =
+      await pair()
+    initiator.start()
+    expect(init.events.some((e) => e.type === 'handshake-complete')).toBe(true)
+
+    holdInitiatorFrames()
+    responder.initiateRekey(rekeyRequest())
+    expect(init.events.filter((e) => e.type === 'rekey-requested')).toHaveLength(1)
+
+    const inWindow = ['window send 1', 'window send 2', 'window send 3'].map((s) =>
+      new TextEncoder().encode(s)
+    )
+    for (const p of inWindow) initiator.sendMessage(p)
+    // Nothing escapes DURING the window — the daemon has not swapped yet, and an old-cipher frame
+    // landing after its swap is the fatal 4421 case.
+    expect(respPlaintexts(resp.events)).toHaveLength(0)
+
+    // Release: the withheld msg1 reaches the responder, which swaps and answers with the genuine
+    // noise_resp; the client's swap and the flush both land inside this one synchronous cascade.
+    releaseInitiatorFrames()
+
+    // Issued after the swap, so necessarily after onFrame returned — it must land LAST.
+    const afterSwap = new TextEncoder().encode('issued after the swap')
+    initiator.sendMessage(afterSwap)
+
+    expect(respPlaintexts(resp.events).map(bytes)).toEqual([...inWindow, afterSwap].map(bytes))
+    expect(initErrors(init.events)).toHaveLength(0)
+    expect(respErrors(resp.events)).toHaveLength(0)
+  })
+
+  it('bounds the window buffer, surfaces the overflow, and drops the incoming send (#533 AC2)', async () => {
+    const { initiator, responder, init, resp, holdInitiatorFrames, releaseInitiatorFrames } =
+      await pair()
+    initiator.start()
+    holdInitiatorFrames()
+    responder.initiateRekey(rekeyRequest())
+
+    // Count driven off the exported const, never a hard-coded 8.
+    const sends = Array.from({ length: MAX_BUFFERED_SENDS + 1 }, (_, i) =>
+      new TextEncoder().encode(`window send ${i}`)
+    )
+    for (const p of sends) initiator.sendMessage(p)
+
+    // Exactly one overflow error, and no other error of any reason.
+    expect(initErrors(init.events)).toEqual(['rekey-send-buffer-full'])
+
+    releaseInitiatorFrames()
+    // The INCOMING send was dropped, not the oldest evicted: the first MAX_BUFFERED_SENDS arrive in
+    // issue order and the overflowing one is absent.
+    expect(respPlaintexts(resp.events).map(bytes)).toEqual(
+      sends.slice(0, MAX_BUFFERED_SENDS).map(bytes)
+    )
+    expect(initErrors(init.events)).toEqual(['rekey-send-buffer-full'])
+    expect(respErrors(resp.events)).toHaveLength(0)
+  })
+
+  it('discards buffered sends when the rekey fails, unsent, and stays usable on the old keys (#533 AC3)', async () => {
+    // Clones the dropInitiatorFrames failure-path fixture above, but CAPTURES the swallowed frames
+    // instead of discarding them: "the buffered plaintext was never sealed" is only observable as
+    // "sendFrame was never called with it".
+    const lib = await loadNoiseLib()
+    const curve = lib.constants.NOISE_DH_CURVE25519
+    const [initPriv] = lib.CreateKeyPair(curve)
+    const [respPriv, respPub] = lib.CreateKeyPair(curve)
+    const init = collector<NoiseSessionEvent>()
+    const resp = collector<NoiseResponderEvent>()
+    let responder: NoiseResponder
+    let withholding = false
+    const withheld: Uint8Array[] = []
+    const initiator = await createNoiseSession({
+      staticPrivateKey: initPriv,
+      remoteStaticPublicKey: respPub,
+      prologue: new Uint8Array(0),
+      hello: enc(HELLO),
+      sendFrame: (f) => {
+        if (withholding) {
+          withheld.push(f) // the fresh rekey msg1 never reaches the responder → it stays on K0
+          return
+        }
+        responder.onFrame(f)
+      },
+      onEvent: init.onEvent
+    })
+    responder = await createNoiseResponder({
+      staticPrivateKey: respPriv,
+      prologue: new Uint8Array(0),
+      helloAck: enc(HELLO_ACK),
+      sendFrame: (f) => initiator.onFrame(f),
+      onEvent: resp.onEvent
+    })
+    handles.push(initiator, responder)
+    initiator.start()
+    expect(init.events.filter((e) => e.type === 'handshake-complete')).toHaveLength(1)
+
+    withholding = true
+    // Plain seal (NOT initiateRekey): the session recognizes the trigger, emits the (withheld) msg1,
+    // and parks in awaiting-rekey-reply while the responder stays in `transport` on K0.
+    responder.sendMessage(rekeyRequest())
+    expect(init.events.filter((e) => e.type === 'rekey-requested')).toHaveLength(1)
+
+    initiator.sendMessage(new TextEncoder().encode('issued into a rekey that never completes'))
+
+    // A garbage rekey reply fails the fresh handshake read.
+    initiator.onFrame(new Uint8Array(64).fill(0x5a))
+    // Root cause first, then the loss — one emit per discard, never a count.
+    expect(initErrors(init.events)).toEqual(['handshake-read-failed', 'rekey-send-abandoned'])
+    // Never sealed under the SURVIVING old ciphers: only the rekey msg1 ever reached sendFrame.
+    expect(withheld).toHaveLength(1)
+
+    // AC3 tail — the session is usable, not closed: a K0-sealed responder frame still opens…
+    const inbound = new TextEncoder().encode('still alive on the old keys')
+    responder.sendMessage(inbound)
+    const got = plaintexts(init.events)
+    expect(got).toHaveLength(1)
+    expect(bytes(got[0])).toEqual(bytes(inbound))
+
+    // …and a following send goes out normally, in nonce lockstep — which is also the proof that no
+    // discarded plaintext burned a send nonce on its way out.
+    withholding = false
+    const outbound = new TextEncoder().encode('sent after the failed rekey')
+    initiator.sendMessage(outbound)
+    expect(respPlaintexts(resp.events).map(bytes)).toEqual([bytes(outbound)])
+    expect(respErrors(resp.events)).toHaveLength(0)
+  })
+
+  it('close() during the rekey window releases the buffer — no frame ever escapes (#533 AC4)', async () => {
+    const { initiator, responder, init, resp, holdInitiatorFrames, releaseInitiatorFrames } =
+      await pair()
+    initiator.start()
+    holdInitiatorFrames()
+    responder.initiateRekey(rekeyRequest())
+    initiator.sendMessage(new TextEncoder().encode('held when the window is torn down'))
+
+    const eventsBeforeClose = init.events.length
+    initiator.close()
+    expect(init.events.length).toBe(eventsBeforeClose) // ordinary teardown emits nothing
+
+    // The responder still swaps and answers, but the closed session ignores the reply, so there is
+    // no flush. Buffer emptiness is not observable across the module boundary; "no frame ever
+    // escapes after close" is the honest proxy, and it is the property that matters.
+    releaseInitiatorFrames()
+    expect(respPlaintexts(resp.events)).toHaveLength(0)
+    expect(initErrors(init.events)).toHaveLength(0)
+
+    expect(() => initiator.sendMessage(new Uint8Array([1, 2, 3]))).not.toThrow()
+    expect(respPlaintexts(resp.events)).toHaveLength(0)
+  })
+
+  it('sendMessage stays inert AND buffers nothing outside the rekey window (#533 AC5)', async () => {
+    const { initiator, init, resp, holdInitiatorFrames, releaseInitiatorFrames } = await pair()
+
+    // idle — before start().
+    initiator.sendMessage(new TextEncoder().encode('before start()'))
+
+    // awaiting-handshake-reply — msg1 withheld, so the session parks there. Pre-handshake buffering
+    // is deliberately NOT in scope: no session exists yet (sendCipher is null until Split), and the
+    // composer gate is genuinely closed in that window.
+    holdInitiatorFrames()
+    initiator.start()
+    initiator.sendMessage(new TextEncoder().encode('before the handshake reply'))
+
+    releaseInitiatorFrames() // msg1 lands; the handshake completes
+    expect(init.events.some((e) => e.type === 'handshake-complete')).toBe(true)
+    // Assert the negative: driving the session to `transport` surfaces no deferred frame.
+    expect(respPlaintexts(resp.events)).toHaveLength(0)
+    expect(initErrors(init.events)).toHaveLength(0)
+
+    // closed — and still nothing deferred.
+    initiator.close()
+    initiator.sendMessage(new TextEncoder().encode('after close'))
+    expect(respPlaintexts(resp.events)).toHaveLength(0)
+    expect(initErrors(init.events)).toHaveLength(0)
   })
 })
 

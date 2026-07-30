@@ -70,11 +70,39 @@ export interface NoiseSessionConfig {
   diagnosticLog?: DiagnosticLog
 }
 
+/**
+ * Cap on outbound plaintexts held while the session is parked in `awaiting-rekey-reply` (#533).
+ *
+ * WHY A BOUND EXISTS AT ALL: nothing on the client ever gives up on that state — a client-side rekey
+ * deadline was deferred by #532 and is not filed — so the only backstop is the daemon's own 30s reply
+ * timer closing at WS 4426. The window's worst-case lifetime is therefore a relay-controlled interval,
+ * and every send inside it accumulates USER PLAINTEXT in main-process memory. This is a
+ * memory-residency limit on secret material, not tidiness. It is also bounded in BYTES for free:
+ * encodeEnvelope rejects anything over MAX_PLAINTEXT_BYTES upstream in daemonConnection, so the worst
+ * case is a deterministic MAX_BUFFERED_SENDS x 65519 (~512 KiB), with no second cap needed here.
+ *
+ * DELIBERATE DIVERGENCE from MAX_PENDING_FRAMES (noiseRelayDriver.ts): that buffer drops silently,
+ * because a pre-session frame from a hostile relay is already anomalous garbage. Here the dropped
+ * item is the user's own message, so the drop is surfaced as `rekey-send-buffer-full`.
+ */
+export const MAX_BUFFERED_SENDS = 8
+
 /** Closed set of static error reasons — never carries key/token/frame bytes. */
 export type NoiseSessionErrorReason =
   | 'handshake-read-failed' // message 2 failed MAC / malformed / wrong-suite peer
   | 'transport-decrypt-failed' // a post-handshake frame failed to open
   | 'unexpected-frame' // a frame arrived in the wrong state
+  // #533, both raised only for the rekey window. Each reaches daemonConnection's generic `case
+  // 'error'` -> emitFailed -> failed{retryable:false}: a terminal, non-retryable connection failure
+  // in the UI. ACCEPTED DELIBERATELY, including for the overflow case — do not
+  // add a softer mapping downstream. Precedent: `transport-decrypt-failed` is explicitly
+  // non-terminal here and still lands as failed{retryable:false} at the UI, so a recoverable
+  // session-level anomaly already reads as a hard UI failure; a bespoke severity class would be an
+  // architecture change, not an S bug fix. And an overflowing window is genuinely anomalous — a
+  // healthy window is one relay round-trip, so 9 sends inside it means the connection is already
+  // heading for the daemon's 4426 teardown.
+  | 'rekey-send-buffer-full' // a send arrived with the window buffer already at MAX_BUFFERED_SENDS; that ONE send was dropped
+  | 'rekey-send-abandoned' // the rekey failed; every buffered plaintext was discarded unsent
 
 /** One event from the session. Sealed discriminated union on `type`. */
 export type NoiseSessionEvent =
@@ -161,6 +189,11 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
   let sendCipher: NoiseCipherState | null = null
   let recvCipher: NoiseCipherState | null = null
   let state: SessionState = 'idle'
+  // #533: outbound PLAINTEXT held while parked in `awaiting-rekey-reply`, flushed after the swap.
+  // Holds session-OWNED copies (see sendMessage) and never a sealed frame (see the flush). Bounded by
+  // MAX_BUFFERED_SENDS; emptied at all three exits from that state — the swap, the reply-read
+  // failure, and close() — which is why nothing can outlive one window.
+  const bufferedSends: Uint8Array[] = []
 
   // Free every wasm object we still own. On a handshake read/write error the library already
   // freed `hs` (and we nulled it); on a transport decrypt error the cipher states survive. Each
@@ -325,7 +358,19 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
         // The library auto-freed hs and NO cipher was reassigned — both still hold the OLD keys.
         hs = null
         state = 'transport' // usable — NOT closed (the load-bearing difference from the initial handshake)
+        // #533: discard the window buffer, unsent. Re-sending under the surviving old ciphers is not
+        // an option — the client cannot tell "our noise_init never landed" (old keys still valid at
+        // the daemon) from "the daemon swapped and its reply was corrupted" (an old-cipher send is
+        // then the fatal 4421 case above); both present identically as this failed ReadMessage, so
+        // the only safe branch assumes the worst.
+        //
+        // CLEAR BEFORE EITHER EMIT: fail()/failWithFrame() call a synchronous consumer that can
+        // re-enter sendMessage, and `state` is already back to `transport` — a stale item left in the
+        // buffer could otherwise be picked up by a LATER window's flush.
+        const abandoned = bufferedSends.length > 0
+        bufferedSends.length = 0
         failWithFrame('handshake-read-failed', frame) // `frame` is the daemon's rekey reply (pre-decryption)
+        if (abandoned) fail('rekey-send-abandoned') // once per discard — never a count, which would correlate with user activity
         return
       }
       // Atomic swap (AC2/AC4): install BOTH new ciphers before freeing either old one. ReadMessage
@@ -344,6 +389,7 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
       }
       hs = null
       state = 'transport'
+      flushBufferedSends() // #533: strictly after both assignments + the state restore — seals under the NEW cipher
       return // swap complete; emit no event — the implicit ack is the resumed round-trip (no rekey_ack)
     }
     if (state === 'idle' || hs === null) {
@@ -369,13 +415,60 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
   }
 
   function sendMessage(plaintext: Uint8Array): void {
+    // #533: the rekey window. Sealing here would be FATAL, not merely lossy — the client enters this
+    // state only AFTER handing its own noise_init to sendFrame, so this send is TCP-ordered BEHIND
+    // that frame, and the daemon swaps BOTH ciphers the moment it processes it. An old-cipher frame
+    // landing afterwards fails the daemon's new recv and takes its tampered-frame branch: WS 4421 and
+    // session removal. So hold it and re-seal after the swap.
+    //
+    // Hold the PLAINTEXT, never a sealed frame: a CipherState is a per-direction nonce counter, so
+    // sealing now would burn nonce n under a cipher that is about to be freed and leave a gap the
+    // daemon's receive side cannot tolerate (the mirror of the hold-back hazard documented in
+    // noiseSession.test.ts's capture-and-replay test). Buffering plaintext keeps the send-nonce
+    // stream contiguous by construction — nothing is sealed until it is actually sent.
+    if (state === 'awaiting-rekey-reply') {
+      if (bufferedSends.length >= MAX_BUFFERED_SENDS) {
+        // Drop the INCOMING send, never evict the oldest: eviction would silently break issue
+        // ordering and discard the message the user considers longest-sent, and this keeps the error
+        // in 1:1 correspondence with the sendMessage call that failed.
+        fail('rekey-send-buffer-full')
+        return
+      }
+      // Copy, don't retain the caller's reference. `sendMessage` consumes its argument synchronously
+      // today, so a caller may legally hand over a scratch buffer it intends to reuse; retaining it
+      // across a relay round-trip would turn that legal caller into a corruption bug with no
+      // compile-time signal. The copy is also what makes "the buffer holds no plaintext" a statement
+      // about memory this session owns.
+      bufferedSends.push(plaintext.slice())
+      return
+    }
     if (state !== 'transport' || sendCipher === null) return // inert before completion / after close
     config.sendFrame(sendCipher.EncryptWithAd(EMPTY_AD, plaintext))
+  }
+
+  // #533: drain the window buffer. Called ONLY at the end of the atomic swap — after both cipher
+  // assignments and after `state = 'transport'` — so every held plaintext seals under the NEW send
+  // cipher, in issue order.
+  //
+  // TAKE, then drain: `config.sendFrame` is a synchronous sink that can drive a reply straight back
+  // into onFrame (the same re-entrancy hazard beginRekey's ordering comment documents), so iterating
+  // the live array while a re-entrant call mutates it is the bug this avoids. splice(0) also makes a
+  // double-drain unrepresentable, so no plaintext can be sealed twice.
+  //
+  // Drain through `sendMessage`, not a private seal loop. This is security-load-bearing: the entry
+  // point re-reads the LIVE `sendCipher` on every iteration. A loop capturing a cipher reference
+  // could seal under `prevSend`, which the swap free()s — a use-after-free on a wasm object, and a
+  // frame the daemon can only reject. And if a re-entrant frame opens a SECOND rekey mid-flush, going
+  // back through the entry point re-buffers the remaining items and flushes them after that swap,
+  // still in issue order; a captured-cipher loop would seal them under a cipher no longer current.
+  function flushBufferedSends(): void {
+    for (const plaintext of bufferedSends.splice(0)) sendMessage(plaintext)
   }
 
   function close(): void {
     if (state === 'closed') return
     state = 'closed'
+    bufferedSends.length = 0 // #533 AC4: release the held plaintext; ordinary teardown emits nothing
     freeAll()
   }
 

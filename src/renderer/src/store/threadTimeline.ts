@@ -130,6 +130,12 @@ export type ThreadEvent =
       raw: string
       truncated: boolean
     }
+  // #528: return the whole timeline to its initial state on a context change (a conversation switch,
+  // an unpair). The FIRST arm that is neither daemon- nor user-content-derived — a renderer lifecycle
+  // control event, never translated from a wire frame, so `timelineBridge` never produces it. Nullary
+  // following `stallDetected` (:109): a reset carries no payload, so there is no field a caller can
+  // get wrong. `sessionStore`'s `reset` (#166) is the same arm for the session facet.
+  | { type: 'reset' }
 
 /**
  * #493: the live api-retry attempt counter. Present ⇒ a retry is in flight; `null` ⇒ none.
@@ -426,6 +432,16 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             apiRetry: state.apiRetry,
             compacting: event.active
           }
+    case 'reset':
+      // All five fields clear in one step. Returning the shared const rather than a hand-written
+      // literal is what makes the equality with `initialTimelineState` an identity instead of a
+      // coincidence — a sixth `TimelineState` field is cleared for free, where a literal would
+      // silently keep the stale value and still compile. It also buys two properties: a second reset
+      // is a no-op reference (idempotent), and `items` stays the SAME reference, so a no-op reset
+      // churns no `selectItems` subscriber where a fresh `[]` would re-render every one of them.
+      // Aliasing the shared `items` is safe because the reducer only ever spreads it into a new
+      // array, never mutates it (pinned by the purity block). The `sessionStore.ts` #166 rationale.
+      return initialTimelineState
     default:
       return assertNever(event)
   }

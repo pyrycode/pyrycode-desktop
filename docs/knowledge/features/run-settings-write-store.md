@@ -42,6 +42,7 @@ export type RunSettingsWriteEvent =
   | { type: 'changeDispatched'; changeId: string; change: SettingsChange }
   | { type: 'settingsConfirmed'; changeId: string }   // from sessionSettingsUpdated (#261)
   | { type: 'settingsRejected'; changeId: string }    // from sessionSettingsRejected (#269)
+  | { type: 'reconnected' }                           // from the connected wire edge ([#539](../codebase/539.md))
 
 export interface RunSettingsWriteState {
   pending: ReadonlyMap<string, SettingsChange>                    // changeId → requested change
@@ -60,12 +61,14 @@ always-listening** (a confirm/reject reply can arrive after the sheet closes, wh
 subscriber is sheet-scoped); (b) its state (pending changes + client-confirmed overrides + last error) is
 orthogonal to the snapshot's `{model, effort, yolo, usedTokens, windowTokens}` shape. Unlike
 `sessionIdStore`'s named setters, this is a **reducer** (`dispatch` over the sealed event union) because
-its three transitions (dispatch / confirm / reject) are **correlated** and each reads prior state — a
-confirm or reject is a no-op without a matching pending record — where `sessionIdStore`'s set and clear
+every one of its four transitions reads prior state: three (dispatch / confirm / reject) are
+**correlated** — a confirm or reject is a no-op without a matching pending record — and the fourth,
+`reconnected` ([#539](../codebase/539.md)), is uncorrelated (no `changeId`) but still prior-state-reading,
+since it clears only when something is pending. `sessionIdStore`'s set and clear
 ([#529](../codebase/529.md)) are independent whole-value writes that read nothing. The contrast is the
 coupling, not the count.
 
-### The reducer (three arms, each pinned by a named test)
+### The reducer (four arms, each pinned by a named test)
 
 - **`changeDispatched`** — `pending.set(changeId, change)`; clears `error` (a fresh attempt supersedes
   the last rejection). `confirmed` untouched — the optimistic value shows only through the pending
@@ -76,10 +79,21 @@ coupling, not the count.
 - **`settingsRejected`** — looks up `pending.get(changeId)`; if absent, **no-op** (fail-closed); else
   deletes the pending marker (the view rolls back on its own — the optimistic overlay vanishes, revealing
   the last confirmed value or the snapshot base) and sets `error` to the rejected field.
+- **`reconnected`** ([#539](../codebase/539.md)) — drops **every** pending marker, regardless of how many
+  were outstanding, because main abandons its envelope-id → `changeId` correlation on each re-dial
+  (`daemonConnection.ts` `dial()`) and emits no rejection in its place, so a change stranded by a
+  reconnect can never resolve on its own — and since `pending` beats `confirmed` in
+  `selectEffectiveSettings`, an unresolved stranded entry would otherwise outlive (and shadow) a later
+  *confirmed* change on the same field forever. `confirmed` and `error` are left untouched: a standing
+  rejection is still true after a reconnect, and a confirmed override is still what the daemon has. Same-
+  reference no-op when `pending` is already empty — load-bearing, not cosmetic, because #257's container
+  selects the **whole raw state** (`RunConfigSections.tsx:327`) as its zustand selector, so this is what
+  keeps a reconnect with nothing in flight from re-rendering the sheet.
 
 There is no explicit "roll back" mutation: **clearing the pending marker *is* the rollback**, because the
-effective view falls through to the confirmed override or the snapshot base. A no-match returns the same
-state object, so zustand skips the notify.
+effective view falls through to the confirmed override or the snapshot base — `reconnected` is a fourth
+caller of that doctrine, not a new mechanism. A no-match (or already-clear) arm returns the same state
+object, so zustand skips the notify.
 
 ### The effective-view derivation
 
@@ -109,8 +123,9 @@ Framework-free, effects injected (the `sessionIdBridge`/`composerSend` idiom), b
 ```ts
 translateWriteEvent(event: DaemonEvent): RunSettingsWriteEvent | null
 // sessionSettingsUpdated → {settingsConfirmed, changeId}; sessionSettingsRejected → {settingsRejected,
-// changeId}; every other arm → null (default fall-through — the translateSessionTransition permanent-
-// ignore idiom, not assertNever: this path consumes only the two correlated write replies).
+// changeId}; connected → {reconnected} (#539, event.ack ignored — the arm needs no field off it); every
+// other arm → null (default fall-through — the translateSessionTransition permanent-ignore idiom, not
+// assertNever: this path owns three of the union's arms, two correlated and one connection-lifecycle).
 
 subscribeRunSettingsWrite(onDaemonEvent, dispatch): () => void
 // each event runs through translateWriteEvent; a non-null result is dispatched. Returns the off-handle
@@ -135,7 +150,9 @@ is honored by construction; only the changed field is ever present.
 A headless leaf (`RunSettingsWriteData(): null`) mounted **unconditionally at App level**
 (`src/renderer/src/App.tsx`), alongside `<ConversationListData />` and `<SessionIdData />` — not
 sheet-scoped. A confirm/reject reply can arrive **after** the Run config sheet closes, so the listener
-must outlive the sheet; a sheet-scoped subscription would strand the pending marker. One
+must outlive the sheet; a sheet-scoped subscription would strand the pending marker. That same rationale
+now covers the `reconnected` clear ([#539](../codebase/539.md)) for free — the edge fires whether or not
+the sheet is open. One
 `useEffect(() => subscribeRunSettingsWrite(window.pyry.onDaemonEvent, e => runSettingsWriteStore.getState().dispatch(e)), [])`;
 `window.pyry` is dereferenced only inside the effect (the `SessionIdData` server-render invariant). The
 returned off-handle is the effect cleanup, so a StrictMode double-mount nets exactly one live listener.
@@ -173,9 +190,18 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
 - **`selectPendingFields` is unread.** #257 wired `selectEffectiveSettings` and `selectError` but did
   not build a per-field in-flight indicator — the ticket flagged it as available but not required by the
   AC. Still exported for a future consumer.
-- **A stale or dropped reply leaves a pending change unresolved forever** — this slice adds no timeout.
-  A dropped send or daemon silence leaves the optimistic value standing with no rollback path; deferred
-  as an unobserved failure mode (Evidence-Based Fix Selection), to revisit only if it bites in practice.
+- **A change stranded by a reconnect no longer strands forever** ([#539](../codebase/539.md)) — the
+  `reconnected` arm clears `pending` on every `connected` (re)handshake, so a dropped send or daemon
+  silence across a reconnect resolves at the next connect rather than shadowing a later confirmed change
+  permanently. Two residuals remain, both accepted rather than engineered around: (1) the sheet still
+  shows the optimistic never-applied value for the duration of the outage itself, since the clear fires
+  on reconnect, not on the drop (`disconnected` is never emitted anywhere in `src/main`); (2) a change
+  dispatched in the single IPC hop between main emitting `connected` and the renderer receiving it is
+  really sent and really correlated, and gets cleared anyway — its later confirm arrives as a no-match
+  no-op, so it never commits. Closing residual 2 would need per-change generation correlation across the
+  IPC boundary, out of proportion to the defect. A stale reply for a change that stays connected the whole
+  time (no reconnect involved) is still unresolved forever — that failure mode remains genuinely
+  unobserved and out of scope.
 - **Confirmation order, not dispatch order, wins for two outstanding same-field changes.** If change A
   dispatches before change B (same field) but B's confirm arrives first, `confirmed` lands B's value,
   then A's confirm (when it eventually arrives) overwrites it with A's — the *later*-confirmed value
@@ -213,3 +239,10 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
   `submitSettingsChange` sends.
 - [#259 codebase notes](../codebase/259.md) — the structural precedent for an App-level always-listening
   holder, extended here from a single setter to a three-arm reducer.
+- [#539 codebase notes](../codebase/539.md) — the `reconnected` arm: clears every stranded `pending`
+  entry on the `connected` (re)handshake edge, preserving `confirmed`/`error`, so a change abandoned by
+  main's re-dial correlation reset can no longer shadow a later confirmed change. Split from
+  [#509](https://github.com/pyrycode/pyrycode-desktop/issues/509); sibling of
+  [#538 codebase notes](../codebase/538.md) ([thread timeline](conversation-timeline-store.md)'s twin
+  arm), [#415](../codebase/415.md) (`modalStore`'s), and [#197](../codebase/197.md) (`queueStore`'s) —
+  four stores now reconcile on the same edge.

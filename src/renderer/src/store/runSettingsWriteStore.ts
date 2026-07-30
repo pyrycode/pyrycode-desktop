@@ -1,17 +1,19 @@
 // The Run configuration sheet's WRITE machine: the pending-change state the interactive Model /
 // Effort / YOLO controls (#257) dispatch onto and read back. Pure renderer state — no IPC, no preload
 // bridge, no transport. The data path (runSettingsWriteBridge.ts) mints the correlation id, sends the
-// outbound `setSessionSettings` command, and folds the two correlated daemon replies back in.
+// outbound `setSessionSettings` command, folds the two correlated daemon replies back in, and clears
+// the pending markers a reconnect stranded (#539).
 //
 // An ADJACENT dedicated store, NOT a runConfigStore facet — the same two reasons as sessionIdStore
 // (#259): (a) its inbound subscription is App-level always-listening (a confirm/reject reply can
 // arrive after the sheet closes), whereas runConfigStore's subscriber is sheet-scoped; (b) the write
 // state (pending changes + client-confirmed overrides + last error) is orthogonal to the snapshot's
 // { model, effort, yolo, usedTokens, windowTokens }. A REDUCER (a sealed event union + one `dispatch`)
-// rather than sessionIdStore's named setters, because its three transitions (dispatch / confirm /
-// reject) are CORRELATED and each reads prior state — a confirm or reject is a no-op without a matching
-// pending record — whereas sessionIdStore's set and clear (#529) are independent whole-value writes
-// that read nothing. The contrast is the coupling, not the count.
+// rather than sessionIdStore's named setters, because every one of its four transitions reads prior
+// state: three are CORRELATED (dispatch / confirm / reject — a confirm or reject is a no-op without a
+// matching pending record) and the fourth (`reconnected`, #539) is uncorrelated but still prior-state
+// reading, since it clears only when something is pending. sessionIdStore's set and clear (#529) are
+// independent whole-value writes that read nothing. The contrast is the coupling, not the count.
 //
 // Why the confirmed value is client-side, not a daemon re-read: the daemon's `set_session_settings`
 // reply carries only `session_id` and the change lands on the NEXT session spawn (daemon ADR 031), so
@@ -31,14 +33,18 @@ export type SettingsChange =
   | { field: 'effort'; value: string }
   | { field: 'yolo'; value: boolean }
 
-/** The store's sealed event set on `type`: the outgoing user action (`changeDispatched`) plus the two
- *  incoming daemon events, each keyed by the renderer-minted `changeId` correlation key.
- *  `settingsConfirmed` ← `sessionSettingsUpdated` (#261); `settingsRejected` ← `sessionSettingsRejected`
- *  (#269). The confirm carries no value — the store commits the value the pending record remembered. */
+/** The store's sealed event set on `type`. Three are change-scoped and keyed by the renderer-minted
+ *  `changeId` correlation key: the outgoing user action (`changeDispatched`) plus the two incoming
+ *  daemon replies — `settingsConfirmed` ← `sessionSettingsUpdated` (#261), `settingsRejected` ←
+ *  `sessionSettingsRejected` (#269). The confirm carries no value — the store commits the value the
+ *  pending record remembered. `reconnected` (#539) is the one CONNECTION-LIFECYCLE arm: bridge-produced
+ *  from the `connected` wire edge, carrying no daemon content and no `changeId` — it is correlated to
+ *  nothing precisely because its job is to abandon every correlation. */
 export type RunSettingsWriteEvent =
   | { type: 'changeDispatched'; changeId: string; change: SettingsChange }
   | { type: 'settingsConfirmed'; changeId: string }
   | { type: 'settingsRejected'; changeId: string }
+  | { type: 'reconnected' }
 
 /**
  * The write machine's whole state.
@@ -97,7 +103,7 @@ function applyConfirmed(
 }
 
 /**
- * The pure reducer — three arms, each pinned by a named test:
+ * The pure reducer — four arms, each pinned by a named test:
  *  - `changeDispatched`: record the pending change under its `changeId`; clear `error` (a fresh
  *    attempt supersedes the last rejection). `confirmed` untouched — the optimistic value shows via
  *    the pending overlay in selectEffectiveSettings (AC1).
@@ -107,10 +113,17 @@ function applyConfirmed(
  *  - `settingsRejected`: if no match → no-op (AC4 fail-closed); else delete the pending marker (the
  *    view rolls back on its own — the optimistic overlay vanishes, revealing the last confirmed value
  *    or the snapshot base) and set `error` to the rejected field (AC3).
+ *  - `reconnected`: drop EVERY pending marker (#539). Main abandons its envelope-id → changeId
+ *    correlation on each re-dial (`daemonConnection.ts:1490`) and emits nothing in its place, so an
+ *    in-flight change's reply can never arrive; left alone the entry strands forever and — since
+ *    pending BEATS confirmed in selectEffectiveSettings — outlives later confirmed changes as a
+ *    permanent lie about the applied value. `confirmed` and `error` are preserved: a standing rejection
+ *    is still true after a reconnect, and a confirmed override is still what the daemon has.
  *
  * There is no explicit "roll back" mutation: clearing the pending marker IS the rollback, because the
- * effective view falls through to the confirmed override or the snapshot base. A no-match returns the
- * SAME state object, so zustand skips the notify (no spurious re-render).
+ * effective view falls through to the confirmed override or the snapshot base. `reconnected` is the
+ * fourth caller of that doctrine, not a new mechanism. A no-match returns the SAME state object, so
+ * zustand skips the notify (no spurious re-render).
  */
 function reduceRunSettingsWrite(
   state: RunSettingsWriteState,
@@ -135,6 +148,24 @@ function reduceRunSettingsWrite(
       const pending = new Map(state.pending)
       pending.delete(event.changeId)
       return { ...state, pending, error: change.field }
+    }
+    case 'reconnected': {
+      // Nothing outstanding → the SAME reference, and this early-out is load-bearing rather than
+      // cosmetic: #257 selects the whole raw write state (`RunConfigSections.tsx:327`), so zustand's
+      // Object.is short-circuit is what keeps a first connect — or any reconnect with nothing in flight
+      // — from re-rendering the entire sheet (AC4).
+      if (state.pending.size === 0) return state
+      // A FRESH empty Map, not `initialRunSettingsWriteState.pending`: aliasing the shared constant is
+      // safe today (every arm copy-on-writes) but a latent footgun for zero gain, and the early-out
+      // means this allocates only when there was something to clear.
+      //
+      // Spread `state` — the file's idiom, and the conservative direction here: an unknown future field
+      // is PRESERVED by default, matching this arm's posture (clear the one thing that strands, leave
+      // everything else alone). This is why the argument INVERTS from sibling #538, which spread the
+      // initial constant and so would have silently wiped a future field. The mirror-image residual:
+      // a future field that is itself pending-scoped must be added to this arm by hand — TypeScript
+      // will not force it.
+      return { ...state, pending: new Map() }
     }
     default:
       return assertNever(event)

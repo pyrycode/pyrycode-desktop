@@ -9,7 +9,7 @@ Introduced in [#7](../codebase/7.md), which **promotes** the throwaway `createNo
 Gives the background process **one factory** — `createNoiseSession(config): Promise<NoiseSession>` — that builds an IK **initiator** from injected keys and returns an idle handle:
 
 - **`start()`** writes IK message 1 (carrying the injected `hello` as early-data) to `sendFrame`, exactly once.
-- **`onFrame(frame)`** feeds one inbound frame: first it reads message 2 (recovering `hello_ack` and splitting into transport ciphers), then every later frame is AEAD-decrypted.
+- **`onFrame(frame, innerType?)`** feeds one inbound frame: first it reads message 2 (recovering `hello_ack` and splitting into transport ciphers), then every later frame is AEAD-decrypted. Since [#532](../codebase/532.md), the optional `innerType` — the frame's `InnerFrameV2.type` label, forwarded by the driver — is consulted in exactly one state, `awaiting-rekey-reply` (see [Rekey-window routing by inner frame type](#rekey-window-routing-by-inner-frame-type-532) below); every other state ignores it.
 - **`sendMessage(plaintext)`** AEAD-seals one post-handshake plaintext to `sendFrame`.
 - **`close()`** frees the wasm handshake + cipher state and leaves every entry point inert.
 
@@ -53,7 +53,7 @@ export type NoiseSessionEvent =
 
 export interface NoiseSession {
   start(): void
-  onFrame(frame: Uint8Array): void
+  onFrame(frame: Uint8Array, innerType?: string): void  // innerType: #532, consulted only in awaiting-rekey-reply
   sendMessage(plaintext: Uint8Array): void
   close(): void
 }
@@ -88,7 +88,7 @@ One session walks `idle → awaiting-handshake-reply → transport`, loops back 
 | `idle` | write msg 1 (`hello`) → `awaiting-handshake-reply` | `unexpected-frame` (a frame before start) | inert |
 | `awaiting-handshake-reply` | inert | read msg 2 → recover `helloAck` → `Split()` → `transport` + emit `handshake-complete`; a throw → `handshake-read-failed`, **close** | inert |
 | `transport` | inert | AEAD-decrypt → recognize (#108): a `rekey_request` control envelope → emit `rekey-requested`, then `beginRekey()` (#111: fresh IK msg1 with **empty** early-data → `awaiting-rekey-reply`, OLD ciphers held live); **everything else** → emit `message` (identical bytes); a decrypt throw → `transport-decrypt-failed` (cipher survives; non-terminal) | AEAD-seal → `sendFrame` |
-| `awaiting-rekey-reply` (#111) | inert | read daemon reply → `Split()` → **atomic swap** (install both new ciphers, then free both old) → `transport`, **no event**; a throw → `handshake-read-failed` back to `transport` (**old ciphers intact, usable — not `closed`**) | inert (a send during the sub-second window is dropped, not queued) |
+| `awaiting-rekey-reply` (#111, routing since [#532](../codebase/532.md)) | inert | **labelled `noise_resp` or unlabelled** → read daemon reply → `Split()` → **atomic swap** (install both new ciphers, then free both old) → `transport`, **no event**; a throw → `handshake-read-failed` back to `transport` (**old ciphers intact, usable — not `closed`**). **Labelled anything else** → decrypt under the still-live OLD `recvCipher` → emit `message` (state unchanged, self-loop); a decrypt throw → `transport-decrypt-failed`, **`hs`/state untouched** (reply slot survives) | inert (a send during the sub-second window is dropped, not queued) |
 | `closed` | inert | inert | inert |
 
 - **`Split()` no-swap.** `noise-c` returns `[send, recv]` **already role-adjusted for both roles** — the JS side does no `(cs1, cs2)` swap; only a raw `flynn/noise` peer needs it, which the daemon already performs (proven byte-for-byte in [#30](../codebase/30.md)). Crossing the two would sail through the handshake and only detonate on the first sealed frame — so the round-trip, not "no error thrown", is the structural pin.
@@ -150,6 +150,59 @@ awaiting-rekey-reply, inbound daemon reply
 - **Re-entrancy: `hs` + `state` are set before `sendFrame(msg1)`.** A synchronous re-entrant `sendFrame` can drive the daemon's reply straight back into `onFrame`, completing the whole rekey inside `beginRekey`'s send — so the state is armed first, exactly as `start()` sets `state` before `sendFrame`. The successful swap emits **no event** (no `rekey_ack`, no wire marker); `sendMessage` is already inert during the window (its `state !== 'transport'` guard), so an app send there is dropped rather than sent under an ambiguous key.
 - **Session-layer only — wire framing landed in [#112](../codebase/112.md).** This produces the fresh msg1 as raw handshake bytes and swaps ciphers; tagging it `noise_init` on the wire so the real daemon routes it to its rekey responder (instead of transport-decrypting it → WS 4421), and the e2e round-trip against `fakeDaemon`, landed in the follow-on #112 via a driver-local `rekeyInitPending` latch — **no session change**. #112 relies on this feature's synchronous emit-then-send ordering (emit `rekey-requested` → `beginRekey()` → `sendFrame(msg1)` in one `onFrame` turn), so the latch arms exactly as the fresh msg1 reaches the driver.
 
+### Rekey-window routing by inner frame type (#532)
+
+The daemon does not stop the world for a rekey (pyrycode spec #450): it keeps fanning out ordinary
+transport frames under the OLD ciphers for the whole `awaiting-reply` window, so an app frame it
+emitted after `rekey_request` but before processing the client's fresh `noise_init` is TCP-ordered
+**ahead of** the reply. Pre-#532, `onFrame` fed whatever arrived next in `awaiting-rekey-reply`
+straight into `hs.ReadMessage` as the reply — so that interleaved app frame MAC-failed, freed the
+fresh handshake, and dropped the client to the OLD ciphers while the daemon had already swapped to
+the NEW ones. The client's next send then failed the daemon's new receive cipher and the relay tore
+the session down (WS 4421). Not a dropped frame — the session was gone.
+
+`onFrame`'s second parameter, `innerType?: string` (the frame's `InnerFrameV2.type`, forwarded
+verbatim by the [driver](noise-relay-driver.md)), is read in exactly one state:
+
+```ts
+const NOISE_RESP_TYPE = 'noise_resp'  // module-private, sibling to REKEY_REQUEST_TYPE
+// in onFrame, state === 'awaiting-rekey-reply':
+if (innerType !== undefined && innerType !== NOISE_RESP_TYPE) {
+  // window-transport path: decrypt under the still-live OLD recvCipher, emit message, self-loop.
+  // A throw here is non-terminal: hs and state are untouched, so the one-shot reply slot survives.
+} else {
+  // the pre-#532 reply path, byte-for-byte unchanged: hs.ReadMessage → Split → atomic swap.
+}
+```
+
+- **Positive on `noise_resp`, not negative on `noise_msg`.** An unknown or hostile label takes the
+  *gentler* window-transport branch (non-terminal, reply slot preserved) rather than burning the
+  one-shot handshake read — the broader, safer reading given a hostile on-path relay can set `type`
+  to anything.
+- **`undefined` routes to the reply path — the pre-#532 assumption, now written down.** In
+  production this arm is **unreachable**: `decodeInnerFrame` rejects a non-string `type` before the
+  session ever sees the frame, so the driver always supplies a real label. The arm exists solely so
+  the 35 pre-#532 unlabelled test call sites (`noiseSession.test.ts`, `noiseSession.interop.test.ts`,
+  `fakeDaemon.test.ts`) keep behaving exactly as before — an optional parameter, not a required one,
+  to avoid a fixture cascade across an S-sized ticket.
+- **The label chooses a PATH, never a KEY.** Both paths were already reachable, both objects (`hs`,
+  the live `recvCipher`) existed before the frame arrived, and the AEAD stays the sole authority on
+  whether a frame opens. A relabelling relay only changes *which* of two pre-existing rejections an
+  already-doomed frame receives (`transport-decrypt-failed` vs. `handshake-read-failed`) — never a
+  downgrade, a transport bypass, or a key/nonce reuse. Mirrors the daemon's own dispatch on the inner
+  type (`v2session.go:664-669`), matched on the fake side in [#524](../codebase/524.md).
+- **Deliberately no `isRekeyRequest` re-check in the window path.** A `rekey_request` interleaved
+  into an already-open window isn't representable (`beginRekey`'s `state !== 'transport'` guard
+  would no-op it), and emitting `rekey-requested` here would arm the driver's `rekeyInitPending`
+  latch and mis-tag the *next* outbound app frame as `noise_init` after the swap — routing it into
+  the daemon's reconnect handler and failing closed. So the window path only decrypts and emits
+  `message`, nothing else.
+
+This closed the last routing gap the [#524](../codebase/524.md)/[#525](../codebase/525.md) pair set
+up for: #524 taught `fakeDaemon` to route its own rekey window by inner type instead of state alone,
+#525 made both fakes tag handshake replies `noise_resp` rather than a uniform `noise_msg`, and this
+ticket is the client finally reading that same distinction on its own inbound frames.
+
 ### Data flow
 
 ```
@@ -196,6 +249,7 @@ Ticket carries `security-sensitive`; the architect's security review verdict is 
 - [#7 codebase notes](../codebase/7.md) — implementation summary, patterns, lessons.
 - [#108 codebase notes](../codebase/108.md) — the `rekey_request` recognition seam added to `transport` state (the type-peek, the module-private constant, the driver build-integrity edit); daemon twin pyrycode #454.
 - [#111 codebase notes](../codebase/111.md) — the **action** on the recognized trigger: the in-session IK re-handshake as initiator + the atomic cipher swap (`beginRekey`, the `awaiting-rekey-reply` phase, empty early-data, a failure returns to `transport` not `closed`); daemon twin pyrycode #453/#435.
+- [#532 codebase notes](../codebase/532.md) — the rekey-window desync fix: `onFrame`'s optional `innerType` parameter and the routing rule in `awaiting-rekey-reply` (§ *Rekey-window routing by inner frame type*); closes the permanent-desync bug where an app frame interleaved into the window was consumed as the handshake reply.
 - [Content-free diagnostic log](diagnostic-log.md) / [#133 codebase notes](../codebase/133.md) — the optional injected `diagnosticLog` this session now logs through at the three inbound-read catches (§ *Pre-decryption byte logging*), carrying the capped raw ciphertext / handshake bytes via the branded `safeBytes` field; forwarded in by the [noise relay driver](noise-relay-driver.md).
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — the downstream `parseInboundMessage` whose `default → null` branch silently dropped `rekey_request` before #108; stays the sole app-message decode authority.
 - [#29 codebase notes](../codebase/29.md) — the library-selection spike that chose `noise-c.wasm`, established the harness contract, and flagged the async-load NIT this ticket closes.

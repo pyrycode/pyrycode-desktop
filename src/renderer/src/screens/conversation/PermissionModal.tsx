@@ -1,7 +1,13 @@
 import { useState } from 'react'
 import { useModalStore, selectOutstanding, selectRejections } from '../../store/modalStore'
 import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
-import { answerPrompt, cancelPrompt, selectOption } from './modalResolution'
+import {
+  answerPrompt,
+  cancelPrompt,
+  selectOption,
+  resolvePendingOption,
+  type PendingConfirm
+} from './modalResolution'
 
 // #224/#237: the interactive permission/trust modal — the store → UI half of the modal vertical. Two
 // components mirroring RepairPrompt / RepairControl: a pure, exported view (ModalPrompt in, markup out,
@@ -186,21 +192,24 @@ export function PermissionModal(): JSX.Element | null {
   const outstanding = useModalStore(selectOutstanding)
   const rejections = useModalStore(selectRejections)
   const dispatch = useModalStore((s) => s.dispatch)
-  // #226: the transient second-confirm marker — the id of the option held pending a confirm, or null in
-  // list mode. useState (not a store slice): the lowest scope that survives re-render, cleared on confirm
-  // or back, never persisted. Declared BEFORE the early return (rules-of-hooks); the empty-case SSR test
-  // still returns null because the guard fires after the hook runs.
-  const [pendingOptionId, setPendingOptionId] = useState<string | null>(null)
+  // #226/#511: the transient second-confirm marker — the option held pending a confirm AND the modalId
+  // of the prompt it was selected on, or null in list mode. useState (not a store slice): the lowest
+  // scope that survives re-render, cleared on confirm or back, never persisted. Declared BEFORE the
+  // early return (rules-of-hooks); the empty-case SSR test still returns null because the guard fires
+  // after the hook runs.
+  const [pending, setPending] = useState<PendingConfirm | null>(null)
   const prompt = outstanding[0]
   // Fire only when BOTH surfaces are empty: a rejection can show with no outstanding prompt (the prompt
   // was optimistically cleared, #237), so a lone `rejections` entry must still render.
   if (!prompt && rejections.length === 0) return null
-  // Derive the pending option from the CURRENT prompt's options — a deterministic safety net: if
-  // outstanding[0] is swapped out (a remote/timeout dismissed clears the current prompt, the next
-  // renders) while a confirm is pending, a stale id no longer matches and the view falls back to list
-  // mode rather than confirming against the wrong prompt. Guarded on `prompt` (it can be undefined while
-  // a rejection shows alone).
-  const pendingOption = prompt ? (prompt.options.find((o) => o.id === pendingOptionId) ?? null) : null
+  // #511: re-derive the held option every render, scoped by modalId — a marker armed on one prompt can
+  // never render as a confirm step on another. The three routes that swap outstanding[0] under a live
+  // marker (a remote/timeout `dismissed`, a `reconnected` reset, and the empty-outstanding window this
+  // component survives because ConversationScreen mounts it unconditionally) therefore all fall back to
+  // list mode. `pending` and `outstanding` are read in the SAME render pass, so Confirm exists only
+  // while the identity currently matches — there is no clearing effect to get wrong and a stale marker
+  // is inert rather than dangerous. Guard/consequence detail lives on resolvePendingOption.
+  const pendingOption = resolvePendingOption(prompt, pending)
   return (
     <>
       {prompt && (
@@ -211,14 +220,17 @@ export function PermissionModal(): JSX.Element | null {
             selectOption(prompt, optionId, {
               answer: (id) =>
                 answerPrompt(modalId, id, { sendCommand: window.pyry.sendCommand, dispatch }),
-              requestConfirm: setPendingOptionId
+              // #511: the identity is captured from the CLICK — `modalId` is onSelect's own first
+              // argument, sourced by the view from the prompt it actually rendered — never re-read
+              // from a possibly-newer store.
+              requestConfirm: (optionId) => setPending({ modalId, optionId })
             })
           }
           onConfirm={(modalId, optionId) => {
             answerPrompt(modalId, optionId, { sendCommand: window.pyry.sendCommand, dispatch })
-            setPendingOptionId(null)
+            setPending(null)
           }}
-          onBack={() => setPendingOptionId(null)}
+          onBack={() => setPending(null)}
           onCancel={(modalId) =>
             cancelPrompt(modalId, { sendCommand: window.pyry.sendCommand, dispatch })
           }

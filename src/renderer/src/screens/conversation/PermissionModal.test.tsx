@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PermissionModal, PermissionModalView, RejectionSurfaceView } from './PermissionModal'
-import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
+import { resolvePendingOption, type PendingConfirm } from './modalResolution'
+import {
+  reduceModal,
+  initialModalState,
+  selectOutstanding,
+  type ModalEvent,
+  type ModalOption,
+  type ModalPrompt,
+  type ModalState
+} from '../../store/modalPrompts'
 
 // No DOM harness — mirrors ConversationScreen.test.tsx. PermissionModalView is the pure, exported view
 // (ModalPrompt in, markup out), so a server-rendered string proves the render: title/prompt, one button
@@ -171,6 +180,98 @@ describe('PermissionModalView — the second-confirm sub-step (#226)', () => {
     expect(markup).toContain('aria-modal="true"')
     expect(markup).toContain('aria-labelledby="permission-modal-title"')
     expect(markup).toContain('Allow file write')
+  })
+})
+
+// #511: the second-confirm marker is scoped to the prompt it was selected on. These drive the REAL
+// reducer through the two routes that swap `outstanding[0]` under a live marker, then render the pure
+// view with the derived `pendingOption` — the interactiveRoundtrip precedent (real store logic + pure
+// view, no jsdom). The fixtures use the real daemon `permission` vocabulary, so A and B share their
+// ENTIRE option-id set; a pair with disjoint ids would not exercise the bug (AC1).
+describe('PermissionModal — the second-confirm marker is scoped to its prompt (#511)', () => {
+  const DAEMON_OPTIONS: readonly ModalOption[] = [
+    { id: 'allow_once', label: 'Allow once' },
+    { id: 'allow_always', label: 'Allow always' },
+    { id: 'reject_once', label: 'Reject once' },
+    { id: 'reject_always', label: 'Reject always' }
+  ]
+
+  function shown(modalId: string): ModalEvent {
+    return {
+      type: 'shown',
+      modalId,
+      class: 'permission',
+      title: `Allow Bash (${modalId})`,
+      prompt: `claude wants to run the build (${modalId})`,
+      options: DAEMON_OPTIONS,
+      defaultOptionId: 'reject_once'
+    }
+  }
+
+  function run(events: readonly ModalEvent[]): ModalState {
+    return events.reduce(reduceModal, initialModalState)
+  }
+
+  // What the user armed by clicking A's non-default "Allow always" (the selectOption gate holds it
+  // pending a confirm rather than answering — modalResolution.test.ts).
+  const ARMED_ON_A: PendingConfirm = { modalId: 'mdl-a', optionId: 'allow_always' }
+
+  it('falls back to list mode when a remote dismissed swaps outstanding[0] to another prompt (AC1)', () => {
+    // A and B are outstanding; A is resolved elsewhere (another device, or the daemon's
+    // deny-on-timeout), so B becomes outstanding[0] under a marker armed on A.
+    const state = run([
+      shown('mdl-a'),
+      shown('mdl-b'),
+      { type: 'dismissed', modalId: 'mdl-a', outcome: 'allow_once', source: 'remote' }
+    ])
+    const prompt = selectOutstanding(state)[0]
+    expect(prompt.modalId).toBe('mdl-b')
+    // Non-vacuous: B genuinely offers the held id, so a list-mode render is the modalId guard firing.
+    expect(prompt.options.some((o) => o.id === ARMED_ON_A.optionId)).toBe(true)
+
+    const pendingOption = resolvePendingOption(prompt, ARMED_ON_A)
+    expect(pendingOption).toBeNull()
+    const markup = renderView(prompt, pendingOption)
+    expect(optionCount(markup)).toBe(4)
+    expect(markup).toContain('class="permission-modal__cancel">Cancel</button>')
+    expect(markup).not.toContain('permission-modal__confirm')
+    expect(markup).not.toContain('This grants the requested action')
+  })
+
+  it('does not survive the empty-outstanding window across a reconnect (AC2)', () => {
+    const emptied = run([shown('mdl-a'), shown('mdl-b'), { type: 'reconnected' }])
+    // The empty window is explicitly exercised: the container returns null here, but returning null
+    // does NOT unmount it (ConversationScreen mounts it unconditionally), so the marker survives.
+    expect(selectOutstanding(emptied)).toHaveLength(0)
+    expect(resolvePendingOption(selectOutstanding(emptied)[0], ARMED_ON_A)).toBeNull()
+
+    // The daemon repopulates via its connect-time re-sends; their order need not match the old one,
+    // so outstanding[0] can come back as a different prompt.
+    const state = reduceModal(emptied, shown('mdl-b'))
+    const prompt = selectOutstanding(state)[0]
+    expect(prompt.modalId).toBe('mdl-b')
+    expect(prompt.options.some((o) => o.id === ARMED_ON_A.optionId)).toBe(true)
+
+    const pendingOption = resolvePendingOption(prompt, ARMED_ON_A)
+    expect(pendingOption).toBeNull()
+    expect(optionCount(renderView(prompt, pendingOption))).toBe(4)
+  })
+
+  it('still renders the confirm sub-step for the prompt the option WAS selected on (AC3)', () => {
+    // The mutation control, and it is not optional: every assertion above is "→ null", so a
+    // resolvePendingOption that simply returned null always would pass all of them. This is the one
+    // that fails against that stub.
+    const state = run([shown('mdl-a'), shown('mdl-b')])
+    const prompt = selectOutstanding(state)[0]
+    expect(prompt.modalId).toBe('mdl-a')
+
+    const pendingOption = resolvePendingOption(prompt, ARMED_ON_A)
+    expect(pendingOption).toEqual({ id: 'allow_always', label: 'Allow always' })
+
+    const markup = renderView(prompt, pendingOption)
+    expect(markup).toContain('class="permission-modal__back">Back</button>')
+    expect(markup).toContain('class="permission-modal__confirm">Confirm</button>')
+    expect(optionCount(markup)).toBe(0)
   })
 })
 

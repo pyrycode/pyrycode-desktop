@@ -106,7 +106,7 @@ describe('registerUnpairHandler', () => {
     expect(JSON.stringify(await listenerOf(okTarget)({}))).toBe('{"result":"ok"}')
   })
 
-  it('logs nothing on either the ok or the error path', async () => {
+  it('logs nothing on the ok, the error, or the throwing-callback path', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -125,8 +125,74 @@ describe('registerUnpairHandler', () => {
     })
     await listenerOf(errTarget)({})
 
+    // The dropped onUnpaired throw must not break log-free-by-construction either (#504): its
+    // caught object could carry internal state or a path, so it is dropped, not reported.
+    const throwTarget = fakeTarget()
+    registerUnpairHandler(throwTarget, {
+      store: storeWithClear(vi.fn(async () => {})),
+      onUnpaired: () => {
+        throw new Error(`teardown failed: ${SECRET_PATH}`)
+      }
+    })
+    await listenerOf(throwTarget)({})
+
     expect(errorSpy).not.toHaveBeenCalled()
     expect(logSpy).not.toHaveBeenCalled()
     expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  // --- onUnpaired: the teardown-on-unpair trigger (#504) -------------------------------------
+  describe('onUnpaired', () => {
+    it('fires exactly once, with no arguments, after a successful clear()', async () => {
+      const target = fakeTarget()
+      const onUnpaired = vi.fn()
+      registerUnpairHandler(target, {
+        store: storeWithClear(vi.fn(async () => {})),
+        onUnpaired
+      })
+
+      expect(await listenerOf(target)({})).toEqual({ result: 'ok' })
+
+      expect(onUnpaired).toHaveBeenCalledTimes(1)
+      // Value-free: a bare signal, so no record/token/key field can cross to the callback.
+      expect(onUnpaired).toHaveBeenCalledWith()
+    })
+
+    it('never fires when clear() throws, and the fail-closed error result is unchanged', async () => {
+      const target = fakeTarget()
+      const onUnpaired = vi.fn()
+      registerUnpairHandler(target, {
+        store: storeWithClear(
+          vi.fn(async () => {
+            throw new Error(`delete failed: ${SECRET_PATH}`)
+          })
+        ),
+        onUnpaired
+      })
+
+      await expect(listenerOf(target)({})).resolves.toEqual({ result: 'error' })
+      expect(onUnpaired).not.toHaveBeenCalled()
+    })
+
+    // Pins the deliberate deviation from onPaired (pairingHandler.ts:103, inside the try): a throw
+    // here must NOT downgrade an already-completed erase to `error`. runUnpair coerces `error` and a
+    // rejected invoke to the same outcome — stay on the conversation screen — which would leave a
+    // paired-looking UI over an erased record. A future "tidy-up" back to onPaired's shape fails here.
+    it('still resolves ok (never rejects) when the callback throws — the erase already completed', async () => {
+      const target = fakeTarget()
+      const clear = vi.fn(async () => {})
+      registerUnpairHandler(target, {
+        store: storeWithClear(clear),
+        onUnpaired: () => {
+          throw new Error(`teardown failed: ${SECRET_PATH}`)
+        }
+      })
+
+      const response = await listenerOf(target)({})
+      expect(response).toEqual({ result: 'ok' })
+      expect(clear).toHaveBeenCalledTimes(1)
+      // The dropped object never reaches the renderer.
+      expect(JSON.stringify(response)).not.toContain(SECRET_PATH)
+    })
   })
 })

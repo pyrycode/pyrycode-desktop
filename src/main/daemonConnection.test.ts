@@ -7,8 +7,13 @@ import {
 import type { DaemonEvent } from '../shared/ipc/events'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeyPair, DeviceKeypairStore } from './deviceKeypair'
-import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
+import type {
+  ClearablePairedServerStore,
+  PairedServerRecord,
+  PairedServerStore
+} from './pairedServerStore'
 import { MalformedPairedServerRecordError } from './pairedServerStore'
+import { registerUnpairHandler } from './unpairHandler'
 import type {
   NoiseRelayDriver,
   NoiseRelayDriverConfig,
@@ -973,6 +978,107 @@ describe('createDaemonConnection — reconnect (connect-on-pair, #82)', () => {
     } finally {
       for (const spy of spies) spy.mockRestore()
     }
+  })
+})
+
+describe('createDaemonConnection — teardown on unpair (#504)', () => {
+  /**
+   * Pull the registered invoke listener out of a fake ipcMain — the unpairHandler.test `listenerOf`
+   * idiom. The composition root's wiring (index.ts) has no test of its own, so this test composes
+   * those two lines itself: driving `connection.reconnect()` directly would pass on `main`
+   * unchanged (reconnect already fences) and prove nothing — the fix IS the wiring.
+   */
+  function unpairListenerFor(deps: Parameters<typeof registerUnpairHandler>[1]): (
+    event: unknown
+  ) => Promise<unknown> {
+    const handle = vi.fn()
+    registerUnpairHandler({ handle, removeHandler: vi.fn() }, deps)
+    return handle.mock.calls[0][1]
+  }
+
+  /**
+   * A connection and a clearable store over ONE mutable record — the real pair modelled with no new
+   * helper: clear() erases it, and the connection's read-through `load` sees null on the next dial.
+   * `repair()` puts it back, standing in for a later pairing confirm.
+   */
+  function unpairable(): {
+    ctx: ReturnType<typeof build>
+    store: ClearablePairedServerStore
+    repair: () => void
+  } {
+    let record: PairedServerRecord | null = RECORD
+    return {
+      ctx: build({ load: () => Promise.resolve(record) }),
+      store: {
+        save: () => Promise.resolve(),
+        load: () => Promise.resolve(record),
+        clear: async () => {
+          record = null
+        }
+      },
+      repair: () => {
+        record = RECORD
+      }
+    }
+  }
+
+  it('stops the live driver and drops its later events once the record is erased', async () => {
+    const { ctx, store } = unpairable()
+
+    // Reach connected. reachConnected() can't be reused — it hardcodes the always-RECORD load.
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    // Positive control: the same frame the post-teardown assertion drives DOES reach the sink while
+    // the session is live, so "nothing arrives" below cannot pass vacuously on a mis-shaped fixture.
+    const message = { conversation_id: 'c1', message_id: 'm1', role: 'assistant', text: 'hi there' }
+    const beforeControl = emitted(ctx.sink).length
+    ctx.drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+    expect(emitted(ctx.sink).slice(beforeControl)).toEqual([{ type: 'messageReceived', message }])
+
+    // The renderer's unpair invoke, through the real handler wired the way index.ts wires it.
+    const listener = unpairListenerFor({ store, onUnpaired: () => ctx.connection.reconnect() })
+    const beforeUnpair = emitted(ctx.sink).length
+    expect(await listener({})).toEqual({ result: 'ok' })
+    await tick()
+
+    // The authenticated session is closed, and bootstrap returns before createDriver with no record.
+    expect(ctx.drivers[0].stopped).toBe(true)
+    expect(ctx.drivers).toHaveLength(1)
+
+    // Only the two permitted non-connected status events follow the teardown.
+    const afterUnpair = emitted(ctx.sink).slice(beforeUnpair)
+    expect(afterUnpair.map((e) => e.type)).toEqual(['connecting', 'failed'])
+    expect((afterUnpair[1] as { error: { code: string } }).error.code).toBe('not-paired')
+
+    // The superseded session keeps streaming: the generation fence drops it upstream of any decode,
+    // so no session-scoped event reaches the renderer channel.
+    const beforeStale = emitted(ctx.sink).length
+    ctx.drivers[0].emit({ type: 'message', plaintext: messagePlaintext(message) })
+    expect(emitted(ctx.sink)).toHaveLength(beforeStale)
+  })
+
+  it('still connects on a later re-pair — the teardown never sets the permanent stopped flag', async () => {
+    const { ctx, store, repair } = unpairable()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    await unpairListenerFor({ store, onUnpaired: () => ctx.connection.reconnect() })({})
+    await tick()
+    expect(ctx.drivers).toHaveLength(1)
+
+    // A later pairing confirm takes the unchanged onPaired path — the same reconnect(). Were the
+    // teardown to have set `stopped`, reconnect() would return early and no driver would be built.
+    repair()
+    const beforeRepair = emitted(ctx.sink).length
+    ctx.connection.reconnect()
+    await tick()
+    expect(ctx.drivers).toHaveLength(2)
+
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(emitted(ctx.sink).slice(beforeRepair).some((e) => e.type === 'connected')).toBe(true)
   })
 })
 

@@ -39,9 +39,18 @@ export interface UnpairHandleTarget {
  */
 export function registerUnpairHandler(
   target: UnpairHandleTarget,
-  deps: { store: ClearablePairedServerStore }
+  deps: {
+    store: ClearablePairedServerStore
+    /**
+     * Called once after clear() erases the record — the teardown-on-unpair trigger (#504). A
+     * trusted in-process callback, value-free (no record/token/key crosses), mirroring onPaired's
+     * contract (pairingHandler.ts:51-57). Never called when clear() throws. MUST NOT throw; a throw
+     * is DROPPED rather than downgrading the already-completed erase to `error` — see the listener.
+     */
+    onUnpaired?: () => void
+  }
 ): () => void {
-  const { store } = deps
+  const { store, onUnpaired } = deps
 
   const listener = async (): Promise<UnpairResult> => {
     try {
@@ -49,15 +58,28 @@ export function registerUnpairHandler(
       // read. clear() is idempotent (a not-paired store clears cleanly), so success covers both
       // "record erased" and "already absent".
       await store.clear()
-      return { result: 'ok' }
     } catch {
       // Classify-don't-forward: every throw maps to `error` WITHOUT inspecting the error type. The
       // caught object is DROPPED — its message could echo a keychain/filesystem path, so it is never
       // logged, interpolated, or returned. This is the fail-closed boundary: it never resolves `ok`
       // while a live bearer token may still be on disk. handle must resolve to a value, so this never
-      // rethrows.
+      // rethrows. The teardown below is skipped: nothing was erased, so nothing must be torn down.
       return { result: 'error' }
     }
+    // The record is gone: fire the teardown trigger (#504) so the live daemon session cannot outlive
+    // the record that authorised it. Deliberately OUTSIDE the fail-closed catch above and guarded by
+    // its own — unlike onPaired, which sits inside its try (pairingHandler.ts:103). runUnpair coerces
+    // BOTH `error` and a rejected invoke to "stay on the conversation screen", so reporting a throw
+    // here would leave a paired-looking UI over an already-erased record: the precise inverse
+    // half-state runUnpair exists to prevent. By this point the erase has resolved — and the wired
+    // callback, connection.reconnect(), arms the event fence in dial()'s first statement — so `ok` is
+    // the truthful answer. The caught object is DROPPED, keeping this module log-free by construction.
+    try {
+      onUnpaired?.()
+    } catch {
+      // Intentionally empty — see above.
+    }
+    return { result: 'ok' }
   }
 
   target.handle(UNPAIR_CHANNEL, listener)

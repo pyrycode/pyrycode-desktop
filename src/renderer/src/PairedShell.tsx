@@ -9,11 +9,30 @@ import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { usePushNotify } from './store/pushNotifyBridge'
-import { useActiveConversationStore } from './store/activeConversationStore'
+import { activateConversation, type ActivateConversationDeps } from './activateConversation'
+import { activeConversationStore } from './store/activeConversationStore'
+import { sessionIdStore } from './store/sessionIdStore'
+import { timelineStore } from './store/timelineStore'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
 function assertNever(route: never): never {
   throw new Error(`Unhandled paired route: ${JSON.stringify(route)}`)
+}
+
+/**
+ * #530: the store wiring for the conversation-switch clear. Each effect reaches its singleton through
+ * `getState()` inside the arrow body — the bridge idiom (timelineBridge.ts:206, sessionIdBridge.ts:68)
+ * and the in-component one (CreateFolderDialog.tsx:154) — so nothing is dereferenced at module load and
+ * nothing is read during render. The object closes over no per-render value, so module scope is right:
+ * PairedShell subscribes to no store at all now and re-renders only on its own nav dispatch, which keeps
+ * it server-renderable.
+ */
+const activateDeps: ActivateConversationDeps = {
+  getActiveConversation: () => activeConversationStore.getState().activeConversation,
+  setActiveConversation: (conversation) =>
+    activeConversationStore.getState().setActiveConversation(conversation),
+  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearSessionId: () => sessionIdStore.getState().clearSessionId()
 }
 
 /**
@@ -82,14 +101,13 @@ export function PairedShellView(props: {
  */
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
-  // #278: the setter that snapshots the created discussion so the empty thread's workspace chip can read
-  // its `cwd`. Read via the store hook (the Composer/UnpairControl store-write idiom); the reference is
-  // stable, so no re-render churn, and the created-event callback below closes over it.
-  const setActiveConversation = useActiveConversationStore((s) => s.setActiveConversation)
   // The created-event → list→thread nav. #278: also record the created payload (its `cwd` feeds the
   // empty-thread workspace chip) — the callback already receives this payload and previously dropped it.
+  // #530: recording now goes through activateConversation, which first clears the previous
+  // conversation's timeline rows and daemon session id when the id actually changes — so a newly
+  // created discussion opens on an empty thread instead of the last one's history.
   useConversationCreatedNav((created) => {
-    setActiveConversation(created)
+    activateConversation(activateDeps, created)
     dispatch({ type: 'open' })
   })
   // #393: a notification click drives the same list→thread `open` nav (focus the window + show the
@@ -108,9 +126,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       // record-then-open the created-event path above performs — so the thread's wire actions (send,
       // snapshot, dequeue) target the clicked conversation's real id, not a placeholder. A
       // ConversationSummary carries every ConversationCreatedPayload field (plus two more), so the
-      // store accepts it structurally; most-recent-wins replacement is the store's contract.
+      // store accepts it structurally; most-recent-wins replacement is the store's contract. #530: the
+      // record goes through activateConversation, which clears the previous conversation's rows and
+      // session id ONLY when the id changes — a re-click of the already-active row keeps its thread.
       onOpen={(conversation) => {
-        setActiveConversation(conversation)
+        activateConversation(activateDeps, conversation)
         dispatch({ type: 'open' })
       }}
       onOpenSettings={() => dispatch({ type: 'openSettings' })}

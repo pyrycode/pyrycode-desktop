@@ -119,14 +119,18 @@ leaves the renderer. `PyryApi = typeof api` re-derives `window.pyry.unpair` auto
 ### 4. Composition-root registration (`src/main/index.ts`)
 
 ```ts
-const unregisterUnpair = registerUnpairHandler(ipcMain, { store: pairedServerStore })
+const unregisterUnpair = registerUnpairHandler(ipcMain, {
+  store: pairedServerStore,
+  onUnpaired: () => connection.reconnect()
+})
 app.on('will-quit', () => unregisterUnpair())
 ```
 
-Registered in the pairing-status sibling slot, alongside `registerPairingStatusHandler`, over the
-**same** `pairedServerStore` built once at the composition root — no second store constructed. Needs
-only the store (no `connection`, no `did-finish-load` gate), so placement is not correctness-critical
-(nothing calls `unpair()` yet to race it) but groups with its twin for readability.
+**Moved in [#504](../codebase/504.md)** from the pairing-status sibling slot to sit beside the pairing
+handler, below `createDaemonConnection` — it now needs to close over `connection`, which does not exist
+at the old registration site. Still the same `pairedServerStore` built once at the composition root; no
+second store constructed. See [daemon connection](daemon-connection.md) § Teardown-on-unpair for what
+`onUnpaired` triggers.
 
 ## Data flow
 
@@ -163,11 +167,14 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
 - **Confirmation gate lives in the caller, not here.** This channel ships only the mechanism; the
   "are you sure?" UI gate is [#166](../codebase/166.md)'s concern — a two-step confirm phase in the
   conversation screen's `UnpairControl`, ahead of the `unpair()` invoke.
-- **Live-session teardown is still out of scope**, confirmed by #166: erasing the at-rest record and
-  resetting renderer state does not tear down an in-flight Noise session or relay socket — the
-  current connection persists until next launch. In #166's target scenario (a stale/wrong record
-  trapping the user on a dead conversation screen) the session is not live, so this is a
-  no-observed-failure edge deferred, not defended.
+- **Live-session teardown, closed by [#504](../codebase/504.md).** A successful `clear()` now also
+  fires an optional `onUnpaired?: () => void` dep — value-free, mirroring the pairing handler's
+  `onPaired` — wired at the composition root to `connection.reconnect()`. This used to be deferred (see
+  the [daemon connection](daemon-connection.md) § Teardown-on-unpair doc for the full mechanism: the
+  same `reconnect()` fences the superseded driver's in-flight events and closes its socket, so an
+  authenticated session can no longer outlive the record that authorised it). The callback sits outside
+  the fail-closed `catch` and swallows its own throw, so a teardown failure can never downgrade an
+  already-completed erase to `{ result: 'error' }` — see `unpairHandler.ts`'s inline rationale.
 - **No error sub-reason.** The `error` arm deliberately carries no detail beyond the discriminant.
   #166's caller synthesizes its own generic `ConnectionError` (`code: 'unpair'`) on that arm rather
   than threading a sub-reason through. A future recovery flow that needs to distinguish error
@@ -175,6 +182,9 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
 
 ## Related
 
+- [#504 codebase notes](../codebase/504.md) — the `onUnpaired` teardown trigger, the registration move
+  below `connection`, and why the callback deliberately deviates from `onPaired`'s inside-the-try
+  placement.
 - [Paired-server store](paired-server-store.md) / [#172 codebase notes](../codebase/172.md) — the
   `clear()` capability this channel calls.
 - [Pairing-status signal](pairing-status-signal.md) / [#79 codebase notes](../codebase/79.md) — the

@@ -144,23 +144,14 @@ app.whenReady().then(() => {
   const unregisterPairingStatus = registerPairingStatusHandler(ipcMain, { store: pairedServerStore })
   app.on('will-quit', () => unregisterPairingStatus())
 
-  // The unpair request (#173): reuse the same pairedServerStore — do not construct a second store —
-  // so the renderer can ask to erase the stored pairing and return to a clean, not-paired state. Its
-  // ClearablePairedServerStore.clear() (#172) is fail-closed; the handler maps every throw to a
-  // value-free `error`, never reporting success while a live token may remain on disk. Grouped with
-  // the pairing-status registration (needs only the store — no `connection`, no did-finish-load
-  // gate). No caller races it: the visible unpair UI is #166/#167. `will-quit` removes the handler,
-  // symmetric with unregisterPairingStatus.
-  const unregisterUnpair = registerUnpairHandler(ipcMain, { store: pairedServerStore })
-  app.on('will-quit', () => unregisterUnpair())
-
   // The paired-server-info query (#339): reuse the same pairedServerStore — do not construct a second
   // store — so a Settings screen (#340/#334) can read the paired server's non-secret identity (its
   // server id + relay URL) from the at-rest record, including while disconnected. Grouped with the
-  // pairing-status / unpair registrations (needs only the store — no `connection`, no did-finish-load
-  // gate). Only the two non-secret fields cross back — never the token / server_static_pubkey; every
-  // non-readable case collapses to a value-free `unavailable`. No caller races it — the consumer is
-  // #340. `will-quit` removes the handler, symmetric with unregisterUnpair.
+  // pairing-status registration (needs only the store — no `connection`, no did-finish-load gate;
+  // the unpair handler left this group in #504, which gave it a `connection` dependency). Only the
+  // two non-secret fields cross back — never the token / server_static_pubkey; every non-readable
+  // case collapses to a value-free `unavailable`. No caller races it — the consumer is #340.
+  // `will-quit` removes the handler, symmetric with unregisterPairingStatus.
   const unregisterServerInfo = registerServerInfoHandler(ipcMain, { store: pairedServerStore })
   app.on('will-quit', () => unregisterServerInfo())
 
@@ -215,6 +206,26 @@ app.whenReady().then(() => {
     onPaired: () => connection.reconnect()
   })
   app.on('will-quit', () => unregisterPairing())
+
+  // The unpair request (#173): reuse the same pairedServerStore — do not construct a second store —
+  // so the renderer can ask to erase the stored pairing and return to a clean, not-paired state. Its
+  // ClearablePairedServerStore.clear() (#172) is fail-closed; the handler maps every throw to a
+  // value-free `error`, never reporting success while a live token may remain on disk. Registered
+  // here, below `connection` and beside the pairing handler, because #504 gave it the mirror-image
+  // dependency: `onUnpaired` fires only after the erase succeeds and tears the live daemon session
+  // down, so an authenticated session can never outlive the record that authorised it. The same
+  // `reconnect()` — synchronous, void, non-throwing — serves both callbacks; with the record gone it
+  // stops the driver, fences its in-flight events, and settles at failed(not-paired) without
+  // constructing a replacement. It never sets the permanent `stopped` flag, so a later re-pair still
+  // connects. Registering this late is safe for the same reason the pairing handler is (above): the
+  // whole whenReady callback runs to completion in one tick, and no caller races it — the visible
+  // unpair UI is #166/#167, many ticks later, after first paint. `will-quit` removes the handler,
+  // symmetric with unregisterPairing.
+  const unregisterUnpair = registerUnpairHandler(ipcMain, {
+    store: pairedServerStore,
+    onUnpaired: () => connection.reconnect()
+  })
+  app.on('will-quit', () => unregisterUnpair())
 
   // Defer the connect until the renderer document + scripts have loaded, so its daemon-event
   // subscription (#19) is in place before the load-bearing `connected` event (which arrives only

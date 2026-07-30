@@ -354,9 +354,11 @@ clear from, and [#530](../codebase/530.md) (navigation, shipped) did touch exact
 deliberately did **not** call `clearActiveConversation` there: `setActiveConversation` stays
 unconditional (a conversation switch still *records* the new conversation, it just also clears the
 timeline and session id first via the new `activateConversation` helper — see [Paired
-shell](paired-shell.md#the-pure-view--container-pairedshelltsx)). `clearActiveConversation` remains
-uncalled; #531 (unpair / pair-another-server) is its sole intended caller, for when the pairing context
-itself ends rather than the active conversation merely changing.
+shell](paired-shell.md#the-pure-view--container-pairedshelltsx)). [#531](../codebase/531.md) (unpair /
+pair-another-server, shipped) is `clearActiveConversation`'s sole caller, wired unconditionally into
+[`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx) — the pairing
+context itself ending, rather than the active conversation merely changing, is exactly the case that
+call site was reserved for.
 
 Rejected alternative: correlating `sessionIdStore`'s session id against a `conversationListStore` row.
 There is no join key — `sessionIdStore` holds a daemon *session* routing id from `sessionTransition`,
@@ -1454,7 +1456,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 ## Related
 
 - [App shell](app-shell.md) — the router that mounts the `paired`/`conversation` route (#80); gains the `onUnpaired` reverse-flip seam this screen's unpair control fires (#166)
-- [Paired shell](paired-shell.md) — the second-level `list ⇄ thread` router now mounting this screen as its `thread` view (#140); source of the `onBack` seam this screen's back control fires; its `conversation_created` nav callback now also writes `activeConversationStore` (#278), routed since [#530](../codebase/530.md) through `activateConversation`, which clears the timeline and session id first when the active conversation's id actually changes
+- [Paired shell](paired-shell.md) — the second-level `list ⇄ thread` router now mounting this screen as its `thread` view (#140); source of the `onBack` seam this screen's back control fires; its `conversation_created` nav callback now also writes `activeConversationStore` (#278), routed since [#530](../codebase/530.md) through `activateConversation`, which clears the timeline and session id first when the active conversation's id actually changes; its `onUnpaired`/`onPairServerPaired` handlers clear `activeConversationStore` unconditionally since [#531](../codebase/531.md), via `clearPairingScopedState`, when the pairing itself ends
 - [Session store](session-store.md) — the state the coarse thread rendered through #69–#178; the `MessageThread`/status seams bound to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166); its `messages` slice is unread residue since [#179](../codebase/179.md) (status/`selectStatus` is still live, read by the composer's send gate)
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66), retargeted from the session store into the timeline store since [#179](../codebase/179.md); the send half of this screen; also home of `shouldShowBanner`/`CONNECTION_BANNER_COPY` (#279), the connection banner's predicate + copy, co-located beside `composerAvailability`/`shouldOfferRepair` as a third read of `ConnectionStatus`
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)

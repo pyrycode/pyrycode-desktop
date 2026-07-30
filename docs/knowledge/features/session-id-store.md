@@ -50,9 +50,10 @@ writes, neither reading prior state nor constraining the other's ordering, so th
 machine for a discriminated-union action set to model. Shipped with no production caller; [#530](../codebase/530.md)
 (navigation) added the first — `clearSessionId` is now called from
 [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx), gated on the active
-conversation's id actually changing — a same-id re-open leaves the held session id untouched. #531
-(unpair / pair-another-server) still owns a second, separate call site for the pairing-context-ends
-case.
+conversation's id actually changing — a same-id re-open leaves the held session id untouched.
+[#531](../codebase/531.md) (unpair / pair-another-server) added the second, unconditional call site, via
+[`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx) — the pairing
+itself is ending there, so unlike #530's gate there is no id to compare against.
 
 ### The data path (`src/renderer/src/store/sessionIdBridge.ts`)
 
@@ -112,8 +113,8 @@ daemon → transport (#254) → sessionTransition{newSessionId}
 - **No correlation, no automatic reset.** Nothing is requested, so there is nothing to time out or
   retry; the store keeps its last id until something explicitly clears it. [#529](../codebase/529.md)
   added `clearSessionId` as the manual path back to `initialSessionIdState`; [#530](../codebase/530.md)
-  wired its first caller (a conversation switch), and #531 (unpair / pair-another-server) still owns a
-  second.
+  wired its first caller (a conversation switch), and [#531](../codebase/531.md) wired its second
+  (unpair / pair-another-server, unconditional).
 - **A late `sessionTransition` for the previous conversation can re-stale the id after a switch**
   ([#530](../codebase/530.md)). The marker carries no `conversation_id` (this store is single-conversation
   by design, see above), so if the previous conversation is still streaming when the switch happens, a
@@ -121,7 +122,10 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   conversation's first marker and gets written — reopening the misdirected-write window
   [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx) narrows. Not fixable
   at this store's layer; needs a daemon-side conversation-id tag or main-process suppression. Named as an
-  open PO follow-up by the architect's security review on #530, not yet its own ticket.
+  open PO follow-up by the architect's security review on #530, not yet its own ticket. The general
+  form is unchanged by [#531](../codebase/531.md): unpair tears the transport down first, so no late
+  marker follows, and on the pair-another path the exposure window is a microtask gap that shrinks to
+  nothing in practice — see #531's spec § Open questions.
 
 ## Related
 
@@ -154,3 +158,6 @@ daemon → transport (#254) → sessionTransition{newSessionId}
 - [#530 codebase notes](../codebase/530.md) — `clearSessionId`'s first production caller: a conversation
   switch, gated on the active conversation's id changing, via
   [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+- [#531 codebase notes](../codebase/531.md) — `clearSessionId`'s second production caller: a pairing
+  ending (unpair / pair-another-server), unconditional, via
+  [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).

@@ -249,8 +249,9 @@ Nothing imports this module yet.
   `ThreadEvent`, and `timelineBridge.ts` never produces a `reset` since no wire frame maps to it.
   [#530](../codebase/530.md) (conversation switch, shipped) added the first dispatch site, via
   [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx), gated on the active
-  conversation's id actually changing. #531 (unpair / pair-another-server) still owns a second, separate
-  site for the pairing-context-ends case.
+  conversation's id actually changing. [#531](../codebase/531.md) (unpair / pair-another-server, shipped)
+  added the second, unconditional site, via
+  [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
 - **[#538](../codebase/538.md) (shipped)** added a twelfth arm, the nullary `reconnected` — the second
   arm that is neither daemon- nor user-content-derived, but unlike `reset` it **is** bridge-produced:
   `timelineBridge.ts` maps the `connected` daemon edge onto it (moved out of the null fall-through
@@ -260,6 +261,14 @@ Nothing imports this module yet.
   `compacting` in one step while preserving `items` **by reference** — the Mode A/Mode B split held on
   the same connect. The [`modalStore` #415](../codebase/415.md) / `queueStore` #197 reconcile shape,
   applied a third time.
+- **[#531](../codebase/531.md) (shipped)** added `reset`'s second production dispatch site — unpair and
+  pair-another-server, the two paths that end a pairing rather than merely switch conversations, both
+  routed through the new `clearPairingScopedState` helper alongside three sibling clears
+  (`activeConversationStore`, `sessionIdStore`, `sessionStore`). Unlike `reconnected` above and unlike
+  [#530](../codebase/530.md)'s conversation-switch dispatch, this one is unconditional — no id gate, no
+  `connected`-edge trigger — because the pairing itself is ending and no state in which `items`
+  legitimately survives. `reduceTimeline`'s `reset` arm is unmodified; this ticket only wires a second
+  call site.
 
 ## Edge cases and limitations
 
@@ -302,10 +311,12 @@ Nothing imports this module yet.
   carries no progress data at all — banner-only, no counter, no percentage — so the state is a plain
   `boolean` rather than a `| null` record; there is nothing for a falling edge to discard.
 - **`reset` had no dispatch site as of [#528](../codebase/528.md); [#530](../codebase/530.md) shipped
-  the first.** A conversation switch now clears the timeline via `activateConversation`, gated on the
-  active conversation's id actually changing — a re-open of the already-active conversation clears
-  nothing, since the timeline has no history backfill and a redundant reset would destroy rows that
-  never come back. #531 (unpair / pair-another-server) still owns a second call site.
+  the first, [#531](../codebase/531.md) the second.** A conversation switch clears the timeline via
+  `activateConversation`, gated on the active conversation's id actually changing — a re-open of the
+  already-active conversation clears nothing, since the timeline has no history backfill and a
+  redundant reset would destroy rows that never come back. A pairing ending (unpair / pair-another-
+  server) clears it via `clearPairingScopedState`, unconditionally — there the pairing itself is over,
+  so no id gate applies.
 - **A retry or compaction genuinely still live across a reconnect shows no banner until the daemon's
   next edge** ([#538](../codebase/538.md)), an accepted residual, not a bug to engineer around. The
   daemon's connect-time re-assertion set is the outstanding modal (#877) and the queued backlog (#878)
@@ -320,7 +331,9 @@ Nothing imports this module yet.
   *accumulated* rows at the moment of the switch, it cannot stop an ongoing stream from the conversation
   just left. Named as an open PO follow-up by the architect's security review on #530 (same root cause
   and remedy as the equivalent gap on [`sessionIdStore`](session-id-store.md#edge-cases-and-limitations)),
-  not yet its own ticket.
+  not yet its own ticket. Unaffected by [#531](../codebase/531.md)'s pairing-ended clear: unpair tears
+  the transport down before any late delta could arrive, and the pair-another path's exposure window is
+  a microtask gap the daemon connection replaces almost immediately — see #531's spec § Open questions.
 - **Strangler Fig, cut over in [#179](../codebase/179.md).** `sessionStore`, `messageViewModel.ts`,
   and the coarse `message`/`message_chunk` path were completely untouched by this module through
   #199–#230. #179 retired the coarse render path (`MessageThread` unmounted, kept as dead-but-tested
@@ -383,6 +396,9 @@ Nothing imports this module yet.
   `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
 - [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation
   switch, via [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+- [#531 codebase notes](../codebase/531.md) — `reset`'s second production dispatch site: a pairing
+  ending, unconditional, via
+  [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
 - [#538 codebase notes](../codebase/538.md) — the nullary `reconnected` arm: `timelineBridge.ts` maps
   the `connected` daemon edge onto it, clearing `phase`/`stalled`/`apiRetry`/`compacting` while
   preserving `items` by reference — the Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md)

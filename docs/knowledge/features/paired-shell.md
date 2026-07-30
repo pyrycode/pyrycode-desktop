@@ -180,6 +180,16 @@ const activateDeps: ActivateConversationDeps = {
   clearSessionId: () => sessionIdStore.getState().clearSessionId()
 }
 
+// #531: the store wiring for the pairing-ended clear, module-scope for the same reason as
+// activateDeps — nothing dereferenced at load, nothing read during render. sessionStore appears
+// here and nowhere else in this file.
+const clearPairingDeps: ClearPairingScopedStateDeps = {
+  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
+  clearSessionId: () => sessionIdStore.getState().clearSessionId(),
+  dispatchSession: (action) => sessionStore.getState().dispatch(action)
+}
+
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
   useConversationCreatedNav((created) => {   // #242, widened #278
@@ -197,9 +207,15 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       onOpenSettings={() => dispatch({ type: 'openSettings' })}
       onOpenArchive={() => dispatch({ type: 'openArchive' })}
       onBack={() => dispatch({ type: 'back' })}
-      onUnpaired={onUnpaired}
+      onUnpaired={() => {
+        clearPairingScopedState(clearPairingDeps)   // #531 — the pairing that just ended
+        onUnpaired()
+      }}
       onOpenPairServer={() => dispatch({ type: 'openPairServer' })}
-      onPairServerPaired={() => dispatch({ type: 'pairServerPaired' })}
+      onPairServerPaired={() => {
+        clearPairingScopedState(clearPairingDeps)   // #531 — same clear, the other path that ends one
+        dispatch({ type: 'pairServerPaired' })
+      }}
       onPairServerCancelled={() => dispatch({ type: 'pairServerCancelled' })}
     />
   )
@@ -208,9 +224,10 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
 
 `useReducer(nextPairedRoute, 'list')` is screen-local ephemeral state per
 [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — resets on remount, never
-the session store (AC5). Enters at `'list'` (AC2). `onUnpaired` threads straight through to
-`ConversationScreen` unchanged ([#166](../codebase/166.md)); `PairedShell` does not intercept it.
-[`useConversationCreatedNav`](new-discussion-fab.md) (#242) is the one added line: it subscribes to
+the session store (AC5). Enters at `'list'` (AC2). `onUnpaired` threaded straight through to
+`ConversationScreen` unchanged from [#166](../codebase/166.md) until [#531](../codebase/531.md) wrapped
+it (below); `PairedShell` still does not intercept the prop's *identity*, only wraps the callback it's
+given. [`useConversationCreatedNav`](new-discussion-fab.md) (#242) is the one added line: it subscribes to
 the daemon's `conversationCreated` event and dispatches the same `open` transition the list rows
 use, so a FAB-initiated create eventually opens the thread with no new route. `useNotificationActivatedNav`
 ([#393](../codebase/393.md), see [Push notifications](push-notifications.md#clicking-the-notification-393))
@@ -248,6 +265,24 @@ lets `PairedShell` drop `useActiveConversationStore` entirely — it now holds *
 subscriptions and re-renders only on its own `useReducer` nav dispatch. See [#530 codebase
 notes](../codebase/530.md) for the full design rationale (the getter, the id-not-event gate, why
 `clearActiveConversation` stays out of this path).
+
+**[#531](../codebase/531.md) wrapped the two nav sites that *end* a pairing**, `onUnpaired` and
+`onPairServerPaired`, in `clearPairingScopedState(clearPairingDeps)` — a fourth clear
+([`sessionStore`'s `reset`](session-store.md), #166) alongside the timeline `reset` and the two #529
+clears `activateConversation` already uses. Unlike `activateConversation`'s id-gated clear-on-switch,
+this one is **unconditional**: the pairing itself is ending, so there is no state in which the thread
+rows, the active conversation, or the daemon session id legitimately survive into the new pairing.
+The two paths are not symmetric and that's why both need their own wrap rather than one shared
+remount-driven reset: unpair flips the app-level route to `pairing`, unmounting `PairedShell`
+entirely, while pair-another-server transitions `pairServer` → `list` *inside* this shell
+(`pairedRoute.ts:62-65`), so the shell never unmounts and nothing a remount would have cleared gets
+cleared. `onPairServerCancelled` is deliberately **not** wrapped — cancelling ends no pairing, so it
+clears nothing (AC4). Wrapping at this shared prop-handoff point, rather than threading a new
+dependency through `runUnpair` and its two `ConversationScreen.tsx` call sites, keeps both wirings on
+two adjacent lines in one file and inherits `runUnpair`'s existing ok-only fail-safe posture for free
+— see [#531 codebase notes](../codebase/531.md) for the full rationale and the divergence trap it
+closes (`sessionStore`'s reset used to live in `unpairAction.ts` alone; see [Session
+store](session-store.md) and [Unpair channel](unpair-channel.md)).
 
 ### The app-shell seam (`App.tsx`)
 
@@ -288,6 +323,8 @@ AppView (route='conversation')
                                                 ArchiveButton → dispatch{openArchive} (#347)
                             route='thread'   → ConversationScreen (store-backed) + BackControl — [←] → dispatch{back}
                                                 → WorkspaceChip reads activeConversationStore (#278)
+                                                onUnpaired → clearPairingScopedState(clearPairingDeps)  ← #531
+                                                              onUnpaired() → App sets route='pairing'
 
   activateConversation(activateDeps, conversation):  ← #530 (src/renderer/src/activateConversation.ts)
     previous = activateDeps.getActiveConversation()
@@ -299,9 +336,17 @@ AppView (route='conversation')
                                                 PairAnotherServerRow → dispatch{openPairServer} (#152)
                             route='pairServer' → PairingScreen (window.pyry default) — (#152)
                                                 onCancel → dispatch{pairServerCancelled} → 'settings'
-                                                onPaired → dispatch{pairServerPaired} → 'list'
+                                                onPaired → clearPairingScopedState(clearPairingDeps)  ← #531
+                                                            dispatch{pairServerPaired} → 'list'
                             route='archive'  → ArchiveScreen (pure, no store) + BackControl — [←] → dispatch{back} (#347)
                                                 tabs: useState<ArchiveTab> screen-local, both bodies empty (#348 mount point)
+
+  clearPairingScopedState(clearPairingDeps):  ← #531 (src/renderer/src/clearPairingScopedState.ts)
+    clearPairingDeps.dispatchTimeline({type:'reset'})        ← #528, clears timelineStore
+    clearPairingDeps.clearActiveConversation()                 ← #529, clears activeConversationStore
+    clearPairingDeps.clearSessionId()                          ← #529, clears sessionIdStore
+    clearPairingDeps.dispatchSession({type:'reset'})           ← #166, clears sessionStore
+    (unconditional — no id gate, unlike activateConversation above)
 ```
 
 A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row
@@ -314,7 +359,9 @@ Navigating list→thread→list→thread unmounts/remounts `ConversationScreen`,
 each mount — so store-backed messages stay intact across navigation (AC4). Only `ConversationScreen`'s
 own ephemeral UI state (composer draft, sheet-open, unpair phase) resets on remount, same as any other
 `useState`/`useReducer` component state — expected under ADR 0006, and not a regression (there was no
-navigation, and hence no remount, before this ticket).
+navigation, and hence no remount, before this ticket). `sessionStore` is, however, explicitly reset —
+along with the timeline, the active conversation, and the session id — when the pairing itself ends;
+see [#531](../codebase/531.md) above.
 
 ## Edge cases and limitations
 
@@ -354,6 +401,14 @@ navigation, and hence no remount, before this ticket).
   (`renderToStaticMarkup` only), so its nav coverage is limited to `nextPairedRoute` reducer assertions.
   The branch logic (clear-iff-id-changed, clear-then-set ordering) is unit-tested directly on the pure
   helper in `activateConversation.test.ts` — see [#530 codebase notes](../codebase/530.md).
+- **`PairedShell.test.tsx` cannot exercise `clearPairingScopedState`'s wiring either, for the same
+  reason** — its coverage is `nextPairedRoute` reducer assertions and the `:114` SSR test guarding the
+  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The four-clear logic is
+  unit-tested directly on the pure helper in `clearPairingScopedState.test.ts`. One residual: the
+  "clear runs before the route flips" ordering has no executable assertion after
+  [#531](../codebase/531.md) removed the one `unpairAction.test.ts` case that pinned it — low-stakes
+  today since all four writes are synchronous and batched into the same commit as the route change, but
+  worth restoring the moment a jsdom harness lands (see [#531 codebase notes](../codebase/531.md)).
 
 ## Related
 
@@ -366,9 +421,10 @@ navigation, and hence no remount, before this ticket).
 - [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
 - [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
-- [Session store](session-store.md) — untouched by this ticket; the store-backed messages that survive navigation
-- [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) — `timelineStore`'s `reset` arm ([#528](../codebase/528.md)) gets its first production dispatch site here, via `activateConversation`
-- [Session-id store](session-id-store.md) / [#530](../codebase/530.md) — `clearSessionId` ([#529](../codebase/529.md)) gets its first production caller here
+- [Session store](session-store.md) — its `reset` action is one of the four [#531](../codebase/531.md) clears from here; the store-backed messages otherwise survive plain navigation untouched
+- [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the IPC boundary `onUnpaired` ultimately calls; [#531](../codebase/531.md) moved the session reset that used to run inside its first caller (`runUnpair`) to this file
+- [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `timelineStore`'s `reset` arm ([#528](../codebase/528.md)) gets its first production dispatch site via `activateConversation` and its second via `clearPairingScopedState`
+- [Session-id store](session-id-store.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `clearSessionId` ([#529](../codebase/529.md)) gets its first production caller via `activateConversation` and its second via `clearPairingScopedState`
 - [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the single-active-conversation, `conversation_id`-free event model that is why `activateConversation` has to gate on the id rather than filter by conversation
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the ephemeral-state rule `PairedShell`'s `useReducer` follows
 - [#140 codebase notes](../codebase/140.md) · Spec: `docs/specs/architecture/140-list-thread-navigation-shell.md`
@@ -379,3 +435,6 @@ navigation, and hence no remount, before this ticket).
 - [#530 codebase notes](../codebase/530.md) · Spec: `docs/specs/architecture/530-clear-per-conversation-context-on-switch.md`
   — replaces both carrying nav sites' direct `setActiveConversation` with `activateConversation`, clearing
   the timeline and session id on an actual conversation switch.
+- [#531 codebase notes](../codebase/531.md) · Spec: `docs/specs/architecture/531-clear-pairing-scoped-state.md`
+  — wraps `onUnpaired`/`onPairServerPaired` in `clearPairingScopedState`, the unconditional four-store
+  clear for when the pairing itself ends rather than the active conversation merely changing.

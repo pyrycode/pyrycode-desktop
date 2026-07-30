@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
-import { answerPrompt, cancelPrompt, selectOption, MODAL_CANCEL_OUTCOME } from './modalResolution'
+import {
+  answerPrompt,
+  cancelPrompt,
+  selectOption,
+  resolvePendingOption,
+  MODAL_CANCEL_OUTCOME
+} from './modalResolution'
 import { answerModalCommand, cancelModalCommand, type RendererCommand } from '@shared/ipc/commands'
-import type { ModalPrompt } from '../../store/modalPrompts'
+import type { ModalOption, ModalPrompt } from '../../store/modalPrompts'
 
 // answerPrompt / cancelPrompt are pure, React-free helpers (the composerSend precedent): their two
 // effects — the guarded sendCommand and the unconditional local `dismissed` dispatch — are injected,
@@ -118,6 +124,95 @@ describe('selectOption — the second-confirm gate', () => {
     expect(answer).toHaveBeenCalledTimes(1)
     expect(answer).toHaveBeenCalledWith('ok')
     expect(requestConfirm).not.toHaveBeenCalled()
+  })
+})
+
+// #511: resolvePendingOption is the pure derivation that scopes the #226 marker to the prompt it was
+// selected on. Daemon option ids are a CLOSED per-class vocabulary (`permission` → allow_once /
+// allow_always / reject_once / reject_always, `trust` → proceed / exit), so two prompts of the same
+// class share their ENTIRE id set — the pre-#511 option-id-only marker was GUARANTEED to match the
+// next prompt, not merely likely. The fixtures below therefore use the real daemon sets: a pair with
+// disjoint ids would not exercise the bug at all (AC1).
+describe('resolvePendingOption — the prompt-scoped second-confirm marker (#511)', () => {
+  const PERMISSION_OPTIONS: readonly ModalOption[] = [
+    { id: 'allow_once', label: 'Allow once' },
+    { id: 'allow_always', label: 'Allow always' },
+    { id: 'reject_once', label: 'Reject once' },
+    { id: 'reject_always', label: 'Reject always' }
+  ]
+
+  function permissionPrompt(modalId: string): ModalPrompt {
+    return {
+      modalId,
+      class: 'permission',
+      title: `Allow Bash (${modalId})`,
+      prompt: `claude wants to run the build (${modalId})`,
+      options: PERMISSION_OPTIONS,
+      defaultOptionId: 'reject_once'
+    }
+  }
+
+  // Two distinct prompts drawing from the identical id set — the shape the daemon actually produces
+  // for two consecutive permission requests.
+  const A = permissionPrompt('mdl-a')
+  const B = permissionPrompt('mdl-b')
+  // What the user armed by clicking A's non-default "Allow always" (selectOption holds, never answers).
+  const ARMED_ON_A = { modalId: 'mdl-a', optionId: 'allow_always' }
+
+  it('returns the held option when the rendered prompt IS the one it was selected on', () => {
+    expect(resolvePendingOption(A, ARMED_ON_A)).toEqual({ id: 'allow_always', label: 'Allow always' })
+  })
+
+  it('returns null when the rendered prompt is a DIFFERENT prompt sharing the same id set (AC1)', () => {
+    // The precondition that makes this non-vacuous: B genuinely offers the held id, so a null result
+    // can only come from the modalId guard — never from an accidental id mismatch.
+    expect(B.options.some((o) => o.id === ARMED_ON_A.optionId)).toBe(true)
+    expect(resolvePendingOption(B, ARMED_ON_A)).toBeNull()
+  })
+
+  it('returns null while nothing is outstanding (the empty-outstanding window, AC2)', () => {
+    expect(resolvePendingOption(undefined, ARMED_ON_A)).toBeNull()
+  })
+
+  it('returns null with no marker held — list mode', () => {
+    expect(resolvePendingOption(A, null)).toBeNull()
+  })
+
+  it('returns null when the SAME prompt is re-delivered without the held option (within-prompt net)', () => {
+    // The retained option-id lookup, redemoted to its real job: a `shown` re-delivery replaces the
+    // prompt in place (modalPrompts.ts) and may carry a changed option set.
+    const reDelivered: ModalPrompt = {
+      ...A,
+      options: [
+        { id: 'reject_once', label: 'Reject once' },
+        { id: 'reject_always', label: 'Reject always' }
+      ]
+    }
+    expect(resolvePendingOption(reDelivered, ARMED_ON_A)).toBeNull()
+  })
+
+  it('scopes by modalId in the `trust` vocabulary too (proceed / exit), the second closed id set', () => {
+    function trustPrompt(modalId: string): ModalPrompt {
+      return {
+        modalId,
+        class: 'trust',
+        title: 'Trust this workspace',
+        prompt: 'Grant access',
+        options: [
+          { id: 'proceed', label: 'Proceed' },
+          { id: 'exit', label: 'Exit' }
+        ],
+        defaultOptionId: 'exit'
+      }
+    }
+    const t1 = trustPrompt('mdl-t1')
+    const t2 = trustPrompt('mdl-t2')
+    const armedOnT1 = { modalId: 'mdl-t1', optionId: 'proceed' }
+
+    expect(t2.options.some((o) => o.id === armedOnT1.optionId)).toBe(true)
+    expect(resolvePendingOption(t2, armedOnT1)).toBeNull()
+    // The guard is the modalId, not the class — the same marker still resolves on its own prompt.
+    expect(resolvePendingOption(t1, armedOnT1)).toEqual({ id: 'proceed', label: 'Proceed' })
   })
 })
 

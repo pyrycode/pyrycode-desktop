@@ -5,7 +5,7 @@
 // these. This is where the AC4 guarded-send + unconditional-clear logic lives so it is unit-testable
 // under the `node` test environment (the view cannot be — no DOM to fire clicks).
 import { answerModalCommand, cancelModalCommand, type RendererCommand } from '@shared/ipc/commands'
-import type { ModalEvent, ModalPrompt } from '../../store/modalPrompts'
+import type { ModalEvent, ModalOption, ModalPrompt } from '../../store/modalPrompts'
 
 /**
  * The `outcome` a cancel records on the local `dismissed` event. The reduce ignores `outcome` (it
@@ -79,6 +79,54 @@ export function selectOption(
   } else {
     deps.requestConfirm(optionId)
   }
+}
+
+/**
+ * The held second-confirm marker (#511): which option, and — the part the bare option id never carried
+ * — WHICH PROMPT it was selected on. `modalId` is the daemon's per-modal nonce (a `crypto/rand` UUIDv4
+ * minted once per surfaced modal at its single mint site), so it is distinct per prompt; the property
+ * relied on is distinctness, not secrecy. Nothing is authorized by matching it client-side — every
+ * answer is re-validated against the daemon's own registry — so this is a UI-routing key, not a
+ * credential.
+ */
+export interface PendingConfirm {
+  readonly modalId: string
+  readonly optionId: string
+}
+
+/**
+ * Derive the rendered prompt's held option — the confirm sub-step's input — or null for list mode
+ * (#511). Total and React-free: every failure mode (no prompt, no marker, a marker from a different
+ * prompt, a missing option) collapses to null, which renders the option list again and requires a
+ * fresh selection — the fail-safe direction. Nothing is logged: `title` / `prompt` / option `label`
+ * are daemon-supplied application content.
+ *
+ * Two guards, both load-bearing:
+ *
+ * 1. `pending.modalId === prompt.modalId` — the marker is scoped to the prompt it was selected on.
+ *    This is the #511 fix. Daemon option ids are a CLOSED per-class vocabulary (`permission` →
+ *    allow_once / allow_always / reject_once / reject_always, `trust` → proceed / exit), NOT
+ *    per-prompt nonces, so two prompts of the same class share their entire id set — which is why the
+ *    pre-#511 option-id-only lookup could never catch a swap of `outstanding[0]` and one click on
+ *    Confirm could answer a prompt whose option list the user was never shown.
+ * 2. The option-id lookup — RETAINED, and redemoted rather than removed: it is no longer a
+ *    (never-firing) cross-prompt net but the WITHIN-prompt one, for a `shown` re-delivery that
+ *    replaces the prompt in place with a changed option set, and it is how the ModalOption the
+ *    confirm sentence names is obtained at all.
+ *
+ * Deriving on every render — rather than clearing the marker on a prompt change — means a stale marker
+ * is inert instead of needing a lifecycle: it can only ever match the prompt it was minted against, so
+ * the empty-`outstanding` window (`prompt === undefined`) is structurally safe, not defended. The
+ * deliberate consequence: if the SAME prompt returns (a reconnect re-send of a still-outstanding
+ * modal) the confirm sub-step is restored — correct, since the user did see that prompt's options and
+ * did select that option on it.
+ */
+export function resolvePendingOption(
+  prompt: ModalPrompt | undefined,
+  pending: PendingConfirm | null
+): ModalOption | null {
+  if (!prompt || !pending || prompt.modalId !== pending.modalId) return null
+  return prompt.options.find((o) => o.id === pending.optionId) ?? null
 }
 
 /**

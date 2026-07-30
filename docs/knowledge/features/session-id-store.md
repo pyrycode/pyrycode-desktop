@@ -38,11 +38,18 @@ selectSessionId(s)               // the only read surface
 
 Mirrors `conversationListStore`'s DI-factory → singleton → hook → selector structure (the #208
 idiom), but holds a bare `string | null` — no wire type, no camelCase remap, since the value is
-already a routing id, not a wire row. A **single setter**, not a reducer: there is exactly one
-mutation ("record the latest id"). `setSessionId` replaces the whole `sessionId` unconditionally
+already a routing id, not a wire row. `setSessionId` replaces the whole `sessionId` unconditionally
 (last-write-wins, no merge) and never coerces or validates — a received empty string is held
 **verbatim**, not treated as "no id." `sessionId: null` is the distinct "no marker seen yet" state, so
 a degenerate empty-string id is never confused with "nothing arrived yet."
+
+[#529](../codebase/529.md) added a second mutation, `clearSessionId`, returning the state to the
+exported `initialSessionIdState` constant — for when the pairing context that scoped the id ends.
+Named setters rather than a reducer: `setSessionId`/`clearSessionId` are independent whole-value
+writes, neither reading prior state nor constraining the other's ordering, so there is still no state
+machine for a discriminated-union action set to model. Ships with **no production caller** — #530
+(navigation) and #531 (unpair / pair-another-server) own the call sites and are both native blockers
+on #529.
 
 ### The data path (`src/renderer/src/store/sessionIdBridge.ts`)
 
@@ -99,8 +106,10 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   `runSettingsControls.ts`) — see [#257 codebase notes](../codebase/257.md).
 - **Empty-string `session_id` is held, not dropped** — deliberate (see the store section); a product
   call to instead reject it would be a behavior change, not a bug fix.
-- **No correlation, no reset.** Nothing is requested, so there is nothing to time out or retry; the
-  store keeps its last id across the whole app lifetime (there is no "close" event to reset on).
+- **No correlation, no automatic reset.** Nothing is requested, so there is nothing to time out or
+  retry; the store keeps its last id until something explicitly clears it. [#529](../codebase/529.md)
+  added `clearSessionId` as the manual path back to `initialSessionIdState`, but nothing calls it yet
+  (#530/#531 own that wiring).
 
 ## Related
 
@@ -127,3 +136,6 @@ daemon → transport (#254) → sessionTransition{newSessionId}
 - [Relay-link store](relay-link-store.md) / [#329](../codebase/329.md) — a sibling store cloning
   this one's structure verbatim (DI-factory → singleton → hook → selector, reactive-only, `null`
   sentinel) for the `relayLinkChanged` arm instead of `sessionTransition`.
+- [#529 codebase notes](../codebase/529.md) — added `clearSessionId`, the store's clear path, in
+  lockstep with the same capability on [`activeConversationStore`](conversation-shell.md); capability
+  only, no caller yet.

@@ -340,10 +340,18 @@ ticket is the first consumer of that payload beyond navigation.
 `conversationListStore` DI-factory → singleton → hook → selector shape, holding
 `ConversationCreatedPayload | null` (`null` = "no conversation created/opened this session yet") **verbatim**
 — snake_case, no camelCase remap, the `conversationListStore` doctrine — so the chip derives `cwd` and
-`is_promoted` at the read boundary rather than the store drifting from the wire shape. One setter,
-`setActiveConversation`, unconditional whole-value replace (most-recent-wins, no merge). [PairedShell's
+`is_promoted` at the read boundary rather than the store drifting from the wire shape. `setActiveConversation`,
+unconditional whole-value replace (most-recent-wins, no merge). [PairedShell's
 `conversation_created` callback](paired-shell.md#the-pure-view--container-pairedshelltsx) is the sole
 writer; `WorkspaceChip` (below) is the sole reader — no other consumer exists yet.
+
+[#529](../codebase/529.md) added a second mutation, `clearActiveConversation`, returning the state to
+the exported `initialActiveConversationState` constant — for when the conversation context that scoped
+the payload ends. Named setters rather than a reducer: the two mutations are independent whole-value
+writes, neither reading prior state nor constraining the other's ordering. Ships with **no production
+caller** — `PairedShell.tsx:88` already holds `setActiveConversation` and is an obvious-looking call
+site, but it belongs to #530 (navigation); #531 (unpair / pair-another-server) is the other native
+blocker on #529.
 
 Rejected alternative: correlating `sessionIdStore`'s session id against a `conversationListStore` row.
 There is no join key — `sessionIdStore` holds a daemon *session* routing id from `sessionTransition`,

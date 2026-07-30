@@ -11,11 +11,13 @@
 // (a marker can arrive before the Run config sheet is ever opened), and (b) session_id is a routing
 // id orthogonal to runConfigStore's { model, effort, yolo, usedTokens, windowTokens } snapshot. It
 // mirrors conversationListStore's DI-factory → singleton → hook → selector structure, but holds a
-// bare `string` (no wire type, no camelCase remap — the value is a routing id, not a wire row). A
-// single setter rather than a reducer: there is exactly one mutation ("record the latest id"), so a
-// discriminated-union action set would be a one-member union — ceremony without benefit.
-// Unidirectional is preserved: read-only selector, one write path, and `setSessionId` is invoked only
-// by the subscription wiring, never two-way-bound from a component.
+// bare `string` (no wire type, no camelCase remap — the value is a routing id, not a wire row). Named
+// setters rather than a reducer: the two mutations ("record the latest id" and, since #529, "clear
+// when the pairing context ends") are independent whole-value writes — neither reads prior state and
+// neither constrains the other's ordering — so there is no state machine for a discriminated-union
+// action set to model; it would still be ceremony without benefit. Unidirectional is preserved:
+// read-only selector, store-owned write paths, and both mutations are invoked only by wiring, never
+// two-way-bound from a component.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 
@@ -26,9 +28,12 @@ export interface SessionIdState {
   sessionId: string | null
 }
 
-/** Store shape = state + the single mutation entry point. */
+/** Store shape = state + the two mutation entry points. The mutations live here and NOT on
+ *  `SessionIdState`, so the selector — typed against the state-only interface — cannot see them and
+ *  `initialSessionIdState` stays assignable. */
 export type SessionIdStore = SessionIdState & {
   setSessionId: (id: string) => void
+  clearSessionId: () => void
 }
 
 export const initialSessionIdState: SessionIdState = { sessionId: null }
@@ -36,12 +41,17 @@ export const initialSessionIdState: SessionIdState = { sessionId: null }
 /**
  * DI-friendly, React-free store — one isolated instance per test. `setSessionId` replaces the whole
  * `sessionId` unconditionally (AC2 "most recent marker wins" — no merge, no coercion, no validation).
- * The stored value is the daemon's, as-is (AC4).
+ * The stored value is the daemon's, as-is (AC4). `clearSessionId` (#529) returns the state to
+ * `initialSessionIdState` for when the pairing context that scoped the id ends — sourced from that
+ * exported constant rather than a fresh literal, so it keeps resetting everything if the state ever
+ * gains a second field. It is unconditional, which is what makes clearing an already-clear store a
+ * no-op by construction rather than by a guard.
  */
 export function createSessionIdStore(init: SessionIdState = initialSessionIdState) {
   return createStore<SessionIdStore>((set) => ({
     ...init,
-    setSessionId: (sessionId) => set({ sessionId })
+    setSessionId: (sessionId) => set({ sessionId }),
+    clearSessionId: () => set(initialSessionIdState)
   }))
 }
 
@@ -53,6 +63,6 @@ export function useSessionIdStore<T>(selector: (s: SessionIdStore) => T): T {
   return useStore(sessionIdStore, selector)
 }
 
-/** The only read surface. There is no exposed setter beyond `setSessionId`; it is the sole mutation
- *  path and is invoked only by the subscription wiring, never two-way-bound from a component. */
+/** The only read surface. The exposed mutations are exactly `setSessionId` and `clearSessionId`; both
+ *  are invoked only by wiring, never two-way-bound from a component. */
 export const selectSessionId = (s: SessionIdState): string | null => s.sessionId

@@ -16,6 +16,13 @@
 // both ways (no hello re-sent, no hello_ack) — and on the daemon's reply atomically swaps its
 // cipher states for the freshly derived pair, so a long-lived session outlives the daemon's rekey
 // interval. A failed or wrong-state rekey leaves the pre-rekey ciphers intact and the session usable.
+// While that rekey is in flight the session ALSO reads one OUTER label — the inbound frame's
+// InnerFrameV2 `type`, passed down by the driver (#532). It is consulted in exactly one state,
+// `awaiting-rekey-reply`, to tell the daemon's handshake reply (`noise_resp`) apart from an app
+// frame the daemon fanned out under the still-live old ciphers before our rekey msg1 landed — two
+// frame kinds that are legitimately in flight at once, which the state machine alone cannot
+// separate. It is used for ROUTING only: it selects a path, never a key, and the AEAD stays the sole
+// authority on whether a frame opens. Every other state ignores it. See onFrame for the full model.
 // The crypto is `noise-c.wasm` (a vetted Emscripten build of rweather/noise-c, the reference C
 // implementation; no hand-rolled crypto), loaded once via the shared ./noiseLib loader.
 //
@@ -80,8 +87,12 @@ export type NoiseSessionEvent =
 export interface NoiseSession {
   /** Write message 1 (carrying the hello) to sendFrame. Call exactly once; inert after close. */
   start(): void
-  /** Feed one inbound frame: drive the message-2 read, then post-handshake transport decrypt. */
-  onFrame(frame: Uint8Array): void
+  /** Feed one inbound frame: drive the message-2 read, then post-handshake transport decrypt.
+   *  `innerType` is the frame's InnerFrameV2 `type` label when the caller has one (the production
+   *  driver always does). It is consulted in EXACTLY ONE state, `awaiting-rekey-reply`, for routing
+   *  only (#532); every other state ignores it outright. Omitted → unlabelled, which routes exactly
+   *  as it did pre-#532. */
+  onFrame(frame: Uint8Array, innerType?: string): void
   /** Post-handshake: AEAD-seal one plaintext to sendFrame. Inert before completion / after close. */
   sendMessage(plaintext: Uint8Array): void
   /** Free the wasm handshake + cipher states. Idempotent; leaves every entry point inert. */
@@ -101,6 +112,14 @@ type SessionState =
 // like the daemon's `TypeRekeyRequest` (kept out of its app-dispatch `v1TypeSet`), it is a control
 // type, not an app-dispatch type — `parseInboundMessage` never switches on it.
 const REKEY_REQUEST_TYPE = 'rekey_request'
+
+// The InnerFrameV2 `type` the daemon puts on every one of its IK handshake replies — initial msg2,
+// rekey msg2, reconnect msg2 (pyrycode internal/relay/v2session_handshake.go:241,
+// v2session_rekey.go:146). Module-private for the same reason REKEY_REQUEST_TYPE is: one spelling,
+// one place. It is unambiguously a daemon→client-only tag — the real daemon rejects an INBOUND
+// `noise_resp` from a client as a state-machine violation (v2session.go:669-676) — which is what
+// makes it usable as the reply marker in the one state that needs one (#532).
+const NOISE_RESP_TYPE = 'noise_resp'
 
 // True iff `plaintext` decodes as an Envelope whose type is the rekey trigger. TOTAL by
 // construction: it reuses the vetted, fail-closed decodeEnvelope and swallows its WireDecodeError
@@ -229,7 +248,7 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
     config.sendFrame(msg1)
   }
 
-  function onFrame(frame: Uint8Array): void {
+  function onFrame(frame: Uint8Array, innerType?: string): void {
     if (state === 'closed') return // inert after teardown — never touch freed wasm
     if (state === 'transport') {
       if (recvCipher === null) return
@@ -254,6 +273,48 @@ export async function createNoiseSession(config: NoiseSessionConfig): Promise<No
       return
     }
     if (state === 'awaiting-rekey-reply') {
+      // #532: the ONE state where the inner-frame label is consulted. The daemon does not stop the
+      // world for a rekey — it keeps fanning out transport frames under the OLD CipherStates for the
+      // whole awaiting-reply window, and only its handleRekeyInit swaps (pyrycode #450). So an app
+      // frame emitted after `rekey_request` but before our `noise_init` landed is TCP-ordered AHEAD
+      // of the reply. Two frame kinds are legitimately in flight at once and ONLY the label separates
+      // them; the Noise state machine alone is provably insufficient here, which is why this state
+      // (and only this state) reads it. The real daemon resolved the mirror-image problem the same
+      // way (v2session.go:664-669), and fakeDaemon was corrected to match in #524.
+      //
+      // The test is POSITIVE on `noise_resp`, not negative on `noise_msg`: an unknown or hostile
+      // label therefore takes the gentler window-transport branch below (non-terminal, reply slot
+      // preserved) instead of burning the one-shot handshake read. An ABSENT label means the reply,
+      // which is exactly the pre-#532 assumption, now written down — unreachable from production
+      // (decodeInnerFrame rejects a non-string `type`, codec.ts), so it is a unit-test affordance.
+      //
+      // The label picks a PATH, never a key: both paths were already reachable, both objects
+      // (`hs`, `recvCipher`) existed before the frame arrived, and the AEAD remains the sole
+      // authority on whether a frame opens. A relabelling relay only changes WHICH of two
+      // pre-existing rejections an already-doomed frame receives — never a downgrade, a transport
+      // bypass, or a key/nonce reuse. Same argument as fakeDaemon.ts's, in the mirror direction.
+      if (innerType !== undefined && innerType !== NOISE_RESP_TYPE) {
+        if (recvCipher === null) return // defensive: beginRekey requires both ciphers and clears neither
+        let plaintext: Uint8Array
+        try {
+          plaintext = recvCipher.DecryptWithAd(EMPTY_AD, frame)
+        } catch {
+          // Non-terminal and, crucially, NOT a reply: `hs` and `state` are untouched, so the one-shot
+          // handshake read survives and a genuine reply arriving afterwards still completes the swap.
+          failWithFrame('transport-decrypt-failed', frame)
+          return
+        }
+        // Deliberately NO isRekeyRequest re-check here, unlike the `transport` branch. A
+        // `rekey_request` interleaved into an already-open window is not representable — beginRekey's
+        // own `state !== 'transport'` guard would no-op it — but emitting `rekey-requested` would
+        // still arm the driver's rekeyInitPending latch, which would then mis-tag the NEXT outbound
+        // app frame as `noise_init` after the swap; the daemon would route that app frame into its
+        // reconnect handler and fail closed. A faithful daemon never sends one here (in its
+        // awaiting-rekey-init substate it emits only msg2 and the resume frame); a hostile one gets
+        // its frame surfaced as an ordinary unmodeled envelope to parseInboundMessage, which is benign.
+        config.onEvent({ type: 'message', plaintext })
+        return
+      }
       if (hs === null) return // defensive: this state always holds the fresh handshake
       let pair: [NoiseCipherState, NoiseCipherState]
       try {

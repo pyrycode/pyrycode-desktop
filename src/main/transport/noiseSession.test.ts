@@ -65,7 +65,13 @@ async function createNoiseResponder(config: {
   staticPrivateKey: Uint8Array
   prologue: Uint8Array
   helloAck: Uint8Array
-  sendFrame: (frame: Uint8Array) => void
+  // #532: the double TAGS each outbound frame with its InnerFrameV2 `type`, exactly as the real
+  // daemon and fakeDaemon do — the two handshake replies are `noise_resp`, every transport frame
+  // (including the `rekey_request` control envelope) is `noise_msg`. The tag follows the FRAME,
+  // never the state. Widening the callback forces no call-site edit: a one-parameter
+  // `sendFrame: (f) => …` lambda stays assignable, so every pre-#532 fixture is untouched and keeps
+  // feeding the session unlabelled frames.
+  sendFrame: (frame: Uint8Array, type: string) => void
   onEvent: (event: NoiseResponderEvent) => void
 }): Promise<NoiseResponder> {
   const lib = await loadNoiseLib()
@@ -112,7 +118,7 @@ async function createNoiseResponder(config: {
             }
           }
           state = 'transport'
-          config.sendFrame(reply)
+          config.sendFrame(reply, 'noise_resp') // a handshake reply — the rekey msg2
         } catch {
           // Surface a responder-side error; leave the existing (old-key) ciphers live and usable.
           config.onEvent({ type: 'error', reason: 'handshake-read-failed' })
@@ -129,7 +135,7 @@ async function createNoiseResponder(config: {
         recv = pair[1]
         state = 'transport'
         config.onEvent({ type: 'handshake-complete', hello })
-        config.sendFrame(reply)
+        config.sendFrame(reply, 'noise_resp') // a handshake reply — the initial IK msg2
       } catch {
         hs = null
         state = 'closed'
@@ -137,8 +143,13 @@ async function createNoiseResponder(config: {
       }
     },
     sendMessage(plaintext) {
-      if (state !== 'transport' || !send) return
-      config.sendFrame(send.EncryptWithAd(EMPTY_AD, plaintext))
+      // #532: `awaiting-rekey-init` serves too. This double swaps its ciphers ONLY inside the
+      // awaiting-rekey-init handler above, so `send` here is still the live OLD cipher — the seal is
+      // mechanically available, and serving it matches the real daemon, which keeps fanning out
+      // transport frames under the OLD CipherStates for the whole awaiting-reply window (pyrycode
+      // #450). That frame is exactly what the client's rekey window has to decrypt.
+      if ((state !== 'transport' && state !== 'awaiting-rekey-init') || !send) return
+      config.sendFrame(send.EncryptWithAd(EMPTY_AD, plaintext), 'noise_msg')
     },
     initiateRekey(rekeyRequestBytes) {
       if (state !== 'transport' || !send) return
@@ -146,7 +157,7 @@ async function createNoiseResponder(config: {
       // (mirrors the session's set-state-before-send ordering). Seal under the CURRENT (old) key.
       const sealed = send.EncryptWithAd(EMPTY_AD, rekeyRequestBytes)
       state = 'awaiting-rekey-init'
-      config.sendFrame(sealed)
+      config.sendFrame(sealed, 'noise_msg') // a transport frame despite driving the rekey
     },
     close() {
       state = 'closed'
@@ -452,6 +463,13 @@ describe('rekey re-handshake + atomic cipher swap (#111)', () => {
     responder: NoiseResponder
     init: ReturnType<typeof collector<NoiseSessionEvent>>
     resp: ReturnType<typeof collector<NoiseResponderEvent>>
+    /** Stop delivering the client's outbound frames to the responder — they queue instead. Arming
+     *  this before initiateRekey() withholds the client's fresh rekey msg1, so the responder never
+     *  swaps and both peers sit in the rekey window holding the OLD ciphers live (#532). */
+    holdInitiatorFrames(): void
+    /** Resume delivery and drain everything queued, in order — the withheld msg1 reaches the
+     *  responder, which swaps and answers with the genuine `noise_resp` reply. */
+    releaseInitiatorFrames(): void
   }> {
     const lib = await loadNoiseLib()
     const curve = lib.constants.NOISE_DH_CURVE25519
@@ -460,23 +478,48 @@ describe('rekey re-handshake + atomic cipher swap (#111)', () => {
     const init = collector<NoiseSessionEvent>()
     const resp = collector<NoiseResponderEvent>()
     let responder: NoiseResponder
+    // The withhold-and-release gate (#532), modelled on dropInitiatorFrames below but CAPTURING
+    // rather than dropping — the held frames are replayed, not lost. No timer: release is an
+    // explicit test call, so the ordering the rekey window depends on is exact.
+    let holdingInitiator = false
+    const heldInitiator: Uint8Array[] = []
     const initiator = await createNoiseSession({
       staticPrivateKey: initPriv,
       remoteStaticPublicKey: respPub,
       prologue: new Uint8Array(0),
       hello: enc(HELLO),
-      sendFrame: (f) => responder.onFrame(f),
+      sendFrame: (f) => {
+        if (holdingInitiator) {
+          heldInitiator.push(f)
+          return
+        }
+        responder.onFrame(f)
+      },
       onEvent: init.onEvent
     })
     responder = await createNoiseResponder({
       staticPrivateKey: respPriv,
       prologue: new Uint8Array(0),
       helloAck: enc(HELLO_ACK),
-      sendFrame: (f) => initiator.onFrame(f),
+      // #532: thread the responder's own tag through to the session, exactly as the production
+      // driver now forwards the decoded InnerFrameV2 `type` (noiseRelayDriver.onMessage).
+      sendFrame: (f, t) => initiator.onFrame(f, t),
       onEvent: resp.onEvent
     })
     handles.push(initiator, responder)
-    return { initiator, responder, init, resp }
+    return {
+      initiator,
+      responder,
+      init,
+      resp,
+      holdInitiatorFrames: () => {
+        holdingInitiator = true
+      },
+      releaseInitiatorFrames: () => {
+        holdingInitiator = false
+        for (const f of heldInitiator.splice(0)) responder.onFrame(f)
+      }
+    }
   }
 
   const plaintexts = (events: NoiseSessionEvent[]): Uint8Array[] =>
@@ -633,6 +676,105 @@ describe('rekey re-handshake + atomic cipher swap (#111)', () => {
     const got = plaintexts(init.events)
     expect(got).toHaveLength(1)
     expect(bytes(got[0])).toEqual(bytes(app))
+  })
+
+  // --- #532: routing inbound frames in the rekey window by inner frame type ---------------------
+  // The daemon does not stop the world for a rekey: any app frame it fanned out after emitting
+  // `rekey_request` but before processing the client's `noise_init` is TCP-ordered AHEAD of the
+  // reply and lands while the client is parked in `awaiting-rekey-reply` (pyrycode #450). Two frame
+  // kinds are legitimately in flight at once and only the inner-frame label separates them, so in
+  // this ONE state the session consults it. The interleaved frame must be sealed DURING the window —
+  // the responder->initiator AEAD stream is nonce-lockstep, so it cannot be sealed early and held
+  // back (see the note at the capture-and-replay test above).
+
+  it('serves an interleaved app frame in the rekey window, then still completes the swap (AC1/AC2/AC3)', async () => {
+    const { initiator, responder, init, resp, holdInitiatorFrames, releaseInitiatorFrames } =
+      await pair()
+    initiator.start()
+    expect(init.events.some((e) => e.type === 'handshake-complete')).toBe(true)
+
+    // Open the window: withhold the client's fresh rekey msg1 so the responder never reaches its
+    // swap. Both peers now hold the OLD ciphers live, exactly as the real pair does mid-rekey.
+    holdInitiatorFrames()
+    responder.initiateRekey(rekeyRequest())
+    expect(init.events.filter((e) => e.type === 'rekey-requested')).toHaveLength(1)
+
+    // AC1: an ordinary app frame sealed under the pre-rekey send cipher, carrying the daemon's
+    // transport tag, decrypts under the still-live old receive cipher and reaches the SAME consumer
+    // it would have reached outside the window.
+    const interleaved = new TextEncoder().encode('fanned out before the rekey msg1 landed')
+    responder.sendMessage(interleaved)
+    const inWindow = plaintexts(init.events)
+    expect(inWindow).toHaveLength(1)
+    expect(bytes(inWindow[0])).toEqual(bytes(interleaved))
+    // AC3: no handshake-read-failed — and no error of ANY reason.
+    expect(initErrors(init.events)).toHaveLength(0)
+
+    // AC2: the daemon's actual reply, released now, still drives the cipher swap…
+    releaseInitiatorFrames()
+    expect(initErrors(init.events)).toHaveLength(0)
+
+    // …and traffic in BOTH directions afterwards succeeds under the new ciphers.
+    const k1In = new TextEncoder().encode('under the new keys, resp -> init')
+    responder.sendMessage(k1In)
+    const afterSwap = plaintexts(init.events)
+    expect(afterSwap).toHaveLength(2)
+    expect(bytes(afterSwap[1])).toEqual(bytes(k1In))
+
+    const k1Out = new TextEncoder().encode('under the new keys, init -> resp')
+    initiator.sendMessage(k1Out)
+    const gotByResp = resp.events.find((e) => e.type === 'message')
+    expect(gotByResp).toBeDefined()
+    expect(bytes((gotByResp as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(k1Out))
+
+    expect(initErrors(init.events)).toHaveLength(0)
+    expect(respErrors(resp.events)).toHaveLength(0)
+    expect(init.events.filter((e) => e.type === 'rekey-requested')).toHaveLength(1)
+  })
+
+  it('rejects an undecryptable non-reply frame in the window without consuming the reply slot (AC5)', async () => {
+    const { initiator, responder, init, holdInitiatorFrames, releaseInitiatorFrames } = await pair()
+    initiator.start()
+    holdInitiatorFrames()
+    responder.initiateRekey(rekeyRequest())
+
+    // Garbage carrying the daemon's TRANSPORT tag: not the reply, and it opens under no cipher.
+    initiator.onFrame(new Uint8Array(48).fill(0x33), 'noise_msg')
+    // Non-terminal: the gentler transport-decrypt rejection, never handshake-read-failed.
+    expect(initErrors(init.events)).toEqual(['transport-decrypt-failed'])
+
+    // The one-shot handshake read was NOT burned — the genuine reply still completes the swap…
+    releaseInitiatorFrames()
+    expect(initErrors(init.events)).toEqual(['transport-decrypt-failed'])
+
+    // …proven by a frame that only the NEW receive cipher can open.
+    const k1 = new TextEncoder().encode('the rekey still completed')
+    responder.sendMessage(k1)
+    const got = plaintexts(init.events)
+    expect(got).toHaveLength(1)
+    expect(bytes(got[0])).toEqual(bytes(k1))
+  })
+
+  it('routes a noise_resp-tagged frame to the reply path — the label, not the bytes, decides (AC4)', async () => {
+    const { initiator, responder, init, holdInitiatorFrames } = await pair()
+    initiator.start()
+    holdInitiatorFrames()
+    responder.initiateRekey(rekeyRequest())
+
+    // Byte-identical garbage to the AC5 scenario above, differing ONLY in its tag. As the daemon's
+    // handshake reply it burns the one-shot handshake read and fails exactly as it did pre-#532.
+    // This is the routing mutation control: under a negative-on-noise_msg rule, or a swapped
+    // comparison, the two scenarios' reasons trade places and both die.
+    initiator.onFrame(new Uint8Array(48).fill(0x33), 'noise_resp')
+    expect(initErrors(init.events)).toEqual(['handshake-read-failed'])
+
+    // Old ciphers intact and the session usable in `transport`, not closed: a following K0-sealed
+    // responder frame still surfaces (the AC4 guarantee, unchanged from #111).
+    const afterFail = new TextEncoder().encode('still alive on the old keys')
+    responder.sendMessage(afterFail)
+    const got = plaintexts(init.events)
+    expect(got).toHaveLength(1)
+    expect(bytes(got[0])).toEqual(bytes(afterFail))
   })
 })
 

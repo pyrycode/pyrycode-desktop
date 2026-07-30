@@ -20,7 +20,7 @@ import { createDaemonConnection } from './daemonConnection'
 import { createDebugBundleDownload } from './debugBundleDownload'
 import { saveDebugBundle } from './saveDebugBundle'
 import { emitDaemonEvent } from './emitDaemonEvent'
-import { fireNotification, activateWindow } from './fireNotification'
+import { fireNotification, activateWindow, windowHasFocus } from './fireNotification'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
@@ -362,8 +362,11 @@ app.whenReady().then(() => {
         // #393: the click is composed HERE (the sole composition site) — on click, activate the window
         // (AC1) and emit the nullary notificationActivated event (AC2/AC3) so the renderer navigates to
         // the thread. `mainWindow` satisfies both ActivatableWindow and DaemonEventSink structurally.
+        // #518: all three window touches in this closure are destroyed-safe — the guard lives in
+        // each callee (windowHasFocus, activateWindow, emitDaemonEvent), so on macOS a `notify`
+        // arriving after the window is closed is a no-op rather than an uncaught exception.
         fireNotification(command.payload.kind, {
-          isWindowFocused: () => mainWindow.isFocused(),
+          isWindowFocused: () => windowHasFocus(mainWindow),
           Notification,
           onClick: () => {
             activateWindow(mainWindow)

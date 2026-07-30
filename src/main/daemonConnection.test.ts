@@ -109,8 +109,27 @@ function makeDriverFactory(options: { throwOnSend?: boolean } = {}): {
 }
 
 // --- sink ----------------------------------------------------------------------------------
-function fakeSink(): DaemonEventSink & { webContents: { send: ReturnType<typeof vi.fn> } } {
-  return { webContents: { send: vi.fn() } }
+// `destroy()` (#518) models the macOS window being closed mid-session: `isDestroyed()` flips true
+// and, exactly like a real destroyed BrowserWindow, the `webContents` accessor starts throwing.
+function fakeSink(): DaemonEventSink & {
+  webContents: { send: ReturnType<typeof vi.fn> }
+  /** The send spy by a stable handle — `sink.webContents` throws once destroyed. */
+  send: ReturnType<typeof vi.fn>
+  destroy(): void
+} {
+  let destroyed = false
+  const webContents = { send: vi.fn() }
+  return {
+    isDestroyed: () => destroyed,
+    get webContents(): { send: ReturnType<typeof vi.fn> } {
+      if (destroyed) throw new Error('Object has been destroyed')
+      return webContents
+    },
+    send: webContents.send,
+    destroy(): void {
+      destroyed = true
+    }
+  }
 }
 
 function emitted(sink: ReturnType<typeof fakeSink>): DaemonEvent[] {
@@ -805,6 +824,41 @@ describe('createDaemonConnection', () => {
     } finally {
       for (const spy of spies) spy.mockRestore()
     }
+  })
+})
+
+describe('createDaemonConnection — destroyed window sink (#518)', () => {
+  // On macOS, closing the window destroys the BrowserWindow but leaves the app and this connection
+  // running, so inbound daemon events keep arriving at a destroyed sink. The transport invokes the
+  // event callback with no try/catch (relayConnection.ts), so a throw here is an uncaught
+  // main-process exception. Drive the CONNECTION's sink, not the emitter in isolation (AC2).
+  it('drops an inbound message frame without throwing once the window is destroyed', async () => {
+    const { sink, drivers } = await reachConnected()
+    const before = sink.send.mock.calls.length
+    sink.destroy()
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: messagePlaintext({
+          conversation_id: 'c1',
+          message_id: 'm1',
+          role: 'assistant',
+          text: 'hi'
+        })
+      })
+    ).not.toThrow()
+    expect(sink.send.mock.calls.length).toBe(before)
+  })
+
+  it('drops a relay-link-down transition without throwing once the window is destroyed', async () => {
+    // The relay-link pair is inside the emitDaemonEvent funnel, so the one guard covers it too.
+    const { sink, drivers } = await reachConnected()
+    const before = sink.send.mock.calls.length
+    sink.destroy()
+
+    expect(() => drivers[0].emit({ type: 'relay-link-down', code: 4404 })).not.toThrow()
+    expect(sink.send.mock.calls.length).toBe(before)
   })
 })
 

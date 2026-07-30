@@ -3,10 +3,33 @@ import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
 import { DAEMON_EVENT_CHANNEL, type DaemonEvent } from '../shared/ipc/events'
 import type { HelloAckPayload, MessagePayload } from '../shared/wire/types'
 
-// A structural stand-in for a BrowserWindow: only webContents.send, spied. No Electron
+// A structural stand-in for a BrowserWindow: webContents.send, spied, plus the destroyed query
+// (#518). `destroy()` flips it, modelling the window being closed mid-session. No Electron
 // harness needed — the helper is typed against the minimal sink, not BrowserWindow.
-function fakeSink(): DaemonEventSink & { webContents: { send: ReturnType<typeof vi.fn> } } {
-  return { webContents: { send: vi.fn() } }
+function fakeSink(): DaemonEventSink & {
+  webContents: { send: ReturnType<typeof vi.fn> }
+  destroy(): void
+} {
+  let destroyed = false
+  return {
+    isDestroyed: () => destroyed,
+    webContents: { send: vi.fn() },
+    destroy(): void {
+      destroyed = true
+    }
+  }
+}
+
+// A destroyed BrowserWindow as Electron really behaves (#518): `isDestroyed()` answers true and
+// the `webContents` ACCESSOR itself throws — the property read is the throw, before `send` is
+// ever reached. A throwing getter body satisfies the declared property type, so no cast is needed.
+function destroyedSink(): DaemonEventSink {
+  return {
+    isDestroyed: () => true,
+    get webContents(): { send(channel: string, event: DaemonEvent): void } {
+      throw new Error('Object has been destroyed')
+    }
+  }
 }
 
 describe('emitDaemonEvent', () => {
@@ -50,5 +73,37 @@ describe('emitDaemonEvent', () => {
 
     expect(sink.webContents.send).toHaveBeenCalledTimes(1)
     expect(sink.webContents.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, event)
+  })
+})
+
+describe('emitDaemonEvent — destroyed sink (#518)', () => {
+  it('drops the event and returns normally when the sink reports itself destroyed', () => {
+    const sink = fakeSink()
+    sink.destroy()
+
+    expect(() => emitDaemonEvent(sink, { type: 'connecting' })).not.toThrow()
+    expect(sink.webContents.send).not.toHaveBeenCalled()
+  })
+
+  it('does not read webContents on a destroyed sink — the accessor itself throws', () => {
+    // The ordering pin: a guard placed AFTER any `sink.webContents` read (a destructure, an early
+    // alias) still throws here, because on a real destroyed BrowserWindow the property read is the
+    // throw. This is the only assertion that catches that mistake.
+    expect(() => emitDaemonEvent(destroyedSink(), { type: 'connecting' })).not.toThrow()
+  })
+
+  it('still sends exactly once on a live sink after another sink was destroyed', () => {
+    // No behaviour change while a window is alive (AC5): the guard is a per-call query, so one
+    // destroyed sink cannot mute a live one.
+    const dead = fakeSink()
+    dead.destroy()
+    const live = fakeSink()
+    const event: DaemonEvent = { type: 'connecting' }
+
+    emitDaemonEvent(dead, event)
+    emitDaemonEvent(live, event)
+
+    expect(live.webContents.send).toHaveBeenCalledTimes(1)
+    expect(live.webContents.send).toHaveBeenCalledWith(DAEMON_EVENT_CHANNEL, event)
   })
 })

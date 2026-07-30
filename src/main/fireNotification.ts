@@ -67,12 +67,43 @@ export function fireNotification(
 }
 
 /**
+ * The minimal main-window surface the fire-decision reads (#518). Parallel to ActivatableWindow —
+ * the sibling half of the same `notify` closure — and a real BrowserWindow satisfies both.
+ */
+export interface FocusableWindow {
+  /** See ActivatableWindow.isDestroyed — the one member safe to call post-destruction. */
+  isDestroyed(): boolean
+  isFocused(): boolean
+}
+
+/**
+ * Is the main window focused? (#518) A destroyed window reports UNFOCUSED without touching
+ * `isFocused()` — which throws once the window is gone. That is the semantically right answer, not
+ * a fudge: a closed window cannot hold focus, and it is exactly the condition under which a
+ * notification should fire. (Whether the resulting click can surface a window is #519's concern;
+ * here `activateWindow` makes it a safe no-op.)
+ *
+ * Extracted rather than inlined at the wiring site because `src/main/index.ts` has no peer test —
+ * the house pattern is the Electron-free module with injected dependencies, so the logic lives
+ * where a test can reach it and the root keeps a one-line closure.
+ */
+export function windowHasFocus(win: FocusableWindow): boolean {
+  if (win.isDestroyed()) return false
+  return win.isFocused()
+}
+
+/**
  * The minimal main-window surface `activateWindow` drives (#393). A real Electron BrowserWindow
  * satisfies this structurally (as it satisfies DaemonEventSink), so no `electron` import reaches this
  * unit and the test injects a fake. `isVisible` is deliberately absent — `show()` is safe to call
  * unconditionally, so there is nothing to branch on for the hidden case.
  */
 export interface ActivatableWindow {
+  /**
+   * True once the window has been destroyed (#518) — the ONE member safe to call on a destroyed
+   * BrowserWindow; the four below all throw. Declared first because it is checked first.
+   */
+  isDestroyed(): boolean
   isMinimized(): boolean
   restore(): void
   show(): void
@@ -85,8 +116,12 @@ export interface ActivatableWindow {
  * covers the hidden case (and reveals a restored window), and an explicit `focus()` covers the
  * already-visible-but-behind case. The main concern lives HERE, injected, so the wiring site composes
  * it into the click handler without any Electron import reaching the tested unit.
+ *
+ * A destroyed window (#518) is a total no-op: the check comes first, above `isMinimized()`, because
+ * every member below throws once the window is gone. Reviving a closed window is #519's job.
  */
 export function activateWindow(win: ActivatableWindow): void {
+  if (win.isDestroyed()) return
   if (win.isMinimized()) win.restore()
   win.show()
   win.focus()

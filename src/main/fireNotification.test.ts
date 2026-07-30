@@ -2,9 +2,11 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   fireNotification,
   activateWindow,
+  windowHasFocus,
   type OsNotification,
   type OsNotificationConstructor,
-  type ActivatableWindow
+  type ActivatableWindow,
+  type FocusableWindow
 } from './fireNotification'
 import type { NotifyKind } from '../shared/ipc/commands'
 
@@ -32,17 +34,40 @@ function fakeNotification(): {
 }
 
 // A structural stand-in for Electron's BrowserWindow, minimal to the ActivatableWindow surface
-// (#393): spied restore/show/focus plus a fixed isMinimized. No Electron harness.
-function fakeWindow(isMinimized: boolean): {
+// (#393): spied restore/show/focus plus a fixed isMinimized. `destroyed` (#518) defaults false;
+// `isMinimized` is spied too, so a destroyed-window test can prove the guard precedes every touch.
+// No Electron harness.
+function fakeWindow(
+  isMinimized: boolean,
+  destroyed = false
+): {
   win: ActivatableWindow
+  isMinimized: ReturnType<typeof vi.fn>
   restore: ReturnType<typeof vi.fn>
   show: ReturnType<typeof vi.fn>
   focus: ReturnType<typeof vi.fn>
 } {
+  const minimized = vi.fn(() => isMinimized)
   const restore = vi.fn()
   const show = vi.fn()
   const focus = vi.fn()
-  return { win: { isMinimized: () => isMinimized, restore, show, focus }, restore, show, focus }
+  return {
+    win: { isDestroyed: () => destroyed, isMinimized: minimized, restore, show, focus },
+    isMinimized: minimized,
+    restore,
+    show,
+    focus
+  }
+}
+
+// A structural stand-in for the focus half of the same real BrowserWindow (#518): a spied
+// isFocused, so a destroyed-window test can assert the guard short-circuits above the touch.
+function fakeFocusableWindow(
+  focused: boolean,
+  destroyed = false
+): { win: FocusableWindow; isFocused: ReturnType<typeof vi.fn> } {
+  const isFocused = vi.fn(() => focused)
+  return { win: { isDestroyed: () => destroyed, isFocused }, isFocused }
 }
 
 describe('fireNotification (#391)', () => {
@@ -165,5 +190,41 @@ describe('activateWindow (#393)', () => {
     expect(restore).not.toHaveBeenCalled()
     expect(show).toHaveBeenCalledTimes(1)
     expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  // #518: on macOS the window can be destroyed while the app keeps running, so a notification
+  // click can land on a destroyed window. Every member below throws once destroyed.
+  it('is a total no-op on a destroyed window — no member is touched (#518)', () => {
+    const { win, isMinimized, restore, show, focus } = fakeWindow(false, true)
+
+    expect(() => activateWindow(win)).not.toThrow()
+
+    expect(isMinimized).not.toHaveBeenCalled()
+    expect(restore).not.toHaveBeenCalled()
+    expect(show).not.toHaveBeenCalled()
+    expect(focus).not.toHaveBeenCalled()
+  })
+})
+
+describe('windowHasFocus (#518)', () => {
+  it('reports a live focused window as focused', () => {
+    const { win } = fakeFocusableWindow(true)
+    expect(windowHasFocus(win)).toBe(true)
+  })
+
+  it('reports a live unfocused window as unfocused', () => {
+    const { win } = fakeFocusableWindow(false)
+    expect(windowHasFocus(win)).toBe(false)
+  })
+
+  it('reports a destroyed window as unfocused without querying isFocused', () => {
+    // A closed window cannot hold focus, so `false` is the semantically right answer — and it is
+    // the condition under which a notification should fire. Asserting isFocused was never called
+    // is what proves the guard precedes the touch (isFocused() throws once destroyed).
+    const { win, isFocused } = fakeFocusableWindow(true, true)
+
+    expect(() => windowHasFocus(win)).not.toThrow()
+    expect(windowHasFocus(win)).toBe(false)
+    expect(isFocused).not.toHaveBeenCalled()
   })
 })

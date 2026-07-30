@@ -9,7 +9,7 @@ import type { UnpairResult } from '@shared/ipc/unpair'
 // container is trivial useState (untested, like Composer's `text`); the branch logic lives here.
 
 describe('runUnpair', () => {
-  it('ok → dispatches exactly one reset, calls onUnpaired once, resolves ok', async () => {
+  it('ok → dispatches nothing, calls onUnpaired once, resolves ok', async () => {
     const dispatch = vi.fn()
     const onUnpaired = vi.fn()
     const unpair = vi.fn(async (): Promise<UnpairResult> => ({ result: 'ok' }))
@@ -17,21 +17,14 @@ describe('runUnpair', () => {
     const outcome = await runUnpair({ unpair, dispatch, onUnpaired })
 
     expect(outcome).toBe('ok')
-    expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(dispatch).toHaveBeenCalledWith({ type: 'reset' })
+    // #531: the session reset is NOT dispatched here any more. It moved into the shared
+    // clearPairingScopedState, which PairedShell runs around `onUnpaired` so the unpair and the
+    // pair-another-server paths clear the same set from one place. Leaving a second reset here would
+    // be runtime-harmless (the arm is idempotent by reference) but a live divergence trap: a later
+    // reader deleting the helper's session reset because "runUnpair already does it" would silently
+    // break the pair-another path with every test still green. This assertion pins the single owner.
+    expect(dispatch).not.toHaveBeenCalled()
     expect(onUnpaired).toHaveBeenCalledTimes(1)
-  })
-
-  it('ok → resets the store BEFORE flipping the route (reset-then-onUnpaired order)', async () => {
-    const order: string[] = []
-    const dispatch = vi.fn(() => void order.push('reset'))
-    const onUnpaired = vi.fn(() => void order.push('onUnpaired'))
-    const unpair = vi.fn(async (): Promise<UnpairResult> => ({ result: 'ok' }))
-
-    await runUnpair({ unpair, dispatch, onUnpaired })
-
-    // Reset before the flip so neither the pairing screen nor an immediate relaunch sees stale state.
-    expect(order).toEqual(['reset', 'onUnpaired'])
   })
 
   it('error → dispatches one failed (error.code "unpair"), never flips the route, resolves error', async () => {

@@ -49,9 +49,14 @@ export type SessionAction =
   // delivery — though the reducer body is identical: append through the same `message_id`
   // dedupe so the daemon's later echo of the same id drops instead of double-posting.
   | { type: 'messageSent'; message: MessagePayload }
-  // Return the whole session to its initial state on unpair (#166). Unlike `disconnected`, which
-  // deliberately preserves `messages`, this clears BOTH facets so a later re-pair never shows the
-  // previous pairing's conversation.
+  // Return the whole session to its initial state when a pairing ends (#166). Unlike `disconnected`,
+  // which deliberately preserves `messages`, this clears BOTH of THIS store's facets: the connection
+  // status and the coarse `messages` list. That is its whole scope, and it is narrower than it once
+  // read: since #179 the visible thread renders `timelineStore.items`, not `messages`, so this action
+  // alone does NOT keep a later re-pair from showing the previous pairing's conversation (#531 — the
+  // gap that claim hid). The full pairing-scoped clear set — the timeline rows, the active
+  // conversation, the daemon session id and this reset — is owned by `clearPairingScopedState.ts`,
+  // which both pairing-change paths run; this action is one of its four members, never the whole job.
   | { type: 'reset' }
 
 /** The whole session state. Single source of truth. */

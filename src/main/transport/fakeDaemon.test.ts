@@ -139,6 +139,20 @@ function buildTestHello(): Uint8Array {
 }
 
 /**
+ * The inner `type` of a raw InnerFrameV2, or a static placeholder if it will not decode. Total by
+ * construction — a throw here would break the relay's event dispatch and hang unrelated tests, so a
+ * decode failure classifies rather than propagates (mirroring the fake's own discipline). Records
+ * the type ONLY, never `.data` (base64 of the sealed transcript).
+ */
+function peekInnerType(frame: Uint8Array): string {
+  try {
+    return decodeInnerFrame(frame).type
+  } catch {
+    return 'undecodable' // static placeholder — the caught object is dropped, no bytes
+  }
+}
+
+/**
  * Wire the REAL client initiator (createNoiseSession) to the forwarder's /v1/client leg exactly as
  * the live path does (noiseSession.interop.test.ts:388-447), pointed at the in-process forwarder
  * instead of the live relay: on `connected` start the handshake; on `message` decode the inner
@@ -167,6 +181,9 @@ async function driveClient(opts: {
   resumeInbound(): void
   /** Raw InnerFrameV2 frames captured while the gate was armed, in arrival order. */
   held: Uint8Array[]
+  /** Every inbound frame's inner `type`, in arrival order — held frames included (the tap sits above
+   *  the gate). The ONLY oracle for the daemon's outbound tagging, since the client discards it (#525). */
+  inboundTypes: string[]
   /** Feed `held[i]` through the normal decode + initiator.onFrame path, as if it had just arrived. */
   deliverHeld(i: number): void
   /** Send `raw` as a `noise_msg` InnerFrameV2, bypassing the initiator's ciphers (#524, AC4). */
@@ -185,6 +202,10 @@ async function driveClient(opts: {
   // The inbound gate (#524): while armed, an inbound frame is captured raw instead of delivered.
   let holdingInbound = false
   const held: Uint8Array[] = []
+  // The passive tagging tap (#525). Shared by a replaced relay on the bounded pre-`connected`
+  // re-dial path (#336) exactly as `held` is — safe, since no inbound frame can arrive before
+  // `connected` (the daemon's first outbound answers a msg1 the client only sends from that handler).
+  const inboundTypes: string[] = []
   let initiator!: NoiseSession
 
   // Bounded transient re-dial for the pre-`connected` 404-upgrade race (#336). createRelayConnection
@@ -221,6 +242,7 @@ async function driveClient(opts: {
           connectedOnce = true
           initiator.start()
         } else if (e.type === 'message') {
+          inboundTypes.push(peekInnerType(e.frame)) // above the gate, so a held frame is recorded too
           if (holdingInbound) {
             held.push(e.frame) // raw InnerFrameV2 bytes — the tests inspect `type` and the sealed length
             waiter.notify()
@@ -271,6 +293,7 @@ async function driveClient(opts: {
       holdingInbound = false
     },
     held,
+    inboundTypes,
     deliverHeld: (i) => deliverFrame(held[i]),
     sendRaw: (raw) =>
       activeRelay.send(encodeInnerFrame({ v: 2, type: 'noise_msg', data: base64StdEncode(raw) }))
@@ -295,7 +318,7 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
   it('completes the handshake and one sealed round-trip through the forwarder (AC1–AC6)', async () => {
     const { forwarderUrl, whenReady, daemon } = await standUp()
     const hello = buildTestHello()
-    const { initiator, events, waiter } = await driveClient({
+    const { initiator, events, waiter, inboundTypes } = await driveClient({
       forwarderUrl,
       remoteStaticPublicKey: daemon.staticPublicKey,
       hello
@@ -327,6 +350,12 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     const message = events.find((e) => e.type === 'message')
     expect(message, 'a sealed transport frame must round-trip through the daemon cipher states').toBeDefined()
     expect(bytes((message as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(probe))
+
+    // Outbound tagging on the wire (#525): the IK msg2 is a handshake reply (`noise_resp`), the
+    // transport reply is not (`noise_msg`). Whole-array equality pins BOTH directions — a handshake
+    // site regressing to `noise_msg` and a transport site wrongly becoming `noise_resp` fail the
+    // same assertion. The client discards the inbound type, so the wire bytes are the only oracle.
+    expect(inboundTypes).toEqual(['noise_resp', 'noise_msg'])
 
     // No client error — in particular no transport-decrypt-failed; the daemon settled ok.
     expect(events.some((e) => e.type === 'error')).toBe(false)
@@ -393,7 +422,7 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
 
   it('initiates a rekey: the real client swaps and resumes messaging under the new keys (AC2, AC3)', async () => {
     const { forwarderUrl, whenReady, daemon } = await standUp()
-    const { initiator, events, waiter } = await driveClient({
+    const { initiator, events, waiter, inboundTypes } = await driveClient({
       forwarderUrl,
       remoteStaticPublicKey: daemon.staticPublicKey,
       hello: buildTestHello()
@@ -440,6 +469,19 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     // wrong rekey cipher mapping) — and the daemon settled ok on the initial round-trip.
     expect(events.some((e) => e.type === 'error')).toBe(false)
     expect(await daemon.whenSettled()).toEqual({ ok: true })
+
+    // Outbound tagging across the whole rekey (#525), in arrival order: the initial IK msg2, the K0
+    // reply, the `rekey_request` control envelope, the rekey msg2, the post-swap resume frame, the
+    // K1 reply. Only the two handshake replies are `noise_resp` — the `rekey_request` is a transport
+    // frame despite driving the rekey, so the tag follows the FRAME, never the state.
+    expect(inboundTypes).toEqual([
+      'noise_resp',
+      'noise_msg',
+      'noise_msg',
+      'noise_resp',
+      'noise_msg',
+      'noise_msg'
+    ])
   })
 
   it('honours a custom rekeyResumeMessage streamed under the new keys (AC2)', async () => {
@@ -624,6 +666,10 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
       const pushed = first.events.filter((e) => e.type === 'message')[1]
       expect(bytes((pushed as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(canned))
 
+      // Outbound tagging on the first leg (#525): the initial IK msg2, then the K0 reply and the
+      // server-initiated push — neither of the latter a handshake reply.
+      expect(first.inboundTypes).toEqual(['noise_resp', 'noise_msg', 'noise_msg'])
+
       // AC1: drop the client leg. The forwarder nulls it on close so a fresh /v1/client dial re-splices
       // to the still-connected server leg (the daemon), instead of being terminated.
       forwarder.dropClientLeg()
@@ -669,6 +715,10 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
       await second.waiter.wait(() => second.events.filter((e) => e.type === 'message').length >= 2)
       const reply1 = second.events.filter((e) => e.type === 'message')[1]
       expect(bytes((reply1 as { plaintext: Uint8Array }).plaintext)).toEqual(bytes(probe1))
+
+      // Outbound tagging on the reconnect leg (#525): the reconnect msg2 is a handshake reply, while
+      // the re-sent frame and the post-reconnect echo are ordinary transport.
+      expect(second.inboundTypes).toEqual(['noise_resp', 'noise_msg', 'noise_msg'])
 
       // No client error across either leg (no transport-decrypt-failed → the reconnect cipher mapping
       // is correct), and the fake stayed log-free across the whole reconnect path.

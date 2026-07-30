@@ -26,7 +26,7 @@ export interface DebugBundleDownloadDeps {
   requestDebugBundle: (consumer: BundleConsumer) => void
   /** Persist the archive, resolving the written absolute path — a `dir`-closed saveDebugBundle. */
   save: (bytes: Uint8Array) => Promise<string>
-  /** The one path to the window — `e => emitDaemonEvent(mainWindow, e)`. */
+  /** The one path to the window — `e => emitDaemonEvent(live.sink, e)` (#519). */
   emit: (event: DaemonEvent) => void
 }
 

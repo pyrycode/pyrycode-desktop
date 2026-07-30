@@ -17,9 +17,16 @@
 // handshake (EMPTY early-data both ways, no `rekey_ack`) whose Split ciphers atomically replace the
 // old ones, after which a resume frame under the NEW send cipher gives the client a deterministic
 // swap signal (there is no wire ack). Throughout that window the daemon KEEPS SERVING transport
-// frames under the OLD ciphers (#524) — see the routing note below. The crypto is faithful; every
-// outbound frame stays tagged `noise_msg` (the client reads by session state, never the inbound
-// `type` — see sendNoise).
+// frames under the OLD ciphers (#524) — see the routing note below. The crypto is faithful, and so
+// is the OUTBOUND TAGGING (#525): the three handshake replies — initial IK msg2, rekey msg2,
+// reconnect msg2 — go out as `noise_resp`, mirroring the real daemon's TypeNoiseResp (pyrycode
+// internal/relay/v2session_handshake.go:241, v2session_rekey.go:146); every other outbound — the
+// transport replies, the `rekey_request` control envelope, the post-rekey resume frame, the
+// reconnect re-sends, pushFrame — stays `noise_msg`, mirroring TypeNoiseMsg (v2session.go:913/:954/
+// :1265, v2session_rekey.go:315). The tag follows the FRAME, never the session state. Today's client
+// still discards the inbound `type` and reads by session state (noiseRelayDriver.onMessage), so the
+// split is behaviour-preserving — the fake is simply correct AHEAD of the client, and a client that
+// starts distinguishing the two meets a faithful fake instead of a drifted one. See sendNoise.
 //
 // It also gains a RECONNECT capability (#416): a supervised client, on a relay drop, re-dials and
 // starts a FRESH createNoiseSession carrying its `hello` — a full IK handshake whose first frame is
@@ -171,6 +178,10 @@ export interface FakeDaemon {
 
 type DaemonState = 'awaiting-msg1' | 'transport' | 'awaiting-rekey-init' | 'closed'
 
+/** The two inner-frame tags this fake ever emits. Narrow on purpose: `InnerFrameV2.type` is a bare
+ *  `string` (wire/types.ts), so this alias is the ONLY compile-time backstop against a typo. */
+type OutboundInnerType = 'noise_resp' | 'noise_msg'
+
 /**
  * Stand up the fake daemon: load the shared wasm, generate a responder static keypair, dial the
  * `/v1/server` leg, and arm the responder. Resolves once the leg is OPEN with handlers armed — so
@@ -241,12 +252,15 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
     recvCipher = null
   }
 
-  // Frame + send one raw Noise output as an InnerFrameV2 text frame, mirroring the client. Every
-  // outbound is tagged `noise_msg` (both msg2 and transport replies) — faithful and safe because
-  // the client does not branch on the inbound `type` (noiseRelayDriver.onMessage).
-  function sendNoise(raw: Uint8Array): void {
+  // Frame + send one raw Noise output as an InnerFrameV2 text frame, mirroring the client. The
+  // CALLER names the tag (#525): the three handshake replies pass `noise_resp`, every other outbound
+  // takes the `noise_msg` default — see the module header for the daemon-side authority. Pure
+  // framing: the AEAD seal always happens at the call site, so the tag can never influence key
+  // selection. Synchronous and unbuffered — handleRekeyInit's msg2-then-resume and handleReconnect's
+  // msg2-then-resends are ordering-critical (the client's cipher swap depends on that order).
+  function sendNoise(raw: Uint8Array, type: OutboundInnerType = 'noise_msg'): void {
     if (leg === null || leg.readyState !== WebSocket.OPEN) return
-    leg.send(encodeInnerFrame({ v: 2, type: 'noise_msg', data: base64StdEncode(raw) }))
+    leg.send(encodeInnerFrame({ v: 2, type, data: base64StdEncode(raw) }))
   }
 
   function handleMsg1(raw: Uint8Array): void {
@@ -264,7 +278,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       hs = null
       sendCipher = split[0]
       recvCipher = split[1]
-      sendNoise(msg2)
+      sendNoise(msg2, 'noise_resp')
       state = 'transport'
     } catch {
       hs = null // the library auto-freed the handshake state on the throw
@@ -318,7 +332,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
         }
       }
       state = 'transport'
-      sendNoise(reply)
+      sendNoise(reply, 'noise_resp')
       // The post-swap resume frame under the NEW send cipher — the client's deterministic swap signal.
       sendNoise(sendCipher.EncryptWithAd(EMPTY_AD, rekeyResumeMessage))
     } catch {
@@ -364,7 +378,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
         }
       }
       state = 'transport'
-      sendNoise(msg2)
+      sendNoise(msg2, 'noise_resp')
       // Re-send the still-held frames sealed under the NEW send cipher, in order (modal-agnostic).
       for (const frame of reconnectResendFrames) {
         sendNoise(send.EncryptWithAd(EMPTY_AD, frame))

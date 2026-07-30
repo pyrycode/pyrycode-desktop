@@ -201,6 +201,7 @@ async function standUpRoundTrip(
   const events: DaemonEvent[] = []
   const waiter = makeWaiter()
   const sink: DaemonEventSink = {
+    isDestroyed: () => false,
     webContents: {
       send(_channel, event) {
         events.push(event)
@@ -883,6 +884,7 @@ describe.skipIf(!live)(
         const events: DaemonEvent[] = []
         const waiter = makeWaiter()
         const sink: DaemonEventSink = {
+          isDestroyed: () => false,
           webContents: {
             send(_channel, event) {
               events.push(event)

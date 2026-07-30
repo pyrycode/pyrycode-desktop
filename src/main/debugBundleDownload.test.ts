@@ -6,6 +6,7 @@
 // that its `Object.keys` allowlist carries no errno / token / key / bytes.
 import { describe, it, expect, vi } from 'vitest'
 import { createDebugBundleDownload, type DebugBundleDownloadDeps } from './debugBundleDownload'
+import { emitDaemonEvent, type DaemonEventSink } from './emitDaemonEvent'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
 import type { DaemonEvent, DebugBundleFailure } from '../shared/ipc/events'
 
@@ -191,6 +192,35 @@ describe('createDebugBundleDownload — single-in-flight (AC4)', () => {
     expect(emitted).toEqual([{ type: 'debugBundleFailed', reason: 'unavailable' }])
 
     // The flag cleared synchronously, so the next request is admitted.
+    downloader.request()
+    expect(requestDebugBundle).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('createDebugBundleDownload — a destroyed window cannot strand the flag (#518)', () => {
+  // The orchestrator gets NO guard of its own: every terminal emits BEFORE clearing `active`, so a
+  // throw out of `emit` would leave the flag stuck true for the rest of the process lifetime. The
+  // guard lives in emitDaemonEvent, which is why this one test composes the composition root's real
+  // wiring (`emit: e => emitDaemonEvent(mainWindow, e)`) instead of the plain collector every other
+  // test here uses — it is the only place the second-order fault is observable.
+  it('clears the flag when a terminal emits into a destroyed window, so a later request starts', () => {
+    const destroyed: DaemonEventSink = {
+      isDestroyed: () => true,
+      // A real destroyed BrowserWindow throws from the `webContents` accessor itself.
+      get webContents(): { send(channel: string, event: DaemonEvent): void } {
+        throw new Error('Object has been destroyed')
+      }
+    }
+    const { downloader, requestDebugBundle, consumer } = setup({
+      emit: (e) => emitDaemonEvent(destroyed, e)
+    })
+
+    downloader.request()
+    expect(requestDebugBundle).toHaveBeenCalledTimes(1)
+
+    // The synchronous terminal — the simplest of the three. Before the guard this threw.
+    expect(() => consumer()?.fail('daemon-error')).not.toThrow()
+
     downloader.request()
     expect(requestDebugBundle).toHaveBeenCalledTimes(2)
   })

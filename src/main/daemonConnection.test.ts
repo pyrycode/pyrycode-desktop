@@ -22,6 +22,7 @@ import type {
 import type { DiagnosticEvent, DiagnosticLog } from './diagnosticLog'
 import { base64StdEncode, base64StdDecode, encodeEnvelope, decodeEnvelope } from './transport/codec'
 import type { BundleConsumer, BundleFailReason } from './transport/bundleReassembler'
+import { createDebugBundleDownload, type DebugBundleDownload } from './debugBundleDownload'
 import {
   MAX_PLAINTEXT_BYTES,
   type SendMessagePayload,
@@ -3735,6 +3736,66 @@ describe('createDaemonConnection — debug-bundle reassembly routing (#116)', ()
     expect(failed).toEqual(['connection-lost'])
   })
 
+  // #505 — the two teardown paths the net missed. A retryable close and a re-dial are both
+  // stream-fatal (the supervisor dials a FRESH Noise session with no resume, so the daemon-side
+  // request dies and the remaining chunks never arrive), but neither reached consumer.fail.
+  it('fails the consumer connection-lost when a relay-link-down interrupts the stream (#505)', async () => {
+    const { connection, sink, drivers } = await connected()
+    const { consumer, completed, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+
+    expect(failed).toEqual(['connection-lost'])
+    expect(completed).toEqual([])
+    // The arm is OTHERWISE unchanged: the same classified category still reaches the window with
+    // the same content-free { type, status } payload, and the raw close code is still dropped.
+    const relayEvent = emitted(sink).find((e) => e.type === 'relayLinkChanged')
+    expect(relayEvent).toEqual({ type: 'relayLinkChanged', status: 'offline' })
+    expect(relayEvent && Object.keys(relayEvent)).toEqual(['type', 'status'])
+  })
+
+  it('absorbs a straggler chunk after a link-down and takes no second terminal from a later terminal (#505)', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, completed, failed, progress } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+
+    // The fail must land AT the link-down. A bare end-state "exactly one fail" assertion would be
+    // vacuous — the trailing terminal below supplies that one fail on the unfixed build too.
+    expect(failed).toEqual(['connection-lost'])
+    const ticks = progress.length
+
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(1, CHUNK_B) })
+    drivers[0].emit({ type: 'terminal', code: 4426, reason: 'dropped' })
+
+    expect(progress).toHaveLength(ticks) // the straggler is absorbed, not delivered
+    expect(failed).toEqual(['connection-lost'])
+    expect(completed).toEqual([])
+  })
+
+  it('fails the consumer connection-lost when a reconnect abandons the stream, without waiting on the new driver (#505)', async () => {
+    const { connection, drivers } = await connected()
+    const { consumer, completed, failed } = makeBundleConsumer()
+
+    connection.requestDebugBundle(consumer)
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK_A) })
+    connection.reconnect()
+
+    // Synchronous, before any tick: dial() bumps `generation` BEFORE stopping the old driver, so
+    // that driver's terminal{1000} is dropped by the fence — the fail can only come from dial().
+    expect(failed).toEqual(['connection-lost'])
+
+    await tick()
+    drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(failed).toEqual(['connection-lost'])
+    expect(completed).toEqual([])
+  })
+
   it('completes an empty bundle (done{0}, no chunks) with a zero-length archive', async () => {
     const { connection, drivers } = await connected()
     const { consumer, completed, failed } = makeBundleConsumer()
@@ -3744,6 +3805,84 @@ describe('createDaemonConnection — debug-bundle reassembly routing (#116)', ()
 
     expect(failed).toEqual([])
     expect(completed[0]).toHaveLength(0)
+  })
+})
+
+// #505 — the wedge itself. The single-in-flight `active` flag lives in the ORCHESTRATOR, not in
+// the reassembler, so a test that drives a spy consumer directly cannot tell "wedged" from "fine".
+// These compose the REAL createDebugBundleDownload over the REAL connection.requestDebugBundle;
+// the observable is whether a LATER download still reaches the wire.
+describe('createDaemonConnection — a teardown unwedges the debug-bundle orchestrator (#505)', () => {
+  const CHUNK = new Uint8Array([1, 2, 3, 4])
+
+  /** Reach the connected window with the real orchestrator wired over the real transport call. */
+  async function connectedDownload(): Promise<
+    ReturnType<typeof build> & { download: DebugBundleDownload; events: DaemonEvent[] }
+  > {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const events: DaemonEvent[] = []
+    // `save` is never reached: every path here ends in `fail`, so no archive is ever completed.
+    const download = createDebugBundleDownload({
+      requestDebugBundle: (consumer) => ctx.connection.requestDebugBundle(consumer),
+      save: vi.fn(async () => '/unreachable'),
+      emit: (event) => events.push(event)
+    })
+    return { ...ctx, download, events }
+  }
+
+  /** How many request_debug_bundle envelopes actually reached this driver. */
+  function bundleRequests(driver: FakeDriver): number {
+    return driver.sent.filter((bytes) => decodeEnvelope(bytes).type === 'request_debug_bundle')
+      .length
+  }
+
+  it('clears the single-in-flight flag on a relay-link-down, so a later download still reaches the wire', async () => {
+    const { drivers, download, events } = await connectedDownload()
+
+    download.request()
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK) })
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+
+    expect(events).toContainEqual({ type: 'debugBundleFailed', reason: 'unavailable' })
+
+    download.request()
+
+    // Two frames on the wire: without the teardown the second request is silently short-circuited
+    // by the stuck `active` flag, for the rest of the process lifetime.
+    expect(bundleRequests(drivers[0])).toBe(2)
+  })
+
+  it('clears the single-in-flight flag on a reconnect, so a later download reaches the new driver', async () => {
+    const { connection, drivers, download } = await connectedDownload()
+
+    download.request()
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK) })
+    connection.reconnect()
+    await tick()
+    drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    download.request()
+
+    expect(bundleRequests(drivers[1])).toBe(1)
+  })
+
+  it('fails a download requested before the new handshake completes, rather than wedging (AC4)', async () => {
+    const { connection, drivers, download, events } = await connectedDownload()
+
+    download.request()
+    drivers[0].emit({ type: 'message', plaintext: bundleChunkPlaintext(0, CHUNK) })
+    connection.reconnect()
+    // Deliberately no `await tick()`: dial() has nulled the driver and the bootstrap reassigns it
+    // only a microtask later, so this is the window where requestDebugBundle's null guard is exact.
+    download.request()
+
+    // Two terminals, both the coarse `unavailable` category: one from the re-dial teardown, one
+    // from the not-connected guard. Still a terminal, still not wedged.
+    expect(events.filter((e) => e.type === 'debugBundleFailed')).toHaveLength(2)
+    expect(bundleRequests(drivers[0])).toBe(1) // the second request sent nothing
   })
 })
 

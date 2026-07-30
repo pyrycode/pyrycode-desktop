@@ -59,8 +59,11 @@ An **adjacent, dedicated store** — not a `runConfigStore` facet — for the sa
 always-listening** (a confirm/reject reply can arrive after the sheet closes, whereas `runConfigStore`'s
 subscriber is sheet-scoped); (b) its state (pending changes + client-confirmed overrides + last error) is
 orthogonal to the snapshot's `{model, effort, yolo, usedTokens, windowTokens}` shape. Unlike
-`sessionIdStore`'s single setter, this is a **reducer** (`dispatch` over the sealed event union) because
-it has three real transitions instead of one "record the latest value" mutation.
+`sessionIdStore`'s named setters, this is a **reducer** (`dispatch` over the sealed event union) because
+its three transitions (dispatch / confirm / reject) are **correlated** and each reads prior state — a
+confirm or reject is a no-op without a matching pending record — where `sessionIdStore`'s set and clear
+([#529](../codebase/529.md)) are independent whole-value writes that read nothing. The contrast is the
+coupling, not the count.
 
 ### The reducer (three arms, each pinned by a named test)
 

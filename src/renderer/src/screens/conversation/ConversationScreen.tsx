@@ -34,6 +34,7 @@ import type {
 } from '../../store/threadTimeline'
 import {
   submitMessage,
+  shouldSubmitOnKeyDown,
   composerAvailability,
   shouldOfferRepair,
   shouldShowBanner,
@@ -1420,11 +1421,15 @@ function Composer(): JSX.Element {
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Enter sends; Shift+Enter inserts a newline.
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      handleSubmit()
-    }
+    // Enter sends; Shift+Enter inserts a newline; the Enter that commits an IME composition does
+    // neither (#512). `isComposing` is on the DOM event, not React's synthetic one, so it is read
+    // through `nativeEvent` — writing `event.isComposing` is a compile error, which is what keeps
+    // this untested glue honest. The `return` MUST precede preventDefault(): preventing the default
+    // on the committing keydown would break the IME commit itself.
+    const { key, shiftKey, nativeEvent } = event
+    if (!shouldSubmitOnKeyDown({ key, shiftKey, isComposing: nativeEvent.isComposing })) return
+    event.preventDefault()
+    handleSubmit()
   }
 
   return (

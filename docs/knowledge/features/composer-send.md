@@ -72,7 +72,7 @@ A **distinct name** from `messageReceived` documents intent (a local echo, not a
 - `const dispatch = useSessionStore((s) => s.dispatch)` — `dispatch` identity is stable, so selecting it adds no re-render churn.
 - The `<textarea>` gains `value={text}`, `onChange`, and `onKeyDown`; the send `<button>` gains `onClick={handleSubmit}`. Existing `className`/`placeholder`/`aria-label="Send"`/SVG untouched.
 - `handleSubmit` builds `deps` **inside the handler body** (so `window.pyry` is dereferenced only at interaction time, never during render — this keeps the server-rendered container smoke test crash-free), calls `submitMessage(text, { sendCommand: window.pyry.sendCommand, dispatch, newMessageId: () => crypto.randomUUID() })`, and `setText('')` when it returns `true`.
-- `onKeyDown`: **Enter** (no Shift) → `preventDefault()` + `handleSubmit()`; **Shift+Enter** → default (newline).
+- `onKeyDown`: reads `key`, `shiftKey`, and `nativeEvent.isComposing` off the event and asks `shouldSubmitOnKeyDown` (§7) whether to act; on `false` it returns without touching the event, otherwise `preventDefault()` + `handleSubmit()`.
 
 ### 4. Connection-status gate — `composerAvailability` ([#31](../codebase/31.md))
 
@@ -150,6 +150,27 @@ the same string stacked twice even though both remain visible while disconnected
 per-arm map: the composer already carries the per-arm nuance, so a second three-way split would
 duplicate it.
 
+### 7. Keystroke-intent gate — `shouldSubmitOnKeyDown` ([#512](../codebase/512.md))
+
+A fourth pure predicate in `composerSend.ts`, but on a different axis from `composerAvailability`/`shouldOfferRepair`/`shouldShowBanner` (all of which read `ConnectionStatus` — *may* the composer send): this one reads the keydown itself — *did this keystroke ask* to send. Placed directly after `submitMessage`, not beside the `ConnectionStatus` cluster.
+
+```ts
+export interface ComposerKeyEvent {
+  key: string
+  shiftKey: boolean
+  isComposing: boolean   // event.nativeEvent.isComposing — not on React's synthetic event
+}
+export function shouldSubmitOnKeyDown(event: ComposerKeyEvent): boolean {
+  return event.key === 'Enter' && !event.shiftKey && !event.isComposing
+}
+```
+
+Plain Enter (no shift, no composition) → `true`; Shift+Enter, a non-Enter key, or — the fix — **the Enter that commits an in-progress IME composition** → `false`. That commit keydown fires with `key === 'Enter'` and `shiftKey === false`, indistinguishable from an ordinary Enter except for `isComposing`; before #512 it both sent the half-composed text and suppressed the commit itself.
+
+`handleKeyDown` is now exactly three statements, and the `return` on `false` **precedes** `preventDefault()` — calling `preventDefault()` first and declining to submit second would still break the IME commit, since the candidate never lands. This ordering, not the predicate, is the actual fix; it's why AC1's "no `preventDefault`" is a separate clause from "no wire command."
+
+The predicate deliberately does **not** absorb the `canSend` gate (§4) — that stays authoritative in `handleSubmit`, preserving #31's contract that a disconnected Enter is *swallowed*, not turned into a newline. It also doesn't read the legacy `keyCode === 229`; `isComposing` is the one signal used, since Electron `^33.2.1` is Chromium-only and doesn't need a WebKit fallback.
+
 ## Data flow
 
 ```
@@ -172,7 +193,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone.
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
-- **DOM interaction is untested.** Only the pure `submitMessage` is unit-tested (spies + a stub id). Enter-vs-Shift+Enter, `onChange`, and clear-on-success have no test, because the render harness is `renderToStaticMarkup` (node env), not jsdom — the same deferral [#69](../codebase/69.md) carries.
+- **DOM interaction is untested.** Only the pure `submitMessage` and `shouldSubmitOnKeyDown` are unit-tested (spies/plain values + a stub id). `onChange`, clear-on-success, and `handleKeyDown`'s own three-statement wiring have no test, because the render harness is `renderToStaticMarkup` (node env), not jsdom — the same deferral [#69](../codebase/69.md) carries, and the one carved out by [#512](../codebase/512.md) is that the IME-vs-plain-Enter *decision* no longer has to live in that untested surface.
 - **Single active conversation.** All sends use `MILESTONE_CONVERSATION_ID`; there is no conversation-selection surface. `auto-grow` on the textarea is unbuilt (cosmetic, no AC).
 
 ## Related
@@ -187,3 +208,4 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control and inline "why" hint.
 - [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the `Re-pair` affordance it gates.
 - [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell.md#connection-banner-279) it gates.
+- [#512 codebase notes](../codebase/512.md) — the `shouldSubmitOnKeyDown` keystroke-intent predicate: the Enter that commits an IME composition no longer submits or suppresses the commit.

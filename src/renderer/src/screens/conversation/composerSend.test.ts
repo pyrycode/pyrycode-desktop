@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   submitMessage,
+  shouldSubmitOnKeyDown,
   composerAvailability,
   shouldOfferRepair,
   shouldShowBanner
@@ -107,6 +108,41 @@ describe('submitMessage', () => {
     // The optimistic echo is appended regardless of send outcome.
     expect(dispatch).toHaveBeenCalledTimes(1)
     errorSpy.mockRestore()
+  })
+})
+
+// shouldSubmitOnKeyDown is the keystroke-intent predicate (#512), tested with plain values: there is
+// no DOM harness here (vitest `environment: 'node'`), and `Composer` is module-local so it cannot be
+// rendered at all — the decision is lifted out of the handler exactly so it can be exercised this way.
+describe('shouldSubmitOnKeyDown', () => {
+  it('plain Enter with no composition in progress submits (AC2)', () => {
+    expect(shouldSubmitOnKeyDown({ key: 'Enter', shiftKey: false, isComposing: false })).toBe(true)
+  })
+
+  // #512, the fix: the Enter that COMMITS an IME candidate reports an in-progress composition. It
+  // must not submit — submitting there sends half-composed text and blanks the input mid-word.
+  it('Enter that commits an IME composition does not submit (AC1)', () => {
+    expect(shouldSubmitOnKeyDown({ key: 'Enter', shiftKey: false, isComposing: true })).toBe(false)
+  })
+
+  it('Shift+Enter does not submit — the newline is preserved (AC2)', () => {
+    expect(shouldSubmitOnKeyDown({ key: 'Enter', shiftKey: true, isComposing: false })).toBe(false)
+  })
+
+  it('both suppressors at once still does not submit — neither cancels the other', () => {
+    expect(shouldSubmitOnKeyDown({ key: 'Enter', shiftKey: true, isComposing: true })).toBe(false)
+  })
+
+  // The predicate matches on `key`, not `code`. 'NumpadEnter' is a `code`, and a real browser reports
+  // `key === 'Enter'` for that physical key; it appears here only as a "not the string Enter" case.
+  it('no other key submits, under any shift/composition combination', () => {
+    for (const key of ['a', 'Escape', 'Tab', 'NumpadEnter']) {
+      for (const shiftKey of [false, true]) {
+        for (const isComposing of [false, true]) {
+          expect(shouldSubmitOnKeyDown({ key, shiftKey, isComposing })).toBe(false)
+        }
+      }
+    }
   })
 })
 

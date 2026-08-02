@@ -51,29 +51,100 @@ function isTransientDialError(err: Error): boolean {
   )
 }
 
+// A silently-stalled dial (#342, recurring here as #550): under full-suite CPU starvation a dial can
+// land its TCP connect yet never see the server process the HTTP upgrade, so `ws` emits neither
+// 'open' nor 'error' and the dial hangs to vitest's 5000ms budget — the emitted-'error' ladder below
+// can't see it. A per-attempt timeout drops the half-open socket and re-dials (a stall is inherently
+// transient: the server is already 'listening', so a dial yielding no event within a generous margin
+// is a contention artifact). > a healthy contended dial (~250ms).
+const DIAL_STALL_MS = 1500
+
+// Every await in the #550 leg-boundary test settles by `start + AWAIT_BUDGET_MS`, comfortably under
+// vitest's 5000ms default, so a stall anywhere in that test rejects NAMING THE STEP instead of
+// yielding a nil-diagnosis timeout. The ~1000ms of headroom absorbs the rejection's own unwinding and
+// afterEach teardown. One shared wall-clock deadline, not per-step budgets: convergence is then a
+// property of the deadline itself rather than of summed attempt-count arithmetic.
+const AWAIT_BUDGET_MS = 4000
+
+/**
+ * Reject at `deadline` naming `step`, unless `work` settles first — its own settle (value OR error)
+ * passes through unchanged, so a more specific diagnosis always wins over the generic bound. Clears
+ * its timer on every settle path so no handle outlives the test and no rejection fires after the test
+ * body has moved on. Emits no console output on any path (the log-free assertion measures the
+ * harness + daemon alone).
+ */
+function bounded<T>(step: string, work: Promise<T>, deadline: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(
+          new Error(`#550 bound: ${step} did not settle within the ${AWAIT_BUDGET_MS}ms test budget`)
+        ),
+      Math.max(0, deadline - Date.now())
+    )
+    work.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      }
+    )
+  })
+}
+
 // Dial a raw ws client and resolve once it is OPEN. A pre-open transient reset is re-dialled up to
 // `attemptsLeft` times against the already-listening server — deterministic convergence on a
 // recoverable reset, NOT a blind whole-test retry (no assertion re-runs, so a real logic bug is
 // never masked; a genuinely-down target still fails fast once attempts are exhausted). On open the
 // pre-open reject handler is swapped for a benign swallow so a later reset never crashes the process
-// (mirrors fakeDaemon.ts's dial lifecycle).
-function connect(url: string, attemptsLeft = 5): Promise<WebSocket> {
+// (mirrors fakeDaemon.ts's dial lifecycle). Both ladders are additionally capped by `deadline`, so
+// the whole thing terminates by wall clock rather than by attempts × per-attempt-limit arithmetic.
+function connect(url: string, deadline: number, attemptsLeft = 5): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url)
     const onDialError = (err: Error): void => {
+      clearTimeout(dialTimer) // this dial settled: the stall timer must not also fire
       ws.terminate() // drop the half-open socket before re-dialling so none leaks
-      if (attemptsLeft > 1 && isTransientDialError(err)) {
-        setTimeout(() => resolve(connect(url, attemptsLeft - 1)), 20)
+      if (attemptsLeft > 1 && Date.now() < deadline && isTransientDialError(err)) {
+        setTimeout(() => resolve(connect(url, deadline, attemptsLeft - 1)), 20)
         return
       }
       reject(err)
     }
     ws.once('error', onDialError)
     ws.once('open', () => {
+      clearTimeout(dialTimer) // this dial settled: the stall timer must not also fire
       ws.off('error', onDialError)
       ws.on('error', () => {})
       resolve(ws)
     })
+    // Re-dial unconditionally on a stall (no error object to classify — an isTransientDialError
+    // clause here would be dead code). SWAP onDialError for a benign swallow rather than dropping it:
+    // detaching keeps terminate()'s teardown events from spawning a duplicate re-dial, but a stall
+    // timer can only fire while the socket is still CONNECTING, and terminate() on a CONNECTING socket
+    // takes ws@8's abortHandshake branch, which emits 'error' on nextTick — with zero listeners Node
+    // throws `Unhandled 'error' event`, out of band, killing the very re-dial this path exists to do.
+    // Exhausting the attempts or the budget rejects with a descriptive message, so a genuine
+    // never-accept regression still turns the test red.
+    const stallMs = Math.min(DIAL_STALL_MS, Math.max(0, deadline - Date.now()))
+    const dialTimer = setTimeout(() => {
+      ws.off('error', onDialError)
+      ws.on('error', () => {})
+      ws.terminate()
+      if (attemptsLeft > 1 && Date.now() < deadline) {
+        resolve(connect(url, deadline, attemptsLeft - 1))
+      } else {
+        reject(
+          new Error(
+            `dial to ${url} stalled: no open/error within ${stallMs}ms ` +
+              `(attempts left ${attemptsLeft}, ${AWAIT_BUDGET_MS}ms test budget)`
+          )
+        )
+      }
+    }, stallMs)
   })
 }
 
@@ -863,22 +934,36 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
 
   it('fail-closes a non-InnerFrameV2 frame at the leg boundary to frame-decode-failed (security)', async () => {
     const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    // One shared wall-clock deadline for every await below (#550): whichever step stalls, the
+    // rejection names it and lands under vitest's 5000ms, instead of the nil-diagnosis timeout this
+    // test flaked with under full-suite contention.
+    const deadline = Date.now() + AWAIT_BUDGET_MS
     try {
-      const forwarder = await startFakeRelayForwarder()
-      cleanups.push(() => forwarder.close())
-      const daemon = await startFakeDaemon({ url: forwarder.url })
-      cleanups.push(() => daemon.close())
+      // Each disposer is registered against the START PROMISE, not the resolved value: were a bound
+      // below to reject, a start resolving LATE would otherwise leak a listening server into the rest
+      // of the run — a clean diagnostic rejection turned into a worker-level hang. Non-blocking
+      // (`void`), since afterEach awaits each cleanup and a disposer chained to a never-settling start
+      // would stall teardown; the rejection arm keeps a start that fails after its bound already fired
+      // a HANDLED rejection. Both close()s cache a closePromise, so firing alongside a normal close is
+      // a documented no-op.
+      const forwarderStart = startFakeRelayForwarder()
+      cleanups.push(() => void forwarderStart.then((f) => f.close(), () => {}))
+      const forwarder = await bounded('startFakeRelayForwarder', forwarderStart, deadline)
+      const daemonStart = startFakeDaemon({ url: forwarder.url })
+      cleanups.push(() => void daemonStart.then((d) => d.close(), () => {}))
+      const daemon = await bounded('startFakeDaemon /v1/server dial', daemonStart, deadline)
 
       // A raw ws on the client leg keeps this at the byte level, without a full Noise initiator.
       // Bounded transient re-dial (connect): a raw dial has no createRelayConnection
       // unexpected-response handler, so the pre-open 404-upgrade race (#336) surfaces here as a raw
-      // throw and is recovered by re-dial rather than crashing the test.
-      const raw = await connect(`${forwarder.url}/v1/client`)
+      // throw and is recovered by re-dial rather than crashing the test. Self-bounding by `deadline`
+      // — NOT wrapped in bounded(), which would cut its own retry ladder short.
+      const raw = await connect(`${forwarder.url}/v1/client`, deadline)
       cleanups.push(() => raw.terminate())
-      await forwarder.whenReady()
+      await forwarder.whenReady() // already bounded (1000ms, rejects) and already settled by here
       raw.send('{not json') // a non-InnerFrameV2 text frame
 
-      expect(await daemon.whenSettled()).toEqual({ ok: false, reason: 'frame-decode-failed' })
+      expect(await bounded('daemon.whenSettled', daemon.whenSettled(), deadline)).toEqual({ ok: false, reason: 'frame-decode-failed' })
       for (const spy of spies) expect(spy).not.toHaveBeenCalled()
     } finally {
       for (const spy of spies) spy.mockRestore()

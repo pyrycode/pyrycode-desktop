@@ -108,11 +108,25 @@ export interface PairingBridge {
 
 /**
  * Submit the paste over the bridge and map the typed response to the reducer event it produces.
- * This is the tested proof that "submit invokes the IPC". The preload method resolves to a typed
- * response for every domain outcome (it does not reject on a domain error), so there is no catch.
+ * This is the tested proof that "submit invokes the IPC". Total by contract — it never rejects
+ * (#513): the preload method resolves to a typed response for every DOMAIN outcome, but the invoke
+ * itself can still reject at the infrastructure level (handler absent or already unregistered on
+ * will-quit, an invoke racing registration, a non-serializable reply), which the catch coerces to
+ * `submit-failed` / `malformed-request` — the same event the handler's own guard produces, so the
+ * screen returns to `editing` with the paste intact instead of wedging in `submitting` with every
+ * control (Cancel included) disabled. The caught value is deliberately discarded unbound: nothing
+ * from a main-process error reaches renderer state, the UI, or the console (mirrors runUnpair).
  */
 export async function runSubmit(bridge: PairingBridge, paste: string): Promise<PairingEvent> {
-  const response = await bridge.submitPairingPaste(paste)
+  let response: PairingSubmitResponse
+  try {
+    // Only the bridge call is guarded — a malformed response is a contract violation, not an
+    // infrastructure hiccup, so the mapping below must still throw rather than read "try again".
+    response = await bridge.submitPairingPaste(paste)
+  } catch {
+    return { type: 'submit-failed', reason: 'malformed-request' }
+  }
+
   return response.ok
     ? { type: 'submit-succeeded', fingerprint: response.fingerprint }
     : { type: 'submit-failed', reason: response.reason }
@@ -121,9 +135,17 @@ export async function runSubmit(bridge: PairingBridge, paste: string): Promise<P
 /**
  * Send the bare confirm signal over the bridge and map the typed response. This is the tested
  * proof that "confirm triggers persist" (the persist itself runs entirely in main, #53/#54).
+ * Total by contract, exactly as runSubmit: a rejected invoke resolves to `confirm-failed` /
+ * `malformed-request` with the caught value discarded unbound (#513).
  */
 export async function runConfirm(bridge: PairingBridge): Promise<PairingEvent> {
-  const response = await bridge.confirmPairing()
+  let response: PairingConfirmResponse
+  try {
+    response = await bridge.confirmPairing()
+  } catch {
+    return { type: 'confirm-failed', reason: 'malformed-request' }
+  }
+
   return response.ok
     ? { type: 'confirm-succeeded' }
     : { type: 'confirm-failed', reason: response.reason }

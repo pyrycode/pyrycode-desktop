@@ -45,6 +45,13 @@ describe('PairingView', () => {
     expect(markup).toContain('valid pairing code')
   })
 
+  it('after a coerced infra failure: the error line shows and no control is disabled', () => {
+    const markup = renderView({ phase: 'editing', paste: 'pyry://x', error: 'malformed-request' })
+    expect(markup).toContain('Something went wrong sending the code.')
+    // Covers Cancel, the textarea and Pair in one assertion — the screen is answerable again.
+    expect(markup).not.toContain('disabled')
+  })
+
   it('reviewing: renders the fingerprint and Confirm/Cancel', () => {
     const markup = renderView({
       phase: 'reviewing',

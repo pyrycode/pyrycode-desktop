@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { RendererCommand } from '@shared/ipc/commands'
-import type { ConversationCreatedPayload, MessagePayload } from '@shared/wire/types'
+import type { ConversationCreatedPayload, HelloAckPayload, MessagePayload } from '@shared/wire/types'
 import { notifyKindForEvent, subscribePushNotify } from './pushNotifyBridge'
 
 // Framework-free data-path tests with injected spies (the notificationActivatedBridge idiom): no React,
@@ -36,6 +36,27 @@ const modalShown: DaemonEvent = {
   prompt: 'prompt-XYZ',
   options: [],
   defaultOptionId: 'opt-XYZ'
+}
+
+// #514: a genuinely different prompt — same shape, different modalId. Keeps an XYZ-bearing value so the
+// AC5 no-leak assertions stay meaningful when it is the one that gets sent.
+const otherModalShown: DaemonEvent = {
+  type: 'modalShown',
+  modalId: 'modal-XYZ-2',
+  class: 'trust',
+  title: 'title-XYZ-2',
+  prompt: 'prompt-XYZ-2',
+  options: [],
+  defaultOptionId: 'opt-XYZ-2'
+}
+
+// The reconnect edge (#415): every supervisor re-handshake re-emits `connected`, and the daemon then
+// re-sends every still-outstanding modal_shown behind it. Shape copied from modalBridge.test.ts.
+const ack: HelloAckPayload = {
+  protocol_version: 'v2',
+  server_id: 'srv-1',
+  conn_id: 'conn-1',
+  capabilities: ['interactive']
 }
 
 // A fake onDaemonEvent that captures the listener and hands back an off spy — the bridge-test idiom.
@@ -146,6 +167,87 @@ describe('subscribePushNotify', () => {
     bridge.emit({ type: 'toolUse', turnId: 't', toolUseId: 'u', name: 'n', inputSummary: 's' })
     bridge.emit({ type: 'notificationActivated' })
     expect(sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('the same modalId twice → exactly one command, and the id never rides along (#514 AC1, AC5)', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+
+    bridge.emit(modalShown)
+    bridge.emit(modalShown)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith({ type: 'notify', payload: { kind: 'prompt' } })
+    // AC5: the dedup key is read, but it must not reach the payload.
+    expect(JSON.stringify(sendCommand.mock.calls[0][0])).not.toContain('XYZ')
+  })
+
+  it('the same modalId across a reconnect → exactly one command (#514 AC2)', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+
+    // The shape this ticket exists for: prompt left outstanding, link drops, re-handshake, daemon
+    // re-sends the still-outstanding prompt (#415 reconcile). `connected` lands BEFORE the re-send,
+    // so memory cleared on that edge would be empty here — this test fails on that fix sketch.
+    bridge.emit(modalShown)
+    bridge.emit({ type: 'connected', ack })
+    bridge.emit(modalShown)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('a genuinely new modalId after a suppressed re-delivery still notifies (#514 AC3)', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+
+    bridge.emit(modalShown)
+    bridge.emit(modalShown)
+    bridge.emit(otherModalShown)
+    expect(sendCommand).toHaveBeenCalledTimes(2)
+    expect(sendCommand).toHaveBeenNthCalledWith(1, { type: 'notify', payload: { kind: 'prompt' } })
+    expect(sendCommand).toHaveBeenNthCalledWith(2, { type: 'notify', payload: { kind: 'prompt' } })
+  })
+
+  it('two turnEnds with the toggle on still send two commands — suppression is prompt-only (#514 AC4)', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => true)
+
+    bridge.emit(turnEnd)
+    bridge.emit(turnEnd)
+    expect(sendCommand).toHaveBeenCalledTimes(2)
+  })
+
+  it('a first delivery dropped by the toggle is not recorded as announced (#514 AC1)', () => {
+    const bridge = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    let enabled = false
+    subscribePushNotify(bridge.onDaemonEvent, sendCommand, () => enabled)
+
+    // Push off while the prompt arrives — nothing announced, so nothing to remember.
+    bridge.emit(modalShown)
+    expect(sendCommand).not.toHaveBeenCalled()
+    // User turns push on; the daemon re-sends the still-outstanding prompt. It must fire.
+    enabled = true
+    bridge.emit(modalShown)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
+    expect(sendCommand).toHaveBeenCalledWith({ type: 'notify', payload: { kind: 'prompt' } })
+  })
+
+  it('the announced-prompt memory is per-subscription, not module-level (#514, unpair reset edge)', () => {
+    const first = fakeBridge()
+    const cleanup = subscribePushNotify(first.onDaemonEvent, vi.fn(), () => true)
+    first.emit(modalShown)
+    cleanup()
+
+    // Unpair unmounts PairedShell and tears the subscription down; a new pairing is a new daemon
+    // relationship and starts with no memory. A module-level Set would swallow this command.
+    const second = fakeBridge()
+    const sendCommand = vi.fn<(command: RendererCommand) => void>()
+    subscribePushNotify(second.onDaemonEvent, sendCommand, () => true)
+    second.emit(modalShown)
+    expect(sendCommand).toHaveBeenCalledTimes(1)
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {

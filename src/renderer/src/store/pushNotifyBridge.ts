@@ -51,17 +51,53 @@ export function notifyKindForEvent(event: DaemonEvent): NotifyKind | null {
  * user who flips the toggle off in Settings mid-session must see the NEXT turn-end/prompt not fire. The
  * `{ kind }` payload is a fresh literal built from the closed kind alone — no daemon field is copied in.
  * The listener only ever calls `sendCommand` inside the two owned arms and never throws into React.
+ *
+ * #514: one OS notification per prompt, however many times the link re-handshakes. The daemon re-sends
+ * every still-outstanding modal_shown after each handshake (#415 reconcile), so a prompt left unanswered
+ * while the window is in the background used to earn a fresh notification per network flap. A
+ * closure-local set of already-announced `modalId`s absorbs the re-delivery. Three properties it depends
+ * on:
+ *
+ * - It must SURVIVE the reconnect edge. `connected` lands BEFORE the daemon's re-sent frames — that
+ *   ordering is what modalBridge/modalPrompts' clear-then-repopulate reset is built on — so memory
+ *   cleared there would be empty when the re-sends arrive and every reconnect would re-notify as before.
+ *   Nothing remounts this subscription on a reconnect: App's route flips only on the mount-time
+ *   pairing-status read, onPaired, or onUnpaired, so the closure spans every handshake. Unpair is the
+ *   reset edge — it unmounts PairedShell, the cleanup runs, and the set dies with the closure. Hence
+ *   closure-local rather than module-level: the reset is structural, and nothing leaks across tests.
+ * - The record happens AFTER the send, not at the dedup check. A prompt dropped by the toggle gate was
+ *   never announced, so a user who turns push on mid-prompt must still be notified when the daemon
+ *   re-sends it.
+ * - The set is never pruned — no dismissal-driven eviction, no cap. Evicting on dismissal would
+ *   reintroduce #510 in notification form: an Allow clicked while the link is down is swallowed by the
+ *   transport, the renderer optimistically dispatches `dismissed` anyway, and the daemon re-sends the
+ *   still-outstanding prompt after the handshake — which would then re-notify.
+ *
+ * Dedup is per COMMAND, not per raised OS notification: if the window is focused on the first delivery,
+ * main's focus gate (fireNotification.ts) drops it silently and the id is still recorded. Accepted —
+ * `isWindowFocused()` is main-side, the payload is `{ kind }`-only, and there is no reply channel; a
+ * focused window means the prompt was rendered in front of the user, and it stays on screen.
+ * `turnEnd` is untouched: `modalId` is null for every other arm, so both the check and the record are
+ * skipped for the whole rest of the union by construction.
  */
 export function subscribePushNotify(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   sendCommand: (command: RendererCommand) => void,
   isPushEnabled: () => boolean
 ): () => void {
+  const announcedModalIds = new Set<string>()
   return onDaemonEvent((event) => {
     const kind = notifyKindForEvent(event)
     if (kind === null) return
+    // Narrowing on the discriminant is what makes `event.modalId` legal — no cast. This local is the
+    // only new read of a daemon-supplied field and never leaves the listener. `!== null`, never
+    // truthiness: requireString admits '', and `if (modalId)` would treat an empty id as "not a modal"
+    // and skip both the check and the record.
+    const modalId = event.type === 'modalShown' ? event.modalId : null
+    if (modalId !== null && announcedModalIds.has(modalId)) return
     if (!isPushEnabled()) return
     sendCommand({ type: 'notify', payload: { kind } })
+    if (modalId !== null) announcedModalIds.add(modalId)
   })
 }
 

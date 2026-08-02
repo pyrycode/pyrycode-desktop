@@ -123,6 +123,33 @@ describe('runSubmit', () => {
     }
     expect(await runSubmit(bridge, 'bad')).toEqual({ type: 'submit-failed', reason: 'invalid-paste' })
   })
+
+  it('resolves (never rejects) to submit-failed when the invoke rejects', async () => {
+    const bridge: PairingBridge = {
+      submitPairingPaste: vi.fn().mockRejectedValue(new Error('boom')),
+      confirmPairing: vi.fn()
+    }
+    // toEqual against the exact literal: nothing from the caught error (message, stack, cause)
+    // and no `paste` may ride along into renderer state.
+    expect(await runSubmit(bridge, 'pyry://x')).toEqual({
+      type: 'submit-failed',
+      reason: 'malformed-request'
+    })
+  })
+
+  it('resolves to submit-failed when the invoke throws synchronously', async () => {
+    // Pins the `try` around the CALL, not just the `await` — hoisting the call out fails here.
+    const bridge: PairingBridge = {
+      submitPairingPaste: vi.fn(() => {
+        throw new Error('sync')
+      }),
+      confirmPairing: vi.fn()
+    }
+    expect(await runSubmit(bridge, 'pyry://x')).toEqual({
+      type: 'submit-failed',
+      reason: 'malformed-request'
+    })
+  })
 })
 
 describe('runConfirm', () => {
@@ -149,6 +176,17 @@ describe('runConfirm', () => {
       confirmPairing: vi.fn().mockResolvedValue({ ok: false, reason: 'no-pending-pairing' })
     }
     expect(await runConfirm(bridge)).toEqual({ type: 'confirm-failed', reason: 'no-pending-pairing' })
+  })
+
+  it('resolves (never rejects) to confirm-failed when the invoke rejects', async () => {
+    const bridge: PairingBridge = {
+      submitPairingPaste: vi.fn(),
+      confirmPairing: vi.fn().mockRejectedValue(new Error('boom'))
+    }
+    expect(await runConfirm(bridge)).toEqual({
+      type: 'confirm-failed',
+      reason: 'malformed-request'
+    })
   })
 })
 

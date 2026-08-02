@@ -75,7 +75,9 @@ runSubmit(bridge, paste): Promise<PairingEvent>   // ok → submit-succeeded{fin
 runConfirm(bridge):       Promise<PairingEvent>   // ok → confirm-succeeded;             !ok → confirm-failed{reason}
 ```
 
-The two IPC calls are wrapped in pure async functions that map a typed response to the reducer event it produces — the tested seam that proves "submit invokes the IPC" and "confirm triggers persist" without a DOM. `PairingBridge` is the injected seam; **`window.pyry` is structurally assignable** to it (it has these two methods plus extras from #54), so the container defaults `bridge = window.pyry` and tests pass a `{ submitPairingPaste: vi.fn(), confirmPairing: vi.fn() }` fake. The preload methods resolve to a typed response for *every* domain outcome (they don't reject on a domain error), so there is **no `try/catch`** in the screen — an actual IPC transport rejection (unmodelled) is left to surface rather than caught speculatively.
+The two IPC calls are wrapped in pure async functions that map a typed response to the reducer event it produces — the tested seam that proves "submit invokes the IPC" and "confirm triggers persist" without a DOM. `PairingBridge` is the injected seam; **`window.pyry` is structurally assignable** to it (it has these two methods plus extras from #54), so the container defaults `bridge = window.pyry` and tests pass a `{ submitPairingPaste: vi.fn(), confirmPairing: vi.fn() }` fake. The preload methods resolve to a typed response for *every* domain outcome (they don't reject on a domain error) — that part maps outside any `try`.
+
+**Both runners are total functions ([#513](../codebase/513.md)): they never reject.** A `try` wraps only the bridge call itself (not the response mapping), and a bare `catch {}` — binding nothing — coerces an infrastructure-level rejection (handler absent or already unregistered on `will-quit`, an invoke racing registration, a non-serializable reply) or a synchronous throw into the phase's failure event with reason `malformed-request`, the same reason the handler's own guard produces. This mirrors `runUnpair` (`unpairAction.ts:53-59`). The mapping (`response.ok ? … : …`) stays outside the `try`, so a malformed response object is still a thrown contract violation, not a swallowed "try again". Before #513 a rejected invoke dispatched nothing and the reducer wedged in `submitting`/`confirming` — recoverable only by restart, since `busy` disables Cancel too (see State + concurrency model below).
 
 ### Fingerprint formatter
 
@@ -92,7 +94,7 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 |---|---|
 | `invalid-paste` | "That doesn't look like a valid pairing code — check you copied the whole thing." |
 | `invalid-key` | "The server key in that code is malformed." |
-| `malformed-request` | "Something went wrong sending the code. Try again." |
+| `malformed-request` | "Something went wrong sending the code. Try again." — also the coerced reason for a rejected/throwing invoke ([#513](../codebase/513.md)); indistinguishable by design from the handler's own domain use of the same reason |
 | `no-pending-pairing` | "The pairing expired — paste the code again." |
 | `persist-failed` | "Couldn't save the pairing — your system keychain may be unavailable." |
 
@@ -118,6 +120,7 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 
 - **Empty / whitespace-only paste** — Pair is `disabled` (deterministic guard against an empty submit).
 - **A failed confirm** cannot retry with Confirm — the main pending record is already consumed, so the screen returns to `editing` for a fresh submit (paste preserved).
+- **A rejected or throwing bridge invoke** (handler absent/unregistered, invoke racing registration, non-serializable reply) is coerced to `malformed-request` rather than left to wedge the screen in `submitting`/`confirming` with Cancel disabled ([#513](../codebase/513.md)).
 - **`paired` renders a success marker** ("Paired ✓"), but the [app shell](app-shell.md) unmounts this screen the moment `onPaired` fires ([#80](../codebase/80.md)) — `confirm-succeeded` both flips the reducer to `paired` and calls `onPaired`, and `App`'s `setRoute('conversation')` swaps the screen out — so the marker is effectively superseded by navigation rather than lingering.
 - **Container interaction is not click-simulated** — no DOM harness. The interaction is proven on the pure `runSubmit`/`runConfirm`/`pairingReducer` seams; only the thin container glue is untested (the precedented gap, mirroring `useDaemonEventBridge`).
 - **Dark scheme only**; the card is dialog-shaped (`max-width` + centered margin). Its placement is now decided by the [app shell](app-shell.md) ([#80](../codebase/80.md)): when unpaired it is the full-window app root, not a dialog over another screen.
@@ -131,4 +134,5 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 - [Session store](session-store.md) / [Daemon-event bridge](daemon-event-bridge.md) — the pure-reducer / untested-wiring precedent this screen mirrors.
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the sibling renderer screen; the `renderToStaticMarkup` + theme-token discipline reused here.
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — `useReducer` for ephemeral screen state · [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the store shape this deliberately does *not* use.
+- [#513 codebase notes](../codebase/513.md) — the rejected-invoke recovery fix that made `runSubmit`/`runConfirm` total functions.
 - [#55 codebase notes](../codebase/55.md) · Spec: `docs/specs/architecture/55-pairing-input-screen.md`

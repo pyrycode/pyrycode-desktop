@@ -71,50 +71,29 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Last run: 2026-07-17** — after working each red spec against `~/.local/bin/pyry` rebuilt from main
-`bf4705e`: **6 passed / 2 failed** (interrupt fixed). send/stream and the four claude-less
-`real-daemon-*` specs stay green. The three reds turned out to be three different problems, not one.
+**Last run: 2026-07-26 — 8 passed / 0 failed, the first-ever full green.** 37.9s against a
+freshly-built `pyry`, and 40.0s re-run against the installed production binary. The umbrella ticket
+for the red specs, [desktop#483](https://github.com/pyrycode/pyrycode-desktop/issues/483), closed
+2026-07-26.
 
-Root cause the three shared: a long *text* prompt ("count to 300") collapses on `--model haiku`. The
-turn bridge binds the transcript only after claude's ~1.7s cold-start, and by then haiku has already
-written the whole reply, so `turn_state responding` → the full reply as one `assistant_delta` →
-`turn_end` → `idle` all arrive within ~2ms. There is no observable running-turn window. The daemon
-fans everything correctly (proven: the pyrycode#1062 Go liveness gate for base-case per-conversation
-`turn_state` PASSES live on haiku); the window just doesn't exist for a fast turn. So the fix is to
-drive a genuinely-running turn, not to change the daemon.
+What changed: the daemon's production interactive runner has been **stream-json** since 2026-07-24 —
+claude is driven over a structured stdin/stdout stream, not a PTY. All four interactive real-claude
+specs (send/stream, interrupt, permission-modal, queue-drop) migrated onto the stream runner in
+[#490](https://github.com/pyrycode/pyrycode-desktop/pull/490) (merged). The four claude-less
+`real-daemon-*` specs were already green and are unchanged.
 
-- **`real-claude-interrupt.spec.ts` — FIXED** (commit on `main`). Drives the turn with a **foreground
-  Bash tool loop** (`for i in $(seq 20); do echo $i; sleep 1; done`) so it stays in `responding`
-  deterministically. Dropped the streaming-text cursor gate (a tool turn streams no text) per the
-  spec's own OQ-c fallback. Green 3×.
-- **`real-claude-queue-drop.spec.ts` — still red, no reliable prompt-only fix.** It needs turn 1
-  running for ~15s *through* the enqueue+drop, and claude's tool behaviour is non-deterministic: a
-  silent `sleep` is often set `run_in_background:true` (turn returns at once) or capped short; a chatty
-  loop stays foreground but floods the ordered frame stream so the msg2 `queue_state` control frame
-  lands tens of seconds late. Needs a deterministic-hold design (e.g. a test-owned gate file, which
-  needs the fixture to expose the daemon workdir). Follow-up.
-- **`real-claude-permission-modal.spec.ts` — still red. Two daemon layers, pinned by in-situ daemon
-  instrumentation; one fixed today, one open.** A PTY probe confirms claude 2.1.199 without skip-permissions
-  calls Write and **blocks on a real permission dialog** (`Do you want to create …? / 1. Yes / 2. Yes,
-  allow all edits / 3. No`), so this is a real daemon bug, not a test issue.
-  - **Layer 1 — subscription. FIXED today by the pipeline (`#1066/#1070`, pyrycode `deb41fe`, PR #1071,
-    ~21:25 2026-07-18).** The modal stream used a transcript-gated subscription; a per-conversation session
-    blocked on a permission prompt writes no transcript, so the subscription never opened — deadlocking the
-    modal. #1070 switches to a screen-only subscriber. The installed daemon `bf4705e` predates it.
-  - **Layer 2 — detection on the live buffer. STILL BROKEN on current `main`.** Built `deb41fe` (with
-    #1070) and instrumented `Session.ScreenEvents`: the screen-only subscription opens, follows the correct
-    per-conversation session, and its tracker buffer (`s.buffer.Snapshot`) **contains the modal** (logged:
-    `1. Yes / 2. … / 3. No / Esc to cancel`), yet `DetectModalClass` returns **Unknown** on that live buffer
-    (at session dims 120×40 AND default 0×0). So `EventKindPtyModalShown` never fires, no `modal_shown` is
-    emitted. A clean build of `main` still fails the spec (2.1m). The detector succeeds on an isolated
-    captured snapshot but fails on the daemon's live buffer — the format difference (scrollback / trailing
-    cursor moves / the #242 option-row shape gate) is the fix's open question.
-  - **Corrections:** the detector is not unconditionally fine (fails on the live buffer), and it is not a
-    pure wiring gap (that half is #1070). The installed daemon is ALREADY on `deb41fe`/#1070 — the
-    run-clone updater rebuilt `~/.local/bin/pyry` (built 21:28) and launchd restarted onto it (PID up
-    21:28:44) automatically mid-session, so no rebuild is needed and #1070 is already live. The one open
-    item is a tui-driver detection ticket for `DetectModalClass` robustness on the live session buffer.
-    Tracked on desktop#483.
+The last red was **queue-drop**, fixed by pyrycode#1199. It was a drain race, not a missing message:
+the stream runner returns on write, so the queued backlog emptied at pipe speed and the observation
+window closed before the spec could see the queue. With the drain race fixed, the spec holds.
+
+The PTY-era diagnosis previously recorded here — `DetectModalClass` returning Unknown on the live
+session buffer — is **historical**. It described the PTY runner's modal detection, which the
+stream-json migration made moot for this gate.
+
+**Silent-skip warning:** without `claude`, `pyry`, or the credential (`ANTHROPIC_API_KEY`, or
+`CLAUDE_CODE_OAUTH_TOKEN` plus a readable `~/.claude.json`) the suite **skips every spec and still
+exits 0**. Read the skip reasons, never the exit code — or use `npm run e2e:real:gate`, which turns
+an all-skip run into a non-zero exit naming the missing prerequisite.
 
 This section is the **single** authoritative record of real-claude gate state. README, the feature
 doc (`real-claude-liveness-e2e.md`), and the spec header point here instead of restating it — so the

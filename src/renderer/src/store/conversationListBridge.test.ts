@@ -100,14 +100,18 @@ describe('shouldRefreshList', () => {
     expect(shouldRefreshList(event)).toBe(true)
   })
 
+  it('returns true for a conversationCreated correlated reply (#515)', () => {
+    const event: DaemonEvent = {
+      type: 'conversationCreated',
+      conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts' }
+    }
+    expect(shouldRefreshList(event)).toBe(true)
+  })
+
   it('returns false for a sample of unrelated daemon events', () => {
     const others: DaemonEvent[] = [
       { type: 'conversationsReceived', conversations: [] },
-      { type: 'connecting' },
-      {
-        type: 'conversationCreated',
-        conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts' }
-      }
+      { type: 'connecting' }
     ]
     for (const event of others) expect(shouldRefreshList(event)).toBe(false)
   })
@@ -214,6 +218,22 @@ describe('subscribeConversations', () => {
     bridge.emit({ type: 'conversationDeleted', id: 'a' })
     expect(refreshOnChange).toHaveBeenCalledTimes(1)
     // A delete event carries no rows to land — it only triggers the authoritative re-request.
+    expect(setConversations).not.toHaveBeenCalled()
+  })
+
+  it('re-requests (refreshOnChange) on a conversationCreated — and does NOT write rows', () => {
+    const bridge = fakeBridge()
+    const setConversations = vi.fn()
+    const refreshOnChange = vi.fn()
+    subscribeConversations(bridge.onDaemonEvent, setConversations, refreshOnChange)
+
+    bridge.emit({
+      type: 'conversationCreated',
+      conversation: { id: 'c1', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts' }
+    })
+    expect(refreshOnChange).toHaveBeenCalledTimes(1)
+    // The 5-field created payload is not a ConversationSummary (no is_archived, no last_message_ts), so
+    // it lands nothing itself — only the authoritative re-request's reply carries a complete row.
     expect(setConversations).not.toHaveBeenCalled()
   })
 
@@ -328,6 +348,37 @@ describe('subscribeConversations', () => {
     const flipped = selectConversations(store.getState()) ?? []
     expect(partitionByPromotion(flipped).channels.map((r) => r.id)).toEqual(['a'])
     expect(partitionByPromotion(flipped).discussions).toEqual([])
+  })
+
+  it('a FAB create lands the new row once the authoritative re-request arrives (#515)', () => {
+    const bridge = fakeBridge()
+    const store = createConversationListStore()
+    const refreshOnChange = vi.fn()
+    subscribeConversations(
+      bridge.onDaemonEvent,
+      (list) => store.getState().setConversations(list),
+      refreshOnChange
+    )
+
+    // Seed: the pre-create list. The whole bug is that this stayed frozen after a create.
+    bridge.emit({ type: 'conversationsReceived', conversations: [row({ id: 'a' })] })
+    expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a'])
+
+    // The correlated created reply triggers exactly one re-request; it writes no rows itself.
+    bridge.emit({
+      type: 'conversationCreated',
+      conversation: { id: 'b', is_promoted: false, cwd: '/w', name: null, last_used_at: 'ts' }
+    })
+    expect(refreshOnChange).toHaveBeenCalledTimes(1)
+    expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a'])
+
+    // The daemon's authoritative reply carries the new row; the whole-array replace lands it. No
+    // conversationUpdated, no conversationDeleted, no reconnect anywhere in this test.
+    bridge.emit({
+      type: 'conversationsReceived',
+      conversations: [row({ id: 'a' }), row({ id: 'b', is_promoted: false })]
+    })
+    expect((selectConversations(store.getState()) ?? []).map((r) => r.id)).toEqual(['a', 'b'])
   })
 })
 

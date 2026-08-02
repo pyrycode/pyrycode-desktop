@@ -65,10 +65,11 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
 
   // AC3 — FAB create-nav. The FAB dispatches requestNewConversation (name: null) → create_conversation →
   // the fake mints `created-1` (unnamed, non-promoted) and replies conversation_created →
-  // useConversationCreatedNav sets it active and dispatches `open` → route `thread`. Assert NAVIGATION
-  // into a thread, NOT list membership (Gap A: conversationListBridge.shouldRefreshList is false for
-  // conversationCreated, so the created row does not enter the active list at create time). The overflow
-  // trigger is absent on the list and present on a thread, so its auto-wait IS the create-nav gate.
+  // useConversationCreatedNav sets it active and dispatches `open` → route `thread` (and, independently,
+  // #515's re-list lands the row in the store, still unnamed). Assert NAVIGATION into a thread, NOT list
+  // membership — the route is `thread`, so the Channel List is unmounted and there is nothing to assert
+  // against there. The overflow trigger is absent on the list and present on a thread, so its auto-wait
+  // IS the create-nav gate.
   await page.locator('.channel-list__fab').click()
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
   await expect(overflowTrigger).toBeVisible()

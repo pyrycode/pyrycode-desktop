@@ -201,6 +201,44 @@ turn-end/prompt respect the new value. `usePushNotify()` mounts this in
 sibling hooks, it takes no per-render caller callback, so its three dependencies (`window.pyry.*`,
 the pref-store thunk) can be closed over directly in an empty-dep effect.
 
+### Dedup across reconnects (#514)
+
+The daemon deliberately re-sends every still-outstanding `modal_shown` after each re-handshake
+([#415](../codebase/415.md) reconcile), so without further guarding a prompt left unanswered while the
+window was backgrounded earned a fresh OS notification per network flap or sleep/wake cycle.
+[#514](../codebase/514.md) closed this: `subscribePushNotify` opens a closure-local
+`announcedModalIds = new Set<string>()` once per subscription. On the `modalShown` arm only, it binds
+`const modalId = event.type === 'modalShown' ? event.modalId : null` (narrowed on the discriminant, the
+only new read of a daemon-supplied field, never leaving the listener), short-circuits before the
+toggle read if `modalId !== null && announcedModalIds.has(modalId)`, and — **only after** the
+`sendCommand` call — records `modalId` into the set. `turnEnd` is untouched by construction: `modalId`
+is `null` for every non-`modalShown` arm, so both the check and the record are skipped for the rest of
+the union without a second rule. The `{ kind }` payload literal is unchanged; `modalId` is never
+spread or interpolated into it.
+
+Two properties make this correct rather than a no-op:
+
+- **The set must survive the reconnect edge, so it cannot live in the [modal store](modal-prompt-model.md).**
+  `connected` lands *before* the daemon's re-sent frames — `modalBridge.ts` → `modalPrompts.ts`'s
+  `reconnected` arm is built on exactly that ordering (clear, then let the re-sends repopulate). Since
+  [#510](../codebase/510.md), that arm clears both `outstanding` and `resolved`, so the store has no
+  memory across the edge this bug needs suppressed across. Nothing remounts `usePushNotify`'s
+  subscription on a reconnect either — `App.tsx`'s `route` moves only on the mount-time pairing-status
+  read, `onPaired`, or `onUnpaired`, never a daemon event — so the closure-local `Set` outlives every
+  handshake and dies only when [`PairedShell`](paired-shell.md) unmounts on unpair.
+- **The record happens after the send, not at the dedup check.** A delivery dropped by the push toggle
+  was never announced, so a user who turns push on mid-prompt must still be notified when the daemon
+  re-sends it.
+
+Deliberately no pruning: there is no `modalDismissed`-driven eviction and no size cap. Evicting on
+dismissal would reintroduce [#510](../codebase/510.md)'s bug in notification form — an Allow clicked
+while disconnected is swallowed by the transport, the renderer optimistically dispatches `dismissed`
+anyway, and the daemon's genuine re-send after the handshake would then re-notify. Growth is one short
+string per distinct prompt per pairing session, not an observed failure mode, so a cap was rejected
+too. A first delivery the main-side focus gate silently drops still counts as announced — accepted, not
+a gap: the payload is `{ kind }`-only and there is no reply channel, and a focused window means the
+prompt was already rendered in front of the user.
+
 Two independent, deterministic gates guard the same notification, in different fabric: main gates on
 *window focus* (§ above, #391 owns it); the trigger gates on the *Settings push toggle* (#392 owns
 it, the renderer owns settings state). Neither is a stochastic agent rule.
@@ -264,6 +302,12 @@ navigating to the thread.
 - **No conversation id on the notification.** Desktop's single-active-conversation model means daemon
   events drop `conversation_id` at the emit, so `NotifyPayload` carries only `kind` — clicking always
   opens the one active conversation ([#393](../codebase/393.md)), never a specific thread.
+- **One notification per prompt across reconnects, not per raised OS notification ([#514](../codebase/514.md)).**
+  The daemon re-sends every still-outstanding `modal_shown` after each re-handshake; the trigger now
+  dedupes on `modalId` in a closure-local `Set` that survives reconnects and dies on unpair. Dedup is
+  per *command sent*, not per *notification actually shown* — a first delivery the main-side focus gate
+  silently drops is still recorded as announced, so a later re-send while unfocused stays suppressed.
+  See [Dedup across reconnects (#514)](#dedup-across-reconnects-514) above.
 
 ## Related
 
@@ -281,5 +325,11 @@ navigating to the thread.
   renderer trigger.
 - [#393 codebase notes](../codebase/393.md) — implementation summary, patterns, lessons for
   click-to-focus.
+- [#514 codebase notes](../codebase/514.md) — implementation summary, patterns, lessons for the
+  reconnect-dedup hardening.
+- [#415 codebase notes](../codebase/415.md) — the daemon reconcile behavior (re-send of still-outstanding
+  `modal_shown` on every re-handshake) that #514 exists to absorb.
+- [#510 codebase notes](../codebase/510.md) — why the modal store's `reconnected` arm clears `resolved`
+  too, and therefore cannot be #514's dedup oracle.
 - [#158](https://github.com/pyrycode/pyrycode-desktop/issues/158) — the parent split into
   #391/#392/#393, all merged.

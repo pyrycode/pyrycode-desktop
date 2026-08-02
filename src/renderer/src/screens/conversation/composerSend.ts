@@ -70,6 +70,41 @@ export function submitMessage(
 }
 
 /**
+ * The three fields of a composer keydown that the submit decision reads. Plain values, no React —
+ * the container destructures them off the synthetic event so this stays testable without a DOM.
+ */
+export interface ComposerKeyEvent {
+  key: string
+  shiftKey: boolean
+  /** `event.nativeEvent.isComposing` — true on every keydown fired while an IME composition is live. */
+  isComposing: boolean
+}
+
+/**
+ * Whether this keydown asks the composer to submit (#512). Enter sends; Shift+Enter inserts a newline;
+ * and — the fix — the Enter that COMMITS an IME composition does neither. For a CJK user that commit
+ * keydown is ordinary typing: it arrives with `key === 'Enter'` and `shiftKey === false`, so the old
+ * handler sent the half-composed text and blanked the input mid-word.
+ *
+ * The caller must `return` on `false` BEFORE calling `preventDefault()`. Preventing the default on the
+ * committing keydown breaks the IME commit itself — the candidate never lands and the user's text is
+ * stranded — so "do not submit" has to mean "do not touch the event" too.
+ *
+ * `isComposing` is the standard signal and it is reliable on the committing keydown in Chromium, which
+ * is the only renderer this app has (Electron ^33.2.1). Chromium also sets the legacy `keyCode === 229`
+ * on the same event, but one signal identifies the composition; a second would be a defense for a
+ * failure mode nobody has observed here.
+ *
+ * This deliberately does NOT absorb the `canSend` gate. That gate lives in the container's
+ * `handleSubmit` and is authoritative for the send button as well as for Enter; #31's contract is that
+ * a disconnected Enter is *swallowed* (prevented, nothing sent, input preserved), not turned into a
+ * newline. This answers keystroke intent only.
+ */
+export function shouldSubmitOnKeyDown(event: ComposerKeyEvent): boolean {
+  return event.key === 'Enter' && !event.shiftKey && !event.isComposing
+}
+
+/**
  * Whether the composer may send, and — when it may not — a short caption naming why (#31). Both
  * facts derive from the single `ConnectionStatus` read, so there is one source of truth.
  */

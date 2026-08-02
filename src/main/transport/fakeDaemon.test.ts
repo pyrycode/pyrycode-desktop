@@ -122,12 +122,17 @@ function connect(url: string, deadline: number, attemptsLeft = 5): Promise<WebSo
       resolve(ws)
     })
     // Re-dial unconditionally on a stall (no error object to classify — an isTransientDialError
-    // clause here would be dead code); detach onDialError first so terminate()'s teardown events
-    // cannot spawn a duplicate re-dial. Exhausting the attempts or the budget rejects with a
-    // descriptive message, so a genuine never-accept regression still turns the test red.
+    // clause here would be dead code). SWAP onDialError for a benign swallow rather than dropping it:
+    // detaching keeps terminate()'s teardown events from spawning a duplicate re-dial, but a stall
+    // timer can only fire while the socket is still CONNECTING, and terminate() on a CONNECTING socket
+    // takes ws@8's abortHandshake branch, which emits 'error' on nextTick — with zero listeners Node
+    // throws `Unhandled 'error' event`, out of band, killing the very re-dial this path exists to do.
+    // Exhausting the attempts or the budget rejects with a descriptive message, so a genuine
+    // never-accept regression still turns the test red.
     const stallMs = Math.min(DIAL_STALL_MS, Math.max(0, deadline - Date.now()))
     const dialTimer = setTimeout(() => {
       ws.off('error', onDialError)
+      ws.on('error', () => {})
       ws.terminate()
       if (attemptsLeft > 1 && Date.now() < deadline) {
         resolve(connect(url, deadline, attemptsLeft - 1))

@@ -102,9 +102,12 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   [#451](../codebase/451.md) added `e2e/conversation-create-rename.spec.ts` (split from #422; its sibling
   #452 covers archive → restore → delete): a single `launchPairedApp` launch drives FAB create-nav, the
   Channel-info **sheet** rename entry point (distinct from the list-row pencil #434's demonstrator owns),
-  and the resulting two-row Channel List. Confirms the Gap A pattern (`shouldRefreshList` false for
-  `conversationCreated`, so a scenario must assert navigation, not list membership, right after a create)
-  and surfaces a harness-adjacent UI lesson: the Channel-info sheet is a full-surface
+  and the resulting two-row Channel List. Confirms the then-current Gap A pattern (`shouldRefreshList` false
+  for `conversationCreated`, so a scenario must assert navigation, not list membership, right after a
+  create) — **fixed by [#515](../codebase/515.md)**, which added the missing arm; the spec's assertions
+  didn't change (route is still `thread` at the create step, so there is nothing to assert against on the
+  list even though the row now lands in the store) but the *reason* is different — see #515 for the
+  corrected rationale — and surfaces a harness-adjacent UI lesson: the Channel-info sheet is a full-surface
   `.status-sheet-overlay` scrim that blocks `.conversation__back` until the sheet's own
   `.status-sheet__close` is clicked first — relevant to any future scenario that opens the sheet.
 - **#451's independent sibling, the destructive-lifecycle scenario, landed too.**
@@ -113,7 +116,9 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   archive → restore → delete on the same single `launchPairedApp` launch. It hits the same Gaps A/B as
   #440 and lands on the same ruling: assert the Archive view's `role=tab` count deltas (`Discussions
   0→1→0` for archive/restore) rather than active-Channel-List departure/return, since Gap B means an
-  archived row never actually leaves the active list. Delete is asserted as gone from **both** surfaces —
+  archived row never actually leaves the active list. (Gap A itself is later fixed by
+  [#515](../codebase/515.md); Gap B is untouched and still governs this ruling.) Delete is asserted as gone
+  from **both** surfaces —
   it splices the row from the fake's held state rather than tagging it, so that's the one step where
   "gone" holds everywhere. Also nuances the #451 sheet-scrim lesson: whether `.status-sheet__close` is
   needed before `.conversation__back` depends on the specific action's callback wiring, not the sheet shell
@@ -237,6 +242,14 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
   `shouldOfferRepair`) before the infra was written, confirming it as the #464-first case where the fatal
   hook is feasible rather than falling back to the ticket's own "route back instead of asserting the
   unrealizable" escape hatch (the #440 discipline).
+- **[#515](../codebase/515.md) closes Gap A.** `conversationListBridge.shouldRefreshList` gained a third
+  arm for `conversationCreated`, so a FAB-created conversation now re-requests the list and lands in the
+  store instead of waiting for an unrelated rename/archive/promote/delete. No e2e assertion changed — the
+  three specs that document Gap A (#440, #451, #452) still assert navigation, not list membership, at the
+  create step, because the route is `thread` and `ChannelList` is unmounted there regardless of whether the
+  row is in the store. Only the *reason* in their comments changed, from "the row isn't in the store yet"
+  to "the list isn't mounted to show it". Gap B (archived rows never leave the active list,
+  `partitionByPromotion`, #469) is untouched.
 
 ## Related
 
@@ -263,6 +276,7 @@ Teardown runs through Playwright's fixture lifecycle (the code after `use()`), w
 - [#428 codebase notes](../codebase/428.md) — the stall indicator, screen snapshot, and debug-bundle download; the last of the reliability-affordance surfaces, covering a server push, a request→reply, and a chunked reply stream in a single launch.
 - [#465 codebase notes](../codebase/465.md) — the paired region's inner navigation: the pair-another-server round-trip and the thread/settings/archive back-chain, plus the Cancel→Settings round-trip as the only realizable teardown proof when two routes render the same component.
 - [#466 codebase notes](../codebase/466.md) — the push-notification toggle's relaunch persistence; the first two-launch scenario in the family, and the `reuseUserDataDir` fixture affordance (dir-reuse + drive-skip as one flag) it added to `launchPairedApp`.
+- [#515 codebase notes](../codebase/515.md) — closed Gap A (`shouldRefreshList` now covers `conversationCreated`); zero e2e assertion changes, comment-only reconciliation across #440/#451/#452.
 - [Push-notification preference store](push-notification-preference-store.md) / [#408 codebase notes](../codebase/408.md) — the `pyry.pushNotificationsEnabled` `localStorage` contract [#466](../codebase/466.md) is the first e2e to prove survives a full app relaunch.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

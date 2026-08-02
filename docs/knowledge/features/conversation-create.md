@@ -164,9 +164,13 @@ By #241, three independent `assertNever`-guarded `DaemonEvent` switches exist
 (`daemonEventBridge.ts`, [`timelineBridge.ts`](conversation-timeline-store.md),
 [`modalBridge.ts`](modal-store-bridge.md)), so adding `conversationCreated` forced a one-line case in
 all three — `daemonEventBridge`/`timelineBridge` return `null`, `modalBridge` folds it into its
-existing null fall-through list. The real consumer is
+existing null fall-through list. The real consumer at #241 time was
 [the new-discussion FAB's bridge](new-discussion-fab.md) (#242), which subscribes directly via
-`window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges above.
+`window.pyry.onDaemonEvent`, not through any of the three exhaustive bridges above. [#515](../codebase/515.md)
+later added a second, independent consumer on the same event: the [conversation list
+store](conversation-list-store.md)'s `subscribeConversations` now also re-requests the list on
+`conversationCreated`, so the row lands in the store instead of only triggering navigation. The two
+subscriptions are separate and side-effect-disjoint (nav vs. re-list), so they never cross-fire.
 
 ## Data flow
 
@@ -214,6 +218,9 @@ one.
 
 - [New-discussion FAB](new-discussion-fab.md) / [#242 codebase notes](../codebase/242.md) — the
   renderer consumer: fires `createConversation`, navigates on `conversationCreated`.
+- [Conversation list store](conversation-list-store.md) / [#515 codebase notes](../codebase/515.md) —
+  the second `conversationCreated` consumer, added later: re-requests the list so the new row lands in
+  the store on the same event the FAB navigates on.
 - [Default-workspace store](default-workspace-store.md) / [#403 codebase notes](../codebase/403.md) —
   widened `requestNewConversation`'s `cwd` from a hardcoded `null` to the caller's saved default
   (`null` still means "take the daemon default"); no wire/payload change.

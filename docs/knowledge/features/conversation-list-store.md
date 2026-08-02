@@ -60,15 +60,16 @@ requestConversationList(sendCommand: (c: RendererCommand) => void): void
 subscribeConversations(onDaemonEvent, setConversations, refreshOnChange): () => void
 // onDaemonEvent(event => {
 //   const list = translateConversationsEvent(event); if (list !== null) setConversations(list)
-//   if (shouldRefreshList(event)) refreshOnChange()   // #275, widened #376
+//   if (shouldRefreshList(event)) refreshOnChange()   // #275, widened #376, widened #515
 // })
 // returns the off-handle (the subscribeRunConfig idiom)
 
 shouldRefreshList(event: DaemonEvent): boolean
-// event.type === 'conversationUpdated' || event.type === 'conversationDeleted' — a plain boolean,
-// not a type guard: the payload (id/name/cwd) is never consulted (#275, widened #376). Renamed from
+// event.type === 'conversationUpdated' || event.type === 'conversationDeleted' ||
+// event.type === 'conversationCreated' — a plain boolean, not a type guard: the payload
+// (id/name/cwd) is never consulted (#275, widened #376, widened #515). Renamed from
 // isConversationUpdated when #376 added the second arm — one predicate answering "should this event
-// re-request the list?", not two isX predicates OR'd at the call site.
+// re-request the list?", not N isX predicates OR'd at the call site.
 
 ConversationListData(): null
 // headless component, two effects: subscribe on mount ([]), request on the rising edge to `connected` ([isConnected])
@@ -92,9 +93,10 @@ not-loaded)" unmistakable to a reviewer.
 1. **Subscribe** (deps `[]`) — `subscribeConversations(window.pyry.onDaemonEvent, list =>
    conversationListStore.getState().setConversations(list), () =>
    requestConversationList(window.pyry.sendCommand))`; the off-handle is the cleanup, so a
-   StrictMode double-mount nets exactly one live listener. The third arg (#275) re-requests the list
-   on a `conversationUpdated` broadcast — `window.pyry.sendCommand` is dereferenced only when the
-   arrow runs, never during render, so the server-render-to-empty-markup invariant is unaffected.
+   StrictMode double-mount nets exactly one live listener. The third arg re-requests the list on a
+   `conversationUpdated` broadcast (#275), a `conversationDeleted` reply (#376), or a
+   `conversationCreated` reply (#515) — `window.pyry.sendCommand` is dereferenced only when the arrow
+   runs, never during render, so the server-render-to-empty-markup invariant is unaffected.
 2. **Request on the rising edge to `connected`** (deps `[isConnected]`, `isConnected =
    useSessionStore(s => s.status.type === 'connected')`) — a `useRef(false)` guard fires exactly one
    request per connection episode: resets to `false` while disconnected (so a reconnect re-requests)
@@ -135,6 +137,13 @@ daemon → conversation_deleted frame (CORRELATED reply, no broadcast) → conve
     → shouldRefreshList(event) → true (id-blind — the id is never consulted) → refreshOnChange()
     → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#376]
     → … re-enters the flow above; the arriving conversationsReceived omits the deleted row
+
+daemon → conversation_created frame (CORRELATED reply to the creator, no broadcast) → conversationCreated
+DaemonEvent [#241] → DAEMON_EVENT_CHANNEL → subscribeConversations listener (independent of the
+new-discussion FAB's own subscription on the same event, #242)
+    → shouldRefreshList(event) → true → refreshOnChange()
+    → requestConversationList(window.pyry.sendCommand) → {type:'requestConversations'}   [#515]
+    → … re-enters the flow above; the arriving conversationsReceived lands the new, complete row
 ```
 
 ## Configuration and usage
@@ -171,6 +180,17 @@ daemon → conversation_deleted frame (CORRELATED reply, no broadcast) → conve
   site. The trigger never inspects the event's `id`, so it fires the same re-request whether or not
   the deleted id is present in the current list; the deleted row's absence from the fresh
   `conversationsReceived` reply is what actually removes it — no local remove-by-id path exists.
+- **A create was the last gap, and stayed open for a full release cycle before [#515](../codebase/515.md)
+  closed it.** `create_conversation` is, like delete, a *correlated* reply with no broadcast — but unlike
+  delete it went unnoticed at #376 time and shipped with only two arms, so a FAB-created discussion stayed
+  invisible in the Channel List until an unrelated rename/archive/promote/delete or a reconnect. #515 added
+  the third `shouldRefreshList` arm, `event.type === 'conversationCreated'`. No optimistic insert: the
+  5-field `ConversationCreatedPayload` ([conversation create](conversation-create.md), #241) carries
+  neither `is_archived` nor `last_message_ts`, so fabricating a row locally would either invent those
+  fields or force this store to grow a per-row setter it deliberately doesn't have — re-requesting keeps
+  the daemon authoritative and reuses the existing `conversationsReceived → setConversations` seam
+  unchanged. Being a correlated reply, the refresh is **creator-only**: a second client's list stays stale
+  until its own next mutation, which needs a daemon-side broadcast to fix and is out of scope.
 - **No correlation, no request tracking.** Any `conversationsReceived` that arrives — solicited or
   not — is written unconditionally; safe because only the authenticated daemon can produce one (see
   [conversation list fetch § Correlation is deliberately absent](conversation-list-fetch.md#correlation-is-deliberately-absent)).
@@ -201,7 +221,10 @@ daemon → conversation_deleted frame (CORRELATED reply, no broadcast) → conve
 - [#208 codebase notes](../codebase/208.md) — implementation summary and patterns established.
 - [Channel List home screen](channel-list.md) (#141) — the first consumer of
   `useConversationListStore`/`selectConversations`. The [new-discussion FAB](new-discussion-fab.md)
-  (#242) reads the daemon's `conversationCreated` event through its own bridge, not this store.
+  (#242) reads the daemon's `conversationCreated` event through its own, independent bridge (it only
+  navigates, sends no command); since [#515](../codebase/515.md) this store's `subscribeConversations`
+  also reacts to the same event on its own subscription, so the two never cross-fire and exactly one
+  `list_conversations` re-request goes out per create.
 - [Conversation promote (transport)](conversation-promote.md) / [#273 codebase
   notes](../codebase/273.md) — the `conversationUpdated` broadcast this store's `refreshOnChange`
   reacts to; [#275 codebase notes](../codebase/275.md) — implementation summary and patterns for the
@@ -210,3 +233,10 @@ daemon → conversation_deleted frame (CORRELATED reply, no broadcast) → conve
   notes](../codebase/375.md) — the `conversationDeleted` correlated reply this store's
   `refreshOnChange` also reacts to since #376; [#376 codebase notes](../codebase/376.md) —
   implementation summary and patterns for the `isConversationUpdated → shouldRefreshList` widening.
+- [Conversation create (transport)](conversation-create.md) / [#241 codebase
+  notes](../codebase/241.md) — the `conversationCreated` correlated reply this store's
+  `refreshOnChange` also reacts to since #515; [#515 codebase notes](../codebase/515.md) —
+  implementation summary and patterns for the third `shouldRefreshList` arm, and the fixed
+  Channel-List-missing-a-new-discussion staleness bug.
+- [E2E test harness](e2e-harness.md) — documents "Gap A" (#440/#451/#452), the e2e-visible symptom of
+  this staleness, and its comment-only reconciliation once #515 closed it.

@@ -33,19 +33,29 @@ export function translateConversationsEvent(
 }
 
 /**
- * The refresh trigger (#275, #376): should this event re-request the list? True for the two arms that
- * signal a daemon-side conversation change — the unsolicited `conversationUpdated` BROADCAST (promote /
- * rename / archive) and the CORRELATED `conversationDeleted` reply (a permanent delete confirmed with
- * a distinct `{ id }` and no broadcast, pyrycode #822). Deliberately a plain boolean, NOT a type guard
- * that narrows to the payload — the event's `id` / `name` / `cwd` are never consulted (AC3). We react
- * to the OCCURRENCE of a change, then let the daemon's authoritative reply land the new rows via the
- * existing `conversationsReceived → setConversations` seam: a delete drops the row because the fresh
- * `list_conversations` reply omits it, no local array surgery. Kept separate from
- * `translateConversationsEvent` so that pure `event → rows | null` filter stays single-purpose (the
- * ticket's "don't overload that filter"). Total over the sealed union — no failure mode.
+ * The refresh trigger (#275, #376, #515): should this event re-request the list? True for the three arms
+ * that signal a daemon-side conversation change — the unsolicited `conversationUpdated` BROADCAST
+ * (promote / rename / archive), the CORRELATED `conversationDeleted` reply (a permanent delete confirmed
+ * with a distinct `{ id }` and no broadcast, pyrycode #822), and the CORRELATED `conversationCreated`
+ * reply (#515: the daemon sends no broadcast on a plain create, so without this arm a FAB-created
+ * discussion stayed absent from the Channel List until a reconnect or an unrelated mutation). Deliberately
+ * a plain boolean, NOT a type guard that narrows to the payload — the event's `id` / `name` / `cwd` are
+ * never consulted (AC3). We react to the OCCURRENCE of a change, then let the daemon's authoritative reply
+ * land the new rows via the existing `conversationsReceived → setConversations` seam: a delete drops the
+ * row because the fresh `list_conversations` reply omits it, and a create gains a COMPLETE row rather than
+ * one fabricated from the 5-field created payload (which carries no `is_archived` / `last_message_ts`) —
+ * no local array surgery either way. Creator-only by construction: `conversation_created` is a correlated
+ * reply, so a second client's list stays stale until its own next mutation — unfixable renderer-side, out
+ * of scope. Kept separate from `translateConversationsEvent` so that pure `event → rows | null` filter
+ * stays single-purpose (the ticket's "don't overload that filter"). Total over the sealed union — no
+ * failure mode.
  */
 export function shouldRefreshList(event: DaemonEvent): boolean {
-  return event.type === 'conversationUpdated' || event.type === 'conversationDeleted'
+  return (
+    event.type === 'conversationUpdated' ||
+    event.type === 'conversationDeleted' ||
+    event.type === 'conversationCreated'
+  )
 }
 
 /**
@@ -62,9 +72,11 @@ export function requestConversationList(sendCommand: (command: RendererCommand) 
  * Subscribe via the injected `onDaemonEvent` with a SINGLE listener that has two independent reactions
  * (a single event is never both a `conversationsReceived` and a refresh-trigger event, so they never
  * cross-fire): each `conversationsReceived` writes its rows verbatim into the store via
- * `setConversations`; each refresh-trigger event — a `conversationUpdated` broadcast (#275) or a
- * `conversationDeleted` reply (#376) — fires `refreshOnChange` to re-request the authoritative list,
- * keeping the Channel List live on a promote/rename/archive/delete without a reconnect. Every unrelated
+ * `setConversations`; each refresh-trigger event — a `conversationUpdated` broadcast (#275), a
+ * `conversationDeleted` reply (#376), or a `conversationCreated` reply (#515) — fires `refreshOnChange`
+ * to re-request the authoritative list, keeping the Channel List live on a create/promote/rename/archive/
+ * delete without a reconnect. A create fires exactly one re-request: `conversationCreatedBridge` consumes
+ * the same event on an INDEPENDENT subscription but only navigates, it sends no command. Every unrelated
  * event no-ops. Still exactly one subscription (AC4). Returns the
  * unsubscribe handle (the daemonEventBridge off-handle idiom) so the React binding can use it as its
  * effect cleanup. The `list !== null` guard (not `if (list)`) is deliberate: an empty array is truthy
@@ -105,8 +117,9 @@ export function ConversationListData(): null {
     // is live before any request goes out. The returned off handle is the effect cleanup, so a
     // StrictMode double-mount nets exactly one live listener (the daemonEventBridge idiom). Each
     // conversationsReceived writes its rows verbatim into the app-singleton store via its setter; a
-    // conversationUpdated broadcast (#275) re-requests the list so the flipped row lands without a
-    // reconnect. `window.pyry.sendCommand` is dereferenced only when the arrow runs (an update fires),
+    // conversationUpdated broadcast (#275), a conversationDeleted reply (#376) or a conversationCreated
+    // reply (#515) re-requests the list so the changed row lands without a reconnect.
+    // `window.pyry.sendCommand` is dereferenced only when the arrow runs (a refresh trigger fires),
     // never during render — so the server-render-to-empty-markup invariant is unaffected.
     return subscribeConversations(
       window.pyry.onDaemonEvent,

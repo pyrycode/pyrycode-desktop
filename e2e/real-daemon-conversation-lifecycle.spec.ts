@@ -11,13 +11,15 @@ import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
 // Archive / unarchive / delete are pure registry ops daemon-side (they never touch claude), so they prove
 // against a real daemon deterministically and cheaply. Zero production code.
 //
-// The two code-confirmed gaps that dictate the assertion surface (identical to what #452 documents):
-//   - Gap A — a FAB-created conversation never enters the active list at create time
-//     (conversationListBridge.shouldRefreshList is false for conversationCreated). So the created row lands
-//     in the renderer store only when the first MUTATION re-lists it. Archiving is what first lands it — the
-//     conversation_updated → re-list returns it now is_archived:true, so it surfaces in the Archive view's
-//     Discussions tab. That is why the Archive-view Discussions 0→1 delta is the sound first assertion; the
-//     create step asserts THREAD NAV, never active-list membership.
+// The two code-confirmed constraints that dictate the assertion surface (identical to what #452 documents):
+//   - The create step asserts THREAD NAV, never active-list membership — because the route flips to
+//     `thread` on the created reply, so the Channel List is UNMOUNTED and there is nothing to assert
+//     membership against there. (Since #515 the created row does land in the renderer store at create time —
+//     conversationListBridge.shouldRefreshList is now true for conversationCreated, so the correlated
+//     conversation_created triggers a re-list — but it lands is_archived:false, invisible to the Archive
+//     view. Archiving is what flips it to is_archived:true and surfaces it in the Archive view's Discussions
+//     tab, so the Archive-view Discussions 0→1 delta still measures the ARCHIVE, not the create, and remains
+//     the sound first assertion.)
 //   - Gap B — the active Channel List never filters archived rows (partitionByPromotion splits by
 //     is_promoted only), so an archived conversation keeps rendering in the active list. Active-list
 //     departure/return on archive is unrealizable (a latent product bug, filed as #469, out of scope here).
@@ -96,13 +98,14 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   await expect(page.getByRole('tab', { name: 'Discussions (0)', exact: true })).toBeVisible()
   await page.locator('.archive__back').click()
 
-  // --- FAB create-nav (AC2, Gap A). The FAB dispatches requestNewConversation (name: null, cwd: null →
+  // --- FAB create-nav (AC2). The FAB dispatches requestNewConversation (name: null, cwd: null →
   // daemon default = the harness -pyry-workdir) → create_conversation → the daemon mints a session RECORD
   // (#677, no claude process; it spawns lazily on the first send_message, #439) and replies
-  // conversation_created → useConversationCreatedNav sets it active and routes `thread`. Assert NAVIGATION
-  // into a thread, NOT list membership (Gap A): the overflow trigger is absent on the list and present on a
-  // thread, so its auto-wait IS the create-nav gate. A timeout here = a missing create_conversation handler
-  // (#949-class), not a flake. ---
+  // conversation_created → useConversationCreatedNav sets it active and routes `thread` (and, independently,
+  // #515's re-list lands the row in the store). Assert NAVIGATION into a thread, NOT list membership — the
+  // route is `thread`, so the Channel List is unmounted and there is nothing to assert against there. The
+  // overflow trigger is absent on the list and present on a thread, so its auto-wait IS the create-nav gate.
+  // A timeout here = a missing create_conversation handler (#949-class), not a flake. ---
   await page.locator('.channel-list__fab').click()
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
   await expect(overflowTrigger).toBeVisible()
@@ -110,8 +113,9 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   // --- Archive (AC3). Open the Channel-info sheet, then the Archive pill. `.channel-info__action` is NOT
   // class-unique (three pills: Rename / Archive / Delete), so target Archive by its accessible name. This
   // fires archive_conversation → the daemon sets is_archived:true and replies conversation_updated (to the
-  // requester, NOT a broadcast — pyrycode#881) → shouldRefreshList re-lists → the store gains the created
-  // row now archived. onArchive also calls onClose(), so the sheet overlay unmounts and we are back on the
+  // requester, NOT a broadcast — pyrycode#881) → shouldRefreshList re-lists → the created row the store
+  // already holds (landed at create, #515) FLIPS to archived, so it enters the Archive view's Discussions
+  // tab. onArchive also calls onClose(), so the sheet overlay unmounts and we are back on the
   // bare thread — no `.status-sheet__close` needed. ---
   await overflowTrigger.click()
   await page.getByRole('menuitem', { name: 'Channel info' }).click()

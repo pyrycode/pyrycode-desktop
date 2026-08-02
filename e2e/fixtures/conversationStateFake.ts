@@ -31,13 +31,15 @@ import type {
 // default seed is a single PROMOTED, NAMED row so a zero-config fake both launches (the non-empty-seed
 // constraint: launchPairedApp's row click needs a clickable row) and renders the rename pencil.
 //
-// Two reflect paths (matching src/shared/wire/types.ts + conversationListBridge.shouldRefreshList):
+// Three reflect paths (matching src/shared/wire/types.ts + conversationListBridge.shouldRefreshList):
 //   - rename / archive / unarchive / promote / change_workspace → an unsolicited `conversation_updated`
 //     broadcast; the app auto re-requests `list_conversations`, which this fake answers from UPDATED state.
 //   - delete_conversation → a CORRELATED `conversation_deleted { id }` echoing the request id as
 //     `in_reply_to` (no broadcast); the app also auto re-lists.
-//   - create_conversation → a `conversation_created { record }` consumed by the create→nav bridge; the new
-//     row surfaces on the NEXT `list_conversations`, not via a re-list.
+//   - create_conversation → a CORRELATED `conversation_created { record }` (no broadcast), consumed by BOTH
+//     the create→nav bridge and — since #515 — shouldRefreshList; the app auto re-lists, which this fake
+//     answers from state that has ALREADY appended the minted row (`list.push` below), so the new row lands
+//     at create time rather than waiting for the next unrelated mutation.
 //
 // It imports the production `codec` + wire types by RELATIVE path (`../../src/...`) exactly like
 // launchPairedApp.ts — the `@shared` alias is not available to e2e, and e2e is not part of any tsconfig.

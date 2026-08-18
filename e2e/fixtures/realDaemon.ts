@@ -2,6 +2,7 @@ import {
   test as base,
   expect,
   _electron as electron,
+  type ElectronApplication,
   type Page
 } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -138,8 +139,15 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
 
   relay: async ({}, use) => {
     const relay = await startFakeRoutingRelay()
-    await use(relay)
-    await relay.close()
+    // #517 consistency conversion — `close` before `use` returns on every raised path, matching `daemon`
+    // below. No swallow here, deliberately: one resource means there is no drain for a throwing `finally`
+    // to abort, and a fake-relay close failure is a genuine harness signal worth surfacing. This one was
+    // never an orphan risk (an in-process server dies with the worker), which is why it gets no test.
+    try {
+      await use(relay)
+    } finally {
+      await relay.close()
+    }
   },
 
   daemon: async (
@@ -349,20 +357,68 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   page: async ({ daemon }, use) => {
     // `daemon` is depended on for teardown ordering only; its value is consumed in the test body.
     void daemon
-    // Verbatim from #94: launch the BUILT app (`args: ['.']`), strip ELECTRON_RENDERER_URL to force the
-    // built-renderer path, set the two dev-affordance flags, and isolate userData for an unpaired start.
-    const env = { ...process.env }
-    delete env.ELECTRON_RENDERER_URL
-    env[LOOPBACK_RELAY_ENV_FLAG] = '1'
-    env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
-    const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-realclaude-'))
-    const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
-    const page = await app.firstWindow()
-    await use(page)
-    await app.close()
-    await rm(userDataDir, { recursive: true, force: true })
+    await withIsolatedElectronApp(({ page }) => use(page))
   }
 })
+
+export type IsolatedElectronApp = {
+  page: Page
+  app: ElectronApplication
+  userDataDir: string
+}
+
+/**
+ * Launch the BUILT app against a throwaway `--user-data-dir`, hand the handles to `run`, and reap both.
+ *
+ * Verbatim from #94: `args: ['.']` launches the built app, ELECTRON_RENDERER_URL is stripped to force the
+ * built-renderer path, the two `app.isPackaged`-gated dev-affordance flags are set, and userData is
+ * isolated for a guaranteed-unpaired start.
+ *
+ * Lifted out of the `page` fixture closure by #517 so the real setup path is reachable from a test (the
+ * fixture above is now a one-line delegation). It takes NO path parameter — the `rm` target is always the
+ * value `mkdtemp` just returned, so this never becomes an arbitrary recursive-delete primitive.
+ *
+ * Both resources are reaped on EVERY raised exit path — success, `run` failing, and a setup failure raised
+ * after the resource came up (#517: `firstWindow()` rejecting used to strand both). Each `try` textually
+ * follows its `const x = await create()`, so "no `await` between create and cleanup registration" is a
+ * structural property, not a discipline a future edit can break. Nesting also gives AC2's app-close-then-
+ * `rm` order for free: the inner `finally` completes before the outer one begins. NOT covered: an `await`
+ * that never settles (a hung `firstWindow()`) — Playwright kills the worker without unwinding the stack,
+ * so no `finally` runs. Whatever `run` or setup threw is rethrown; teardown never replaces it.
+ */
+export async function withIsolatedElectronApp(
+  run: (handles: IsolatedElectronApp) => Promise<void>
+): Promise<void> {
+  const env = { ...process.env }
+  delete env.ELECTRON_RENDERER_URL
+  env[LOOPBACK_RELAY_ENV_FLAG] = '1'
+  env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
+  const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-realclaude-'))
+  try {
+    const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
+    try {
+      const page = await app.firstWindow()
+      await run({ page, app, userDataDir })
+    } finally {
+      // Best-effort, like launchPairedApp.ts's drain: a throwing `finally` would REPLACE the causal error
+      // the developer needs, and would abort the unwind before the outer `rm` — leaving the
+      // credential-bearing dir behind, i.e. this very bug on a narrower path. Discarded without logging:
+      // a close error can carry the launch argv, which embeds `--user-data-dir=<path>`, and this file's
+      // no-echo rule extends to teardown diagnostics.
+      try {
+        await app.close()
+      } catch {
+        // best-effort
+      }
+    }
+  } finally {
+    try {
+      await rm(userDataDir, { recursive: true, force: true })
+    } catch {
+      // best-effort
+    }
+  }
+}
 
 /** Encode a QrPayload the way the daemon's `pair.Encode` does: JSON → URL-safe, no-pad base64url (the
  *  strict alphabet parsePairingPayload requires). Copied from #94; there is no `pyry://` wrapper. */

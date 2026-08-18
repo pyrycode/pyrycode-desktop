@@ -11,7 +11,7 @@
     "build": "npm run typecheck && electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "check:electron-digest": "ELECTRON_RUN_AS_NODE=1 electron scripts/electron-digest-check.mjs",
     "e2e": "npm run build && playwright test",
     "e2e:real-claude": "npm run build && playwright test --config playwright.real-claude.config.ts",

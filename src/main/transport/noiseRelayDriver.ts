@@ -153,6 +153,10 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
   // Single-writer per dial (resolveConnection writes during a re-dial; onConnected reads after it
   // connects; supervisor dials never overlap), so the value read is always the one this dial
   // resolved.
+  //
+  // Note `firstConnect` counts CONNECTS while the supervisor's `firstDial` counts dial ATTEMPTS, so
+  // the two are not interchangeable after a failed dial. See the #516 note in onConnected for what
+  // that costs and why it is left alone.
   let firstConnect = true
   let pendingSession: SessionMaterial | null = null
 
@@ -174,9 +178,22 @@ export function createNoiseRelayDriver(config: NoiseRelayDriverConfig): NoiseRel
 
     // Pick this dial's session material (#83): on an automatic reconnect (a provider is set and this
     // is past the first connect) it's the freshly-reloaded `pendingSession` the supervisor's
-    // resolveConnection stashed from the SAME load() that fed the reconnect's connection — so headers
-    // and key never split across a re-pair. On the first connect, or with no provider, it's the
-    // construction-time config.session, exactly as before.
+    // resolveConnection stashed from the SAME load() that fed the reconnect's connection. On the
+    // first connect, or with no provider, it's the construction-time config.session, exactly as
+    // before.
+    //
+    // #516 — this does NOT hold headers and key together in every case, and an earlier version of
+    // this comment claimed it did. `firstConnect` flips on the first `connected` event; the
+    // supervisor's `firstDial` flips on the first dial ATTEMPT. A dial that fails before connecting
+    // advances one and not the other, so the first SUCCESSFUL connect after one or more failed dials
+    // takes the provider branch for its headers and the construction-time branch for its key
+    // material. If the paired-server record changed in that window the two disagree.
+    //
+    // Left as-is deliberately. The consequence is a handshake that fails and is retried with
+    // `firstConnect` already false, which resolves it — one wasted connect attempt, self-healing, and
+    // no path to a wrong key being accepted. Fixing the gate is a behaviour change guarding a failure
+    // nobody has reached; the defect worth correcting was this comment asserting an invariant the
+    // code does not have.
     const material = config.loadDialConfig && !firstConnect ? pendingSession : config.session
     firstConnect = false
 

@@ -84,7 +84,20 @@ None. No store, no async iterables, no cancellation. One synchronous assertion a
 
 ## Note on `electronApp.ts` becoming unimported
 
-smoke is currently the **only** importer of `e2e/fixtures/electronApp.ts`. After this change nothing imports it. This is intentional and must be left as-is:
+> **SUPERSEDED 2026-08-18 (#546). The file has been deleted.** The rule below was written to preserve
+> the fixture for two named future scenarios. Both have since shipped and neither used it: `#40` and
+> `#93` are closed, and every e2e spec launches through `launchPairedApp` or the `realDaemon` fixture
+> instead. At deletion, 26 specs used those two and nothing imported `electronApp.ts` — the remaining
+> textual mentions were comments explaining why it was *not* used, plus one unrelated local variable.
+>
+> Keeping it had turned into a cost rather than a saving. Its header still advertised it as the
+> primitive new scenarios should import, and what they would have inherited is precisely the
+> non-hermetic launch this spec moved smoke off: no `--user-data-dir`, no isolation, the developer's
+> real user data and any persisted pairing visible to the test. The hermeticity argued for below is
+> unchanged and still correct; only the decision to keep an unused, non-hermetic launcher alongside it
+> is reversed.
+
+The rule as originally written, kept for the trail:
 
 - **Do NOT delete `electronApp.ts`** — AC4 keeps it as the scenario-agnostic launch primitive for future scenarios (`#40`/`#93`).
 - **Do NOT modify it** — AC4.

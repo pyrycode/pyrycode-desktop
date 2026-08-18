@@ -101,6 +101,21 @@ all. The consumer arm drops `conversation_id`, carrying only `active` onward —
 one-field emit, `stall`'s content-drop shape rather than `api_retry`'s carry-three-fields one. Ships
 dormant; the render slice #496 is the first consumer.
 
+[#564](../codebase/564.md) added a sixteenth kind, `background_task_started` → `background-task-started` —
+the first of three sibling frames (`background_task_updated` #565, `background_task_roster` #566) that
+report claude work outliving the turn that spawned it (pyrycode#1240; lane confirmed as the v2 interactive
+stream, pyrycode#1394). `BackgroundTaskStartedPayload` scales `parseApiRetryPayload` from four fields to
+six: five map onto `requireString`, and the sixth, `truncated_fields: string[] | null`, needed a new field
+narrower, `requireStringArrayOrNull`, added directly after `requireStringOrNull`. It widens that helper's
+"a literal `null` is a VALUE, not an absence" semantic from a scalar to an array with no extra check: an
+omitted key (`undefined`) is neither `null` nor an array, so fail-closed-on-absence falls out of the shape.
+Its element check is a bare `typeof === 'string'`, not a record narrower like `parseQueuedItem` — the only
+other array narrowing in this file maps elements through a record because its elements *are* records; this
+frame's elements are bare wire field names. Unlike `api_retry`/`compacting`, the consumer emit (see
+[daemon connection](daemon-connection.md)) **keeps** `conversation_id` — the frame carries no `turn_id`
+and opens/closes no turn, so it is daemon state (the `queue_state` #720 rule), not a turn-stream item.
+Ships dormant; the still-unbuilt background-task store #567 is the first consumer.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -133,12 +148,14 @@ export type InboundDaemonMessage =
   | { kind: 'conversation-created'; conversationCreated: ConversationCreatedPayload }  // #241, additive
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }  // #254, additive
   | { kind: 'session-settings-updated'; sessionSettingsUpdated: SessionSettingsUpdatedPayload; inReplyTo?: number }  // #264, additive; inReplyTo added by #261
+  | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }  // #564, additive
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`stall`/
 //                            `api_retry`/`compacting`/`tool_use`/`modal_shown`/`modal_dismissed`/`tool_result`/
-//                            `conversation_created`/`session_transition`/`session_settings_updated`
+//                            `conversation_created`/`session_transition`/`session_settings_updated`/
+//                            `background_task_started`
 //                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
@@ -286,6 +303,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `modal_shown` / `modal_dismissed` ([#201](../codebase/201.md)) | `inbound-decoded` | `code: 'modal_shown' \| 'modal_dismissed'`, `bytes`, `hash` — never `modal_id`/`class`/`title`/`prompt`/any `options[].label`/`default_option_id`/`outcome`/`source` |
 | modeled `tool_result` ([#229](../codebase/229.md)) | `inbound-decoded` | `code: 'tool_result'`, `bytes`, `hash` — never `result_summary`/`is_error`/`tool_use_id`/`turn_id`/`conversation_id` |
 | modeled `session_settings_updated` ([#264](../codebase/264.md)) | `inbound-decoded` | `code: 'session_settings_updated'`, `bytes`, `hash` — never `session_id` |
+| modeled `background_task_started` ([#564](../codebase/564.md)) | `inbound-decoded` | `code: 'background_task_started'`, `bytes`, `hash` — never `conversation_id`/`task_id`/`tool_call_id`/`description`/`task_type`/`truncated_fields`; narrows before logging, so a malformed frame leaves no record |
 | unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
 
 Load-bearing details:
@@ -491,6 +509,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [Session settings send](session-settings-send.md) / [#264 codebase notes](../codebase/264.md) — the twelfth and simplest additive extension: the `session_settings_updated` kind, `parseSessionSettingsUpdatedPayload` (a single `requireString`, no enum, no nullable), and the write-confirmation twin of `session_transition` — the consumer arm drops nothing at the emit, since the reply has only the one field to begin with.
 - [#261 codebase notes](../codebase/261.md) — widened the `session-settings-updated` kind with `inReplyTo?: number`, propagating the already-decoded `Envelope.in_reply_to` for [daemon connection](daemon-connection.md)'s correlation lookup.
 - [#269 codebase notes](../codebase/269.md) — widened the original `daemon-error` kind ([#116](../codebase/116.md)) with the same `inReplyTo?: number` carrier, letting [daemon connection](daemon-connection.md) correlate a rejection against the same `pendingSettings` map #261 built, ahead of the pre-existing bundle-reassembler and #248 modal-FIFO consumers of that kind.
+- [#564 codebase notes](../codebase/564.md) — the sixteenth additive extension: the `background_task_started` kind, `parseBackgroundTaskStartedPayload` (`parseApiRetryPayload` scaled from four fields to six), and the new `requireStringArrayOrNull` field narrower — required-present with a nullable array value, borrowing `parseQueuedItem`'s posture (one bad element fails closed, empty array valid) but not its record-narrower shape, since this frame's array elements are bare strings. First of three sibling frames (#565/#566 follow); the consumer arm keeps `conversation_id`, unlike `api_retry`/`compacting`.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

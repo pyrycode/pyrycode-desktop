@@ -287,6 +287,19 @@ export type DaemonEvent =
   `modalAnswerRejected`'s `modalId`: only one create-folder dialog is ever open, so there is no
   concurrency to disambiguate, and the success twin `workspaceFolderCreated` carries only `path` with no
   correlation key to mirror.
+- **`backgroundTaskStarted{conversationId,taskId,toolCallId,description,taskType,truncatedFields}`**
+  ([#564](../codebase/564.md)) also maps to *no* `SessionAction`, consumed by **none** of the three
+  existing bridges — the real consumer is the still-unbuilt background-task store (#567). The frame
+  announces claude work that **outlives the turn that spawned it** (pyrycode#1240); it carries no
+  `turn_id` and opens/closes no turn, so — like `queueState` — it **keeps** `conversationId` rather than
+  dropping it, following the same "turn-stream item vs daemon state" test #720 established. `toolCallId`
+  is the wire `tool_call_id` (not `tool_use_id`, despite `toolUse`/`toolResult`'s spelling) but the same
+  identifier value those two carry. `taskType` is an open string; `truncatedFields: null` means "nothing
+  was cut" and must not collapse into `[]` — dropping it downstream would present claude's cut text as
+  complete. `description`/`taskType` are untrusted, model-influenced daemon-relayed text (for
+  `taskType: 'local_bash'`, `description` is the literal command line claude ran) — the render slice
+  (#568) must treat both as plain text, never HTML, an attribute, or a URL sink. Ships dormant; first of
+  three sibling frame members (#565 `background_task_updated`, #566 `background_task_roster` follow).
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -404,6 +417,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#269 codebase notes](../codebase/269.md) — the `sessionSettingsRejected` member, the seventeenth no-`SessionAction` arm and the rejected twin of `sessionSettingsUpdated`; emitted by [daemon connection](daemon-connection.md)'s `pendingSettings`-lookup precedence gate on a correlated `daemon-error`, which on a match also suppresses that ticket's own `modalAnswerRejected` FIFO and the #116 bundle reassembler; consumed by none of the three existing bridges, real consumer is [#256](../codebase/256.md) (shipped)
 - [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md) — the pending→confirm/reject store consuming both `sessionSettingsUpdated` and `sessionSettingsRejected`; a fourth, independent App-level subscriber on this channel, alongside the three exhaustive bridges above
 - [#396 codebase notes](../codebase/396.md) — the `workspaceFolderRejected` member, the rejected twin of `workspaceFolderCreated` (#381); emitted by [daemon connection](daemon-connection.md)'s `pendingCreateFolders`-lookup precedence gate (the `pendingSettings`/`sessionSettingsRejected` pattern applied to a `Set`, since the event is bare); consumed by none of the three existing bridges, real consumer is the [create-folder round-trip store](new-folder-store.md) ([#397](../codebase/397.md))
+- [#564 codebase notes](../codebase/564.md) — the `backgroundTaskStarted` member, `apiRetry`/`compacting`'s peer on the v2 stream but widened to five strings plus a nullable string array; first of three sibling frame members (#565/#566 follow), and — like `queueState` — **keeps** `conversationId` because the frame is daemon state (no `turn_id`, opens/closes no turn) rather than a turn-stream item. Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

@@ -291,7 +291,19 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       { type: 'relayLinkChanged', status: 'connected' },
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // timeline store — it is not a turn-stream item.
-      { type: 'workspaceFolderRejected' }
+      { type: 'workspaceFolderRejected' },
+      // background-task open ships dormant (#564); its consumer is the #567 background-task store, not
+      // the timeline store. Daemon STATE, not a turn-stream item — the wire says so outright: no
+      // turn_id, opens and closes no turn, "its own thread of activity, not part of the turn".
+      {
+        type: 'backgroundTaskStarted',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        toolCallId: 'toolu_01XYZ',
+        description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
+        taskType: 'local_bash',
+        truncatedFields: ['description']
+      }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
   })
@@ -521,5 +533,27 @@ describe('subscribeTimeline', () => {
     // The falling edge repeats the last-known counter; the status still clears.
     bridge.emit({ type: 'apiRetry', active: false, current: 3, total: 10 })
     expect(selectApiRetry(store.getState())).toBeNull()
+  })
+
+  it('#564: a backgroundTaskStarted daemon event creates NO timeline item (ships dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'backgroundTaskStarted',
+      conversationId: 'conv-1',
+      taskId: 'task_01ABC',
+      toolCallId: 'toolu_01XYZ',
+      description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
+      taskType: 'local_bash',
+      truncatedFields: ['description']
+    })
+
+    // Both halves: the bridge filtered it out so no dispatch reached the reducer (same state ref), AND
+    // no chat row exists. The length assertion alone would be vacuous against an already-empty store.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
   })
 })

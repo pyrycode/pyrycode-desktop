@@ -11,6 +11,7 @@ import type {
   StallPayload,
   ApiRetryPayload,
   CompactingPayload,
+  BackgroundTaskStartedPayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
   WireSessionTransitionReason,
@@ -185,6 +186,47 @@ describe('compacting wire vocabulary (#495)', () => {
       active: false
     }
     expect(falling.active).toBe(false)
+  })
+})
+
+describe('background-task-started wire vocabulary (#564)', () => {
+  it('admits the background_task_started inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const started: EnvelopeType = 'background_task_started'
+    expect(started).toBe('background_task_started')
+  })
+
+  it('shapes BackgroundTaskStartedPayload as its six fields — no turn_id', () => {
+    const payload: BackgroundTaskStartedPayload = {
+      conversation_id: 'c1',
+      task_id: 'task_01ABC',
+      tool_call_id: 'toolu_01XYZ',
+      description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
+      task_type: 'local_bash',
+      truncated_fields: ['description']
+    }
+    expect(payload).toEqual({
+      conversation_id: 'c1',
+      task_id: 'task_01ABC',
+      tool_call_id: 'toolu_01XYZ',
+      description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
+      task_type: 'local_bash',
+      truncated_fields: ['description']
+    })
+    // No turn_id: a background task outlives the turn that spawned it, so it is not turn-scoped.
+    expect(payload).not.toHaveProperty('turn_id')
+  })
+
+  it('admits truncated_fields null — "nothing was cut", a wire VALUE distinct from []', () => {
+    const nothingCut: BackgroundTaskStartedPayload = {
+      conversation_id: 'c1',
+      task_id: 'task_01ABC',
+      tool_call_id: 'toolu_01XYZ',
+      description: 'sleep 60',
+      task_type: 'local_bash',
+      truncated_fields: null
+    }
+    expect(nothingCut.truncated_fields).toBeNull()
   })
 })
 

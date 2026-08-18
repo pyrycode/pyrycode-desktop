@@ -155,6 +155,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'screenSnapshotReceived':
     case 'relayLinkChanged':
     case 'notificationActivated':
+    case 'backgroundTaskStarted':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -178,6 +179,10 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // question #495 deferred: transient thread chrome, NOT a timeline row.)
       // (connected is now an owned arm — #538 flips it to the `reconnected` chrome reconcile above;
       // `connecting` / `disconnected` stay here, since only the completed handshake reconciles.)
+      // backgroundTaskStarted (#564) ships dormant — its consumer is the #567 background-task store. It
+      // belongs in this null group for the queueState reason, and here the wire says so outright: no
+      // turn_id, opens and closes no turn, "its own thread of activity, not part of the turn it appeared
+      // in". Whether the background-task panel ever becomes a timeline surface is #568's call.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

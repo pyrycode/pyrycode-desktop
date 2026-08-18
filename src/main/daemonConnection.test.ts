@@ -293,6 +293,11 @@ function compactingPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'compacting', ts: FIXED_TS, payload })
 }
 
+/** A `background_task_started` plaintext, wrapping an arbitrary payload (#564). */
+function backgroundTaskStartedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'background_task_started', ts: FIXED_TS, payload })
+}
+
 /** An `unrecognized_message` plaintext, wrapping an arbitrary payload. */
 function unrecognizedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'unrecognized_message', ts: FIXED_TS, payload })
@@ -1785,6 +1790,160 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: compactingPlaintext({ conversation_id: 'conv-1', active: 'true' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — background_task_started stream (#564)', () => {
+  /** The daemon's canonical fixture — six distinct, non-empty values (#564). */
+  const STARTED = {
+    conversation_id: 'conv-1',
+    task_id: 'task_01ABC',
+    tool_call_id: 'toolu_01XYZ',
+    description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
+    task_type: 'local_bash',
+    truncated_fields: ['description']
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('emits exactly one backgroundTaskStarted carrying all six fields, conversationId KEPT', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskStartedPlaintext(STARTED) })
+
+    // A whole-object assertion, which is what makes a swapped or dropped field fail (AC1).
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'backgroundTaskStarted',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        toolCallId: 'toolu_01XYZ',
+        description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
+        taskType: 'local_bash',
+        truncatedFields: ['description']
+      }
+    ])
+  })
+
+  it('KEEPS conversation_id — daemon state keyed by id, not a turn-stream item (the queueState rule)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskStartedPlaintext(STARTED) })
+
+    const events = emitted(sink).slice(before) as Array<{ conversationId?: string }>
+    // The deliberate inverse of api_retry's `not.toContain('conv-1')`: #567 attributes tasks by id,
+    // the same model queue_state already uses, so dropping it here would make that slice unbuildable.
+    expect(events[0].conversationId).toBe('conv-1')
+  })
+
+  it('maps tool_call_id onto toolCallId, distinct from taskId (the wire name is tool_call_id)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskStartedPlaintext({
+        ...STARTED,
+        task_id: 'the-task-handle',
+        tool_call_id: 'the-spawning-tool-call'
+      })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ taskId?: string; toolCallId?: string }>
+    expect(events[0].taskId).toBe('the-task-handle')
+    expect(events[0].toolCallId).toBe('the-spawning-tool-call')
+  })
+
+  it('round-trips truncatedFields null as null — never coerced to an empty list', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskStartedPlaintext({ ...STARTED, truncated_fields: null })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ truncatedFields?: unknown }>
+    expect(events[0].truncatedFields).toBeNull()
+  })
+
+  it('round-trips a populated truncatedFields element-for-element, in order', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskStartedPlaintext({
+        ...STARTED,
+        truncated_fields: ['description', 'task_type']
+      })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ truncatedFields?: unknown }>
+    expect(events[0].truncatedFields).toEqual(['description', 'task_type'])
+  })
+
+  it('emits exactly the seven modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskStartedPlaintext({ ...STARTED, smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
+      'description',
+      'taskId',
+      'taskType',
+      'toolCallId',
+      'truncatedFields',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('holds no correlation memory: two tasks and a verbatim repeat each emit their own event', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (const task_id of ['task_01ABC', 'task_02DEF', 'task_02DEF']) {
+      drivers[0].emit({
+        type: 'message',
+        plaintext: backgroundTaskStartedPlaintext({ ...STARTED, task_id })
+      })
+    }
+
+    // Three frames, three events, in arrival order — the transport holds no task map (that is #567's,
+    // and the wire's ordering is claude's, so any buffering here would be wrong).
+    const events = emitted(sink).slice(before) as Array<{ taskId?: string }>
+    expect(events.map((e) => e.taskId)).toEqual(['task_01ABC', 'task_02DEF', 'task_02DEF'])
+  })
+
+  it('drops a malformed background_task_started without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+    const missingKey: Record<string, unknown> = { ...STARTED }
+    delete missingKey.truncated_fields
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: backgroundTaskStartedPlaintext(missingKey)
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

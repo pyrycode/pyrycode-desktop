@@ -680,6 +680,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // emit.
             emitDaemonEvent(sink, { type: 'compacting', active: inbound.compacting.active })
             return
+          case 'background-task-started':
+            // The background-task open data path (#564). Emit a fresh literal carrying all six fields,
+            // copied BY NAME from the already-decoded, already-validated payload — never a spread of
+            // inbound.backgroundTaskStarted (the assistant-delta idiom), so a decoder that later grows a
+            // field cannot smuggle it across IPC. snake→camel throughout; `truncatedFields` passes the
+            // narrowed array by reference (requireStringArrayOrNull already returned a fresh, fully
+            // validated string[], so there is nothing left to strip — the `queued` precedent below), and
+            // its `null` is preserved, never coerced to [].
+            //
+            // `conversation_id` is KEPT — the deliberate divergence from api-retry / compacting above.
+            // This frame carries no turn_id and opens no turn: it is daemon STATE, not a turn-stream
+            // item, so it follows the queue-state rule (#720) and #567 attributes tasks by id.
+            //
+            // Deliberately stateless: no dedup, no task map, no correlation memory. The wire's ordering
+            // is claude's, not the daemon's (a roster can arrive before the `started` for a task it
+            // lists), so buffering here would be wrong — #567 joins on task_id instead. Not
+            // compile-forced (this inner switch has no assertNever) — the round-trip test guards this
+            // emit.
+            emitDaemonEvent(sink, {
+              type: 'backgroundTaskStarted',
+              conversationId: inbound.backgroundTaskStarted.conversation_id,
+              taskId: inbound.backgroundTaskStarted.task_id,
+              toolCallId: inbound.backgroundTaskStarted.tool_call_id,
+              description: inbound.backgroundTaskStarted.description,
+              taskType: inbound.backgroundTaskStarted.task_type,
+              truncatedFields: inbound.backgroundTaskStarted.truncated_fields
+            })
+            return
           case 'unrecognized-message':
             // The parser-gap diagnostic data path. Emit a fresh literal carrying the four display
             // fields, copied BY NAME from the already-decoded, already-validated payload — never a

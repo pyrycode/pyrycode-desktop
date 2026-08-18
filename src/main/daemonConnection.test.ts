@@ -303,6 +303,11 @@ function backgroundTaskUpdatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'background_task_updated', ts: FIXED_TS, payload })
 }
 
+/** A `background_task_roster` plaintext, wrapping an arbitrary payload (#566). */
+function backgroundTaskRosterPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'background_task_roster', ts: FIXED_TS, payload })
+}
+
 /** An `unrecognized_message` plaintext, wrapping an arbitrary payload. */
 function unrecognizedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'unrecognized_message', ts: FIXED_TS, payload })
@@ -2112,6 +2117,232 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
       drivers[0].emit({
         type: 'message',
         plaintext: backgroundTaskUpdatedPlaintext(missingKey)
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — background_task_roster stream (#566)', () => {
+  /** The daemon's canonical fixture — two rows whose `truncated_fields` shapes DIFFER, every field on
+   *  every row a distinct value, and a non-zero dropped_tasks (#566). */
+  const ROSTER = {
+    conversation_id: 'conv-1',
+    tasks: [
+      {
+        task_id: 'task_01ABC',
+        task_type: 'local_bash',
+        description: "grep -rn 'a<b&c' .",
+        truncated_fields: ['description']
+      },
+      {
+        task_id: 'task_02DEF',
+        task_type: 'local_bash',
+        description: 'sleep 300',
+        truncated_fields: null
+      }
+    ],
+    dropped_tasks: 3
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('emits exactly one backgroundTaskRoster carrying all three fields, conversationId KEPT', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskRosterPlaintext(ROSTER) })
+
+    // A whole-object assertion over BOTH rows, which is what makes a swapped or dropped field fail
+    // (AC1) — and what catches a `toolCallId` / `patch` left over from cloning a scalar sibling's row,
+    // since an extra emitted property fails toEqual.
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'backgroundTaskRoster',
+        conversationId: 'conv-1',
+        tasks: [
+          {
+            task_id: 'task_01ABC',
+            task_type: 'local_bash',
+            description: "grep -rn 'a<b&c' .",
+            truncated_fields: ['description']
+          },
+          {
+            task_id: 'task_02DEF',
+            task_type: 'local_bash',
+            description: 'sleep 300',
+            truncated_fields: null
+          }
+        ],
+        droppedTasks: 3
+      }
+    ])
+  })
+
+  it('KEEPS conversation_id — daemon state keyed by id, not a turn-stream item (the queueState rule)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskRosterPlaintext(ROSTER) })
+
+    const events = emitted(sink).slice(before) as Array<{ conversationId?: string }>
+    // The deliberate inverse of api_retry's `not.toContain('conv-1')`: #567 attributes tasks by id,
+    // the same model queue_state already uses, so dropping it here would make that slice unbuildable.
+    expect(events[0].conversationId).toBe('conv-1')
+  })
+
+  it('crosses the rows snake_case and by reference — no snake→camel on the row (the queueState rule)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskRosterPlaintext(ROSTER) })
+
+    // The row type is REUSED verbatim from the wire (the queued / conversationsReceived precedent):
+    // the row narrower already stripped each row to its known fields, so there is nothing to drop and
+    // no mapping to write. A camel-cased row fails this.
+    const events = emitted(sink).slice(before) as Array<{ tasks?: Array<Record<string, unknown>> }>
+    expect(events[0].tasks?.[0].task_id).toBe('task_01ABC')
+    expect(events[0].tasks?.[0].task_type).toBe('local_bash')
+    expect(Object.keys(events[0].tasks?.[0] ?? {}).sort()).toEqual([
+      'description',
+      'task_id',
+      'task_type',
+      'truncated_fields'
+    ])
+  })
+
+  it('round-trips each row truncated_fields per row — populated and null in the SAME event', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskRosterPlaintext(ROSTER) })
+
+    // The anti-flattening pin at the IPC layer: row 1's list element-for-element, row 2's null
+    // preserved — never hoisted into one merged list and never coerced to [].
+    const events = emitted(sink).slice(before) as Array<{ tasks?: Array<Record<string, unknown>> }>
+    expect(events[0].tasks?.[0].truncated_fields).toEqual(['description'])
+    expect(events[0].tasks?.[1].truncated_fields).toBeNull()
+  })
+
+  it('emits an EMPTY roster as tasks: [] — the positive "nothing is alive" signal (AC2)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskRosterPlaintext({
+        conversation_id: 'conv-1',
+        tasks: [],
+        dropped_tasks: 0
+      })
+    })
+
+    // Emitted, never dropped / filtered / coalesced. `droppedTasks` crosses as the VALUE 0 (AC3).
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'backgroundTaskRoster', conversationId: 'conv-1', tasks: [], droppedTasks: 0 }
+    ])
+    const events = emitted(sink).slice(before) as Array<{ droppedTasks?: unknown }>
+    expect(events[0].droppedTasks).toBe(0)
+  })
+
+  it('distinguishes "roster observed, nothing alive" from "no roster observed" (AC2)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // No frame arrives: zero events. Asserting the empty array against an empty baseline alone would
+    // be vacuous, which is what this half of the pair fixes.
+    expect(emitted(sink).slice(before)).toEqual([])
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskRosterPlaintext({
+        conversation_id: 'conv-1',
+        tasks: [],
+        dropped_tasks: 0
+      })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ type?: string; tasks?: unknown }>
+    expect(events).toHaveLength(1)
+    expect(events[0].type).toBe('backgroundTaskRoster')
+    expect(events[0].tasks).toEqual([])
+  })
+
+  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // Anti-smuggling at BOTH levels: an extra top-level key and an extra key on the first row.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskRosterPlaintext({
+        ...ROSTER,
+        smuggled: 'must-not-cross',
+        tasks: [{ ...ROSTER.tasks[0], smuggled_row: 'must-not-cross-either' }]
+      })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ tasks?: Array<Record<string, unknown>> }>
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
+      'droppedTasks',
+      'tasks',
+      'type'
+    ])
+    expect(Object.keys(events[0].tasks?.[0] ?? {}).sort()).toEqual([
+      'description',
+      'task_id',
+      'task_type',
+      'truncated_fields'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('holds no state, no dedup and NO DIFF: repeats emit, and an empty roster after a full one emits', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // A roster listing a task_id NEVER opened by a background_task_started on this connection, the
+    // same frame verbatim twice, and then an EMPTY roster following a non-empty one. Ordering is
+    // claude's, so a roster can arrive before the `started` for a task it lists; and this layer holds
+    // no previous roster, so it draws no "finished" inference from a task's disappearance (#567's
+    // call, on its own terms).
+    for (const payload of [
+      { ...ROSTER, tasks: [{ ...ROSTER.tasks[0], task_id: 'task_never_opened' }] },
+      ROSTER,
+      ROSTER,
+      { conversation_id: 'conv-1', tasks: [], dropped_tasks: 0 }
+    ]) {
+      drivers[0].emit({ type: 'message', plaintext: backgroundTaskRosterPlaintext(payload) })
+    }
+
+    // Four frames, four events, in arrival order — the last one an empty roster that is emitted
+    // normally rather than suppressed or diffed against its predecessor.
+    const events = emitted(sink).slice(before) as Array<{ tasks?: Array<{ task_id: string }> }>
+    expect(events.map((e) => e.tasks?.map((t) => t.task_id))).toEqual([
+      ['task_never_opened'],
+      ['task_01ABC', 'task_02DEF'],
+      ['task_01ABC', 'task_02DEF'],
+      []
+    ])
+  })
+
+  it('drops a malformed background_task_roster without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        // `tasks: null` — the trap case: valid for a ROW's truncated_fields, never for `tasks`.
+        plaintext: backgroundTaskRosterPlaintext({ ...ROSTER, tasks: null })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

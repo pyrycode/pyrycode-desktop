@@ -317,6 +317,28 @@ export type DaemonEvent =
   constraint is carried forward to #567/#568. Consumed as a no-op by all three exhaustive bridges at ship
   time; real consumer is the still-unbuilt background-task store #567. Second of three sibling frame
   members (#566 `background_task_roster` follows).
+- **`backgroundTaskRoster{conversationId,tasks,droppedTasks}`** ([#566](../codebase/566.md)) closes the
+  family — the **aggregate peer** of the two scalar arms above: they report what happened to **one** task,
+  this reports the **whole live set**. Also **keeps** `conversationId`, the same in-family precedent both
+  siblings established (no `turn_id`, opens/closes no turn, the `queueState` #720 rule). Its **row type is
+  reused verbatim, snake_case** — `tasks: readonly BackgroundTask[]` — the `queueState`/`conversationsReceived`
+  nested-array precedent, not a snake→camel remap: the row narrower already stripped each row to its known
+  fields, so there is nothing left to drop. A **snapshot, not a delta**: each frame replaces the reader's
+  view of what is running, so #567 must **replace**, never merge, its held set per frame. `tasks: []` is a
+  **positive statement that nothing is alive** — the payoff signal for pyrycode#1240 — and must be emitted
+  and consumed, never dropped, filtered, or coalesced as "no news". `droppedTasks` is the frame's **only**
+  truncation report (there is deliberately no top-level `truncatedFields`); the true roster size is
+  `tasks.length + droppedTasks`, and `0` is a value, never consulted for truthiness. Each row's
+  `truncated_fields: null` means nothing was cut **for that row**, distinct from `[]`, and is per-row —
+  never hoisted or flattened across rows. SECURITY: each row's `description` is untrusted, model-influenced
+  text and for `task_type: local_bash` is the literal command line claude ran — plain text only, never
+  HTML, an attribute, or a URL; the daemon states the rule per row rather than delegating it to the scalar
+  frames because **a list of command lines is a more tempting shape to feed somewhere structured than a
+  single one** — treat `tasks` as a display list, never a structured work list. No terminal/finish event
+  exists in this family by design; "finished" is a client conclusion #567 draws from a task's absence in a
+  later roster, never something the wire reports. Consumed as a no-op by all three exhaustive bridges at
+  ship time; real consumer is the still-unbuilt background-task store #567. Third and last of the sibling
+  frame members.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -436,6 +458,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#396 codebase notes](../codebase/396.md) — the `workspaceFolderRejected` member, the rejected twin of `workspaceFolderCreated` (#381); emitted by [daemon connection](daemon-connection.md)'s `pendingCreateFolders`-lookup precedence gate (the `pendingSettings`/`sessionSettingsRejected` pattern applied to a `Set`, since the event is bare); consumed by none of the three existing bridges, real consumer is the [create-folder round-trip store](new-folder-store.md) ([#397](../codebase/397.md))
 - [#564 codebase notes](../codebase/564.md) — the `backgroundTaskStarted` member, `apiRetry`/`compacting`'s peer on the v2 stream but widened to five strings plus a nullable string array; first of three sibling frame members (#565/#566 follow), and — like `queueState` — **keeps** `conversationId` because the frame is daemon state (no `turn_id`, opens/closes no turn) rather than a turn-stream item. Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
 - [#565 codebase notes](../codebase/565.md) — the `backgroundTaskUpdated` member, `backgroundTaskStarted`'s peer joined on `taskId` but narrowed to four fields (no `toolCallId`/`description`/`taskType`) plus the new opaque `patch` string, which is never typed as JSON and never parsed on this path — the daemon's own golden fixture is cut mid-token. Also **keeps** `conversationId`, the same in-family precedent as its sibling. Second of three sibling frame members (#566 follows). Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
+- [#566 codebase notes](../codebase/566.md) — the `backgroundTaskRoster` member, the **aggregate peer** of the two scalar arms above: they report what happened to one task, this reports the whole live set, as a snapshot, not a delta. Reuses the wire `BackgroundTask` row type verbatim (the `queueState`/`conversationsReceived` nested-array precedent — snake_case, no remap), keeps `conversationId` for the same in-family reason, and `tasks: []` is the payoff signal pyrycode#1240 needs — a positive statement that nothing is alive, never filtered out. `droppedTasks` is the frame's only truncation report. Third and last of the sibling frame members. Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

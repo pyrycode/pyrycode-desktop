@@ -13,6 +13,8 @@ import type {
   CompactingPayload,
   BackgroundTaskStartedPayload,
   BackgroundTaskUpdatedPayload,
+  BackgroundTask,
+  BackgroundTaskRosterPayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
   WireSessionTransitionReason,
@@ -272,6 +274,98 @@ describe('background-task-updated wire vocabulary (#565)', () => {
     expect(noChange.patch).toBe('')
     // `null` means NOTHING WAS CUT, distinct from [].
     expect(noChange.truncated_fields).toBeNull()
+  })
+})
+
+describe('background-task-roster wire vocabulary (#566)', () => {
+  it('admits the background_task_roster inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const roster: EnvelopeType = 'background_task_roster'
+    expect(roster).toBe('background_task_roster')
+  })
+
+  it('shapes BackgroundTaskRosterPayload as its THREE fields, tasks a PLAIN non-optional array', () => {
+    // The daemon's canonical fixture verbatim (internal/protocol/testdata/background_task_roster.json):
+    // two rows whose `truncated_fields` shapes DIFFER, and a non-zero dropped_tasks.
+    const payload: BackgroundTaskRosterPayload = {
+      conversation_id: 'c1',
+      tasks: [
+        {
+          task_id: 'task_01ABC',
+          task_type: 'local_bash',
+          description: "grep -rn 'a<b&c' .",
+          truncated_fields: ['description']
+        },
+        {
+          task_id: 'task_02DEF',
+          task_type: 'local_bash',
+          description: 'sleep 300',
+          truncated_fields: null
+        }
+      ],
+      dropped_tasks: 3
+    }
+    expect(payload.tasks).toHaveLength(2)
+    expect(payload.dropped_tasks).toBe(3)
+    // No turn_id: like both siblings, the frame opens and closes no turn.
+    expect(payload).not.toHaveProperty('turn_id')
+    // No TOP-LEVEL truncated_fields — deliberately absent (the trap-3 pin). `dropped_tasks` is this
+    // frame's only truncation report, so the roster's true size is tasks.length + dropped_tasks.
+    expect(payload).not.toHaveProperty('truncated_fields')
+    expect(payload.tasks.length + payload.dropped_tasks).toBe(5)
+  })
+
+  it('shapes BackgroundTask as its FOUR fields — NOT the scalar siblings four', () => {
+    const row: BackgroundTask = {
+      task_id: 'task_01ABC',
+      task_type: 'local_bash',
+      description: "grep -rn 'a<b&c' .",
+      truncated_fields: ['description']
+    }
+    expect(row).toEqual({
+      task_id: 'task_01ABC',
+      task_type: 'local_bash',
+      description: "grep -rn 'a<b&c' .",
+      truncated_fields: ['description']
+    })
+    // The two fields the SCALAR frames carry because their LINES do, and this row must never have.
+    // A row narrower cloned from parseBackgroundTaskStartedPayload would require `tool_call_id` and
+    // fail-close every valid roster, so the absence is pinned at the type.
+    expect(row).not.toHaveProperty('tool_call_id')
+    expect(row).not.toHaveProperty('patch')
+  })
+
+  it('admits an EMPTY tasks array — the positive statement that NOTHING IS ALIVE', () => {
+    // The daemon's second golden fixture (background_task_roster_empty.json). An empty roster is a
+    // signal, not an absence of information: the reassurance that a turn really is finished.
+    const nothingAlive: BackgroundTaskRosterPayload = {
+      conversation_id: 'c1',
+      tasks: [],
+      dropped_tasks: 0
+    }
+    expect(nothingAlive.tasks).toEqual([])
+    // 0 is a VALUE, never consulted for truthiness.
+    expect(nothingAlive.dropped_tasks).toBe(0)
+  })
+
+  it('takes a row truncated_fields of null while tasks stays a plain array — the two contracts', () => {
+    // THE TRAP, at the type level: within this one payload a row's `truncated_fields` is nullable
+    // (nil and [] say the identical thing there) while `tasks` is not (the daemon's only custom
+    // MarshalJSON normalises a nil Tasks to [], so an empty roster never serialises as null).
+    const nothingCut: BackgroundTask = {
+      task_id: 'task_02DEF',
+      task_type: 'local_bash',
+      description: 'sleep 300',
+      truncated_fields: null
+    }
+    expect(nothingCut.truncated_fields).toBeNull()
+    // `tasks` admits no null: a consumer never branches on it, which is AC2's whole point.
+    const roster: BackgroundTaskRosterPayload = {
+      conversation_id: 'c1',
+      tasks: [nothingCut],
+      dropped_tasks: 0
+    }
+    expect(roster.tasks[0].truncated_fields).toBeNull()
   })
 })
 

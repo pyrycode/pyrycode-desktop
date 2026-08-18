@@ -70,14 +70,18 @@ export type EnvelopeType =
   | 'tool_use'
   | 'tool_result'
   | 'queue_state'
-  // The first of the three `interactive`-gated background-task frames (#564; #566's
-  // `background_task_roster` still joins them here). Announces work claude left running past the turn
-  // that spawned it — the frame that separates a genuine finish from a `turn_end` whose command is
-  // still alive. SSOT pyrycode#1394 / internal/protocol/interactive.go.
+  // The first of the three `interactive`-gated background-task frames (#564). Announces work claude
+  // left running past the turn that spawned it — the frame that separates a genuine finish from a
+  // `turn_end` whose command is still alive. SSOT pyrycode#1394 / internal/protocol/interactive.go.
   | 'background_task_started'
   // The peer of the frame above (#565): that one OPENS a task, this one reports what happened to it
   // afterwards. The two join on `task_id`. Same gating and same non-turn character.
   | 'background_task_updated'
+  // The AGGREGATE peer of the two above (#566): they report what happened to ONE task, this reports
+  // what is ALIVE. A SNAPSHOT, not a delta — each frame replaces the reader's view of what is running
+  // rather than amending it — and an EMPTY `tasks` is the positive statement that NOTHING is alive,
+  // which is the payoff signal of the whole family. Same gating and same non-turn character.
+  | 'background_task_roster'
   | 'dequeue_message'
   // v2-only bare phone→binary control frame — maps to a single claude Esc (stops the current
   // turn). Carries NO conversation_id / nonce / answer_token / payload; daemon-gated on the
@@ -485,6 +489,98 @@ export interface BackgroundTaskUpdatedPayload {
   task_id: string
   patch: string
   truncated_fields: string[] | null
+}
+
+/**
+ * ONE ROW of a BackgroundTaskRosterPayload (daemon → client). Mirrors the daemon's BackgroundTask
+ * field-for-field (SSOT pyrycode#1394, internal/protocol/interactive.go:313, docs/protocol-mobile.md
+ * § background_task_roster), wire order `task_id, task_type, description, truncated_fields` — all always
+ * present (no `omitempty` on any of them).
+ *
+ * FOUR FIELDS, AND THEY ARE NOT THE SCALAR SIBLINGS' FOUR. There is deliberately NO `tool_call_id` and
+ * NO `patch`: the daemon's comment is explicit that those ride the scalar frames because their LINES do,
+ * and claude's roster line carries only these four. A row type cloned from BackgroundTaskStartedPayload
+ * would require `tool_call_id` and fail-close every valid roster. `task_id` is the join key back to the
+ * `background_task_started` that opened the task — the same identifier all three frames carry.
+ *
+ * `task_type` is an OPEN string. `local_bash` is the only observed value and one observation does not
+ * earn an enum; a closed set would fail-close a valid future frame (the drift risk CLAUDE.md / ADR 0002
+ * rank above cosmetic robustness).
+ *
+ * `truncated_fields` names THIS ROW'S OWN cut fields (`task_id` / `task_type` / `description`) — a THIRD
+ * distinct set from #564's and #565's, which is itself the argument against ever narrowing the element
+ * vocabulary. Each row reports its own: there is no hoisted or flattened list anywhere on this frame.
+ * `null` means NOTHING WAS CUT for this row and is a distinct value from `[]`, never to be collapsed
+ * into it. Note the contrast with the parent's `tasks`, which is never nullable — see
+ * BackgroundTaskRosterPayload.
+ *
+ * SECURITY: `description` carries the SAME LITERAL COMMAND LINE as
+ * BackgroundTaskStartedPayload.description, under a TIGHTER producer cap — here it is one label in a
+ * list whose length claude chooses, and the full-length copy already crossed the wire on the
+ * `background_task_started` this row joins back to. Untrusted, model-influenced text: render as INERT
+ * PLAIN TEXT ONLY — never execute it, never re-shell it, and never feed it to an HTML sink (`innerHTML`
+ * / `dangerouslySetInnerHTML`), an attribute, or a URL. The daemon repeats this rule PER ROW rather than
+ * delegating it to the sibling's section, and its stated reason is worth carrying: A LIST OF COMMAND
+ * LINES IS A MORE TEMPTING SHAPE TO FEED SOMEWHERE STRUCTURED THAN A SINGLE ONE. The temptation unique
+ * to this frame is treating the array as a structured WORK LIST rather than a display list. See #566
+ * (this decode), #567 (the task store) and #568 (the panel).
+ */
+export interface BackgroundTask {
+  task_id: string
+  task_type: string
+  description: string
+  truncated_fields: string[] | null
+}
+
+/**
+ * Inbound `background_task_roster` event (daemon → client). Mirrors the daemon's
+ * BackgroundTaskRosterPayload field-for-field (SSOT pyrycode#1394, internal/protocol/interactive.go:242,
+ * docs/protocol-mobile.md § background_task_roster), wire order `conversation_id, tasks, dropped_tasks`
+ * — all always present (no `omitempty`). Fanned out ONLY to `interactive`-capable clients.
+ *
+ * THE AGGREGATE PEER of the two scalar frames above: they report what happened to ONE task, this reports
+ * WHAT IS ALIVE. It is a SNAPSHOT, NOT A DELTA — each frame replaces the reader's view of what is
+ * running, never amends it. The frame is named for its trigger, the daemon's own naming, not claude's.
+ *
+ * `tasks` IS A PLAIN ARRAY AND NEVER `BackgroundTask[] | null`, and that is the daemon's deliberate
+ * contract rather than a client assumption. This payload carries interactive.go's ONLY custom
+ * `MarshalJSON` (`:274`), whose entire job is normalising a nil `Tasks` to `[]` so an empty roster never
+ * serialises as `null`; `omitempty` is deliberately out, because eliding the key would erase the frame's
+ * whole point. AN EMPTY `[]` IS A POSITIVE STATEMENT THAT NOTHING IS ALIVE — the reassurance that a turn
+ * really is finished (pyrycode#1240's symptom), not an absence of information. A client decoding into a
+ * non-optional array type therefore never has to branch on `null`.
+ *
+ * THE TRAP, stated here so a reader meets both contracts at once: within THIS ONE PAYLOAD, `tasks: null`
+ * FAILS CLOSED while a row's `truncated_fields: null` is a VALID VALUE. They look like the same shape and
+ * are not. The daemon's marshaller normalises the first and deliberately does NOT normalise the second,
+ * because nil and `[]` say the identical thing for `truncated_fields` while `tasks` is the frame's
+ * subject and its empty value is the signal.
+ *
+ * `dropped_tasks` IS THIS FRAME'S ONLY TRUNCATION REPORT. There is deliberately no top-level
+ * `truncated_fields` here, so a reader grepping for that name finds nothing and would silently believe a
+ * capped roster is the whole roster: THE ROSTER'S TRUE SIZE IS `tasks.length + dropped_tasks`. A COUNT is
+ * carried rather than a name because a name-only report loses HOW MANY were lost; per-row text cuts are a
+ * property of one row and ride that row's own `truncated_fields`. `dropped_tasks: 0` is a VALUE, never
+ * consulted for truthiness — and the absence of `omitempty` is what makes a plain number decode correct,
+ * since the key is always written and an absent key is a real defect rather than a valid zero.
+ *
+ * NOT A TURN-STREAM ITEM, exactly like both siblings: no `turn_id`, and it opens and closes no turn.
+ * Hence the emitted event KEEPS `conversation_id` (daemon state keyed by id) rather than dropping it like
+ * `api_retry` / `turn_state`.
+ *
+ * NO TERMINAL / FINISH EVENT EXISTS IN THIS FAMILY, BY DESIGN. A task's disappearance from a later roster
+ * is the available finish signal, but the daemon does not report a finish it cannot detect. "Finished" is
+ * therefore a CLIENT conclusion drawn from absence, never something the wire reports — legitimate for the
+ * task store (#567) to draw on its own terms, and emphatically not this decode's to draw.
+ *
+ * SECURITY: every row's `description` is untrusted, model-influenced text and for `task_type: local_bash`
+ * is the literal command line claude ran — see BackgroundTask above for the per-row rule and the daemon's
+ * reason for stating it per row. See #566 (this decode), #567 (the task store) and #568 (the panel).
+ */
+export interface BackgroundTaskRosterPayload {
+  conversation_id: string
+  tasks: BackgroundTask[]
+  dropped_tasks: number
 }
 
 /**

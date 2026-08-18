@@ -737,6 +737,40 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               truncatedFields: inbound.backgroundTaskUpdated.truncated_fields
             })
             return
+          case 'background-task-roster':
+            // The background-task roster data path (#566) — the AGGREGATE peer of the two arms above:
+            // they report what happened to one task, this reports what is ALIVE. A fresh named-field
+            // literal at the TOP level, copied BY NAME from the already-decoded, already-validated
+            // payload — never a spread of inbound.backgroundTaskRoster, so a decoder that later grows a
+            // field cannot smuggle it across IPC. `tasks` passes the already-narrowed row array BY
+            // REFERENCE: parseBackgroundTask returned fresh four-field literals, so there is nothing left
+            // to strip — exactly the `queued` precedent below, including NO snake→camel on the row and no
+            // per-row re-literal. An EMPTY tasks array emits normally; it is never filtered, coalesced,
+            // or treated as "nothing to report" — it is the positive "nothing is alive" signal, the
+            // payoff of the whole family.
+            //
+            // `conversation_id` is KEPT for the siblings' reason — daemon STATE keyed by id (the
+            // queue-state rule, #720), not a turn-stream item; #567 attributes tasks by id.
+            //
+            // Deliberately stateless, and the temptation here is a DIFFERENT one from the arm above:
+            // that frame tempted a join, this one tempts a DIFF. It is a snapshot, the family has no
+            // terminal event, and "a task vanished from the roster" is the only available finish signal —
+            // so holding the previous roster to compute what disappeared looks like the obvious next
+            // step. It would be wrong: the only mutable state in this leg, keyed by an
+            // attacker-influenceable task_id, fed by a hostile daemon's frame stream, and with each frame
+            // carrying an attacker-chosen NUMBER of rows it is a growth surface a flood can drive. The
+            // daemon is explicit that the finish inference is the client's own conclusion; #567 owns that
+            // decision and its own bounding. Ordering is claude's, so a roster can arrive BEFORE the
+            // `background_task_started` for a task it lists — emit what decoded, never hold one back
+            // waiting for rows to be explained. Not compile-forced (this inner switch has no
+            // assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'backgroundTaskRoster',
+              conversationId: inbound.backgroundTaskRoster.conversation_id,
+              tasks: inbound.backgroundTaskRoster.tasks,
+              droppedTasks: inbound.backgroundTaskRoster.dropped_tasks
+            })
+            return
           case 'unrecognized-message':
             // The parser-gap diagnostic data path. Emit a fresh literal carrying the four display
             // fields, copied BY NAME from the already-decoded, already-validated payload — never a

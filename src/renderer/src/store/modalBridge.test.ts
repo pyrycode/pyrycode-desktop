@@ -194,6 +194,28 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         taskId: 'task_01ABC',
         patch: '{"is_backgrounded":tr',
         truncatedFields: ['patch']
+      },
+      // background-task roster ships dormant (#566); its consumer is the #567 background-task store,
+      // not the modal store — a snapshot of what claude left running is not a modal either, since
+      // nothing is waiting on an answer.
+      {
+        type: 'backgroundTaskRoster',
+        conversationId: 'conv-1',
+        tasks: [
+          {
+            task_id: 'task_01ABC',
+            task_type: 'local_bash',
+            description: "grep -rn 'a<b&c' .",
+            truncated_fields: ['description']
+          },
+          {
+            task_id: 'task_02DEF',
+            task_type: 'local_bash',
+            description: 'sleep 300',
+            truncated_fields: null
+          }
+        ],
+        droppedTasks: 3
       }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()

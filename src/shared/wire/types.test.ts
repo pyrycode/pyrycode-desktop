@@ -12,6 +12,7 @@ import type {
   ApiRetryPayload,
   CompactingPayload,
   BackgroundTaskStartedPayload,
+  BackgroundTaskUpdatedPayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
   WireSessionTransitionReason,
@@ -227,6 +228,50 @@ describe('background-task-started wire vocabulary (#564)', () => {
       truncated_fields: null
     }
     expect(nothingCut.truncated_fields).toBeNull()
+  })
+})
+
+describe('background-task-updated wire vocabulary (#565)', () => {
+  it('admits the background_task_updated inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const updated: EnvelopeType = 'background_task_updated'
+    expect(updated).toBe('background_task_updated')
+  })
+
+  it('shapes BackgroundTaskUpdatedPayload as its FOUR fields — the sibling minus three', () => {
+    // The daemon's canonical fixture verbatim: `patch` is cut mid-token and is therefore not valid
+    // JSON, which is exactly why it is typed as a plain string here and never as nested JSON.
+    const payload: BackgroundTaskUpdatedPayload = {
+      conversation_id: 'c1',
+      task_id: 'task_01ABC',
+      patch: '{"is_backgrounded":tr',
+      truncated_fields: ['patch']
+    }
+    expect(payload).toEqual({
+      conversation_id: 'c1',
+      task_id: 'task_01ABC',
+      patch: '{"is_backgrounded":tr',
+      truncated_fields: ['patch']
+    })
+    // No turn_id: like its sibling, the frame opens and closes no turn.
+    expect(payload).not.toHaveProperty('turn_id')
+    // The three fields the SIBLING carries and this frame must NOT: cloning #564 means DELETING them,
+    // and a leftover would compile at four of the seven touch-points, so it is pinned at the type.
+    expect(payload).not.toHaveProperty('tool_call_id')
+    expect(payload).not.toHaveProperty('description')
+    expect(payload).not.toHaveProperty('task_type')
+  })
+
+  it('admits an EMPTY patch — claude sent no change, a wire VALUE and not an absence', () => {
+    const noChange: BackgroundTaskUpdatedPayload = {
+      conversation_id: 'c1',
+      task_id: 'task_01ABC',
+      patch: '',
+      truncated_fields: null
+    }
+    expect(noChange.patch).toBe('')
+    // `null` means NOTHING WAS CUT, distinct from [].
+    expect(noChange.truncated_fields).toBeNull()
   })
 })
 

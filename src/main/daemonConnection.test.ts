@@ -298,6 +298,11 @@ function backgroundTaskStartedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'background_task_started', ts: FIXED_TS, payload })
 }
 
+/** A `background_task_updated` plaintext, wrapping an arbitrary payload (#565). */
+function backgroundTaskUpdatedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'background_task_updated', ts: FIXED_TS, payload })
+}
+
 /** An `unrecognized_message` plaintext, wrapping an arbitrary payload. */
 function unrecognizedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'unrecognized_message', ts: FIXED_TS, payload })
@@ -1944,6 +1949,169 @@ describe('createDaemonConnection — background_task_started stream (#564)', () 
       drivers[0].emit({
         type: 'message',
         plaintext: backgroundTaskStartedPlaintext(missingKey)
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — background_task_updated stream (#565)', () => {
+  /** The daemon's canonical fixture — four distinct, non-empty values, `patch` cut mid-token by the
+   *  daemon and therefore NOT valid JSON (#565). */
+  const UPDATED = {
+    conversation_id: 'conv-1',
+    task_id: 'task_01ABC',
+    patch: '{"is_backgrounded":tr',
+    truncated_fields: ['patch']
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('emits exactly one backgroundTaskUpdated carrying all four fields, conversationId KEPT', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskUpdatedPlaintext(UPDATED) })
+
+    // A whole-object assertion, which is what makes a swapped or dropped field fail (AC1) — and what
+    // catches a `description` / `taskType` left over from cloning the sibling, since an extra emitted
+    // property fails toEqual.
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'backgroundTaskUpdated',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        patch: '{"is_backgrounded":tr',
+        truncatedFields: ['patch']
+      }
+    ])
+  })
+
+  it('KEEPS conversation_id — daemon state keyed by id, not a turn-stream item (the queueState rule)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: backgroundTaskUpdatedPlaintext(UPDATED) })
+
+    const events = emitted(sink).slice(before) as Array<{ conversationId?: string }>
+    // The deliberate inverse of api_retry's `not.toContain('conv-1')`: #567 attributes tasks by id,
+    // the same model queue_state already uses, so dropping it here would make that slice unbuildable.
+    expect(events[0].conversationId).toBe('conv-1')
+  })
+
+  it('crosses IPC with an invalid-JSON patch byte-for-byte — nothing parses or normalizes it', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+    const patch = '{"is_backgrounded":true,"note":"a<b&c \'quoted\' > /tmp/out'
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskUpdatedPlaintext({ ...UPDATED, patch })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ patch?: string }>
+    expect(() => JSON.parse(patch)).toThrow()
+    expect(events[0].patch).toBe(patch)
+  })
+
+  it('carries an EMPTY patch across as "" — claude sent no change, never a missing field', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskUpdatedPlaintext({ ...UPDATED, patch: '' })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ patch?: unknown }>
+    expect(events[0].patch).toBe('')
+  })
+
+  it('round-trips truncatedFields null as null — never coerced to an empty list', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskUpdatedPlaintext({ ...UPDATED, truncated_fields: null })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ truncatedFields?: unknown }>
+    expect(events[0].truncatedFields).toBeNull()
+  })
+
+  it('round-trips a populated truncatedFields element-for-element, in order', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskUpdatedPlaintext({
+        ...UPDATED,
+        truncated_fields: ['task_id', 'patch']
+      })
+    })
+
+    const events = emitted(sink).slice(before) as Array<{ truncatedFields?: unknown }>
+    expect(events[0].truncatedFields).toEqual(['task_id', 'patch'])
+  })
+
+  it('emits exactly the five modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: backgroundTaskUpdatedPlaintext({ ...UPDATED, smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
+      'patch',
+      'taskId',
+      'truncatedFields',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('holds no correlation memory and performs NO join: an update for a never-opened task still emits', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // No `background_task_started` has been seen on this connection for ANY of these ids. Ordering is
+    // claude's, not the daemon's, so an update for a task this client never saw opened is a legal,
+    // expected frame — never an error and never something to buffer until the `started` shows up.
+    for (const task_id of ['task_never_opened', 'task_02DEF', 'task_02DEF']) {
+      drivers[0].emit({
+        type: 'message',
+        plaintext: backgroundTaskUpdatedPlaintext({ ...UPDATED, task_id })
+      })
+    }
+
+    // Three frames, three events, in arrival order — the transport holds no task map (that is #567's).
+    const events = emitted(sink).slice(before) as Array<{ taskId?: string }>
+    expect(events.map((e) => e.taskId)).toEqual(['task_never_opened', 'task_02DEF', 'task_02DEF'])
+  })
+
+  it('drops a malformed background_task_updated without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+    const missingKey: Record<string, unknown> = { ...UPDATED }
+    delete missingKey.truncated_fields
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: backgroundTaskUpdatedPlaintext(missingKey)
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

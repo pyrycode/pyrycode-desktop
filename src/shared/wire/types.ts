@@ -70,11 +70,14 @@ export type EnvelopeType =
   | 'tool_use'
   | 'tool_result'
   | 'queue_state'
-  // The first of the three `interactive`-gated background-task frames (#564; #565's
-  // `background_task_updated` and #566's `background_task_roster` join it here). Announces work claude
-  // left running past the turn that spawned it — the frame that separates a genuine finish from a
-  // `turn_end` whose command is still alive. SSOT pyrycode#1394 / internal/protocol/interactive.go.
+  // The first of the three `interactive`-gated background-task frames (#564; #566's
+  // `background_task_roster` still joins them here). Announces work claude left running past the turn
+  // that spawned it — the frame that separates a genuine finish from a `turn_end` whose command is
+  // still alive. SSOT pyrycode#1394 / internal/protocol/interactive.go.
   | 'background_task_started'
+  // The peer of the frame above (#565): that one OPENS a task, this one reports what happened to it
+  // afterwards. The two join on `task_id`. Same gating and same non-turn character.
+  | 'background_task_updated'
   | 'dequeue_message'
   // v2-only bare phone→binary control frame — maps to a single claude Esc (stops the current
   // turn). Carries NO conversation_id / nonce / answer_token / payload; daemon-gated on the
@@ -421,6 +424,66 @@ export interface BackgroundTaskStartedPayload {
   tool_call_id: string
   description: string
   task_type: string
+  truncated_fields: string[] | null
+}
+
+/**
+ * Inbound `background_task_updated` event (daemon → client). Mirrors the daemon's
+ * BackgroundTaskUpdatedPayload field-for-field (SSOT pyrycode#1394, internal/protocol/interactive.go:215,
+ * docs/protocol-mobile.md § background_task_updated), wire order `conversation_id, task_id, patch,
+ * truncated_fields` — all always present (no `omitempty`). Fanned out ONLY to `interactive`-capable
+ * clients.
+ *
+ * THE PEER of BackgroundTaskStartedPayload above, joined on `task_id`: that frame OPENS a task, this one
+ * reports what CHANGED about it afterwards. FOUR fields, not six — this frame has no `tool_call_id`, no
+ * `description` and no `task_type`, and gains `patch`.
+ *
+ * NOT A TURN-STREAM ITEM, exactly like its sibling: no `turn_id`, and it opens, closes and alters no
+ * turn — a background task's lifecycle is orthogonal to its turn's, which is the whole #1240 point. Hence
+ * the emitted event KEEPS `conversation_id` (daemon state keyed by id) rather than dropping it like
+ * `api_retry` / `turn_state`.
+ *
+ * `patch` IS AN OPAQUE STRING. Do not type it as JSON, do not parse it, do not enumerate its keys:
+ *
+ *   1. IT PROVABLY MAY NOT PARSE. The daemon truncates it at construction (`maxTaskPatch = 4 << 10`,
+ *      internal/streamsup/parser.go) and a truncated object is no longer valid JSON. The Go field is a
+ *      plain `string`, NOT `json.RawMessage`, for exactly this reason — typing it as structured JSON on
+ *      this wire would be a lie that broke decoding. The daemon's own golden fixture ships
+ *      `{"is_backgrounded":tr`, cut mid-token.
+ *   2. ENUMERATING KEYS SILENTLY DISCARDS CLAUDE'S NEXT ONE. The daemon deliberately enumerates none,
+ *      because a mapping that listed the keys it knew would drop every key claude ships next
+ *      (`is_backgrounded` is the one key observed so far). A client must do the same: read the keys it
+ *      understands, pass the rest through or ignore it. Any consumer that later wants those keys parses
+ *      BEHIND AN ERROR BRANCH that falls back to rendering it as text — #567 / #568's problem, not the
+ *      decode's.
+ *   3. IT IS UNTRUSTED TEXT. See the SECURITY note below.
+ *
+ * An EMPTY `patch` is a VALUE, not an absence: the daemon documents it as "empty when claude sent none",
+ * and the field has no `omitempty`, so `''` is carried as `''` while an omitted key fails closed.
+ *
+ * `truncated_fields` names the fields the daemon cut to fit their caps — for THIS frame `task_id` /
+ * `patch`, a DIFFERENT pair from the sibling's, which is itself the argument against ever narrowing the
+ * element vocabulary to a client-side union (a closed set would fail-close a valid future frame — the
+ * drift risk CLAUDE.md / ADR 0002 rank above cosmetic robustness). `null` means NOTHING WAS CUT and is a
+ * distinct value from `[]`, never to be collapsed into it.
+ *
+ * DO NOT RECONCILE `patch` AGAINST `truncated_fields`. The daemon also scrubs invalid UTF-8 from `patch`
+ * by DELETING the offending bytes, while `truncated_fields` reports the cap cut ONLY — so `patch` can
+ * differ from claude's bytes without appearing there. A stated upstream limitation; a client cannot act
+ * differently either way, so no cross-check is warranted.
+ *
+ * SECURITY: a `patch` key may carry command text exactly as the sibling's `description` does. The daemon
+ * bounds and UTF-8-scrubs it but does not sanitize its content — it stays untrusted, model-influenced
+ * text all the way here. Safe to render as INERT PLAIN TEXT only: never execute it, never re-shell it,
+ * and never feed it to an HTML sink (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL.
+ * The daemon doc states this rule in THIS frame's section rather than delegating it to the sibling,
+ * because a patch's structured shape makes it the more tempting thing to feed somewhere that runs it.
+ * See #565 (this decode), #567 (the task store) and #568 (the panel).
+ */
+export interface BackgroundTaskUpdatedPayload {
+  conversation_id: string
+  task_id: string
+  patch: string
   truncated_fields: string[] | null
 }
 

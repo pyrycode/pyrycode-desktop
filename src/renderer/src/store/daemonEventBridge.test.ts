@@ -302,6 +302,27 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('backgroundTaskUpdated → null (consumed by the #567 background-task store, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'backgroundTaskUpdated',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        patch: '{"is_backgrounded":tr',
+        truncatedFields: ['patch']
+      })
+    ).toBeNull()
+    expect(
+      translateDaemonEvent({
+        type: 'backgroundTaskUpdated',
+        conversationId: 'conv-1',
+        taskId: 'task_02DEF',
+        patch: '',
+        truncatedFields: null
+      })
+    ).toBeNull()
+  })
+
   it('unrecognizedMessage → null (consumed by the timeline render slice, not the session store)', () => {
     expect(
       translateDaemonEvent({

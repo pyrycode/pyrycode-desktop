@@ -242,6 +242,17 @@ function snapshotPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'screen_snapshot', ts: FIXED_TS, payload })
 }
 
+/** A `session_settings` plaintext, wrapping an arbitrary payload (#491). */
+function sessionSettingsPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({
+    id: 45,
+    type: 'session_settings',
+    ts: FIXED_TS,
+    in_reply_to: 812,
+    payload
+  })
+}
+
 /** An `assistant_delta` plaintext, wrapping an arbitrary payload (#199). */
 function assistantDeltaPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'assistant_delta', ts: FIXED_TS, payload })
@@ -4612,5 +4623,87 @@ describe('createDaemonConnection — interrupt (bare interrupt control frame, fi
     drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
 
     expect(() => connection.interrupt()).not.toThrow()
+  })
+})
+
+describe('createDaemonConnection — requestSessionSettings (run-config request/reply, #491)', () => {
+  const RUN_CONFIG = {
+    session_id: 'sess-a',
+    model: 'claude-opus-4-8',
+    effort: 'high',
+    yolo: true,
+    used_tokens: 12480,
+    window_tokens: 200000
+  }
+
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
+    const { connection, drivers } = build()
+    expect(() => connection.requestSessionSettings()).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('sends a bare request_session_settings frame when connected', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.requestSessionSettings()
+
+    const sent = drivers[0].sent.map((bytes) => decodeEnvelope(bytes))
+    const request = sent.find((e) => e.type === 'request_session_settings')
+    expect(request).toBeDefined()
+    // Bare: no conversation id, no session id, no selector of any kind. The reply is daemon-wide.
+    expect(request?.payload).toEqual({})
+  })
+
+  it('decodes an inbound session_settings into runConfigReceived with all six fields', async () => {
+    const { sink, drivers } = await connected()
+
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG) })
+
+    expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([
+      {
+        type: 'runConfigReceived',
+        sessionId: 'sess-a',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+        yolo: true,
+        used_tokens: 12480,
+        window_tokens: 200000
+      }
+    ])
+  })
+
+  it('carries an empty session_id through as "" (the cannot-address signal), never coerced', async () => {
+    // '' is the daemon saying "I have no session to address". The sheet's gate must be able to see
+    // it: coercing it to null here would make it indistinguishable from "no reply yet" and re-open
+    // the inert-sheet defect one layer down (#491).
+    const { sink, drivers } = await connected()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, session_id: '' })
+    })
+
+    const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
+    expect(event).toBeDefined()
+    expect(event).toHaveProperty('sessionId', '')
+  })
+
+  it('emits nothing for a malformed session_settings (fail-closed, never a partial event)', async () => {
+    const { sink, drivers } = await connected()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, window_tokens: undefined })
+    })
+
+    expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([])
   })
 })

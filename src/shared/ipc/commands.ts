@@ -128,6 +128,7 @@ export type RendererCommand =
   | { type: 'sendMessage'; payload: SendMessagePayload }
   | { type: 'requestDebugBundle' }
   | { type: 'requestSnapshot'; payload: RequestSnapshotPayload }
+  | { type: 'requestSessionSettings' }
   | { type: 'requestConversations' }
   | { type: 'requestRecentWorkspaces' }
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
@@ -215,6 +216,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return true
     case 'requestSnapshot':
       return 'payload' in value && isRequestSnapshotPayload(value.payload)
+    case 'requestSessionSettings':
+      // Bare member (#491): no payload to validate, so a well-formed `type` is complete acceptance.
+      return true
     case 'requestConversations':
       // Bare member (#139): no payload to validate, so a well-formed `type` is complete acceptance.
       return true

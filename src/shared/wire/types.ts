@@ -50,6 +50,11 @@ export type EnvelopeType =
   | 'request_snapshot'
   | 'set_session_settings'
   | 'session_settings_updated'
+  // v2-only bare phone→binary control frame — asks for the current run configuration. Carries NO
+  // payload at all: the reply is daemon-wide, so there is no field that could select another
+  // session's data. Answered by `session_settings`, correlated on in_reply_to. SSOT pyrycode #491.
+  | 'request_session_settings'
+  | 'session_settings'
   | 'screen_snapshot'
   | 'assistant_delta'
   | 'turn_end'
@@ -193,6 +198,40 @@ export interface SetSessionSettingsPayload {
  */
 export interface SessionSettingsUpdatedPayload {
   session_id: string
+}
+
+/**
+ * Inbound `session_settings` reply (daemon → client). Mirrors the daemon's
+ * internal/protocol/settings.go SessionSettingsPayload field-for-field, wire order
+ * `session_id, model, effort, yolo, used_tokens, window_tokens` — all always present (no
+ * `omitempty`), so every zero value is a real answer rather than an absence.
+ *
+ * The answer to a bare `request_session_settings`, and the run-configuration sheet's source of
+ * truth (#491). It replaces reading these values off `ScreenSnapshotPayload`, which still carries
+ * copies: that reply is a picture of the terminal, and a daemon on the stream-json interactive
+ * runner has no terminal, so it answers `server.binary_offline` and the settings — which have
+ * nothing to do with a terminal — were refused along with it. On the runner in production that left
+ * the sheet with no values, no session id and no context figure at all.
+ */
+export interface SessionSettingsPayload {
+  /**
+   * The session a `set_session_settings` must address. `''` = the daemon has no session to
+   * address, so the controls must stay read-only rather than sending an empty id (which the daemon
+   * would reject). This is the client's reliable source for it: the unsolicited
+   * `session_transition` marker fires only on a clear or an idle eviction, never on session
+   * creation, so a fresh conversation never yielded one and the sheet stayed inert forever (#491).
+   */
+  session_id: string
+  /** Active model; '' = inherited daemon default (never treated as absent). */
+  model: string
+  /** Reasoning effort; '' = inherited daemon default. */
+  effort: string
+  /** Permissions posture; `false` = permissions enforced. */
+  yolo: boolean
+  /** Current context size on the latest usage-bearing transcript entry; NOT a running total. */
+  used_tokens: number
+  /** Context-window size (200000 today); `0` = usage seam unwired — do NOT render a percentage. */
+  window_tokens: number
 }
 
 /**

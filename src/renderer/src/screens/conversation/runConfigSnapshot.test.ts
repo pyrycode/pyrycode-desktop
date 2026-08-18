@@ -3,6 +3,7 @@ import type { DaemonEvent } from '@shared/ipc/events'
 import type { MessagePayload } from '@shared/wire/types'
 import {
   toRunConfigSnapshot,
+  toSnapshotSessionId,
   requestRunConfigSnapshot,
   subscribeRunConfig
 } from './runConfigSnapshot'
@@ -18,11 +19,12 @@ const message: MessagePayload = {
 }
 
 describe('toRunConfigSnapshot', () => {
-  it('maps a snapshotReceived to the five fields verbatim, including empty/false (AC5)', () => {
+  it('maps a runConfigReceived to the five display fields verbatim, including empty/false (AC5)', () => {
     // Input carries the two usage ints (#191); #192 widens the OUTPUT to also carry them, mapping the
     // wire snake_case (used_tokens / window_tokens) to the store's camelCase.
     const event: DaemonEvent = {
-      type: 'snapshotReceived',
+      type: 'runConfigReceived',
+      sessionId: 'sess-a',
       model: '',
       effort: '',
       yolo: false,
@@ -40,7 +42,8 @@ describe('toRunConfigSnapshot', () => {
 
   it('carries non-empty values through verbatim', () => {
     const event: DaemonEvent = {
-      type: 'snapshotReceived',
+      type: 'runConfigReceived',
+      sessionId: 'sess-a',
       model: 'claude-x',
       effort: 'high',
       yolo: true,
@@ -58,7 +61,8 @@ describe('toRunConfigSnapshot', () => {
 
   it('carries window_tokens: 0 (usage unavailable) through as windowTokens: 0, not coerced', () => {
     const event: DaemonEvent = {
-      type: 'snapshotReceived',
+      type: 'runConfigReceived',
+      sessionId: 'sess-a',
       model: '',
       effort: '',
       yolo: false,
@@ -86,23 +90,62 @@ describe('toRunConfigSnapshot', () => {
 })
 
 describe('requestRunConfigSnapshot', () => {
-  it('fires exactly one requestSnapshot for the ACTIVE conversation (#448)', () => {
+  it('fires exactly one bare requestSessionSettings (#491)', () => {
     const sendCommand = vi.fn()
-    requestRunConfigSnapshot('130648a8-real-id', sendCommand)
+    requestRunConfigSnapshot(sendCommand)
     expect(sendCommand).toHaveBeenCalledTimes(1)
-    expect(sendCommand).toHaveBeenCalledWith({
-      type: 'requestSnapshot',
-      payload: { conversation_id: '130648a8-real-id' }
-    })
+    expect(sendCommand).toHaveBeenCalledWith({ type: 'requestSessionSettings' })
   })
 
-  // #448: the daemon validates conversation_id on request_snapshot (KnownConversation) and replies
-  // conversation_not_found for an unknown id — so with no active conversation the request must not
-  // fire at all. The readout keeps its defaults; nothing is sent.
-  it('performs no send when the active conversation id is null (#448)', () => {
+  // #491 removed the conversation-id argument entirely. The old route asked for a screen snapshot,
+  // which the daemon validated against a conversation and rejected as conversation_not_found for an
+  // unknown one — so a sheet opened before the active conversation resolved fired nothing at all.
+  // The reply here is daemon-wide, so there is nothing to resolve and nothing to reject.
+  it('carries no conversation id or payload of any kind', () => {
     const sendCommand = vi.fn()
-    requestRunConfigSnapshot(null, sendCommand)
-    expect(sendCommand).not.toHaveBeenCalled()
+    requestRunConfigSnapshot(sendCommand)
+    const command = sendCommand.mock.calls[0][0]
+    expect(Object.keys(command)).toEqual(['type'])
+  })
+})
+
+describe('toSnapshotSessionId', () => {
+  it('maps a runConfigReceived to its session id', () => {
+    const event: DaemonEvent = {
+      type: 'runConfigReceived',
+      sessionId: 'sess-a',
+      model: 'opus',
+      effort: 'high',
+      yolo: false,
+      used_tokens: 0,
+      window_tokens: 200000
+    }
+    expect(toSnapshotSessionId(event)).toBe('sess-a')
+  })
+
+  it('maps an empty session id to "" verbatim, NOT to null', () => {
+    // '' is the daemon saying "I have no session to address" — a real answer. Returning null here
+    // would leave a stale id in the store, so the sheet would stay operable and address a session
+    // the daemon just said it cannot resolve. The gate, not this mapper, turns '' into inert.
+    const event: DaemonEvent = {
+      type: 'runConfigReceived',
+      sessionId: '',
+      model: '',
+      effort: '',
+      yolo: false,
+      used_tokens: 0,
+      window_tokens: 200000
+    }
+    expect(toSnapshotSessionId(event)).toBe('')
+  })
+
+  it('returns null for a sample of unrelated daemon events (the filter)', () => {
+    const others: DaemonEvent[] = [
+      { type: 'connecting' },
+      { type: 'disconnected' },
+      { type: 'messageReceived', message }
+    ]
+    for (const event of others) expect(toSnapshotSessionId(event)).toBeNull()
   })
 })
 
@@ -130,17 +173,18 @@ describe('subscribeRunConfig', () => {
 
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
-    subscribeRunConfig(bridge.onDaemonEvent, vi.fn())
+    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), vi.fn())
     expect(bridge.subscribeCalls()).toBe(1)
   })
 
-  it('writes the verbatim snapshot on a snapshotReceived event (AC3/AC5)', () => {
+  it('writes the verbatim snapshot on a runConfigReceived event (AC3/AC5)', () => {
     const bridge = fakeBridge()
     const setSnapshot = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot)
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn())
 
     bridge.emit({
-      type: 'snapshotReceived',
+      type: 'runConfigReceived',
+      sessionId: 'sess-a',
       model: '',
       effort: '',
       yolo: false,
@@ -160,7 +204,7 @@ describe('subscribeRunConfig', () => {
   it('does not call setSnapshot for an unrelated event', () => {
     const bridge = fakeBridge()
     const setSnapshot = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot)
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn())
 
     bridge.emit({ type: 'connecting' })
     expect(setSnapshot).not.toHaveBeenCalled()
@@ -169,10 +213,11 @@ describe('subscribeRunConfig', () => {
   it('a later event replaces the held value — most recent snapshot wins (AC4)', () => {
     const bridge = fakeBridge()
     const setSnapshot = vi.fn()
-    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot)
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, vi.fn())
 
     bridge.emit({
-      type: 'snapshotReceived',
+      type: 'runConfigReceived',
+      sessionId: 'sess-a',
       model: 'a',
       effort: 'low',
       yolo: false,
@@ -180,7 +225,8 @@ describe('subscribeRunConfig', () => {
       window_tokens: 200000
     })
     bridge.emit({
-      type: 'snapshotReceived',
+      type: 'runConfigReceived',
+      sessionId: 'sess-a',
       model: 'b',
       effort: 'high',
       yolo: true,
@@ -205,8 +251,60 @@ describe('subscribeRunConfig', () => {
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {
     const bridge = fakeBridge()
-    const cleanup = subscribeRunConfig(bridge.onDaemonEvent, vi.fn())
+    const cleanup = subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), vi.fn())
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
+  })
+
+  it('feeds BOTH setters from ONE listener on a single event (#491)', () => {
+    // The values and the session id arrive on the same frame and are only meaningful together: the
+    // values describe the session the id names. One subscription, not two, so there is no state
+    // where the sheet shows one session's values while addressing another.
+    const bridge = fakeBridge()
+    const setSnapshot = vi.fn()
+    const setSessionId = vi.fn()
+    subscribeRunConfig(bridge.onDaemonEvent, setSnapshot, setSessionId)
+
+    bridge.emit({
+      type: 'runConfigReceived',
+      sessionId: 'sess-a',
+      model: 'opus',
+      effort: 'high',
+      yolo: false,
+      used_tokens: 100,
+      window_tokens: 200000
+    })
+
+    expect(bridge.subscribeCalls()).toBe(1)
+    expect(setSnapshot).toHaveBeenCalledTimes(1)
+    expect(setSessionId).toHaveBeenCalledTimes(1)
+    expect(setSessionId).toHaveBeenCalledWith('sess-a')
+  })
+
+  it('writes an empty session id through, so the gate can close on it', () => {
+    const bridge = fakeBridge()
+    const setSessionId = vi.fn()
+    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), setSessionId)
+
+    bridge.emit({
+      type: 'runConfigReceived',
+      sessionId: '',
+      model: '',
+      effort: '',
+      yolo: false,
+      used_tokens: 0,
+      window_tokens: 200000
+    })
+
+    expect(setSessionId).toHaveBeenCalledWith('')
+  })
+
+  it('does not call setSessionId for an unrelated event', () => {
+    const bridge = fakeBridge()
+    const setSessionId = vi.fn()
+    subscribeRunConfig(bridge.onDaemonEvent, vi.fn(), setSessionId)
+
+    bridge.emit({ type: 'connecting' })
+    expect(setSessionId).not.toHaveBeenCalled()
   })
 })

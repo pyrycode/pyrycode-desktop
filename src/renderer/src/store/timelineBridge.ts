@@ -179,6 +179,10 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // (connected is now an owned arm — #538 flips it to the `reconnected` chrome reconcile above;
       // `connecting` / `disconnected` stay here, since only the completed handshake reconciles.)
       return null
+    case 'runConfigReceived':
+      // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a
+      // compile error.
+      return null
     default:
       return assertNever(event)
   }

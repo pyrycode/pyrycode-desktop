@@ -1,9 +1,19 @@
 // The renderer data path feeding the session-id store: it observes the typed `sessionTransition`
 // daemon event (#254's transport half already decodes the `session_transition` marker and emits it,
 // renaming `new_session_id` → `newSessionId`) and lands its id in the app-singleton `sessionIdStore`
-// the Run configuration controls (#257) read. Reactive-only — unlike conversationListBridge (#208)
-// and runConfigSnapshot (#187), the daemon *pushes* markers unsolicited, so there is NO request half:
-// no command sent, no connected-edge trigger, no snapshot request. The two helpers
+// the Run configuration controls (#257) read. Reactive-only — unlike conversationListBridge (#208),
+// the daemon *pushes* markers unsolicited, so THIS path has NO request half: no command sent, no
+// connected-edge trigger, no snapshot request. That is still true and is the whole shape of this
+// module.
+//
+// What is NOT true, and used to be: that this is the ONLY way a session id reaches the store. It was,
+// and that was the defect (#491) — the daemon fires the marker only on a clear or an idle eviction,
+// never on session creation, so a fresh conversation never yielded an id and the Run configuration
+// controls stayed permanently inert. runConfigSnapshot is now a second, request-driven ingress,
+// scoped to the open sheet. Both land the daemon's value verbatim and neither is preferred: arrival
+// order wins, which is the store's existing contract. Preferring this marker would be wrong after an
+// eviction, since the wire mirrors the PREVIOUS id onto it and the next read is the only correct
+// value. The two helpers
 // are React-free and injected, so the whole path is unit-testable with plain spies (the
 // conversationListBridge idiom); `SessionIdData` is the thin React glue over them. Nothing here
 // touches keys, sockets, ipcRenderer, or raw frames — it only subscribes through the preload bridge

@@ -110,6 +110,10 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // row — a diagnostic the operator reads at leisure is emphatically not a modal, since nothing is
       // waiting on an answer.
       return null
+    case 'runConfigReceived':
+      // Not a modal event (#491). Present only because the assertNever guard makes a new arm a
+      // compile error.
+      return null
     default:
       return assertNever(event)
   }

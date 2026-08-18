@@ -37,6 +37,7 @@ import type {
   CompactingPayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
+  SessionSettingsPayload,
   SessionSettingsUpdatedPayload,
   ToolUsePayload,
   ToolResultPayload,
@@ -213,6 +214,11 @@ export type InboundDaemonMessage =
       sessionSettingsUpdated: SessionSettingsUpdatedPayload
       inReplyTo?: number
     }
+  | {
+      kind: 'session-settings'
+      sessionSettings: SessionSettingsPayload
+      inReplyTo?: number
+    }
   | { kind: 'tool-use'; toolUse: ToolUsePayload }
   | { kind: 'tool-result'; toolResult: ToolResultPayload }
   | { kind: 'queue-state'; queueState: QueueStatePayload }
@@ -363,6 +369,30 @@ function parseScreenSnapshotPayload(payload: unknown): ScreenSnapshotPayload {
   const used_tokens = requireNumber(payload, 'used_tokens')
   const window_tokens = requireNumber(payload, 'window_tokens')
   return { conversation_id, text, ts, model, effort, yolo, used_tokens, window_tokens }
+}
+
+/**
+ * Narrow an opaque payload into a SessionSettingsPayload (#491). Fail-closed like
+ * parseScreenSnapshotPayload: every field is required-present, because every zero value here is a
+ * real ANSWER rather than an absence. `session_id: ''` means "the daemon has no session to
+ * address", `model`/`effort: ''` mean "inherited daemon default", `yolo: false` means permissions
+ * enforced, and `window_tokens: 0` means the usage reader is unwired. Defaulting any of them would
+ * make "the daemon said zero" indistinguishable from "the daemon did not say", which is the exact
+ * ambiguity that let the inert-sheet defect hide. Returns only the six known fields; unknown
+ * server-added keys are tolerated (forward-compat) but not copied through. Its messages name the
+ * failure category only — no field value is interpolated.
+ */
+function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed session_settings payload')
+  }
+  const session_id = requireString(payload, 'session_id')
+  const model = requireString(payload, 'model')
+  const effort = requireString(payload, 'effort')
+  const yolo = requireBoolean(payload, 'yolo')
+  const used_tokens = requireNumber(payload, 'used_tokens')
+  const window_tokens = requireNumber(payload, 'window_tokens')
+  return { session_id, model, effort, yolo, used_tokens, window_tokens }
 }
 
 /**
@@ -962,6 +992,20 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'snapshot', snapshot }
+    }
+    case 'session_settings': {
+      // Narrow BEFORE logging so a malformed reply throws first and leaves no record. No decoded
+      // field is ever logged — not the session id, not the model / effort / yolo, not the usage
+      // ints — only the frame's byte length + one-way hash, reusing the existing content-free field
+      // set. Mirrors the screen_snapshot arm above.
+      const sessionSettings = parseSessionSettingsPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'session_settings',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'session-settings', sessionSettings, inReplyTo: envelope.in_reply_to }
     }
     case 'assistant_delta': {
       // Narrow BEFORE logging so a malformed delta throws first and leaves no record. The decoded

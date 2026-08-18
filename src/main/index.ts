@@ -303,6 +303,11 @@ app.whenReady().then(() => {
         // orchestrator/consumer, unlike requestDebugBundle. Inert no-op when not connected (#180).
         connection.requestSnapshot(command.payload)
         return
+      case 'requestSessionSettings':
+        // Direct to the connection method (mirrors requestSnapshot), no facade — a run-config read
+        // has no orchestrator/consumer. Bare: no payload, because the reply is daemon-wide (#491).
+        connection.requestSessionSettings()
+        return
       case 'requestConversations':
         // Direct to the connection method (mirrors requestSnapshot), no orchestrator — a list request
         // has no consumer/reassembler. Inert no-op when not connected (#139).

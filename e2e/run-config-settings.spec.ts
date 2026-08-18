@@ -1,11 +1,10 @@
 import { isDeepStrictEqual } from 'node:util'
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   Envelope,
-  ScreenSnapshotPayload,
+  SessionSettingsPayload,
   SessionSettingsUpdatedPayload,
-  SessionTransitionPayload,
   SetSessionSettingsPayload
 } from '../src/shared/wire/types'
 
@@ -18,14 +17,25 @@ import type {
 // ONE test() block, ONE launch (unlike #423's two) — the sheet stays open, all three controls are
 // independently operable, and the session persists, so a single continuous drive covers every AC.
 //
-// TWO setup preconditions launchPairedApp does NOT provide (the load-bearing traps the parent omitted):
-//   1. SESSION ID — the operability gate. RunConfigSections builds each control's onChange ONLY when
-//      sessionIdStore is non-null; otherwise the controls render #188's inert read-only markup and
-//      clicks are no-ops. sessionIdStore is fed by an UNSOLICITED session_transition marker, which
-//      launchPairedApp never sends — so the spec pushes one via daemon.pushFrame after launch.
-//   2. SNAPSHOT BASELINE — on sheet open RunConfigData fires one request_snapshot for the active
-//      conversation (the seeded row landed on at launch); the factory answers it with a seeded
-//      screen_snapshot so the baseline (and the value a reject reverts toward) is crisp.
+// ONE setup precondition, and it is a REPLY to a frame the app itself sent (#491): on sheet open
+// RunConfigData fires one bare request_session_settings, and the factory answers it with the seeded
+// run configuration. That reply carries BOTH the baseline values and the session id the controls
+// need, so there is nothing left for the spec to manufacture.
+//
+// It used to carry a second precondition, and that precondition WAS the bug. The operability gate
+// needs a session id; the only source was an UNSOLICITED session_transition marker; launchPairedApp
+// never sends one, because the real daemon never sends one either — it fires that marker on a clear
+// or an idle eviction, never on session creation. So this spec pushed one by hand and passed, while
+// the product was permanently inert against a real daemon. Same shape as save-as-channel, which
+// passed every fake test and had never worked because the daemon had no handler at all. Twice now.
+//
+// STANDING RULE, adopted here: a fake-tier spec may not supply an input production does not produce.
+// If a precondition needs a manufactured push, that is a bug report, not a fixture.
+//
+// This spec now enforces that structurally rather than by discipline: it does not bind the `daemon`
+// handle at all, so it HAS no way to inject an unsolicited frame. Every byte the app receives is a
+// reply to a frame the app itself sent. A future edit cannot quietly reintroduce a manufactured push
+// without first re-adding the handle, which is a visible change in review.
 //
 // WHY THE CAPTURED OUTBOUND FRAME IS THE LOAD-BEARING PROOF. The view renders NO pending/disabled state
 // (it consumes selectEffectiveSettings + selectError only), so a resolved confirm is DOM-indistinguishable
@@ -50,18 +60,16 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 const REPLY_ENVELOPE_ID = 1
 const FIXED_TS = '2026-07-07T12:00:00.000Z'
 
-// The session the controls address. Pushed as new_session_id via the session_transition marker, then
-// carried by every set_session_settings payload (#425 addressing key). A non-secret routing id.
+// The session the controls address. Carried on the session_settings reply, then echoed by every
+// set_session_settings payload (#425 addressing key). A non-secret routing id.
 const SESSION_ID = 'session-425'
 
-// The seeded run-config baseline the snapshot request is answered with. model 'opus' selects the
-// 'Opus 4.7' row, effort 'low' the low segment, yolo false the off switch — the crisp AC1 baseline and
-// the value a rejected model change reverts toward. conversation_id is documentary (the decoder drops it,
-// #316); text '' is dropped at the transport boundary (#180) and never surfaced.
-const BASELINE_SNAPSHOT: ScreenSnapshotPayload = {
-  conversation_id: SEEDED_ROW.id,
-  text: '',
-  ts: FIXED_TS,
+// The seeded run configuration the read request is answered with. model 'opus' selects the 'Opus 4.7'
+// row, effort 'low' the low segment, yolo false the off switch — the crisp AC1 baseline and the value
+// a rejected model change reverts toward. session_id is the same non-secret routing id the write half
+// then echoes, and carrying it here is the whole point: it is what un-inerts the controls.
+const BASELINE_RUN_CONFIG: SessionSettingsPayload = {
+  session_id: SESSION_ID,
   model: 'opus',
   effort: 'low',
   yolo: false,
@@ -85,10 +93,16 @@ const HAIKU_ROW = 'Haiku 4.5'
 // Spec-local frame builders (the conversationsFrame idiom): each seals one reply envelope via the
 // production codec, deterministic id/ts.
 
-// The seeded run-config baseline — answers the one request_snapshot RunConfigData fires on sheet open.
-// NO in_reply_to: the `snapshot` arm emits snapshotReceived unconditionally on decode (#180).
-function screenSnapshotFrame(base: ScreenSnapshotPayload): Uint8Array {
-  return encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'screen_snapshot', ts: FIXED_TS, payload: base })
+// The seeded run configuration — answers the one bare request_session_settings RunConfigData fires on
+// sheet open. Correlated by in_reply_to, matching the real daemon's reply.
+function sessionSettingsFrame(base: SessionSettingsPayload, inReplyTo: number): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'session_settings',
+    ts: FIXED_TS,
+    in_reply_to: inReplyTo,
+    payload: base
+  })
 }
 
 // The happy confirm — echoes the request's envelope id → in_reply_to (the conversation_deleted idiom),
@@ -115,24 +129,6 @@ function settingsErrorFrame(inReplyTo: number): Uint8Array {
   })
 }
 
-// The unsolicited session marker that un-inerts the controls (feeds sessionIdStore via sessionIdBridge).
-// reason 'clear' pairs with workspace_cwd null (valid per the enum + nullable contract); prev/new session
-// ids are non-empty strings (parseSessionTransitionPayload requires both).
-function sessionTransitionFrame(sessionId: string): Uint8Array {
-  return encodeEnvelope({
-    id: REPLY_ENVELOPE_ID,
-    type: 'session_transition',
-    ts: FIXED_TS,
-    payload: {
-      previous_session_id: 'session-424',
-      new_session_id: sessionId,
-      reason: 'clear',
-      occurred_at: FIXED_TS,
-      workspace_cwd: null
-    } satisfies SessionTransitionPayload
-  })
-}
-
 /**
  * The spec-local capturing reply factory (the #456 capturingWorkspaceFake shape). The fake daemon runs in
  * the TEST process (via the loopback forwarder), so a spec-held `captured` array written here is directly
@@ -150,8 +146,8 @@ function capturingRunConfigFake(captured: Envelope[]): (inbound: Uint8Array) => 
     switch (env.type) {
       case 'list_conversations':
         return [seedConversationsFrame()]
-      case 'request_snapshot':
-        return [screenSnapshotFrame(BASELINE_SNAPSHOT)]
+      case 'request_session_settings':
+        return [sessionSettingsFrame(BASELINE_RUN_CONFIG, env.id)]
       case 'set_session_settings':
         return (env.payload as SetSessionSettingsPayload).model === REJECTED_MODEL
           ? [settingsErrorFrame(env.id)]
@@ -174,13 +170,12 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
   launchPairedApp
 }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({
+  // NOTE the destructure takes `page` ONLY. Not binding `daemon` is deliberate and load-bearing: the
+  // spec has no handle capable of pushing an unsolicited frame, so it cannot supply an input the real
+  // daemon does not produce. See the standing rule in the header.
+  const { page } = await launchPairedApp({
     buildReplyFrames: capturingRunConfigFake(captured)
   })
-
-  // Precondition 1 — un-inert the controls: push the session_transition marker (App-level sessionIdBridge
-  // listens regardless of route, so this can precede sheet-open). Without it the controls stay inert (#259).
-  daemon.pushFrame(sessionTransitionFrame(SESSION_ID))
 
   // Per-control locators. `.run-config__model-row` (3) and `.run-config__effort-segment` (5) are not
   // unique, so scope by display text: model rows by their mutually-non-substring names, effort segments by
@@ -199,7 +194,22 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
   // id gates the handler on), the baseline model/effort/yolo are selected, and the switch is operable
   // (no aria-readonly).
   await page.getByRole('button', { name: 'Run configuration' }).click()
+
+  // THE BUG, STATED AS AN ASSERTION. role="button" is present ONLY when a session id gated the
+  // handler on. On the parent commit this times out: the app asked for a screen snapshot, that reply
+  // carries no session id, and the spec no longer manufactures one -- so the controls render inert
+  // read-only markup and every click below is a no-op. This is desktop#491 exactly.
   await expect(modelRow(OPUS_ROW)).toHaveAttribute('role', 'button', { timeout: ROUNDTRIP_TIMEOUT_MS })
+
+  // Positive proof of the SOURCE of that id: exactly one bare read request went out, and its reply is
+  // the only thing the app could have learned a session id from. Combined with the unbound `daemon`
+  // handle above, this pins that the controls are operable because the DAEMON told them so, not
+  // because the spec did.
+  await expect
+    .poll(() => captured.filter((e) => e.type === 'request_session_settings').length, {
+      timeout: ROUNDTRIP_TIMEOUT_MS
+    })
+    .toBe(1)
   await expect(selectedRadioIn(OPUS_ROW)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(effortSegment('low')).toHaveAttribute('aria-current', 'true')
   await expect(yoloSwitch).toHaveAttribute('aria-checked', 'false')

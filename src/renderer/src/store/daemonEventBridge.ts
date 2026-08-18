@@ -157,6 +157,11 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // status, not the session store. Present only because the assertNever guard below makes a new arm a
       // compile error (the stallDetected-was-a-no-op-until-#317 precedent).
       return null
+    case 'runConfigReceived':
+      // No session-store action: the run-config store + its sheet-scoped bridge hold the run
+      // configuration and the session id (#491), not the session store. Present only because the
+      // assertNever guard below makes a new arm a compile error.
+      return null
     default:
       return assertNever(event)
   }

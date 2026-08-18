@@ -4,6 +4,7 @@ import {
   useRunSettingsWriteStore,
   selectEffectiveSettings,
   selectError,
+  selectPendingFields,
   type SettingsChange
 } from '../../store/runSettingsWriteStore'
 import { changeSetting, isAddressableSessionId } from './runSettingsControls'
@@ -83,6 +84,12 @@ function RunConfigError({ field }: { field: SettingsChange['field'] }): JSX.Elem
  * per-control callbacks are derived from the single `onChange` here, so the SettingsChange construction
  * lives in exactly one place. `errorField` is the last-rejected field (or null) — it flags at most one
  * section's error line (AC4).
+ *
+ * `pending` (#558) marks the controls of a change the daemon has not confirmed yet, so an optimistic
+ * value stops rendering identically to a settled one. It is #256's selectPendingFields verbatim — typed
+ * as that selector's return type so a parallel pending representation is a compile error, not a review
+ * catch. NOT shaped like `errorField`: the store's `pending` is keyed by changeId so two fields can be
+ * outstanding at once, and these three booleans are independent. Omitted ⇒ nothing is marked (AC5).
  */
 export function RunConfigView({
   model,
@@ -91,7 +98,8 @@ export function RunConfigView({
   usedTokens,
   windowTokens,
   onChange,
-  errorField
+  errorField,
+  pending
 }: {
   model: string
   effort: string
@@ -100,34 +108,53 @@ export function RunConfigView({
   windowTokens: number
   onChange?: (change: SettingsChange) => void
   errorField?: SettingsChange['field'] | null
+  pending?: ReturnType<typeof selectPendingFields>
 }): JSX.Element {
   const onModel = onChange ? (family: string): void => onChange({ field: 'model', value: family }) : undefined
   const onEffort = onChange ? (level: string): void => onChange({ field: 'effort', value: level }) : undefined
   const onYolo = onChange ? (next: boolean): void => onChange({ field: 'yolo', value: next }) : undefined
+  // The marking is independent of operability: the view marks whatever it is told. In production the
+  // combination cannot arise (the container withholds onChange until a session id exists, and without
+  // one nothing can be dispatched, so `pending` is empty), so gating one on the other would be logic
+  // for an unreachable state.
   return (
     <>
-      <ModelSection model={model} onSelect={onModel} error={errorField === 'model'} />
-      <EffortSection effort={effort} onSelect={onEffort} error={errorField === 'effort'} />
-      <YoloSection yolo={yolo} onToggle={onYolo} error={errorField === 'yolo'} />
+      <ModelSection model={model} onSelect={onModel} error={errorField === 'model'} busy={pending?.model} />
+      <EffortSection
+        effort={effort}
+        onSelect={onEffort}
+        error={errorField === 'effort'}
+        busy={pending?.effort}
+      />
+      <YoloSection yolo={yolo} onToggle={onYolo} error={errorField === 'yolo'} busy={pending?.yolo} />
       <ContextWindowSection usedTokens={usedTokens} windowTokens={windowTokens} />
     </>
   )
 }
 
+// #558 — the in-flight marker. aria-busy goes on the element that OWNS the field's controls (the group
+// here, since the field has three of them), which is both the a11y marker and the CSS hook — the
+// aria-current idiom below, and likewise OMITTED rather than rendered "false" so nothing-in-flight is
+// byte-identical to #188's markup. Load-bearing: the RunConfigError <p> must stay a SIBLING of this
+// wrapper, never a descendant — aria-busy on an ancestor tells assistive technology to withhold the
+// subtree's announcements, which would silently suppress #269's role="alert" rejection line on the very
+// field the operator was told is in flight.
 function ModelSection({
   model,
   onSelect,
-  error
+  error,
+  busy
 }: {
   model: string
   onSelect?: (family: string) => void
   error?: boolean
+  busy?: boolean
 }): JSX.Element {
   const selected = matchedFamily(model)
   return (
     <>
       <p className="status-sheet__section-header">Model</p>
-      <div className="run-config__model-list">
+      <div className="run-config__model-list" aria-busy={busy ? 'true' : undefined}>
         {MODEL_CATALOG.map((entry) => {
           const isSelected = entry.family === selected
           // onSelect present ⇒ the row is an operable button that submits its family token
@@ -170,16 +197,19 @@ function ModelSection({
 function EffortSection({
   effort,
   onSelect,
-  error
+  error,
+  busy
 }: {
   effort: string
   onSelect?: (level: string) => void
   error?: boolean
+  busy?: boolean
 }): JSX.Element {
   return (
     <>
       <p className="status-sheet__section-header">Effort</p>
-      <div className="run-config__effort">
+      {/* #558: the group, not a segment — the field's five controls are one field. */}
+      <div className="run-config__effort" aria-busy={busy ? 'true' : undefined}>
         {EFFORT_LEVELS.map((level) => {
           const isSelected = level === effort
           // aria-current is both the a11y marker and the CSS selection hook (no modifier class); the
@@ -208,11 +238,13 @@ function EffortSection({
 function YoloSection({
   yolo,
   onToggle,
-  error
+  error,
+  busy
 }: {
   yolo: boolean
   onToggle?: (next: boolean) => void
   error?: boolean
+  busy?: boolean
 }): JSX.Element {
   return (
     <>
@@ -226,13 +258,19 @@ function YoloSection({
         </div>
         {/* role="switch" + aria-checked reflects state honestly. onToggle present ⇒ #257 makes it live:
             drop aria-readonly, become focusable, and toggle the current value on click (AC3). Absent ⇒
-            #188's read-only switch (aria-readonly, no handler). */}
+            #188's read-only switch (aria-readonly, no handler). #558's aria-busy goes on the switch
+            ITSELF — unlike Model/Effort the field has exactly one control and it IS the switch, while
+            .run-config__yolo also wraps the title/caption. It marks without disabling: LogDataSection
+            pairs aria-busy with `disabled`, but taking that half would contradict the store's deliberate
+            last-write-wins for rapid same-field changes. It contributes nothing to the accessible name,
+            so the aria-label/aria-checked/aria-readonly the e2e specs assert on are untouched. */}
         <span
           className={yolo ? 'run-config__switch run-config__switch--on' : 'run-config__switch'}
           role="switch"
           aria-checked={yolo}
           aria-readonly={onToggle ? undefined : 'true'}
           aria-label="Auto-accept tool calls"
+          aria-busy={busy ? 'true' : undefined}
           tabIndex={onToggle ? 0 : undefined}
           onClick={onToggle ? () => onToggle(!yolo) : undefined}
         >
@@ -327,6 +365,11 @@ export function RunConfigSections(): JSX.Element {
   const writeState = useRunSettingsWriteStore((s) => s)
 
   const effective = selectEffectiveSettings(snapshot, writeState)
+  // #558: derived from the SAME writeState reference in the SAME render pass as `effective` — that is
+  // what makes the displayed value and its marking incapable of disagreeing. A second
+  // useRunSettingsWriteStore subscription for pending could tear them apart, showing an optimistic
+  // value with no marker, which is exactly the state this ticket exists to prevent.
+  const pending = selectPendingFields(writeState)
   const errorField = selectError(writeState)
 
   const onChange =
@@ -349,6 +392,7 @@ export function RunConfigSections(): JSX.Element {
       windowTokens={snapshot?.windowTokens ?? 0}
       onChange={onChange}
       errorField={errorField}
+      pending={pending}
     />
   )
 }

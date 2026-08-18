@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import {
+  createRunSettingsWriteStore,
+  selectPendingFields,
+  type RunSettingsWriteEvent
+} from '../../store/runSettingsWriteStore'
 import { RunConfigView, RunConfigSections } from './RunConfigSections'
 
 // No DOM harness (jsdom/Testing Library) — mirrors LogDataSection.test.tsx. RunConfigView is pure
@@ -17,6 +22,27 @@ const NO_USAGE = { usedTokens: 0, windowTokens: 0 } as const
 // single Model row / Effort segment to assert its own selection marker without cross-row bleed.
 function segmentFor(markup: string, className: string, needle: string): string {
   return markup.split(className).find((chunk) => chunk.includes(needle)) ?? ''
+}
+
+// The OPENING TAG of the element whose class list STARTS with `className` — so one element's own
+// attributes can be asserted without a descendant's bleeding in. The class token must be followed by a
+// quote or a space, which is what keeps `run-config__switch` from matching `run-config__switch-knob`
+// and `run-config__effort` from matching `run-config__effort-segment`, while still matching the
+// two-token `run-config__switch run-config__switch--on`.
+function tagWithClass(markup: string, className: string): string {
+  return markup.match(new RegExp(`<[a-z]+ class="${className}( [^"]*)?"[^>]*>`))?.[0] ?? ''
+}
+
+// True when the element opened by `openTag` is CLOSED BEFORE `needle` appears — i.e. `needle` is a
+// sibling, not a descendant. Every element between the section wrappers and the rejection line is a
+// <div>, so counting opens against closes over the run between them is exact: balanced ⇒ the wrapper
+// returned to depth 0 before the needle.
+function closedBefore(markup: string, openTag: string, needle: string): boolean {
+  const from = markup.indexOf(openTag)
+  const to = markup.indexOf(needle)
+  if (from < 0 || to <= from) return false
+  const run = markup.slice(from, to)
+  return (run.match(/<div/g)?.length ?? 0) === (run.match(/<\/div>/g)?.length ?? 0)
 }
 
 describe('RunConfigView — Model', () => {
@@ -264,6 +290,148 @@ describe('RunConfigView — error surface (#257 AC4)', () => {
   })
 })
 
+// #558: the in-flight marker — an unconfirmed change must not render identically to a settled one. The
+// source is #256's selectPendingFields: three INDEPENDENT booleans (the store's `pending` is keyed by
+// changeId so two fields can be outstanding at once), never an errorField-shaped single field. The
+// marker is aria-busy on the element that OWNS each field's controls — one attribute serving as both
+// the a11y marker and the CSS hook (the aria-current idiom), omitted rather than rendered "false".
+// These assert the attribute's PLACEMENT, not merely its presence: placement is what keeps #269's
+// role="alert" rejection line out of the busy subtree (an aria-busy ancestor would suppress it).
+describe('RunConfigView — pending marker (#558)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+  const NONE = { model: false, effort: false, yolo: false } as const
+
+  it('marks the model group only, when a model change is in flight (AC1/AC3)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} pending={{ ...NONE, model: true }} />)
+    expect(markup.match(/aria-busy="true"/g)?.length).toBe(1)
+    expect(tagWithClass(markup, 'run-config__model-list')).toContain('aria-busy="true"')
+  })
+
+  it('marks the effort group — the group, not an individual segment (AC1/AC3)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} pending={{ ...NONE, effort: true }} />)
+    expect(markup.match(/aria-busy="true"/g)?.length).toBe(1)
+    expect(tagWithClass(markup, 'run-config__effort')).toContain('aria-busy="true"')
+    expect(tagWithClass(markup, 'run-config__effort-segment')).not.toContain('aria-busy')
+  })
+
+  it('marks the switch itself, leaving role/aria-checked untouched (AC1/AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} yolo={true} pending={{ ...NONE, yolo: true }} />
+    )
+    expect(markup.match(/aria-busy="true"/g)?.length).toBe(1)
+    const tag = tagWithClass(markup, 'run-config__switch')
+    expect(tag).toContain('aria-busy="true"')
+    expect(tag).toContain('role="switch"')
+    expect(tag).toContain('aria-checked="true"')
+  })
+
+  it('marks two fields at once, independently (AC3 — the simultaneous case)', () => {
+    // Two outstanding changes to DIFFERENT fields: the store tells them apart by changeId, so both
+    // controls are marked and the untouched one is not. A single `pendingField | null` prop — the
+    // errorField shape — could not express this.
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} pending={{ model: true, effort: false, yolo: true }} />
+    )
+    expect(markup.match(/aria-busy="true"/g)?.length).toBe(2)
+    expect(tagWithClass(markup, 'run-config__model-list')).toContain('aria-busy="true"')
+    expect(tagWithClass(markup, 'run-config__switch')).toContain('aria-busy="true"')
+    expect(tagWithClass(markup, 'run-config__effort')).not.toContain('aria-busy')
+  })
+
+  it('renders exactly today markup with nothing in flight, prop given or omitted (AC5)', () => {
+    const allFalse = renderToStaticMarkup(<RunConfigView {...base} pending={NONE} />)
+    const omitted = renderToStaticMarkup(<RunConfigView {...base} />)
+    // Omitted, never aria-busy="false": a rendered "false" would already be a markup change.
+    expect(allFalse).not.toContain('aria-busy')
+    expect(omitted).not.toContain('aria-busy')
+    expect(allFalse).toBe(omitted)
+  })
+
+  it('leaves a marked control fully operable — the busy half only, never disabled (AC3)', () => {
+    // LogDataSection pairs aria-busy with `disabled`; taking that half would contradict the store's
+    // deliberate last-write-wins for rapid same-field changes.
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        onChange={(): void => undefined}
+        pending={{ model: true, effort: true, yolo: true }}
+      />
+    )
+    expect(markup).toContain('role="button"')
+    expect(markup).toContain('tabindex="0"')
+    expect(markup).not.toContain('aria-readonly')
+    expect(markup).not.toContain('disabled')
+  })
+
+  it('alters no existing accessible name or selection marker (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        model="opus"
+        effort="high"
+        yolo={true}
+        pending={{ model: true, effort: true, yolo: true }}
+      />
+    )
+    expect(markup.match(/aria-label="Current model"/g)?.length).toBe(1)
+    expect(markup).toContain('aria-label="Auto-accept tool calls"')
+    expect(markup.match(/aria-current="true"/g)?.length).toBe(1)
+    expect(markup).toContain('aria-checked="true"')
+  })
+
+  it('never encloses the rejection alert — the marked wrapper closes before it', () => {
+    // The #269 alert must still be announced on the very field the operator was told is in flight; an
+    // aria-busy ANCESTOR would instruct assistive technology to withhold it.
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} errorField="model" pending={{ ...NONE, model: true }} />
+    )
+    const wrapper = tagWithClass(markup, 'run-config__model-list')
+    // Assert the wrapper was found and is the marked one first — otherwise closedBefore would be
+    // measuring from offset 0 and could pass vacuously.
+    expect(wrapper).toContain('aria-busy="true"')
+    expect(markup).toContain('role="alert"')
+    expect(closedBefore(markup, wrapper, 'role="alert"')).toBe(true)
+  })
+
+  it('marks a read-only control too — the marking is independent of operability (AC5)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} pending={{ ...NONE, yolo: true }} />
+    )
+    expect(tagWithClass(markup, 'run-config__switch')).toContain('aria-busy="true"')
+    expect(markup).toContain('aria-readonly="true"')
+    expect(markup).not.toContain('role="button"')
+  })
+
+  it('clears through the existing pending deletion on confirm, reject and reconnect (AC4)', () => {
+    // Composed against the real store: there is no second representation of pending state to clear —
+    // all three paths converge on the reducer deleting the pending marker.
+    const changeId = 'change-1'
+    const clearing: readonly RunSettingsWriteEvent[] = [
+      { type: 'settingsConfirmed', changeId },
+      { type: 'settingsRejected', changeId },
+      { type: 'reconnected' }
+    ]
+    for (const event of clearing) {
+      const store = createRunSettingsWriteStore()
+      store.getState().dispatch({
+        type: 'changeDispatched',
+        changeId,
+        change: { field: 'model', value: 'opus' }
+      })
+      const inFlight = renderToStaticMarkup(
+        <RunConfigView {...base} pending={selectPendingFields(store.getState())} />
+      )
+      expect(inFlight).toContain('aria-busy="true"')
+
+      store.getState().dispatch(event)
+      const settled = renderToStaticMarkup(
+        <RunConfigView {...base} pending={selectPendingFields(store.getState())} />
+      )
+      expect(settled).not.toContain('aria-busy')
+    }
+  })
+})
+
 describe('RunConfigSections (container)', () => {
   it('server-renders the AC4 default without touching window.pyry', () => {
     // useStore reads getInitialState() (snapshot:null) under server render, so the container always
@@ -281,8 +449,9 @@ describe('RunConfigSections (container)', () => {
     // read-only and no operable affordance renders (identical to #188).
     expect(markup).toContain('aria-readonly="true"')
     expect(markup).not.toContain('role="button"')
-    // No standing rejection on the opening frame.
+    // No standing rejection on the opening frame — and nothing in flight either (#558).
     expect(markup).not.toContain('role="alert"')
+    expect(markup).not.toContain('aria-busy')
     // The null-snapshot default (windowTokens: 0) collapses into the same unavailable branch as the
     // daemon's window_tokens == 0 signal — no % used, no NaN, no divide-by-zero (AC5).
     expect(markup).not.toContain('% used')

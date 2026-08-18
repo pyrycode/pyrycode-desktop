@@ -289,7 +289,8 @@ export type DaemonEvent =
   correlation key to mirror.
 - **`backgroundTaskStarted{conversationId,taskId,toolCallId,description,taskType,truncatedFields}`**
   ([#564](../codebase/564.md)) also maps to *no* `SessionAction`, consumed by **none** of the three
-  existing bridges — the real consumer is the still-unbuilt background-task store (#567). The frame
+  existing bridges. [The background-task-roster store (#573, shipped)](../codebase/573.md) is now live but
+  consumes only `backgroundTaskRoster` below, not this arm — it stays dormant, awaiting #574. The frame
   announces claude work that **outlives the turn that spawned it** (pyrycode#1240); it carries no
   `turn_id` and opens/closes no turn, so — like `queueState` — it **keeps** `conversationId` rather than
   dropping it, following the same "turn-stream item vs daemon state" test #720 established. `toolCallId`
@@ -314,9 +315,10 @@ export type DaemonEvent =
   may differ from claude's bytes without appearing there (the daemon separately scrubs invalid UTF-8 by
   deletion). SECURITY: `patch`'s keys may carry command text exactly as `description` does — render as
   plain text, never HTML/attribute/URL, never executed or re-shelled; this slice has no DOM sink, so the
-  constraint is carried forward to #567/#568. Consumed as a no-op by all three exhaustive bridges at ship
-  time; real consumer is the still-unbuilt background-task store #567. Second of three sibling frame
-  members (#566 `background_task_roster` follows).
+  constraint is carried forward to #568. Consumed as a no-op by all three exhaustive bridges at ship
+  time. [The background-task-roster store (#573, shipped)](../codebase/573.md) consumes only the
+  `backgroundTaskRoster` arm below, not this one — it stays dormant, awaiting #574. Second of three
+  sibling frame members (#566 `background_task_roster` follows).
 - **`backgroundTaskRoster{conversationId,tasks,droppedTasks}`** ([#566](../codebase/566.md)) closes the
   family — the **aggregate peer** of the two scalar arms above: they report what happened to **one** task,
   this reports the **whole live set**. Also **keeps** `conversationId`, the same in-family precedent both
@@ -324,7 +326,8 @@ export type DaemonEvent =
   reused verbatim, snake_case** — `tasks: readonly BackgroundTask[]` — the `queueState`/`conversationsReceived`
   nested-array precedent, not a snake→camel remap: the row narrower already stripped each row to its known
   fields, so there is nothing left to drop. A **snapshot, not a delta**: each frame replaces the reader's
-  view of what is running, so #567 must **replace**, never merge, its held set per frame. `tasks: []` is a
+  view of what is running, so [#573](../codebase/573.md) **replaces**, never merges, its held set per
+  frame. `tasks: []` is a
   **positive statement that nothing is alive** — the payoff signal for pyrycode#1240 — and must be emitted
   and consumed, never dropped, filtered, or coalesced as "no news". `droppedTasks` is the frame's **only**
   truncation report (there is deliberately no top-level `truncatedFields`); the true roster size is
@@ -335,10 +338,12 @@ export type DaemonEvent =
   HTML, an attribute, or a URL; the daemon states the rule per row rather than delegating it to the scalar
   frames because **a list of command lines is a more tempting shape to feed somewhere structured than a
   single one** — treat `tasks` as a display list, never a structured work list. No terminal/finish event
-  exists in this family by design; "finished" is a client conclusion #567 draws from a task's absence in a
-  later roster, never something the wire reports. Consumed as a no-op by all three exhaustive bridges at
-  ship time; real consumer is the still-unbuilt background-task store #567. Third and last of the sibling
-  frame members.
+  exists in this family by design; "finished" is a client conclusion that would have to be drawn from a
+  task's absence in a later roster, never something the wire reports — and [#573](../codebase/573.md)
+  deliberately declines to draw it, holding only what the daemon reported. Consumed as a no-op by all
+  three exhaustive bridges at ship time. Ships dormant no longer: [the background-task-roster store
+  (#573, shipped)](../codebase/573.md) is the first consumer, an independent subscriber outside the three
+  exhaustive bridges. Third and last of the sibling frame members.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -456,9 +461,9 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#269 codebase notes](../codebase/269.md) — the `sessionSettingsRejected` member, the seventeenth no-`SessionAction` arm and the rejected twin of `sessionSettingsUpdated`; emitted by [daemon connection](daemon-connection.md)'s `pendingSettings`-lookup precedence gate on a correlated `daemon-error`, which on a match also suppresses that ticket's own `modalAnswerRejected` FIFO and the #116 bundle reassembler; consumed by none of the three existing bridges, real consumer is [#256](../codebase/256.md) (shipped)
 - [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md) — the pending→confirm/reject store consuming both `sessionSettingsUpdated` and `sessionSettingsRejected`; a fourth, independent App-level subscriber on this channel, alongside the three exhaustive bridges above
 - [#396 codebase notes](../codebase/396.md) — the `workspaceFolderRejected` member, the rejected twin of `workspaceFolderCreated` (#381); emitted by [daemon connection](daemon-connection.md)'s `pendingCreateFolders`-lookup precedence gate (the `pendingSettings`/`sessionSettingsRejected` pattern applied to a `Set`, since the event is bare); consumed by none of the three existing bridges, real consumer is the [create-folder round-trip store](new-folder-store.md) ([#397](../codebase/397.md))
-- [#564 codebase notes](../codebase/564.md) — the `backgroundTaskStarted` member, `apiRetry`/`compacting`'s peer on the v2 stream but widened to five strings plus a nullable string array; first of three sibling frame members (#565/#566 follow), and — like `queueState` — **keeps** `conversationId` because the frame is daemon state (no `turn_id`, opens/closes no turn) rather than a turn-stream item. Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
-- [#565 codebase notes](../codebase/565.md) — the `backgroundTaskUpdated` member, `backgroundTaskStarted`'s peer joined on `taskId` but narrowed to four fields (no `toolCallId`/`description`/`taskType`) plus the new opaque `patch` string, which is never typed as JSON and never parsed on this path — the daemon's own golden fixture is cut mid-token. Also **keeps** `conversationId`, the same in-family precedent as its sibling. Second of three sibling frame members (#566 follows). Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
-- [#566 codebase notes](../codebase/566.md) — the `backgroundTaskRoster` member, the **aggregate peer** of the two scalar arms above: they report what happened to one task, this reports the whole live set, as a snapshot, not a delta. Reuses the wire `BackgroundTask` row type verbatim (the `queueState`/`conversationsReceived` nested-array precedent — snake_case, no remap), keeps `conversationId` for the same in-family reason, and `tasks: []` is the payoff signal pyrycode#1240 needs — a positive statement that nothing is alive, never filtered out. `droppedTasks` is the frame's only truncation report. Third and last of the sibling frame members. Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
+- [#564 codebase notes](../codebase/564.md) — the `backgroundTaskStarted` member, `apiRetry`/`compacting`'s peer on the v2 stream but widened to five strings plus a nullable string array; first of three sibling frame members (#565/#566 follow), and — like `queueState` — **keeps** `conversationId` because the frame is daemon state (no `turn_id`, opens/closes no turn) rather than a turn-stream item. Ships dormant, consumed by none of the three exhaustive bridges; [the background-task-roster store (#573, shipped)](../codebase/573.md) is live but consumes only the sibling `backgroundTaskRoster` member below, so this arm stays dormant, awaiting #574
+- [#565 codebase notes](../codebase/565.md) — the `backgroundTaskUpdated` member, `backgroundTaskStarted`'s peer joined on `taskId` but narrowed to four fields (no `toolCallId`/`description`/`taskType`) plus the new opaque `patch` string, which is never typed as JSON and never parsed on this path — the daemon's own golden fixture is cut mid-token. Also **keeps** `conversationId`, the same in-family precedent as its sibling. Second of three sibling frame members (#566 follows). Ships dormant, consumed by none of the three exhaustive bridges; [the background-task-roster store (#573, shipped)](../codebase/573.md) is live but consumes only the sibling `backgroundTaskRoster` member below, so this arm stays dormant, awaiting #574
+- [#566 codebase notes](../codebase/566.md) — the `backgroundTaskRoster` member, the **aggregate peer** of the two scalar arms above: they report what happened to one task, this reports the whole live set, as a snapshot, not a delta. Reuses the wire `BackgroundTask` row type verbatim (the `queueState`/`conversationsReceived` nested-array precedent — snake_case, no remap), keeps `conversationId` for the same in-family reason, and `tasks: []` is the payoff signal pyrycode#1240 needs — a positive statement that nothing is alive, never filtered out. `droppedTasks` is the frame's only truncation report. Third and last of the sibling frame members. Consumed by none of the three exhaustive bridges; ships dormant no longer — [the background-task-roster store (#573, shipped)](../codebase/573.md) is the first consumer
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

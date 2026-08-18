@@ -88,22 +88,39 @@ One-line summaries of the evergreen docs. The documentation phase appends here.
 - [Background-task roster store](features/background-task-roster-store.md) — the `queueStore`/`queueBridge`
   precedent applied to the [daemon-event channel](features/daemon-event-channel.md)'s `backgroundTaskRoster`
   arm (#566): a dedicated Zustand store (`createBackgroundTaskRosterStore`/`backgroundTaskRosterStore`/
-  `useBackgroundTaskRosterStore`) keyed by `conversationId`, holding wire `BackgroundTask` rows verbatim by
-  reference (snake_case), plus a reactive-only headless bridge (`translateBackgroundTaskRoster`/
-  `subscribeBackgroundTaskRoster`/`BackgroundTaskRosterData`, the seventh App-level headless leaf). The one
-  deliberate divergence from the precedent: `selectRosterFor` returns `?? null`, not `queueStore`'s `??
-  EMPTY_BACKLOG` — the collapse is correct for `queue_state` but would have silently erased the distinction
-  between "no roster has ever arrived" and "observed, nothing alive" (AC4), with no compiler error and no
-  failing test unless one was written for it; `null` needs no hoisted `EMPTY_*` constant, being a stable
-  reference for free. The `connected` (re)handshake edge clears every conversation's held entry wholesale
-  (same-reference no-op if already empty) and is the **sole enforcement** of a security requirement (AC5):
-  without it, a previous pairing's literal shell-command `description` text would survive into a new
-  pairing. Deliberately does not repopulate after a reconnect — the roster isn't in the daemon's
-  reconcile-on-connect set and this app sends no `last_event_id` (#569, open, needs a daemon change).
-  Ships **populated and unread**: the panel (#568, open) is the first reader, and the two scalar arms
-  (`backgroundTaskStarted`/`backgroundTaskUpdated`) stay dormant, awaiting #574 (open), which is expected to
-  widen the held entry with their `toolCallId`/`patch` as optional fields. Split from #567 (#573,
-  security-sensitive, PASS, code review PASS with zero findings, see [codebase notes](codebase/573.md)).
+  `useBackgroundTaskRosterStore`) keyed by `conversationId`, plus a reactive-only headless bridge
+  (`subscribeBackgroundTaskRoster`/`BackgroundTaskRosterData`, the seventh App-level headless leaf). The one
+  deliberate divergence from the `queueStore` precedent: `selectRosterFor` returns `?? null`, not
+  `queueStore`'s `?? EMPTY_BACKLOG` — the collapse is correct for `queue_state` but would have silently
+  erased the distinction between "no frame has ever arrived" and "observed, nothing alive" (AC5, originally
+  AC4), with no compiler error and no failing test unless one was written for it; `null` needs no hoisted
+  `EMPTY_*` constant, being a stable reference for free. The `connected` (re)handshake edge clears every
+  conversation's held entry wholesale (same-reference no-op if already empty) and is the **sole
+  enforcement** of a security requirement: without it, a previous pairing's literal shell-command
+  `description` text would survive into a new pairing. Deliberately does not repopulate after a reconnect —
+  neither frame is in the daemon's reconcile-on-connect set and this app sends no `last_event_id` (#569,
+  open, needs a daemon change). Split from #567 (#573, security-sensitive, PASS, code review PASS with zero
+  findings, see [codebase notes](codebase/573.md)); shipped **holding wire `BackgroundTask` rows verbatim
+  by reference (snake_case)**, with the two scalar arms (`backgroundTaskStarted`/`backgroundTaskUpdated`)
+  dormant, awaiting #574 (open at the time, since split).
+  **#576 reshaped the held value from a wire-row array to a new per-task `HeldBackgroundTask` type
+  (`{taskId, toolCallId: string | null, taskType, description, truncatedFields}`), keyed within the entry
+  by `taskId` in a `ReadonlyMap` built at write time, and joins the `backgroundTaskStarted` arm (#564) onto
+  it via a new `setStartedTask` setter and a sibling bridge translator, `translateBackgroundTaskStarted`.**
+  Provenance is derived, never stored: a task is started-sourced exactly when `toolCallId !== null`, tested
+  `!== null` and never for truthiness since `requireString` admits `''`. A roster keeps a started-sourced
+  record unchanged (its label is authoritative and never repeats) and rebuilds every other row fresh, while
+  remaining replacement truth for membership regardless of provenance; `setStartedTask` upserts in place,
+  preserving `droppedTasks` and roster order. This falsified #573's "holds BY CONSTRUCTION" null-
+  preservation claim (a per-row mapping now exists) — the header was rewritten to name the straight
+  assignment plus one test per write path as the defence instead. Both predicted "just widen the entry with
+  optional `toolCallId`/`patch`" shapes were closed by the spec: the entry is per-conversation (one
+  `toolCallId` can't hang off it) and the wire `BackgroundTask` type is pinned tool-call-id-free by a
+  shipped test. Still ships **populated and unread** — the panel (#568, open) is still the first reader;
+  the remaining scalar arm, `backgroundTaskUpdated`/`patch`, is #577's (split from #574, open). Size S, code
+  review PASS with one non-blocking SHOULD FIX (the roster-rebuild branch's negative half — a changed
+  roster-sourced row on a second roster — has no dedicated mutation-control test), see [codebase
+  notes](codebase/576.md).
 
 - [Relay-link store](features/relay-link-store.md) — the renderer's held copy of the relay-**socket** leg's link status, split from #149 alongside #328 (transport, shipped) → #330 (two-dot render, shipped): a dedicated `relayLinkStore` (`RelayLinkStatus | null`, `null` = not-connected-yet sentinel, single unconditional `setRelayLinkStatus` — most-recent-category-wins) plus a reactive-only headless bridge (`translateRelayLink`/`subscribeRelayLink`/`RelayLinkData`) that observes the [daemon-event channel](features/daemon-event-channel.md)'s `relayLinkChanged` arm (#328) — the arm's first real consumer, all three exhaustive bridges keep no-op'ing it. Near-verbatim clone of [session-id store](features/session-id-store.md)'s DI-factory → singleton → hook → selector shape (not `conversationListStore`'s request-gated shape — the arm is an unsolicited push). Deliberately does not model the daemon-session leg, which stays in [session store](features/session-store.md)'s `ConnectionStatus`; #330 combines both at render time (`relayLeg`/`daemonLeg`) and decided **not** to reconcile relay-dot presentation after a fatal session close — the leg is left stale, not cleared, per #328's forward note, and #330 renders that staleness honestly rather than suppressing it. `RelayLinkData` mounts as a sixth headless App-level sibling alongside `ConversationListData`/`SessionIdData`/`QueueData`/`ScreenSnapshotData`. Not security-sensitive; no Figma (headless, no render surface). Shipped dormant (#329, code review PASS, no findings, see [codebase notes](codebase/329.md)); gained its first reader in #330 (see [codebase notes](codebase/330.md)).
 - [Screen-snapshot store](features/screen-snapshot-store.md) — the renderer's held copy of the daemon's latest rendered-screen `text`, split from #318 (itself split from #147): a dedicated `screenSnapshotStore` (`{text,ts} | null`, `null` = not yet received, single unconditional `setSnapshot` — most-recent-wins, empty `text` held verbatim not dropped) plus a reactive-only headless bridge (`translateScreenSnapshot`/`subscribeScreenSnapshot`/`ScreenSnapshotData`) that observes the [daemon-event channel](features/daemon-event-channel.md)'s `screenSnapshotReceived` arm (#316). Structurally closest to [session-id store](features/session-id-store.md) (#259) — reactive-only, no request half at all, since the daemon pushes the snapshot unsolicited off the same `case 'snapshot'` seam that also fires the request-triggered `snapshotReceived` (#180/#187) — rather than to `runConfigStore`'s request-on-open shape. `ScreenSnapshotData` mounts as a fifth headless App-level sibling alongside `ConversationListData`/`SessionIdData`/`RunSettingsWriteData`/`QueueData`, for the whole app lifetime (not screen-scoped), since a snapshot can arrive before any display surface is mounted. Not security-sensitive; no Figma (headless, no render surface). Shipped dormant at #323 (no UI, no trigger; code review PASS, see [codebase notes](codebase/323.md)); the sibling #324 (below) is now its sole reader.

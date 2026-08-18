@@ -37,6 +37,8 @@ import type {
   CompactingPayload,
   BackgroundTaskStartedPayload,
   BackgroundTaskUpdatedPayload,
+  BackgroundTask,
+  BackgroundTaskRosterPayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
@@ -150,6 +152,20 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * whose keys may carry command text: decoded, never interpreted, never logged. Ships dormant — the task
  * store (#567) is the first consumer.
  *
+ * The `background-task-roster` kind (#566) carries the decoded BackgroundTaskRosterPayload — the AGGREGATE
+ * peer of the two kinds above: they report what happened to ONE task, this reports WHAT IS ALIVE. A
+ * SNAPSHOT, not a delta. Same non-turn character, so the consumer carries ALL THREE fields onward,
+ * `conversation_id` INCLUDED. The fail-closed defence is one required string, one REQUIRED ARRAY (never
+ * null — an empty `tasks` is the positive "nothing is alive" signal, so the key is always written and
+ * `Array.isArray(null)` is `false`), one required NUMBER (`dropped_tasks`, whose `0` is a value not an
+ * absence), and a per-row narrower that fails the WHOLE frame on one bad row rather than yielding a
+ * partial roster. Within this one frame `tasks: null` fails closed while a ROW's `truncated_fields: null`
+ * is a valid value — the same REQUIRED-PRESENT NULLABLE ARRAY the two kinds above use, applied per row.
+ * Neither `task_type` nor the `truncated_fields` elements (`task_id` / `task_type` / `description` here —
+ * a THIRD distinct set) is narrowed to a closed set. Each row's `description` is, for
+ * `task_type: local_bash`, the literal command line claude ran: untrusted display text, decoded and never
+ * interpreted, never logged. Ships dormant — the task store (#567) is the first consumer.
+ *
  * The `unrecognized-message` kind carries the decoded UnrecognizedMessagePayload — the daemon's report
  * that its stream parser met claude output it has no mapping for. NOT a claude sub-state like its
  * `stall` / `api-retry` / `compacting` neighbours: it reports a gap in the daemon's own mapping. The
@@ -236,6 +252,7 @@ export type InboundDaemonMessage =
   | { kind: 'compacting'; compacting: CompactingPayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
+  | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
   | { kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
   | {
@@ -662,6 +679,93 @@ function parseBackgroundTaskUpdatedPayload(payload: unknown): BackgroundTaskUpda
   const patch = requireString(payload, 'patch')
   const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
   return { conversation_id, task_id, patch, truncated_fields }
+}
+
+/**
+ * Narrow one opaque roster row into a BackgroundTask (#566). Takes parseQueuedItem's POSTURE — one bad
+ * element throws the WHOLE payload closed (never a partial roster), an empty parent array is valid, the
+ * result is a FRESH literal — and pointedly NOT parseBackgroundTaskStartedPayload's SHAPE: this row has
+ * no `tool_call_id` and no `patch`, which the scalar frames carry because their LINES do, so a narrower
+ * cloned from that one would require `tool_call_id` and fail-close every valid roster.
+ *
+ * Three required strings plus `truncated_fields` through the same requireStringArrayOrNull the two scalar
+ * frames use (whose docstring names this ticket; there is deliberately no second narrower and no variant
+ * of it), applied PER ROW: a literal `null` is the value "nothing was cut for this row", an omitted key is
+ * an absence that fails closed, and the lists are never hoisted or flattened across rows. Deliberately NO
+ * closed-set validation of `task_type` (`local_bash` is one observation and one observation does not earn
+ * an enum) nor of the `truncated_fields` element names (`task_id` / `task_type` / `description` here — a
+ * THIRD distinct set from #564's and #565's, which is the concrete proof the vocabulary moves per frame
+ * and a client-side allowlist would fail-close a valid future frame). No per-field length check either:
+ * the daemon bounds each string at construction and the frame-level MAX_PLAINTEXT_BYTES guard in
+ * parseInboundMessage covers the oversized case.
+ *
+ * Returns a fresh four-field literal, so unknown server-added keys — pointedly including the scalar
+ * frames' `tool_call_id` / `patch`, which this row must never have — are tolerated (forward-compat) but
+ * NOT copied through, which also makes it prototype-pollution-safe. That matters more here than on a
+ * scalar frame, because the attacker controls the NUMBER of records offered to this narrower, not just
+ * their content. Its message names the failure CATEGORY only — never a value and never the row INDEX:
+ * `description` is a literal command line, the ids are correlating identifiers, and an index would be a
+ * weak oracle over roster contents that buys nothing.
+ */
+function parseBackgroundTask(payload: unknown): BackgroundTask {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed background task')
+  }
+  const task_id = requireString(payload, 'task_id')
+  const task_type = requireString(payload, 'task_type')
+  const description = requireString(payload, 'description')
+  const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
+  return { task_id, task_type, description, truncated_fields }
+}
+
+/**
+ * Narrow an opaque payload into a BackgroundTaskRosterPayload (#566). The AGGREGATE peer of the two
+ * narrowers above: they decode what happened to one task, this decodes what is alive. `conversation_id` a
+ * required string, `tasks` the parseQueueStatePayload inline shape (an Array.isArray check, then
+ * `raw.map(parseBackgroundTask)`), `dropped_tasks` a plain requireNumber.
+ *
+ * THE TRAP, and it is invisible in the code below: within THIS ONE FRAME, `tasks: null` FAILS CLOSED while
+ * a ROW's `truncated_fields: null` is a VALID VALUE returned as `null`. Same shape, opposite contracts.
+ * `Array.isArray(null)` is `false`, which is precisely what fails `tasks: null` closed, and an omitted key
+ * (`undefined`) fails the same way. The daemon settles the asymmetry explicitly:
+ * BackgroundTaskRosterPayload carries interactive.go's ONLY custom MarshalJSON (`:274`), whose whole job is
+ * normalising a nil `Tasks` to `[]` so an empty roster never serialises as `null` — and whose comment
+ * states that `truncated_fields` is deliberately NOT normalised the same way, because nil and `[]` say the
+ * identical thing there while `tasks` is the frame's subject and its empty value is the signal. Reaching
+ * for requireStringArrayOrNull here would be the reflex from #564 / #565 and it is wrong.
+ *
+ * An EMPTY `tasks` array is VALID and decodes to `[]` (`[].map()` → `[]`) — the positive "nothing is alive"
+ * statement, not an error and not an absence. Order is preserved from the wire (claude's own order). One
+ * bad row throws the whole frame closed rather than yielding a partial roster (the parseQueueStatePayload /
+ * parseConversationsPayload precedent).
+ *
+ * `dropped_tasks` decodes through plain requireNumber, which is correct PRECISELY BECAUSE the Go field has
+ * no `omitempty`: the key is always written, so `0` is a genuine wire value carried as `0` — never
+ * truthiness-tested — while an absent key is a real defect that fails closed. There is NO range check and
+ * no cross-check against `tasks.length`: a client-invented bound would silently drop valid future frames
+ * (the requireNumber house posture since #116), and the roster's true size is `tasks.length +
+ * dropped_tasks` rather than something to reconcile. Note there is deliberately no top-level
+ * `truncated_fields` on this frame — `dropped_tasks` is its only truncation report.
+ *
+ * No per-row or per-roster count check: the daemon bounds the entry count at construction
+ * (`maxTaskRosterEntries`) and the frame-level MAX_PLAINTEXT_BYTES guard already fails an oversized frame
+ * closed before this runs — the same reliance queue_state and both scalar siblings have. Returns a fresh
+ * three-field literal; unknown server-added keys are tolerated but not copied through. Its messages name
+ * the failure category only — a `conversation_id` correlates a conversation and a row's `description` is a
+ * literal command line.
+ */
+function parseBackgroundTaskRosterPayload(payload: unknown): BackgroundTaskRosterPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed background_task_roster payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const raw = payload.tasks
+  if (!Array.isArray(raw)) {
+    throw new WireDecodeError('malformed tasks list')
+  }
+  const tasks = raw.map(parseBackgroundTask)
+  const dropped_tasks = requireNumber(payload, 'dropped_tasks')
+  return { conversation_id, tasks, dropped_tasks }
 }
 
 /**
@@ -1262,6 +1366,24 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'background-task-updated', backgroundTaskUpdated }
+    }
+    case 'background_task_roster': {
+      // Narrow BEFORE logging so a malformed frame (a `tasks: null`, an omitted `dropped_tasks`, one bad
+      // row) throws first and leaves no record. NOTHING decoded is logged — least of all a row's
+      // `description`, which is a literal command line, and DELIBERATELY NOT the roster SIZE either:
+      // DiagnosticEvent already carries a `count` field, so emitting it would cost nothing structurally
+      // and it is omitted on purpose, because how much work claude has running right now is itself a
+      // fact about the user's session (the queue_state / conversation_created posture). Only the frame's
+      // byte length + one-way hash, reusing the existing content-free field set (no new DiagnosticEvent
+      // field, so #131's renderer pin is untouched).
+      const backgroundTaskRoster = parseBackgroundTaskRosterPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'background_task_roster',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'background-task-roster', backgroundTaskRoster }
     }
     case 'unrecognized_message': {
       // Narrow BEFORE logging so a malformed frame (an unknown `site`, an absent `raw`, a non-boolean

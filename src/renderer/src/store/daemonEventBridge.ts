@@ -159,6 +159,13 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // background-task state at all. Present only because the assertNever guard below makes a new arm a
       // compile error (the apiRetry-was-a-no-op-until-#493 precedent).
       return null
+    case 'backgroundTaskRoster':
+      // No session-store action: like both siblings above, the background-task store (#567, not yet
+      // built) holds the live set of tasks claude left running — including the empty set, which is a
+      // positive signal rather than nothing to record — not the session store, which holds no
+      // background-task state at all. Present only because the assertNever guard below makes a new arm a
+      // compile error (the apiRetry-was-a-no-op-until-#493 precedent).
+      return null
     case 'unrecognizedMessage':
       // No session-store action: the parser-gap diagnostic becomes a timeline row (the render slice),
       // not connection state — the session store holds nothing about the daemon's own mapping gaps.

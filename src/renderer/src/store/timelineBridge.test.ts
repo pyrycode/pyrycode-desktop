@@ -313,6 +313,28 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         taskId: 'task_01ABC',
         patch: '{"is_backgrounded":tr',
         truncatedFields: ['patch']
+      },
+      // background-task roster ships dormant (#566); its consumer is the #567 background-task store,
+      // not the timeline store. Daemon STATE, not a turn-stream item — the wire says so outright: no
+      // turn_id, opens and closes no turn.
+      {
+        type: 'backgroundTaskRoster',
+        conversationId: 'conv-1',
+        tasks: [
+          {
+            task_id: 'task_01ABC',
+            task_type: 'local_bash',
+            description: "grep -rn 'a<b&c' .",
+            truncated_fields: ['description']
+          },
+          {
+            task_id: 'task_02DEF',
+            task_type: 'local_bash',
+            description: 'sleep 300',
+            truncated_fields: null
+          }
+        ],
+        droppedTasks: 3
       }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
@@ -579,6 +601,37 @@ describe('subscribeTimeline', () => {
       taskId: 'task_01ABC',
       patch: '{"is_backgrounded":tr',
       truncatedFields: ['patch']
+    })
+
+    // Both halves, as above: same state ref (nothing dispatched) AND no chat row.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#566: a backgroundTaskRoster daemon event creates NO timeline item (ships dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'backgroundTaskRoster',
+      conversationId: 'conv-1',
+      tasks: [
+        {
+          task_id: 'task_01ABC',
+          task_type: 'local_bash',
+          description: "grep -rn 'a<b&c' .",
+          truncated_fields: ['description']
+        },
+        {
+          task_id: 'task_02DEF',
+          task_type: 'local_bash',
+          description: 'sleep 300',
+          truncated_fields: null
+        }
+      ],
+      droppedTasks: 3
     })
 
     // Both halves, as above: same state ref (nothing dispatched) AND no chat row.

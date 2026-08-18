@@ -323,6 +323,40 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('backgroundTaskRoster → null (consumed by the #567 background-task store, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'backgroundTaskRoster',
+        conversationId: 'conv-1',
+        tasks: [
+          {
+            task_id: 'task_01ABC',
+            task_type: 'local_bash',
+            description: "grep -rn 'a<b&c' .",
+            truncated_fields: ['description']
+          },
+          {
+            task_id: 'task_02DEF',
+            task_type: 'local_bash',
+            description: 'sleep 300',
+            truncated_fields: null
+          }
+        ],
+        droppedTasks: 3
+      })
+    ).toBeNull()
+    // The empty roster — the positive "nothing is alive" signal — is no more a session action than a
+    // populated one.
+    expect(
+      translateDaemonEvent({
+        type: 'backgroundTaskRoster',
+        conversationId: 'conv-1',
+        tasks: [],
+        droppedTasks: 0
+      })
+    ).toBeNull()
+  })
+
   it('unrecognizedMessage → null (consumed by the timeline render slice, not the session store)', () => {
     expect(
       translateDaemonEvent({

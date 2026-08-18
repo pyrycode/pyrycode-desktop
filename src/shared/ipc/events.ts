@@ -20,6 +20,7 @@ import type {
   ConversationUpdatedPayload,
   RecentWorkspace,
   QueuedItem,
+  BackgroundTask,
   WireTurnState,
   WireSessionTransitionReason,
   WireUnrecognizedSite,
@@ -238,6 +239,49 @@ export type DaemonEvent =
       taskId: string
       patch: string
       truncatedFields: readonly string[] | null
+    }
+  // The background-task roster arm (#566) — the AGGREGATE PEER of the two arms above: they report what
+  // happened to ONE task, this reports the WHOLE LIVE SET. Three fields: one id, the rows, and a count.
+  //
+  // A SNAPSHOT, NOT A DELTA. Each frame replaces the reader's view of what is running rather than
+  // amending it, so #567 REPLACES its held set per frame rather than merging into it. `tasks: []` is a
+  // POSITIVE STATEMENT THAT NOTHING IS ALIVE — the payoff signal for pyrycode#1240 — and must be emitted
+  // and consumed, NEVER dropped, filtered, or coalesced as "no news".
+  //
+  // Top-level fields are snake→camel; THE ROW TYPE IS REUSED VERBATIM with snake_case fields. That is not
+  // an inconsistency to fix but the settled house rule for nested arrays, with two precedents (queueState
+  // above and conversationsReceived): the row narrower already stripped each row to its known fields, so
+  // there is nothing to drop and no mapping to write. `readonly` on the array mirrors queueState; the row
+  // interface itself stays mutable, exactly like QueuedItem.
+  //
+  // Carries `conversationId` for the siblings' reason, settled in-family rather than argued fresh: the
+  // test is "turn-stream item, or daemon state?", and this frame carries NO turn_id and opens and closes
+  // no turn, so it follows the queue_state rule (#720). The task store (#567) attributes by id.
+  //
+  // `droppedTasks` is this frame's ONLY truncation report — there is deliberately no top-level
+  // truncatedFields — so THE TRUE ROSTER SIZE IS `tasks.length + droppedTasks`, and a panel that shows
+  // only the carried rows silently presents a capped roster as the whole one. `0` is a VALUE, never
+  // consulted for truthiness. Each row's `truncated_fields: null` means nothing was cut FOR THAT ROW, is
+  // distinct from `[]`, and is per-row: never hoist or flatten the lists across rows. `task_type` is an
+  // OPEN string. NO TERMINAL EVENT EXISTS IN THIS FAMILY by design, so "finished" is a client conclusion
+  // drawn from a task's absence in a LATER roster — legitimate for #567 to draw on its own terms, never
+  // something to present as reported by the daemon.
+  //
+  // SECURITY: each row's `description` is UNTRUSTED, model-influenced daemon-relayed text and for
+  // `task_type: local_bash` IS THE LITERAL COMMAND LINE claude ran. The panel slice (#568) must render it
+  // as PLAIN TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute or a URL,
+  // and must never execute or re-shell it. The daemon states this rule PER ROW rather than delegating it
+  // to the scalar frames, and its reason is the temptation unique to this arm: A LIST OF COMMAND LINES IS
+  // A MORE TEMPTING SHAPE TO FEED SOMEWHERE STRUCTURED THAN A SINGLE ONE — treat `tasks` as a DISPLAY
+  // list, never as a structured work list something iterates and acts on. This slice has no DOM sink; the
+  // constraint is inherited here. No token, key, or raw frame can ride the arm (one id, a bounded list of
+  // four-field rows, and a count is the whole payload). Ships dormant: all three exhaustive bridges no-op
+  // it until #567 — the apiRetry-was-a-no-op-until-#493 precedent.
+  | {
+      type: 'backgroundTaskRoster'
+      conversationId: string
+      tasks: readonly BackgroundTask[]
+      droppedTasks: number
     }
   // The unrecognized-message arm — the daemon's stream parser met claude output it has no mapping for.
   // Unlike its three status-peer neighbours above, this one is NOT a claude sub-state: it reports a gap

@@ -277,6 +277,31 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'compacting', active: false })).toBeNull()
   })
 
+  it('backgroundTaskStarted → null (consumed by the #567 background-task store, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'backgroundTaskStarted',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        toolCallId: 'toolu_01XYZ',
+        description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
+        taskType: 'local_bash',
+        truncatedFields: ['description']
+      })
+    ).toBeNull()
+    expect(
+      translateDaemonEvent({
+        type: 'backgroundTaskStarted',
+        conversationId: 'conv-1',
+        taskId: 'task_02DEF',
+        toolCallId: 'toolu_02UVW',
+        description: 'sleep 60',
+        taskType: 'local_bash',
+        truncatedFields: null
+      })
+    ).toBeNull()
+  })
+
   it('unrecognizedMessage → null (consumed by the timeline render slice, not the session store)', () => {
     expect(
       translateDaemonEvent({

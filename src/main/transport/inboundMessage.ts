@@ -35,6 +35,7 @@ import type {
   StallPayload,
   ApiRetryPayload,
   CompactingPayload,
+  BackgroundTaskStartedPayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
@@ -123,6 +124,18 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * nothing may consult truthiness). NOT onset-only and NOT deduped: N frames narrow to N values. Ships
  * dormant — the render slice (#496) is the first consumer.
  *
+ * The `background-task-started` kind (#564) carries the decoded BackgroundTaskStartedPayload — the daemon's
+ * announcement that claude started work OUTLIVING the turn that spawned it (pyrycode#1240), fanned out to
+ * interactive clients. Unlike its `stall` / `api-retry` / `compacting` neighbours it is not a claude
+ * sub-state at all: it carries no `turn_id`, opens and closes no turn, and is daemon STATE keyed by id —
+ * so the consumer carries ALL SIX fields onward, `conversation_id` INCLUDED (the queue-state rule, #720;
+ * the task store #567 attributes by id). The fail-closed defence is five required strings plus one
+ * REQUIRED-PRESENT NULLABLE ARRAY (`truncated_fields`: a literal `null` is the value "nothing was cut", a
+ * missing key is an absence and fails closed). `task_type` and the `truncated_fields` elements are
+ * deliberately NOT narrowed to closed sets — both are open on the wire. `description` is, for
+ * `task_type: local_bash`, the literal command line claude ran: untrusted display text, decoded and never
+ * interpreted, never logged. Ships dormant — the task store (#567) is the first consumer.
+ *
  * The `unrecognized-message` kind carries the decoded UnrecognizedMessagePayload — the daemon's report
  * that its stream parser met claude output it has no mapping for. NOT a claude sub-state like its
  * `stall` / `api-retry` / `compacting` neighbours: it reports a gap in the daemon's own mapping. The
@@ -207,6 +220,7 @@ export type InboundDaemonMessage =
   | { kind: 'stall'; stall: StallPayload }
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }
   | { kind: 'compacting'; compacting: CompactingPayload }
+  | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
   | {
@@ -281,6 +295,42 @@ function requireStringOrNull(payload: Record<string, unknown>, field: string): s
     throw new WireDecodeError(`missing required field: ${field}`)
   }
   return value
+}
+
+/** Narrow one required, nullable string-ARRAY field off the payload — a `string[]` OR a literal `null`
+ *  — or fail closed with a category-only message. requireStringOrNull's semantic widened from a scalar
+ *  to a list, for the background-task family's `truncated_fields` (#564, and #565 / #566 which carry the
+ *  identical contract). The Go field is `[]string` with NO `omitempty`, so the daemon always writes the
+ *  key and emits a literal `null` when nothing was cut: `null` is a VALID VALUE ("nothing was cut",
+ *  distinct from the empty list), while an OMITTED key is `undefined` — neither `null` nor an array — and
+ *  therefore fails closed, which is what separates this from an optional-field parse.
+ *
+ *  The element check is a bare `typeof === 'string'`, NOT a record narrower: every other array narrowing
+ *  in this file (parseQueueStatePayload, parseMessageChunkPayload, the modal options) maps through a
+ *  parseX because its elements are records, and these are bare strings. From parseQueuedItem it takes
+ *  only the POSTURE — one bad element throws the whole payload closed, an empty array is valid, the
+ *  result is a FRESH array (so array-borne extra properties cannot ride along). Deliberately NO closed-set
+ *  validation of the names: `truncated_fields` names this frame's own wire fields today, and a
+ *  client-side allowlist would fail-close a valid future frame (the parseQueuedItem no-cross-validate
+ *  posture). The message names the field only — an element could echo a wire field name, and the values
+ *  it describes are untrusted. */
+function requireStringArrayOrNull(
+  payload: Record<string, unknown>,
+  field: string
+): string[] | null {
+  const value = payload[field]
+  if (value === null) {
+    return null
+  }
+  if (!Array.isArray(value)) {
+    throw new WireDecodeError(`missing required field: ${field}`)
+  }
+  return value.map((element) => {
+    if (typeof element !== 'string') {
+      throw new WireDecodeError(`missing required field: ${field}`)
+    }
+    return element
+  })
 }
 
 /**
@@ -518,6 +568,38 @@ function parseCompactingPayload(payload: unknown): CompactingPayload {
   const conversation_id = requireString(payload, 'conversation_id')
   const active = requireBoolean(payload, 'active')
   return { conversation_id, active }
+}
+
+/**
+ * Narrow an opaque payload into a BackgroundTaskStartedPayload (#564). Fail-closed like its neighbours,
+ * over six fields: five required strings plus `truncated_fields` through requireStringArrayOrNull — the
+ * required-present-but-nullable list whose literal `null` means "nothing was cut" and whose OMITTED key
+ * fails closed (the Go field has no `omitempty`, so the key is always on the wire).
+ *
+ * Deliberately NO closed-set narrowing of `task_type` or the `truncated_fields` element names: both are
+ * open on the wire (`local_bash` is one observation, and one observation does not earn an enum), so a
+ * client-invented set would fail-close a valid future frame — the drift risk CLAUDE.md / ADR 0002 rank
+ * above cosmetic robustness, and the same no-cross-validate posture parseQueuedItem documents. No
+ * per-field length check either: every string is bounded by the daemon at construction and the
+ * frame-level MAX_PLAINTEXT_BYTES guard in parseInboundMessage covers the oversized case.
+ *
+ * Any missing / mistyped field throws WireDecodeError (never a partial value). Returns a fresh six-field
+ * literal, so unknown server-added keys (e.g. a spurious `turn_id`, which this frame must never have) are
+ * tolerated (forward-compat) but NOT copied through — which also makes it prototype-pollution-safe. Its
+ * messages name the failure CATEGORY only, never interpolating a value: `description` is a shell command
+ * line for `task_type: local_bash`, and the three ids are correlating identifiers.
+ */
+function parseBackgroundTaskStartedPayload(payload: unknown): BackgroundTaskStartedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed background_task_started payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const task_id = requireString(payload, 'task_id')
+  const tool_call_id = requireString(payload, 'tool_call_id')
+  const description = requireString(payload, 'description')
+  const task_type = requireString(payload, 'task_type')
+  const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
+  return { conversation_id, task_id, tool_call_id, description, task_type, truncated_fields }
 }
 
 /**
@@ -1087,6 +1169,22 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'compacting', compacting }
+    }
+    case 'background_task_started': {
+      // Narrow BEFORE logging so a malformed frame (an omitted `truncated_fields` key, a non-string
+      // element in it, an absent id) throws first and leaves no record. NOTHING decoded is logged —
+      // not `task_type`, which looks harmless, and least of all `description`, which for
+      // `task_type: local_bash` is the literal command line claude ran. Only the frame's byte length +
+      // one-way hash, reusing the existing content-free field set (no new DiagnosticEvent field, so
+      // #131's renderer pin is untouched).
+      const backgroundTaskStarted = parseBackgroundTaskStartedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'background_task_started',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'background-task-started', backgroundTaskStarted }
     }
     case 'unrecognized_message': {
       // Narrow BEFORE logging so a malformed frame (an unknown `site`, an absent `raw`, a non-boolean

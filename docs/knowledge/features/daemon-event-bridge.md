@@ -132,6 +132,16 @@ bridges; this bridge's `null`-returning case discards a real (if minimal) payloa
 a case in all three exhaustive `assertNever`-guarded switches at once. The render slice #496 is the first
 consumer.
 
+[#564](../codebase/564.md) added a further no-store-action member, `backgroundTaskStarted` — the first of
+three sibling frames (#565/#566 follow) reporting claude work that outlives the turn that spawned it
+(pyrycode#1240). Unlike `apiRetry`/`compacting`, it **keeps** `conversationId` rather than dropping it —
+the frame carries no `turn_id` and opens/closes no turn, so it is daemon state (the `queueState` #292/#720
+rule), not a turn-stream item. Carries five strings plus a nullable string array (`toolCallId`,
+`description`, `taskType`, `truncatedFields`), the widest payload since `modalShown`. Consumed by **none**
+of the three existing bridges; this bridge's `null`-returning case discards a real, non-trivial payload — a
+further arm to force a case in all three exhaustive `assertNever`-guarded switches at once. The real
+consumer is the still-unbuilt background-task store #567.
+
 ## What it does
 
 Turns each `DaemonEvent` arriving from the background process into the matching `SessionAction` (or `null`, for events the session store doesn't model) and dispatches non-null results into the one store the UI reads. Two exported symbols:
@@ -173,6 +183,7 @@ A `switch (event.type)` over all twenty-four `DaemonEvent` arms with a `default:
 | `sessionSettingsUpdated` | `null` | consumed by none of the three existing bridges; the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md) (shipped) — present only for exhaustiveness (#264, correlation widened by #261) |
 | `sessionSettingsRejected` | `null` | consumed by none of the three existing bridges; the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md) (shipped) — present only for exhaustiveness (#269) |
 | `relayLinkChanged` | `null` | consumed by none of the three existing bridges; the real consumer is the [relay-link store](relay-link-store.md)'s own bridge (#329, shipped) — present only for exhaustiveness (#328) |
+| `backgroundTaskStarted` | `null` | consumed by none of the three existing bridges; the real consumer is the still-unbuilt background-task store #567 — present only for exhaustiveness (#564). Ships dormant; first of three sibling frame arms (#565/#566 follow) |
 
 `DaemonEvent` was deliberately shaped in #18 with the same member and field names as `SessionAction`, so the six session-lifecycle arms are pass-through. The **only** non-identity session arm is `failed`: `DaemonEvent.failed` carries the wire `ErrorPayload`, `SessionAction.failed` the store-owned `ConnectionError`. They are structurally identical (`{ code, message, retryable }`) but nominally distinct per layer, so the translation copies the three fields into a fresh object rather than spreading — keeping the store shape immune to `ErrorPayload` gaining an unrelated field later. See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) for why `ConnectionError` is a store-owned model distinct from the wire type. The three debug-bundle arms ([#168](../codebase/168.md)) are grouped fall-through cases returning `null` — see § Tolerating events with no store action.
 
@@ -269,5 +280,6 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Session settings send](session-settings-send.md) / [#269 codebase notes](../codebase/269.md) — the `sessionSettingsRejected` member this bridge tolerates as a seventeenth `null`-returning case, the rejected twin of `sessionSettingsUpdated`; consumed by none of the three existing bridges, the real consumer is [#256](../codebase/256.md)'s [write store](run-settings-write-store.md), shipped
 - [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md) — the fourth independent App-level subscriber on this channel (alongside this bridge, the timeline bridge, and the modal bridge), consuming `sessionSettingsUpdated`/`sessionSettingsRejected` into the pending-write state machine; does not modify this bridge
 - [Relay-link store](relay-link-store.md) / [#328 codebase notes](../codebase/328.md) / [#329 codebase notes](../codebase/329.md) — the `relayLinkChanged` member this bridge tolerates as a twentieth `null`-returning case (#328, content-free relay-socket-leg category); its real consumer is a fifth independent App-level subscriber, the relay-link store's own `RelayLinkData` bridge (#329, shipped) — the sixth arm to force a case in all three exhaustive bridges at once
+- [#564 codebase notes](../codebase/564.md) — the `backgroundTaskStarted` member this bridge tolerates as a further `null`-returning case; unlike `apiRetry`/`compacting`, it **keeps** `conversationId` (the `queueState` #720 daemon-state rule — the frame carries no `turn_id` and opens/closes no turn); first of three sibling frame arms (#565/#566 follow); the still-unbuilt background-task store #567 is the real consumer
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [#19 codebase notes](../codebase/19.md) · Spec: `docs/specs/architecture/19-translate-daemon-events-to-session-actions.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

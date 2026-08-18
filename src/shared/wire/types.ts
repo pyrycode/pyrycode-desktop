@@ -70,6 +70,11 @@ export type EnvelopeType =
   | 'tool_use'
   | 'tool_result'
   | 'queue_state'
+  // The first of the three `interactive`-gated background-task frames (#564; #565's
+  // `background_task_updated` and #566's `background_task_roster` join it here). Announces work claude
+  // left running past the turn that spawned it — the frame that separates a genuine finish from a
+  // `turn_end` whose command is still alive. SSOT pyrycode#1394 / internal/protocol/interactive.go.
+  | 'background_task_started'
   | 'dequeue_message'
   // v2-only bare phone→binary control frame — maps to a single claude Esc (stops the current
   // turn). Carries NO conversation_id / nonce / answer_token / payload; daemon-gated on the
@@ -370,6 +375,53 @@ export interface ApiRetryPayload {
 export interface CompactingPayload {
   conversation_id: string
   active: boolean
+}
+
+/**
+ * Inbound `background_task_started` event (daemon → client). Mirrors the daemon's
+ * BackgroundTaskStartedPayload field-for-field (SSOT pyrycode#1394, internal/protocol/interactive.go:177,
+ * docs/protocol-mobile.md § background_task_started), wire order `conversation_id, task_id, tool_call_id,
+ * description, task_type, truncated_fields` — all always present (no `omitempty`). Fanned out ONLY to
+ * `interactive`-capable clients: claude started a command that OUTLIVES THE TURN THAT SPAWNED IT
+ * (pyrycode#1240). This frame is what separates that case from a genuine finish — without it a `turn_end`
+ * carrying `end_turn` while the command is provably still running is indistinguishable from a real one.
+ *
+ * NOT A TURN-STREAM ITEM. It carries NO `turn_id` and opens, closes, and alters no turn: a background
+ * task's lifecycle is orthogonal to its turn's, which is the whole #1240 point. The daemon doc is
+ * explicit that a client renders it "as its own thread of activity, not as part of the turn it appeared
+ * in" — the same characterization `queue_state` got in #720, and the reason the emitted event KEEPS
+ * `conversation_id` (daemon state keyed by id) rather than dropping it like `api_retry` / `turn_state`.
+ *
+ * `tool_call_id` IS THE WIRE NAME, not `tool_use_id` — the daemon's own prose reads "claude's
+ * `tool_use_id`, under the name `tool_use` and `tool_result` already use for it", which invites the
+ * misreading, and ToolUsePayload / ToolResultPayload above spell it `tool_use_id`, so the wrong name
+ * looks locally consistent. The Go tag is `json:"tool_call_id"` and `truncated_fields` reports it under
+ * that name. The VALUE is the same identifier `tool_use` / `tool_result` carry, which is what lets the
+ * task store (#567) join all three background-task frames with no vocabulary lookup.
+ *
+ * `task_type` is an OPEN STRING (`local_bash` is the only observed value), and `truncated_fields` an
+ * OPEN LIST of this frame's own wire field names. Neither may be narrowed to a client-side union: one
+ * observation does not earn an enum, and a closed set would fail-close a valid future frame — the drift
+ * risk CLAUDE.md / ADR 0002 rank above cosmetic robustness.
+ *
+ * `truncated_fields` names the fields the daemon cut to fit their caps; `null` means NOTHING WAS CUT and
+ * is a distinct value from `[]`, never to be collapsed into it. It is load-bearing, not decoration — a
+ * client that ignores it presents claude's cut text as complete. Every string is bounded by the daemon at
+ * construction, so an oversized value never reaches this wire.
+ *
+ * SECURITY: `description` is the task's label, and for `task_type: local_bash` it is the LITERAL COMMAND
+ * LINE claude ran. The daemon bounds it but does not sanitize it — it stays untrusted, model-influenced
+ * text all the way here. Safe to render as INERT PLAIN TEXT only: never execute it, never re-shell it,
+ * and never feed it to an HTML sink (`innerHTML` / `dangerouslySetInnerHTML`), an attribute, or a URL.
+ * See #564 (this decode), #567 (the task store) and #568 (the panel).
+ */
+export interface BackgroundTaskStartedPayload {
+  conversation_id: string
+  task_id: string
+  tool_call_id: string
+  description: string
+  task_type: string
+  truncated_fields: string[] | null
 }
 
 /**

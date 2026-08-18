@@ -170,6 +170,40 @@ export type DaemonEvent =
   // frame (including a verbatim repeat), and #496 is idempotent on the repeat. Ships dormant: all three
   // exhaustive bridges no-op it until #496 — the apiRetry-was-a-no-op-until-#493 precedent.
   | { type: 'compacting'; active: boolean }
+  // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
+  // (pyrycode#1240), the frame that separates that case from a genuine finish.
+  //
+  // Carries `conversationId` — unlike turnState / toolUse / apiRetry / compacting, which drop it. The
+  // test is "turn-stream item, or daemon state?", not "does the frame have the field": this one carries
+  // NO turn_id, opens and closes no turn, and the daemon doc says a client renders it "as its own thread
+  // of activity, not as part of the turn it appeared in" — the same characterization queue_state got in
+  // #720, and queueState keeps it for the same reason (replacement-truth state a store keys by id). The
+  // task store (#567) attributes by id, so dropping it here would make that slice unbuildable.
+  //
+  // `toolCallId` is the wire `tool_call_id` (NOT `tool_use_id`, despite toolUse / toolResult spelling it
+  // that way); the VALUE is the same identifier those two carry, which is what lets #567 join all three
+  // background-task frames with no lookup. `taskType` is an OPEN string — `local_bash` is the only
+  // observed value and one observation does not earn an enum. `truncatedFields: null` means NOTHING WAS
+  // CUT and must not be collapsed into `[]`; it is load-bearing, since a reader that ignores it presents
+  // claude's cut text as complete.
+  //
+  // SECURITY: `description` and `taskType` are UNTRUSTED, model-influenced daemon-relayed text, and for
+  // `taskType: local_bash` the `description` IS the literal command line claude ran. The panel slice
+  // (#568) must render both as PLAIN TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), never
+  // into an attribute or a URL, and must never execute or re-shell it — mirroring the identical warning
+  // on queueState / conversationCreated / unrecognizedMessage, sharpened by the command-line hazard. This
+  // slice has no DOM sink; the constraint is inherited here. No token, key, or raw frame can ride the arm
+  // (five bounded opaque strings and a list of wire field names is the whole payload). Ships dormant: all
+  // three exhaustive bridges no-op it until #567 — the apiRetry-was-a-no-op-until-#493 precedent.
+  | {
+      type: 'backgroundTaskStarted'
+      conversationId: string
+      taskId: string
+      toolCallId: string
+      description: string
+      taskType: string
+      truncatedFields: readonly string[] | null
+    }
   // The unrecognized-message arm — the daemon's stream parser met claude output it has no mapping for.
   // Unlike its three status-peer neighbours above, this one is NOT a claude sub-state: it reports a gap
   // in the DAEMON's own mapping, and it is the reason the drop is visible at all (the daemon's own debug

@@ -21,9 +21,12 @@ import { join } from 'node:path'
 // minimum smoke needs (no fake relay/daemon, no pairing env flags), the per-run `--user-data-dir`
 // is the whole fix: it overrides app.getPath('userData') so the launch reads an empty secrets store
 // and boots genuinely unpaired, regardless of any ambient shared-userData pairing (macOS
-// ~/Library/Application Support/pyrycode-desktop/secrets/). The use() epilogue fires on pass AND
-// fail through Playwright's fixture lifecycle, so no Electron process is orphaned and no temp dir
-// leaks.
+// ~/Library/Application Support/pyrycode-desktop/secrets/).
+//
+// #517: the nested try/finally reaps the app and THEN the dir on every RAISED exit path — pass, test
+// failure, and a failure raised after the launch but before use() returns (the last of which the old
+// post-use() epilogue could not reach, leaking both for the rest of the `workers: 1` run). Not covered:
+// an await that never settles — Playwright kills the worker without unwinding, so no finally runs.
 const test = base.extend<{ page: Page }>({
   page: async ({}, use) => {
     // Mirror electronApp.ts's hardening: stripping ELECTRON_RENDERER_URL keeps createWindow on the
@@ -33,11 +36,28 @@ const test = base.extend<{ page: Page }>({
     // `--user-data-dir` is the Electron switch that overrides app.getPath('userData'); `.` stays the
     // first non-switch arg (the app path). Isolating it guarantees a genuinely unpaired start.
     const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-smoke-'))
-    const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
-    const page = await app.firstWindow()
-    await use(page)
-    await app.close()
-    await rm(userDataDir, { recursive: true, force: true })
+    try {
+      const app = await electron.launch({ args: ['.', `--user-data-dir=${userDataDir}`], env })
+      try {
+        const page = await app.firstWindow()
+        await use(page)
+      } finally {
+        // Best-effort: a throwing finally would replace the causal error AND abort the unwind before
+        // the outer rm, stranding the dir. Discarded without logging — a close error can carry the
+        // launch argv, which embeds `--user-data-dir=<path>`.
+        try {
+          await app.close()
+        } catch {
+          // best-effort
+        }
+      }
+    } finally {
+      try {
+        await rm(userDataDir, { recursive: true, force: true })
+      } catch {
+        // best-effort
+      }
+    }
   }
 })
 

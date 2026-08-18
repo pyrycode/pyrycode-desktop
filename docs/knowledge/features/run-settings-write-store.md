@@ -113,8 +113,9 @@ Composes the displayed value per field, precedence high to low:
 
 `??` falls through only on `undefined`, so an empty-string / `false` value at any layer is held verbatim
 — never coerced (the `runConfigStore` no-coercion posture). `selectError(s)` and
-`selectPendingFields(s): {model; effort; yolo}` (booleans) round out the read surface for #257's in-flight
-UI state.
+`selectPendingFields(s): {model; effort; yolo}` (booleans) round out the read surface for the sheet's
+in-flight UI state — `selectPendingFields` shipped with #256 but had no production consumer until
+[#558](../codebase/558.md) rendered it as `aria-busy` on the owning control.
 
 ### The data path (`src/renderer/src/store/runSettingsWriteBridge.ts`)
 
@@ -187,9 +188,6 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
 
 ## Edge cases and limitations
 
-- **`selectPendingFields` is unread.** #257 wired `selectEffectiveSettings` and `selectError` but did
-  not build a per-field in-flight indicator — the ticket flagged it as available but not required by the
-  AC. Still exported for a future consumer.
 - **A change stranded by a reconnect no longer strands forever** ([#539](../codebase/539.md)) — the
   `reconnected` arm clears `pending` on every `connected` (re)handshake, so a dropped send or daemon
   silence across a reconnect resolves at the next connect rather than shadowing a later confirmed change
@@ -228,6 +226,9 @@ RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWrit
   App-level subscriber sits beside without modifying.
 - [Conversation shell](conversation-shell.md) — the Run configuration sheet #257 wired this store's
   selectors and `submitSettingsChange` into.
+- [#558 codebase notes](../codebase/558.md) — `selectPendingFields`'s first production consumer: renders
+  each field's in-flight flag as `aria-busy` on the control it targets, so an unconfirmed change stops
+  rendering identically to a settled one.
 - [#257 codebase notes](../codebase/257.md) — the interactive controls consuming this store: the
   container reads raw write state + composes `selectEffectiveSettings`/`selectError` in the render body,
   and `runSettingsControls.ts`'s `changeSetting` gates `submitSettingsChange` on a known session id.

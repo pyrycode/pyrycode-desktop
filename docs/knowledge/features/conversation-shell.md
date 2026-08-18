@@ -650,6 +650,12 @@ One more M3 token landed: `--color-surface-container-highest` (the switch's off-
 [#192](../codebase/192.md)'s context-window track below). See [#188 codebase notes](../codebase/188.md)
 for the full design and patterns established.
 
+An unconfirmed in-flight change to any of the three ([#558](../codebase/558.md)) no longer renders
+identically to a settled one: the owning wrapper (the model list, the effort row, or the switch itself)
+carries `aria-busy="true"` plus a dashed `--color-warning` ring/border, sourced from
+[#256](../codebase/256.md)'s `selectPendingFields`, clearing through the same reject/confirm/reconnect
+paths [Run configuration write store](run-settings-write-store.md) already converges on.
+
 ### Run configuration Context window section (#192)
 
 ```

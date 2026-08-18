@@ -36,6 +36,7 @@ import type {
   ApiRetryPayload,
   CompactingPayload,
   BackgroundTaskStartedPayload,
+  BackgroundTaskUpdatedPayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
@@ -136,6 +137,19 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * `task_type: local_bash`, the literal command line claude ran: untrusted display text, decoded and never
  * interpreted, never logged. Ships dormant — the task store (#567) is the first consumer.
  *
+ * The `background-task-updated` kind (#565) carries the decoded BackgroundTaskUpdatedPayload — the PEER of
+ * the kind above, joined on `task_id`: that frame opens a task, this one reports what CHANGED about it
+ * afterwards. FOUR fields, not six (no `tool_call_id` / `description` / `task_type`; it gains `patch`).
+ * Same non-turn character, so the consumer likewise carries ALL FOUR fields onward, `conversation_id`
+ * INCLUDED. The fail-closed defence is three required strings plus the same REQUIRED-PRESENT NULLABLE
+ * ARRAY, and neither the `truncated_fields` elements (`task_id` / `patch` here — a DIFFERENT pair from the
+ * sibling's, which is why the vocabulary is never narrowed) nor `patch` itself is validated further:
+ * `patch` is claude's patch object carried WHOLE AND UNPARSED as a string, which the daemon truncates at
+ * construction, so it PROVABLY MAY NOT PARSE and is never fed to a JSON parser here. An EMPTY `patch` is a
+ * value ("claude sent no change"), an omitted key an absence that fails closed. Untrusted display text
+ * whose keys may carry command text: decoded, never interpreted, never logged. Ships dormant — the task
+ * store (#567) is the first consumer.
+ *
  * The `unrecognized-message` kind carries the decoded UnrecognizedMessagePayload — the daemon's report
  * that its stream parser met claude output it has no mapping for. NOT a claude sub-state like its
  * `stall` / `api-retry` / `compacting` neighbours: it reports a gap in the daemon's own mapping. The
@@ -221,6 +235,7 @@ export type InboundDaemonMessage =
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }
   | { kind: 'compacting'; compacting: CompactingPayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
+  | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
   | { kind: 'unrecognized-message'; unrecognized: UnrecognizedMessagePayload }
   | { kind: 'session-transition'; sessionTransition: SessionTransitionPayload }
   | {
@@ -600,6 +615,53 @@ function parseBackgroundTaskStartedPayload(payload: unknown): BackgroundTaskStar
   const task_type = requireString(payload, 'task_type')
   const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
   return { conversation_id, task_id, tool_call_id, description, task_type, truncated_fields }
+}
+
+/**
+ * Narrow an opaque payload into a BackgroundTaskUpdatedPayload (#565). The subset twin of the narrower
+ * above — FOUR fields, not six: three required strings plus `truncated_fields` through the same
+ * requireStringArrayOrNull (whose docstring names this ticket; there is deliberately no second narrower
+ * and no variant of it). There is no `tool_call_id`, no `description` and no `task_type` here.
+ *
+ * TWO PROPERTIES FALL OUT OF THE SHAPE rather than needing their own checks, and both are invisible in
+ * the code below, which is why each has its own test:
+ *
+ *   - AN EMPTY `patch` IS VALID. requireString checks `typeof value !== 'string'`, so `''` passes free
+ *     (the type-not-truthiness posture requireBoolean documents for `false`). The daemon documents the
+ *     field as "empty when claude sent none", so `''` is a real wire value carried as `''`, never a
+ *     missing field. A later "hardening" to a `.length` or truthiness check would silently break a
+ *     valid frame.
+ *   - AN OMITTED `patch` KEY FAILS CLOSED. The Go field has no `omitempty`, so the key is always on the
+ *     wire; `undefined` is an absence and requireString throws on it. Same for `truncated_fields`.
+ *
+ * `patch` IS NEVER PARSED HERE — not by JSON.parse, not by a key lookup, not by a shape check. The daemon
+ * truncates it at construction (`maxTaskPatch`), so a truncated object is no longer valid JSON and its
+ * own golden fixture is cut mid-token: parsing would turn a VALID frame into a dropped one. It is an
+ * opaque display blob whose validity is never assessed. Likewise NO closed-set narrowing of the
+ * `truncated_fields` element names: they name this frame's own wire fields today (`task_id` / `patch` —
+ * a different pair from the sibling's), and a client-side allowlist would fail-close a valid future
+ * frame (the parseQueuedItem no-cross-validate posture). And NO reconciliation between the two: the
+ * daemon scrubs invalid UTF-8 out of `patch` by deletion while `truncated_fields` reports the cap cut
+ * only, so a mismatch is expected upstream behaviour, not a defect to detect. No per-field length check
+ * either — every string is bounded by the daemon at construction and the frame-level MAX_PLAINTEXT_BYTES
+ * guard in parseInboundMessage covers the oversized case.
+ *
+ * Any missing / mistyped field throws WireDecodeError (never a partial value). Returns a fresh four-field
+ * literal, so unknown server-added keys — pointedly including the sibling's `tool_call_id` /
+ * `description` / `task_type`, which this frame must never have — are tolerated (forward-compat) but NOT
+ * copied through, which also makes it prototype-pollution-safe. Its messages name the failure CATEGORY
+ * only, never interpolating a value: a `patch` key may carry command text, and the two ids are
+ * correlating identifiers.
+ */
+function parseBackgroundTaskUpdatedPayload(payload: unknown): BackgroundTaskUpdatedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed background_task_updated payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const task_id = requireString(payload, 'task_id')
+  const patch = requireString(payload, 'patch')
+  const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
+  return { conversation_id, task_id, patch, truncated_fields }
 }
 
 /**
@@ -1185,6 +1247,21 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'background-task-started', backgroundTaskStarted }
+    }
+    case 'background_task_updated': {
+      // Narrow BEFORE logging so a malformed frame (an omitted `patch` or `truncated_fields` key, a
+      // non-string element in the latter, an absent id) throws first and leaves no record. NOTHING
+      // decoded is logged — least of all `patch`, whose keys may carry command text exactly as the
+      // sibling's `description` does. Only the frame's byte length + one-way hash, reusing the existing
+      // content-free field set (no new DiagnosticEvent field, so #131's renderer pin is untouched).
+      const backgroundTaskUpdated = parseBackgroundTaskUpdatedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'background_task_updated',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'background-task-updated', backgroundTaskUpdated }
     }
     case 'unrecognized_message': {
       // Narrow BEFORE logging so a malformed frame (an unknown `site`, an absent `raw`, a non-boolean

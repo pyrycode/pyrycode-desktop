@@ -303,6 +303,16 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
         taskType: 'local_bash',
         truncatedFields: ['description']
+      },
+      // background-task update ships dormant (#565); its consumer is the #567 background-task store,
+      // not the timeline store. Daemon STATE, not a turn-stream item — the wire says so outright: no
+      // turn_id, opens and closes no turn.
+      {
+        type: 'backgroundTaskUpdated',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        patch: '{"is_backgrounded":tr',
+        truncatedFields: ['patch']
       }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
@@ -553,6 +563,25 @@ describe('subscribeTimeline', () => {
 
     // Both halves: the bridge filtered it out so no dispatch reached the reducer (same state ref), AND
     // no chat row exists. The length assertion alone would be vacuous against an already-empty store.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#565: a backgroundTaskUpdated daemon event creates NO timeline item (ships dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'backgroundTaskUpdated',
+      conversationId: 'conv-1',
+      taskId: 'task_01ABC',
+      patch: '{"is_backgrounded":tr',
+      truncatedFields: ['patch']
+    })
+
+    // Both halves, as above: same state ref (nothing dispatched) AND no chat row.
     expect(store.getState()).toBe(before)
     expect(selectItems(store.getState())).toHaveLength(0)
   })

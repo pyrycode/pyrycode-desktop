@@ -204,6 +204,41 @@ export type DaemonEvent =
       taskType: string
       truncatedFields: readonly string[] | null
     }
+  // The background-task update arm (#565) — the PEER of the arm above, joined on `taskId`: that frame
+  // opens a task, this one reports what CHANGED about it afterwards. FOUR fields, not six: no
+  // `toolCallId`, no `description`, no `taskType`, and it gains `patch`.
+  //
+  // Carries `conversationId` for the sibling's reason, which is settled in-family rather than argued
+  // fresh: the test is "turn-stream item, or daemon state?", and this frame carries NO turn_id and opens
+  // and closes no turn, so it follows the queue_state rule (#720). The task store (#567) attributes by
+  // id, so dropping it here would make that slice unbuildable.
+  //
+  // `patch` IS AN OPAQUE DISPLAY BLOB THAT IS NOT GUARANTEED TO PARSE. The daemon truncates it at
+  // construction, so a truncated object is no longer valid JSON — its own golden fixture is cut
+  // mid-token. A consumer that wants its keys must parse BEHIND AN ERROR BRANCH that falls back to inert
+  // text, and must never enumerate a closed key set (the daemon enumerates none, because a mapping that
+  // listed the keys it knew would silently discard every key claude ships next). `patch: ''` means claude
+  // sent no change — a VALUE, not an absence. `truncatedFields: null` means NOTHING WAS CUT and must not
+  // be collapsed into `[]`; it reports the CAP CUT ONLY, so `patch` may differ from claude's bytes
+  // without appearing there (the daemon also scrubs invalid UTF-8 by deletion) — record it, never
+  // cross-check it.
+  //
+  // SECURITY: `patch` is UNTRUSTED, model-influenced daemon-relayed text whose keys may carry command
+  // text exactly as the sibling's `description` does. The panel slice (#568) must render it as PLAIN
+  // TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute or a URL, and
+  // must never execute or re-shell it — the daemon doc states this rule in THIS frame's section rather
+  // than delegating it to the sibling, because a patch's structured shape makes it the more tempting
+  // thing to feed somewhere that runs it. This slice has no DOM sink and runs no JSON.parse; the
+  // constraint is inherited here. No token, key, or raw frame can ride the arm (three bounded opaque
+  // strings and a list of wire field names is the whole payload). Ships dormant: all three exhaustive
+  // bridges no-op it until #567 — the apiRetry-was-a-no-op-until-#493 precedent.
+  | {
+      type: 'backgroundTaskUpdated'
+      conversationId: string
+      taskId: string
+      patch: string
+      truncatedFields: readonly string[] | null
+    }
   // The unrecognized-message arm — the daemon's stream parser met claude output it has no mapping for.
   // Unlike its three status-peer neighbours above, this one is NOT a claude sub-state: it reports a gap
   // in the DAEMON's own mapping, and it is the reason the drop is visible at all (the daemon's own debug

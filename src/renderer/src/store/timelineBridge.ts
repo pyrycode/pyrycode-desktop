@@ -156,6 +156,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'relayLinkChanged':
     case 'notificationActivated':
     case 'backgroundTaskStarted':
+    case 'backgroundTaskUpdated':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -183,6 +184,9 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // belongs in this null group for the queueState reason, and here the wire says so outright: no
       // turn_id, opens and closes no turn, "its own thread of activity, not part of the turn it appeared
       // in". Whether the background-task panel ever becomes a timeline surface is #568's call.
+      // backgroundTaskUpdated (#565) joins it verbatim: same dormant #567 consumer, and the same wire
+      // facts — no turn_id, opens and closes no turn — so a change to a task claude left running is no
+      // more a turn-stream item than its opening was.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

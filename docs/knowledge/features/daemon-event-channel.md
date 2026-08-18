@@ -300,6 +300,23 @@ export type DaemonEvent =
   `taskType: 'local_bash'`, `description` is the literal command line claude ran) — the render slice
   (#568) must treat both as plain text, never HTML, an attribute, or a URL sink. Ships dormant; first of
   three sibling frame members (#565 `background_task_updated`, #566 `background_task_roster` follow).
+- **`backgroundTaskUpdated{conversationId,taskId,patch,truncatedFields}`** ([#565](../codebase/565.md))
+  is the peer of `backgroundTaskStarted`, joined on `taskId`: that frame opens a task, this one reports
+  what **changed** about it afterwards. **Four fields, not six** — no `toolCallId`, no `description`, no
+  `taskType`; it gains `patch`, claude's patch object carried whole and unparsed as an opaque string
+  (one key observed so far, `is_backgrounded`). Also **keeps** `conversationId`, the same in-family
+  precedent `backgroundTaskStarted` established (no `turn_id`, opens/closes no turn, the `queueState`
+  #720 rule). `patch` is an **opaque display blob that is not guaranteed to parse** — the daemon
+  truncates it at construction (its own golden fixture is cut mid-token), so nothing on this path runs
+  `JSON.parse`; a consumer that wants its keys must parse behind an error branch falling back to inert
+  text, and must never enumerate a closed key set. `patch: ''` is a value ("claude sent no change"), not
+  an absence; `truncatedFields: null` means "nothing was cut" and reports the cap cut **only** — `patch`
+  may differ from claude's bytes without appearing there (the daemon separately scrubs invalid UTF-8 by
+  deletion). SECURITY: `patch`'s keys may carry command text exactly as `description` does — render as
+  plain text, never HTML/attribute/URL, never executed or re-shelled; this slice has no DOM sink, so the
+  constraint is carried forward to #567/#568. Consumed as a no-op by all three exhaustive bridges at ship
+  time; real consumer is the still-unbuilt background-task store #567. Second of three sibling frame
+  members (#566 `background_task_roster` follows).
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -418,6 +435,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Run configuration write store](run-settings-write-store.md) / [#256 codebase notes](../codebase/256.md) — the pending→confirm/reject store consuming both `sessionSettingsUpdated` and `sessionSettingsRejected`; a fourth, independent App-level subscriber on this channel, alongside the three exhaustive bridges above
 - [#396 codebase notes](../codebase/396.md) — the `workspaceFolderRejected` member, the rejected twin of `workspaceFolderCreated` (#381); emitted by [daemon connection](daemon-connection.md)'s `pendingCreateFolders`-lookup precedence gate (the `pendingSettings`/`sessionSettingsRejected` pattern applied to a `Set`, since the event is bare); consumed by none of the three existing bridges, real consumer is the [create-folder round-trip store](new-folder-store.md) ([#397](../codebase/397.md))
 - [#564 codebase notes](../codebase/564.md) — the `backgroundTaskStarted` member, `apiRetry`/`compacting`'s peer on the v2 stream but widened to five strings plus a nullable string array; first of three sibling frame members (#565/#566 follow), and — like `queueState` — **keeps** `conversationId` because the frame is daemon state (no `turn_id`, opens/closes no turn) rather than a turn-stream item. Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
+- [#565 codebase notes](../codebase/565.md) — the `backgroundTaskUpdated` member, `backgroundTaskStarted`'s peer joined on `taskId` but narrowed to four fields (no `toolCallId`/`description`/`taskType`) plus the new opaque `patch` string, which is never typed as JSON and never parsed on this path — the daemon's own golden fixture is cut mid-token. Also **keeps** `conversationId`, the same in-family precedent as its sibling. Second of three sibling frame members (#566 follows). Ships dormant, consumed by none of the three exhaustive bridges; real consumer is the still-unbuilt background-task store #567
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

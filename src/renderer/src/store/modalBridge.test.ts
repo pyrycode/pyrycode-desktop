@@ -184,6 +184,16 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         description: "grep -rn 'a<b&c' . > /tmp/out.txt &",
         taskType: 'local_bash',
         truncatedFields: ['description']
+      },
+      // background-task update ships dormant (#565); its consumer is the #567 background-task store,
+      // not the modal store — a change to a task claude left running is not a modal either, since
+      // nothing is waiting on an answer.
+      {
+        type: 'backgroundTaskUpdated',
+        conversationId: 'conv-1',
+        taskId: 'task_01ABC',
+        patch: '{"is_backgrounded":tr',
+        truncatedFields: ['patch']
       }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()

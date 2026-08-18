@@ -708,6 +708,35 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               truncatedFields: inbound.backgroundTaskStarted.truncated_fields
             })
             return
+          case 'background-task-updated':
+            // The background-task change data path (#565) — the subset twin of the arm above. A fresh
+            // literal carrying all FOUR fields (no toolCallId / description / taskType on this frame),
+            // copied BY NAME from the already-decoded, already-validated payload — never a spread of
+            // inbound.backgroundTaskUpdated, so a decoder that later grows a field cannot smuggle it
+            // across IPC. snake→camel throughout; `truncatedFields` passes the narrowed array by
+            // reference and its `null` is preserved, never coerced to []. `patch` crosses byte-for-byte:
+            // it is an opaque blob the daemon may have truncated mid-token, so nothing here parses,
+            // normalizes, or re-serializes it.
+            //
+            // `conversation_id` is KEPT for the sibling's reason — daemon STATE keyed by id (the
+            // queue-state rule, #720), not a turn-stream item; #567 attributes tasks by id.
+            //
+            // Deliberately stateless, and the temptation is sharper here than on any neighbouring arm:
+            // this frame is DEFINITIONALLY an update to a prior one, so joining it against the
+            // `background_task_started` set looks natural. It would be wrong — the join would be the
+            // only mutable state in this leg, keyed by an attacker-influenceable task_id and fed by a
+            // hostile daemon's frame stream. Ordering is claude's, not the daemon's, so an update for a
+            // task this client never saw opened is a legal frame that must emit, not buffer. #567 joins
+            // on task_id instead. Not compile-forced (this inner switch has no assertNever) — the
+            // round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'backgroundTaskUpdated',
+              conversationId: inbound.backgroundTaskUpdated.conversation_id,
+              taskId: inbound.backgroundTaskUpdated.task_id,
+              patch: inbound.backgroundTaskUpdated.patch,
+              truncatedFields: inbound.backgroundTaskUpdated.truncated_fields
+            })
+            return
           case 'unrecognized-message':
             // The parser-gap diagnostic data path. Emit a fresh literal carrying the four display
             // fields, copied BY NAME from the already-decoded, already-validated payload — never a

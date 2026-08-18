@@ -1456,6 +1456,30 @@
   outline-offset: 2px;
 }
 
+/* #558 — the in-flight marker. The design draws no pending variant for any of the three controls
+   (confirmed against Figma 20:111/20:130/20:143, which have exactly two states each), so this is an
+   annotation layer over the drawn M3 states using an existing role token — the same posture as the
+   undesigned --color-error rejection line below. --color-warning is already the project's in-progress
+   amber (#330). The dash is a second, non-colour channel; aria-busy carries the marking to assistive
+   technology. Gated entirely on [aria-busy='true'], so nothing-in-flight renders exactly as before.
+   Amber-dashed is categorically distinct from the disabled convention (muted grey + not-allowed), and
+   `outline` sits outside the box model, so the marker causes no layout shift. */
+.run-config__model-list[aria-busy='true'],
+.run-config__effort[aria-busy='true'] {
+  border-radius: var(--radius-xs);
+  outline: 1px dashed var(--color-warning);
+  outline-offset: -1px;
+}
+
+/* The switch already carries a 2px border and a full radius — recolour and dash it rather than ring it,
+   and use `border`, NOT `outline`: the #257 focus ring below owns the switch's outline, which would
+   hide the marker exactly on the control where it matters most. Wins over .run-config__switch--on on
+   specificity, and the border-WIDTH is unchanged, so the track geometry does not move. */
+.run-config__switch[aria-busy='true'] {
+  border-color: var(--color-warning);
+  border-style: dashed;
+}
+
 /* #257 — the AC4 rejection line. Field-scoped, apostrophe-free copy in a leading --color-error accent
    (the only error role token on desktop; no new theme token). body-small, padded to the section gutter. */
 .run-config__error {

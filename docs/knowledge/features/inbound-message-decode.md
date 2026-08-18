@@ -135,6 +135,25 @@ sibling, the consumer emit **keeps** `conversation_id`, and performs **no join**
 seen opened is a legal frame that emits, not something to buffer. Ships dormant; the still-unbuilt
 background-task store #567 is the first consumer.
 
+[#566](../codebase/566.md) added an eighteenth kind, `background_task_roster` → `background-task-roster` —
+the third and last sibling frame, the **aggregate peer** of the two above: they report what happened to
+**one** task, this reports **what is alive**, a snapshot rather than a delta. `BackgroundTaskRosterPayload`
+is `{ conversation_id, tasks, dropped_tasks }` — a required string, a required **plain array** (never
+`BackgroundTask[] | null`), and a required number. `parseBackgroundTaskRosterPayload` takes `tasks` through
+`parseQueueStatePayload`'s inline shape (`Array.isArray` check, then `raw.map(parseBackgroundTask)`), **not**
+`requireStringArrayOrNull` — the trap this ticket exists to get right: within this one frame `tasks: null`
+must fail closed (`Array.isArray(null)` is `false`) while a **row's** `truncated_fields: null` is a valid
+value, because the daemon's only custom `MarshalJSON` normalises a nil `Tasks` to `[]` and deliberately does
+not normalise `truncated_fields` the same way. The new row narrower, `parseBackgroundTask`, clones
+`parseQueuedItem`'s posture (one bad row fails the whole frame, an empty array is valid, a fresh literal
+out) rather than `parseBackgroundTaskStartedPayload`'s shape — the row is **four fields and not the scalar
+siblings' four**: no `tool_call_id`, no `patch`. `dropped_tasks` decodes through plain `requireNumber` — the
+frame's **only** truncation report (the true roster size is `tasks.length + dropped_tasks`); no new helper,
+no cross-check against `tasks.length`. The consumer emit **keeps** `conversation_id`, the same in-family
+precedent both siblings established, and passes the already-narrowed row array through **by reference**,
+snake_case — the `queue_state` nested-array precedent, not a remap. Ships dormant; the still-unbuilt
+background-task store #567 is the first consumer.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -169,13 +188,14 @@ export type InboundDaemonMessage =
   | { kind: 'session-settings-updated'; sessionSettingsUpdated: SessionSettingsUpdatedPayload; inReplyTo?: number }  // #264, additive; inReplyTo added by #261
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }  // #564, additive
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }  // #565, additive
+  | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }  // #566, additive
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`stall`/
 //                            `api_retry`/`compacting`/`tool_use`/`modal_shown`/`modal_dismissed`/`tool_result`/
 //                            `conversation_created`/`session_transition`/`session_settings_updated`/
-//                            `background_task_started`/`background_task_updated`
+//                            `background_task_started`/`background_task_updated`/`background_task_roster`
 //                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
@@ -325,6 +345,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `session_settings_updated` ([#264](../codebase/264.md)) | `inbound-decoded` | `code: 'session_settings_updated'`, `bytes`, `hash` — never `session_id` |
 | modeled `background_task_started` ([#564](../codebase/564.md)) | `inbound-decoded` | `code: 'background_task_started'`, `bytes`, `hash` — never `conversation_id`/`task_id`/`tool_call_id`/`description`/`task_type`/`truncated_fields`; narrows before logging, so a malformed frame leaves no record |
 | modeled `background_task_updated` ([#565](../codebase/565.md)) | `inbound-decoded` | `code: 'background_task_updated'`, `bytes`, `hash` — never `conversation_id`/`task_id`/`patch`/`truncated_fields`, least of all `patch` (whose keys may carry command text); narrows before logging, so a malformed frame leaves no record |
+| modeled `background_task_roster` ([#566](../codebase/566.md)) | `inbound-decoded` | `code: 'background_task_roster'`, `bytes`, `hash` — never `conversation_id`/`tasks`/`dropped_tasks`, least of all a row's `description` (a literal command line); deliberately **no `count`** either, though `DiagnosticEvent` already has one — the roster size is itself a fact about the user's session; narrows before logging, so a malformed frame leaves no record |
 | unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
 
 Load-bearing details:
@@ -532,6 +553,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [#269 codebase notes](../codebase/269.md) — widened the original `daemon-error` kind ([#116](../codebase/116.md)) with the same `inReplyTo?: number` carrier, letting [daemon connection](daemon-connection.md) correlate a rejection against the same `pendingSettings` map #261 built, ahead of the pre-existing bundle-reassembler and #248 modal-FIFO consumers of that kind.
 - [#564 codebase notes](../codebase/564.md) — the sixteenth additive extension: the `background_task_started` kind, `parseBackgroundTaskStartedPayload` (`parseApiRetryPayload` scaled from four fields to six), and the new `requireStringArrayOrNull` field narrower — required-present with a nullable array value, borrowing `parseQueuedItem`'s posture (one bad element fails closed, empty array valid) but not its record-narrower shape, since this frame's array elements are bare strings. First of three sibling frames (#565/#566 follow); the consumer arm keeps `conversation_id`, unlike `api_retry`/`compacting`.
 - [#565 codebase notes](../codebase/565.md) — the seventeenth additive extension, the subset twin of #564: the `background_task_updated` kind and `parseBackgroundTaskUpdatedPayload` (`parseBackgroundTaskStartedPayload` scaled from six fields to four — no new field narrower, reuses `requireStringArrayOrNull` unchanged). Gains `patch`, an opaque string never fed to `JSON.parse` (the daemon's own golden fixture is cut mid-token); `requireString`'s bare `typeof` check lets `patch: ''` through free while an omitted `patch` key still fails closed. Second of three sibling frames (#566 follows); the consumer arm keeps `conversation_id` and performs no join against `background_task_started` — ordering is claude's, not the daemon's.
+- [#566 codebase notes](../codebase/566.md) — the eighteenth additive extension, the third and last sibling frame: the `background_task_roster` kind and `parseBackgroundTaskRosterPayload` + the new row narrower `parseBackgroundTask`. `tasks` takes `parseQueueStatePayload`'s inline shape (`Array.isArray` + `raw.map`), not `requireStringArrayOrNull` — the trap: `tasks: null` fails closed while a row's `truncated_fields: null` (decoded via the existing `requireStringArrayOrNull`, per row) is a valid value, because the daemon's only custom `MarshalJSON` normalises a nil `Tasks` to `[]` and deliberately does not normalise `truncated_fields`. The row is four fields, not the scalar siblings' four (no `tool_call_id`, no `patch`) — cloned from `parseQueuedItem`'s posture, not `parseBackgroundTaskStartedPayload`'s shape. `dropped_tasks` is the frame's only truncation report, via plain `requireNumber`. Consumer arm keeps `conversation_id` and passes the row array through by reference, snake_case.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

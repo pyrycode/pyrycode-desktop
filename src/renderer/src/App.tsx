@@ -10,6 +10,7 @@ import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
 import { QueueData } from './store/queueBridge'
 import { ScreenSnapshotData } from './store/screenSnapshotBridge'
 import { RelayLinkData } from './store/relayLinkBridge'
+import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -108,6 +109,13 @@ function App(): JSX.Element {
   // same App-level always-listening rationale — a snapshot can arrive before #324 is ever mounted, so
   // the latest rendered screen must be retained regardless of which screen is shown. Reactive-only, no
   // gate. Ships dormant — it populates the store, but nothing renders it yet (#324).
+  // BackgroundTaskRosterData (#573) is the SEVENTH headless leaf (count the JSX below, not these
+  // comments — RelayLinkData landed without one): it lands each unsolicited `backgroundTaskRoster`
+  // snapshot into the keyed roster store for the panel slice (#568), on the same App-level
+  // always-listening rationale — a roster can arrive before #568 is ever mounted and for a
+  // conversation the user is not looking at. Reactive-only, no gate. Ships dormant. Its `connected`
+  // branch is the sole enforcement of AC5 (no previous pairing's tasks survive a re-handshake), which
+  // is why this store is deliberately absent from clearPairingScopedState.
   return (
     <>
       <ConversationListData />
@@ -116,6 +124,7 @@ function App(): JSX.Element {
       <QueueData />
       <ScreenSnapshotData />
       <RelayLinkData />
+      <BackgroundTaskRosterData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

@@ -114,7 +114,8 @@ other array narrowing in this file maps elements through a record because its el
 frame's elements are bare wire field names. Unlike `api_retry`/`compacting`, the consumer emit (see
 [daemon connection](daemon-connection.md)) **keeps** `conversation_id` — the frame carries no `turn_id`
 and opens/closes no turn, so it is daemon state (the `queue_state` #720 rule), not a turn-stream item.
-Ships dormant; the still-unbuilt background-task store #567 is the first consumer.
+Ships dormant — [the background-task-roster store (#573, shipped)](../codebase/573.md) consumes only the
+`background_task_roster` sibling below, not this arm, which stays dormant awaiting #574.
 
 [#565](../codebase/565.md) added a seventeenth kind, `background_task_updated` → `background-task-updated`
 — the second sibling frame, the peer of `background_task_started` joined on `task_id`: that frame opens a
@@ -132,8 +133,9 @@ construction, so a truncated object is no longer valid JSON, and its own golden 
 (`{"is_backgrounded":tr`) — the canonical proof that nothing on this path may run `JSON.parse`. Like its
 sibling, the consumer emit **keeps** `conversation_id`, and performs **no join** against
 `background_task_started`: ordering is claude's, not the daemon's, so an `updated` frame for a task never
-seen opened is a legal frame that emits, not something to buffer. Ships dormant; the still-unbuilt
-background-task store #567 is the first consumer.
+seen opened is a legal frame that emits, not something to buffer. Ships dormant — [the
+background-task-roster store (#573, shipped)](../codebase/573.md) consumes only the `background_task_roster`
+sibling below, not this arm, which stays dormant awaiting #574.
 
 [#566](../codebase/566.md) added an eighteenth kind, `background_task_roster` → `background-task-roster` —
 the third and last sibling frame, the **aggregate peer** of the two above: they report what happened to
@@ -151,8 +153,9 @@ siblings' four**: no `tool_call_id`, no `patch`. `dropped_tasks` decodes through
 frame's **only** truncation report (the true roster size is `tasks.length + dropped_tasks`); no new helper,
 no cross-check against `tasks.length`. The consumer emit **keeps** `conversation_id`, the same in-family
 precedent both siblings established, and passes the already-narrowed row array through **by reference**,
-snake_case — the `queue_state` nested-array precedent, not a remap. Ships dormant; the still-unbuilt
-background-task store #567 is the first consumer.
+snake_case — the `queue_state` nested-array precedent, not a remap. Ships dormant no longer — [the
+background-task-roster store (#573, shipped)](../codebase/573.md) is the first consumer, holding `tasks`/
+`droppedTasks` verbatim per `conversationId`.
 
 ## Where it lives
 

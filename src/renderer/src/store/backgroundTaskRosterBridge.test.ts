@@ -5,6 +5,7 @@ import type { DaemonEvent } from '@shared/ipc/events'
 import type { BackgroundTask, HelloAckPayload, MessagePayload } from '@shared/wire/types'
 import {
   translateBackgroundTaskRoster,
+  translateBackgroundTaskStarted,
   subscribeBackgroundTaskRoster,
   BackgroundTaskRosterData
 } from './backgroundTaskRosterBridge'
@@ -12,7 +13,8 @@ import { createBackgroundTaskRosterStore, selectRosterFor } from './backgroundTa
 
 // Framework-free data-path tests with injected spies (the queueBridge idiom): no React, no Electron.
 // The real store is wired only for the seam tests. This bridge is reactive-only — the daemon pushes
-// the roster unsolicited — so there is no requestX describe block.
+// both frames unsolicited — so there is no requestX describe block. Two sibling translators, each a
+// pure single-arm filter, rather than one translator returning a tagged union.
 
 const noCut: BackgroundTask = {
   task_id: 't1',
@@ -26,6 +28,9 @@ const cutDescription: BackgroundTask = {
   description: 'npm test -- src/renderer',
   truncated_fields: ['description']
 }
+
+/** The started frame's fuller copy of `noCut`'s label, plus the tool call no roster row carries. */
+const fullDescription = 'grep -rn "a<b&c" . --include="*.ts" --color=never'
 
 // The connect-time edge the reset reacts to. The reset reads only the discriminant, never the ack.
 const ack: HelloAckPayload = {
@@ -54,14 +59,15 @@ describe('translateBackgroundTaskRoster', () => {
     const snapshot = translateBackgroundTaskRoster(event)
 
     expect(snapshot).toEqual({ conversationId: 'c1', tasks, droppedTasks: 2 })
-    // A FRESH named-field literal, never `return event` and never a spread — #574 widens the held
-    // entry, and a spread would silently start carrying fields this slice never agreed to hold.
+    // A FRESH named-field literal, never `return event` and never a spread: a spread would carry the
+    // arm's `type` tag and any field a later arm gains into a write unit that never agreed to hold it.
     expect(snapshot).not.toBe(event)
-    // The rows pass through by reference — order, identity and snake_case preserved.
+    // The rows still pass through by reference here — the row → held-record mapping happens inside
+    // `setRoster`, which is where the prior state the join needs lives.
     expect(snapshot?.tasks).toBe(tasks)
   })
 
-  it('maps an EMPTY roster to a snapshot, not null — the filter hazard (AC4)', () => {
+  it('maps an EMPTY roster to a snapshot, not null — the filter hazard (AC5)', () => {
     const event: DaemonEvent = {
       type: 'backgroundTaskRoster',
       conversationId: 'c1',
@@ -86,7 +92,8 @@ describe('translateBackgroundTaskRoster', () => {
       { type: 'disconnected' },
       { type: 'messageReceived', message },
       { type: 'queueState', conversationId: 'c1', queued: [] },
-      // The two dormant scalar siblings stay dormant here — they are #574's, not this slice's.
+      // The started arm is this bridge's, but it belongs to the SIBLING translator below — each one
+      // stays a single-arm filter, so neither's existing assertions move when the other lands.
       {
         type: 'backgroundTaskStarted',
         conversationId: 'c1',
@@ -96,6 +103,8 @@ describe('translateBackgroundTaskRoster', () => {
         toolCallId: 'tc-1',
         truncatedFields: null
       },
+      // `backgroundTaskUpdated` stays dormant on this path — it is #577's, and leaving it unhandled
+      // compiles green because this bridge is `default: null`, not one of the three assertNever ones.
       {
         type: 'backgroundTaskUpdated',
         conversationId: 'c1',
@@ -105,6 +114,63 @@ describe('translateBackgroundTaskRoster', () => {
       }
     ]
     for (const event of others) expect(translateBackgroundTaskRoster(event)).toBeNull()
+  })
+})
+
+describe('translateBackgroundTaskStarted', () => {
+  it('maps a backgroundTaskStarted event to its six-field snapshot (the owned arm)', () => {
+    const event: DaemonEvent = {
+      type: 'backgroundTaskStarted',
+      conversationId: 'c1',
+      taskId: 't1',
+      toolCallId: 'tc-1',
+      taskType: 'local_bash',
+      description: fullDescription,
+      truncatedFields: ['description']
+    }
+    const snapshot = translateBackgroundTaskStarted(event)
+
+    expect(snapshot).toEqual({
+      conversationId: 'c1',
+      taskId: 't1',
+      toolCallId: 'tc-1',
+      taskType: 'local_bash',
+      description: fullDescription,
+      truncatedFields: ['description']
+    })
+    // Same posture as its neighbour: a fresh named-field literal, never `return event`, never a spread.
+    expect(snapshot).not.toBe(event)
+  })
+
+  it('passes truncatedFields: null through as null — never collapsed into [] (AC3)', () => {
+    const event: DaemonEvent = {
+      type: 'backgroundTaskStarted',
+      conversationId: 'c1',
+      taskId: 't1',
+      toolCallId: 'tc-1',
+      taskType: 'local_bash',
+      description: 'ls',
+      truncatedFields: null
+    }
+    expect(translateBackgroundTaskStarted(event)?.truncatedFields).toBeNull()
+  })
+
+  it('returns null for a sample of unrelated daemon events, roster and updated included', () => {
+    const others: DaemonEvent[] = [
+      { type: 'connecting' },
+      { type: 'connected', ack },
+      { type: 'disconnected' },
+      { type: 'messageReceived', message },
+      { type: 'backgroundTaskRoster', conversationId: 'c1', tasks: [noCut], droppedTasks: 0 },
+      {
+        type: 'backgroundTaskUpdated',
+        conversationId: 'c1',
+        taskId: 't1',
+        patch: 'p',
+        truncatedFields: null
+      }
+    ]
+    for (const event of others) expect(translateBackgroundTaskStarted(event)).toBeNull()
   })
 })
 
@@ -138,15 +204,32 @@ describe('subscribeBackgroundTaskRoster', () => {
     return { type: 'backgroundTaskRoster', conversationId, tasks, droppedTasks }
   }
 
+  function taskStarted(
+    conversationId: string,
+    taskId: string,
+    toolCallId = 'tc-1',
+    description = fullDescription
+  ): DaemonEvent {
+    return {
+      type: 'backgroundTaskStarted',
+      conversationId,
+      taskId,
+      toolCallId,
+      taskType: 'local_bash',
+      description,
+      truncatedFields: null
+    }
+  }
+
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn())
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn())
     expect(bridge.subscribeCalls()).toBe(1)
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {
     const bridge = fakeBridge()
-    const cleanup = subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn())
+    const cleanup = subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn())
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
   })
@@ -155,7 +238,8 @@ describe('subscribeBackgroundTaskRoster', () => {
     const bridge = fakeBridge()
     const setRoster = vi.fn()
     const resetRosters = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters)
+    const setStartedTask = vi.fn()
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters, setStartedTask)
 
     bridge.emit(roster('c1', [noCut, cutDescription], 1))
     expect(setRoster).toHaveBeenCalledTimes(1)
@@ -164,25 +248,49 @@ describe('subscribeBackgroundTaskRoster', () => {
       tasks: [noCut, cutDescription],
       droppedTasks: 1
     })
+    expect(setStartedTask).not.toHaveBeenCalled()
     expect(resetRosters).not.toHaveBeenCalled()
   })
 
-  it('writes an empty roster too — the !== null guard, not truthiness (AC4)', () => {
+  it('writes an empty roster too — the !== null guard, not truthiness (AC5)', () => {
     const bridge = fakeBridge()
     const setRoster = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, vi.fn())
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, vi.fn(), vi.fn())
 
     bridge.emit(roster('c1', []))
     expect(setRoster).toHaveBeenCalledTimes(1)
     expect(setRoster).toHaveBeenCalledWith({ conversationId: 'c1', tasks: [], droppedTasks: 0 })
   })
 
-  it('resets on a connected event, without writing a snapshot (AC5)', () => {
+  it('writes the started snapshot on a started event, without rostering or resetting (AC1)', () => {
     const bridge = fakeBridge()
     const setRoster = vi.fn()
     const resetRosters = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters)
+    const setStartedTask = vi.fn()
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters, setStartedTask)
 
+    bridge.emit(taskStarted('c1', 't1'))
+    expect(setStartedTask).toHaveBeenCalledTimes(1)
+    expect(setStartedTask).toHaveBeenCalledWith({
+      conversationId: 'c1',
+      taskId: 't1',
+      toolCallId: 'tc-1',
+      taskType: 'local_bash',
+      description: fullDescription,
+      truncatedFields: null
+    })
+    expect(setRoster).not.toHaveBeenCalled()
+    expect(resetRosters).not.toHaveBeenCalled()
+  })
+
+  it('resets on a connected event, without writing either snapshot (AC5)', () => {
+    const bridge = fakeBridge()
+    const setRoster = vi.fn()
+    const resetRosters = vi.fn()
+    const setStartedTask = vi.fn()
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters, setStartedTask)
+
+    bridge.emit(taskStarted('c1', 't1'))
     bridge.emit({ type: 'connected', ack })
     expect(resetRosters).toHaveBeenCalledTimes(1)
     expect(setRoster).not.toHaveBeenCalled()
@@ -192,10 +300,12 @@ describe('subscribeBackgroundTaskRoster', () => {
     const bridge = fakeBridge()
     const setRoster = vi.fn()
     const resetRosters = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters)
+    const setStartedTask = vi.fn()
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters, setStartedTask)
 
     bridge.emit({ type: 'disconnected' })
     expect(setRoster).not.toHaveBeenCalled()
+    expect(setStartedTask).not.toHaveBeenCalled()
     expect(resetRosters).not.toHaveBeenCalled()
   })
 
@@ -206,48 +316,108 @@ describe('subscribeBackgroundTaskRoster', () => {
       subscribeBackgroundTaskRoster(
         bridge.onDaemonEvent,
         (s) => store.getState().setRoster(s),
-        () => store.getState().resetRosters()
+        () => store.getState().resetRosters(),
+        (s) => store.getState().setStartedTask(s)
       )
       return { bridge, store }
     }
+
+    const heldTask = (
+      store: ReturnType<typeof createBackgroundTaskRosterStore>,
+      conversationId: string,
+      taskId: string
+    ) => selectRosterFor(conversationId)(store.getState())?.tasks.get(taskId)
 
     it('drives a real store from never-observed → held on one roster emit', () => {
       const { bridge, store } = seam()
       expect(selectRosterFor('c1')(store.getState())).toBeNull()
 
       bridge.emit(roster('c1', [noCut], 2))
-      expect(selectRosterFor('c1')(store.getState())).toEqual({ tasks: [noCut], droppedTasks: 2 })
+      expect(selectRosterFor('c1')(store.getState())?.droppedTasks).toBe(2)
+      expect(heldTask(store, 'c1', 't1')).toEqual({
+        taskId: 't1',
+        toolCallId: null,
+        taskType: 'local_bash',
+        description: 'grep -rn "a<b&c" .',
+        truncatedFields: null
+      })
     })
 
-    it('a second roster for a different conversation does not clobber the first (AC1)', () => {
+    it('drives a real store from never-observed → held on one started emit', () => {
       const { bridge, store } = seam()
-      bridge.emit(roster('c1', [noCut]))
-      bridge.emit(roster('c2', [cutDescription]))
+      bridge.emit(taskStarted('c1', 't1'))
 
-      // Replacement truth is per key, not a single last-roster slot.
-      expect(selectRosterFor('c1')(store.getState())?.tasks).toEqual([noCut])
-      expect(selectRosterFor('c2')(store.getState())?.tasks).toEqual([cutDescription])
+      expect(heldTask(store, 'c1', 't1')).toEqual({
+        taskId: 't1',
+        toolCallId: 'tc-1',
+        taskType: 'local_bash',
+        description: fullDescription,
+        truncatedFields: null
+      })
     })
 
-    it('a connected edge returns every held conversation to null (AC5 end-to-end)', () => {
+    it('started → roster keeps the fuller label and the toolCallId end-to-end (AC2, AC4)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(taskStarted('c1', 't1'))
+      bridge.emit(roster('c1', [noCut, cutDescription]))
+
+      // The roster row's shorter-capped copy of the same text never overwrites the authoritative one.
+      expect(heldTask(store, 'c1', 't1')?.description).toBe(fullDescription)
+      expect(heldTask(store, 'c1', 't1')?.toolCallId).toBe('tc-1')
+      expect(heldTask(store, 'c1', 't2')?.toolCallId).toBeNull()
+    })
+
+    it('roster → started upgrades the held task in place (AC2)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(roster('c1', [noCut, cutDescription]))
+      bridge.emit(taskStarted('c1', 't1'))
+
+      expect(heldTask(store, 'c1', 't1')?.description).toBe(fullDescription)
+      expect([...(selectRosterFor('c1')(store.getState())?.tasks.keys() ?? [])]).toEqual(['t1', 't2'])
+    })
+
+    it('a roster excluding a started-only task drops it (AC5)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(taskStarted('c1', 't1'))
+      bridge.emit(roster('c1', [cutDescription]))
+
+      expect(heldTask(store, 'c1', 't1')).toBeUndefined()
+      expect(heldTask(store, 'c1', 't2')).toBeDefined()
+    })
+
+    it('a second write for a different conversation does not clobber the first (AC1)', () => {
       const { bridge, store } = seam()
       bridge.emit(roster('c1', [noCut]))
-      bridge.emit(roster('c2', [cutDescription], 3))
+      bridge.emit(taskStarted('c2', 't2'))
+
+      // Replacement truth is per key, not a single last-frame slot.
+      expect(heldTask(store, 'c1', 't1')).toBeDefined()
+      expect(heldTask(store, 'c2', 't2')).toBeDefined()
+    })
+
+    it('a connected edge returns every held conversation to null, both kinds (AC5 end-to-end)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(roster('c1', [noCut]))
+      bridge.emit(taskStarted('c2', 't2'))
       bridge.emit({ type: 'connected', ack })
 
       // The sole enforcement of AC5: a previous pairing's literal command lines never survive a
-      // (re)handshake. This assertion must not be deleted as redundant with the store's own test.
+      // (re)handshake, whichever frame reported them. This assertion must not be deleted as
+      // redundant with the store's own test.
       expect(selectRosterFor('c1')(store.getState())).toBeNull()
       expect(selectRosterFor('c2')(store.getState())).toBeNull()
     })
 
-    it('keeps observed-empty and never-observed distinct end-to-end, then clears both (AC4, AC5)', () => {
+    it('keeps observed-empty and never-observed distinct end-to-end, then clears both (AC5)', () => {
       const { bridge, store } = seam()
       bridge.emit(roster('c1', []))
 
       // The single test that would fail if the precedent's `?? EMPTY_*` collapse were cloned: c1 was
       // observed and holds nothing, c2 was never observed at all, and they read differently.
-      expect(selectRosterFor('c1')(store.getState())).toEqual({ tasks: [], droppedTasks: 0 })
+      expect(selectRosterFor('c1')(store.getState())).toEqual({
+        tasks: new Map(),
+        droppedTasks: 0
+      })
       expect(selectRosterFor('c2')(store.getState())).toBeNull()
 
       bridge.emit({ type: 'connected', ack })

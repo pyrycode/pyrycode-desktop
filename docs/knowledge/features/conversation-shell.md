@@ -58,7 +58,7 @@ express, without adding a single row to the timeline. The store's three `selectR
 (never-observed, observed-with-nothing-alive, populated) render as three structurally distinct
 outputs. This slice is the shell: chrome, the trigger, the three-way branch, and one row per task
 showing `description` + `taskType` only. Split from #568 alongside #582 (truncation/cap reports) and
-#583 (latest patch); visual design is #580's. See [Background-task panel](#background-task-panel-581)
+#583 (latest patch); visual design is #580's. See [Background-task panel](#background-task-panel-581-cap-and-cut-display-since-582)
 below.
 
 The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)); the held-option marker is scoped to the exact prompt it was selected on via the prompt's `modalId`, closing a same-class-prompt collision ([#511](../codebase/511.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) below.
@@ -538,13 +538,13 @@ already-guarded command; no transport/crypto/socket surface touched. Code review
 NITs (glyph coloring, the deferred create-folder label). See [#383 codebase
 notes](../codebase/383.md) for the full design and patterns established.
 
-### Background-task panel (#581)
+### Background-task panel (#581, cap and cut display since #582)
 
 An openable surface listing the tasks claude has running in the background for the open conversation
 — the first reader of [`backgroundTaskRosterStore`](background-task-roster-store.md), shipped and
 unread since #573. The store joins three daemon frames (roster, started, updated); this slice reads
 only two of the held per-task fields, `description` and `taskType`. Split from #568 (whose panel work
-was itself split three ways: this ticket → #582 → #583). No Figma node exists for this surface — it is
+was itself split three ways: #581 → #582 → #583). No Figma node exists for this surface — it is
 desktop-only (pyrycode#1241) and the canonical mobile file has no counterpart; visual design is #580's,
 so the chrome deliberately reuses the shared `.status-sheet__*` overlay vocabulary as an interim
 placeholder rather than anything #580 would have to unwind.
@@ -559,10 +559,14 @@ placeholder rather than anything #580 would have to unwind.
             ├── .status-sheet__handle
             ├── .status-sheet__header             "Background tasks" + close
             └── .status-sheet__body
+                ├── entry.droppedTasks > 0    → .background-task-panel__partial     "Partial list (N not shown)"
+                │                                 (sibling of the branch below, not nested in any arm — #582)
                 └── entry === null            → .background-task-panel__unobserved  "No background-task report yet"
                   · entry.tasks.size === 0    → .background-task-panel__empty       "No background tasks"
                   · otherwise                 → .background-task-panel__list > .background-task-panel__row × N
-                                                  (description + taskType, roster order)
+                                                  (description + taskType, roster order, each field followed
+                                                  by .background-task-panel__cut-description / -cut-type
+                                                  "Truncated by the daemon" when truncatedFields names it — #582)
 ```
 
 **No bridge mount.** Unlike `WorkspacePickerSheet` (which mounts `RecentWorkspacesData` inside itself),
@@ -605,10 +609,23 @@ as a work list: `entry.tasks.values()` is spread once, inline, into `<li>` child
 clipboard, no export, no `data-*` attribute carrying a task field. Architect self-review PASS (security-
 sensitive label); code review PASS with zero findings.
 
-Not yet built: `droppedTasks` and per-task `truncatedFields` (#582), the held `latestUpdate` patch
-(#583), and any terminal/completed state — the daemon reports no finish event by design, so a task
-simply stops appearing in the roster rather than being shown as done. See [#581 codebase
-notes](../codebase/581.md) for the full design, the test posture, and the code-review record.
+**Cap and cut display (#582).** Two independent bounds the daemon reports and now displays: a
+**partial-list notice** (`.background-task-panel__partial`, `` `Partial list (${entry.droppedTasks} not
+shown)` ``) whenever the entry reports a nonzero `droppedTasks`, and a **per-field cut marker**
+(`.background-task-panel__cut-description` / `-cut-type`, both reading `Truncated by the daemon`)
+immediately after any field a task's `truncatedFields` names. The notice is a sibling of the three-way
+branch above, not nested in any of its arms, so it shows whichever branch the task list itself takes —
+the placement is the acceptance criterion, since the count belongs to the entry, not to the list. The
+marker match is the ticket's central trap: `truncatedFields`' contents cross IPC unconverted, so the
+panel holds `task.taskType` but must match the wire string `task_type`, not the held name. Neither
+reading is styled as an error — a bounded report is the daemon working as designed, reported honestly.
+Architect self-review PASS (security-sensitive label); code review PASS with zero findings. See [#582
+codebase notes](../codebase/582.md).
+
+Not yet built: the held `latestUpdate` patch and its own, differently-vocabularied cut report (#583),
+and any terminal/completed state — the daemon reports no finish event by design, so a task simply stops
+appearing in the roster rather than being shown as done. See [#581 codebase
+notes](../codebase/581.md) for the shell's full design, test posture, and code-review record.
 
 ### Run configuration sheet (#177)
 
@@ -1530,7 +1547,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   `activeConversationStore`, and supplying `onChoose` only for a non-null active conversation.
   `WorkspaceChip`'s `onChange` now calls `() => setPickerOpen(true)` — see [Workspace Picker
   sheet](#workspace-picker-sheet-383) above.
-- **`BackgroundTaskPanelView({ entry, onClose })` / `BackgroundTaskPanel` / `BackgroundTaskTrigger({ onOpen })`** — **bound in [#581](../codebase/581.md).** `BackgroundTaskPanelView` is the exported pure view (`entry` as `selectRosterFor`'s exact return type — the nullable prop is what forces the three-way branch at a testable boundary); `BackgroundTaskPanel` is the in-file container reading [`backgroundTaskRosterStore`](background-task-roster-store.md) via a `useMemo`-stable selector and owning the Escape effect; `BackgroundTaskTrigger` is a `StatusRow`-sibling icon button, mounted unconditionally. See [Background-task panel](#background-task-panel-581) above.
+- **`BackgroundTaskPanelView({ entry, onClose })` / `BackgroundTaskPanel` / `BackgroundTaskTrigger({ onOpen })`** — **bound in [#581](../codebase/581.md).** `BackgroundTaskPanelView` is the exported pure view (`entry` as `selectRosterFor`'s exact return type — the nullable prop is what forces the three-way branch at a testable boundary); `BackgroundTaskPanel` is the in-file container reading [`backgroundTaskRosterStore`](background-task-roster-store.md) via a `useMemo`-stable selector and owning the Escape effect; `BackgroundTaskTrigger` is a `StatusRow`-sibling icon button, mounted unconditionally. **Gained the partial-list notice and per-task cut markers in [#582](../codebase/582.md)**, both read straight off the same `entry` prop with no signature change. See [Background-task panel](#background-task-panel-581-cap-and-cut-display-since-582) above.
 - **`ChannelInfoSheetView({ conversation, now?, onClose })` / `ChannelInfoSheet`** — **shell + About detail bound in [#365](../codebase/365.md).** `ChannelInfoSheetView` is the exported pure view (`conversation` as a prop, sourced from `activeConversationStore`); `ChannelInfoSheet` is the in-file container owning only the Escape effect. The `ThreadOverflowMenu`'s `onChannelInfo` now calls `() => setChannelInfoOpen(true)` — the speculative `ConversationScreenProps.onChannelInfo?` prop #276 reserved is **retired**, not bound; see [Channel Info sheet](#channel-info-sheet-365) above. **Rename bound in [#368](../codebase/368.md):** the `.channel-info__actions` slot's first filler, an `onRename?` prop supplied by the container only in the `conversation !== null` branch, opening the reused [Rename dialog](rename-conversation-dialog.md) (#360) — see [Channel Info sheet](#channel-info-sheet-365) above. **Archive bound in [#366](../codebase/366.md):** the slot's second filler, an `onArchive?` prop under the same null-guard, dispatching the already-shipped [`archiveConversation` command](conversation-archive.md) (#363) then closing the sheet — see [Channel Info sheet](#channel-info-sheet-365) above. **Delete bound in [#377](../codebase/377.md), completing the slot:** the third and final filler, gated the same way (`onDelete?` supplied only for a non-null active conversation) but dispatch is two-step — `onDelete` opens an inline confirm (a client-owned invention, no Figma node, the #226 second-confirm posture) that swaps in for the pill; confirming dispatches the already-shipped [`deleteConversation` command](conversation-delete.md) (#364) via a new `requestDeleteConversation` helper then closes the sheet, cancelling returns to the pill with no wire effect. The pill and confirm's destructive styling is a new `.channel-info__action--danger` modifier (error-tinted outline via `box-shadow: inset`, since desktop has no error-container fill token). `window.pyry` is dereferenced only inside the confirm handler; the confirm's own open state (`deleteConfirmOpen`) is screen-local `useState`, the `renameOpen` twin.
 
 ## Edge cases and limitations
@@ -1587,6 +1604,6 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `<QueuedBacklogControl/>` reads via `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (#293, consumed in #294), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
 - [Recent-workspaces store](recent-workspaces-store.md) — the dedicated store + dormant bridge `WorkspacePickerSheet` reads via `selectRecentWorkspaces` and mounts (`RecentWorkspacesData`), its first real consumer (#382, consumed in #383)
 - [Conversation workspace change](conversation-workspace-change.md) — the `changeWorkspace` command `requestChangeWorkspace` dispatches on a row choice, its first real caller (#379, consumed in #383)
-- [Background-task roster store](background-task-roster-store.md) — the store `BackgroundTaskPanel` reads via `selectRosterFor(conversationId)`, its first real consumer since the store shipped dormant at #573 (#581, see [Background-task panel](#background-task-panel-581) above)
+- [Background-task roster store](background-task-roster-store.md) — the store `BackgroundTaskPanel` reads via `selectRosterFor(conversationId)`, its first real consumer since the store shipped dormant at #573 (#581, extended to read `droppedTasks`/`truncatedFields` in #582, see [Background-task panel](#background-task-panel-581-cap-and-cut-display-since-582) above)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#492 codebase notes](../codebase/492.md) · [#493 codebase notes](../codebase/493.md) · [#495 codebase notes](../codebase/495.md) · [#496 codebase notes](../codebase/496.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · [#529 codebase notes](../codebase/529.md) · [#530 codebase notes](../codebase/530.md) · [#581 codebase notes](../codebase/581.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

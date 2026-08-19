@@ -11,10 +11,14 @@ import {
 // nothing here renders into the thread timeline, and nothing may (these frames carry no turn_id and
 // deliberately never enter the timeline reducer).
 //
-// This slice is the shell: chrome, the three-way reading branch, and one row per task showing
-// `description` + `taskType`. The entry's `droppedTasks` and each task's `truncatedFields` are #582; the
-// held `latestUpdate` patch is #583. Both are reachable from the `entry` prop and are deliberately not
-// read here — the prop is `selectRosterFor`'s return type exactly, so neither successor has to widen it.
+// #581 shipped the shell: chrome, the three-way reading branch, and one row per task showing
+// `description` + `taskType`. #582 added the two bounds the daemon reports and that shell showed neither
+// of — the roster's cap (`entry.droppedTasks`) and each task's own cut fields (`task.truncatedFields`),
+// so a bounded report no longer reads as a complete one. Both were already reachable on the `entry` prop,
+// which is `selectRosterFor`'s return type exactly, so neither needed a prop, type or store change. The
+// held `latestUpdate` patch and ITS separate cut report are #583 and are still deliberately unread here:
+// that list names a DIFFERENT vocabulary (`task_id` / `patch`) from the task's own, which is why the store
+// keeps them as two fields rather than one flattened list, and they must not be merged.
 //
 // It mounts NO data path. Unlike WorkspacePickerSheet (which mounts RecentWorkspacesData inside itself),
 // the roster bridge is already app-wide — <BackgroundTaskRosterData /> is the seventh headless leaf in
@@ -44,9 +48,59 @@ const BACKGROUND_TASK_PANEL_TITLE = 'Background tasks'
 const BACKGROUND_TASK_PANEL_UNOBSERVED_COPY = 'No background-task report yet'
 const BACKGROUND_TASK_PANEL_EMPTY_COPY = 'No background tasks'
 
+// #582: the marker shown beside a field the daemon cut. Deliberately echoes UNRECOGNIZED_TRUNCATED_COPY's
+// vocabulary (ConversationScreen.tsx:500) so the app says the same thing the same way about the same
+// daemon behaviour. One sentence for both fields — the two classes below, not the copy, carry which.
+const BACKGROUND_TASK_PANEL_CUT_COPY = 'Truncated by the daemon'
+
 // Distinct from STATUS_SHEET_TITLE_ID / CHANNEL_INFO_SHEET_TITLE_ID / WORKSPACE_PICKER_SHEET_TITLE_ID so
 // all four surfaces can coexist without duplicate ids.
 const BACKGROUND_TASK_PANEL_TITLE_ID = 'background-task-panel-title'
+
+/** #582: the partial-list notice, built from the entry's dropped count. The parenthesised-count shape is
+ *  `tabCountLabel`'s idiom (archiveViewModel.ts:47-49) and is chosen to DODGE PLURALISATION: "1 not shown"
+ *  and "3 not shown" both read correctly, so there is no singular/plural branch and the repo gains no
+ *  pluralisation machinery it does not already have. Apostrophe-free, like every literal in this file.
+ *
+ *  `droppedTasks` is a number, so this renders no untrusted string — it is the only daemon-derived VALUE
+ *  the panel shows, and numbers are inert.
+ *
+ *  Deliberately does NOT print the true roster size (`tasks.size + droppedTasks`): the reader can see the
+ *  rows, and a derived total is a second number to keep honest for no stated need. */
+function partialListCopy(droppedTasks: number): string {
+  return `Partial list (${droppedTasks} not shown)`
+}
+
+// #582: THE WIRE NAMES, not the held property names — the trap this slice exists to defuse. A
+// `truncatedFields` list's CONTENTS cross IPC unconverted: only the field itself was camelCased
+// (`truncatedFields: row.truncated_fields`, backgroundTaskRosterStore.ts:328, and again at :351 for the
+// started path), while the strings inside stay as the daemon wrote them. So the panel holds
+// `task.taskType` but must match `task_type`. Matching on `'taskType'` compiles, type-checks, never
+// matches, and fails no other test — the same silent-collapse family as the null-vs-[] distinction, which
+// is why the pairing is pinned here as named constants rather than inlined at the two call sites.
+const CUT_FIELD_DESCRIPTION = 'description' // wire name === held name here — coincidence, not a rule
+const CUT_FIELD_TASK_TYPE = 'task_type' // held as `taskType`; the WIRE name is what the list carries
+
+/** #582: has the daemon reported cutting this wire field on this task? `null` ("nothing was cut"), `[]`
+ *  and an unrecognised name all fall out as `false` without a branch of their own.
+ *
+ *  The vocabulary is OPEN, deliberately: a roster row names `task_id` / `task_type` / `description`, a
+ *  started frame adds `tool_call_id`, and the daemon may ship a name this panel has never heard of. So
+ *  this is `includes` over an open list and NOT a switch — an exhaustive switch, an `assertNever` or a
+ *  closed union type would turn a valid future frame into a crash or a blank panel. The panel renders a
+ *  subset of the named fields; it marks the ones it renders and ignores the rest.
+ *
+ *  Module-private, and NOT unit-tested directly on purpose: a predicate-level test passes whatever name it
+ *  is handed and would stay green while the call site passed the held camelCase name. The trap lives at
+ *  the call site, so its test does too (BackgroundTaskPanel.test.tsx, the wire-name scenario).
+ *
+ *  The daemon string is the NEEDLE, never the index: no dynamic property access, no selector, no regex is
+ *  built from it, so this cannot become a dynamic-lookup gadget. And nothing here reads the task TEXT —
+ *  the list reports the cap cut only (the daemon also scrubs invalid UTF-8 by deletion), so a cut is
+ *  never inferred from the text and the text is never inferred whole from an absent name. */
+function wasCut(truncatedFields: readonly string[] | null, wireFieldName: string): boolean {
+  return truncatedFields !== null && truncatedFields.includes(wireFieldName)
+}
 
 // #581: the pure background-task panel view — props-in / markup-out, server-renderable, no store / no
 // effects / no window.pyry (the WorkspacePickerSheetView posture). Every acceptance criterion binds here.
@@ -105,6 +159,25 @@ export function BackgroundTaskPanelView({
           </button>
         </div>
         <div className="status-sheet__body">
+          {/* #582: the partial-list notice, a SIBLING of the branch below rather than a child of any of
+              its arms. That placement is the acceptance criterion, not a style choice: the count belongs
+              to the ENTRY, not to the list, so a present entry reporting dropped tasks must show it
+              whichever branch the list itself takes. A present entry with dropped tasks and zero carried
+              tasks takes the MIDDLE arm, where a notice written inside the populated arm would be
+              invisible — the daemon cannot currently produce that combination (the cap drops only beyond
+              8 carried rows), but the view is a pure function of its prop and a test constructs it
+              directly, so "unreachable daemon-side" is not an answer.
+
+              A boolean comparison, never `{entry.droppedTasks && …}`: React renders the number `0` as a
+              text node, so the truthiness form would print a bare `0` into the panel on every
+              non-truncated roster. `0` is a value here, never consulted for truthiness
+              (backgroundTaskRosterStore.ts:164-165). And `> 0` rather than `!== 0`, because
+              `requireNumber` upstream does not range-check: a nonsense negative count degrades to "no
+              notice" rather than to "Partial list (-1 not shown)". That is a comparison choice, not a
+              validation branch — nothing has been observed producing one, so none is added. */}
+          {entry !== null && entry.droppedTasks > 0 && (
+            <p className="background-task-panel__partial">{partialListCopy(entry.droppedTasks)}</p>
+          )}
           {entry === null ? (
             <p className="background-task-panel__unobserved">
               {BACKGROUND_TASK_PANEL_UNOBSERVED_COPY}
@@ -124,9 +197,35 @@ export function BackgroundTaskPanelView({
                 <li key={task.taskId} className="background-task-panel__row">
                   {/* Exactly two fields, each as auto-escaped React children. No terminal state is
                       shown or inferred: the daemon reports no finish event, so a task simply leaves
-                      the list when it stops appearing in the roster. */}
+                      the list when it stops appearing in the roster.
+
+                      #582: each cut marker sits IMMEDIATELY AFTER the field it describes, so position
+                      carries the attribution — no id / aria-describedby pair built from `taskId`, which
+                      is a daemon string and is a React key (never rendered), not a rendered attribute.
+                      The row is flex-direction: column, so each marker lands on its own line for free.
+
+                      The marker is a SIBLING ELEMENT holding a client-owned constant, never text
+                      concatenated into the field span: `{task.description}{cut && ' (truncated)'}` would
+                      fuse client copy and daemon text into one node, so a description ending in those
+                      same words would be indistinguishable from the app's own claim. And nothing here
+                      slices, measures, re-joins or re-sinks the field to produce the marker — it marks
+                      text that is already rendered inertly and stays inert itself.
+
+                      The field NAMES are matched, never displayed: no `truncatedFields` element reaches
+                      the markup (a `.join(', ')` display is the obvious first design and is forbidden on
+                      both counts — it renders daemon strings, and it breaks the shell's sentinel test). */}
                   <span className="background-task-panel__description">{task.description}</span>
+                  {wasCut(task.truncatedFields, CUT_FIELD_DESCRIPTION) && (
+                    <span className="background-task-panel__cut-description">
+                      {BACKGROUND_TASK_PANEL_CUT_COPY}
+                    </span>
+                  )}
                   <span className="background-task-panel__type">{task.taskType}</span>
+                  {wasCut(task.truncatedFields, CUT_FIELD_TASK_TYPE) && (
+                    <span className="background-task-panel__cut-type">
+                      {BACKGROUND_TASK_PANEL_CUT_COPY}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

@@ -14,11 +14,16 @@ import {
 // #581 shipped the shell: chrome, the three-way reading branch, and one row per task showing
 // `description` + `taskType`. #582 added the two bounds the daemon reports and that shell showed neither
 // of — the roster's cap (`entry.droppedTasks`) and each task's own cut fields (`task.truncatedFields`),
-// so a bounded report no longer reads as a complete one. Both were already reachable on the `entry` prop,
-// which is `selectRosterFor`'s return type exactly, so neither needed a prop, type or store change. The
-// held `latestUpdate` patch and ITS separate cut report are #583 and are still deliberately unread here:
-// that list names a DIFFERENT vocabulary (`task_id` / `patch`) from the task's own, which is why the store
-// keeps them as two fields rather than one flattened list, and they must not be merged.
+// so a bounded report no longer reads as a complete one. #583 added the last unread field — the held
+// `latestUpdate` pair, the latest change claude reported about a task — so a long-running task shows
+// progress rather than sitting there as a name. All three were already reachable on the `entry` prop,
+// which is `selectRosterFor`'s return type exactly, so none needed a prop, type or store change.
+//
+// The update's cut report is a SECOND list, never merged with the task's own: it names a DIFFERENT
+// vocabulary (`task_id` / `patch`) from the task's (`task_id` / `task_type` / `description`), which is
+// why the store keeps them apart, and it is what keeps every list attributable back to the field it
+// describes. Reading one for the other compiles, type-checks — both are `readonly string[] | null` — and
+// never matches, which is the silent mis-wiring the crossover tests pin.
 //
 // It mounts NO data path. Unlike WorkspacePickerSheet (which mounts RecentWorkspacesData inside itself),
 // the roster bridge is already app-wide — <BackgroundTaskRosterData /> is the seventh headless leaf in
@@ -38,6 +43,16 @@ import {
 // invitation: `entry.tasks` is iterated once, inline, into `<li>` children, and nothing is derived from it —
 // no join, no clipboard, no export, no `data-*` attribute carrying a task field (the obligation the store's
 // own header, backgroundTaskRosterStore.ts:47-55, names this ticket as inheriting).
+//
+// #583: `latestUpdate.patch` is the SAME class of untrusted text under a structured-looking shape, and is
+// rendered under every rule above — and "never parsed" is load-bearing for it specifically. The wire
+// states that rule in the patch's own section rather than delegating it to the sibling's
+// (types.ts:479-485) precisely because a patch LOOKS like something to parse, which makes it the more
+// tempting thing to feed somewhere structured. It is also not guaranteed to be valid JSON (the daemon
+// truncates it at construction, so a cut object no longer parses), and any future parse must sit behind
+// an error branch falling back to this inert text and must enumerate no closed key set — a mapping
+// listing the keys it knew would silently discard every key claude ships next. Rendering it as plain text
+// answers the ticket in full and avoids the hazard entirely.
 
 // Client-owned copy — no daemon string reaches these. Every literal is apostrophe-free:
 // renderToStaticMarkup escapes ' → &#x27; (the standing desktop lesson), which would break the
@@ -52,6 +67,15 @@ const BACKGROUND_TASK_PANEL_EMPTY_COPY = 'No background tasks'
 // vocabulary (ConversationScreen.tsx:500) so the app says the same thing the same way about the same
 // daemon behaviour. One sentence for both fields — the two classes below, not the copy, carry which.
 const BACKGROUND_TASK_PANEL_CUT_COPY = 'Truncated by the daemon'
+
+// #583: the RECORDED-EMPTY-PATCH reading. `patch: ''` means claude reported no change — a VALUE, not an
+// absence, since the field always arrives on the wire — so it gets a sentence of its own rather than
+// rendering as nothing, which is what the never-updated reading renders. Deliberately carries no
+// completion / failure vocabulary: this frame family reports no terminal event, so "no change" is a
+// report about something still alive, never a finish. Also checked for substring collisions against the
+// shipped copy and the classes below, and against the two absences shipped tests assert (`not shown`,
+// `background-task-panel__empty`) — it contains neither.
+const BACKGROUND_TASK_PANEL_NO_CHANGE_COPY = 'No change reported'
 
 // Distinct from STATUS_SHEET_TITLE_ID / CHANNEL_INFO_SHEET_TITLE_ID / WORKSPACE_PICKER_SHEET_TITLE_ID so
 // all four surfaces can coexist without duplicate ids.
@@ -80,6 +104,11 @@ function partialListCopy(droppedTasks: number): string {
 // is why the pairing is pinned here as named constants rather than inlined at the two call sites.
 const CUT_FIELD_DESCRIPTION = 'description' // wire name === held name here — coincidence, not a rule
 const CUT_FIELD_TASK_TYPE = 'task_type' // held as `taskType`; the WIRE name is what the list carries
+// #583: the UPDATE's vocabulary, not the task's — matched against `latestUpdate.truncatedFields` and
+// against nothing else. No casing trap on this one (wire name === held name again, the same coincidence
+// `description` enjoys), so the trap available here is the OTHER one: passing the wrong LIST. Keeping it
+// beside its siblings as a named constant is what makes the three call sites read as three pairings.
+const CUT_FIELD_PATCH = 'patch'
 
 /** #582: has the daemon reported cutting this wire field on this task? `null` ("nothing was cut"), `[]`
  *  and an unrecognised name all fall out as `false` without a branch of their own.
@@ -225,6 +254,62 @@ export function BackgroundTaskPanelView({
                     <span className="background-task-panel__cut-type">
                       {BACKGROUND_TASK_PANEL_CUT_COPY}
                     </span>
+                  )}
+                  {/* #583: the latest change claude reported about this task. Last in the row, so the
+                      identity fields stay at the top and each marker keeps sitting immediately after
+                      the field it describes.
+
+                      The branch is on `latestUpdate !== null`, and the empty patch is a reading BENEATH
+                      it — never `{task.latestUpdate?.patch && …}` or any other truthiness test on the
+                      patch. `patch: ''` is a VALUE ("claude reported no change"; the wire field has no
+                      omitempty), so a truthiness test renders it EXACTLY as a never-updated task: it
+                      compiles, type-checks, and breaks no test. That is #582's `{entry.droppedTasks &&
+                      …}` trap one field over and quieter — `0` at least printed a visible bare `0`,
+                      whereas `''` renders as nothing at all, leaving the collapse no trace in the markup.
+
+                      Three readings, and the never-updated one renders NOTHING — a deliberate divergence
+                      from the branch above, where each reading has its own element because the branch IS
+                      the whole panel body and null would read as broken. A row still shows a description
+                      and a type, so absence is legible here, and a per-row "not updated yet" line would
+                      be noise on the ordinary case. What must not happen is the COLLAPSE, not the
+                      absence: the empty-patch reading renders an element the never-updated one does not.
+
+                      The cut marker is a SIBLING of the two arms, inside the null guard rather than
+                      inside the non-empty arm — the same placement rule #582's notice carries, for the
+                      same reason: the cut report is a property of the update RECORD, not of the patch's
+                      emptiness. A recorded `{ patch: '', truncatedFields: ['patch'] }` is unreachable
+                      daemon-side today (the 4 KiB cap never cuts to zero length) but is directly
+                      constructible against a pure view, and a marker written inside the non-empty arm
+                      would be invisible in exactly that state — the panel would claim "no change
+                      reported" while the daemon said it cut the patch. Presenting an incomplete thing as
+                      complete is what AC3 forbids, and "unreachable daemon-side" is not an answer for a
+                      pure function of its prop.
+
+                      It reads `task.latestUpdate.truncatedFields` and the description / type markers
+                      above read `task.truncatedFields`, and the crossover is the silent mis-wiring here:
+                      both lists are `readonly string[] | null`, so either swap compiles, type-checks and
+                      never matches, because neither list names the other's fields. Nothing here reads the
+                      patch TEXT to produce the marker either — no slice, no measure, no ellipsis, no
+                      re-join — and the cut report is never cross-checked against the patch in either
+                      direction: it reports the cap cut ONLY, while the daemon also scrubs invalid UTF-8
+                      by deletion, so the two genuinely can disagree (types.ts:474-477). */}
+                  {task.latestUpdate !== null && (
+                    <>
+                      {task.latestUpdate.patch === '' ? (
+                        <span className="background-task-panel__no-change">
+                          {BACKGROUND_TASK_PANEL_NO_CHANGE_COPY}
+                        </span>
+                      ) : (
+                        <span className="background-task-panel__patch">
+                          {task.latestUpdate.patch}
+                        </span>
+                      )}
+                      {wasCut(task.latestUpdate.truncatedFields, CUT_FIELD_PATCH) && (
+                        <span className="background-task-panel__cut-patch">
+                          {BACKGROUND_TASK_PANEL_CUT_COPY}
+                        </span>
+                      )}
+                    </>
                   )}
                 </li>
               ))}

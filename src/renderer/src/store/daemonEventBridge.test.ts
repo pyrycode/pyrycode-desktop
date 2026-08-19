@@ -277,6 +277,24 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'compacting', active: false })).toBeNull()
   })
 
+  it('modelAnnounced → null (consumed by the announced-model store #588, not the session store)', () => {
+    expect(
+      translateDaemonEvent({
+        type: 'modelAnnounced',
+        model: 'claude-haiku-4-5-20251001',
+        truncated: false
+      })
+    ).toBeNull()
+    // A cut identifier is no more a session action than a complete one.
+    expect(
+      translateDaemonEvent({
+        type: 'modelAnnounced',
+        model: 'claude-haiku-4-5-2025',
+        truncated: true
+      })
+    ).toBeNull()
+  })
+
   it('backgroundTaskStarted → null (consumed by the #567 background-task store, not the session store)', () => {
     expect(
       translateDaemonEvent({

@@ -147,6 +147,13 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // assertNever guard below makes a new arm a compile error (the
       // apiRetry-was-a-no-op-until-#493 precedent).
       return null
+    case 'modelAnnounced':
+      // No session-store action: the announced-model store (#588, not yet built) holds the identifier
+      // claude named for the turn, not the session store — which holds no model state at all (its
+      // `model` neighbours on snapshotReceived / runConfigReceived are the per-session OVERRIDE, a
+      // different value that goes elsewhere). Present only because the assertNever guard below makes a
+      // new arm a compile error (the compacting-was-a-no-op-until-#496 precedent).
+      return null
     case 'backgroundTaskStarted':
       // No session-store action: the background-task store (#567, not yet built) holds the set of tasks
       // claude left running, not the session store — which holds no background-task state at all.

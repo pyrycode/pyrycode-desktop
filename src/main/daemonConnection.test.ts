@@ -293,6 +293,11 @@ function compactingPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'compacting', ts: FIXED_TS, payload })
 }
 
+/** A `model_announced` plaintext, wrapping an arbitrary payload (#587). */
+function modelAnnouncedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'model_announced', ts: FIXED_TS, payload })
+}
+
 /** A `background_task_started` plaintext, wrapping an arbitrary payload (#564). */
 function backgroundTaskStartedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'background_task_started', ts: FIXED_TS, payload })
@@ -1800,6 +1805,111 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: compactingPlaintext({ conversation_id: 'conv-1', active: 'true' })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — model_announced stream (#587)', () => {
+  /** The daemon's canonical fixture (testdata/model_announced.json). */
+  const ANNOUNCED = {
+    conversation_id: 'conv-1',
+    model: 'claude-haiku-4-5-20251001',
+    truncated: false
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('decodes a model_announced into exactly one modelAnnounced event (conversation_id dropped)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: modelAnnouncedPlaintext(ANNOUNCED) })
+
+    const events = emitted(sink).slice(before)
+    // A strict toEqual on the whole event: `conversation_id` did not ride along, asserted POSITIVELY
+    // (the arm has exactly `type` / `model` / `truncated`), not by absence of a substring.
+    expect(events).toEqual([
+      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false }
+    ])
+    expect(JSON.stringify(events)).not.toContain('conv-1')
+  })
+
+  it('carries the identifier to the sink BYTE-FOR-BYTE — no re-casing introduced at the emit', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modelAnnouncedPlaintext({ ...ANNOUNCED, model: 'Claude-Opus-5_TEST.20260819' })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'modelAnnounced', model: 'Claude-Opus-5_TEST.20260819', truncated: false }
+    ])
+  })
+
+  it('carries truncated true to the sink — the cut report crosses IPC with the value', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modelAnnouncedPlaintext({ ...ANNOUNCED, truncated: true })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: true }
+    ])
+  })
+
+  it('does NOT dedup: two identical announcements each emit their own event', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    for (let i = 0; i < 2; i++) {
+      drivers[0].emit({ type: 'message', plaintext: modelAnnouncedPlaintext(ANNOUNCED) })
+    }
+
+    // Two frames, two events, in wire order — no coalescing, no last-value memo. This pins the "no
+    // dedup" contract against a future optimiser adding state to this leg: a re-announcement is what
+    // tells a consumer the value is still current.
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false },
+      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false }
+    ])
+  })
+
+  it('emits exactly the three modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modelAnnouncedPlaintext({ ...ANNOUNCED, smuggled: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual(['model', 'truncated', 'type'])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('drops a malformed model_announced without emitting or throwing (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: modelAnnouncedPlaintext({ ...ANNOUNCED, truncated: 'true' })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

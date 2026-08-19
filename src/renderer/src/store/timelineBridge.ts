@@ -158,6 +158,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'backgroundTaskStarted':
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
+    case 'modelAnnounced':
       // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
       // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
       // render), the create render slice (#242), the #261 / #256 session-settings consumers
@@ -192,6 +193,11 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // consumer, same wire facts: no turn_id, opens and closes no turn. A snapshot of what claude left
       // running is daemon STATE, not a turn-stream item, even when it is empty. Whether the
       // background-task panel ever becomes a timeline surface remains #568's call.
+      // modelAnnounced (#587) ships dormant here on the same wire facts — no turn_id, opens and closes
+      // no turn — so it is daemon STATE by the queueState rule (#720): an identity report ABOUT the
+      // turn claude is running is not an item IN it. Its consumer is the #588 announced-model store,
+      // and whether the announced model ever becomes a visible surface is #588's call, not this decode
+      // slice's.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

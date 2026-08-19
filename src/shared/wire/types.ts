@@ -82,6 +82,12 @@ export type EnvelopeType =
   // rather than amending it — and an EMPTY `tasks` is the positive statement that NOTHING is alive,
   // which is the payoff signal of the whole family. Same gating and same non-turn character.
   | 'background_task_roster'
+  // The announced-model report (#587). Grouped alone rather than with the status cluster above,
+  // following the daemon's own rationale: it is not a turn sub-state with two edges, not
+  // turn-independent work, not a periodic reading and not a condition report about a window. It is an
+  // IDENTITY report — what claude says it IS, for the turn it says it about. SSOT pyrycode#1616 /
+  // internal/protocol/codes.go TypeModelAnnounced; binary → phone only.
+  | 'model_announced'
   | 'dequeue_message'
   // v2-only bare phone→binary control frame — maps to a single claude Esc (stops the current
   // turn). Carries NO conversation_id / nonce / answer_token / payload; daemon-gated on the
@@ -382,6 +388,58 @@ export interface ApiRetryPayload {
 export interface CompactingPayload {
   conversation_id: string
   active: boolean
+}
+
+/**
+ * Inbound `model_announced` event (daemon → client). Mirrors the daemon's ModelAnnouncedPayload
+ * field-for-field (SSOT pyrycode#1616, internal/protocol/interactive.go:462; producer #1638), wire
+ * order `conversation_id, model, truncated` — all three ALWAYS PRESENT (no `omitempty`; the daemon's
+ * own zero fixture testdata/model_announced_zero.json round-trips `{"","",false}`). Fanned out ONLY to
+ * `interactive`-capable clients: claude names the model it resolved for a turn on its `system` / `init`
+ * line, and until #1638 that value stopped at the daemon boundary.
+ *
+ * NOT a claude sub-state like its `stall` / `api_retry` / `compacting` neighbours, and not a daemon
+ * mapping gap like `unrecognized_message`. It is an IDENTITY report — what claude says it IS, for the
+ * turn it says it about. It answers what the spawn argument cannot: the daemon knows what it REQUESTED,
+ * only claude knows what it GOT. Conversation-scoped rather than turn-scoped, so there is NO `turn_id`,
+ * and receiving one neither opens nor closes a turn.
+ *
+ * `model` IS THE RENDER PAYLOAD and is claude's identifier VERBATIM — never empty (the producer
+ * suppresses the event on an empty model). claude echoes an identifier AT LEAST AS SPECIFIC as the one
+ * it was given, so the value is not reliably dated and NEED NOT APPEAR IN ANY PUBLISHED MODEL LIST:
+ * requesting `haiku` yields `claude-haiku-4-5-20251001`, requesting `claude-haiku-4-5` yields it back
+ * unchanged, requesting nothing yields `claude-sonnet-5`. A LOOKUP MISS IS THEREFORE ORDINARY, not an
+ * error. Hold it verbatim: no normalising, no lowercasing, no allow-list, and above all no regexing a
+ * family out of it — the published list mixes dated (`claude-haiku-4-5-20251001`) and undated
+ * (`claude-opus-5`) shapes, so any pattern that works today breaks on the first identifier without a
+ * family word. Resolution to a display name is #588's concern and is an exact lookup, never inference.
+ *
+ * `truncated` is a BOOL, not the background-task / rate-limit `truncated_fields: string[]`, following
+ * UnrecognizedMessagePayload: this payload bounds a SINGLE string, so a name list would be permanently
+ * either `null` or `["model"]`. It is load-bearing either way — a reader that ignores it presents
+ * claude's cut identifier as a complete one, and that failure is sharper here than elsewhere, because a
+ * cut identifier will ALWAYS miss #588's exact lookup and so will always render verbatim, looking
+ * exactly like a legitimate unrecognised model.
+ *
+ * The bound is the PRODUCER's, decided at construction (pyrycode internal/streamsup/parser.go's
+ * `maxModelField`, 256). This type re-decides no maximum: a second cap here would be a second place the
+ * limit is decided and the two could disagree silently. Nor is there a charset check — pyrycode
+ * internal/relay's `validModel` bounds a PHONE-SUPPLIED OVERRIDE and is deliberately a different rule;
+ * applying it here would reject identifiers claude legitimately announces.
+ *
+ * SECURITY: `model` is a claude-authored string that crossed the subprocess trust boundary. The daemon
+ * BOUNDS it but does NOT SANITIZE it — no control-character or terminal-escape stripping happens
+ * anywhere on this path — so it stays untrusted, model-influenced text and the render boundary owes the
+ * sanitization. Safe to render as INERT PLAIN TEXT only: never through an HTML sink (`innerHTML` /
+ * `dangerouslySetInnerHTML`), never into an attribute, never into a URL. It is a REPORT, NEVER A
+ * CONTROL INPUT — no security-relevant behaviour may branch on it.
+ *
+ * See #587 (this decode) and #588 (the store).
+ */
+export interface ModelAnnouncedPayload {
+  conversation_id: string
+  model: string
+  truncated: boolean
 }
 
 /**

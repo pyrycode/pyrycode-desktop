@@ -344,6 +344,24 @@ export type DaemonEvent =
   three exhaustive bridges at ship time. Ships dormant no longer: [the background-task-roster store
   (#573, shipped)](../codebase/573.md) is the first consumer, an independent subscriber outside the three
   exhaustive bridges. Third and last of the sibling frame members.
+- **`modelAnnounced{model,truncated}`** ([#587](../codebase/587.md)) also maps to *no* `SessionAction`,
+  consumed by **none** of the three existing bridges — the real consumer is the still-unbuilt
+  announced-model store, #588. Claude's own identity report for the turn (its `system`/`init` line),
+  answering what the spawn argument cannot: the daemon knows what it *requested*, only claude knows what
+  it *got*. **`model` collides by name with two arms above and means the opposite thing** —
+  `snapshotReceived` and `runConfigReceived` both carry a `model: string` meaning the per-session
+  *override* (`''` = "inherited default, no override"); this one means what claude *announced*, and in
+  the ordinary case the two disagree (the override is `''` while claude has named a concrete model). The
+  wire field name is kept (no drift, ADR 0002); the distinction is drawn in the arm's own comment, the
+  way the daemon's own payload doc draws it. `model` is held verbatim — not reliably dated, need not
+  appear in any published model list, so a lookup miss on #588's side is ordinary, not an error.
+  `truncated` is load-bearing: sharper here than on `unrecognizedMessage`, because a cut identifier
+  always misses #588's exact lookup and so always renders verbatim, looking exactly like a legitimate
+  unrecognised model. `conversation_id` is dropped — the `turnState`/`stallDetected`/`apiRetry`/
+  `compacting` convention (#588 holds a single value replaced per announcement). Not deduped: the
+  transport holds no state, so N daemon frames (including a verbatim repeat) produce N events — that
+  repeat is what tells #588 the value is still current. Ships dormant — all three exhaustive bridges
+  no-op it until #588, the `compacting`-was-a-no-op-until-#496 precedent.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -464,6 +482,13 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#564 codebase notes](../codebase/564.md) — the `backgroundTaskStarted` member, `apiRetry`/`compacting`'s peer on the v2 stream but widened to five strings plus a nullable string array; first of three sibling frame members (#565/#566 follow), and — like `queueState` — **keeps** `conversationId` because the frame is daemon state (no `turn_id`, opens/closes no turn) rather than a turn-stream item. Ships dormant, consumed by none of the three exhaustive bridges; [the background-task-roster store (#573, shipped)](../codebase/573.md) is live but consumes only the sibling `backgroundTaskRoster` member below, so this arm stays dormant, awaiting #574
 - [#565 codebase notes](../codebase/565.md) — the `backgroundTaskUpdated` member, `backgroundTaskStarted`'s peer joined on `taskId` but narrowed to four fields (no `toolCallId`/`description`/`taskType`) plus the new opaque `patch` string, which is never typed as JSON and never parsed on this path — the daemon's own golden fixture is cut mid-token. Also **keeps** `conversationId`, the same in-family precedent as its sibling. Second of three sibling frame members (#566 follows). Ships dormant, consumed by none of the three exhaustive bridges; [the background-task-roster store (#573, shipped)](../codebase/573.md) is live but consumes only the sibling `backgroundTaskRoster` member below, so this arm stays dormant, awaiting #574
 - [#566 codebase notes](../codebase/566.md) — the `backgroundTaskRoster` member, the **aggregate peer** of the two scalar arms above: they report what happened to one task, this reports the whole live set, as a snapshot, not a delta. Reuses the wire `BackgroundTask` row type verbatim (the `queueState`/`conversationsReceived` nested-array precedent — snake_case, no remap), keeps `conversationId` for the same in-family reason, and `tasks: []` is the payoff signal pyrycode#1240 needs — a positive statement that nothing is alive, never filtered out. `droppedTasks` is the frame's only truncation report. Third and last of the sibling frame members. Consumed by none of the three exhaustive bridges; ships dormant no longer — [the background-task-roster store (#573, shipped)](../codebase/573.md) is the first consumer
+- [#587 codebase notes](../codebase/587.md) — the `modelAnnounced` member, an identity report (claude's
+  resolved model for the turn) rather than a turn sub-state; collides by name with `snapshotReceived`/
+  `runConfigReceived`'s `model` (the per-session override) and the arm's comment draws the distinction.
+  `truncated` is load-bearing the same way `unrecognizedMessage`'s is, sharpened by the fact a cut
+  identifier always misses the display-name lookup. `conversation_id` dropped, not deduped. Consumed by
+  none of the three exhaustive bridges; ships dormant — the still-open announced-model store #588 is the
+  first consumer.
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

@@ -98,6 +98,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'backgroundTaskStarted':
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
+    case 'modelAnnounced':
       // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
       // conversation-list store (#208), timeline store (#202), create render slice (#242), the #259
       // session-id holder, the #261 / #256 session-settings consumers (confirmed + rejected #269),
@@ -117,7 +118,9 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // same dormant #567 consumer, and a change to a task claude left running is no more a modal than
       // its opening was. backgroundTaskRoster (#566) closes the family on the same terms: same dormant
       // #567 consumer, and a snapshot of what claude left running is not a modal either — nothing is
-      // waiting on an answer, not even when the roster is empty.
+      // waiting on an answer, not even when the roster is empty. modelAnnounced (#587) ships dormant on
+      // the same terms; its consumer is the #588 announced-model store — an identity report about the
+      // turn claude is running is not a modal, since nothing is waiting on an answer.
       return null
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a

@@ -1,24 +1,27 @@
-// The renderer data path feeding the background-task store: it observes TWO typed daemon events — the
+// The renderer data path feeding the background-task store: it observes THREE typed daemon events — the
 // `backgroundTaskRoster` aggregate (#566's transport half decodes the `background_task_roster`
-// snapshot: `conversationId` plus the live rows and the drop count) and the `backgroundTaskStarted`
-// scalar (#564: the six fields that open one task, `toolCallId` among them) — and lands each in the
-// app-singleton `backgroundTaskRosterStore` the panel slice (#568) will read, where they are JOINED on
-// `conversationId` + `taskId`. Reactive-only — like queueBridge and sessionIdBridge, the daemon PUSHES
-// both unsolicited, so there is NO request half: no command sent, no connected-edge fetch. The helpers
-// are React-free and injected, so the whole path is unit-testable with plain spies;
-// `BackgroundTaskRosterData` is the thin React glue over them. Nothing here touches keys, sockets,
-// ipcRenderer, or raw frames — it only subscribes through the preload bridge and dispatches an
-// already-typed event.
+// snapshot: `conversationId` plus the live rows and the drop count), the `backgroundTaskStarted`
+// scalar (#564: the six fields that open one task, `toolCallId` among them) and the
+// `backgroundTaskUpdated` scalar (#565: four fields — the latest patch and its own cut report) — and
+// lands each in the app-singleton `backgroundTaskRosterStore` the panel slice (#568) will read, where
+// they are JOINED on `conversationId` + `taskId`. Reactive-only — like queueBridge and sessionIdBridge,
+// the daemon PUSHES all three unsolicited, so there is NO request half: no command sent, no
+// connected-edge fetch. The helpers are React-free and injected, so the whole path is unit-testable
+// with plain spies; `BackgroundTaskRosterData` is the thin React glue over them. Nothing here touches
+// keys, sockets, ipcRenderer, or raw frames — it only subscribes through the preload bridge and
+// dispatches an already-typed event.
 //
-// SECURITY: both arms carry untrusted, model-influenced `description` text — for `local_bash` the
-// literal command line claude ran. This path has no DOM sink and runs no JSON.parse; it copies named
-// fields and never interprets them. The inert-plain-text obligation binds #568.
+// SECURITY: two arms carry untrusted, model-influenced `description` text — for `local_bash` the
+// literal command line claude ran — and the third carries a `patch` whose keys may carry the same class
+// of text under a structured-looking shape. This path has no DOM sink and runs no JSON.parse; it copies
+// named fields and never interprets them. The inert-plain-text obligation binds #568.
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import {
   backgroundTaskRosterStore,
   type BackgroundTaskRosterSnapshot,
-  type BackgroundTaskStartedSnapshot
+  type BackgroundTaskStartedSnapshot,
+  type BackgroundTaskUpdatedSnapshot
 } from './backgroundTaskRosterStore'
 
 /**
@@ -63,10 +66,9 @@ export function translateBackgroundTaskRoster(
  * carries; `truncatedFields` passes through untouched, so `null` ("nothing was cut") reaches the store
  * as `null` and is never collapsed into `[]` (AC3).
  *
- * `backgroundTaskUpdated` stays dormant on this path — it is #577's, and it builds on the held shape
- * this slice introduces. Leaving it unhandled compiles green precisely because this bridge is
- * `default: null` rather than one of the three `assertNever` ones, which is what makes this slice
- * independently shippable ahead of its sibling.
+ * `backgroundTaskUpdated` belongs to the THIRD translator below rather than to this one: one owned arm
+ * per translator is the posture this bridge keeps, so neither sibling's assertions move when another
+ * arm lands.
  */
 export function translateBackgroundTaskStarted(
   event: DaemonEvent
@@ -79,6 +81,33 @@ export function translateBackgroundTaskStarted(
         toolCallId: event.toolCallId,
         taskType: event.taskType,
         description: event.description,
+        truncatedFields: event.truncatedFields
+      }
+    default:
+      return null
+  }
+}
+
+/**
+ * The updated filter — the third sibling, same posture again: one owned arm, a fresh named-field
+ * literal, `default: null`, React-free. FOUR fields, not six: the arm carries no `toolCallId`, no
+ * `description` and no `taskType`, and it gains `patch`.
+ *
+ * `patch` is copied VERBATIM and never parsed, key-enumerated, or inspected here — it is opaque text
+ * that is not guaranteed to be valid JSON (the daemon truncates it at construction). `patch: ''` is a
+ * value meaning "claude sent no change" and always arrives, so there is deliberately no
+ * `if (event.patch)` anywhere on this path. `truncatedFields` passes through untouched, so `null`
+ * ("nothing was cut") reaches the store as `null` and is never collapsed into `[]` (AC3).
+ */
+export function translateBackgroundTaskUpdated(
+  event: DaemonEvent
+): BackgroundTaskUpdatedSnapshot | null {
+  switch (event.type) {
+    case 'backgroundTaskUpdated':
+      return {
+        conversationId: event.conversationId,
+        taskId: event.taskId,
+        patch: event.patch,
         truncatedFields: event.truncatedFields
       }
     default:
@@ -107,15 +136,17 @@ export function translateBackgroundTaskStarted(
  * filtering rather than truthiness — a snapshot object is truthy even when its `tasks` are empty, so the
  * way an empty roster gets dropped is a `length === 0` check at the translator, not here. Keeping the
  * guards on `!== null` and the translators unconditional is what makes the observed-empty case survive
- * the whole path. The two arms are mutually exclusive, so the roster branch returns before the started
- * translator runs. Injected `onDaemonEvent` + the three writers keep this React-free and unit-testable
- * with plain spies. The listener only translates + dispatches — it never throws into React.
+ * the whole path. The three arms are mutually exclusive, so branch ORDER is a readability choice rather
+ * than a correctness one and each matched branch returns. Injected `onDaemonEvent` + the four writers
+ * keep this React-free and unit-testable with plain spies. The listener only translates + dispatches —
+ * it never throws into React.
  */
 export function subscribeBackgroundTaskRoster(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void,
   resetRosters: () => void,
-  setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void
+  setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void,
+  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'connected') {
@@ -128,7 +159,12 @@ export function subscribeBackgroundTaskRoster(
       return
     }
     const started = translateBackgroundTaskStarted(event)
-    if (started !== null) setStartedTask(started)
+    if (started !== null) {
+      setStartedTask(started)
+      return
+    }
+    const updated = translateBackgroundTaskUpdated(event)
+    if (updated !== null) setUpdatedTask(updated)
   })
 }
 
@@ -148,15 +184,17 @@ export function BackgroundTaskRosterData(): null {
   useEffect(() => {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode double-mount
     // nets exactly one live listener (the queueBridge idiom). Each roster replaces its conversation's
-    // held membership; each started frame upserts one task into it; a connected edge clears every one
-    // of them (AC5). All three write paths ride this one listener, dispatched synchronously in arrival
-    // order, so there is no gap between reading and writing the store that a concurrent handler could
+    // held membership; each started frame upserts one task into it; each update records one task's
+    // latest patch, or is dropped when it matches none; a connected edge clears every one of them
+    // (AC5). All four write paths ride this one listener, dispatched synchronously in arrival order,
+    // so there is no gap between reading and writing the store that a concurrent handler could
     // interleave into.
     return subscribeBackgroundTaskRoster(
       window.pyry.onDaemonEvent,
       (snapshot) => backgroundTaskRosterStore.getState().setRoster(snapshot),
       () => backgroundTaskRosterStore.getState().resetRosters(),
-      (snapshot) => backgroundTaskRosterStore.getState().setStartedTask(snapshot)
+      (snapshot) => backgroundTaskRosterStore.getState().setStartedTask(snapshot),
+      (snapshot) => backgroundTaskRosterStore.getState().setUpdatedTask(snapshot)
     )
   }, [])
 

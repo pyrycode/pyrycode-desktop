@@ -157,6 +157,21 @@ snake_case — the `queue_state` nested-array precedent, not a remap. Ships dorm
 background-task-roster store (#573, shipped)](../codebase/573.md) is the first consumer, holding `tasks`/
 `droppedTasks` verbatim per `conversationId`.
 
+[#587](../codebase/587.md) added a nineteenth kind, `model_announced` → `model-announced` — claude's own
+report of the model it resolved for the turn, off its `system` / `init` line (pyrycode#1616 shape,
+#1638 producer). Not a claude sub-state like `stall`/`api_retry`/`compacting`, and not a daemon mapping
+gap like `unrecognized_message`: an **identity** report, carrying no `turn_id` and opening/closing no
+turn. `ModelAnnouncedPayload{conversation_id, model, truncated}` is `parseUnrecognizedMessagePayload`'s
+shape minus `site`/`message_type` — three fields, all mapping onto existing helpers (`requireString` ×2,
+`requireBoolean`), so **no new helper**. `model` is held **verbatim**: no length check, no charset
+check, no allow-list, no normalisation — the producer's own 256-byte cap
+(`internal/streamsup/parser.go:338`) and the frame-level `MAX_PLAINTEXT_BYTES` backstop already cover
+it, and a client-invented rule would silently drop identifiers claude legitimately announces (not
+reliably dated, need not appear in any published list). `truncated` goes through `requireBoolean` and is
+never optional or defaulted — a defaulting reader would present a cut identifier as a complete one. The
+consumer arm carries `model`/`truncated` onward and drops `conversation_id` (the `turnState` convention
+— #588 holds a single value replaced per announcement). Ships dormant; #588 is the first consumer.
+
 ## Where it lives
 
 `src/main/transport/inboundMessage.ts` — sibling to `helloExchange.ts` (handshake `hello` / `hello_ack`) and `sendMessageEnvelope.ts` (outbound builder). **Main-process only:** it imports the [wire codec](wire-codec.md) (`codec.ts`, transitively Node `Buffer`) and the payload it narrows carries message plaintext. It is never re-exported through a renderer barrel — the plaintext and raw bytes must stay out of the web layer.
@@ -182,6 +197,7 @@ export type InboundDaemonMessage =
   | { kind: 'stall'; stall: StallPayload }                      // #315, additive
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }            // #492, additive — NOT nullary
   | { kind: 'compacting'; compacting: CompactingPayload }       // #495, additive — banner-only
+  | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }  // #587, additive — identity report
   | { kind: 'tool-use'; toolUse: ToolUsePayload }               // #217, additive
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }      // #201, additive
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }  // #201, additive
@@ -196,9 +212,10 @@ export type InboundDaemonMessage =
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`stall`/
-//                            `api_retry`/`compacting`/`tool_use`/`modal_shown`/`modal_dismissed`/`tool_result`/
-//                            `conversation_created`/`session_transition`/`session_settings_updated`/
-//                            `background_task_started`/`background_task_updated`/`background_task_roster`
+//                            `api_retry`/`compacting`/`model_announced`/`tool_use`/`modal_shown`/
+//                            `modal_dismissed`/`tool_result`/`conversation_created`/`session_transition`/
+//                            `session_settings_updated`/`background_task_started`/
+//                            `background_task_updated`/`background_task_roster`
 //                            envelope, fully narrowed
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
@@ -349,6 +366,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `background_task_started` ([#564](../codebase/564.md)) | `inbound-decoded` | `code: 'background_task_started'`, `bytes`, `hash` — never `conversation_id`/`task_id`/`tool_call_id`/`description`/`task_type`/`truncated_fields`; narrows before logging, so a malformed frame leaves no record |
 | modeled `background_task_updated` ([#565](../codebase/565.md)) | `inbound-decoded` | `code: 'background_task_updated'`, `bytes`, `hash` — never `conversation_id`/`task_id`/`patch`/`truncated_fields`, least of all `patch` (whose keys may carry command text); narrows before logging, so a malformed frame leaves no record |
 | modeled `background_task_roster` ([#566](../codebase/566.md)) | `inbound-decoded` | `code: 'background_task_roster'`, `bytes`, `hash` — never `conversation_id`/`tasks`/`dropped_tasks`, least of all a row's `description` (a literal command line); deliberately **no `count`** either, though `DiagnosticEvent` already has one — the roster size is itself a fact about the user's session; narrows before logging, so a malformed frame leaves no record |
+| modeled `model_announced` ([#587](../codebase/587.md)) | `inbound-decoded` | `code: 'model_announced'`, `bytes`, `hash` — never `conversation_id`/`model`/`truncated`, least of all `model` (claude-authored text that crossed the subprocess trust boundary); narrows before logging, so a malformed frame leaves no record |
 | unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
 
 Load-bearing details:
@@ -557,6 +575,12 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [#564 codebase notes](../codebase/564.md) — the sixteenth additive extension: the `background_task_started` kind, `parseBackgroundTaskStartedPayload` (`parseApiRetryPayload` scaled from four fields to six), and the new `requireStringArrayOrNull` field narrower — required-present with a nullable array value, borrowing `parseQueuedItem`'s posture (one bad element fails closed, empty array valid) but not its record-narrower shape, since this frame's array elements are bare strings. First of three sibling frames (#565/#566 follow); the consumer arm keeps `conversation_id`, unlike `api_retry`/`compacting`.
 - [#565 codebase notes](../codebase/565.md) — the seventeenth additive extension, the subset twin of #564: the `background_task_updated` kind and `parseBackgroundTaskUpdatedPayload` (`parseBackgroundTaskStartedPayload` scaled from six fields to four — no new field narrower, reuses `requireStringArrayOrNull` unchanged). Gains `patch`, an opaque string never fed to `JSON.parse` (the daemon's own golden fixture is cut mid-token); `requireString`'s bare `typeof` check lets `patch: ''` through free while an omitted `patch` key still fails closed. Second of three sibling frames (#566 follows); the consumer arm keeps `conversation_id` and performs no join against `background_task_started` — ordering is claude's, not the daemon's.
 - [#566 codebase notes](../codebase/566.md) — the eighteenth additive extension, the third and last sibling frame: the `background_task_roster` kind and `parseBackgroundTaskRosterPayload` + the new row narrower `parseBackgroundTask`. `tasks` takes `parseQueueStatePayload`'s inline shape (`Array.isArray` + `raw.map`), not `requireStringArrayOrNull` — the trap: `tasks: null` fails closed while a row's `truncated_fields: null` (decoded via the existing `requireStringArrayOrNull`, per row) is a valid value, because the daemon's only custom `MarshalJSON` normalises a nil `Tasks` to `[]` and deliberately does not normalise `truncated_fields`. The row is four fields, not the scalar siblings' four (no `tool_call_id`, no `patch`) — cloned from `parseQueuedItem`'s posture, not `parseBackgroundTaskStartedPayload`'s shape. `dropped_tasks` is the frame's only truncation report, via plain `requireNumber`. Consumer arm keeps `conversation_id` and passes the row array through by reference, snake_case.
+- [#587 codebase notes](../codebase/587.md) — the nineteenth additive extension: the `model_announced`
+  kind, `parseModelAnnouncedPayload` (`parseUnrecognizedMessagePayload`'s shape minus `site`/
+  `message_type` — three fields, no new helper), and the identity-report grouping (no `turn_id`, opens
+  and closes no turn) that keeps it out of the `stall`/`api_retry`/`compacting` status cluster despite
+  sitting beside it in `InboundDaemonMessage`. `model` is held verbatim (no length/charset check, no
+  allow-list); `truncated` is required and never defaulted. Ships dormant; #588 is the first consumer.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

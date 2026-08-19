@@ -2254,7 +2254,38 @@
    marked and so #580 can style them apart. No padding: the row provides it, and the row is
    flex-direction: column, so each marker lands on its own line under its field. */
 .background-task-panel__cut-description,
-.background-task-panel__cut-type {
+.background-task-panel__cut-type,
+.background-task-panel__cut-patch {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* #583 — the latest change claude reported about a task. Neither of these is an error state either: a
+   patch is a change report about something still ALIVE, and this family reports no terminal event at all,
+   so nothing here takes an error colour or names a completion. Own classes, no positional CSS. */
+
+/* The patch itself. Mono like the description — it is structured-looking text — but MUTED body-small
+   rather than on-surface body-medium, so the task's identity stays the primary line. Wrapping, not
+   ellipsized: overflow-wrap breaks a 4 KiB unbroken token instead of overflowing the panel, and
+   .status-sheet__body already scrolls, so no height clamp is needed here. Clamping is a visual decision
+   #580 owns — and if it lands it must stay CSS-only, never a substring operation on daemon text. */
+.background-task-panel__patch {
+  min-width: 0;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
+/* The recorded-empty-patch reading — client copy, not daemon text, so it wears the muted prose set
+   .background-task-panel__type does rather than the patch's mono. */
+.background-task-panel__no-change {
   color: var(--color-on-surface-variant);
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);

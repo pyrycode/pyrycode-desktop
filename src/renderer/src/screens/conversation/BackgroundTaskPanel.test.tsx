@@ -72,9 +72,9 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
     expect(markup.indexOf('npm run build')).toBeLessThan(markup.indexOf('index the repository'))
   })
 
-  it('renders no task field beyond description and taskType (AC3)', () => {
+  it('renders no task field beyond description, taskType and the held patch (AC3)', () => {
     // Distinctive sentinels rather than realistic values: a realistic truncated_fields entry
-    // (`description`) would collide with other copy. `latestUpdate` is #583's seam and stays unread.
+    // (`description`) would collide with other copy.
     //
     // #582 revised this test rather than fighting it. It was written with `droppedTasks: 987654` and an
     // assertion that the count never rendered — true of the shell, FALSE the moment #582 renders the
@@ -82,6 +82,15 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
     // count assertion is gone: the dropped count has its own tests below, and this test is about TASK
     // fields, which is what its name claims. `SENTINELTASKCUT` stays, and now guards AC5 as well — it is
     // an unrecognised truncated-field name, so it must render no marker AND never reach the markup.
+    //
+    // #583 revised it the same way, one field over. `not.toContain('SENTINELPATCH')` was true of the
+    // shell — which left `latestUpdate` deliberately unread — and is FALSE the moment #583's AC1 renders
+    // the patch, so that one line is gone; the patch has its own tests below. `SENTINELPATCHCUT` STAYS
+    // and is now a live guard for #583's AC3: an unrecognised patch-cut name must mark nothing and must
+    // never be displayed. It is deliberately NOT flipped into a positive `toContain('SENTINELPATCH')` —
+    // `SENTINELPATCH` is a PREFIX SUBSTRING of `SENTINELPATCHCUT`, so that "proof" would also pass on a
+    // render displaying only the forbidden cut-field name. The #583 fixtures below use non-overlapping
+    // values for exactly that reason.
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
         entry={entry(
@@ -99,7 +108,6 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
     )
     expect(markup).not.toContain('SENTINELTOOLCALL')
     expect(markup).not.toContain('SENTINELTASKCUT')
-    expect(markup).not.toContain('SENTINELPATCH')
     expect(markup).not.toContain('SENTINELPATCHCUT')
   })
 
@@ -351,5 +359,199 @@ describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)',
     expect(markup).not.toContain('href="')
     expect(markup).not.toContain('src="')
     expect(markup).not.toMatch(/\son[a-z]+="/)
+  })
+})
+
+// #583: the latest change claude reported about a task — the held `latestUpdate` pair the shell named as
+// this ticket's seam and left deliberately unread. Every state is constructible from the shell's
+// `task(overrides)` / `entry(tasks, droppedTasks)` helpers above; no fixture changes were needed.
+describe('BackgroundTaskPanelView — the latest reported change (#583)', () => {
+  it('renders a markup-shaped patch as inert escaped text (AC1)', () => {
+    // `patch` is untrusted, model-influenced daemon-relayed text whose keys may carry command text
+    // exactly as `description` does — and its structured-looking shape makes it the MORE tempting thing
+    // to feed somewhere structured (backgroundTaskRosterStore.ts:87-93 states the rule for this field
+    // rather than inheriting the sibling's, for that reason). The same hostile fixture the description
+    // is rendered with, so the two paths are held to one standard.
+    const markup = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([
+          task({ latestUpdate: { patch: '<img src=x onerror="alert(1)">', truncatedFields: null } })
+        ])}
+        onClose={noop}
+      />
+    )
+    expect(markup).toContain('background-task-panel__patch')
+    expect(markup).toContain('&lt;img')
+    // The tag never opens: `<` is escaped, so the patch cannot become an element.
+    expect(markup).not.toContain('<img')
+    // The shell's structural guards, attribute-SHAPED and asserted across the WHOLE markup, extended
+    // over the patch path rather than replaced by a narrower net. NOT bare-substring absences like
+    // `not.toContain('src=')` or `not.toContain('javascript:')`: React escapes markup metacharacters and
+    // not arbitrary text, so the escaped patch still carries `src=` inertly and those would fail on a
+    // CORRECT render. A quoted attribute is unforgeable from escaped text — renderToStaticMarkup always
+    // quotes attribute values and escapes `"` → `&quot;` — so these fail on any attribute placement of
+    // the patch anywhere in the panel, including a `title=` tooltip.
+    expect(markup).not.toContain('href="')
+    expect(markup).not.toContain('src="')
+    expect(markup).not.toMatch(/\son[a-z]+="/)
+  })
+
+  it('keeps the three readings of the held field distinct (AC2)', () => {
+    // (1) no update has ever matched this task. The row renders nothing for it — legitimate HERE, and a
+    // deliberate divergence from #581's rule that each reading gets its own element: there the branch WAS
+    // the whole panel body, so null read as broken, whereas a row still shows its description and type.
+    // What AC2 forbids is the COLLAPSE, not the absence.
+    const noUpdate = renderToStaticMarkup(
+      <BackgroundTaskPanelView entry={entry([task({ latestUpdate: null })])} onClose={noop} />
+    )
+    expect(noUpdate).toContain('background-task-panel__row')
+    expect(noUpdate).toContain('npm run build')
+    expect(noUpdate).not.toContain('background-task-panel__patch')
+    expect(noUpdate).not.toContain('background-task-panel__no-change')
+
+    // (2) a RECORDED empty patch: claude reported no change. `patch` always arrives on the wire (no
+    // `omitempty`), so `''` is a VALUE, not an absence — its own element and its own client-owned copy.
+    const emptyPatch = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([task({ latestUpdate: { patch: '', truncatedFields: null } })])}
+        onClose={noop}
+      />
+    )
+    expect(emptyPatch).toContain('background-task-panel__no-change')
+    expect(emptyPatch).toContain('No change reported')
+    expect(emptyPatch).not.toContain('background-task-panel__patch')
+
+    // (3) a reported change — the patch itself, and not the empty-patch element.
+    const withPatch = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([
+          task({ latestUpdate: { patch: 'is_backgrounded true', truncatedFields: null } })
+        ])}
+        onClose={noop}
+      />
+    )
+    expect(withPatch).toContain('background-task-panel__patch')
+    expect(withPatch).toContain('is_backgrounded true')
+    expect(withPatch).not.toContain('background-task-panel__no-change')
+
+    // The collapse guard proper, and the reason this test exists. `{task.latestUpdate?.patch && …}` —
+    // or ANY truthiness test on the patch — renders a recorded empty patch EXACTLY as a never-updated
+    // task: it compiles, type-checks, and breaks no other test. It is #582's `{entry.droppedTasks && …}`
+    // trap one field over and QUIETER — `0` at least printed a visible bare `0`, whereas `''` renders as
+    // nothing at all, so under the truthiness form these two renders are byte-identical and the collapse
+    // leaves no trace for another assertion to catch by accident. The branch is on `latestUpdate !== null`.
+    expect(emptyPatch).not.toBe(noUpdate)
+  })
+
+  it('marks the patch as cut from the UPDATES list only, never the task list (AC3)', () => {
+    // Non-overlapping fixture values throughout: `SENTINELPATCH` is a prefix substring of
+    // `SENTINELPATCHCUT`, the collision the shell's revised test above documents.
+    const cutPatch = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([task({ latestUpdate: { patch: 'PATCHTEXT', truncatedFields: ['patch'] } })])}
+        onClose={noop}
+      />
+    )
+    expect(cutPatch).toContain('background-task-panel__cut-patch')
+    expect(cutPatch).toContain('Truncated by the daemon')
+    // The marker is a SIBLING element, not text fused into the patch span: the patch still renders whole
+    // and is not sliced, measured, ellipsized or re-joined to produce the mark.
+    expect(cutPatch).toContain('PATCHTEXT')
+    expect(cutPatch).not.toContain('background-task-panel__cut-description')
+    expect(cutPatch).not.toContain('background-task-panel__cut-type')
+
+    // The mirror: the same patch with nothing cut is presented as complete.
+    const wholePatch = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([task({ latestUpdate: { patch: 'PATCHTEXT', truncatedFields: null } })])}
+        onClose={noop}
+      />
+    )
+    expect(wholePatch).toContain('background-task-panel__patch')
+    expect(wholePatch).not.toContain('background-task-panel__cut-')
+
+    // CROSSOVER A — the TASK's own list names `patch`, which is not in the task's vocabulary
+    // (`task_id` / `task_type` / `description`). `wasCut(task.truncatedFields, CUT_FIELD_PATCH)`
+    // compiles, type-checks — both lists are `readonly string[] | null` — and never matches. Nothing
+    // fails, which is why the crossover is asserted in both directions rather than assumed.
+    const taskListNamesPatch = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([
+          task({
+            truncatedFields: ['patch'],
+            latestUpdate: { patch: 'PATCHTEXT', truncatedFields: null }
+          })
+        ])}
+        onClose={noop}
+      />
+    )
+    expect(taskListNamesPatch).not.toContain('background-task-panel__cut-')
+    expect(taskListNamesPatch).toContain('PATCHTEXT')
+
+    // CROSSOVER B — the sharpest of the five: the UPDATE's list names the TASK's fields, and both names
+    // are live `CUT_FIELD_*` constants. This is exactly what fires if the description or task-type
+    // marker is wired to `latestUpdate.truncatedFields` instead of the task's own list.
+    const updateListNamesTaskFields = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([
+          task({
+            truncatedFields: null,
+            latestUpdate: { patch: 'PATCHTEXT', truncatedFields: ['description', 'task_type'] }
+          })
+        ])}
+        onClose={noop}
+      />
+    )
+    expect(updateListNamesTaskFields).not.toContain('background-task-panel__cut-')
+    expect(updateListNamesTaskFields).toContain('npm run build')
+    expect(updateListNamesTaskFields).toContain('PATCHTEXT')
+
+    // An unrecognised name in the update's list. The vocabulary is OPEN — the daemon may ship a name this
+    // panel has never heard of — so it is a valid value, not an error: no marker, never displayed, and
+    // the row and its patch still render.
+    const unknownName = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([
+          task({
+            latestUpdate: { patch: 'PATCHTEXT', truncatedFields: ['task_id', 'SENTINELFUTURENAME'] }
+          })
+        ])}
+        onClose={noop}
+      />
+    )
+    expect(unknownName).not.toContain('background-task-panel__cut-')
+    expect(unknownName).not.toContain('SENTINELFUTURENAME')
+    expect(unknownName).not.toContain('task_id')
+    expect(unknownName).toContain('background-task-panel__row')
+    expect(unknownName).toContain('PATCHTEXT')
+  })
+
+  it('presents no patch as a completion, a failure or any other terminal signal (AC4)', () => {
+    // This frame family reports NO terminal event — the daemon reports no finish, so absence from a LATER
+    // roster is the only removal path (HeldBackgroundTask:144-146). A completion or failure reading would
+    // be a claim the wire cannot support, whether it came from copy or from a BEM state modifier (the
+    // repo's terminal-state idiom is `--error`: .tool-row--error, .log-data__status--error). One regex
+    // over the whole markup catches both, since a class named `__completed` contains the word too.
+    //
+    // Both benign fixtures carry no such word themselves, which is what makes the assertion safe — and is
+    // why this test must NOT reuse the AC1 `onerror` payload. Both new displays are rendered here (a
+    // recorded change with its cut marker, and a recorded empty patch) so the sweep covers all of the new
+    // copy and classes at once.
+    const markup = renderToStaticMarkup(
+      <BackgroundTaskPanelView
+        entry={entry([
+          task({
+            taskId: 't1',
+            latestUpdate: { patch: 'is_backgrounded true', truncatedFields: ['patch'] }
+          }),
+          task({ taskId: 't2', latestUpdate: { patch: '', truncatedFields: null } })
+        ])}
+        onClose={noop}
+      />
+    )
+    expect(markup).toContain('background-task-panel__patch')
+    expect(markup).toContain('background-task-panel__cut-patch')
+    expect(markup).toContain('background-task-panel__no-change')
+    expect(markup).not.toMatch(/completed|complete|failed|failure|succeeded|success|finished|error/i)
   })
 })

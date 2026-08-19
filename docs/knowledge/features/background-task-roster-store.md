@@ -339,8 +339,8 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent
   model-influenced `task_id`, fed by the daemon's push stream, would be unbounded growth on
   attacker-influenceable input; the daemon's own per-frame cap (`maxTaskPatch`, 4 KiB) is per frame, not
   per task, so only "one held record per task" keeps the bound meaningful (#577).
-- **No reader wired in this slice.** Ships populated and unread — #568 owns the panel, and no consumer of
-  `useBackgroundTaskRosterStore`/`selectRosterFor` ships until then.
+- **No reader wired in this slice.** Shipped populated and unread through #573/#576/#577 — #568 (the
+  panel) was still open. **#581 is now the first reader** — see below.
 
 ## Related
 
@@ -370,5 +370,9 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent
   describes: the `latestUpdate` nested type, the `setUpdatedTask` setter, the third bridge translator, and
   the trap in the `setRoster` rebuild branch (a field that "no roster row can report" is two different
   kinds, and picking the wrong kind is silent and untested by any pre-existing test).
-- Feeds the still-unbuilt panel #568, which owns rendering every task's `description` **and** `patch` as
-  inert text. #569 (open) owns repopulation after a reconnect and needs a daemon-side change first.
+- [#581 codebase notes](../codebase/581.md) / [Conversation shell — Background-task
+  panel](conversation-shell.md#background-task-panel-581) — the store's first real reader: the shell of
+  #568's panel (split three ways: #581 → #582 → #583), reading `selectRosterFor(conversationId)` and
+  rendering only `description` + `taskType` per held task. `droppedTasks`/`truncatedFields` remain
+  unread until #582; `latestUpdate`/`patch` remain unread until #583. #569 (open) owns repopulation
+  after a reconnect and needs a daemon-side change first.

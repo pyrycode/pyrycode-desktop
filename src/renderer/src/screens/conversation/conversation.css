@@ -2147,3 +2147,87 @@
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
 }
+
+/* #581 — the background-task panel and its trigger. The panel reuses the .status-sheet__* chrome verbatim
+   as the INTERIM visual vocabulary (there is no Figma counterpart — the canonical file is the mobile design
+   and this is a desktop-only surface; #580 owns the real design). So nothing below is written as a
+   `.status-sheet …` descendant selector and no row carries positional CSS: #580 can swap the outer chrome
+   for a docked sidebar without touching the list. All token-based — no color/size/spacing literals. */
+
+/* The trigger beside the status row — an icon-only button in the same between-thread-and-composer region,
+   self-aligned to the start so it does not stretch full-width (the .screen-snapshot__request treatment),
+   muted like the status row it sits with. */
+.background-task-trigger {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+}
+
+.background-task-trigger:hover {
+  background: var(--color-surface-container);
+}
+
+.background-task-trigger:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* The task list — a plain semantic <ul> with the browser's list chrome reset away; the rows carry the
+   panel's own padding. */
+.background-task-panel__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One task row: the description line over the muted task-type line. Not interactive — there is no action
+   on a task in this slice — so no hover/focus affordance is advertised. */
+.background-task-panel__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+}
+
+/* The description (for a local_bash task, the command line claude ran) — mono on-surface, wrapping rather
+   than ellipsizing: a cut command line reads as a different command. overflow-wrap breaks a long unbroken
+   token instead of overflowing the panel. */
+.background-task-panel__description {
+  min-width: 0;
+  color: var(--color-on-surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+  overflow-wrap: anywhere;
+}
+
+/* The task type — the muted secondary line (the .workspace-picker__meta token set). */
+.background-task-panel__type {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
+/* The two non-populated readings — separate rules, not one shared class, so #580 can style them
+   differently. Same muted body-medium token set as .workspace-picker__empty; NEITHER is an error state, so
+   neither takes an error colour. */
+.background-task-panel__unobserved,
+.background-task-panel__empty {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
+}

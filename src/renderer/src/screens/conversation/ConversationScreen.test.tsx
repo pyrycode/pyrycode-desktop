@@ -1614,6 +1614,29 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('conn-dot--up')
   })
 
+  // #581: the background-task panel's trigger sits beside the status row, between the thread and the
+  // composer. It renders UNCONDITIONALLY — not gated on tasks existing — so both non-populated readings
+  // stay reachable through the UI; that also makes its accessible name a plain markup assertion on the
+  // default screen render. It is icon-only, so aria-label supplies the name (the StatusRow pattern).
+  it('renders the background-task panel trigger with an accessible name (#581 AC2)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('aria-label="Background tasks"')
+    expect(markup).toContain('background-task-trigger')
+  })
+
+  // #581: the panel is closed at first paint, so no task list renders on the conversation surface. This
+  // is the assertable half of "no background-task information appears in the chat timeline" — it fails
+  // if anyone mounts the list inline instead of behind the trigger. The other half is structural and
+  // needs no test: ThreadItem (ADR 0008) has no background-task arm and the bridge writes only
+  // backgroundTaskRosterStore, never the timeline reducer, so there is no code path to assert against.
+  // (The open toggle is trivial useState glue; the panel's own surface is proven on the pure
+  // BackgroundTaskPanelView describe in BackgroundTaskPanel.test.tsx.)
+  it('does not render the background-task panel or any task row while closed (#581 AC5)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).not.toContain('background-task-panel-title')
+    expect(markup).not.toContain('background-task-panel__row')
+  })
+
   // #140: the leading back affordance (Figma 16-9's arrow_back). Gated on the optional `onBack` prop
   // exactly like #166's `onUnpaired`: present only when the shell wires navigation, so the existing
   // bare `<ConversationScreen />` render is unchanged (AC3).

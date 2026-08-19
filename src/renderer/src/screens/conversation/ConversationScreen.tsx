@@ -60,6 +60,7 @@ import {
   requestRenameConversation
 } from '../channels/RenameConversationDialog'
 import { WorkspacePickerSheet } from './WorkspacePickerSheet'
+import { BackgroundTaskPanel } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
@@ -139,6 +140,12 @@ export function ConversationScreen({
   // The WorkspaceChip's "Change" button flips it open (the named "#157 Workspace Picker seam"); the sheet
   // reads the same `activeConversation` slice and `now` clock already held. One sheet at a time in normal use.
   const [pickerOpen, setPickerOpen] = useState(false)
+  // #581: the background-task panel's open/closed state — the `pickerOpen` twin, a single-value
+  // screen-local boolean → useState, never the store (ADR 0006), resetting to closed on remount for free.
+  // The BackgroundTaskTrigger beside the status row flips it open; the panel reads the roster store itself
+  // and needs only the active conversation's id, derived from the `activeConversation` slice already held
+  // above (no second subscription). One overlay at a time in normal use.
+  const [panelOpen, setPanelOpen] = useState(false)
   // #286: the render-time clock for the session-boundary delimiter's relative time (`2 hours ago`).
   // A plain render-local value, not store state (the ChannelList precedent) — safe under
   // renderToStaticMarkup, adds no subscription, and re-derives on each render so the label stays fresh.
@@ -189,6 +196,11 @@ export function ConversationScreen({
           working indicator, above the run-config row and composer. Renders nothing when empty. */}
       <QueuedBacklogControl />
       <StatusRow onExpand={() => setSheetOpen(true)} />
+      {/* #581: the background-task panel's trigger — a StatusRow sibling in the same region between the
+          thread and the composer. Rendered unconditionally, NOT gated on tasks existing: gating would make
+          both non-populated panel readings unreachable through the UI. It carries no count badge — a badge
+          would need its own roster subscription, which is the panel's job and #580's design call. */}
+      <BackgroundTaskTrigger onOpen={() => setPanelOpen(true)} />
       {/* #324: the screen-snapshot action & display — a request button (gated on the same connection read
           the composer's send-gate uses) plus a bounded <pre> panel showing the held daemon screen text
           (#323's store). Always visible (button + placeholder-or-<pre>); the <pre> is CSS-bounded so a large
@@ -233,6 +245,17 @@ export function ConversationScreen({
           conversation={activeConversation}
           now={now}
           onClose={() => setPickerOpen(false)}
+        />
+      )}
+      {/* #581: the background-task panel — the WorkspacePickerSheet twin, overlaying the conversation
+          surface with the tasks the daemon holds alive for the open conversation. It reads the roster store
+          itself, so only the conversation id goes down; with no active conversation the id is null and the
+          panel reads "never observed", which is the correct reading. It mounts no data path — the roster
+          bridge is already app-wide in App.tsx. Opened from the trigger beside the status row. */}
+      {panelOpen && (
+        <BackgroundTaskPanel
+          conversationId={activeConversation?.id ?? null}
+          onClose={() => setPanelOpen(false)}
         />
       )}
       {/* #224: the interactive permission/trust modal — the last child so it overlays the whole
@@ -1037,6 +1060,34 @@ function StatusRow({ onExpand }: { onExpand: () => void }): JSX.Element {
         aria-hidden="true"
       >
         <path d="M12 8l-6 6 1.41 1.41L12 10.83l4.59 4.58L18 14z" />
+      </svg>
+    </button>
+  )
+}
+
+// #581: the background-task panel's trigger label — client-owned copy, apostrophe-free (the standing
+// renderToStaticMarkup lesson). Never a daemon string.
+const BACKGROUND_TASK_TRIGGER_LABEL = 'Background tasks'
+
+// #581: the trigger that opens the background-task panel — the StatusRow idiom (an icon-only button whose
+// aria-label supplies its accessible name, advertising its popup via aria-haspopup="dialog"), mounted as a
+// StatusRow sibling. Chosen over the two other trigger idioms the ticket names: the overflow menu is
+// hardcoded to a single item, so routing through it would mean generalising the menu and its tests for no
+// gain here; and WorkspaceChip self-gates to null once the thread has a message, which is exactly when
+// background tasks exist. It subscribes to nothing — the panel owns the store read. In-file, like StatusRow.
+function BackgroundTaskTrigger({ onOpen }: { onOpen: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="background-task-trigger"
+      aria-label={BACKGROUND_TASK_TRIGGER_LABEL}
+      aria-haspopup="dialog"
+      onClick={onOpen}
+    >
+      {/* The Material `schedule` glyph — decorative, so aria-hidden; the button's aria-label is the
+          accessible name. */}
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+        <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" />
       </svg>
     </button>
   )

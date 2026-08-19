@@ -50,6 +50,17 @@ store](screen-snapshot-store.md), #323) — a "no snapshot yet" placeholder is s
 from a received blank screen. See [Screen-snapshot action & display](#screen-snapshot-action--display-324)
 below.
 
+An **openable background-task panel** landed in [#581](../codebase/581.md): a `StatusRow`-sibling
+trigger between the thread and the composer opens an overlay listing the tasks
+[`backgroundTaskRosterStore`](background-task-roster-store.md) (#573/#576/#577) holds alive for the
+open conversation — work that outlives a turn, which the chat's turn-shaped rendering has no way to
+express, without adding a single row to the timeline. The store's three `selectRosterFor` readings
+(never-observed, observed-with-nothing-alive, populated) render as three structurally distinct
+outputs. This slice is the shell: chrome, the trigger, the three-way branch, and one row per task
+showing `description` + `taskType` only. Split from #568 alongside #582 (truncation/cap reports) and
+#583 (latest patch); visual design is #580's. See [Background-task panel](#background-task-panel-581)
+below.
+
 The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)); the held-option marker is scoped to the exact prompt it was selected on via the prompt's `modalId`, closing a same-class-prompt collision ([#511](../codebase/511.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) below.
 
 ## How it works
@@ -70,9 +81,13 @@ ConversationScreen            .conversation        (flex column, full height, po
 │   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…")
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
 │   └── ConnectionStatusIndicatorControl .status-row__connection (two dots, inside .status-row__summary, #330)
+├── BackgroundTaskTrigger      .background-task-trigger (StatusRow sibling, unconditional, #581)
 ├── Composer                  .composer            (pinned)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
 ├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
+├── ChannelInfoSheet (if open) .status-sheet-overlay (absolute overlay, #365)
+├── WorkspacePickerSheet (if open) .status-sheet-overlay (absolute overlay, #383)
+├── BackgroundTaskPanel (if open)  .status-sheet-overlay (absolute overlay, interim chrome pending #580, #581)
 └── PermissionModal (if any)  .permission-modal-overlay (absolute overlay, last child, null when no outstanding prompt, #224)
 ```
 
@@ -522,6 +537,78 @@ Not security-sensitive: a pure renderer read of two already-decoded stores plus 
 already-guarded command; no transport/crypto/socket surface touched. Code review PASS, two non-gating
 NITs (glyph coloring, the deferred create-folder label). See [#383 codebase
 notes](../codebase/383.md) for the full design and patterns established.
+
+### Background-task panel (#581)
+
+An openable surface listing the tasks claude has running in the background for the open conversation
+— the first reader of [`backgroundTaskRosterStore`](background-task-roster-store.md), shipped and
+unread since #573. The store joins three daemon frames (roster, started, updated); this slice reads
+only two of the held per-task fields, `description` and `taskType`. Split from #568 (whose panel work
+was itself split three ways: this ticket → #582 → #583). No Figma node exists for this surface — it is
+desktop-only (pyrycode#1241) and the canonical mobile file has no counterpart; visual design is #580's,
+so the chrome deliberately reuses the shared `.status-sheet__*` overlay vocabulary as an interim
+placeholder rather than anything #580 would have to unwind.
+
+```
+.conversation
+├── BackgroundTaskTrigger              .background-task-trigger (StatusRow sibling, always rendered)
+└── BackgroundTaskPanel (if panelOpen)
+    └── BackgroundTaskPanelView
+        ├── .status-sheet-overlay__scrim        (onClick → onClose)
+        └── .status-sheet  role="dialog" aria-labelledby="background-task-panel-title"
+            ├── .status-sheet__handle
+            ├── .status-sheet__header             "Background tasks" + close
+            └── .status-sheet__body
+                └── entry === null            → .background-task-panel__unobserved  "No background-task report yet"
+                  · entry.tasks.size === 0    → .background-task-panel__empty       "No background tasks"
+                  · otherwise                 → .background-task-panel__list > .background-task-panel__row × N
+                                                  (description + taskType, roster order)
+```
+
+**No bridge mount.** Unlike `WorkspacePickerSheet` (which mounts `RecentWorkspacesData` inside itself),
+`<BackgroundTaskRosterData />` is already the seventh headless leaf in `App.tsx` — this panel is a pure
+reader, and mounting a second data path here would be a second, wrong write path.
+
+**The three-way branch is the ticket's hardest AC**, and is deliberately written on two different
+things in this order: `entry === null` (no background-task frame has ever arrived) before
+`entry.tasks.size === 0` (observed — nothing alive), before the populated row list. Reaching for
+`entry?.tasks` (via `.values()`, `.size ?? 0`, or `?? new Map()`) before branching collapses the first
+two readings into one — compiles clean, breaks no other test — which is exactly the collapse
+`selectRosterFor`'s `?? null` return refuses to make. Each reading is its **own element with its own
+class and copy**, not a shared "empty" element and not `null`: unlike `WorkspacePickerSheetView`'s
+not-loaded branch (which renders `null`, since that sheet has other content), this branch *is* the
+whole panel body, so a `null` render would read as broken.
+
+**The container** (`BackgroundTaskPanel`) clones `QueuedBacklogControl`'s conversation-id idiom:
+`activeConversation?.id ?? null` derived inline at the `ConversationScreen` mount site (no second
+subscription), a `useMemo`-stable `selectRosterFor(conversationId ?? '')` selector, and
+`useBackgroundTaskRosterStore(selectRoster)`. The `''` sentinel matches no store key, so "no active
+conversation" reads as `null` — the correct "never observed" reading — for free. An Escape `keydown`
+effect closes the panel; open/closed state is a fourth screen-local `useState` boolean in
+`ConversationScreen` (the `pickerOpen`/`channelInfoOpen`/`sheetOpen` twin, [ADR
+0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)).
+
+**Trigger.** An icon-only `.background-task-trigger` button (`aria-label="Background tasks"`,
+`aria-haspopup="dialog"`), mounted unconditionally as a `StatusRow` sibling — not gated on tasks
+existing, since gating would make both non-populated readings unreachable through the UI. Chosen over
+the overflow menu (hardcoded to one item; routing through it means generalising the menu) and
+`WorkspaceChip`'s "Change" button (self-gates to `null` once the thread has a message — exactly when
+background tasks exist). Carries no task-count badge; a badge would need its own roster subscription,
+left to #580.
+
+**SECURITY.** For `taskType: local_bash`, `description` is the literal shell command claude ran —
+untrusted, model-influenced text the daemon bounds but does not sanitize. Rendered as auto-escaped
+React children only: never `dangerouslySetInnerHTML`, never an attribute (not even `title=`), never a
+key, never executed or re-shelled. Rows are deliberately non-interactive (no `<button>`, no `onClick`)
+so there is no handler for a future "run this" affordance to grow from. The list itself is not treated
+as a work list: `entry.tasks.values()` is spread once, inline, into `<li>` children — no join, no
+clipboard, no export, no `data-*` attribute carrying a task field. Architect self-review PASS (security-
+sensitive label); code review PASS with zero findings.
+
+Not yet built: `droppedTasks` and per-task `truncatedFields` (#582), the held `latestUpdate` patch
+(#583), and any terminal/completed state — the daemon reports no finish event by design, so a task
+simply stops appearing in the roster rather than being shown as done. See [#581 codebase
+notes](../codebase/581.md) for the full design, the test posture, and the code-review record.
 
 ### Run configuration sheet (#177)
 
@@ -1443,6 +1530,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   `activeConversationStore`, and supplying `onChoose` only for a non-null active conversation.
   `WorkspaceChip`'s `onChange` now calls `() => setPickerOpen(true)` — see [Workspace Picker
   sheet](#workspace-picker-sheet-383) above.
+- **`BackgroundTaskPanelView({ entry, onClose })` / `BackgroundTaskPanel` / `BackgroundTaskTrigger({ onOpen })`** — **bound in [#581](../codebase/581.md).** `BackgroundTaskPanelView` is the exported pure view (`entry` as `selectRosterFor`'s exact return type — the nullable prop is what forces the three-way branch at a testable boundary); `BackgroundTaskPanel` is the in-file container reading [`backgroundTaskRosterStore`](background-task-roster-store.md) via a `useMemo`-stable selector and owning the Escape effect; `BackgroundTaskTrigger` is a `StatusRow`-sibling icon button, mounted unconditionally. See [Background-task panel](#background-task-panel-581) above.
 - **`ChannelInfoSheetView({ conversation, now?, onClose })` / `ChannelInfoSheet`** — **shell + About detail bound in [#365](../codebase/365.md).** `ChannelInfoSheetView` is the exported pure view (`conversation` as a prop, sourced from `activeConversationStore`); `ChannelInfoSheet` is the in-file container owning only the Escape effect. The `ThreadOverflowMenu`'s `onChannelInfo` now calls `() => setChannelInfoOpen(true)` — the speculative `ConversationScreenProps.onChannelInfo?` prop #276 reserved is **retired**, not bound; see [Channel Info sheet](#channel-info-sheet-365) above. **Rename bound in [#368](../codebase/368.md):** the `.channel-info__actions` slot's first filler, an `onRename?` prop supplied by the container only in the `conversation !== null` branch, opening the reused [Rename dialog](rename-conversation-dialog.md) (#360) — see [Channel Info sheet](#channel-info-sheet-365) above. **Archive bound in [#366](../codebase/366.md):** the slot's second filler, an `onArchive?` prop under the same null-guard, dispatching the already-shipped [`archiveConversation` command](conversation-archive.md) (#363) then closing the sheet — see [Channel Info sheet](#channel-info-sheet-365) above. **Delete bound in [#377](../codebase/377.md), completing the slot:** the third and final filler, gated the same way (`onDelete?` supplied only for a non-null active conversation) but dispatch is two-step — `onDelete` opens an inline confirm (a client-owned invention, no Figma node, the #226 second-confirm posture) that swaps in for the pill; confirming dispatches the already-shipped [`deleteConversation` command](conversation-delete.md) (#364) via a new `requestDeleteConversation` helper then closes the sheet, cancelling returns to the pill with no wire effect. The pill and confirm's destructive styling is a new `.channel-info__action--danger` modifier (error-tinted outline via `box-shadow: inset`, since desktop has no error-container fill token). `window.pyry` is dereferenced only inside the confirm handler; the confirm's own open state (`deleteConfirmOpen`) is screen-local `useState`, the `renameOpen` twin.
 
 ## Edge cases and limitations
@@ -1468,6 +1556,14 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   `conversation_updated`) — a pre-existing #278 limitation, not fixed here. The "Other" create-folder
   entry now opens a working dialog ([#398](../codebase/398.md)) whenever a conversation is active; it
   remains inert only in the same list-opened, no-active-conversation case as the rest of the sheet.
+- **Background-task panel** ([#581](../codebase/581.md)) — a list-opened thread (no active conversation)
+  reads `conversationId: null`, which `selectRosterFor` resolves to the "never observed" reading, so
+  the panel opens gracefully with no crash and no rows, same posture as the Channel Info and Workspace
+  Picker sheets. `panelOpen` is independent of the other three open-state booleans, so overlays could in
+  principle stack — not reachable through normal use, no AC requires mutual exclusion. No terminal state
+  is ever shown: a task leaves the list only by no longer appearing in the next roster, never by an
+  explicit "done" render. Stale-list-after-reconnect is a known, out-of-scope limitation shared with the
+  store itself (#569, blocked on a daemon change) — the panel does not paper over it.
 
 ## Related
 
@@ -1491,5 +1587,6 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Queue store](queue-store.md) / [Dequeue message envelope](dequeue-message-envelope.md) — the store `<QueuedBacklogControl/>` reads via `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (#293, consumed in #294), and the outbound command the drop affordance's `dropQueuedMessage` dispatches (#299/#300, consumed in #296) — the queue-drop family is now complete end to end.
 - [Recent-workspaces store](recent-workspaces-store.md) — the dedicated store + dormant bridge `WorkspacePickerSheet` reads via `selectRecentWorkspaces` and mounts (`RecentWorkspacesData`), its first real consumer (#382, consumed in #383)
 - [Conversation workspace change](conversation-workspace-change.md) — the `changeWorkspace` command `requestChangeWorkspace` dispatches on a row choice, its first real caller (#379, consumed in #383)
+- [Background-task roster store](background-task-roster-store.md) — the store `BackgroundTaskPanel` reads via `selectRosterFor(conversationId)`, its first real consumer since the store shipped dormant at #573 (#581, see [Background-task panel](#background-task-panel-581) above)
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#492 codebase notes](../codebase/492.md) · [#493 codebase notes](../codebase/493.md) · [#495 codebase notes](../codebase/495.md) · [#496 codebase notes](../codebase/496.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · [#529 codebase notes](../codebase/529.md) · [#530 codebase notes](../codebase/530.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#492 codebase notes](../codebase/492.md) · [#493 codebase notes](../codebase/493.md) · [#495 codebase notes](../codebase/495.md) · [#496 codebase notes](../codebase/496.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · [#529 codebase notes](../codebase/529.md) · [#530 codebase notes](../codebase/530.md) · [#581 codebase notes](../codebase/581.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

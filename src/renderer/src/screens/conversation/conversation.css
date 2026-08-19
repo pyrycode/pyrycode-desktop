@@ -2231,3 +2231,33 @@
   letter-spacing: var(--text-body-medium-tracking);
   font-weight: var(--text-body-medium-weight);
 }
+
+/* #582 — the daemon's two truncation reports. Like the readings above, NEITHER is an error state and
+   neither takes an error colour: the daemon reporting its own bounds honestly is not a failure. Both use
+   the .unrecognized-row__truncated declaration set, which is what the app already wears when it says the
+   daemon cut something. Own classes, no positional CSS — #580 can restyle or reposition them freely. */
+
+/* The partial-list notice — sits above the branch, so it takes the rows' horizontal padding to align
+   with them and with the branch copy beneath it. */
+.background-task-panel__partial {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The per-field cut markers. One rule for both — the sentence is the same and only the ATTRIBUTION
+   differs, which position already carries; the classes stay separate so a test can prove which field was
+   marked and so #580 can style them apart. No padding: the row provides it, and the row is
+   flex-direction: column, so each marker lands on its own line under its field. */
+.background-task-panel__cut-description,
+.background-task-panel__cut-type {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}

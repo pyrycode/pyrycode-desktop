@@ -1,9 +1,10 @@
 // The daemon's live background-task set, kept per conversation as one unidirectional source of truth
 // for the panel slice (#568). Pure renderer state — no IPC, no preload bridge, no transport. The data
-// path (backgroundTaskRosterBridge.ts) observes two typed daemon events — the `backgroundTaskRoster`
-// aggregate (#566) and the `backgroundTaskStarted` scalar (#564) — and JOINS them here on
-// `conversationId` + `taskId`, never on arrival order: ordering within a turn is claude's, not the
-// daemon's, so a roster can arrive either side of the started frame for a task it lists.
+// path (backgroundTaskRosterBridge.ts) observes three typed daemon events — the `backgroundTaskRoster`
+// aggregate (#566), the `backgroundTaskStarted` scalar (#564) and the `backgroundTaskUpdated` scalar
+// (#565) — and JOINS them here on `conversationId` + `taskId`, never on arrival order: ordering within
+// a turn is claude's, not the daemon's, so a roster can arrive either side of the started frame for a
+// task it lists, and an update can arrive for a task neither has named yet.
 //
 // A dedicated store in the queueStore posture: these frames are daemon STATE, not part of claude's
 // turn stream (they carry no turn_id and open and close no turn — the queue_state rule, SSOT
@@ -30,9 +31,10 @@
 // Keyed by `conversationId`, NOT a flat slot: the daemon fans these frames out to every interactive
 // connection and each carries `conversation_id`, so frames for DIFFERENT conversations arrive in
 // sequence and a single "hold the latest" slot would let one clobber another (the clobber queueStore
-// documents and keys around). Three named setters rather than a reducer — record a conversation's
-// roster, record one started task, and clear everything on the `connected` edge — because a
-// discriminated-union action set for three operations is still ceremony without benefit.
+// documents and keys around). Four named setters rather than a reducer — record a conversation's
+// roster, record one started task, record one task's latest patch, and clear everything on the
+// `connected` edge — because a discriminated-union action set for four operations is still ceremony
+// without benefit.
 // Unidirectional is preserved: read-only selectors, one write path per frame, and no setter is
 // two-way-bound from a component.
 //
@@ -43,17 +45,58 @@
 // refactor adjacent code while you are there"). Retained deliberately, not by oversight.
 //
 // SECURITY: a task's `description` is untrusted, model-influenced daemon-relayed text and for
-// `taskType: local_bash` IS the literal command line claude ran. This store neither renders nor
-// interprets it — #568 must render it as INERT PLAIN TEXT (never an HTML sink, an attribute, or a
-// URL) and must never execute or re-shell it. `tasks` is a DISPLAY set; its collection shape is not an
-// invitation to iterate it as a work list something acts on. Nothing here iterates it. Nothing here is
-// persisted either, and it must not be: `resetRosters` on the `connected` edge is what keeps a previous
-// PAIRING's command lines from ever appearing, and web storage would survive that boundary.
+// `taskType: local_bash` IS the literal command line claude ran, and its `latestUpdate.patch` is the
+// same class of text under a structured-looking shape (see `HeldBackgroundTaskUpdate`). This store
+// neither renders nor interprets either — #568 must render both as INERT PLAIN TEXT (never an HTML
+// sink, an attribute, or a URL) and must never execute or re-shell them. `tasks` is a DISPLAY set; its
+// collection shape is not an invitation to iterate it as a work list something acts on. Nothing here
+// iterates it. Nothing here is persisted either, and it must not be: `resetRosters` on the `connected`
+// edge is what keeps a previous PAIRING's command lines and patches from ever appearing, and web
+// storage would survive that boundary.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { BackgroundTask } from '@shared/wire/types'
 
-/** ONE background task as this app holds it — the join of what the two frames each report, mapped to
+/** The latest change claude reported about ONE task, plus the cut report FOR THAT PATCH — one record,
+ *  because a held task cannot sensibly carry a patch cut report without a patch, and nesting makes that
+ *  disagreement unrepresentable rather than merely untested.
+ *
+ *  `patch` is held VERBATIM as OPAQUE TEXT and is never parsed here. It is not guaranteed to be valid
+ *  JSON: the daemon truncates it at construction, so a truncated object no longer parses (its own
+ *  golden fixture is cut mid-token), which is why the daemon types it as a plain string rather than raw
+ *  JSON. `patch: ''` is a VALUE meaning "claude sent no change" — it always arrives on the wire (the
+ *  daemon's field has no `omitempty`) — and is a DIFFERENT reading from `latestUpdate: null`, which
+ *  means no update has ever matched the task. Neither substitutes for the other. A reader that wants
+ *  the patch's keys must parse BEHIND AN ERROR BRANCH that falls back to inert text, and must never
+ *  enumerate a closed key set (the daemon enumerates none, because a mapping that listed the keys it
+ *  knew would silently discard every key claude ships next).
+ *
+ *  `truncatedFields` here is the PATCH's own cut report and names a different vocabulary (`task_id` /
+ *  `patch`) from the task's own list — hence a second field rather than a third competitor for the
+ *  first one, which is what keeps every list attributable back to the field it describes. It reports
+ *  the CAP CUT ONLY: the daemon also scrubs invalid UTF-8 by deletion, so `patch` may differ from
+ *  claude's bytes without appearing here. Record it, never cross-check it against the patch. `null`
+ *  ("nothing was cut") is assigned straight across and never collapsed into `[]`.
+ *
+ *  Deliberately NOT a history: latest-wins, one record per task. An append-only list keyed by a
+ *  `task_id` the model influences and fed by the daemon's push stream would be unbounded growth on
+ *  attacker-influenceable input — the daemon's own cap (`maxTaskPatch`, 4 KiB) is per FRAME, not per
+ *  task. And a patch is never a finish signal: this family reports no terminal event, so nothing here
+ *  may be read as `completed` / `failed`.
+ *
+ *  SECURITY: `patch` is UNTRUSTED, model-influenced daemon-relayed text whose keys may carry command
+ *  text exactly as `description` does. #568 must render it as INERT PLAIN TEXT — never HTML (no
+ *  `innerHTML` / `dangerouslySetInnerHTML`), never into an attribute or a URL — and must never execute,
+ *  re-shell, or otherwise feed it to something that runs it. The daemon states this rule in THIS
+ *  frame's own section rather than delegating it to the sibling's, because a patch's structured shape
+ *  makes it the more tempting thing to feed somewhere structured. This store has no DOM sink and runs
+ *  no `JSON.parse`; carrying the constraint here is how it reaches the reader. */
+export interface HeldBackgroundTaskUpdate {
+  patch: string
+  truncatedFields: readonly string[] | null
+}
+
+/** ONE background task as this app holds it — the join of what the three frames each report, mapped to
  *  renderer-side camelCase from whichever source last spoke about it.
  *
  *  `toolCallId: string | null`, REQUIRED and nullable rather than optional: only the
@@ -67,15 +110,33 @@ import type { BackgroundTask } from '@shared/wire/types'
  *  `toolCallId !== null`, which is exact by the wire's construction (the started frame always reports
  *  one, no roster row ever can). It must be tested with `!== null` and NEVER for truthiness —
  *  `requireString` admits `''`, so a daemon-sent `tool_call_id: ''` is a valid value that a truthiness
- *  check would silently demote to roster-sourced. Any field added here that a roster row cannot report
- *  must join that predicate.
+ *  check would silently demote to roster-sourced.
+ *
+ *  A field added here that NO ROSTER ROW CAN REPORT is one of exactly two kinds, and choosing wrongly
+ *  is silent — both readings compile and break no test:
+ *
+ *    - It GATES KEEPING THE RECORD WHOLE, like `toolCallId`. The started frame reports a copy of every
+ *      OTHER field too, and its copies are authoritative (fuller label, tighter-capped row), so once
+ *      that frame has been seen there is nothing a later row can improve.
+ *    - It RIDES ACROSS THE REBUILD INDIVIDUALLY, like `latestUpdate`. An update frame reports NOTHING
+ *      but the patch pair, so the row's other fields must still refresh from each new roster. Widening
+ *      the provenance predicate to cover it would freeze a patched roster-sourced task's label, type
+ *      and own cut report forever; leaving it out of the rebuilt literal would drop the patch at the
+ *      next roster.
  *
  *  `truncatedFields` is assigned straight across from whichever frame supplied it — `null` ("nothing
- *  was cut") is a distinct value from `[]` and is never collapsed into it. The two frames' lists name
+ *  was cut") is a distinct value from `[]` and is never collapsed into it. The three frames' lists name
  *  DIFFERENT vocabularies (started: `task_id` / `tool_call_id` / `description` / `task_type`; roster
- *  row: `task_id` / `task_type` / `description`), so a started frame REPLACES this list rather than
- *  unioning with it: one flattened list per task would be a list no reader can attribute back to a
- *  field.
+ *  row: `task_id` / `task_type` / `description`; update: `task_id` / `patch`), so a started frame
+ *  REPLACES this list rather than unioning with it: one flattened list per task would be a list no
+ *  reader can attribute back to a field. The update's list is kept apart under `latestUpdate` for that
+ *  same reason, rather than competing for this field.
+ *
+ *  `latestUpdate: HeldBackgroundTaskUpdate | null`, REQUIRED and nullable rather than optional, for the
+ *  reason above `toolCallId` carries: an optional property lets a construction site silently omit it
+ *  and still compile, and the roster rebuild is exactly such a site. `null` means NO UPDATE HAS EVER
+ *  MATCHED this task — a different reading from a recorded `{ patch: '', … }`, which means claude sent
+ *  no change. Named `latestUpdate`, not `patch`, so latest-wins is stated at every read site.
  *
  *  `taskId` is carried in the value as well as being the map key — redundant by one field so that #568
  *  can iterate values without threading entry keys alongside them.
@@ -89,6 +150,7 @@ export interface HeldBackgroundTask {
   taskType: string
   description: string
   truncatedFields: readonly string[] | null
+  latestUpdate: HeldBackgroundTaskUpdate | null
 }
 
 /** The held value for ONE conversation: the tasks currently believed alive, keyed by `taskId`, plus the
@@ -130,6 +192,17 @@ export interface BackgroundTaskStartedSnapshot {
   truncatedFields: readonly string[] | null
 }
 
+/** The update write unit — the `backgroundTaskUpdated` daemon-event arm minus its `type` tag. FOUR
+ *  fields, not six: no `toolCallId`, no `description`, no `taskType`, and it gains `patch`. Flat, like
+ *  its sibling above and like the arm itself, so the translator stays a copy-the-named-fields filter;
+ *  `setUpdatedTask` is what assembles the nested `HeldBackgroundTaskUpdate` from the pair. */
+export interface BackgroundTaskUpdatedSnapshot {
+  conversationId: string
+  taskId: string
+  patch: string
+  truncatedFields: readonly string[] | null
+}
+
 /** The whole state: each conversation's held task set, keyed by `conversationId`. A key ABSENT from the
  *  map means "NO frame has ever arrived for that conversation" and is a DISTINCT state from a present
  *  entry holding an empty `tasks` map ("observed, nothing alive") — see `selectRosterFor`, which
@@ -139,11 +212,12 @@ export interface BackgroundTaskRosterState {
   rosters: ReadonlyMap<string, BackgroundTaskRosterEntry>
 }
 
-/** Store shape = state + the three mutation entry points: record one conversation's roster, record one
- *  started task, and clear everything on the `connected` edge (AC5). */
+/** Store shape = state + the four mutation entry points: record one conversation's roster, record one
+ *  started task, record one task's latest patch, and clear everything on the `connected` edge (AC5). */
 export type BackgroundTaskRosterStore = BackgroundTaskRosterState & {
   setRoster: (snapshot: BackgroundTaskRosterSnapshot) => void
   setStartedTask: (snapshot: BackgroundTaskStartedSnapshot) => void
+  setUpdatedTask: (snapshot: BackgroundTaskUpdatedSnapshot) => void
   resetRosters: () => void
 }
 
@@ -159,7 +233,12 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  * `setRoster` rebuilds the conversation's set from the snapshot's rows IN ROW ORDER. For each row: if a
  * task is already held for that `task_id` AND is started-sourced (`toolCallId !== null` — see
  * `HeldBackgroundTask`), the held record is KEPT UNCHANGED; otherwise a fresh record is built from the
- * row with `toolCallId: null`. Keeping the started record is AC2 and the point of this slice: the
+ * row with `toolCallId: null` and the held `latestUpdate` carried onto it. That carry-over is the one
+ * thing the rebuild preserves, and it is deliberately NOT folded into the provenance predicate: no
+ * roster row can report a patch, but a row CAN report a better label, type and cut report, so a patched
+ * roster-sourced task must still refresh from each new row (AC4). Widening the predicate instead would
+ * freeze such a task's label forever, and omitting the field from the rebuilt literal would drop its
+ * patch at the next roster — both compile clean, which is why each has its own test. Keeping the started record is AC2 and the point of this slice: the
  * daemon's own cap comment states the roster label is the same text under a tighter cap and that its
  * authoritative full-length copy already crossed the wire on the `background_task_started` the row
  * joins back to, so refreshing from the row would throw the better copy away at the first roster and
@@ -183,9 +262,22 @@ export const initialBackgroundTaskRosterState: BackgroundTaskRosterState = { ros
  * keeps an existing key's position, so upgrading a roster-held task in place preserves roster order
  * while a genuinely new task appends. The snapshot's `description` / `taskType` / `truncatedFields`
  * REPLACE whatever the task held (AC2), and `truncatedFields` in particular replaces rather than
- * unions — the two frames' lists name different vocabularies. `droppedTasks` is PRESERVED from the
+ * unions — the frames' lists name different vocabularies. `droppedTasks` is PRESERVED from the
  * existing entry (or `0` when creating one): a started frame reports nothing about roster truncation and
- * must not reset the count.
+ * must not reset the count. A held `latestUpdate` is PRESERVED for the same reason — a started frame
+ * reports no patch, and claude may emit it after the update for the task it opened.
+ *
+ * `setUpdatedTask` records ONE task's latest patch and its own cut report, joined on `conversationId` +
+ * `taskId`. It is the only setter that can MISS: an update naming a conversation no frame has arrived
+ * for, or a task the conversation does not hold, returns the state object ITSELF unchanged (AC2). It
+ * never opens a task and never creates a conversation entry, because a patch is a change report about
+ * something already alive, not an announcement — and the same-reference return is what makes "creates
+ * no partial entry" provable by `Object.is` rather than by enumerating what did not appear. On a hit it
+ * replaces `latestUpdate` wholesale (latest-wins, never an accumulating list) and touches NOTHING else:
+ * an update frame reports no `description`, `taskType`, `toolCallId`, or task-level `truncatedFields`.
+ * The two cut reports stay distinct fields rather than merging, since they name different vocabularies.
+ * Both miss branches are SILENT — a "dropped an unmatched update" log line is exactly where patch text
+ * would leak into a file (the content-free diagnostics rule, #126).
  *
  * GROWTH BOUND, stated rather than defended: the daemon caps a roster at 8 rows and every frame at the
  * 65519-byte envelope, but it emits a roster only when claude emits one — it synthesises none. So a
@@ -233,7 +325,13 @@ export function createBackgroundTaskRosterStore(
                   description: row.description,
                   // Straight across — no `?? []`. `null` means nothing was cut for this row and is a
                   // distinct value; this assignment plus its test is the whole AC3 defence.
-                  truncatedFields: row.truncated_fields
+                  truncatedFields: row.truncated_fields,
+                  // The patch pair RIDES ACROSS the rebuild: no roster row can report it, and unlike
+                  // `toolCallId` it must not gate keeping the record whole, or the row's own fields
+                  // would freeze. `??` is right HERE and is not the collapse the rule above forbids —
+                  // it normalises "no prior record" and "held, never updated" to the one reading they
+                  // share, and no wire value passes through it.
+                  latestUpdate: held?.latestUpdate ?? null
                 }
           )
         }
@@ -250,10 +348,35 @@ export function createBackgroundTaskRosterStore(
           toolCallId: snapshot.toolCallId,
           taskType: snapshot.taskType,
           description: snapshot.description,
-          truncatedFields: snapshot.truncatedFields
+          truncatedFields: snapshot.truncatedFields,
+          // Same carry-over as the roster path: a started frame reports no patch, so an update that
+          // arrived before it (claude's ordering, not the daemon's) is not thrown away.
+          latestUpdate: existing?.tasks.get(snapshot.taskId)?.latestUpdate ?? null
         })
         const next = new Map(s.rosters)
         next.set(snapshot.conversationId, { tasks, droppedTasks: existing?.droppedTasks ?? 0 })
+        return { rosters: next }
+      }),
+    setUpdatedTask: (snapshot) =>
+      set((s) => {
+        const existing = s.rosters.get(snapshot.conversationId)
+        const held = existing?.tasks.get(snapshot.taskId)
+        // Both misses return the state object ITSELF, so zustand's `Object.is` short-circuits and no
+        // listener churns: an update never OPENS a task and never creates a conversation entry (AC2).
+        // Silently, too — a "dropped an unmatched update" log line would put patch text in a file.
+        if (existing === undefined || held === undefined) return s
+        const tasks = new Map(existing.tasks)
+        // A spread is right here and not in the translators: this is a same-type held → held write
+        // whose whole meaning is "every other field is untouched", and an update reports none of them.
+        // `truncatedFields` straight across — no `??`, no `|| []` (AC3). `Map.set` on an existing key
+        // keeps its position, so display order is untouched.
+        tasks.set(snapshot.taskId, {
+          ...held,
+          latestUpdate: { patch: snapshot.patch, truncatedFields: snapshot.truncatedFields }
+        })
+        const next = new Map(s.rosters)
+        // `droppedTasks` PRESERVED: an update reports nothing about roster truncation.
+        next.set(snapshot.conversationId, { tasks, droppedTasks: existing.droppedTasks })
         return { rosters: next }
       }),
     resetRosters: () => set((s) => (s.rosters.size === 0 ? s : { rosters: new Map() }))

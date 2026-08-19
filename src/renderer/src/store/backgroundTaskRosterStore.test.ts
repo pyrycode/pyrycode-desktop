@@ -5,16 +5,18 @@ import {
   selectRosterFor,
   type BackgroundTaskRosterEntry,
   type BackgroundTaskStartedSnapshot,
+  type BackgroundTaskUpdatedSnapshot,
   type HeldBackgroundTask
 } from './backgroundTaskRosterStore'
 import type { BackgroundTask } from '@shared/wire/types'
 
 // Plain-function store tests over isolated createBackgroundTaskRosterStore() instances — the
-// queueStore.test idiom. No React, no bridge: the store is pure renderer state with two set-on-event
-// mutations and one reset. The held value is now PER TASK (`HeldBackgroundTask`, camelCase, keyed by
-// `taskId`) rather than the wire rows verbatim, because a started-sourced task carries a `toolCallId`
-// and a fuller description that no roster row can report. The roster stays replacement truth for
-// MEMBERSHIP: a held task absent from a new roster is dropped whichever frame first reported it.
+// queueStore.test idiom. No React, no bridge: the store is pure renderer state with three
+// set-on-event mutations and one reset. The held value is PER TASK (`HeldBackgroundTask`, camelCase,
+// keyed by `taskId`) rather than the wire rows verbatim, because a started-sourced task carries a
+// `toolCallId` and a fuller description that no roster row can report, and an updated task carries a
+// `latestUpdate` no roster row can report either. The roster stays replacement truth for MEMBERSHIP:
+// a held task absent from a new roster is dropped whichever frame first reported it.
 //
 // The distinction #573 turned on still rides every read assertion: `null` means "no frame has ever
 // arrived", an entry with an empty `tasks` map means "observed, nothing alive". The queueStore
@@ -39,20 +41,23 @@ const cutDescription: BackgroundTask = {
 }
 
 /** The two wire rows above as a roster write holds them: mapped to camelCase, `toolCallId: null`
- *  because no roster row carries one, `truncatedFields` assigned straight across. */
+ *  because no roster row carries one, `truncatedFields` assigned straight across, and
+ *  `latestUpdate: null` because no update has ever matched — distinct from a recorded empty patch. */
 const heldNoCut: HeldBackgroundTask = {
   taskId: 't1',
   toolCallId: null,
   taskType: 'local_bash',
   description: 'grep -rn "a<b&c" .',
-  truncatedFields: null
+  truncatedFields: null,
+  latestUpdate: null
 }
 const heldCutDescription: HeldBackgroundTask = {
   taskId: 't2',
   toolCallId: null,
   taskType: 'local_bash',
   description: 'npm test -- src/renderer',
-  truncatedFields: ['description']
+  truncatedFields: ['description'],
+  latestUpdate: null
 }
 
 /** A `background_task_started` write unit for `t1` — same task as `noCut`, but with the `toolCallId`
@@ -66,6 +71,20 @@ function started(
     toolCallId: 'tc-1',
     taskType: 'local_bash',
     description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
+    truncatedFields: null,
+    ...overrides
+  }
+}
+
+/** A `background_task_updated` write unit for `t1` — four fields, not six: no `toolCallId`, no
+ *  `description`, no `taskType`, and it gains `patch`. */
+function updated(
+  overrides: Partial<BackgroundTaskUpdatedSnapshot> = {}
+): BackgroundTaskUpdatedSnapshot {
+  return {
+    conversationId: 'c1',
+    taskId: 't1',
+    patch: '{"is_backgrounded":true}',
     truncatedFields: null,
     ...overrides
   }
@@ -150,7 +169,8 @@ describe('backgroundTaskRosterStore', () => {
       toolCallId: 'tc-1',
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
-      truncatedFields: null
+      truncatedFields: null,
+      latestUpdate: null
     })
     expect(heldFor(store, 'c9')?.droppedTasks).toBe(0)
   })
@@ -167,7 +187,8 @@ describe('backgroundTaskRosterStore', () => {
       toolCallId: 'tc-1',
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
-      truncatedFields: null
+      truncatedFields: null,
+      latestUpdate: null
     })
   })
 
@@ -201,7 +222,8 @@ describe('backgroundTaskRosterStore', () => {
       toolCallId: 'tc-1',
       taskType: 'local_bash',
       description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
-      truncatedFields: null
+      truncatedFields: null,
+      latestUpdate: null
     })
     // A roster-sourced peer in the same frame is still rebuilt from its row.
     expect(heldTask(store, 'c1', 't2')).toEqual(heldCutDescription)
@@ -249,6 +271,237 @@ describe('backgroundTaskRosterStore', () => {
     expect(heldTask(store, 'c1', 'a')?.truncatedFields).toBeNull()
     expect(heldTask(store, 'c1', 'b')?.truncatedFields).toEqual([])
     expect(heldTask(store, 'c1', 'c')?.truncatedFields).toEqual(['description'])
+  })
+
+  it('records an update as the latest patch on a ROSTER-sourced task (AC1)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+
+    // Before any update the task reads as having NO patch at all — not an empty one.
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate).toBeNull()
+    store.getState().setUpdatedTask(updated({ truncatedFields: ['patch'] }))
+
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate).toEqual({
+      patch: '{"is_backgrounded":true}',
+      truncatedFields: ['patch']
+    })
+    // An update frame reports none of the other fields, so none of them move.
+    expect(heldTask(store, 'c1', 't1')?.description).toBe('grep -rn "a<b&c" .')
+    expect(heldTask(store, 'c1', 't1')?.taskType).toBe('local_bash')
+    expect(heldTask(store, 'c1', 't1')?.toolCallId).toBeNull()
+    expect(heldTask(store, 'c1', 't1')?.truncatedFields).toBeNull()
+  })
+
+  it('records an update as the latest patch on a STARTED-sourced task (AC1)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setStartedTask(started())
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate).toBeNull()
+
+    store.getState().setUpdatedTask(updated())
+
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate).toEqual({
+      patch: '{"is_backgrounded":true}',
+      truncatedFields: null
+    })
+    // The provenance predicate is untouched: recording a patch never demotes a started-sourced task.
+    expect(heldTask(store, 'c1', 't1')?.toolCallId).toBe('tc-1')
+    expect(heldTask(store, 'c1', 't1')?.description).toBe(
+      'grep -rn "a<b&c" . --include="*.ts" --color=never'
+    )
+  })
+
+  it('holds the LATEST patch only — never an accumulating history (AC1)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ patch: 'first' }))
+    store.getState().setUpdatedTask(updated({ patch: 'second', truncatedFields: [] }))
+
+    // Latest-wins, one record: an append-only history keyed by a model-influenced `task_id` and fed
+    // by a push stream would be unbounded growth on attacker-influenceable input.
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate).toEqual({
+      patch: 'second',
+      truncatedFields: []
+    })
+  })
+
+  it("records patch: '' as a VALUE — distinct from having no patch at all (AC1)", () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ patch: '' }))
+
+    // `patch: ''` means claude sent no change; it always arrives on the wire (no `omitempty`), so it
+    // is never an absence. This test fails the moment anyone writes `if (snapshot.patch)` on the path.
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate).not.toBeNull()
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate?.patch).toBe('')
+  })
+
+  it('ignores an update for an unknown taskId in a known conversation (AC2)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    const before = store.getState()
+    store.getState().setUpdatedTask(updated({ taskId: 'nope' }))
+
+    // Same state reference — zustand's Object.is short-circuits, so no listener churns, and "creates
+    // no partial entry" is provable rather than enumerated. An update never OPENS a task.
+    expect(store.getState()).toBe(before)
+    expect(heldIds(store, 'c1')).toEqual(['t1'])
+  })
+
+  it('ignores an update for an unknown conversationId — it opens no entry (AC2)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    const before = store.getState()
+    store.getState().setUpdatedTask(updated({ conversationId: 'cX' }))
+
+    expect(store.getState()).toBe(before)
+    expect(store.getState().rosters.has('cX')).toBe(false)
+    // Still never-observed through the read surface, not observed-empty.
+    expect(selectRosterFor('cX')(store.getState())).toBeNull()
+  })
+
+  it("keeps the patch's cut report distinct from the task's own — never merged (AC3)", () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({
+      conversationId: 'c1',
+      tasks: [{ ...noCut, truncated_fields: ['description'] }],
+      droppedTasks: 0
+    })
+    store.getState().setUpdatedTask(updated({ truncatedFields: ['patch'] }))
+
+    // Three lists, three vocabularies (the roster row's names `task_id`/`task_type`/`description`,
+    // the update's names `task_id`/`patch`). Nesting the update's under `latestUpdate` is what keeps
+    // every entry attributable back to the field it describes; one flattened list could not be.
+    expect(heldTask(store, 'c1', 't1')?.truncatedFields).toEqual(['description'])
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate?.truncatedFields).toEqual(['patch'])
+  })
+
+  it('preserves truncatedFields on the UPDATE path — null stays null, [] stays [] (AC3)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({
+      conversationId: 'c1',
+      tasks: [noCut, cutDescription, { ...noCut, task_id: 't3' }],
+      droppedTasks: 0
+    })
+    store.getState().setUpdatedTask(updated({ taskId: 't1', truncatedFields: null }))
+    store.getState().setUpdatedTask(updated({ taskId: 't2', truncatedFields: [] }))
+    store.getState().setUpdatedTask(updated({ taskId: 't3', truncatedFields: ['patch'] }))
+
+    // A straight assignment, no `?? []`: `null` means nothing was cut and is a distinct value. Not a
+    // type error and no other assertion breaks if it collapses, so this test is the whole defence.
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate?.truncatedFields).toBeNull()
+    expect(heldTask(store, 'c1', 't2')?.latestUpdate?.truncatedFields).toEqual([])
+    expect(heldTask(store, 'c1', 't3')?.latestUpdate?.truncatedFields).toEqual(['patch'])
+  })
+
+  it("carries a ROSTER-sourced task's patch across a roster that refreshes its row (AC4)", () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated({ truncatedFields: ['patch'] }))
+    store.getState().setRoster({
+      conversationId: 'c1',
+      tasks: [
+        { task_id: 't1', task_type: 'remote_agent', description: 'newer label', truncated_fields: [] }
+      ],
+      droppedTasks: 0
+    })
+
+    // The single test that kills BOTH mistakes the shipped docstring invites. Leaving the rebuild
+    // branch as #576 shipped it drops the patch; widening the provenance predicate to keep the record
+    // whole freezes the label instead. Only refreshing the row's fields AND riding the patch across
+    // passes both halves.
+    expect(heldTask(store, 'c1', 't1')).toEqual({
+      taskId: 't1',
+      toolCallId: null,
+      taskType: 'remote_agent',
+      description: 'newer label',
+      truncatedFields: [],
+      latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: ['patch'] }
+    })
+  })
+
+  it("carries a STARTED-sourced task's patch across a roster, record kept whole (AC4)", () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setStartedTask(started())
+    store.getState().setUpdatedTask(updated())
+    store.getState().setRoster({
+      conversationId: 'c1',
+      tasks: [
+        { task_id: 't1', task_type: 'remote_agent', description: 'newer label', truncated_fields: [] }
+      ],
+      droppedTasks: 0
+    })
+
+    // The started-sourced half of AC4: the record rides across WHOLE, so the row's changed label and
+    // type never overwrite the started frame's authoritative copies, and the patch comes with it. Its
+    // roster-sourced twin above is what kills the `&& held.toolCallId !== null` deletion (#576's open
+    // SHOULD FIX) — this one pins the branch that deletion would swallow everything into, so the pair
+    // discriminates both directions. Not redundant — do not prune either.
+    expect(heldTask(store, 'c1', 't1')).toEqual({
+      taskId: 't1',
+      toolCallId: 'tc-1',
+      taskType: 'local_bash',
+      description: 'grep -rn "a<b&c" . --include="*.ts" --color=never',
+      truncatedFields: null,
+      latestUpdate: { patch: '{"is_backgrounded":true}', truncatedFields: null }
+    })
+  })
+
+  it("carries a patch across a LATER started frame — it reports none (AC4's principle)", () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated())
+    store.getState().setStartedTask(started())
+
+    // Claude orders these, not the daemon, so a started frame can follow the update for the task it
+    // opened. It reports no patch, so it must not erase one — the same rule that stops an update
+    // frame from touching the label. Every field the started frame DOES report is still authoritative.
+    expect(heldTask(store, 'c1', 't1')?.latestUpdate).toEqual({
+      patch: '{"is_backgrounded":true}',
+      truncatedFields: null
+    })
+    expect(heldTask(store, 'c1', 't1')?.toolCallId).toBe('tc-1')
+  })
+
+  it('does not resurrect a patched task the newest roster omits (AC4)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated())
+    store.getState().setRoster({ conversationId: 'c1', tasks: [cutDescription], droppedTasks: 0 })
+
+    // Membership still wins over carry-over: a recorded patch is not a claim the task is alive, and
+    // absence from a later roster stays this family's only removal path.
+    expect(heldTask(store, 'c1', 't1')).toBeUndefined()
+    expect(heldIds(store, 'c1')).toEqual(['t2'])
+  })
+
+  it('resetRosters clears recorded patches along with everything else (AC5)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setStartedTask(started({ conversationId: 'c2', taskId: 't9' }))
+    store.getState().setUpdatedTask(updated({ conversationId: 'c1', taskId: 't1' }))
+    store.getState().setUpdatedTask(updated({ conversationId: 'c2', taskId: 't9' }))
+    store.getState().resetRosters()
+
+    // A patch key may carry command text, so the connected edge clearing it is what keeps a previous
+    // PAIRING's text from ever appearing. Nothing here is persisted, so nothing survives the reset.
+    expect(selectRosterFor('c1')(store.getState())).toBeNull()
+    expect(selectRosterFor('c2')(store.getState())).toBeNull()
+  })
+
+  it('leaves the selector reference-stable across an update (no per-call construction)', () => {
+    const store = createBackgroundTaskRosterStore()
+    store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
+    store.getState().setRoster({ conversationId: 'c2', tasks: [cutDescription], droppedTasks: 0 })
+    store.getState().setUpdatedTask(updated())
+
+    // The entry is built at write time, so two reads hand back the SAME object — adding a per-task
+    // field is exactly where a fresh-object-per-selector-call regression creeps in.
+    expect(heldFor(store, 'c1')).toBe(heldFor(store, 'c1'))
+
+    // And an update for one conversation leaves every other entry Object.is identical.
+    const beforeC2 = heldFor(store, 'c2')
+    store.getState().setUpdatedTask(updated({ patch: 'again' }))
+    expect(heldFor(store, 'c2')).toBe(beforeC2)
   })
 
   it('marks a task started-sourced even when toolCallId is the empty string', () => {
@@ -415,12 +668,15 @@ describe('backgroundTaskRosterStore', () => {
     const store = createBackgroundTaskRosterStore()
     const setRoster = store.getState().setRoster
     const setStartedTask = store.getState().setStartedTask
+    const setUpdatedTask = store.getState().setUpdatedTask
     const resetRosters = store.getState().resetRosters
     store.getState().setRoster({ conversationId: 'c1', tasks: [noCut], droppedTasks: 0 })
     store.getState().setStartedTask(started())
+    store.getState().setUpdatedTask(updated())
 
     expect(store.getState().setRoster).toBe(setRoster)
     expect(store.getState().setStartedTask).toBe(setStartedTask)
+    expect(store.getState().setUpdatedTask).toBe(setUpdatedTask)
     expect(store.getState().resetRosters).toBe(resetRosters)
   })
 })

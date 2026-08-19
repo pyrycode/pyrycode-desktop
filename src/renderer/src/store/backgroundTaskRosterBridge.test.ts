@@ -6,6 +6,7 @@ import type { BackgroundTask, HelloAckPayload, MessagePayload } from '@shared/wi
 import {
   translateBackgroundTaskRoster,
   translateBackgroundTaskStarted,
+  translateBackgroundTaskUpdated,
   subscribeBackgroundTaskRoster,
   BackgroundTaskRosterData
 } from './backgroundTaskRosterBridge'
@@ -13,8 +14,8 @@ import { createBackgroundTaskRosterStore, selectRosterFor } from './backgroundTa
 
 // Framework-free data-path tests with injected spies (the queueBridge idiom): no React, no Electron.
 // The real store is wired only for the seam tests. This bridge is reactive-only — the daemon pushes
-// both frames unsolicited — so there is no requestX describe block. Two sibling translators, each a
-// pure single-arm filter, rather than one translator returning a tagged union.
+// all three frames unsolicited — so there is no requestX describe block. Three sibling translators,
+// each a pure single-arm filter, rather than one translator returning a tagged union.
 
 const noCut: BackgroundTask = {
   task_id: 't1',
@@ -103,8 +104,8 @@ describe('translateBackgroundTaskRoster', () => {
         toolCallId: 'tc-1',
         truncatedFields: null
       },
-      // `backgroundTaskUpdated` stays dormant on this path — it is #577's, and leaving it unhandled
-      // compiles green because this bridge is `default: null`, not one of the three assertNever ones.
+      // `backgroundTaskUpdated` is now this bridge's too, but it belongs to the THIRD translator
+      // below — the assertion stays, because each translator remains a single-arm filter.
       {
         type: 'backgroundTaskUpdated',
         conversationId: 'c1',
@@ -174,6 +175,65 @@ describe('translateBackgroundTaskStarted', () => {
   })
 })
 
+describe('translateBackgroundTaskUpdated', () => {
+  it('maps a backgroundTaskUpdated event to its four-field snapshot (the owned arm)', () => {
+    const event: DaemonEvent = {
+      type: 'backgroundTaskUpdated',
+      conversationId: 'c1',
+      taskId: 't1',
+      patch: '{"is_backgrounded":true}',
+      truncatedFields: ['patch']
+    }
+    const snapshot = translateBackgroundTaskUpdated(event)
+
+    // FOUR fields, not six: no toolCallId, no description, no taskType, and it gains `patch`.
+    expect(snapshot).toEqual({
+      conversationId: 'c1',
+      taskId: 't1',
+      patch: '{"is_backgrounded":true}',
+      truncatedFields: ['patch']
+    })
+    // Same posture as both neighbours: a fresh named-field literal, never `return event`, never a
+    // spread — a spread would carry the `type` tag into a write unit that never agreed to hold it.
+    expect(snapshot).not.toBe(event)
+  })
+
+  it('passes truncatedFields: null through as null — never collapsed into [] (AC3)', () => {
+    const event: DaemonEvent = {
+      type: 'backgroundTaskUpdated',
+      conversationId: 'c1',
+      taskId: 't1',
+      patch: '',
+      truncatedFields: null
+    }
+    const snapshot = translateBackgroundTaskUpdated(event)
+
+    expect(snapshot?.truncatedFields).toBeNull()
+    // And `patch: ''` survives as the value it is — the arm always carries one (no `omitempty`).
+    expect(snapshot?.patch).toBe('')
+  })
+
+  it('returns null for a sample of unrelated daemon events, roster and started included', () => {
+    const others: DaemonEvent[] = [
+      { type: 'connecting' },
+      { type: 'connected', ack },
+      { type: 'disconnected' },
+      { type: 'messageReceived', message },
+      { type: 'backgroundTaskRoster', conversationId: 'c1', tasks: [noCut], droppedTasks: 0 },
+      {
+        type: 'backgroundTaskStarted',
+        conversationId: 'c1',
+        taskId: 't1',
+        toolCallId: 'tc-1',
+        taskType: 'local_bash',
+        description: 'ls',
+        truncatedFields: null
+      }
+    ]
+    for (const event of others) expect(translateBackgroundTaskUpdated(event)).toBeNull()
+  })
+})
+
 describe('subscribeBackgroundTaskRoster', () => {
   // A fake onDaemonEvent that captures the listener and hands back an off spy.
   function fakeBridge(): {
@@ -221,15 +281,24 @@ describe('subscribeBackgroundTaskRoster', () => {
     }
   }
 
+  function taskUpdated(
+    conversationId: string,
+    taskId: string,
+    patch = '{"is_backgrounded":true}',
+    truncatedFields: readonly string[] | null = null
+  ): DaemonEvent {
+    return { type: 'backgroundTaskUpdated', conversationId, taskId, patch, truncatedFields }
+  }
+
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn())
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn(), vi.fn())
     expect(bridge.subscribeCalls()).toBe(1)
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {
     const bridge = fakeBridge()
-    const cleanup = subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn())
+    const cleanup = subscribeBackgroundTaskRoster(bridge.onDaemonEvent, vi.fn(), vi.fn(), vi.fn(), vi.fn())
     cleanup()
     expect(bridge.off).toHaveBeenCalledTimes(1)
   })
@@ -239,7 +308,14 @@ describe('subscribeBackgroundTaskRoster', () => {
     const setRoster = vi.fn()
     const resetRosters = vi.fn()
     const setStartedTask = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters, setStartedTask)
+    const setUpdatedTask = vi.fn()
+    subscribeBackgroundTaskRoster(
+      bridge.onDaemonEvent,
+      setRoster,
+      resetRosters,
+      setStartedTask,
+      setUpdatedTask
+    )
 
     bridge.emit(roster('c1', [noCut, cutDescription], 1))
     expect(setRoster).toHaveBeenCalledTimes(1)
@@ -249,13 +325,14 @@ describe('subscribeBackgroundTaskRoster', () => {
       droppedTasks: 1
     })
     expect(setStartedTask).not.toHaveBeenCalled()
+    expect(setUpdatedTask).not.toHaveBeenCalled()
     expect(resetRosters).not.toHaveBeenCalled()
   })
 
   it('writes an empty roster too — the !== null guard, not truthiness (AC5)', () => {
     const bridge = fakeBridge()
     const setRoster = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, vi.fn(), vi.fn())
+    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, vi.fn(), vi.fn(), vi.fn())
 
     bridge.emit(roster('c1', []))
     expect(setRoster).toHaveBeenCalledTimes(1)
@@ -267,7 +344,14 @@ describe('subscribeBackgroundTaskRoster', () => {
     const setRoster = vi.fn()
     const resetRosters = vi.fn()
     const setStartedTask = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters, setStartedTask)
+    const setUpdatedTask = vi.fn()
+    subscribeBackgroundTaskRoster(
+      bridge.onDaemonEvent,
+      setRoster,
+      resetRosters,
+      setStartedTask,
+      setUpdatedTask
+    )
 
     bridge.emit(taskStarted('c1', 't1'))
     expect(setStartedTask).toHaveBeenCalledTimes(1)
@@ -280,6 +364,34 @@ describe('subscribeBackgroundTaskRoster', () => {
       truncatedFields: null
     })
     expect(setRoster).not.toHaveBeenCalled()
+    expect(setUpdatedTask).not.toHaveBeenCalled()
+    expect(resetRosters).not.toHaveBeenCalled()
+  })
+
+  it('writes the updated snapshot on an updated event, and nothing else (AC1)', () => {
+    const bridge = fakeBridge()
+    const setRoster = vi.fn()
+    const resetRosters = vi.fn()
+    const setStartedTask = vi.fn()
+    const setUpdatedTask = vi.fn()
+    subscribeBackgroundTaskRoster(
+      bridge.onDaemonEvent,
+      setRoster,
+      resetRosters,
+      setStartedTask,
+      setUpdatedTask
+    )
+
+    bridge.emit(taskUpdated('c1', 't1', 'p', ['patch']))
+    expect(setUpdatedTask).toHaveBeenCalledTimes(1)
+    expect(setUpdatedTask).toHaveBeenCalledWith({
+      conversationId: 'c1',
+      taskId: 't1',
+      patch: 'p',
+      truncatedFields: ['patch']
+    })
+    expect(setRoster).not.toHaveBeenCalled()
+    expect(setStartedTask).not.toHaveBeenCalled()
     expect(resetRosters).not.toHaveBeenCalled()
   })
 
@@ -288,7 +400,14 @@ describe('subscribeBackgroundTaskRoster', () => {
     const setRoster = vi.fn()
     const resetRosters = vi.fn()
     const setStartedTask = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters, setStartedTask)
+    const setUpdatedTask = vi.fn()
+    subscribeBackgroundTaskRoster(
+      bridge.onDaemonEvent,
+      setRoster,
+      resetRosters,
+      setStartedTask,
+      setUpdatedTask
+    )
 
     bridge.emit(taskStarted('c1', 't1'))
     bridge.emit({ type: 'connected', ack })
@@ -301,11 +420,19 @@ describe('subscribeBackgroundTaskRoster', () => {
     const setRoster = vi.fn()
     const resetRosters = vi.fn()
     const setStartedTask = vi.fn()
-    subscribeBackgroundTaskRoster(bridge.onDaemonEvent, setRoster, resetRosters, setStartedTask)
+    const setUpdatedTask = vi.fn()
+    subscribeBackgroundTaskRoster(
+      bridge.onDaemonEvent,
+      setRoster,
+      resetRosters,
+      setStartedTask,
+      setUpdatedTask
+    )
 
     bridge.emit({ type: 'disconnected' })
     expect(setRoster).not.toHaveBeenCalled()
     expect(setStartedTask).not.toHaveBeenCalled()
+    expect(setUpdatedTask).not.toHaveBeenCalled()
     expect(resetRosters).not.toHaveBeenCalled()
   })
 
@@ -317,7 +444,8 @@ describe('subscribeBackgroundTaskRoster', () => {
         bridge.onDaemonEvent,
         (s) => store.getState().setRoster(s),
         () => store.getState().resetRosters(),
-        (s) => store.getState().setStartedTask(s)
+        (s) => store.getState().setStartedTask(s),
+        (s) => store.getState().setUpdatedTask(s)
       )
       return { bridge, store }
     }
@@ -339,7 +467,8 @@ describe('subscribeBackgroundTaskRoster', () => {
         toolCallId: null,
         taskType: 'local_bash',
         description: 'grep -rn "a<b&c" .',
-        truncatedFields: null
+        truncatedFields: null,
+        latestUpdate: null
       })
     })
 
@@ -352,7 +481,8 @@ describe('subscribeBackgroundTaskRoster', () => {
         toolCallId: 'tc-1',
         taskType: 'local_bash',
         description: fullDescription,
-        truncatedFields: null
+        truncatedFields: null,
+        latestUpdate: null
       })
     })
 
@@ -383,6 +513,44 @@ describe('subscribeBackgroundTaskRoster', () => {
 
       expect(heldTask(store, 'c1', 't1')).toBeUndefined()
       expect(heldTask(store, 'c1', 't2')).toBeDefined()
+    })
+
+    it('roster → update → roster keeps the patch and refreshes the row fields (AC4 end-to-end)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(roster('c1', [noCut]))
+      bridge.emit(taskUpdated('c1', 't1', 'p', ['patch']))
+      bridge.emit(
+        roster('c1', [
+          {
+            task_id: 't1',
+            task_type: 'remote_agent',
+            description: 'newer label',
+            truncated_fields: []
+          }
+        ])
+      )
+
+      // No roster row can report a patch, so the recorded pair rides across the rebuild while every
+      // field the row CAN report is refreshed from it.
+      expect(heldTask(store, 'c1', 't1')?.latestUpdate).toEqual({
+        patch: 'p',
+        truncatedFields: ['patch']
+      })
+      expect(heldTask(store, 'c1', 't1')?.description).toBe('newer label')
+      expect(heldTask(store, 'c1', 't1')?.taskType).toBe('remote_agent')
+    })
+
+    it('a connected edge clears recorded patches too (AC5 end-to-end)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(roster('c1', [noCut]))
+      bridge.emit(taskUpdated('c1', 't1'))
+      expect(heldTask(store, 'c1', 't1')?.latestUpdate).not.toBeNull()
+
+      bridge.emit({ type: 'connected', ack })
+
+      // A patch key may carry command text, so a previous PAIRING's patch never survives a
+      // (re)handshake. This assertion must not be deleted as redundant with the store's own test.
+      expect(selectRosterFor('c1')(store.getState())).toBeNull()
     })
 
     it('a second write for a different conversation does not clobber the first (AC1)', () => {

@@ -121,6 +121,27 @@ One-line summaries of the evergreen docs. The documentation phase appends here.
   review PASS with one non-blocking SHOULD FIX (the roster-rebuild branch's negative half — a changed
   roster-sourced row on a second roster — has no dedicated mutation-control test), see [codebase
   notes](codebase/576.md).
+  **#577 joins the third and last arm, `backgroundTaskUpdated`: `HeldBackgroundTask` gains
+  `latestUpdate: HeldBackgroundTaskUpdate | null`** (`{patch: string; truncatedFields: readonly string[] |
+  null}`, required-and-nullable, one nested record so a cut report without a patch is unrepresentable), a
+  new `setUpdatedTask` setter that joins on `conversationId`+`taskId` and misses silently (returns state
+  unchanged) on either an unknown conversation or an unknown task, and a third sibling bridge translator +
+  fifth `subscribeBackgroundTaskRoster` writer. `latestUpdate` is latest-wins, never a history — the
+  daemon's per-frame cap (`maxTaskPatch`, 4 KiB) is per frame, not per task. The `setRoster` rebuild branch
+  was reshaped to carry `latestUpdate` across **individually** (`held?.latestUpdate ?? null`) rather than
+  joining the `toolCallId !== null` provenance predicate that gates keeping a record whole — the ticket's
+  central trap: the shipped `HeldBackgroundTask` docstring said any field a roster row can't report must
+  join that predicate, and following it literally would freeze a patched roster-sourced task's label
+  forever, while leaving the branch unchanged (as #576 shipped it) would drop the patch at the next roster.
+  Both compile clean and break no pre-existing test; the mutation-control test this ticket adds
+  (`backgroundTaskRosterStore.test.ts:396-420`) discriminates all three ways the branch can go wrong,
+  closing the SHOULD FIX #576's review left open. `setStartedTask` also gained the same carry-over — an
+  undocumented-in-spec deviation, since a started frame reporting no patch must not erase one recorded
+  before it arrives. Finally corrects #573's now-sole-surviving stale prediction (widening the
+  per-**conversation** entry with an optional field) — see [#577 codebase notes](codebase/577.md) §
+  "Correcting a stale prediction still on disk". Still ships **populated and unread**; #568 remains the
+  first reader. Size S, code review PASS with two non-blocking NITs (both comment-only — a spliced-in
+  docstring line and one unwrapped multi-arg call site), see [codebase notes](codebase/577.md).
 
 - [Relay-link store](features/relay-link-store.md) — the renderer's held copy of the relay-**socket** leg's link status, split from #149 alongside #328 (transport, shipped) → #330 (two-dot render, shipped): a dedicated `relayLinkStore` (`RelayLinkStatus | null`, `null` = not-connected-yet sentinel, single unconditional `setRelayLinkStatus` — most-recent-category-wins) plus a reactive-only headless bridge (`translateRelayLink`/`subscribeRelayLink`/`RelayLinkData`) that observes the [daemon-event channel](features/daemon-event-channel.md)'s `relayLinkChanged` arm (#328) — the arm's first real consumer, all three exhaustive bridges keep no-op'ing it. Near-verbatim clone of [session-id store](features/session-id-store.md)'s DI-factory → singleton → hook → selector shape (not `conversationListStore`'s request-gated shape — the arm is an unsolicited push). Deliberately does not model the daemon-session leg, which stays in [session store](features/session-store.md)'s `ConnectionStatus`; #330 combines both at render time (`relayLeg`/`daemonLeg`) and decided **not** to reconcile relay-dot presentation after a fatal session close — the leg is left stale, not cleared, per #328's forward note, and #330 renders that staleness honestly rather than suppressing it. `RelayLinkData` mounts as a sixth headless App-level sibling alongside `ConversationListData`/`SessionIdData`/`QueueData`/`ScreenSnapshotData`. Not security-sensitive; no Figma (headless, no render surface). Shipped dormant (#329, code review PASS, no findings, see [codebase notes](codebase/329.md)); gained its first reader in #330 (see [codebase notes](codebase/330.md)).
 - [Screen-snapshot store](features/screen-snapshot-store.md) — the renderer's held copy of the daemon's latest rendered-screen `text`, split from #318 (itself split from #147): a dedicated `screenSnapshotStore` (`{text,ts} | null`, `null` = not yet received, single unconditional `setSnapshot` — most-recent-wins, empty `text` held verbatim not dropped) plus a reactive-only headless bridge (`translateScreenSnapshot`/`subscribeScreenSnapshot`/`ScreenSnapshotData`) that observes the [daemon-event channel](features/daemon-event-channel.md)'s `screenSnapshotReceived` arm (#316). Structurally closest to [session-id store](features/session-id-store.md) (#259) — reactive-only, no request half at all, since the daemon pushes the snapshot unsolicited off the same `case 'snapshot'` seam that also fires the request-triggered `snapshotReceived` (#180/#187) — rather than to `runConfigStore`'s request-on-open shape. `ScreenSnapshotData` mounts as a fifth headless App-level sibling alongside `ConversationListData`/`SessionIdData`/`RunSettingsWriteData`/`QueueData`, for the whole app lifetime (not screen-scoped), since a snapshot can arrive before any display surface is mounted. Not security-sensitive; no Figma (headless, no render surface). Shipped dormant at #323 (no UI, no trigger; code review PASS, see [codebase notes](codebase/323.md)); the sibling #324 (below) is now its sole reader.

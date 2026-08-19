@@ -171,6 +171,44 @@ export type DaemonEvent =
   // frame (including a verbatim repeat), and #496 is idempotent on the repeat. Ships dormant: all three
   // exhaustive bridges no-op it until #496 — the apiRetry-was-a-no-op-until-#493 precedent.
   | { type: 'compacting'; active: boolean }
+  // The announced-model arm (#587) — what claude named as the model it resolved for the turn, off its
+  // `system` / `init` line. Neither a claude sub-state like its three status neighbours above nor a
+  // daemon mapping gap like unrecognizedMessage: an IDENTITY report, answering what the spawn argument
+  // cannot — the daemon knows what it REQUESTED, only claude knows what it GOT.
+  //
+  // `model` COLLIDES BY NAME WITH TWO ARMS ABOVE AND MEANS THE OPPOSITE THING. snapshotReceived and
+  // runConfigReceived both carry a `model: string` meaning the per-session OVERRIDE, where `''` means
+  // "inherited default, no override". This one means what claude ANNOUNCED, and in the ordinary case
+  // the two disagree: the override is `''` while claude has named a concrete model. Both values are
+  // destined for the same run-configuration sheet, so the collision is live rather than theoretical.
+  // The daemon's wire field name is kept (no drift, ADR 0002) and the distinction is drawn here, the
+  // way the daemon's own payload doc draws it.
+  //
+  // The identifier is VERBATIM: not reliably dated, and it need not appear in any published model list
+  // (requesting `claude-haiku-4-5` yields it back undated), so a MISS on #588's lookup is ORDINARY,
+  // not an error — and #588 must not normalise, lowercase, allow-list, or regex a family out of it.
+  //
+  // `truncated` is LOAD-BEARING: a reader that ignores it presents claude's cut text as complete. It is
+  // sharper here than on unrecognizedMessage, because a cut identifier always misses #588's exact
+  // lookup and so always renders verbatim, looking exactly like a legitimate unrecognised model.
+  // `false` is a VALUE (nothing was cut), never an absence, and the decoder never defaults it.
+  //
+  // SECURITY: `model` is UNTRUSTED, model-influenced daemon-relayed text that crossed the subprocess
+  // trust boundary. The daemon BOUNDS it (256 bytes) but does NOT SANITIZE it — no control-character or
+  // terminal-escape stripping happens anywhere on this path — so #588 and its render surface must treat
+  // it as PLAIN TEXT ONLY, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute
+  // or a URL, mirroring the identical warning on unrecognizedMessage / backgroundTaskStarted. It is a
+  // REPORT, NEVER A CONTROL INPUT: no security-relevant behaviour may branch on it, and it is not a
+  // cache key, a filename, or a lookup path. This slice has no DOM sink; the constraint is inherited
+  // here for #588.
+  //
+  // `conversation_id` is dropped at the emit (single active conversation, matching turnState /
+  // stallDetected / apiRetry / compacting): #588 holds a SINGLE value replaced on each announcement, so
+  // nothing downstream keys by conversation — the condition under which backgroundTaskStarted keeps it.
+  // NOT deduped: the transport holds no state, so a consumer sees exactly one event per daemon frame,
+  // including a verbatim repeat — which is what tells #588 the value is still current. Ships dormant:
+  // all three exhaustive bridges no-op it until #588 — the compacting-was-a-no-op-until-#496 precedent.
+  | { type: 'modelAnnounced'; model: string; truncated: boolean }
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //

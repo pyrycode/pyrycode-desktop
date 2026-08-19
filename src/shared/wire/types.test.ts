@@ -15,6 +15,7 @@ import type {
   BackgroundTaskUpdatedPayload,
   BackgroundTask,
   BackgroundTaskRosterPayload,
+  ModelAnnouncedPayload,
   WireUnrecognizedSite,
   UnrecognizedMessagePayload,
   WireSessionTransitionReason,
@@ -366,6 +367,50 @@ describe('background-task-roster wire vocabulary (#566)', () => {
       dropped_tasks: 0
     }
     expect(roster.tasks[0].truncated_fields).toBeNull()
+  })
+})
+
+describe('model-announced wire vocabulary (#587)', () => {
+  it('admits the model_announced inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType.
+    const announced: EnvelopeType = 'model_announced'
+    expect(announced).toBe('model_announced')
+  })
+
+  it('shapes ModelAnnouncedPayload as its three fields — no turn_id, no counter', () => {
+    const payload: ModelAnnouncedPayload = {
+      conversation_id: 'c1',
+      model: 'claude-haiku-4-5-20251001',
+      truncated: true
+    }
+    expect(payload).toEqual({
+      conversation_id: 'c1',
+      model: 'claude-haiku-4-5-20251001',
+      truncated: true
+    })
+  })
+
+  it('admits truncated false as a wire VALUE, not an absence — the field is never optional', () => {
+    // The daemon's own zero fixture (model_announced_zero.json) round-trips all three fields present,
+    // so `false` is what "nothing was cut" looks like on the wire — never a missing key.
+    const notCut: ModelAnnouncedPayload = {
+      conversation_id: '',
+      model: '',
+      truncated: false
+    }
+    expect(notCut.truncated).toBe(false)
+  })
+
+  it('admits an identifier in no published list — the type imposes no shape beyond `string`', () => {
+    // claude echoes an identifier at least as specific as the one it was given: requesting
+    // `claude-haiku-4-5` yields it back undated, which appears in no published model list. A lookup
+    // miss is ORDINARY, so nothing here narrows `model` to a dated pattern or a closed set.
+    const undated: ModelAnnouncedPayload = {
+      conversation_id: 'c1',
+      model: 'claude-haiku-4-5',
+      truncated: false
+    }
+    expect(undated.model).toBe('claude-haiku-4-5')
   })
 })
 

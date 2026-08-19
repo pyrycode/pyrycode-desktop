@@ -39,6 +39,7 @@ import type {
   BackgroundTaskUpdatedPayload,
   BackgroundTask,
   BackgroundTaskRosterPayload,
+  ModelAnnouncedPayload,
   UnrecognizedMessagePayload,
   SessionTransitionPayload,
   SessionSettingsPayload,
@@ -126,6 +127,22 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * one string and one BOOLEAN (whose `false` is the explicit falling edge, a value not an absence, so
  * nothing may consult truthiness). NOT onset-only and NOT deduped: N frames narrow to N values. Ships
  * dormant — the render slice (#496) is the first consumer.
+ *
+ * The `model-announced` kind (#587) carries the decoded ModelAnnouncedPayload — claude's own report of
+ * the model it resolved for the turn, off its `system` / `init` line, fanned out to interactive clients.
+ * Neither a claude sub-state like its `stall` / `api-retry` / `compacting` neighbours nor a daemon
+ * mapping gap like `unrecognized-message`: an IDENTITY report, carrying no `turn_id` and opening and
+ * closing no turn. The consumer carries `model` and `truncated` onward, dropping `conversation_id` (the
+ * turnState convention — #588 holds a single value replaced per announcement, so nothing keys by
+ * conversation). The fail-closed defence is two required strings plus one required BOOLEAN whose `false`
+ * is a VALUE (nothing was cut), not an absence — `truncated` is never optional and never defaults.
+ *
+ * `model` is held VERBATIM: no normalising, no lowercasing, no allow-list, no family regex, and NO
+ * LENGTH CHECK is duplicated here (the daemon caps it at 256 at construction — that is what `truncated`
+ * reports — and MAX_PLAINTEXT_BYTES, 65519, backstops the frame with ~250× headroom). A client-invented
+ * rule would drop identifiers claude legitimately announces, since the value need not be dated and need
+ * not appear in any published list. Ships dormant — the announced-model store (#588) is the first
+ * consumer.
  *
  * The `background-task-started` kind (#564) carries the decoded BackgroundTaskStartedPayload — the daemon's
  * announcement that claude started work OUTLIVING the turn that spawned it (pyrycode#1240), fanned out to
@@ -250,6 +267,7 @@ export type InboundDaemonMessage =
   | { kind: 'stall'; stall: StallPayload }
   | { kind: 'api-retry'; apiRetry: ApiRetryPayload }
   | { kind: 'compacting'; compacting: CompactingPayload }
+  | { kind: 'model-announced'; modelAnnounced: ModelAnnouncedPayload }
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }
@@ -811,6 +829,45 @@ function parseUnrecognizedMessagePayload(payload: unknown): UnrecognizedMessageP
 }
 
 /**
+ * Narrow an opaque payload into a ModelAnnouncedPayload (#587). Fail-closed like its neighbours, over
+ * three fields — and the closest model is parseUnrecognizedMessagePayload directly above, which already
+ * narrows a `conversation_id`, a bounded untrusted string and a `truncated` bool with exactly these
+ * `require*` calls. Any missing / mistyped field throws WireDecodeError, never a partial value.
+ *
+ * `model` gets NO LENGTH CHECK, NO CHARSET CHECK, NO ALLOW-LIST and NO NORMALISATION. The producer caps
+ * it at 256 at construction (that is what `truncated` reports) and parseInboundMessage's frame-level
+ * MAX_PLAINTEXT_BYTES guard (65519) backstops the oversized case with roughly 250× headroom, so a third
+ * bound here would defend a failure that cannot reach this line. A client-invented rule would be worse
+ * than redundant: claude echoes an identifier at least as specific as the one it was given, so the value
+ * is not reliably dated and need not appear in any published list — anything narrower would silently
+ * drop VALID future identifiers, the drift risk CLAUDE.md / ADR 0002 rank above cosmetic robustness. A
+ * lookup miss is #588's ORDINARY case, not this decoder's problem.
+ *
+ * requireString admits `''`. The daemon SUPPRESSES the event on an empty model at the producer, so `''`
+ * will not arrive off a conforming daemon — and there is deliberately no second suppression branch
+ * there, nor one here. Do not add a guard.
+ *
+ * `truncated` goes through requireBoolean, whose check is on the TYPE: a literal `false` passes (a
+ * VALUE — nothing was cut), while an absent field, `0`, `'false'` or `null` all fail the payload closed.
+ * It is a REQUIRED wire field, never an optional one, and never defaults to "not cut" — a defaulting
+ * reader would present claude's cut identifier as a complete one.
+ *
+ * Returns a fresh three-field literal, so unknown server-added keys (e.g. a spurious `turn_id`) are
+ * tolerated (forward-compat) but NOT copied through — which also makes it prototype-pollution-safe. Its
+ * messages name the failure CATEGORY only: never `model` (untrusted, model-influenced) and never the
+ * conversation-correlating id.
+ */
+function parseModelAnnouncedPayload(payload: unknown): ModelAnnouncedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed model_announced payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const model = requireString(payload, 'model')
+  const truncated = requireBoolean(payload, 'truncated')
+  return { conversation_id, model, truncated }
+}
+
+/**
  * Narrow an opaque payload into a SessionTransitionPayload (#254). Fail-closed like parseTurnStatePayload,
  * scaled to five fields: three required strings (`previous_session_id` / `new_session_id` / `occurred_at`),
  * a required nullable `workspace_cwd` via requireStringOrNull (the `ConversationSummary.name` #139 idiom — a
@@ -1335,6 +1392,22 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'compacting', compacting }
+    }
+    case 'model_announced': {
+      // Narrow BEFORE logging so a malformed frame (an absent / non-string `model`, a non-boolean
+      // `truncated`) throws first and leaves no record. NOTHING decoded is logged — not the
+      // conversation_id, not the cut flag, and least of all `model` itself, which is claude-authored
+      // text that crossed the subprocess trust boundary. Only the frame's byte length + one-way hash,
+      // reusing the existing content-free field set (no new DiagnosticEvent field, so #131's renderer
+      // pin is untouched).
+      const modelAnnounced = parseModelAnnouncedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'model_announced',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'model-announced', modelAnnounced }
     }
     case 'background_task_started': {
       // Narrow BEFORE logging so a malformed frame (an omitted `truncated_fields` key, a non-string

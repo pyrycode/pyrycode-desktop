@@ -171,6 +171,11 @@ function encodeCompacting(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 24, type: 'compacting', ts: FIXED_TS, payload })
 }
 
+/** A `model_announced` envelope's plaintext bytes, wrapping an arbitrary payload (#587). */
+function encodeModelAnnounced(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 29, type: 'model_announced', ts: FIXED_TS, payload })
+}
+
 /** A `background_task_started` envelope's plaintext bytes, wrapping an arbitrary payload (#564). */
 function encodeBackgroundTaskStarted(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 26, type: 'background_task_started', ts: FIXED_TS, payload })
@@ -241,6 +246,14 @@ const API_RETRY = {
 const COMPACTING = {
   conversation_id: 'c1',
   active: true
+}
+
+/** A well-formed model_announced payload — the daemon's canonical fixture VERBATIM (#587,
+ *  pyrycode/internal/protocol/testdata/model_announced.json). All three fields are always present. */
+const MODEL_ANNOUNCED = {
+  conversation_id: 'c1',
+  model: 'claude-haiku-4-5-20251001',
+  truncated: true
 }
 
 /** A well-formed background_task_started payload — the daemon's canonical fixture (#564). Every field
@@ -1745,6 +1758,146 @@ describe('parseInboundMessage — compacting fail-closed (#495)', () => {
   it('throws when a compacting payload is not an object', () => {
     expect(() => parseInboundMessage(encodeCompacting('nope'))).toThrow(WireDecodeError)
     expect(() => parseInboundMessage(encodeCompacting(['a']))).toThrow(WireDecodeError)
+  })
+})
+
+describe('parseInboundMessage — model_announced recognition (#587, additive)', () => {
+  // AC3's assertion discipline: every expectation below is a SPELLED-OUT literal, never the fixture
+  // object reused as its own expectation — a fixture on both sides would pass a decoder that re-cased
+  // or substituted the value it was handed.
+  it('narrows a well-formed model_announced into { kind: model-announced } carrying all three fields', () => {
+    expect(parseInboundMessage(encodeModelAnnounced(MODEL_ANNOUNCED))).toEqual({
+      kind: 'model-announced',
+      modelAnnounced: {
+        conversation_id: 'c1',
+        model: 'claude-haiku-4-5-20251001',
+        truncated: true
+      }
+    })
+  })
+
+  it('carries the identifier BYTE-FOR-BYTE — no lowercasing, no trimming, no family match', () => {
+    // A deliberately conspicuous sentinel: mixed case, an underscore, a dot and a digit run that no
+    // normaliser would leave alone. This is the assertion a decoder that "tidies" the value fails.
+    const sentinel = 'Claude-Opus-5_TEST.20260819'
+    const decoded = parseInboundMessage(
+      encodeModelAnnounced({ ...MODEL_ANNOUNCED, model: sentinel })
+    )
+    expect(decoded).toEqual({
+      kind: 'model-announced',
+      modelAnnounced: {
+        conversation_id: 'c1',
+        model: 'Claude-Opus-5_TEST.20260819',
+        truncated: true
+      }
+    })
+  })
+
+  it('decodes an identifier in no published list exactly like any other (AC1 — no allow-list)', () => {
+    // Requesting `claude-haiku-4-5` yields it back UNDATED, which appears in no published list; an
+    // outright invented one is no different here. A lookup miss is ORDINARY, not a decode failure.
+    expect(
+      parseInboundMessage(encodeModelAnnounced({ ...MODEL_ANNOUNCED, model: 'claude-haiku-4-5' }))
+    ).toEqual({
+      kind: 'model-announced',
+      modelAnnounced: { conversation_id: 'c1', model: 'claude-haiku-4-5', truncated: true }
+    })
+    expect(
+      parseInboundMessage(
+        encodeModelAnnounced({ ...MODEL_ANNOUNCED, model: 'totally-made-up-model-9' })
+      )
+    ).toEqual({
+      kind: 'model-announced',
+      modelAnnounced: { conversation_id: 'c1', model: 'totally-made-up-model-9', truncated: true }
+    })
+  })
+
+  it('round-trips truncated in both directions — the cut report reaches the caller unchanged', () => {
+    const cut = parseInboundMessage(encodeModelAnnounced({ ...MODEL_ANNOUNCED, truncated: true }))
+    expect(cut).toEqual({
+      kind: 'model-announced',
+      modelAnnounced: { conversation_id: 'c1', model: 'claude-haiku-4-5-20251001', truncated: true }
+    })
+    const whole = parseInboundMessage(encodeModelAnnounced({ ...MODEL_ANNOUNCED, truncated: false }))
+    expect(whole).toEqual({
+      kind: 'model-announced',
+      modelAnnounced: { conversation_id: 'c1', model: 'claude-haiku-4-5-20251001', truncated: false }
+    })
+  })
+
+  it('decodes an EMPTY model — the producer suppresses it, but the decoder must not (no guard)', () => {
+    expect(
+      parseInboundMessage(encodeModelAnnounced({ ...MODEL_ANNOUNCED, model: '', truncated: false }))
+    ).toEqual({
+      kind: 'model-announced',
+      modelAnnounced: { conversation_id: 'c1', model: '', truncated: false }
+    })
+  })
+
+  it('drops unknown server keys, keeping exactly the three known fields (forward-compat)', () => {
+    const withExtras = { ...MODEL_ANNOUNCED, turn_id: 'turn-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeModelAnnounced(withExtras))).toEqual({
+      kind: 'model-announced',
+      modelAnnounced: {
+        conversation_id: 'c1',
+        model: 'claude-haiku-4-5-20251001',
+        truncated: true
+      }
+    })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — model_announced fail-closed (#587)', () => {
+  it('throws when model is absent or a non-string (AC4 — never a defaulted value)', () => {
+    const bad: unknown[] = [
+      { conversation_id: 'c1', truncated: true }, // absent
+      { ...MODEL_ANNOUNCED, model: 42 },
+      { ...MODEL_ANNOUNCED, model: null },
+      { ...MODEL_ANNOUNCED, model: { name: 'claude-opus-5' } },
+      { ...MODEL_ANNOUNCED, model: ['claude-opus-5'] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModelAnnounced(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when truncated is absent or a non-boolean (TYPE-checked, never defaulted to "not cut")', () => {
+    // The `0` and `'true'` cases are the ones that matter: they are exactly what an implementation
+    // that defaulted a missing/loose `truncated` to false would silently swallow, presenting a cut
+    // identifier as a complete one.
+    const bad: unknown[] = [
+      { conversation_id: 'c1', model: 'claude-haiku-4-5-20251001' }, // absent
+      { ...MODEL_ANNOUNCED, truncated: 'true' },
+      { ...MODEL_ANNOUNCED, truncated: 'false' },
+      { ...MODEL_ANNOUNCED, truncated: 0 },
+      { ...MODEL_ANNOUNCED, truncated: 1 },
+      { ...MODEL_ANNOUNCED, truncated: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModelAnnounced(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when conversation_id is absent, a non-string, or null', () => {
+    const bad: unknown[] = [
+      { model: 'claude-haiku-4-5-20251001', truncated: true }, // absent
+      { ...MODEL_ANNOUNCED, conversation_id: 42 },
+      { ...MODEL_ANNOUNCED, conversation_id: null }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeModelAnnounced(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a model_announced payload is not an object', () => {
+    expect(() => parseInboundMessage(encodeModelAnnounced('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeModelAnnounced(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeModelAnnounced(null))).toThrow(WireDecodeError)
   })
 })
 
@@ -3273,6 +3426,46 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeCompacting({ conversation_id: 'c1', active: 'true' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs a model_announced content-free, never the conversation_id, the model or the cut flag (#587)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONV = 'secret-conversation-id'
+    const ANNOUNCED_MODEL = 'claude-haiku-4-5-20251001'
+    const plaintext = encodeModelAnnounced({
+      conversation_id: SECRET_CONV,
+      model: ANNOUNCED_MODEL,
+      truncated: true
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('model_announced')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field (conversation_id / model / truncated)
+    // reaches the log, and no new DiagnosticEvent field is introduced (reuses the existing set).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_CONV)
+    expect(lines[0]).not.toContain(ANNOUNCED_MODEL)
+  })
+
+  it('does NOT log on a malformed model_announced throw path (#587)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeModelAnnounced({
+          conversation_id: 'c1',
+          model: 'claude-haiku-4-5-20251001',
+          truncated: 'true'
+        }),
+        log
+      )
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

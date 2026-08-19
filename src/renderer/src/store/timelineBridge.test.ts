@@ -292,6 +292,10 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       // create-folder rejection ships dormant (#396); its consumer is the #397 round-trip store, not the
       // timeline store — it is not a turn-stream item.
       { type: 'workspaceFolderRejected' },
+      // the announced model ships dormant (#587); its consumer is the #588 announced-model store, not
+      // the timeline store. Daemon STATE, not a turn-stream item: the frame carries no turn_id and
+      // opens and closes no turn — an identity report ABOUT a turn is not an item IN one.
+      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false },
       // background-task open ships dormant (#564); its consumer is the #567 background-task store, not
       // the timeline store. Daemon STATE, not a turn-stream item — the wire says so outright: no
       // turn_id, opens and closes no turn, "its own thread of activity, not part of the turn".
@@ -565,6 +569,24 @@ describe('subscribeTimeline', () => {
     // The falling edge repeats the last-known counter; the status still clears.
     bridge.emit({ type: 'apiRetry', active: false, current: 3, total: 10 })
     expect(selectApiRetry(store.getState())).toBeNull()
+  })
+
+  it('#587: a modelAnnounced daemon event creates NO timeline item (ships dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'claude-haiku-4-5-20251001',
+      truncated: false
+    })
+
+    // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
+    // state ref), AND no chat row exists.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
   })
 
   it('#564: a backgroundTaskStarted daemon event creates NO timeline item (ships dormant)', () => {

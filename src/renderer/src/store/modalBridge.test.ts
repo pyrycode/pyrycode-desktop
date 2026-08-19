@@ -173,6 +173,9 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         raw: '{"type":"some_future_event"}',
         truncated: false
       },
+      // the announced model ships dormant (#587); its consumer is the #588 announced-model store, not
+      // the modal store — an identity report is not a modal, since nothing is waiting on an answer.
+      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false },
       // background-task open ships dormant (#564); its consumer is the #567 background-task store, not
       // the modal store — a task claude left running is emphatically not a modal, since nothing is
       // waiting on an answer.

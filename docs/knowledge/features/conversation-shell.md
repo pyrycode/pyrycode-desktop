@@ -1637,8 +1637,15 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   `__compacting`/`__queued`/`__interrupt`, `.screen-snapshot`) can mount or unmount with no risk of
   un-pinning a thread the operator never scrolled — a chrome mount only shrinks the thread's viewport, which
   cannot fire a scroll event. `overflow-anchor` stays unset (closed as indifferent, confirmed on an observed
-  e2e run, not just reasoning). Forcing the thread to the bottom on send (#602) and opening a conversation
-  at the bottom (#603) are separate, not-yet-built triggers meant to ride this same mechanism.
+  e2e run, not just reasoning). **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
+  mechanism with no second one: `useThreadScrollPin` now also returns `followBottom`, a single
+  `following.current = true` re-arm, wired as a required `onMessageSent` prop on `Composer` and invoked
+  inside `handleSubmit`'s existing `if (sent)` branch — so a submit that sends nothing (not connected,
+  whitespace-only, no active conversation) never re-arms the flag and leaves no armed pin behind for the
+  next unrelated arriving item to yank. Because the re-assert layout effect has no dependency array,
+  "jump to the bottom now" and "stay pinned while the reply streams" are the same fact observed at two
+  times — an operator who scrolls up again mid-stream still wins, unchanged from #601. Opening a
+  conversation at the bottom (#603) remains the one not-yet-built trigger meant to ride this mechanism.
 
 ## Related
 

@@ -132,6 +132,26 @@ daemon → screen_snapshot → snapshotReceived{model,effort,yolo,used_tokens,wi
 - **Conversation id:** `MILESTONE_CONVERSATION_ID` (`'default'`) from `composerSend.ts` — the one
   place a future conversation-selection ticket replaces.
 
+## Running model section (#560)
+
+`RunConfigView` gained a **sixth section**, `RunningModelSection`, rendered immediately *before*
+`ModelSection` — reading order is "what is running, then what you can switch to." It reads **no
+state from this store**: its data comes from the sibling [Announced-model
+store](announced-model-store.md) (`useAnnouncedModelStore(selectAnnouncedModel)`, a fourth read
+added to the `RunConfigSections` container alongside this store's `selectSnapshot`). It exists
+because this store's `snapshot.model` is the daemon's *persisted override*, which reads `''` /
+unmarked on a daemon where nothing was overridden — honest, but indistinguishable from broken; the
+new section answers what claude actually announced instead.
+
+Resolution is an **exact-match lookup**, `runningCatalogEntry` — `MODEL_CATALOG.find((e) =>
+e.family === model)`, `===` only — deliberately not `matchedFamily`, the case-insensitive
+*substring* matcher `ModelSection` uses to mark the override row. A miss (the ordinary case today,
+since the catalog holds family words and claude announces full identifiers) renders the identifier
+verbatim; a hit renders the catalog's display name; no announcement yet renders an explicit
+not-yet-known line; a daemon-reported cut renders a sibling client-owned marker element, never text
+concatenated into the value. See [#560 codebase notes](../codebase/560.md) for the full render
+contract, the three-state table, and the forgery-resistance property.
+
 ## Edge cases and limitations
 
 - **No reset on sheet close.** The store keeps its last snapshot across a close→reopen, so
@@ -175,3 +195,6 @@ daemon → screen_snapshot → snapshotReceived{model,effort,yolo,used_tokens,wi
 - [#257 codebase notes](../codebase/257.md) — made `RunConfigSections`/`RunConfigView` interactive:
   selecting a model, picking an effort, or toggling YOLO now submits a change through the write store
   above instead of the sections only ever reading this store's snapshot.
+- [Announced-model store](announced-model-store.md) / [#560 codebase notes](../codebase/560.md) —
+  the sixth section, `RunningModelSection`, added ahead of `ModelSection`; sources its own store,
+  not this one — see § Running model section above.

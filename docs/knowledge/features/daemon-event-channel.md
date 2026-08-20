@@ -345,8 +345,9 @@ export type DaemonEvent =
   (#573, shipped)](../codebase/573.md) is the first consumer, an independent subscriber outside the three
   exhaustive bridges. Third and last of the sibling frame members.
 - **`modelAnnounced{model,truncated}`** ([#587](../codebase/587.md)) also maps to *no* `SessionAction`,
-  consumed by **none** of the three existing bridges — the real consumer is the still-unbuilt
-  announced-model store, #588. Claude's own identity report for the turn (its `system`/`init` line),
+  consumed by **none** of the three existing bridges — the real consumer is
+  [the announced-model store](announced-model-store.md), #588 (shipped, still dormant pending #560's
+  render surface). Claude's own identity report for the turn (its `system`/`init` line),
   answering what the spawn argument cannot: the daemon knows what it *requested*, only claude knows what
   it *got*. **`model` collides by name with two arms above and means the opposite thing** —
   `snapshotReceived` and `runConfigReceived` both carry a `model: string` meaning the per-session
@@ -360,8 +361,9 @@ export type DaemonEvent =
   unrecognised model. `conversation_id` is dropped — the `turnState`/`stallDetected`/`apiRetry`/
   `compacting` convention (#588 holds a single value replaced per announcement). Not deduped: the
   transport holds no state, so N daemon frames (including a verbatim repeat) produce N events — that
-  repeat is what tells #588 the value is still current. Ships dormant — all three exhaustive bridges
-  no-op it until #588, the `compacting`-was-a-no-op-until-#496 precedent.
+  repeat is what tells #588 the value is still current. Ships dormant no longer: [the announced-model
+  store (#588, shipped)](announced-model-store.md) is a fourth independent observer, alongside the three
+  exhaustive bridges, which keep their no-ops permanently.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.
@@ -487,8 +489,9 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
   `runConfigReceived`'s `model` (the per-session override) and the arm's comment draws the distinction.
   `truncated` is load-bearing the same way `unrecognizedMessage`'s is, sharpened by the fact a cut
   identifier always misses the display-name lookup. `conversation_id` dropped, not deduped. Consumed by
-  none of the three exhaustive bridges; ships dormant — the still-open announced-model store #588 is the
-  first consumer.
+  none of the three exhaustive bridges; ships dormant no longer — [the announced-model store (#588,
+  shipped)](announced-model-store.md) is the first consumer, still dormant pending #560's render
+  surface.
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — the normative contract these two arms are shaped to feed
 - [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the `failed → ErrorPayload → ConnectionError` seam
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

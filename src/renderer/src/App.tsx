@@ -11,6 +11,7 @@ import { QueueData } from './store/queueBridge'
 import { ScreenSnapshotData } from './store/screenSnapshotBridge'
 import { RelayLinkData } from './store/relayLinkBridge'
 import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
+import { AnnouncedModelData } from './store/announcedModelBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -116,6 +117,12 @@ function App(): JSX.Element {
   // conversation the user is not looking at. Reactive-only, no gate. Ships dormant. Its `connected`
   // branch is the sole enforcement of AC5 (no previous pairing's tasks survive a re-handshake), which
   // is why this store is deliberately absent from clearPairingScopedState.
+  // AnnouncedModelData (#588) is the EIGHTH headless leaf: it lands each unsolicited `modelAnnounced`
+  // announcement into the announced-model store for the run-configuration sheet (#560), on the same
+  // App-level always-listening rationale — the announcement rides the turn's init line, so it can
+  // arrive long before that sheet is ever opened. Reactive-only, no gate. Ships dormant. Unlike its
+  // roster neighbour above it has no `connected` branch, so its store is pairing-scoped with nothing
+  // clearing it yet; that deferral and its follow-up obligation are recorded in announcedModelStore.ts.
   return (
     <>
       <ConversationListData />
@@ -125,6 +132,7 @@ function App(): JSX.Element {
       <ScreenSnapshotData />
       <RelayLinkData />
       <BackgroundTaskRosterData />
+      <AnnouncedModelData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

@@ -1,0 +1,119 @@
+// The model claude announced for the running turn, kept live as one unidirectional source of truth for
+// the run-configuration sheet (#560, later). Pure renderer state — no IPC, no preload bridge, no
+// transport. The data path (announcedModelBridge.ts) observes each arriving `modelAnnounced` daemon
+// event (#587 decodes claude's `system` / `init` line) and writes its `model`/`truncated` here via the
+// single setter; #560 reads them through the selector.
+//
+// A dedicated store (the screenSnapshotStore / runConfigStore precedent, #323 / #187), NOT a
+// runConfigStore facet, on four grounds. (a) Lifetime: runConfigStore's data path requests a fresh
+// snapshot on sheet open (runConfigStore.ts:1-5), whereas this holder must be App-level
+// always-listening — an announcement rides the turn's init line whether or not any sheet is open.
+// (b) All three exhaustive bridges already name this as a distinct thing (daemonEventBridge.ts:150,
+// modalBridge.ts:101, timelineBridge.ts:161). (c) The name collides and means the OPPOSITE:
+// runConfigStore.ts:27 holds `model: string` meaning the per-session OVERRIDE (`''` = inherited
+// default), while this one is what claude ANNOUNCED, and in the ordinary case the two disagree
+// (events.ts:179-185). (d) runConfigStore's `snapshot: null` already spends the not-yet sentinel, so
+// folding in would need a second one nested inside it. The two stores stay orthogonal and an
+// announcement re-renders only components selecting this slice.
+//
+// A single setter rather than a reducer: there is exactly one mutation ("record the latest
+// announcement"), so a discriminated-union action set would be a one-member union — ceremony without
+// benefit. Unidirectional is preserved: read-only selector, one write path, and `setAnnouncedModel` is
+// invoked only by the subscription wiring, never two-way-bound from a component.
+//
+// PAIRING-SCOPED, and DELIBERATELY ABSENT FROM clearPairingScopedState (#529). By that helper's own
+// rule (clearPairingScopedState.ts:19-27) a pairing-scoped store that nothing re-asserts on the new
+// pairing belongs there, and this one qualifies: nothing on a fresh pairing re-asserts an announcement
+// — the next one arrives only with the next turn's init line, so a stale value would latch. It is left
+// out here because this slice ships DORMANT (nothing renders it, so a stale value is unobservable
+// until #560 builds the surface), because adding a clear would be a second mutation to a store whose
+// contract is "written only by wiring", and because it would take this ticket to five production
+// files. The clear rides with #560 or a follow-up filed against it — #560 is the ticket that makes a
+// stale value observable.
+import { createStore } from 'zustand/vanilla'
+import { useStore } from 'zustand'
+
+/** The held announcement. `model` is claude's identifier held VERBATIM — never normalised, lowercased,
+ *  allow-listed, date-stamped, family-mapped, or shape-checked. claude echoes an identifier at least as
+ *  specific as the one it was given, so `claude-haiku-4-5` announces back undated and appears in no
+ *  published model list: a MISS on #560's exact lookup is ORDINARY, not an error.
+ *
+ *  `truncated` is the daemon's cut report and is LOAD-BEARING: a consumer that ignores it presents
+ *  claude's cut text as complete, and a cut identifier always misses #560's lookup and so always
+ *  renders verbatim, looking exactly like a legitimate unrecognised model. `false` is a VALUE (nothing
+ *  was cut), never an absence.
+ *
+ *  SECURITY: `model` is UNTRUSTED, model-influenced daemon-relayed text. The daemon BOUNDS it (256
+ *  bytes) but does NOT SANITIZE it — nothing strips control characters or terminal escapes anywhere on
+ *  this path — so #560's render surface must treat it as PLAIN TEXT ONLY, NEVER HTML (no innerHTML /
+ *  dangerouslySetInnerHTML), never into an attribute or a URL. It is a REPORT, NEVER A CONTROL INPUT:
+ *  no security-relevant behaviour may branch on it, and it is not a cache key, a filename, or a lookup
+ *  path. This slice has no DOM sink, so the constraint is inherited here rather than discharged.
+ *  Mirrors the `modelAnnounced` event shape (events.ts:174-211). */
+export interface AnnouncedModel {
+  model: string
+  truncated: boolean
+}
+
+/** The whole announced-model state. `announced: null` is the distinct "no announcement has arrived yet"
+ *  state — an announcement arrives once per turn, so a freshly launched app has none and #560 must be
+ *  able to say so explicitly. A received `{ model: '', truncated: false }` is a REAL (if degenerate)
+ *  announcement the daemon emitted, held verbatim and NOT collapsed to null — the sessionIdStore
+ *  `null`-vs-`''` contract (sessionIdStore.ts:24-26). That arm is reachable, not hypothetical: the
+ *  daemon's producer suppresses an empty model (parser.go:1446) so a conforming daemon never sends one,
+ *  but #587 deliberately declined a second client-side suppression, so `requireString` admits `''` and
+ *  the decoder passes it through from a non-conforming or hostile daemon.
+ *
+ *  The record-`|`-null shape (the screenSnapshotStore / runConfigStore idiom) is load-bearing rather
+ *  than stylistic. The flat alternative `{ model: string | null; truncated: boolean }` would force
+ *  `truncated` to carry a value before any announcement exists, contradicting "`false` is a VALUE,
+ *  never an absence" (events.ts:194). Wrapping both fields behind one nullable makes "not yet
+ *  announced" a single sentinel and makes every field of a present record a real daemon-delivered
+ *  value by construction. */
+export interface AnnouncedModelState {
+  announced: AnnouncedModel | null
+}
+
+/** Store shape = state + the single mutation entry point. The mutation lives here and NOT on
+ *  `AnnouncedModelState`, so the selector — typed against the state-only interface — cannot see it and
+ *  `initialAnnouncedModelState` stays assignable. */
+export type AnnouncedModelStore = AnnouncedModelState & {
+  setAnnouncedModel: (announced: AnnouncedModel) => void
+}
+
+export const initialAnnouncedModelState: AnnouncedModelState = { announced: null }
+
+/**
+ * DI-friendly, React-free store — one isolated instance per test. `setAnnouncedModel` replaces the
+ * whole `announced` record unconditionally: no merge, no coercion, no validation, and NO DEDUP OF A
+ * VERBATIM REPEAT. The repeat is not noise — per events.ts:208-209 the transport holds no state, so a
+ * consumer sees exactly one event per daemon frame, and a repeat is the signal that the value is still
+ * current; suppressing it would discard information. One consequence, stated rather than discovered:
+ * each write produces a fresh object identity, so a verbatim repeat does re-notify subscribers (exactly
+ * as screenSnapshotStore behaves; #560 memoises if it ever matters). Memory is O(1) regardless of how
+ * many announcements arrive — the store holds exactly one record and replaces it, so a flooding hostile
+ * relay costs one allocation per frame, not an unbounded append.
+ *
+ * The stored value is the daemon's, as-is.
+ */
+export function createAnnouncedModelStore(
+  init: AnnouncedModelState = initialAnnouncedModelState
+) {
+  return createStore<AnnouncedModelStore>((set) => ({
+    ...init,
+    setAnnouncedModel: (announced) => set({ announced })
+  }))
+}
+
+/** App-wide singleton — the one source of truth the data path writes and #560 reads. */
+export const announcedModelStore = createAnnouncedModelStore()
+
+/** Narrow-slice React binding for #560. Selecting a single slice avoids cross-facet re-renders. */
+export function useAnnouncedModelStore<T>(selector: (s: AnnouncedModelStore) => T): T {
+  return useStore(announcedModelStore, selector)
+}
+
+/** The only read surface. There is no exposed setter beyond `setAnnouncedModel`; it is the sole
+ *  mutation path and is invoked only by the subscription wiring, never two-way-bound from a
+ *  component. */
+export const selectAnnouncedModel = (s: AnnouncedModelState): AnnouncedModel | null => s.announced

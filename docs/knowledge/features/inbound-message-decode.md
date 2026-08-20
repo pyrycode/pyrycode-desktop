@@ -170,7 +170,9 @@ it, and a client-invented rule would silently drop identifiers claude legitimate
 reliably dated, need not appear in any published list). `truncated` goes through `requireBoolean` and is
 never optional or defaulted — a defaulting reader would present a cut identifier as a complete one. The
 consumer arm carries `model`/`truncated` onward and drops `conversation_id` (the `turnState` convention
-— #588 holds a single value replaced per announcement). Ships dormant; #588 is the first consumer.
+— #588 holds a single value replaced per announcement). Ships dormant no longer: [the announced-model
+store (#588, shipped)](announced-model-store.md) is the first consumer, still dormant
+pending #560's render surface.
 
 ## Where it lives
 
@@ -580,7 +582,9 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
   `message_type` — three fields, no new helper), and the identity-report grouping (no `turn_id`, opens
   and closes no turn) that keeps it out of the `stall`/`api_retry`/`compacting` status cluster despite
   sitting beside it in `InboundDaemonMessage`. `model` is held verbatim (no length/charset check, no
-  allow-list); `truncated` is required and never defaulted. Ships dormant; #588 is the first consumer.
+  allow-list); `truncated` is required and never defaulted. Ships dormant no longer: [the announced-model
+  store (#588, shipped)](announced-model-store.md) is the first consumer, still dormant
+  pending #560's render surface.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

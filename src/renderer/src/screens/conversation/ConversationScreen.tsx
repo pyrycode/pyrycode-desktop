@@ -1,11 +1,14 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
-  type Ref
+  type Ref,
+  type RefObject,
+  type UIEventHandler
 } from 'react'
 import './conversation.css'
 import type { Message } from './messageViewModel'
@@ -40,6 +43,7 @@ import {
   shouldShowBanner,
   CONNECTION_BANNER_COPY
 } from './composerSend'
+import { isAtBottom } from './threadScrollPosition'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { sendInterrupt } from './sendInterrupt'
@@ -150,6 +154,10 @@ export function ConversationScreen({
   // A plain render-local value, not store state (the ChannelList precedent) — safe under
   // renderToStaticMarkup, adds no subscription, and re-derives on each render so the label stays fresh.
   const now = Date.now()
+  // #601: the follow-the-conversation pin. Screen-local, held beside the other screen-local values above —
+  // nothing outside this screen reads it and it must not survive a remount (ADR 0006), so a re-entered
+  // thread starts pinned again, which is the correct reading. The two handles go to Timeline as one prop.
+  const scrollPin = useThreadScrollPin()
   return (
     <div className="conversation">
       <BackControl onBack={onBack} />
@@ -172,7 +180,7 @@ export function ConversationScreen({
         isEmpty={items.length === 0}
         onChange={() => setPickerOpen(true)}
       />
-      <Timeline items={items} now={now} />
+      <Timeline items={items} now={now} scrollPin={scrollPin} />
       {/* #493/#496: the thinking gate NARROWS — a live api-retry, or a live compaction, supersedes the
           generic thinking indicator. With neither in flight the predicate is exactly the pre-#493
           `phase === 'thinking'`, so thinking behaviour is unchanged. */}
@@ -266,6 +274,88 @@ export function ConversationScreen({
   )
 }
 
+/**
+ * The two DOM handles the thread's scroll container needs from the screen. Bundled into ONE value rather
+ * than passed as two props so "wired the ref, forgot the handler" is unrepresentable: both or neither.
+ */
+export interface ThreadScrollPin {
+  ref: RefObject<HTMLDivElement>
+  onScroll: UIEventHandler<HTMLDivElement>
+}
+
+// The standard isomorphic alias. `document` exists in the window and NOT in vitest's `node` environment
+// (vitest.config.ts:27), where the renderer tests server-render through renderToStaticMarkup — and React 18
+// logs "useLayoutEffect does nothing on the server" for every component reached that way. There are 33
+// `<ConversationScreen` render sites in the renderer tests, so without this the pin would add 33 lines of
+// warning noise to every `npm test` run (observed, not projected). Neither hook runs under
+// renderToStaticMarkup, so behaviour there is unchanged; in the app `document` exists and the re-assert
+// keeps the pre-paint guarantee it actually needs.
+const useThreadLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
+
+/**
+ * #601: keep the thread following the conversation while the operator is already reading at the bottom.
+ *
+ * The ORDER of the decision is the whole design. The flag is written only by the container's own scroll
+ * events; the re-assert reads that flag and never re-measures. A measurement taken when new content lands
+ * reads a layout that already includes it, so it cannot say whether the operator was at the bottom
+ * beforehand. Mobile draws the same separation with its `userScrolledAway` flag (ThreadScreen.kt:249-256) —
+ * what carries over from mobile is the flag, not the measurement (it reverses its layout and tests an exact
+ * index, so it has no pixel band to copy).
+ *
+ * A `useRef`, not `useState`, and deliberately so: nothing renders this value — no markup, class, or
+ * attribute depends on it — and scroll events fire at frame rate, so `useState` would re-render the app's
+ * most expensive subtree on every scroll frame for a value nothing displays. "State updated from the
+ * container's scroll events" means tracked across time, which a ref is.
+ *
+ * It starts `true`, so a fresh thread pins from its first message. That also covers the late-mounting node
+ * (Timeline renders <EmptyThread /> at zero items, so `.conversation__thread` mounts only once an item
+ * lands) with no guard of its own, and the merged helper already answers at-bottom for a thread too short
+ * to scroll — the distance goes negative when content is no taller than the viewport.
+ *
+ * Nothing to tear down: `onScroll` is a React prop, so the listener's lifetime is the node's, and there is
+ * no manual addEventListener whose attach could race the late mount.
+ */
+function useThreadScrollPin(): ThreadScrollPin {
+  const ref = useRef<HTMLDivElement>(null)
+  const following = useRef(true)
+
+  // NO dependency array — this runs after every render of the screen, and that is what makes the chrome
+  // case work rather than being a missing optimization. The working, stall, retry and compaction
+  // indicators, the queued backlog, the interrupt control and the status row mount off four different store
+  // slices; enumerating them in a dependency array would be exactly the fragile coupling to avoid, and it
+  // would rot silently the moment an eighth affordance lands. Every one of those mounts IS a re-render
+  // here, so "after every render" covers an items change and a chrome change under one rule.
+  //
+  // Two properties make the dep-free form safe. It is IDEMPOTENT: it writes only while following, and
+  // assigning scrollTop a value it already holds is a no-op that fires no scroll event, so there is no
+  // feedback loop (and a StrictMode double-invoke is likewise a no-op). And chrome CANNOT corrupt the flag:
+  // a chrome mount shrinks clientHeight while leaving scrollTop and scrollHeight untouched, which raises
+  // the maximum scroll offset, so the browser never clamps scrollTop and no scroll event fires at all.
+  useThreadLayoutEffect(() => {
+    const el = ref.current
+    if (el === null || !following.current) return
+    // Past the maximum; the browser clamps to exactly the bottom.
+    el.scrollTop = el.scrollHeight
+  })
+
+  return {
+    ref,
+    // The metric mapping is the one thing this feature can get wrong with no type error and no unit test:
+    // scrollTop is the offset, clientHeight the viewport, scrollHeight the total content. Named fields are
+    // what make it correct by inspection. Read synchronously off `currentTarget` and assigned with no
+    // branch of its own — every case is a consequence of isAtBottom's single comparison. No useCallback:
+    // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
+    onScroll: (event) => {
+      const el = event.currentTarget
+      following.current = isAtBottom({
+        scrollOffset: el.scrollTop,
+        viewportHeight: el.clientHeight,
+        contentHeight: el.scrollHeight
+      })
+    }
+  }
+}
+
 export function MessageThread({ messages }: { messages: Message[] }): JSX.Element {
   // Renders the adapted messages in arrival order. An empty array renders a valid
   // (empty) scroll region — no crash, no placeholder fallback.
@@ -301,17 +391,25 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // threaded from the container so the pure view stays deterministic under test. Defaulted to `Date.now()`
 // so the existing `<Timeline items={...} />` call sites (which render no sessionBoundary row, so `now` is
 // never consulted) stay green untouched — no edit cascade across the test suite.
+// #601: `scrollPin` carries the container's two DOM handles for the scroll region — the node ref and the
+// scroll handler. OPTIONAL for `now`'s reason, verbatim: the 30 existing `<Timeline` render sites pass
+// nothing, get `undefined` for both attributes (legal no-ops under renderToStaticMarkup) and stay green
+// untouched. Timeline itself stays pure props-in / markup-out — it holds no scroll state and reads no
+// layout; both handles are written out explicitly below rather than spread, so the both-or-neither wiring
+// is visible in the markup.
 export function Timeline({
   items,
-  now = Date.now()
+  now = Date.now(),
+  scrollPin
 }: {
   items: readonly ThreadItem[]
   now?: number
+  scrollPin?: ThreadScrollPin
 }): JSX.Element {
   if (items.length === 0) return <EmptyThread />
   const lastIndex = items.length - 1
   return (
-    <div className="conversation__thread">
+    <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}>
       {items.map((item, index) => (
         // Array index as key. The list is append-only with tail-mutation and never inserts or
         // reorders mid-list (threadTimeline.ts: appendDelta grows the tail assistantText in place;

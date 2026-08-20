@@ -1,6 +1,11 @@
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
 import {
+  useAnnouncedModelStore,
+  selectAnnouncedModel,
+  type AnnouncedModel
+} from '../../store/announcedModelStore'
+import {
   useRunSettingsWriteStore,
   selectEffectiveSettings,
   selectError,
@@ -54,6 +59,34 @@ function matchedFamily(model: string): string | null {
   return MODEL_CATALOG.find((entry) => lower.includes(entry.family))?.family ?? null
 }
 
+// #560 — the RUNNING model's lookup, and deliberately NOT matchedFamily above: string equality only.
+// No toLowerCase, no includes, no startsWith, no trim, no regex. The announced identifier mixes dated
+// ('claude-haiku-4-5-20251001') and undated ('claude-opus-5') shapes, so any pattern that works today
+// breaks on the first identifier carrying no family word — and inferring a family would name a model
+// claude never announced.
+//
+// IT IS DORMANT BY DESIGN AND THAT IS NOT A DEFECT TO REPAIR. The catalog's tokens are family words;
+// claude announces full identifiers, so equality essentially never fires until the sheet's rows come
+// from the daemon-published model list (#556 / #561). Until then the verbatim path is the live path,
+// which is the correct outcome: the operator sees the true running identifier rather than a wrong
+// display name inferred from a substring. Widening this into matchedFamily's substring match to make
+// it "work" would reintroduce exactly what #560 exists to stop.
+function runningCatalogEntry(model: string): ModelCatalogEntry | undefined {
+  return MODEL_CATALOG.find((entry) => entry.family === model)
+}
+
+// #560 — client-owned copy for the running-model surface, the RUN_CONFIG_ERROR_COPY convention.
+// Apostrophe-free (renderToStaticMarkup escapes ' → &#x27;).
+//
+// Neither literal may contain 'Current model': the sheet's selection marker is asserted by COUNT at six
+// unit sites and page-wide in e2e, and this copy renders in EVERY existing RunConfigView test (the prop
+// is optional and its absence is the not-yet-known state).
+const RUN_CONFIG_RUNNING_UNKNOWN_COPY = 'Running model not yet known'
+
+// Deliberately echoes BACKGROUND_TASK_PANEL_CUT_COPY / UNRECOGNIZED_TRUNCATED_COPY's vocabulary so the
+// app says the same thing the same way about the same daemon behaviour.
+const RUN_CONFIG_RUNNING_CUT_COPY = 'Truncated by the daemon'
+
 // The fixed accepted set (Figma 20:130); effort matches by exact equality, so '' / unknown marks
 // none — AC4's default.
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -105,7 +138,8 @@ export function RunConfigView({
   windowTokens,
   onChange,
   errorField,
-  pending
+  pending,
+  announced
 }: {
   model: string
   effort: string
@@ -115,6 +149,7 @@ export function RunConfigView({
   onChange?: (change: SettingsChange) => void
   errorField?: SettingsChange['field'] | null
   pending?: ReturnType<typeof selectPendingFields>
+  announced?: AnnouncedModel | null
 }): JSX.Element {
   const onModel = onChange ? (family: string): void => onChange({ field: 'model', value: family }) : undefined
   const onEffort = onChange ? (level: string): void => onChange({ field: 'effort', value: level }) : undefined
@@ -125,6 +160,10 @@ export function RunConfigView({
   // for an unreachable state.
   return (
     <>
+      {/* #560: what is running, then what you can switch to. Placed BEFORE the rows deliberately —
+          reading order first, and it keeps the surface out of the last model row's open-ended
+          segmentFor chunk in the tests. */}
+      <RunningModelSection announced={announced} />
       <ModelSection model={model} onSelect={onModel} error={errorField === 'model'} busy={pending?.model} />
       <EffortSection
         effort={effort}
@@ -134,6 +173,58 @@ export function RunConfigView({
       />
       <YoloSection yolo={yolo} onToggle={onYolo} error={errorField === 'yolo'} busy={pending?.yolo} />
       <ContextWindowSection usedTokens={usedTokens} windowTokens={windowTokens} />
+    </>
+  )
+}
+
+// #560 — the running-model surface: what claude ANNOUNCED for the running turn (#587 decodes it off the
+// `system` / `init` line, #588 holds it), as opposed to the daemon's persisted OVERRIDE the Model rows
+// below display. On a daemon where nothing was overridden the override is '' and no row is marked, which
+// is honest but indistinguishable from broken; this section answers the question the operator is
+// actually asking. Header + column body, cloning the Context window idiom (Figma 20:149 / 20:151); the
+// design draws no running-model surface and no not-yet-known state.
+//
+// SECURITY — this is the render boundary for `announced.model`. It is untrusted, model-influenced text
+// that crossed the subprocess trust boundary; the daemon bounds it at 256 bytes but sanitizes nothing
+// (announcedModelStore.ts:46-51), and #588 had no DOM sink so it inherited the obligation. It reaches
+// exactly ONE JSX text position, where React escapes it. It is never dangerouslySetInnerHTML, never an
+// attribute value, never a URL, and it selects nothing beyond which catalog display name is shown —
+// nothing this app sends is derived from it, and this surface dispatches nothing at all.
+//
+// Three branches, and two of them are easy to get wrong:
+//
+//  - The MARKER branches on `truncated` ALONE, never on which path the value took. The flag is the
+//    daemon's report about the identifier it delivered; suppressing it on the resolve path would let a
+//    daemon hide its own cut report by sending a value that happens to equal a catalog token. The
+//    hit+truncated combination is only reachable from a non-conforming daemon, and renders both readings
+//    honestly rather than silently dropping one.
+//  - `{ model: '', truncated: false }` takes the VERBATIM path: a real announcement the daemon emitted
+//    (announcedModelStore.ts:58-65), so the value element renders present and empty rather than
+//    collapsing into the not-yet-known sentinel — collapsing would erase the store's deliberate
+//    null-vs-'' distinction one layer above where it was established.
+//
+// The cut marker is a SIBLING ELEMENT holding a client-owned constant, never text concatenated into the
+// value (the BackgroundTaskPanel.tsx:236-255 / ConversationScreen.tsx:485-500 idiom):
+// `{announced.model}{truncated && ' (truncated)'}` would fuse client copy and daemon text into one node,
+// so an identifier ending in those same words would be indistinguishable from the sheet's own claim.
+// Nothing here slices, measures, re-joins or re-sinks the identifier to produce the marker.
+function RunningModelSection({ announced }: { announced?: AnnouncedModel | null }): JSX.Element {
+  const entry = announced ? runningCatalogEntry(announced.model) : undefined
+  return (
+    <>
+      <p className="status-sheet__section-header">Running model</p>
+      <div className="run-config__running">
+        {announced ? (
+          // On a hit the rendered text is the CLIENT-owned display name; on a miss it is the daemon's
+          // identifier verbatim. The two provenances never mix in one node.
+          <p className="run-config__running-value">{entry ? entry.name : announced.model}</p>
+        ) : (
+          <p className="run-config__running-unknown">{RUN_CONFIG_RUNNING_UNKNOWN_COPY}</p>
+        )}
+        {announced?.truncated ? (
+          <p className="run-config__running-cut">{RUN_CONFIG_RUNNING_CUT_COPY}</p>
+        ) : null}
+      </div>
     </>
   )
 }
@@ -369,6 +460,10 @@ export function RunConfigSections(): JSX.Element {
   // zustand selector: it returns a fresh object every call, which would defeat Object.is and re-render on
   // every store tick — the composition runs in the render body instead.
   const writeState = useRunSettingsWriteStore((s) => s)
+  // #560: a fourth narrow-slice read, passed straight down — no derivation here, no setter. A repeat
+  // announcement produces a fresh object identity (announcedModelStore.ts:88-95) and so re-renders this
+  // section with identical output; that is anticipated by the store and needs no memoisation.
+  const announced = useAnnouncedModelStore(selectAnnouncedModel)
 
   const effective = selectEffectiveSettings(snapshot, writeState)
   // #558: derived from the SAME writeState reference in the SAME render pass as `effective` — that is
@@ -399,6 +494,7 @@ export function RunConfigSections(): JSX.Element {
       onChange={onChange}
       errorField={errorField}
       pending={pending}
+      announced={announced}
     />
   )
 }

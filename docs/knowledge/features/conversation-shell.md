@@ -892,17 +892,31 @@ Per-item render, by `kind`, with **no `default`/`assertNever`** (an exhaustive s
 unsourced-today kind to `null` rather than throwing — the render-path counterpart to the store
 bridges' hard `assertNever`, see [#203 codebase notes § Patterns established](../codebase/203.md)):
 
-- `assistantText` → one bubble, text as React children (never `dangerouslySetInnerHTML` — HTML inside
-  a delta renders as visible characters, discharging #199's untrusted-text handoff), carrying
-  `data-thread-role="assistant"` as the test hook (`MessageThread`'s `data-message-role` counterpart).
-  Since [#607](../codebase/607.md), this bubble also carries a dedicated `.bubble--assistant-text`
-  modifier (`white-space: pre-wrap`) so a multi-paragraph reply keeps its blank lines and space runs
-  instead of collapsing to one run-on line — hung on its own class rather than `.bubble--daemon` so
-  the four chrome affordances below (thinking/stall/api-retry/compacting) and the coarse path's
-  `.bubble--user` are structurally unreachable by the rule. This plain-text path is deliberately kept
-  once markdown rendering lands (#608/#609/#610): the in-progress streaming-cursor tail always
-  renders as plain text so it's never shown half-parsed, and that tail needs this whitespace rule
-  permanently.
+- `assistantText` → one bubble, carrying `data-thread-role="assistant"` as the test hook
+  (`MessageThread`'s `data-message-role` counterpart). Since [#609](../codebase/609.md), the bubble
+  forks on the same `inProgress` prop the streaming cursor below reads — no new state:
+  - **In progress** (the tail, still growing): unchanged from #199/#607 — text as React children
+    (never `dangerouslySetInnerHTML`, so HTML inside a delta renders as visible characters), plus the
+    dedicated `.bubble--assistant-text` modifier (`white-space: pre-wrap`) so a multi-paragraph reply
+    keeps its blank lines and space runs instead of collapsing to one run-on line. Hung on its own
+    class rather than `.bubble--daemon` so the four chrome affordances below
+    (thinking/stall/api-retry/compacting) and the coarse path's `.bubble--user` stay structurally
+    unreachable by the rule.
+  - **Settled** (every other item, and the tail once its turn's `turn_end` arrives): renders through
+    [`AssistantMarkdown`](assistant-markdown-renderer.md) (#608, wired in by #609) inside a
+    `<div className="bubble__markdown">` — a flex column with `gap: var(--space-2)` for Figma `16:43`'s
+    8px block rhythm, `margin-block: 0` on direct children (`index.css` resets only `body`, so UA block
+    margins would otherwise stack on top of the flex gap), and `pre { white-space: pre-wrap }` so
+    fenced code wraps within the bubble's measure instead of spilling out of it. `bubble--assistant-text`
+    is **not** carried here — the settled branch never gets the class at all, making "markdown owns the
+    whitespace" true by construction rather than by an override one level down. `React.memo` was
+    considered and declined (unmeasured cost, no test tier in this repo can observe a skipped
+    re-render); the seam is named in a code comment at the render site.
+
+  The fork exists because the daemon emits one event per *complete* content block and the store
+  coalesces a turn's deltas in place, so a settled item's text is always a whole document — a fenced
+  block never arrives half-open — while the in-progress tail must never be shown half-parsed, which is
+  why it stays plain text permanently rather than gaining markdown once "enough" of it has streamed in.
 - `toolCall` → the tool-row chip ([#218](#pending-tool-call-row-218), below) — no longer a no-op as
   of that ticket; the resolved success/error treatment ([#230](#resolved-tool-call-row-230), below)
   lifted the pending dimming and added the error accent.
@@ -1677,5 +1691,6 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Recent-workspaces store](recent-workspaces-store.md) — the dedicated store + dormant bridge `WorkspacePickerSheet` reads via `selectRecentWorkspaces` and mounts (`RecentWorkspacesData`), its first real consumer (#382, consumed in #383)
 - [Conversation workspace change](conversation-workspace-change.md) — the `changeWorkspace` command `requestChangeWorkspace` dispatches on a row choice, its first real caller (#379, consumed in #383)
 - [Background-task roster store](background-task-roster-store.md) — the store `BackgroundTaskPanel` reads via `selectRosterFor(conversationId)`, its first real consumer since the store shipped dormant at #573 (#581, extended to read `droppedTasks`/`truncatedFields` in #582 and `latestUpdate` in #583, see [Background-task panel](#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583) above)
+- [Assistant markdown renderer](assistant-markdown-renderer.md) — `AssistantMarkdown`, shipped dormant at #608, wired into this screen's `assistantText` settled branch by [#609](../codebase/609.md); the `.bubble__markdown` container and its block-rhythm/code-wrap CSS live in `conversation.css`, not in that module
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#492 codebase notes](../codebase/492.md) · [#493 codebase notes](../codebase/493.md) · [#495 codebase notes](../codebase/495.md) · [#496 codebase notes](../codebase/496.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · [#529 codebase notes](../codebase/529.md) · [#530 codebase notes](../codebase/530.md) · [#581 codebase notes](../codebase/581.md) · [#582 codebase notes](../codebase/582.md) · [#583 codebase notes](../codebase/583.md) · [#600 codebase notes](../codebase/600.md) · [#601 codebase notes](../codebase/601.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

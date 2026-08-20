@@ -91,6 +91,30 @@ function threadBubbleCount(markup: string): number {
 
 const CURSOR = 'bubble__cursor'
 
+// #609: the settled reply's markdown container. Its presence is the markup-level signal that a bubble
+// took the markdown path; its absence, that the bubble is the still-growing plain-text tail.
+const CONTAINER = 'bubble__markdown'
+
+// One markdown source exercising every construct AC1 lists — built with join('\n'), never an indented
+// template literal: a template literal indented to match this code would put four leading spaces on each
+// line, which CommonMark reads as an INDENTED CODE BLOCK, and the case would then pass or fail for a
+// reason unrelated to what it claims (#608's hard-break fixture lesson). No apostrophes — renderToStaticMarkup
+// escapes ' → &#x27;.
+const MARKDOWN_SOURCE = [
+  '# Heading one',
+  '',
+  'Text with **bold** and `code` here.',
+  '',
+  '```',
+  'const x = 1',
+  '```',
+  '',
+  '- first item',
+  '- second item',
+  '',
+  '> quoted line'
+].join('\n')
+
 describe('Timeline — the streamed assistant text', () => {
   // #277: the empty branch is no longer inert. A fresh thread with no items renders the
   // pre-first-message empty state (a client-owned copy line + its decorative glyph) instead of null,
@@ -369,33 +393,36 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).toContain('bubble bubble--daemon')
   })
 
-  it('renders the assistant text flush against its bubble tag and its cursor — no stray JSX whitespace', () => {
+  it('opens the settled container and the in-progress text flush against the bubble tag — no stray JSX whitespace', () => {
     // Only matters once whitespace is preserved: a newline the JSX transform left between the opening tag
-    // and {item.text} (or between the text and the cursor) would become a VISIBLE blank under the rule.
+    // and the content (or between the text and the cursor) would become a VISIBLE blank under the rule.
     // The transform strips whitespace-only lines containing a newline, so this already holds — this
-    // assertion is what keeps it holding.
+    // assertion is what keeps it holding. #609 re-pointed the settled half: the settled bubble now opens
+    // with the markdown container rather than with the reply text.
     const settled: ThreadItem[] = [
       { kind: 'assistantText', turnId: 't1', text: 'settled reply' },
       { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
     ]
     expect(renderToStaticMarkup(<Timeline items={settled} />)).toContain(
-      'data-thread-role="assistant">settled reply</div>'
+      `data-thread-role="assistant"><div class="${CONTAINER}">`
     )
-    // The in-progress tail: the cursor opens immediately after the text run, contributing no whitespace
-    // of its own, so it keeps its place at the end of the text (AC5).
+    // The in-progress tail: the text opens flush against the tag, and the cursor opens immediately after
+    // the text run, contributing no whitespace of its own (AC5).
     const streaming: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'streaming reply' }]
-    expect(renderToStaticMarkup(<Timeline items={streaming} />)).toContain('streaming reply<span')
+    const streamingMarkup = renderToStaticMarkup(<Timeline items={streaming} />)
+    expect(streamingMarkup).toContain('data-thread-role="assistant">streaming reply')
+    expect(streamingMarkup).toContain('streaming reply<span')
   })
 
-  it('carries newlines and space runs into the markup verbatim — nothing upstream of CSS normalises', () => {
+  it('carries the in-progress tail newlines and space runs into the markup verbatim — nothing upstream of CSS normalises', () => {
+    // #609 re-pointed this case at the TAIL. Its fixture is a four-space-indented line, which CommonMark
+    // reads as an indented code block, so "React escapes markup characters, never whitespace" is exactly
+    // true only on the plain-text branch — which is the branch #607's rule still governs.
     const text = 'First paragraph.\n\nSecond paragraph.\n    indented    and    spaced'
-    const items: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text },
-      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
-    ]
-    // React escapes markup characters, never whitespace, so the run survives byte-for-byte and the
-    // rendering is the ONLY place it was being discarded.
-    expect(renderToStaticMarkup(<Timeline items={items} />)).toContain(`>${text}</div>`)
+    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text }]
+    // The run survives byte-for-byte up to the cursor, so the rendering is the ONLY place it was being
+    // discarded.
+    expect(renderToStaticMarkup(<Timeline items={items} />)).toContain(`>${text}<span`)
   })
 
   it('leaves the user bubble and the four daemon-bubble affordances outside the rule (AC4, AC5)', () => {
@@ -410,10 +437,99 @@ describe('Timeline — the streamed assistant text', () => {
     expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(MODIFIER)
     const retryMarkup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 3, total: 10 }} />)
     expect(retryMarkup).not.toContain(MODIFIER)
+    // #609 (AC5): the markdown container is the assistant bubble's alone. Neither the user bubble nor any
+    // of the four chrome affordances that reuse the daemon bubble's fill and measure gains it.
+    expect(userMarkup).not.toContain(CONTAINER)
+    expect(renderToStaticMarkup(<ThinkingIndicator isThinking={true} />)).not.toContain(CONTAINER)
+    expect(renderToStaticMarkup(<StallIndicator isStalled={true} />)).not.toContain(CONTAINER)
+    expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(CONTAINER)
+    expect(retryMarkup).not.toContain(CONTAINER)
     // AC4's one spot where a preserved space could have become visible: the counter's separator is a
     // single space inside its own span, so it reads the same under either whitespace treatment.
     expect(retryMarkup).toContain(`${API_RETRY_COPY}<span`)
     expect(retryMarkup).toContain('> attempt 3/10<')
+  })
+
+  // #609: the settled reply renders through #608's AssistantMarkdown; the still-growing tail does not.
+  // This tier pins the markup shape of each branch — which element carries the container, which
+  // constructs became real tags, and that the escaping posture holds on BOTH sides of the new fork.
+  // What the browser then does with the whitespace is layout, unobservable under `environment: 'node'`
+  // — that half is e2e/assistant-whitespace.spec.ts.
+  it('renders a settled assistant bubble through the markdown path — markup, not literal syntax (AC1)', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: MARKDOWN_SOURCE },
+      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    // Positive: every construct AC1 names became a real element. Each negative below is paired with one
+    // of these — `not.toContain` alone passes against the empty string.
+    expect(markup).toContain(CONTAINER)
+    expect(markup).toContain('<h1>Heading one</h1>')
+    expect(markup).toContain('<strong>bold</strong>')
+    expect(markup).toContain('<code>code</code>')
+    expect(markup).toContain('<pre>')
+    expect(markup).toContain('<li>first item</li>')
+    expect(markup).toContain('<blockquote>')
+    // Negative: the source syntax is gone — it was interpreted, not shown. `&gt;` is how the blockquote
+    // marker would have survived, since React escapes `>`.
+    expect(markup).not.toContain('# Heading one')
+    expect(markup).not.toContain('**bold**')
+    expect(markup).not.toContain('&gt; quoted line')
+  })
+
+  it('never markdown-renders the in-progress tail — its syntax stays visible characters (AC2)', () => {
+    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: MARKDOWN_SOURCE }]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('# Heading one')
+    expect(markup).toContain('**bold**')
+    expect(markup).not.toContain(CONTAINER)
+    expect(markup).not.toContain('<strong>')
+    expect(markup).not.toContain('<h1>')
+    // The tail is still the streaming tail: the cursor is unchanged by the fork.
+    expect(markup).toContain(CURSOR)
+  })
+
+  it('puts the markdown container on the settled bubble alone, never on the tail or another row (AC2, AC5)', () => {
+    const items: ThreadItem[] = [
+      { kind: 'userText', text: 'typed by the operator' },
+      { kind: 'assistantText', turnId: 't1', text: 'settled body' },
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u1',
+        name: 'read_file',
+        inputSummary: 'a.ts',
+        result: null
+      },
+      {
+        kind: 'sessionBoundary',
+        reason: 'workspace_change',
+        workspaceCwd: '/home/user/next',
+        occurredAt: '2026-01-15T10:00:00.000Z'
+      },
+      { kind: 'assistantText', turnId: 't2', text: 'growing tail' }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    // Exactly one of each, and they land on different bubbles: the container before the tail text, the
+    // plain-text modifier after the settled body.
+    expect(markup.match(new RegExp(CONTAINER, 'g'))?.length ?? 0).toBe(1)
+    expect(markup.match(/bubble--assistant-text/g)?.length ?? 0).toBe(1)
+    expect(markup.indexOf(CONTAINER)).toBeLessThan(markup.indexOf('growing tail'))
+    expect(markup.indexOf('bubble--assistant-text')).toBeGreaterThan(markup.indexOf('settled body'))
+  })
+
+  it('keeps the escaping posture on the settled markdown path — HTML renders as characters (AC5)', () => {
+    // The fork is exactly where two rendering paths drift apart, so #199s posture is re-proved on the new
+    // branch: :141 covers the plain-text tail, this covers markdown. react-markdown escapes raw HTML by
+    // default (no rehype-raw, no skipHtml — AssistantMarkdown.tsx:9-19), which is the same posture.
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: '<b>hi</b>' },
+      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain(CONTAINER)
+    expect(markup).toContain('&lt;b&gt;hi&lt;/b&gt;')
+    expect(markup).not.toContain('<b>hi</b>')
   })
 })
 

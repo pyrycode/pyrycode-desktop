@@ -11,6 +11,7 @@ import {
   type UIEventHandler
 } from 'react'
 import './conversation.css'
+import { AssistantMarkdown } from './AssistantMarkdown'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import type { RelayLinkStatus } from '@shared/ipc/events'
@@ -487,29 +488,56 @@ function TimelineRow({
   now?: number
 }): JSX.Element | null {
   switch (item.kind) {
-    case 'assistantText':
+    case 'assistantText': {
+      // #609: the bubble forks on `inProgress` — the settled reply renders as markdown, the still-growing
+      // tail as plain text. No new state: `inProgress` (Timeline:466) already means "the tail, still open",
+      // and because the daemon emits one event per COMPLETE content block and the store coalesces a turn's
+      // deltas in place, a settled item's text is a whole document — never a half-open fence.
+      //
+      // #607's bubble--assistant-text (white-space: pre-wrap, see conversation.css) rides the same fork.
+      // Making it conditional rather than neutralising it inside the container makes "markdown owns the
+      // whitespace" true BY CONSTRUCTION — an absent declaration needs no re-verifying when a new element
+      // type appears inside the container, and no stray text node can render as a visible blank. Appended,
+      // never inserted — the `bubble bubble--daemon` pair stays contiguous.
+      const bubbleClass = inProgress
+        ? 'bubble bubble--daemon bubble--assistant-text'
+        : 'bubble bubble--daemon'
       return (
         <div className="message-row message-row--daemon">
-          {/* Text passed as React children (auto-escaped) — never dangerouslySetInnerHTML — so HTML
-              inside a delta renders as visible characters, discharging #199's untrusted-text handoff. */}
-          {/* #607: bubble--assistant-text is the whitespace-preservation anchor (see conversation.css).
-              Its OWN modifier rather than .bubble or .bubble--daemon, so the rule provably cannot reach
-              the user bubble or the four daemon-bubble chrome affordances. Appended, never inserted —
-              the `bubble bubble--daemon` pair stays contiguous. */}
-          <div className="bubble bubble--daemon bubble--assistant-text" data-thread-role="assistant">
-            {item.text}
-            {/* The streaming cursor (Figma 16:56, ▎ U+258E): a trailing inline visual on the
-                in-progress bubble's text run, inheriting the bubble's color/size. Derived structurally
-                (the tail, still-open assistantText), never from `phase` (which has no source until
-                #204). Decorative → aria-hidden. */}
-            {inProgress && (
-              <span className="bubble__cursor" aria-hidden="true">
-                ▎
-              </span>
+          <div className={bubbleClass} data-thread-role="assistant">
+            {inProgress ? (
+              <>
+                {/* Text passed as React children (auto-escaped) — never dangerouslySetInnerHTML — so HTML
+                    inside a delta renders as visible characters, discharging #199's untrusted-text
+                    handoff. AssistantMarkdown holds the same posture on the settled branch: it escapes
+                    raw HTML rather than interpreting it, and returns elements rather than an HTML
+                    string, so neither branch can hand a sink anything. */}
+                {item.text}
+                {/* The streaming cursor (Figma 16:56, ▎ U+258E): a trailing inline visual on the
+                    in-progress bubble's text run, inheriting the bubble's color/size. Derived structurally
+                    (the tail, still-open assistantText), never from `phase` (which has no source until
+                    #204). Decorative → aria-hidden. */}
+                <span className="bubble__cursor" aria-hidden="true">
+                  ▎
+                </span>
+              </>
+            ) : (
+              // AssistantMarkdown emits no wrapper of its own (#608), so this container is what the
+              // block rhythm hangs on. NOT memoized: parsing does re-run on every timeline render, but no
+              // failure has been observed, `React.memo` appears nowhere in src/ (this file declines it
+              // twice already, :376 and :394), and nothing in this repo's server-render test tier can
+              // observe a skipped re-render — it would ship unverified. If it is ever measured to matter,
+              // the seam is a memoized wrapper component keyed on `text` (not useMemo — hooks cannot be
+              // called from inside this switch), which is sound because the render is a pure function of
+              // that one prop.
+              <div className="bubble__markdown">
+                <AssistantMarkdown text={item.text} />
+              </div>
             )}
           </div>
         </div>
       )
+    }
     case 'toolCall': {
       // #218: the tool row (Figma node 16-28) — a compact chip, not a message bubble, so
       // data-thread-role="tool" (not "assistant") keeps it out of the daemon bubble count. `name` and

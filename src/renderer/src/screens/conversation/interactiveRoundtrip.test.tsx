@@ -55,7 +55,14 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
 
     // The single ordered thread: user bubble → one coalesced assistant bubble → one resolved tool row.
     expect(markup).toContain('data-thread-role="user">help me refactor')
-    expect(markup).toContain('data-thread-role="assistant">Sure, reading now.')
+    // #609 re-pointed the assistant half. `turnEnd` closes the turn, so this bubble is SETTLED and
+    // renders through the markdown path — its content opens with the container, not with the reply text
+    // flush against the bubble tag (the same re-point ConversationScreen.test.tsx:396 took). The single
+    // `<p>` carrying both deltas is what keeps this a coalescing assertion: deltas that failed to
+    // coalesce would be two timeline items, hence two bubbles and two paragraphs, and neither the
+    // container-then-paragraph opening nor this joined paragraph would appear.
+    expect(markup).toContain('data-thread-role="assistant"><div class="bubble__markdown"><p>')
+    expect(markup).toContain('<p>Sure, reading now.</p>')
     expect(markup).toContain('tool-row--resolved')
     expect(markup).toContain('data-thread-role="tool"')
     // Arrival order preserved across the two write paths (echo + stream).

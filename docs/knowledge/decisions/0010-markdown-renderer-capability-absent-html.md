@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-08-20. First realized in [#608](../codebase/608.md), shipped dormant. Consumer is [#609](https://github.com/pyrycode/pyrycode-desktop/issues/609) (blocked-by this ticket).
+Accepted, 2026-08-20. First realized in [#608](../codebase/608.md), shipped dormant; wired into the thread by [#609](../codebase/609.md).
 
 ## Context
 

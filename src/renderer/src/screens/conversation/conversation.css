@@ -315,21 +315,62 @@
   border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-xs);
 }
 
-/* #607 — the assistant reply's whitespace treatment. .bubble declares no white-space, so the initial
-   `normal` collapsed every newline and every run of spaces into a single space and a multi-paragraph
-   reply arrived as one run-on block. pre-wrap is the one value the criteria leave: `normal` loses the
-   paragraph break, `pre-line` still collapses space runs and indentation, and `pre` stops wrapping so a
-   long unbroken token would widen the bubble past its measure. Not `break-spaces` either — that pushes
-   preserved spaces onto the next line instead of hanging them, which would let a run of daemon-supplied
-   spaces contribute to the box's width. Wrapping the long token is .bubble's existing
+/* #607 — the IN-PROGRESS assistant tail's whitespace treatment. .bubble declares no white-space, so the
+   initial `normal` collapsed every newline and every run of spaces into a single space and a
+   multi-paragraph reply arrived as one run-on block. pre-wrap is the one value the criteria leave:
+   `normal` loses the paragraph break, `pre-line` still collapses space runs and indentation, and `pre`
+   stops wrapping so a long unbroken token would widen the bubble past its measure. Not `break-spaces`
+   either — that pushes preserved spaces onto the next line instead of hanging them, which would let a run
+   of daemon-supplied spaces contribute to the box's width. Wrapping the long token is .bubble's existing
    word-break: break-word (:298), not restated here.
 
    Hung on its OWN modifier: .bubble would reach .bubble--user, and .bubble--daemon would reach the four
    chrome affordances below (thinking / stall / api-retry / compacting). Each of those renders a
    single-line client-owned constant today, so the rule would be visually inert there — but "inert
    because we read the four literals" needs re-verifying every time a fifth is added, whereas a modifier
-   makes it structural. */
+   makes it structural.
+
+   #609 NARROWED THE SUBJECT AGAIN, by that same argument: ConversationScreen.tsx now emits this modifier
+   only while the reply is still growing. A settled reply renders through .bubble__markdown below, where
+   whitespace is markdown's to decide — and it is markdown's by ABSENCE of this declaration, not by an
+   override one level down, so a new element type inside that container cannot silently inherit pre-wrap.
+   The modifier's name reads as "the assistant text" but now means "the plain-text streaming tail"; the
+   rename would touch four files for no behavioural gain, so the meaning lives here instead. */
 .bubble--assistant-text {
+  white-space: pre-wrap;
+}
+
+/* #609 — the settled reply's markdown container (Figma 16:43): a flex column with an 8px gap between
+   blocks. Figma's fill, 14/12 padding and 20/20/20/6 radius are already .bubble + .bubble--daemon, and
+   its items-start + w-full children are exactly flex's default `stretch`, so the column and its gap are
+   the only visual properties this adds. #608's AssistantMarkdown emits no wrapper of its own, so without
+   this element the blocks would be direct children of .bubble with nothing to hang the gap on.
+
+   The gap alone is NOT enough. index.css resets only `body`, so every UA block margin is live and would
+   ADD to the gap — <p> neighbours would sit ~24px apart, not 8px. margin-block, never `margin`:
+   margin-inline is <blockquote>'s 40px indent and its only visual distinction until #624 lands. Direct
+   children only — a <p> nested in a <blockquote> or a loose <li> keeps its UA margins, which is #624's to
+   tune. flex `gap` applies strictly BETWEEN items, so "no extra space at the first and last block" falls
+   out rather than needing a :first-child / :last-child pair. */
+.bubble__markdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bubble__markdown > * {
+  margin-block: 0;
+}
+
+/* <pre>'s UA `white-space: pre` is a DECLARATION on the element, and a declaration beats an inherited
+   value whatever its origin — so without this the code body would keep `pre` and a long line would spill
+   past the bubble's measure. Figma 16:49 settles it: the code body is pre-wrap + word-break: break-word,
+   so code wraps rather than scrolling. word-break is inherited from .bubble (:298) and is deliberately not
+   restated (#607's precedent). No max-height and no overflow either: .screen-snapshot__screen below is the
+   ANTI-precedent — it bounds and scrolls because a terminal grid must not reflow, whereas source code in a
+   chat bubble must. Nor can a tall block push the composer anywhere; .conversation__thread (:233) is its
+   own scroll region and .composer is its sibling. */
+.bubble__markdown pre {
   white-space: pre-wrap;
 }
 

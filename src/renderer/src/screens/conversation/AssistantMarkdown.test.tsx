@@ -46,7 +46,9 @@ describe('AssistantMarkdown', () => {
     expect(markup).toContain('<strong>bold</strong>')
     expect(markup).toContain('<em>italic</em>')
     expect(markup).toContain('<code>inline code</code>')
-    expect(markup).toContain('<pre>')
+    // #623 gave the fence its chrome, so the bare `<pre>` this case asserted became the block's body.
+    // This fixture's fence has NO info string, so it is the no-header degrade path that renders here.
+    expect(markup).toContain('<pre class="code-block__body">')
     expect(markup).toContain('const x = 1')
     expect(markup).toContain('<ol>')
     expect(markup).toContain('<ul>')
@@ -137,12 +139,60 @@ describe('AssistantMarkdown', () => {
     expect(markup).not.toContain('evil.example')
   })
 
-  it('keeps the language class on a fenced code block, the #609 label carrier', () => {
+  it('keeps the language class on a fenced code block, the #623 label carrier', () => {
     // Figma 16:47 puts the language ("typescript") on the code block's header bar, and this class is
-    // the only carrier for that value. Stripping it would look like hardening and would silently
-    // delete the data #609 needs.
+    // the only carrier for that value — `fenceLanguage` reads it rather than re-parsing the source.
+    // Stripping it would look like hardening and would silently delete the label's only input.
     const markup = render(lines('```typescript', 'const x: number = 1', '```'))
     expect(markup).toContain('class="language-typescript"')
     expect(markup).toContain('const x: number = 1')
+  })
+
+  it('renders a languaged fence as the bordered block, language above the code (#623 AC1, AC2)', () => {
+    const markup = render(lines('```typescript', 'const x: number = 1', '```'))
+    // One string, so "a header exists", "it names the fence's own language" and "it sits inside the
+    // block, above the body" are a single claim rather than three assertions that could hold apart.
+    expect(markup).toContain(
+      '<div class="code-block"><div class="code-block__header">typescript</div><pre class="code-block__body">'
+    )
+    expect(markup).toContain('const x: number = 1')
+  })
+
+  it('renders a fence with no language as the same block with no header bar (#623 AC3)', () => {
+    const markup = render(lines('```', 'const x = 1', '```'))
+    // The wrapper IMMEDIATELY followed by the body is the proof that no empty bar sits between them —
+    // stronger than the absence assertion below, which alone would also pass on a header rendered
+    // somewhere else entirely.
+    expect(markup).toContain('<div class="code-block"><pre class="code-block__body">')
+    expect(markup).toContain('const x = 1')
+    expect(markup).not.toContain('code-block__header')
+  })
+
+  it('bounds a pathological info string rather than letting it stretch the header (#623 AC4)', () => {
+    // A single unbroken word far past any real language name (the longest, `restructuredtext`, is 16),
+    // every character distinct so no prefix can be mistaken for the whole.
+    const info = 'abcdefghijklmnopqrstuvwxyz0123456789'
+    const markup = render(lines('```' + info, 'const x = 1', '```'))
+    const label = /<div class="code-block__header">([^<]*)<\/div>/.exec(markup)?.[1] ?? ''
+    // Positive: a label rendered at all, and it is a genuine prefix of what the fence declared.
+    expect(label.length).toBeGreaterThan(0)
+    expect(info.startsWith(label)).toBe(true)
+    // Negative: it is SHORTER than the fence's string, so the bound applied, and the dropped tail
+    // reached no rendered text. Asserted on the label rather than on the whole markup: the untruncated
+    // string is still present there as the `language-…` class the carrier case above pins, and that
+    // attribute is not displayed — the bound this criterion is about is a bound on what is DRAWN.
+    expect(label.length).toBeLessThan(info.length)
+    expect(markup).not.toContain('>' + info + '<')
+  })
+
+  it('renders a markup-character info string as inert escaped text (#623 AC4)', () => {
+    // Deliberately SHORT — under the truncation bound — so this case reads the escaping half of AC4
+    // and the case above reads the bounding half, neither standing in for the other.
+    const markup = render(lines('```<b>x</b>', 'const x = 1', '```'))
+    // Positive: the label survives as escaped TEXT (not deleted), and the block still rendered.
+    expect(markup).toContain('<div class="code-block__header">&lt;b&gt;x&lt;/b&gt;</div>')
+    expect(markup).toContain('const x = 1')
+    // Negative: no real element was constructed from it.
+    expect(markup).not.toContain('<b')
   })
 })

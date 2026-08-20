@@ -369,9 +369,85 @@
    restated (#607's precedent). No max-height and no overflow either: .unrecognized-row__raw below is the
    ANTI-precedent — it bounds and scrolls because a raw wire payload must keep its exact shape, whereas
    source code in a chat bubble must reflow. Nor can a tall block push the composer anywhere;
-   .conversation__thread (:233) is its own scroll region and .composer is its sibling. */
+   .conversation__thread (:233) is its own scroll region and .composer is its sibling.
+
+   #623 nested that <pre> one level in, as .code-block__body inside the block wrapper. This is a
+   DESCENDANT selector (not `>`), which is why it still reaches it — and why white-space is deliberately
+   NOT restated on the new class: one subject, one rule, so a future reader looking at two rules that
+   both target this element knows which one owns the wrapping. */
 .bubble__markdown pre {
   white-space: pre-wrap;
+}
+
+/* #623 — a fenced code block's chrome (Figma 16:45): surface fill (deliberately NOT the bubble's own
+   --color-surface-container-high — the block reads as a step darker than what it sits in), 1px
+   outline-variant border, 12px radius. Nothing else: no display (its two children are block-level and
+   stack in normal flow), no width (a stretched flex item of .bubble__markdown, and stretch sizes the
+   MARGIN box so the border is accounted for), and no margin (:361 already zeroes it). */
+.code-block {
+  background: var(--color-surface);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius-sm);
+}
+
+/* The header bar and its label (Figma 16:46 + 16:47, collapsed into one box — the bar's only content is
+   the label, and the padding, type, nowrap and clip all coexist on one element). px 12 → --space-3;
+   Figma's py 6 is an exact MIDPOINT between --space-1 and --space-2, so "nearest" decides nothing and
+   this file's own precedent does: .run-config__effort-segment (:1323) already mapped the same 6 UP to
+   --space-2 (±2px). No font-family — --font-sans inherits from .conversation (.tool-row__summary:602).
+
+   THE DIVIDER HANGS HERE, not on the body as Figma draws it (border-top on 16:48). With it on the body,
+   a fence with no language — which renders the body as the block's only child — would put a 1px line a
+   hair under the block's own top border: a doubled edge, exactly the "empty bar in its place" the
+   no-language criterion forbids. On the header it appears and disappears WITH the thing it divides.
+
+   nowrap + ellipsis bound an unbounded untrusted info string geometrically — the residual the TSX-side
+   truncation cannot see, since 20 characters can still exceed the block in a narrow window. Cloned from
+   .tool-row__summary (:605), which settled the same question for the tool chip. No min-width: 0 — that
+   is a flex-item remedy and this is a block box. */
+.code-block__header {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-outline-variant);
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The code body (Figma 16:48 + 16:49). Figma's py 10 is the other exact midpoint (--space-2 vs
+   --space-3) and rounds UP on .log-data__download's precedent (:1191), which lands it on the same 12 as
+   the px — hence the single value. Rounding both paddings up also preserves the mock's relationship: its
+   header is 4px tighter than its body, and --space-2 is 4px tighter than --space-3. (The apparent
+   counter-case, .channel-info__action:1739, maps a py 10 DOWN — but its geometry lives in a
+   min-height: 40px, and this box has no height bound at all, per :369-371.)
+
+   margin-block is NOT decoration. :361 is a DIRECT-CHILD selector and .code-block is now the direct
+   child, so this <pre> takes its UA margin-block: 1em back — 12px of dead space top and bottom inside a
+   box where Figma allows exactly 12, silently doubling the padding. margin-block, never `margin`
+   (:350-352). The four type tokens complete the quartet the way .tool-row__name:596 does; without them
+   the body would inherit .bubble's body-MEDIUM tracking. word-break: break-word still inherits from
+   .bubble (:298) — inheritance follows the DOM, not selectors — so it is not restated either. */
+.code-block__body {
+  margin-block: 0;
+  padding: var(--space-3);
+  color: var(--color-on-surface);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* Both elements, because the UA stylesheet carries `tt, code, kbd, samp { font-family: monospace }` and
+   a DECLARATION beats an inherited value whatever its origin (the same rule :365 invokes). The <code>
+   child holds every visible character, so --font-mono on the <pre> alone would be inert — invisible in
+   the server-render tier and in any screenshot taken where the two families resolve alike. */
+.code-block__body,
+.code-block__body code {
+  font-family: var(--font-mono);
 }
 
 /* #203 — the streaming cursor (Figma node 16:56): the ▎ glyph (U+258E) trailing the in-progress

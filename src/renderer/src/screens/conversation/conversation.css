@@ -315,6 +315,24 @@
   border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-xs);
 }
 
+/* #607 — the assistant reply's whitespace treatment. .bubble declares no white-space, so the initial
+   `normal` collapsed every newline and every run of spaces into a single space and a multi-paragraph
+   reply arrived as one run-on block. pre-wrap is the one value the criteria leave: `normal` loses the
+   paragraph break, `pre-line` still collapses space runs and indentation, and `pre` stops wrapping so a
+   long unbroken token would widen the bubble past its measure. Not `break-spaces` either — that pushes
+   preserved spaces onto the next line instead of hanging them, which would let a run of daemon-supplied
+   spaces contribute to the box's width. Wrapping the long token is .bubble's existing
+   word-break: break-word (:298), not restated here.
+
+   Hung on its OWN modifier: .bubble would reach .bubble--user, and .bubble--daemon would reach the four
+   chrome affordances below (thinking / stall / api-retry / compacting). Each of those renders a
+   single-line client-owned constant today, so the rule would be visually inert there — but "inert
+   because we read the four literals" needs re-verifying every time a fifth is added, whereas a modifier
+   makes it structural. */
+.bubble--assistant-text {
+  white-space: pre-wrap;
+}
+
 /* #203 — the streaming cursor (Figma node 16:56): the ▎ glyph (U+258E) trailing the in-progress
    assistant bubble's text run, inline, inheriting .bubble's on-surface color and body-medium size —
    no color/type literal of its own. A subtle blink conveys the live-streaming state; the static caret

@@ -450,7 +450,11 @@ function TimelineRow({
         <div className="message-row message-row--daemon">
           {/* Text passed as React children (auto-escaped) — never dangerouslySetInnerHTML — so HTML
               inside a delta renders as visible characters, discharging #199's untrusted-text handoff. */}
-          <div className="bubble bubble--daemon" data-thread-role="assistant">
+          {/* #607: bubble--assistant-text is the whitespace-preservation anchor (see conversation.css).
+              Its OWN modifier rather than .bubble or .bubble--daemon, so the rule provably cannot reach
+              the user bubble or the four daemon-bubble chrome affordances. Appended, never inserted —
+              the `bubble bubble--daemon` pair stays contiguous. */}
+          <div className="bubble bubble--daemon bubble--assistant-text" data-thread-role="assistant">
             {item.text}
             {/* The streaming cursor (Figma 16:56, ▎ U+258E): a trailing inline visual on the
                 in-progress bubble's text run, inheriting the bubble's color/size. Derived structurally

@@ -55,9 +55,10 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 
 // The primer send's reply: REPLY_TURNS separate TURNS, each an assistant_delta plus its turn_end, so the
 // timeline grows REPLY_TURNS distinct assistant bubbles. Separate turns rather than newlines inside one
-// delta, for two independent reasons: same-turn deltas coalesce into a single bubble
-// (threadTimeline.appendDelta), and `.bubble` sets no `white-space: pre-wrap`, so a newline buys no height
-// at all. 20 is sized for headroom over the 1100x800 window (src/main/index.ts:37-38), not measured — if
+// delta because same-turn deltas coalesce into a single bubble (threadTimeline.appendDelta), so newlines
+// would grow one bubble instead of the row count this spec varies. (#607 since gave the assistant bubble
+// `white-space: pre-wrap`, so a newline now does buy height — the reason above is the one that stands.)
+// 20 is sized for headroom over the 1100x800 window (src/main/index.ts:37-38), not measured — if
 // the thread does not overflow, the scrollHeight > clientHeight gate fails loudly, which is the gate
 // working. Raise the count; never weaken the gate.
 const REPLY_TURNS = 20

@@ -77,7 +77,8 @@ drops, now that the display slice [#324](../codebase/324.md) needs it. Emitted f
 `case 'snapshot'` seam as `snapshotReceived` — one decoded `screen_snapshot` frame now fires both
 events, each a fresh named-field literal bounding its own two/five fields. Consumed by neither
 existing bridge; `screenSnapshotReceived` is held by the [screen-snapshot store](screen-snapshot-store.md)'s
-observer (#323) and read by #324's `ScreenSnapshotControl`. See
+observer (#323), whose sole reader, #324's `ScreenSnapshotControl`, was removed by
+[#618](../codebase/618.md) — the store keeps receiving the event regardless. See
 [screen snapshot fetch](screen-snapshot-fetch.md) for the full data-flow update.
 
 ## What it does

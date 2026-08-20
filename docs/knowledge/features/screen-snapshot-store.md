@@ -1,16 +1,20 @@
 # Screen-snapshot store
 
 The renderer's held copy of the daemon's **latest rendered-screen text** — a dedicated,
-unidirectional Zustand store fed by a reactive-only headless observer, read by the display surface
-[#324](../codebase/324.md) so a screen request never needs its own store facet or a second
-subscription.
+unidirectional Zustand store fed by a reactive-only headless observer. **Reader-less since
+[#618](../codebase/618.md)**, which removed its sole reader; the store and its bridge stay and keep
+compiling regardless, still receiving `screenSnapshotReceived` off the daemon's push.
 
 Introduced in [#323](../codebase/323.md), split from [#318](https://github.com/pyrycode/pyrycode-desktop/issues/318)
 (itself split from [#147](../codebase/147.md)). Consumes the `screenSnapshotReceived` event
 [#316](../codebase/316.md) already emits (see [Screen snapshot fetch](screen-snapshot-fetch.md)).
 Shipped **dormant** at #323 — that ticket added no UI and no trigger; both landed in the sibling
-[#324](../codebase/324.md), the store's sole reader (`ScreenSnapshotControl`) and the sole action
-that fires a fresh `requestSnapshot`.
+[#324](../codebase/324.md), whose `ScreenSnapshotControl` was the store's sole reader and sole
+action firing a fresh `requestSnapshot`, until [#618](../codebase/618.md) removed that control as
+the visible-surface slice of a five-ticket removal (the feature it exposed — photographing claude's
+terminal — was deleted upstream, pyrycode#1348). #618 took only the view and its request helper; the
+store, its bridge, the `requestSnapshot` IPC command and the wire types stay, per that ticket's
+scope — #619–#622 take the rest out consumer-first.
 
 ## What it does
 
@@ -90,20 +94,24 @@ daemon → screen_snapshot frame → case 'snapshot' → emitDaemonEvent
 
 ## Configuration and usage
 
-- **Import surface** (read by [#324](../codebase/324.md)'s `ScreenSnapshotControl`):
+- **Import surface** (formerly read by [#324](../codebase/324.md)'s `ScreenSnapshotControl`, removed
+  [#618](../codebase/618.md); no reader today):
   `import { useScreenSnapshotStore, selectScreenSnapshot } from '@renderer/store/screenSnapshotStore'`.
 - **Mount point:** `src/renderer/src/App.tsx`, alongside the other App-level headless leaves.
 - No new command, no IPC change, no preload change — renderer state only.
 
 ## Edge cases and limitations
 
-- **One reader.** `ScreenSnapshotControl` ([#324](../codebase/324.md)) is the store's only consumer;
-  a future second reader (e.g. a dedicated screen-snapshot sheet) would select the same narrow slice.
+- **Reader-less.** `ScreenSnapshotControl` ([#324](../codebase/324.md)) was the store's only
+  consumer; [#618](../codebase/618.md) removed it as the visible-surface slice of the
+  screen-snapshot removal, and nothing reads `selectScreenSnapshot` today. The store keeps writing
+  regardless — a future reader (or #619's outright deletion) would find it already current.
 - **No correlation, no request tracking in this store.** Same posture as
   [#180](../codebase/180.md)/[#316](../codebase/316.md): any `screenSnapshotReceived` that arrives is
-  written unconditionally. [#324](../codebase/324.md)'s `requestScreenSnapshot` fires a fresh
-  `requestSnapshot` command from a separate, guarded action helper — the store itself still has no
-  request half and no correlation to the command that produced a given reply.
+  written unconditionally. #324's `requestScreenSnapshot` fired a fresh `requestSnapshot` command
+  from a separate, guarded action helper — removed alongside the control by #618 — but no renderer
+  module sends `requestSnapshot` today; the store itself still has no request half and no
+  correlation to the command that produced a given reply.
 - **No reset.** Unlike `runConfigStore`, there is no sheet-close boundary to reset on — the store
   simply keeps the last-known screen for the app's lifetime.
 
@@ -118,6 +126,8 @@ daemon → screen_snapshot frame → case 'snapshot' → emitDaemonEvent
   shape this store mirrors, contrasted on request-on-open vs. push-only.
 - [Daemon-event channel](daemon-event-channel.md) — the `screenSnapshotReceived` `DaemonEvent` member.
 - [#323 codebase notes](../codebase/323.md) — implementation summary and patterns established.
-- [#324 codebase notes](../codebase/324.md) — the live-screen display + its trigger, the store's
-  first and only consumer: `ScreenSnapshotControl` reads `selectScreenSnapshot` and renders the held
-  `text` in a bounded `<pre>`, never HTML.
+- [#324 codebase notes](../codebase/324.md) — the screen display + its trigger, the store's first and
+  only consumer, `ScreenSnapshotControl`; removed by #618.
+- [#618 codebase notes](../codebase/618.md) — removed `ScreenSnapshotControl`, leaving this store
+  reader-less; the store, its bridge, the `requestSnapshot` command and the wire types were
+  deliberately left in place.

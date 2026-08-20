@@ -43,12 +43,10 @@ icon-only button that dispatches a removal for that entry, with no optimistic UI
 only when the daemon's next queue snapshot confirms it. See [Queued backlog + drop
 affordance](#queued-backlog--drop-affordance-294-drop-since-296) below.
 
-A **screen-snapshot request + display** landed in [#324](../codebase/324.md): a request button
-between the status row and the interrupt control that fires the existing `requestSnapshot` command,
-plus a bounded `<pre>` panel showing the daemon's held rendered-screen text (the [screen-snapshot
-store](screen-snapshot-store.md), #323) — a "no snapshot yet" placeholder is structurally distinct
-from a received blank screen. See [Screen-snapshot action & display](#screen-snapshot-action--display-324)
-below.
+A **screen-snapshot request + display** landed in [#324](../codebase/324.md) and was **removed in
+[#618](../codebase/618.md)**: the feature answered by photographing claude's terminal, which was
+deleted upstream (pyrycode#1348), leaving the button enabled and silently inert. See
+[Screen-snapshot action & display](#screen-snapshot-action--display-324-removed-618) below.
 
 An **openable background-task panel** landed in [#581](../codebase/581.md): a `StatusRow`-sibling
 trigger between the thread and the composer opens an overlay listing the tasks
@@ -310,7 +308,8 @@ decorative — colour is redundant with the label) plus a `.conn-leg__label` spa
 `role="group"`, not a live region — the banner (#279) already announces disconnect transitions, so a
 second live region here would double-announce. `ConnectionStatusIndicatorControl`, the in-file
 container, reads `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)` (the
-`ScreenSnapshotControl` two-independent-store precedent) and passes the mapped legs down; no
+`QueuedBacklogControl` two-independent-store precedent — re-anchored here by [#618](../codebase/618.md)
+after the original, `ScreenSnapshotControl`, was removed) and passes the mapped legs down; no
 `window.pyry`, no IPC, no effects, so the server-rendered smoke test touches no bridge (initial state
 → two "Offline" dots — the relay leg's `null` sentinel and the daemon leg's `disconnected`).
 
@@ -1445,52 +1444,27 @@ No Figma coverage for either the queued row or its drop control — the same doc
 delivered thread (node 16-8/16-21). See [#294 codebase notes](../codebase/294.md) and [#296
 codebase notes](../codebase/296.md) for full design and patterns established.
 
-### Screen-snapshot action & display (#324)
+### Screen-snapshot action & display (#324, removed #618)
 
-The view half of #318's store/render split (store half: [#323](../codebase/323.md)). Mounted
-between `<StatusRow/>` and `<InterruptControl/>`:
+The view half of #318's store/render split (store half: [#323](../codebase/323.md)) — a request
+button between `<StatusRow/>` and `<InterruptControl/>` (`ScreenSnapshotControl`, `.screen-snapshot`)
+that fired the `requestSnapshot` command, plus a bounded `<pre>` panel (`.screen-snapshot__screen`,
+`max-height: 240px; overflow: auto`) showing the daemon's held rendered-screen text, with a distinct
+`.screen-snapshot__empty` placeholder before any reply arrived.
 
-```
-.conversation
-├── StatusRow                  .status-row              (trigger, #177)
-├── ScreenSnapshotControl       .screen-snapshot          (always visible, #324)
-│   ├── button                  .screen-snapshot__request (disabled unless connected)
-│   └── <p>/<pre>                .screen-snapshot__empty / .screen-snapshot__screen
-└── InterruptControl            .conversation__interrupt  (null at idle, #307)
-```
+**Removed in [#618](../codebase/618.md).** The feature it exposed — photographing claude's terminal
+— was deleted upstream (pyrycode#1348); the daemon now wires `Snapshotter: nil`, so the button
+rendered enabled and did nothing, with no error shown. #618 took only this visible surface:
+`ScreenSnapshotView`, `ScreenSnapshotControl`, both copy constants, `requestScreenSnapshot.ts`, and
+the `.screen-snapshot*` CSS block are all gone, and the mount between `StatusRow` and
+`InterruptControl` reverts to the two sitting adjacent. A raw-event view to replace this was
+discussed and deliberately deferred, not built.
 
-`requestScreenSnapshot.ts` (new, React-free) fires the **existing** `requestSnapshot` command — the
-`{ type: 'requestSnapshot', payload: { conversation_id: MILESTONE_CONVERSATION_ID } }` literal
-`requestRunConfigSnapshot` already sends — wrapped in `sendInterrupt`'s guarded-send posture
-(try/catch + `console.error`, no local dispatch, fire-and-forget). No new command, no new IPC: the
-daemon's reply arrives on the path #316/#323 already wired.
-
-`ScreenSnapshotView({ snapshot, canRequest, onRequest })` is the exported pure view bundling both
-halves of the affordance into one component, since a request button with nothing to render is dead
-UI and a display with no trigger only shows unsolicited pushes (the ticket's sizing note — action and
-display ship as one `s`, not two). It always renders the request button
-(`disabled={!canRequest}`), then discriminates the display region on `snapshot === null`:
-
-- `null` (no snapshot received yet) → a `.screen-snapshot__empty` placeholder `<p>`, no `<pre>`.
-- `{ text, ts }` (a real reply, even `text === ''`) → `<pre className="screen-snapshot__screen">
-  {snapshot.text}</pre>` — present, structurally distinct from the placeholder even when empty.
-
-`text` is daemon-relayed and untrusted: it reaches the `<pre>` as auto-escaped React children only,
-never `dangerouslySetInnerHTML`/`innerHTML` — an HTML-looking screen renders as literal characters.
-`ScreenSnapshotControl`, the in-file container (unexported, the `InterruptControl` shape), reads
-`useSessionStore(selectStatus)` and `useScreenSnapshotStore(selectScreenSnapshot)` (see
-[Screen-snapshot store](screen-snapshot-store.md)), derives `canRequest` from
-`composerAvailability(status).canSend` — the same gate the composer's send button uses, not a
-re-derived `status.type === 'connected'` — and binds `onRequest` to
-`requestScreenSnapshot({ sendCommand: window.pyry.sendCommand })`, dereferenced only inside the
-click closure so the server-rendered container smoke never touches the bridge.
-
-Unlike `InterruptControl` (`null` at rest), this control **always renders** — button plus
-placeholder-or-`<pre>` — so `.screen-snapshot__screen` is CSS-bounded (`max-height: 240px;
-overflow: auto`) to keep a large screen dump from shoving the composer off-screen. No Figma
-coverage (the mobile file draws no daemon-screen surface, the same documented gap as
-[#279](../codebase/279.md)/[#294](../codebase/294.md)/[#317](../codebase/317.md)). See [#324 codebase
-notes](../codebase/324.md) for the full design and patterns established.
+**What stays, deliberately.** [`screenSnapshotStore`](screen-snapshot-store.md) and its bridge keep
+compiling and keep receiving `screenSnapshotReceived` — reader-less now, per #618's scope; the store
+itself, the `requestSnapshot` IPC command, and the wire types are #619–#622's removals, not this
+one. See [#324 codebase notes](../codebase/324.md) for the original design and patterns established,
+and [#618 codebase notes](../codebase/618.md) for the removal and its comment re-anchors.
 
 ### Channel Info sheet (#365)
 
@@ -1599,7 +1573,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md); gained a rejection surface in [#249](../codebase/249.md); its second-confirm marker was re-keyed from a bare option id to `{modalId, optionId}` in [#511](../codebase/511.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, `selectRejections`, and `dispatch`, mounted as the last child of `.conversation`. `null` only when both the outstanding prompt and the rejection list are empty; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first scoped to the prompt it was selected on, and a round-tripped rejection renders a dismissible banner independent of the prompt. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) above.
 - **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
 - **`QueuedBacklog({ items, onDrop })` / `QueuedBacklogControl`** — **render bound in [#294](../codebase/294.md); `onDrop` (required) bound in [#296](../codebase/296.md).** `QueuedBacklogControl` reads the [queue store](queue-store.md)'s `selectBacklogFor(MILESTONE_CONVERSATION_ID)` and binds `onDrop` to the pure `dropQueuedMessage` (`dropQueuedMessage.ts`), which dispatches `dequeueMessageCommand` and nothing else — no local mutation. See [Queued backlog + drop affordance](#queued-backlog--drop-affordance-294-drop-since-296) above.
-- **`ScreenSnapshotView({ snapshot, canRequest, onRequest })` / `ScreenSnapshotControl`** — **bound in [#324](../codebase/324.md).** `ScreenSnapshotControl` reads `useSessionStore(selectStatus)` (for `canRequest`, via `composerAvailability`) and the [screen-snapshot store](screen-snapshot-store.md)'s `selectScreenSnapshot` (#323, this store's only reader), binds `onRequest` to the new `requestScreenSnapshot` helper, and mounts between `StatusRow` and `InterruptControl`. See [Screen-snapshot action & display](#screen-snapshot-action--display-324) above.
+- **`ScreenSnapshotView({ snapshot, canRequest, onRequest })` / `ScreenSnapshotControl`** — **bound in [#324](../codebase/324.md); removed in [#618](../codebase/618.md).** Read `useSessionStore(selectStatus)` and the [screen-snapshot store](screen-snapshot-store.md)'s `selectScreenSnapshot`, and mounted between `StatusRow` and `InterruptControl`, until #618 took the view, its container and `requestScreenSnapshot.ts` out; the store is now reader-less. See [Screen-snapshot action & display](#screen-snapshot-action--display-324-removed-618) above.
 - **`WorkspacePickerSheetView({ workspaces, activeCwd, now?, onClose, onChoose?, onCreateFolder? })` /
   `WorkspacePickerSheet`** — **bound in [#383](../codebase/383.md).** `WorkspacePickerSheetView` is the
   exported pure view; `WorkspacePickerSheet` is the in-file container mounting `RecentWorkspacesData`
@@ -1620,7 +1594,6 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - No DOM interactivity is tested yet — the render test uses `renderToStaticMarkup`, not a DOM harness. Because zustand v5's `useStore` reads `getInitialState()` (not `getState()`) for its server snapshot, a *server*-rendered store-bound container always shows the store's **initial** state; #69 therefore proves ordering + role→type on the pure `MessageThread` view and smoke-tests the container against the empty store. Observing a *populated* container render needs a jsdom harness — still deferred. See [#69 codebase notes](../codebase/69.md).
 - **Session-boundary delimiter** ([#286](../codebase/286.md)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before (AC5). Its `clear`/`idle_evict` copy is provisional — no Figma variant exists for those two reasons yet.
 - **Queued backlog + drop affordance** ([#294](../codebase/294.md)/[#296](../codebase/296.md)) — the region and its drop buttons render only when the milestone conversation's backlog is non-empty; dropping a row is fire-and-forget with no client-side validation of `queued_msg_id` and no error surface on a bridge failure (swallowed, `console.error` only) — the row simply remains, since the daemon never received the drop. The drop button inherits the region's 50% dimming; it cannot be rendered at full opacity without restructuring the region-level dim (a child opacity cannot escape a parent's opacity compositing group).
-- **Screen-snapshot action & display** ([#324](../codebase/324.md)) — unlike every other in-thread control, this region is **always visible** (button + placeholder-or-`<pre>`), never `null` at rest; a re-request is fire-and-forget with no pending/loading state, so re-clicking before a reply lands simply waits for the next `screenSnapshotReceived` to overwrite the store. A send-bridge failure is swallowed (`console.error`, no crash); the held screen is unchanged.
 - **Two-dot connection indicator** ([#330](../codebase/330.md)) — the two legs render independently and are never reconciled: a fatal session close leaves the relay dot at its last value (typically up) while the daemon dot shows down, and a retryable daemon-absent close leaves the daemon dot in-progress while the relay dot shows up/"Reachable" — both are intended, honest-per-hop renders, not bugs. The relay leg has no in-progress arm (that category is exercised only by the daemon leg's `connecting`), so the daemon dot never shows a false green.
 - **Channel Info sheet** ([#365](../codebase/365.md)) — a list-opened thread (never populates `activeConversationStore`) opens the sheet gracefully: chrome + a placeholder About line, no Channel ID footer, no crash. `sheetOpen` (run-config) and `channelInfoOpen` are independent booleans, so both overlays could in principle stack — not reachable through normal use (separate triggers) and no AC requires mutual exclusion, left as-is. Created / Total sessions / Total messages / Memory (Figma 20-48) have no desktop wire field and are deferred, not invented. Escape-dismiss and the overflow-select → open wiring are reviewed glue, not unit-tested (the `renderToStaticMarkup`-only suite constraint, same as #276/#177).
 - **Workspace Picker sheet** ([#383](../codebase/383.md)) — same `activeConversationStore`-null
@@ -1648,7 +1621,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   measurement taken after the new content is already in the layout. `Timeline` gained one optional
   `scrollPin` prop bundling the ref and the scroll handler so the ~30 pre-existing render sites needed no
   edits. Every chrome sibling below the thread (`.conversation__thinking`/`__stall`/`__api-retry`/
-  `__compacting`/`__queued`/`__interrupt`, `.screen-snapshot`) can mount or unmount with no risk of
+  `__compacting`/`__queued`/`__interrupt`) can mount or unmount with no risk of
   un-pinning a thread the operator never scrolled — a chrome mount only shrinks the thread's viewport, which
   cannot fire a scroll event. `overflow-anchor` stays unset (closed as indifferent, confirmed on an observed
   e2e run, not just reasoning). **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
@@ -1677,8 +1650,8 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
-- [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`; also the `requestSnapshot` command `<ScreenSnapshotControl/>`'s `requestScreenSnapshot` fires and the `screenSnapshotReceived` event its display renders (#316, #324)
-- [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323) `<ScreenSnapshotControl/>` reads via `selectScreenSnapshot`, its only consumer (#324)
+- [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`; also the `requestSnapshot` command and `screenSnapshotReceived` event #324's now-removed control used to send and render (#316, #324, removed #618)
+- [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323), reader-less since [#618](../codebase/618.md) removed `ScreenSnapshotControl`, its former sole consumer (#324)
 - [Relay-link store](relay-link-store.md) — the dedicated store (#329) `<ConnectionStatusIndicatorControl/>` reads via `selectRelayLinkStatus`, its first real consumer; combined at render time with [session store](session-store.md)'s `ConnectionStatus` (#330)
 - [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` now also writes to this store's `dispatch` as the `userText` producer, and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is now translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` reads the store's new `selectStalled` (#317, transport #315); `<ApiRetryIndicator/>` reads the store's new `selectApiRetry`, and the exported `shouldShowThinking` predicate reads it alongside `selectPhase` to narrow `<ThinkingIndicator/>`'s gate (#493, transport #492); `<CompactingIndicator/>` reads the store's new `selectCompacting`, and `shouldShowThinking` gains a second clause reading it to narrow `<ThinkingIndicator/>`'s gate again (#496, transport #495)
 - [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224) and now also `dispatch` (#237); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, live since [#179](../codebase/179.md) flipped `interactive` (dormant #223–#178)
@@ -1693,4 +1666,4 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Background-task roster store](background-task-roster-store.md) — the store `BackgroundTaskPanel` reads via `selectRosterFor(conversationId)`, its first real consumer since the store shipped dormant at #573 (#581, extended to read `droppedTasks`/`truncatedFields` in #582 and `latestUpdate` in #583, see [Background-task panel](#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583) above)
 - [Assistant markdown renderer](assistant-markdown-renderer.md) — `AssistantMarkdown`, shipped dormant at #608, wired into this screen's `assistantText` settled branch by [#609](../codebase/609.md); the `.bubble__markdown` container and its block-rhythm/code-wrap CSS live in `conversation.css`, not in that module
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
-- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#492 codebase notes](../codebase/492.md) · [#493 codebase notes](../codebase/493.md) · [#495 codebase notes](../codebase/495.md) · [#496 codebase notes](../codebase/496.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · [#529 codebase notes](../codebase/529.md) · [#530 codebase notes](../codebase/530.md) · [#581 codebase notes](../codebase/581.md) · [#582 codebase notes](../codebase/582.md) · [#583 codebase notes](../codebase/583.md) · [#600 codebase notes](../codebase/600.md) · [#601 codebase notes](../codebase/601.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`
+- [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#492 codebase notes](../codebase/492.md) · [#493 codebase notes](../codebase/493.md) · [#495 codebase notes](../codebase/495.md) · [#496 codebase notes](../codebase/496.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · [#529 codebase notes](../codebase/529.md) · [#530 codebase notes](../codebase/530.md) · [#581 codebase notes](../codebase/581.md) · [#582 codebase notes](../codebase/582.md) · [#583 codebase notes](../codebase/583.md) · [#600 codebase notes](../codebase/600.md) · [#601 codebase notes](../codebase/601.md) · [#618 codebase notes](../codebase/618.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

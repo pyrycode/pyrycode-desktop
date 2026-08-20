@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-08-20. First realized in [#608](../codebase/608.md), shipped dormant; wired into the thread by [#609](../codebase/609.md).
+Accepted, 2026-08-20. First realized in [#608](../codebase/608.md), shipped dormant; wired into the thread by [#609](../codebase/609.md); fenced-code language label consumed by [#623](../codebase/623.md).
 
 ## Context
 
@@ -34,14 +34,14 @@ Two secondary points reinforced the choice: `markdown-to-jsx` auto-slugs heading
 
 **Links and images are suppressed at the element level, not the policy level.** `components.a` renders only `children`; `components.img` renders only `alt`. Neither override spreads `{...props}` — a spread reintroduces `href`/`src` and defeats the suppression while every visible-text assertion keeps passing, which is why this repo's convention forbids the spread by construction rather than by test coverage alone. This lands the repo in a state where no anchor and no image element is ever constructed from daemon markdown, so no unvetted `href` reaches the DOM regardless of scheme — including `javascript:`, which executes in the document rather than navigating it and so would never be caught by `will-navigate`. `react-markdown`'s built-in `urlTransform` (which already blanks a `javascript:` href) is not relied on for this — no anchor is produced at all. [#610](https://github.com/pyrycode/pyrycode-desktop/issues/610) opens the `http:`/`https:` allowlist later and will re-enable `urlTransform` rather than invent a new mechanism.
 
-**`code`'s `language-*` class is kept, deliberately.** Stripping it looks like hardening but isn't load-bearing: the value is React-escaped as an attribute (inert) and the mandatory `language-` prefix makes collision with an app CSS class structurally impossible. It is also the only carrier for the fenced-code language label Figma `16:47` specifies — stripping it would delete data [#609](https://github.com/pyrycode/pyrycode-desktop/issues/609) needs and force it to re-parse the source text.
+**`code`'s `language-*` class is kept, deliberately.** Stripping it looks like hardening but isn't load-bearing: the value is React-escaped as an attribute (inert) and the mandatory `language-` prefix makes collision with an app CSS class structurally impossible. It is also the only carrier for the fenced-code language label Figma `16:47` specifies — stripping it would have deleted the data [#623](../codebase/623.md)'s `fenceLanguage` helper reads and forced it to re-parse the source text.
 
 ## Consequences
 
 - Interpreting HTML on this path now requires a `package.json` diff (adding `rehype-raw`), not a boolean flip — the structural property this decision is built on. Any future PR adding `rehype-raw` anywhere near this file should be treated as a security-relevant change requiring the same review depth as this ADR.
 - 79 net-new packages entered the tree (see note below on the two competing counts), with no automated gate vetting them — the standing cost of this choice, accepted because the safety property purchased is structural rather than configurational. Overwhelmingly the `micromark-*`/`mdast-util-*`/`hast-util-*` toolchain from one maintainer (wooorm), MIT-licensed.
 - `<a>` and `<img>` overrides are the two places a future edit could quietly regress AC3/AC4 by adding `{...props}`; this is called out in a code comment in `AssistantMarkdown.tsx` itself, not just here.
-- `code`'s `className` is intentionally left un-hardened; a future "cleanup" that strips it needs to know it is Figma `16:47`'s label carrier, not incidental output.
+- `code`'s `className` is intentionally left un-hardened; a future "cleanup" that strips it needs to know it is Figma `16:47`'s label carrier, not incidental output — [#623](../codebase/623.md) is the ticket that reads it, via a token-scan of the class rather than a re-parse of the message source.
 - `remark-gfm` must never be added "for completeness" — its bare-URL autolinking would manufacture exactly the anchors this design suppresses.
 
 **Note on the two dependency counts.** The architecture spec's design table states "85 packages added," verified at spec time against an install. [#608](../codebase/608.md)'s code review re-measured with an honest `comm -23` set difference between the pre- and post-change lockfile package lists and found **79 net-new** packages — `npm install`'s own summary line ("added 256") was junk in that worktree (an empty `node_modules` directory was present and mis-reported as populated), and a naive `grep -c '^+.*node_modules/'` over the lockfile diff over-counted at 89 because npm re-sorts entries, so roughly 10 packages appear as both a `-` and a `+` line for the same version. 79 is the number that should be cited going forward; 85 was a reasonable estimate at spec time that a more careful measure later corrected downward.
@@ -49,6 +49,7 @@ Two secondary points reinforced the choice: `markdown-to-jsx` auto-slugs heading
 ## Related
 
 - [#608 codebase notes](../codebase/608.md) — the implementation, the full verified construct-coverage table, and the code-review record.
+- [#623 codebase notes](../codebase/623.md) — the fenced-code header bar and language label, the module's first consumer of `code`'s kept `className`.
 - [Assistant markdown renderer](../features/assistant-markdown-renderer.md) — the feature doc for the module this ADR governs.
 - [ADR 0003](0003-m3-theme-tokens-css-custom-properties.md) — unrelated in mechanism, same repo discipline of "the configuration is the contract."
 - `src/main/index.ts` — the process-level guards this decision explicitly does not rebuild or weaken: `setWindowOpenHandler`, `will-navigate`, sandbox/context-isolation.

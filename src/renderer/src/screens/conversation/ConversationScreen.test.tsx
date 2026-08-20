@@ -466,7 +466,9 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).toContain('<h1>Heading one</h1>')
     expect(markup).toContain('<strong>bold</strong>')
     expect(markup).toContain('<code>code</code>')
-    expect(markup).toContain('<pre>')
+    // #623 gave the fence its chrome; MARKDOWN_SOURCE's fence declares no language, so this tier sees
+    // the no-header degrade. Still discharges "a fence became a real element" for the screen tier.
+    expect(markup).toContain('<pre class="code-block__body">')
     expect(markup).toContain('<li>first item</li>')
     expect(markup).toContain('<blockquote>')
     // Negative: the source syntax is gone — it was interpreted, not shown. `&gt;` is how the blockquote

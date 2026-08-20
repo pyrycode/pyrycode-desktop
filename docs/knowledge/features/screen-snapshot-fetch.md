@@ -272,7 +272,8 @@ that failure is actually observed (evidence-based-fix).
 - **Rendering the `text` field** — [#316](../codebase/316.md) surfaced `text`/`ts` across IPC via the
   dedicated `screenSnapshotReceived` event (see §5 above); [#323](../codebase/323.md) added the
   [dedicated renderer store](screen-snapshot-store.md) that retains the latest value;
-  [#324](../codebase/324.md) added the request action and the `<pre>` display that reads it.
+  [#324](../codebase/324.md) added the request action and the `<pre>` display that reads it, removed
+  in turn by [#618](../codebase/618.md) (the store and this transport path stay).
 - **Daemon `error` reply correlation** — see § Correlation above.
 
 ## Related
@@ -286,7 +287,7 @@ that failure is actually observed (evidence-based-fix).
 - [Screen-snapshot store](screen-snapshot-store.md) / [#323 codebase notes](../codebase/323.md) —
   the dedicated renderer store + reactive-only observer that retains this event's `text`/`ts`.
 - [#324 codebase notes](../codebase/324.md) — the request action + `<pre>` display, the first and
-  only consumer of the store above.
+  only consumer of the store above; removed by [#618](../codebase/618.md).
 - [Daemon connection](daemon-connection.md) — hosts `requestSnapshot()`, the `send` twin.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseScreenSnapshotPayload` and the
   `snapshot` `InboundDaemonMessage` kind.

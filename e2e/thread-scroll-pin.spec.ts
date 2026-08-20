@@ -64,10 +64,14 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 const REPLY_TURNS = 20
 const replyText = (turn: number): string => `Streamed reply line ${turn}`
 
-// Two typed messages with distinct texts. The PRIMER is the one the fake answers with the overflow stream;
-// the SECOND is a pure optimistic-echo plant, so the two sends are unambiguous by text as well as by order.
+// Three typed messages with distinct texts. The PRIMER is the one the fake answers with the overflow
+// stream; the other two are pure optimistic-echo plants (buildReplyFrames' non-primer arm below returns no
+// frames), so every send is unambiguous by text as well as by order.
 const PRIMER_TEXT = 'prime the thread with a long reply'
 const SECOND_TEXT = 'a second message sent from the bottom'
+// #602: sent while the operator is parked at the very top of the history, so the send is the only thing
+// that could have brought the view back down.
+const SCROLLED_UP_TEXT = 'a third message sent from far up the history'
 
 // --- Spec-local frame builders (the seedConversationsFrame idiom): each seals one envelope through the
 // production codec, deterministic id/ts. ---
@@ -144,7 +148,7 @@ const turnStateFrame = (state: WireTurnState): Uint8Array =>
  * stream; every other inbound (the auto-fired `list_conversations`, plus any later non-send frame) -> the
  * shared one-row seed, since a scripted buildReplyFrames overrides the fixture's default arm.
  *
- * Only the PRIMER send streams. The second send is answered with NOTHING, on purpose: it is the userText
+ * Only the PRIMER send streams. Every other send is answered with NOTHING, on purpose: it is the userText
  * plant (the queued-backlog-interrupt idiom — the fake no-ops send_message and the optimistic echo renders
  * on its own), and a second 20-turn stream would add no coverage while racing the assertion it exists to
  * make.
@@ -304,4 +308,56 @@ test('an arriving item leaves the scroll offset unchanged when the operator has 
   // the flag would read at-bottom and the pin would likewise have dragged it off zero.
   const { scrollTop } = await readThreadMetrics(page)
   expect(scrollTop).toBe(0)
+})
+
+test('sending from far up the history jumps to the bottom and leaves the thread pinned', async ({
+  launchPairedApp
+}) => {
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames })
+
+  await primeOverflowingThread(page)
+
+  // Park the operator at the very top — the same programmatic idiom as the test above, for the same
+  // reasons. The rAF settle is NOT optional, and the direction of the hazard is INVERTED from that test's:
+  // there, skipping it makes a correct app fail; here it would make a BROKEN app pass. The tracked flag is
+  // still `true` at the instant of the assignment, so without waiting for the queued scroll event to
+  // dispatch and clear it, the send would find a thread that was already following and the view would land
+  // at the bottom with no feature present at all.
+  await page.locator('.conversation__thread').evaluate((el) => {
+    el.scrollTop = 0
+  })
+  await settleScrollEvent(page)
+
+  // The precondition guard. Without it the test cannot distinguish "the send pulled the view down" from
+  // "the view was never up" — the primer leaves the thread resting at the bottom.
+  const before = await readThreadMetrics(page)
+  expect(before.scrollTop).toBe(0)
+
+  await page.getByPlaceholder('Message…').fill(SCROLLED_UP_TEXT)
+  await page.getByRole('button', { name: 'Send' }).click()
+
+  // The first criterion. The optimistic echo is the second user bubble (the primer was the first), and
+  // awaiting it is what makes the plain assertion that follows correct — expectPinnedToBottom's contract.
+  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(2)
+  await expectPinnedToBottom(page)
+
+  // The second criterion: the reply that follows keeps the view, with no second manual scroll. Turn
+  // REPLY_TURNS + 1 so it is a distinct turn and therefore a distinct bubble from the primer's stream, and
+  // two arrivals rather than one so "the reply keeps the view" is asserted across a stream instead of at a
+  // single instant.
+  //
+  // No rAF settle before these pushes, and the asymmetry with the scroll above is deliberate: the only
+  // scroll event outstanding here is the one the pin's OWN write queued, and when it dispatches it computes
+  // at-bottom -> true, which is the value the flag already holds. The settle above matters precisely
+  // because there the pending event carries the opposite value.
+  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  daemon.pushFrame(assistantDeltaFrame(REPLY_TURNS + 1))
+  await expect(assistantBubbles).toHaveCount(REPLY_TURNS + 1, { timeout: STREAM_TIMEOUT_MS })
+  await expectPinnedToBottom(page)
+
+  // The exact-text wait is the settle gate (the primer's idiom): the trailing streaming cursor drops only
+  // when this turn's `turn_end` lands, so the match proves the layout is final before it is measured.
+  daemon.pushFrame(turnEndFrame(REPLY_TURNS + 1))
+  await expect(assistantBubbles.last()).toHaveText(replyText(REPLY_TURNS + 1))
+  await expectPinnedToBottom(page)
 })

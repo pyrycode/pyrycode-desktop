@@ -157,7 +157,8 @@ export function ConversationScreen({
   // #601: the follow-the-conversation pin. Screen-local, held beside the other screen-local values above —
   // nothing outside this screen reads it and it must not survive a remount (ADR 0006), so a re-entered
   // thread starts pinned again, which is the correct reading. The two handles go to Timeline as one prop.
-  const scrollPin = useThreadScrollPin()
+  // #602: `followBottom` re-arms that pin and goes to the Composer, the thread's sibling under this body.
+  const { scrollPin, followBottom } = useThreadScrollPin()
   return (
     <div className="conversation">
       <BackControl onBack={onBack} />
@@ -218,7 +219,10 @@ export function ConversationScreen({
           composer's send side, shown only while a turn is running (phase thinking or responding) and
           retracting on the daemon's turn_state{idle}. Renders nothing at idle. */}
       <InterruptControl />
-      <Composer />
+      {/* #602: sending is the one act that overrides the conditional pin, so the Composer reports "a
+          message entered the timeline" and this screen — which owns the flag — decides that means follow
+          the bottom. The Composer learns nothing about scrolling. */}
+      <Composer onMessageSent={followBottom} />
       <RepairControl onUnpaired={onUnpaired} />
       {sheetOpen && (
         <StatusSheet onClose={() => setSheetOpen(false)}>
@@ -283,6 +287,23 @@ export interface ThreadScrollPin {
   onScroll: UIEventHandler<HTMLDivElement>
 }
 
+/**
+ * What the screen gets back from the pin: the DOM bundle above, plus the one control that re-arms it.
+ *
+ * `followBottom` is deliberately NOT a third member of ThreadScrollPin. That interface's value is that it is
+ * exactly "the two DOM handles the thread's scroll container needs" — both-or-neither is honest only while
+ * both are handles for the same node — and it is Timeline's prop type, so a third member would widen
+ * Timeline's contract with a value Timeline never reads. This one goes to a different component entirely
+ * (the Composer) and touches no DOM node.
+ *
+ * File-local: nothing outside this module names it.
+ */
+interface ThreadPin {
+  scrollPin: ThreadScrollPin
+  /** Resume following the bottom. Called when the operator's own message enters the timeline (#602). */
+  followBottom: () => void
+}
+
 // The standard isomorphic alias. `document` exists in the window and NOT in vitest's `node` environment
 // (vitest.config.ts:27), where the renderer tests server-render through renderToStaticMarkup — and React 18
 // logs "useLayoutEffect does nothing on the server" for every component reached that way. There are 33
@@ -314,8 +335,14 @@ const useThreadLayoutEffect = typeof document === 'undefined' ? useEffect : useL
  *
  * Nothing to tear down: `onScroll` is a React prop, so the listener's lifetime is the node's, and there is
  * no manual addEventListener whose attach could race the late mount.
+ *
+ * #602 adds the one documented exception to "only the operator's own scrolling writes this flag": sending is
+ * the operator's own act of moving the conversation forward, so the view follows unconditionally. That is
+ * `followBottom` below — a single re-arming assignment, no second mechanism. Because the re-assert has no
+ * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
+ * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(): ThreadScrollPin {
+function useThreadScrollPin(): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const following = useRef(true)
 
@@ -339,19 +366,34 @@ function useThreadScrollPin(): ThreadScrollPin {
   })
 
   return {
-    ref,
-    // The metric mapping is the one thing this feature can get wrong with no type error and no unit test:
-    // scrollTop is the offset, clientHeight the viewport, scrollHeight the total content. Named fields are
-    // what make it correct by inspection. Read synchronously off `currentTarget` and assigned with no
-    // branch of its own — every case is a consequence of isAtBottom's single comparison. No useCallback:
-    // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
-    onScroll: (event) => {
-      const el = event.currentTarget
-      following.current = isAtBottom({
-        scrollOffset: el.scrollTop,
-        viewportHeight: el.clientHeight,
-        contentHeight: el.scrollHeight
-      })
+    scrollPin: {
+      ref,
+      // The metric mapping is the one thing this feature can get wrong with no type error and no unit test:
+      // scrollTop is the offset, clientHeight the viewport, scrollHeight the total content. Named fields are
+      // what make it correct by inspection. Read synchronously off `currentTarget` and assigned with no
+      // branch of its own — every case is a consequence of isAtBottom's single comparison. No useCallback:
+      // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
+      onScroll: (event) => {
+        const el = event.currentTarget
+        following.current = isAtBottom({
+          scrollOffset: el.scrollTop,
+          viewportHeight: el.clientHeight,
+          contentHeight: el.scrollHeight
+        })
+      }
+    },
+    // #602: one assignment, and deliberately nothing more — no measurement of its own and no immediate
+    // scrollTop write. The echo is already in the store when this runs (submitMessage dispatches before it
+    // returns), and the app mounts through ReactDOM.createRoot (main.tsx:6), so React 18's automatic
+    // batching flushes that update only once the discrete event handler returns. The render that mounts the
+    // echo therefore always comes after this, and the dep-free re-assert above scrolls it into view before
+    // paint. A second write here would defend an ordering that cannot occur and would only re-scroll a
+    // container whose content has not grown yet.
+    //
+    // No useCallback, for onScroll's reason verbatim: Composer is not memoized, so it re-renders with this
+    // screen regardless of prop identity and a stable identity buys nothing.
+    followBottom: () => {
+      following.current = true
     }
   }
 }
@@ -1540,7 +1582,12 @@ function ChannelInfoSheet({
   )
 }
 
-function Composer(): JSX.Element {
+// #602: `onMessageSent` fires exactly when the operator's message enters the timeline. REQUIRED, not
+// optional — `<Composer />` above is the only render site in the repo (Composer is not exported and no test
+// renders it), so requiring it costs no edit cascade and makes "forgot to wire it" a compile error. That is
+// the opposite call from Timeline's optional `scrollPin`, and for the opposite reason: there, 30 existing
+// render sites made optional the only non-cascading choice.
+function Composer({ onMessageSent }: { onMessageSent: () => void }): JSX.Element {
   // Thin controlled container over composerSend.submitMessage (the pairing container/pure-logic
   // split). Input text is ephemeral single-value screen-local state → useState, never the store
   // (ADR 0006). `dispatch` identity is stable, so selecting it adds no re-render churn.
@@ -1570,7 +1617,18 @@ function Composer(): JSX.Element {
       dispatch,
       newMessageId: () => crypto.randomUUID()
     })
-    if (sent) setText('')
+    // #602: `sent === true` is exactly "a message entered the timeline", which is why the notify sits HERE
+    // and not at the top of this function or just past the `!canSend` gate. Both of submitMessage's `false`
+    // returns (composerSend.ts:47-48 — whitespace-only, null conversation id) are above its echo dispatch,
+    // and the gate above returns before submitMessage is called at all, so a submit that sends nothing never
+    // reaches this line: it leaves the scroll position as the operator's own scrolling set it and leaves NO
+    // armed pin behind, so the next unrelated arriving item still cannot yank a scrolled-up operator. A send
+    // whose bridge call throws is caught (composerSend.ts:60-63), still posts the echo and still returns
+    // `true`, so it follows — correctly, because the timeline did move.
+    if (sent) {
+      setText('')
+      onMessageSent()
+    }
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {

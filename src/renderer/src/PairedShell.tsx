@@ -15,6 +15,7 @@ import {
   type ClearPairingScopedStateDeps
 } from './clearPairingScopedState'
 import { activeConversationStore } from './store/activeConversationStore'
+import { announcedModelStore } from './store/announcedModelStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { timelineStore } from './store/timelineStore'
@@ -44,13 +45,16 @@ const activateDeps: ActivateConversationDeps = {
  * #531: the store wiring for the pairing-ended clear, module scope for the same reason as
  * `activateDeps` above — each effect reaches its singleton through `getState()` inside the arrow body,
  * so nothing is dereferenced at module load, nothing is read during render, and the object closes over
- * no per-render value. `sessionStore` appears here and nowhere else in this file; PairedShell still
- * subscribes to no store at all and stays server-renderable.
+ * no per-render value. `sessionStore` and `announcedModelStore` appear here and nowhere else in this
+ * file; PairedShell still subscribes to no store at all and stays server-renderable. #593 widened the
+ * set with the announced running model, and because both call sites below pass this one object, that
+ * was a single edit rather than two.
  */
 const clearPairingDeps: ClearPairingScopedStateDeps = {
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
+  clearAnnouncedModel: () => announcedModelStore.getState().clearAnnouncedModel(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action)
 }
 

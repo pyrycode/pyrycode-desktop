@@ -5,6 +5,7 @@ import {
 } from './clearPairingScopedState'
 import { createTimelineStore } from './store/timelineStore'
 import { createSessionIdStore } from './store/sessionIdStore'
+import { createAnnouncedModelStore } from './store/announcedModelStore'
 import { createActiveConversationStore } from './store/activeConversationStore'
 import { createSessionStore, initialSessionState } from './store/sessionStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
@@ -34,25 +35,40 @@ function spyDeps(): {
   dispatchTimeline: ReturnType<typeof vi.fn>
   clearActiveConversation: ReturnType<typeof vi.fn>
   clearSessionId: ReturnType<typeof vi.fn>
+  clearAnnouncedModel: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
 } {
   const dispatchTimeline = vi.fn()
   const clearActiveConversation = vi.fn()
   const clearSessionId = vi.fn()
+  const clearAnnouncedModel = vi.fn()
   const dispatchSession = vi.fn()
   return {
-    deps: { dispatchTimeline, clearActiveConversation, clearSessionId, dispatchSession },
+    deps: {
+      dispatchTimeline,
+      clearActiveConversation,
+      clearSessionId,
+      clearAnnouncedModel,
+      dispatchSession
+    },
     dispatchTimeline,
     clearActiveConversation,
     clearSessionId,
+    clearAnnouncedModel,
     dispatchSession
   }
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all four clears exactly once, with the exact reset actions (AC1, AC2)', () => {
-    const { deps, dispatchTimeline, clearActiveConversation, clearSessionId, dispatchSession } =
-      spyDeps()
+  it('performs all five clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+    const {
+      deps,
+      dispatchTimeline,
+      clearActiveConversation,
+      clearSessionId,
+      clearAnnouncedModel,
+      dispatchSession
+    } = spyDeps()
 
     clearPairingScopedState(deps)
 
@@ -60,32 +76,37 @@ describe('clearPairingScopedState', () => {
     expect(dispatchTimeline).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearActiveConversation).toHaveBeenCalledTimes(1)
     expect(clearSessionId).toHaveBeenCalledTimes(1)
+    expect(clearAnnouncedModel).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
   })
 
-  it('the pairing-scoped set is exactly these four stores', () => {
+  it('the pairing-scoped set is exactly these five stores', () => {
     // The tripwire the no-divergence design rests on: both switch paths clear whatever this interface
-    // names, so a fifth pairing-scoped store added to `ClearPairingScopedStateDeps` fails to compile
+    // names, so a sixth pairing-scoped store added to `ClearPairingScopedStateDeps` fails to compile
     // here until it is added to the literal, and then fails this assertion until it is also asserted
     // called above — rather than being silently declared and never invoked.
     const { deps } = spyDeps()
 
     expect(Object.keys(deps).sort()).toEqual([
       'clearActiveConversation',
+      'clearAnnouncedModel',
       'clearSessionId',
       'dispatchSession',
       'dispatchTimeline'
     ])
   })
 
-  it('real stores: the ended pairing leaves behind no rows, conversation id or session id (AC1, AC2)', () => {
+  it('real stores: the ended pairing leaves behind no rows, conversation id, session id or announced model (AC1, AC2)', () => {
     const timeline = createTimelineStore({
       ...initialTimelineState,
       items: seededItems,
       phase: 'thinking'
     })
     const sessionId = createSessionIdStore({ sessionId: 'session-on-A' })
+    const announcedModel = createAnnouncedModelStore({
+      announced: { model: 'model-on-A', truncated: false }
+    })
     const active = createActiveConversationStore({ activeConversation: conversation })
     const session = createSessionStore({
       status: {
@@ -100,31 +121,37 @@ describe('clearPairingScopedState', () => {
       messages: seededMessages
     })
 
-    clearPairingScopedState(realDeps(timeline, sessionId, active, session))
+    clearPairingScopedState(realDeps(timeline, sessionId, announcedModel, active, session))
 
     // toMatchObject, not toEqual: the store state objects also carry dispatch / the setters.
     expect(timeline.getState()).toMatchObject(initialTimelineState)
     expect(timeline.getState().items).toHaveLength(0)
     expect(active.getState().activeConversation).toBeNull()
     expect(sessionId.getState().sessionId).toBeNull()
+    // Server A's identifier — and its `truncated` cut report with it — cannot be attributed to server B.
+    expect(announcedModel.getState().announced).toBeNull()
     expect(session.getState()).toMatchObject(initialSessionState)
   })
 
   it('real stores: clearing an already-clear set is a no-op, timeline items by reference', () => {
     // The idempotence the no-guard design rests on — every clear returns its shared initial* const, so
-    // a redundant clear churns no subscriber (notably no selectItems re-render from a fresh []).
+    // a redundant clear churns no subscriber (notably no selectItems re-render from a fresh []). For
+    // the announced model the cleared value IS the `null` sentinel, so the by-reference property is
+    // structural: a selector's Object.is(null, null) short-circuits the re-render.
     const timeline = createTimelineStore()
     const sessionId = createSessionIdStore()
+    const announcedModel = createAnnouncedModelStore()
     const active = createActiveConversationStore()
     const session = createSessionStore()
     const itemsBefore = timeline.getState().items
 
-    clearPairingScopedState(realDeps(timeline, sessionId, active, session))
+    clearPairingScopedState(realDeps(timeline, sessionId, announcedModel, active, session))
 
     expect(timeline.getState()).toMatchObject(initialTimelineState)
     expect(timeline.getState().items).toBe(itemsBefore)
     expect(active.getState().activeConversation).toBeNull()
     expect(sessionId.getState().sessionId).toBeNull()
+    expect(announcedModel.getState().announced).toBeNull()
     expect(session.getState()).toMatchObject(initialSessionState)
   })
 })
@@ -132,6 +159,7 @@ describe('clearPairingScopedState', () => {
 function realDeps(
   timeline: ReturnType<typeof createTimelineStore>,
   sessionId: ReturnType<typeof createSessionIdStore>,
+  announcedModel: ReturnType<typeof createAnnouncedModelStore>,
   active: ReturnType<typeof createActiveConversationStore>,
   session: ReturnType<typeof createSessionStore>
 ): ClearPairingScopedStateDeps {
@@ -139,6 +167,7 @@ function realDeps(
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
     clearActiveConversation: () => active.getState().clearActiveConversation(),
     clearSessionId: () => sessionId.getState().clearSessionId(),
+    clearAnnouncedModel: () => announcedModel.getState().clearAnnouncedModel(),
     dispatchSession: (action) => session.getState().dispatch(action)
   }
 }

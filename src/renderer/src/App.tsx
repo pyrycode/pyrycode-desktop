@@ -121,8 +121,9 @@ function App(): JSX.Element {
   // announcement into the announced-model store for the run-configuration sheet (#560), on the same
   // App-level always-listening rationale — the announcement rides the turn's init line, so it can
   // arrive long before that sheet is ever opened. Reactive-only, no gate. Ships dormant. Unlike its
-  // roster neighbour above it has no `connected` branch, so its store is pairing-scoped with nothing
-  // clearing it yet; that deferral and its follow-up obligation are recorded in announcedModelStore.ts.
+  // roster neighbour above it has no `connected` branch, BECAUSE the announcement survives a
+  // re-handshake to the same daemon — it still describes that daemon. Its store is pairing-scoped and
+  // the pairing-change clear is clearPairingScopedState's (#593), not this leaf's.
   return (
     <>
       <ConversationListData />

@@ -16,20 +16,29 @@
 // folding in would need a second one nested inside it. The two stores stay orthogonal and an
 // announcement re-renders only components selecting this slice.
 //
-// A single setter rather than a reducer: there is exactly one mutation ("record the latest
-// announcement"), so a discriminated-union action set would be a one-member union — ceremony without
-// benefit. Unidirectional is preserved: read-only selector, one write path, and `setAnnouncedModel` is
-// invoked only by the subscription wiring, never two-way-bound from a component.
+// Named setters rather than a reducer: the two mutations ("record the latest announcement" and, since
+// #593, "clear when the pairing that scoped it ends") are independent whole-value writes — neither
+// reads prior state and neither constrains the other's ordering — so there is no state machine for a
+// discriminated-union action set to model; it would still be ceremony without benefit. Unidirectional
+// is preserved: read-only selector, store-owned write paths, and both mutations are invoked only by
+// wiring (the subscription for one, the pairing-ended helper for the other), never two-way-bound from a
+// component.
 //
-// PAIRING-SCOPED, and DELIBERATELY ABSENT FROM clearPairingScopedState (#529). By that helper's own
+// PAIRING-SCOPED, and IN clearPairingScopedState's set (#529, joined by #593). By that helper's own
 // rule (clearPairingScopedState.ts:19-27) a pairing-scoped store that nothing re-asserts on the new
 // pairing belongs there, and this one qualifies: nothing on a fresh pairing re-asserts an announcement
-// — the next one arrives only with the next turn's init line, so a stale value would latch. It is left
-// out here because this slice ships DORMANT (nothing renders it, so a stale value is unobservable
-// until #560 builds the surface), because adding a clear would be a second mutation to a store whose
-// contract is "written only by wiring", and because it would take this ticket to five production
-// files. The clear rides with #560 or a follow-up filed against it — #560 is the ticket that makes a
-// stale value observable.
+// — the next one arrives only with the next turn's init line, so a stale value would otherwise latch,
+// and #560's sheet would attribute the previous server's identifier, and its `truncated` cut report,
+// to the newly paired one under a "Running model" header that carries no provenance marker.
+//
+// NOT on the transport's `connected` edge, the other mechanism, which is mutually exclusive with this
+// one by design — that helper's docstring (clearPairingScopedState.ts:22-26) excludes stores the
+// `connected` edge already clears. The discriminator is one question: does a reconnect to the SAME
+// daemon need to clear it? For backgroundTaskRosterStore yes, and its bridge branch is the sole
+// enforcement of #573's AC5 (backgroundTaskRosterBridge.ts:118-127). Here NO: after a reconnect to the
+// same daemon the held announcement still describes that daemon, and clearing it would blank a correct
+// value the sheet has no way to re-fetch — there is no request half on this path
+// (announcedModelBridge.ts:1-7), only the unsolicited announcement.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 
@@ -74,11 +83,12 @@ export interface AnnouncedModelState {
   announced: AnnouncedModel | null
 }
 
-/** Store shape = state + the single mutation entry point. The mutation lives here and NOT on
- *  `AnnouncedModelState`, so the selector — typed against the state-only interface — cannot see it and
- *  `initialAnnouncedModelState` stays assignable. */
+/** Store shape = state + the two mutation entry points. The mutations live here and NOT on
+ *  `AnnouncedModelState`, so the selector — typed against the state-only interface — cannot see them
+ *  and `initialAnnouncedModelState` stays assignable. */
 export type AnnouncedModelStore = AnnouncedModelState & {
   setAnnouncedModel: (announced: AnnouncedModel) => void
+  clearAnnouncedModel: () => void
 }
 
 export const initialAnnouncedModelState: AnnouncedModelState = { announced: null }
@@ -94,6 +104,23 @@ export const initialAnnouncedModelState: AnnouncedModelState = { announced: null
  * many announcements arrive — the store holds exactly one record and replaces it, so a flooding hostile
  * relay costs one allocation per frame, not an unbounded append.
  *
+ * `clearAnnouncedModel` (#593) returns the state to `initialAnnouncedModelState` for when the pairing
+ * that scoped the announcement ends — sourced from that exported constant rather than a fresh literal,
+ * so it keeps resetting everything if the state ever gains a second field. It restores the `null`
+ * not-yet-announced sentinel, never a `{ model: '', truncated: false }` record. It is unconditional and
+ * NEVER branches on the held content: a clear gated on the identifier (non-empty, catalog-matching, or
+ * otherwise) would let a hostile daemon craft a value that survives a pairing switch and is then
+ * attributed to the next daemon. Being unguarded is also what makes clearing an already-clear store a
+ * no-op by construction rather than by a guard.
+ *
+ * A `modelAnnounced` frame already queued on the IPC channel when the clear runs repopulates the store
+ * afterwards, because every write here is unconditional and last-write-wins: AnnouncedModelData is an
+ * App-level sibling of AppView (App.tsx:126-142), so the unpair route flip does not unmount its
+ * listener. That is the window sessionIdStore.ts:56-62 documents and deliberately leaves alone,
+ * inherited verbatim and for the same reason — guarding it belongs with the pairing lifecycle that owns
+ * the clear, not in a store whose whole contract is to record what it was told. It is bounded (the
+ * unpair tears the transport down) and self-correcting (the new daemon's first turn overwrites).
+ *
  * The stored value is the daemon's, as-is.
  */
 export function createAnnouncedModelStore(
@@ -101,7 +128,8 @@ export function createAnnouncedModelStore(
 ) {
   return createStore<AnnouncedModelStore>((set) => ({
     ...init,
-    setAnnouncedModel: (announced) => set({ announced })
+    setAnnouncedModel: (announced) => set({ announced }),
+    clearAnnouncedModel: () => set(initialAnnouncedModelState)
   }))
 }
 
@@ -113,7 +141,8 @@ export function useAnnouncedModelStore<T>(selector: (s: AnnouncedModelStore) => 
   return useStore(announcedModelStore, selector)
 }
 
-/** The only read surface. There is no exposed setter beyond `setAnnouncedModel`; it is the sole
- *  mutation path and is invoked only by the subscription wiring, never two-way-bound from a
+/** The only read surface. The exposed mutations are exactly `setAnnouncedModel` and
+ *  `clearAnnouncedModel`; both are store-owned and invoked only by wiring — the subscription for the
+ *  first, clearPairingScopedState (its sole caller) for the second — never two-way-bound from a
  *  component. */
 export const selectAnnouncedModel = (s: AnnouncedModelState): AnnouncedModel | null => s.announced

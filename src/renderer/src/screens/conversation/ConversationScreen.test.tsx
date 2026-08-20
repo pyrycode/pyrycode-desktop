@@ -351,6 +351,70 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
     expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('the assistant answers'))
   })
+
+  // #607: the whitespace-preservation anchor. `.bubble` sets no `white-space`, so the initial `normal`
+  // collapses every newline and space run and a multi-paragraph reply arrives as one run-on block. The
+  // rule that fixes it hangs on its OWN modifier — not on `.bubble` (which reaches the user bubble) and
+  // not on `.bubble--daemon` (which reaches the four chrome affordances) — so "unchanged elsewhere" is
+  // true BY CONSTRUCTION: the rule provably cannot reach an element that does not carry the class.
+  //
+  // This tier pins WHICH element carries it (a markup fact). What the browser then does with the
+  // declaration is a layout fact, unobservable under `environment: 'node'` (vitest.config.ts:27) with no
+  // DOM and no stylesheet — that half is e2e/assistant-whitespace.spec.ts.
+  it('carries the whitespace modifier on the assistant bubble, appended to the daemon treatment', () => {
+    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'hello there' }]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('bubble bubble--daemon bubble--assistant-text')
+    // Appended, never inserted: the daemon-bubble pair stays contiguous (the :113 assertion above).
+    expect(markup).toContain('bubble bubble--daemon')
+  })
+
+  it('renders the assistant text flush against its bubble tag and its cursor — no stray JSX whitespace', () => {
+    // Only matters once whitespace is preserved: a newline the JSX transform left between the opening tag
+    // and {item.text} (or between the text and the cursor) would become a VISIBLE blank under the rule.
+    // The transform strips whitespace-only lines containing a newline, so this already holds — this
+    // assertion is what keeps it holding.
+    const settled: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: 'settled reply' },
+      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+    ]
+    expect(renderToStaticMarkup(<Timeline items={settled} />)).toContain(
+      'data-thread-role="assistant">settled reply</div>'
+    )
+    // The in-progress tail: the cursor opens immediately after the text run, contributing no whitespace
+    // of its own, so it keeps its place at the end of the text (AC5).
+    const streaming: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'streaming reply' }]
+    expect(renderToStaticMarkup(<Timeline items={streaming} />)).toContain('streaming reply<span')
+  })
+
+  it('carries newlines and space runs into the markup verbatim — nothing upstream of CSS normalises', () => {
+    const text = 'First paragraph.\n\nSecond paragraph.\n    indented    and    spaced'
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text },
+      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+    ]
+    // React escapes markup characters, never whitespace, so the run survives byte-for-byte and the
+    // rendering is the ONLY place it was being discarded.
+    expect(renderToStaticMarkup(<Timeline items={items} />)).toContain(`>${text}</div>`)
+  })
+
+  it('leaves the user bubble and the four daemon-bubble affordances outside the rule (AC4, AC5)', () => {
+    const MODIFIER = 'bubble--assistant-text'
+    const userMarkup = renderToStaticMarkup(
+      <Timeline items={[{ kind: 'userText', text: 'typed by the operator' }]} />
+    )
+    expect(userMarkup).toContain('bubble bubble--user')
+    expect(userMarkup).not.toContain(MODIFIER)
+    expect(renderToStaticMarkup(<ThinkingIndicator isThinking={true} />)).not.toContain(MODIFIER)
+    expect(renderToStaticMarkup(<StallIndicator isStalled={true} />)).not.toContain(MODIFIER)
+    expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(MODIFIER)
+    const retryMarkup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 3, total: 10 }} />)
+    expect(retryMarkup).not.toContain(MODIFIER)
+    // AC4's one spot where a preserved space could have become visible: the counter's separator is a
+    // single space inside its own span, so it reads the same under either whitespace treatment.
+    expect(retryMarkup).toContain(`${API_RETRY_COPY}<span`)
+    expect(retryMarkup).toContain('> attempt 3/10<')
+  })
 })
 
 // #286: the session-boundary delimiter row (Figma node 16-35). Server-rendered with a FIXED `now` via

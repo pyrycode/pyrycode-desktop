@@ -895,6 +895,14 @@ bridges' hard `assertNever`, see [#203 codebase notes § Patterns established](.
 - `assistantText` → one bubble, text as React children (never `dangerouslySetInnerHTML` — HTML inside
   a delta renders as visible characters, discharging #199's untrusted-text handoff), carrying
   `data-thread-role="assistant"` as the test hook (`MessageThread`'s `data-message-role` counterpart).
+  Since [#607](../codebase/607.md), this bubble also carries a dedicated `.bubble--assistant-text`
+  modifier (`white-space: pre-wrap`) so a multi-paragraph reply keeps its blank lines and space runs
+  instead of collapsing to one run-on line — hung on its own class rather than `.bubble--daemon` so
+  the four chrome affordances below (thinking/stall/api-retry/compacting) and the coarse path's
+  `.bubble--user` are structurally unreachable by the rule. This plain-text path is deliberately kept
+  once markdown rendering lands (#608/#609/#610): the in-progress streaming-cursor tail always
+  renders as plain text so it's never shown half-parsed, and that tail needs this whitespace rule
+  permanently.
 - `toolCall` → the tool-row chip ([#218](#pending-tool-call-row-218), below) — no longer a no-op as
   of that ticket; the resolved success/error treatment ([#230](#resolved-tool-call-row-230), below)
   lifted the pending dimming and added the error accent.
@@ -905,7 +913,10 @@ aria-hidden="true">` inside the in-progress bubble, rendered only on the tail it
 `item.kind === 'assistantText'` — derived from array position, never from `selectPhase` (which had no
 source at the time; [#214](../codebase/214.md) later wired one up, but this render still doesn't read
 it — the thinking indicator is a separate, still-open slice). CSS blink guarded by
-`@media (prefers-reduced-motion: reduce)`.
+`@media (prefers-reduced-motion: reduce)`. Since #607's `pre-wrap` rule, a reply whose text ends in a
+newline now carries the cursor onto the following line — the whitespace rule working as intended, not
+a regression; the cursor `<span>` sits flush against `{item.text}` in the JSX with no intervening
+whitespace so no extra blank line is introduced by the markup itself.
 
 **React key = array index**, deliberately: the reducer's `appendDelta`/`fillResult` invariants
 guarantee the list is append-only with tail-mutation, never reordering or inserting mid-list, so index

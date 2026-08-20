@@ -36,6 +36,12 @@ interface ModelCatalogEntry {
 const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
   { family: 'opus', name: 'Opus 4.7', descriptor: 'best for complex work' },
   { family: 'sonnet', name: 'Sonnet 4.6', descriptor: 'faster, cheaper' },
+  // #590 — Fable is a published family the sheet offered no way to reach. Not drawn in Figma (the
+  // file has three rows); the row is derived from the drawn ones, which is exact because every row is
+  // emitted by the map below. The descriptor is deliberately not a when-to-pick-it line like its
+  // siblings: naming one means a capability claim unverifiable from this repo. Position is display
+  // order only — matching is first-match-wins, and no real model id carries two family tokens.
+  { family: 'fable', name: 'Fable 5', descriptor: 'newest in the Fable family' },
   { family: 'haiku', name: 'Haiku 4.5', descriptor: 'fastest' }
 ]
 
@@ -158,7 +164,7 @@ function ModelSection({
         {MODEL_CATALOG.map((entry) => {
           const isSelected = entry.family === selected
           // onSelect present ⇒ the row is an operable button that submits its family token
-          // ('opus'/'sonnet'/'haiku'); it round-trips — matchedFamily re-selects the same row from the
+          // ('opus'/'sonnet'/'fable'/'haiku'); it round-trips — matchedFamily re-selects the same row from the
           // optimistic overlay, and the token is a valid `claude --model` alias. Absent ⇒ #188's inert
           // row (no role/tabindex/handler). Click is the baseline affordance (spec); keyboard activation
           // (Enter/Space) is a deliberate non-goal here.

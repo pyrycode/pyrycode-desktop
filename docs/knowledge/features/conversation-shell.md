@@ -764,13 +764,17 @@ coalesces `snapshot ?? { model: '', effort: '', yolo: false }` before handing th
 through the identical code path (both are AC4's blessed default: no radio filled, no segment marked,
 switch off).
 
-- **Model** — a static three-entry catalog (Opus 4.7 / Sonnet 4.6 / Haiku 4.5, each with a one-line
-  descriptor) is renderer content from the design, not daemon data; the snapshot's `model` string
-  only selects a row via `matchedFamily`, a case-insensitive substring match against each catalog
-  entry's family token (`opus`/`sonnet`/`haiku`). That handles both the short alias the wire fixture
-  uses (`"opus"`) and a full `claude --model` id (`"claude-opus-4-7"`) with one rule, and degrades to
-  no selection for `''` or anything unrecognized. The selected row's radio is `role="img"
-  aria-label="Current model"`; the other two are `aria-hidden`.
+- **Model** — a static catalog (Opus 4.7 / Sonnet 4.6 / Haiku 4.5, each with a one-line descriptor)
+  is renderer content from the design, not daemon data; the snapshot's `model` string only selects a
+  row via `matchedFamily`, a case-insensitive substring match against each catalog entry's family
+  token (`opus`/`sonnet`/`haiku`). That handles both the short alias the wire fixture uses
+  (`"opus"`) and a full `claude --model` id (`"claude-opus-4-7"`) with one rule, and degrades to no
+  selection for `''` or anything unrecognized. The selected row's radio is `role="img"
+  aria-label="Current model"`; the others are `aria-hidden`. [#590](../codebase/590.md) added a
+  fourth entry, `Fable 5` / `newest in the Fable family` (family token `fable`), between Sonnet and
+  Haiku — the published family the catalog previously made unreachable from the app; matching,
+  layout and the read-only render posture above are unchanged, since the row is emitted by the same
+  `map` and no vector collides two family tokens.
 - **Effort** — five fixed segments (`low`/`medium`/`high`/`xhigh`/`max`) matched by exact equality;
   the current level carries `aria-current="true"`, which is both the accessibility marker and the
   CSS hook (`[aria-current='true']`) for the filled-pill style — no parallel modifier class.

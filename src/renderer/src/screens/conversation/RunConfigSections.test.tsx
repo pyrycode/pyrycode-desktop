@@ -75,6 +75,62 @@ describe('RunConfigView — Model', () => {
     expect(markup.match(/Current model/g)?.length).toBe(1)
   })
 
+  // #590 — the Fable family. `entry.family` is ONE field with TWO uses: the token handed to onSelect
+  // and the token matchedFamily substring-matches the daemon's model against. So rendering with the
+  // bare alias and observing the row marked exercises the same literal the row submits — the
+  // round-trip proof, without a click the `node` env cannot fire.
+  it('marks the Fable row for the resolved id "claude-fable-5" (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView model="claude-fable-5" effort="" yolo={false} {...NO_USAGE} />
+    )
+    expect(segmentFor(markup, 'run-config__model-row', 'Fable 5')).toContain('Current model')
+    expect(markup.match(/Current model/g)?.length).toBe(1)
+  })
+
+  it('marks that same row for the bare alias "fable" — the token the row submits (AC3)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView model="fable" effort="" yolo={false} {...NO_USAGE} />)
+    expect(segmentFor(markup, 'run-config__model-row', 'Fable 5')).toContain('Current model')
+    expect(markup.match(/Current model/g)?.length).toBe(1)
+  })
+
+  it('steals no existing match — each sibling vector still marks its own single row (AC4)', () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['opus', 'Opus 4.7'],
+      ['sonnet', 'Sonnet 4.6'],
+      ['haiku', 'Haiku 4.5'],
+      ['claude-opus-5', 'Opus 4.7'],
+      ['claude-sonnet-4-6', 'Sonnet 4.6']
+    ]
+    for (const [model, row] of cases) {
+      const markup = renderToStaticMarkup(<RunConfigView model={model} effort="" yolo={false} {...NO_USAGE} />)
+      expect(segmentFor(markup, 'run-config__model-row', row)).toContain('Current model')
+      expect(segmentFor(markup, 'run-config__model-row', 'Fable 5')).not.toContain('Current model')
+      expect(markup.match(/Current model/g)?.length).toBe(1)
+    }
+  })
+
+  // Per-row, via segmentFor: the whole-markup role="button" assertion in the interactive-toggle block
+  // is satisfied by the other three rows and proves nothing about this one. Fable sits third of four,
+  // so its chunk is bounded by the Haiku row — the inert case is a tight negative, not an open-ended
+  // tail that would swallow the effort segments and the YOLO switch.
+  it('is operable on the same terms as its siblings, and inert without a handler (AC5)', () => {
+    const props = { model: 'fable', effort: '', yolo: false, ...NO_USAGE } as const
+    const operable = segmentFor(
+      renderToStaticMarkup(<RunConfigView {...props} onChange={(): void => undefined} />),
+      'run-config__model-row',
+      'Fable 5'
+    )
+    expect(operable).toContain('role="button"')
+    expect(operable).toContain('tabindex="0"')
+    const inert = segmentFor(
+      renderToStaticMarkup(<RunConfigView {...props} />),
+      'run-config__model-row',
+      'Fable 5'
+    )
+    expect(inert).not.toContain('role="button"')
+    expect(inert).not.toContain('tabindex')
+  })
+
   it('marks no row for the empty model (AC4 default) or an unrecognized model', () => {
     for (const model of ['', 'some-unknown-model']) {
       const markup = renderToStaticMarkup(<RunConfigView model={model} effort="" yolo={false} {...NO_USAGE} />)
@@ -82,7 +138,7 @@ describe('RunConfigView — Model', () => {
     }
   })
 
-  it('always renders all three names and descriptors, matched or not', () => {
+  it('always renders all four names and descriptors, matched or not', () => {
     for (const model of ['opus', '', 'gibberish']) {
       const markup = renderToStaticMarkup(<RunConfigView model={model} effort="" yolo={false} {...NO_USAGE} />)
       for (const text of [
@@ -90,6 +146,8 @@ describe('RunConfigView — Model', () => {
         'best for complex work',
         'Sonnet 4.6',
         'faster, cheaper',
+        'Fable 5',
+        'newest in the Fable family',
         'Haiku 4.5',
         'fastest'
       ]) {

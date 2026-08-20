@@ -85,7 +85,8 @@ const HAPPY_EFFORT = 'high'
 const REJECTED_MODEL = 'haiku'
 
 // The mutually-non-substring model row display names (RunConfigSections MODEL_CATALOG) — the unique
-// locators for the three model rows, which share `.run-config__model-row`.
+// locators for the model rows, which share `.run-config__model-row`. The catalog has four rows since
+// #590 added Fable; this spec exercises three of them and needs no locator for the fourth.
 const OPUS_ROW = 'Opus 4.7'
 const SONNET_ROW = 'Sonnet 4.6'
 const HAIKU_ROW = 'Haiku 4.5'
@@ -177,7 +178,7 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
     buildReplyFrames: capturingRunConfigFake(captured)
   })
 
-  // Per-control locators. `.run-config__model-row` (3) and `.run-config__effort-segment` (5) are not
+  // Per-control locators. `.run-config__model-row` (4) and `.run-config__effort-segment` (5) are not
   // unique, so scope by display text: model rows by their mutually-non-substring names, effort segments by
   // an ANCHORED regex (bare 'high' is a substring of 'xhigh', so `/^high$/` avoids the false match). The
   // selected-model marker (radio, aria-label="Current model") is scoped WITHIN its row, never by class.

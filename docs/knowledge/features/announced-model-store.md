@@ -8,7 +8,10 @@ answer on an un-overridden daemon.
 Introduced in [#588](../codebase/588.md), consuming the `modelAnnounced` daemon event
 [#587](../codebase/587.md) already decodes off claude's `system` / `init` line. Shipped dormant at
 #588; rendered by [#560](../codebase/560.md)'s `RunningModelSection`, the sixth section of
-`RunConfigView` — see [Run configuration store](run-config-store.md) § Running model section.
+`RunConfigView` — see [Run configuration store](run-config-store.md) § Running model section. Cleared
+when a pairing ends, both on the unpair route flip and the pair-another-server transition, by
+[#593](../codebase/593.md) — see § Edge cases below and [Paired shell](paired-shell.md) for the shared
+clear helper.
 
 ## What it does
 
@@ -42,7 +45,10 @@ announced), and `runConfigStore`'s own `snapshot: null` already spends its not-y
 ```ts
 export interface AnnouncedModel { model: string; truncated: boolean }
 export interface AnnouncedModelState { announced: AnnouncedModel | null }  // null = not yet announced
-export type AnnouncedModelStore = AnnouncedModelState & { setAnnouncedModel: (a: AnnouncedModel) => void }
+export type AnnouncedModelStore = AnnouncedModelState & {
+  setAnnouncedModel: (a: AnnouncedModel) => void
+  clearAnnouncedModel: () => void   // #593 — returns to initialAnnouncedModelState, by reference
+}
 
 createAnnouncedModelStore(init?)     // vanilla createStore — one isolated instance per test (DI seam)
 announcedModelStore                  // app-wide singleton
@@ -57,11 +63,23 @@ value before any announcement exists, contradicting "`false` is a value, never a
 both fields behind one nullable record makes "not yet announced" a single sentinel and makes every
 field of a present record a real daemon-delivered value by construction.
 
-A single setter rather than a reducer — exactly one mutation ("record the latest announcement"), so a
-discriminated-union action set would be ceremony without benefit. `setAnnouncedModel` replaces the whole
-`announced` record unconditionally: no merge, no coercion, no validation. Memory is O(1) regardless of
-announcement volume — the store holds exactly one record and replaces it, so a flooding hostile relay
-costs one allocation per frame, not an unbounded append.
+Named setters rather than a reducer — the two mutations ("record the latest announcement" and, since
+#593, "clear when the pairing that scoped it ends") are independent whole-value writes that neither read
+prior state nor constrain each other's ordering, so a discriminated-union action set would still be
+ceremony without benefit. `setAnnouncedModel` replaces the whole `announced` record unconditionally: no
+merge, no coercion, no validation. Memory is O(1) regardless of announcement volume — the store holds
+exactly one record and replaces it, so a flooding hostile relay costs one allocation per frame, not an
+unbounded append.
+
+`clearAnnouncedModel` ([#593](../codebase/593.md)) returns the state to the exported
+`initialAnnouncedModelState` — unconditional and sourced from that constant rather than a fresh literal,
+so it keeps resetting everything if the state ever gains a second field, and so clearing an already-clear
+store is a no-op by construction rather than by a guard. It restores the `null` not-yet-announced
+sentinel, never a `{ model: '', truncated: false }` record — the one case that distinguishes the store's
+two sentinels (see above). It is invoked only by [`clearPairingScopedState`](paired-shell.md), never
+two-way-bound from a component, and it never branches on the held content: a clear gated on the
+identifier would let a hostile daemon craft a value that survives a pairing switch and is then
+attributed to the next daemon.
 
 ### The data path (`src/renderer/src/store/announcedModelBridge.ts`)
 
@@ -131,13 +149,16 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 - **No dedup of a verbatim repeat, by design.** N daemon frames — including an identical repeat — produce
   N writes and N fresh object identities, so a component selecting `selectAnnouncedModel` re-renders on
   a repeat too. #560 memoises if that ever matters; this store does not pre-empt it.
-- **Still absent from `clearPairingScopedState`, as of #560.** The store is pairing-scoped (nothing
-  on a fresh pairing re-asserts an announcement — the next one arrives only with the next turn's
-  init line), which by that helper's own rule means it belongs there — and now that #560 renders it,
-  a stale value from a prior pairing is observable, not merely latent. #588 recommended folding the
-  fix into #560; it did not land there (zero file overlap, confirmed during #560's scope check) and
-  is tracked instead as its own ticket, **#593** — see [#560 codebase notes](../codebase/560.md)
-  § Deferred.
+- **Cleared on both pairing-change paths, since #593.** The store is pairing-scoped — nothing on a
+  fresh pairing re-asserts an announcement, the next one arrives only with the next turn's init line —
+  so it is a member of [`clearPairingScopedState`](paired-shell.md)'s shared set rather than cleared at
+  either call site. #588 shipped the store without this (the deferral was harmless while the slice
+  rendered nowhere); #560 made a stale value observable (the sheet would attribute server A's
+  identifier, and its `truncated` cut report, to server B with no provenance marker); #593 closed it.
+  **Not** on the transport's `connected` edge — the mutually exclusive alternative mechanism
+  `backgroundTaskRosterStore` uses — because a reconnect to the *same* daemon leaves the held
+  announcement accurate; there is no re-handshake staleness case for this store the way there is for
+  the task roster.
 - **No correlation, no request half.** The daemon pushes `modelAnnounced` unsolicited off the turn's
   init line; there is no `requestAnnouncedModel` command and nothing to time out or retry.
 
@@ -160,5 +181,7 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
   sentinel); § Running model section documents this store's consumer, `RunConfigView`'s sixth
   section.
 - [#560 codebase notes](../codebase/560.md) — the render consumer: `runningCatalogEntry`'s exact-
-  match lookup, the render contract for the three states, the sibling-element cut marker, and the
-  deferred pairing-scoped clear (filed as #593).
+  match lookup, the render contract for the three states, and the sibling-element cut marker.
+- [#593 codebase notes](../codebase/593.md) — `clearAnnouncedModel` and its join into
+  [`clearPairingScopedState`](paired-shell.md)'s shared set, closing the deferral #588 flagged and #560
+  made observable.

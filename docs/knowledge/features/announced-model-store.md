@@ -2,12 +2,13 @@
 
 The renderer's held copy of **the model claude announced for the running turn** — a dedicated,
 unidirectional Zustand store fed by a reactive-only headless observer, so the run-configuration sheet
-(#560) can eventually answer "what is actually running", a question the daemon's persisted per-session
-override cannot answer on an un-overridden daemon.
+can answer "what is actually running", a question the daemon's persisted per-session override cannot
+answer on an un-overridden daemon.
 
 Introduced in [#588](../codebase/588.md), consuming the `modelAnnounced` daemon event
-[#587](../codebase/587.md) already decodes off claude's `system` / `init` line. Shipped **dormant** —
-nothing renders it yet; [#560](run-config-store.md) (open) is the consumer.
+[#587](../codebase/587.md) already decodes off claude's `system` / `init` line. Shipped dormant at
+#588; rendered by [#560](../codebase/560.md)'s `RunningModelSection`, the sixth section of
+`RunConfigView` — see [Run configuration store](run-config-store.md) § Running model section.
 
 ## What it does
 
@@ -107,12 +108,12 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
                                      → translateModelAnnounced → setAnnouncedModel
                                      → announcedModelStore                        [most recent announcement wins]
 
-#560 (open): useAnnouncedModelStore(selectAnnouncedModel) → run-configuration sheet's "what is running" row
+#560: useAnnouncedModelStore(selectAnnouncedModel) → RunningModelSection, the sheet's sixth section
 ```
 
 ## Configuration and usage
 
-- **Import surface**, for #560 to consume:
+- **Import surface**, consumed by [#560](../codebase/560.md)'s `RunningModelSection`:
   `import { useAnnouncedModelStore, selectAnnouncedModel } from '@renderer/store/announcedModelStore'`.
 - **Mount point:** `src/renderer/src/App.tsx`, `<AnnouncedModelData />` after `<BackgroundTaskRosterData />`.
 - **Single current value, not a per-conversation map** — `conversation_id` is dropped at the #587 emit
@@ -121,22 +122,22 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 
 ## Edge cases and limitations
 
-- **Untrusted text, no DOM sink here.** `model` is model-influenced daemon-relayed text, bounded to 256
-  bytes by the daemon's producer but not sanitised — no control-character or terminal-escape stripping
-  anywhere on this path. This slice has no render surface, so the plain-text-never-HTML discipline is
-  inherited rather than discharged: #560 owns the only DOM sink and must never place `model` into
-  `innerHTML`, an attribute, or a URL.
+- **Untrusted text, one DOM sink, downstream of this store.** `model` is model-influenced
+  daemon-relayed text, bounded to 256 bytes by the daemon's producer but not sanitised — no
+  control-character or terminal-escape stripping anywhere on this path. [#560](../codebase/560.md)'s
+  `RunningModelSection` is the only DOM sink: one JSX text position, never `innerHTML`, an attribute,
+  or a URL, and the resolved catalog display name (client-owned) is never mixed into the same node as
+  the daemon-supplied verbatim text.
 - **No dedup of a verbatim repeat, by design.** N daemon frames — including an identical repeat — produce
   N writes and N fresh object identities, so a component selecting `selectAnnouncedModel` re-renders on
   a repeat too. #560 memoises if that ever matters; this store does not pre-empt it.
-- **Deliberately absent from `clearPairingScopedState`, as of #588.** The store is pairing-scoped
-  (nothing on a fresh pairing re-asserts an announcement — the next one arrives only with the next
-  turn's init line), which by that helper's own rule means it belongs there. It was left out at #588
-  because the store still ships dormant (a stale value is unobservable until #560 renders it), because
-  a clear would be a second mutation to a store contracted as "written only by wiring", and because
-  adding it would have pushed #588 to five production files. **Recommended, not yet ticketed:** fold
-  `clearAnnouncedModel` + a `ClearPairingScopedStateDeps` entry into #560 — see
-  [#588 codebase notes](../codebase/588.md) § Deferred.
+- **Still absent from `clearPairingScopedState`, as of #560.** The store is pairing-scoped (nothing
+  on a fresh pairing re-asserts an announcement — the next one arrives only with the next turn's
+  init line), which by that helper's own rule means it belongs there — and now that #560 renders it,
+  a stale value from a prior pairing is observable, not merely latent. #588 recommended folding the
+  fix into #560; it did not land there (zero file overlap, confirmed during #560's scope check) and
+  is tracked instead as its own ticket, **#593** — see [#560 codebase notes](../codebase/560.md)
+  § Deferred.
 - **No correlation, no request half.** The daemon pushes `modelAnnounced` unsolicited off the turn's
   init line; there is no `requestAnnouncedModel` command and nothing to time out or retry.
 
@@ -156,4 +157,8 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
   reactive-only, App-lifetime holder with no request half.
 - [Run configuration store](run-config-store.md) — the sibling store this ticket deliberately did
   **not** fold the announcement into (lifecycle mismatch, name collision on `model`, spent `null`
-  sentinel); #560, its future consumer, is tracked there.
+  sentinel); § Running model section documents this store's consumer, `RunConfigView`'s sixth
+  section.
+- [#560 codebase notes](../codebase/560.md) — the render consumer: `runningCatalogEntry`'s exact-
+  match lookup, the render contract for the three states, the sibling-element cut marker, and the
+  deferred pairing-scoped clear (filed as #593).

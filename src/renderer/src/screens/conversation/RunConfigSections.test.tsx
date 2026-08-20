@@ -490,6 +490,197 @@ describe('RunConfigView — pending marker (#558)', () => {
   })
 })
 
+// #560: the running-model surface — what claude ANNOUNCED (#587 decodes it, #588 holds it), rendered
+// beside the Model rows, which keep showing the daemon's persisted OVERRIDE. Read-only: the view
+// dispatches nothing derived from the announcement, so these assert markup only.
+//
+// The prop is OPTIONAL and its absence IS the not-yet-known state. That is what keeps every render site
+// above compiling and passing unmodified — and why the unknown copy renders in all of them, so it must
+// collide with none of their assertions ('Current model', aria-*, role=*, '% used', 'Could not change').
+//
+// The value is asserted as an EXACT SERIALIZED ELEMENT because AC2 is literally "character for
+// character": a `toContain(model)` would also pass if the identifier were trimmed into a neighbouring
+// node, and would say nothing about which element received it.
+describe('RunConfigView — running model (#560)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+  const UNKNOWN = 'Running model not yet known'
+  const CUT = 'Truncated by the daemon'
+  const value = (text: string): string => `<p class="run-config__running-value">${text}</p>`
+  const cut = `<p class="run-config__running-cut">${CUT}</p>`
+
+  it('states that the running model is not yet known before any announcement (AC4)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} />)
+    expect(markup).toContain('<p class="status-sheet__section-header">Running model</p>')
+    expect(markup).toContain(UNKNOWN)
+    // No value element AT ALL — not a blank one — and no cut marker.
+    expect(markup).not.toContain('run-config__running-value')
+    expect(markup).not.toContain('run-config__running-cut')
+  })
+
+  it('renders byte-identical markup for an explicit null and an omitted prop (AC4)', () => {
+    expect(renderToStaticMarkup(<RunConfigView {...base} announced={null} />)).toBe(
+      renderToStaticMarkup(<RunConfigView {...base} />)
+    )
+  })
+
+  it('names the row an exactly-equal identifier resolves to (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model: 'opus', truncated: false }} />
+    )
+    expect(markup).toContain(value('Opus 4.7'))
+    expect(markup).not.toContain(UNKNOWN)
+    // Naming the row IS "identifies that row": no second selection marker joins the list, which is what
+    // keeps the six 'Current model' count assertions (and the page-wide e2e count) honest.
+    expect(markup).not.toContain('Current model')
+  })
+
+  it('resolves every catalog token to its own display name (AC1)', () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['opus', 'Opus 4.7'],
+      ['sonnet', 'Sonnet 4.6'],
+      ['fable', 'Fable 5'],
+      ['haiku', 'Haiku 4.5']
+    ]
+    for (const [model, name] of cases) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView {...base} announced={{ model, truncated: false }} />
+      )
+      expect(markup).toContain(value(name))
+    }
+  })
+
+  it('misses on a case-folded or padded token and renders it verbatim (AC1/AC2)', () => {
+    // The assertion that fails if anyone reintroduces toLowerCase or trim.
+    for (const model of ['Opus', 'OPUS', ' opus']) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView {...base} announced={{ model, truncated: false }} />
+      )
+      expect(markup).toContain(value(model))
+      expect(markup).not.toContain(value('Opus 4.7'))
+    }
+  })
+
+  it('misses on a superstring of a token — never matchedFamily substring matching (AC1/AC2)', () => {
+    // The assertion that fails if anyone swaps the exact lookup for the override's matchedFamily.
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model: 'claude-opus-4-7', truncated: false }} />
+    )
+    expect(markup).toContain(value('claude-opus-4-7'))
+    expect(markup).not.toContain(value('Opus 4.7'))
+    expect(markup).not.toContain('Current model')
+  })
+
+  it('renders a full unrecognized identifier character for character (AC2)', () => {
+    const model = 'claude-haiku-4-5-20251001'
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model, truncated: false }} />
+    )
+    expect(markup).toContain(value(model))
+    expect(markup).not.toContain(UNKNOWN)
+  })
+
+  it('renders an announced empty identifier as a present, empty value — never not-yet-known', () => {
+    // `{ model: '' }` is a real announcement a non-conforming daemon can emit; collapsing it into the
+    // null sentinel would erase the store's deliberate null-vs-'' distinction one layer above.
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model: '', truncated: false }} />
+    )
+    expect(markup).toContain(value(''))
+    expect(markup).not.toContain(UNKNOWN)
+  })
+
+  it('marks a cut identifier with its own sibling element (AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model: 'claude-opus-4-', truncated: true }} />
+    )
+    // Adjacent siblings: the value element CLOSES before the marker opens, so the sheet's own words are
+    // never inside the daemon-supplied node. Asserting the pair as one serialized run is the whole
+    // structural claim — an incomplete identifier is distinguishable in the markup from a complete one
+    // the sheet merely did not recognise.
+    expect(markup).toContain(`${value('claude-opus-4-')}${cut}`)
+  })
+
+  it('renders no cut marker when nothing was cut (AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model: 'claude-opus-4-7', truncated: false }} />
+    )
+    expect(markup).not.toContain('run-config__running-cut')
+    expect(markup).not.toContain(CUT)
+  })
+
+  it('reports a cut independently of whether the identifier resolved', () => {
+    // The flag is the daemon reporting on the identifier it delivered. Gating the marker on the lookup
+    // MISSING would let a daemon suppress its own cut report by sending a value equal to a catalog token.
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model: 'opus', truncated: true }} />
+    )
+    expect(markup).toContain(value('Opus 4.7'))
+    expect(markup).toContain(cut)
+  })
+
+  it('cannot have its cut claim forged by an identifier ending in the same words (AC3)', () => {
+    const model = `claude-x ${CUT}`
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model, truncated: false }} />
+    )
+    // The words appear — inside the daemon's own node, verbatim — but the sheet's marker ELEMENT does
+    // not exist. Structural on purpose: `not.toContain(CUT)` would fail on a CORRECT render here.
+    expect(markup).toContain(value(model))
+    expect(markup).not.toContain('run-config__running-cut')
+  })
+
+  it('renders a hostile identifier as inert escaped text (AC5)', () => {
+    for (const model of [
+      '<img src=x onerror="alert(1)">',
+      'javascript:alert(1)',
+      '" onmouseover="x',
+      '\u001b[31mred\u0007'
+    ]) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView {...base} announced={{ model, truncated: false }} />
+      )
+      // Attribute-shaped guards, NEVER not.toContain('onerror=') / ('src=') / ('javascript:') — those
+      // substrings survive a CORRECT render (React escapes markup metacharacters, not arbitrary text),
+      // so they would pass vacuously. renderToStaticMarkup always quotes attribute values and escapes
+      // the quote, so no attribute and no URL can be forged out of escaped text.
+      expect(markup).not.toContain('<img')
+      expect(markup).not.toContain('src="')
+      expect(markup).not.toContain('href="')
+      expect(markup).not.toMatch(/\son[a-z]+="/)
+    }
+  })
+
+  it('escapes markup metacharacters into the value element (AC5)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        announced={{ model: '<img src=x onerror="alert(1)">', truncated: false }}
+      />
+    )
+    expect(markup).toContain(value('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;'))
+  })
+
+  it('passes control characters and terminal escapes through verbatim (AC2/AC5)', () => {
+    // Written as \u escapes in SOURCE — a typed control byte lands raw in the file. Nothing on this path
+    // strips them, which is the contract: the identifier is held verbatim, and a control character in a
+    // DOM text node is inert in a browser renderer.
+    const model = '\u001b[31mred\u0007'
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} announced={{ model, truncated: false }} />
+    )
+    expect(markup).toContain(value(model))
+  })
+
+  it('leaves the override marking alone — the two surfaces are independent', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} model="opus" announced={{ model: 'claude-unknown-9', truncated: false }} />
+    )
+    // The override still marks its own row, exactly as today, and the running surface adds no marker.
+    expect(markup.match(/Current model/g)?.length).toBe(1)
+    expect(markup).toContain(value('claude-unknown-9'))
+  })
+})
+
 describe('RunConfigSections (container)', () => {
   it('server-renders the AC4 default without touching window.pyry', () => {
     // useStore reads getInitialState() (snapshot:null) under server render, so the container always
@@ -518,5 +709,8 @@ describe('RunConfigSections (container)', () => {
     // The static catalog + labels still render.
     expect(markup).toContain('Opus 4.7')
     expect(markup).toContain('>low<')
+    // #560: the fourth store read is wired and still needs no bridge mock — under server render zustand
+    // reads getInitialState() (announced: null), so the container renders the not-yet-known state.
+    expect(markup).toContain('Running model not yet known')
   })
 })

@@ -1556,6 +1556,49 @@
   font-weight: var(--text-body-large-weight);
 }
 
+/* #560 — the running-model surface, sitting above the Model rows. No Figma frame draws it (the sheet's
+   five drawn sections hold no running-model state), so the geometry and the token set are cloned from
+   the Context window body above rather than invented. The added section scrolls inside the sheet:
+   .status-sheet is max-height: 90% and .status-sheet__body is overflow-y: auto; min-height: 0. */
+
+/* The body frame — the .run-config__context clone: pt 4 / px 16 / pb 16, gap 8. */
+.run-config__running {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4) var(--space-4);
+}
+
+/* The identifier (or, on an exact hit, the catalog display name) — body-large on-surface, matching the
+   usage line it sits parallel to. overflow-wrap is NOT decoration: the identifier is a 256-byte daemon
+   string with no guaranteed break opportunity, so without it a single unbroken token pushes the sheet
+   into horizontal overflow. Breaking it is the right remedy rather than truncating, which would violate
+   the verbatim contract and re-introduce the very ambiguity the cut marker exists to remove
+   (.background-task-panel__description carries the same pairing and rationale). */
+.run-config__running-value {
+  margin: 0;
+  min-width: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+  overflow-wrap: anywhere;
+}
+
+/* The not-yet-known line and the cut marker — muted body-small (the .run-config__context-explainer
+   token set). NEITHER is an error state, so neither takes --color-error: not-yet-known is expected
+   before the first turn, and a cut is the daemon reporting its own bound. */
+.run-config__running-unknown,
+.run-config__running-cut {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
 /* #276 — the thread top app bar's trailing overflow menu (Figma node 16-16): the single entry point to
    per-conversation actions, opening the Channel Info sheet first (#155). The wrapper anchors the trigger
    to the top-right corner of .conversation (the position: relative containing block), balancing the

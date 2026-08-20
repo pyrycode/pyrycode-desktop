@@ -68,12 +68,56 @@ const LONG_TOKEN_TEXT = 'sha256deadbeefcafe'.repeat(12)
 // `white-space: pre` DECLARATION that beats .bubble's inherited value, so the code body only wraps if
 // .bubble__markdown re-declares pre-wrap (Figma 16:49).
 const CODE_TEXT = ['```', LONG_TOKEN_TEXT, '```'].join('\n')
-// Three consecutive markdown blocks of three DIFFERENT element types, so a margin reset written narrowly
-// (say `> p` only) fails the rhythm measurement the same way a missing one does. Assembled with join('\n')
-// — an indented template literal would put four leading spaces on each line, which CommonMark reads as an
-// indented code block.
-const RHYTHM_TEXT = ['Alpha paragraph.', '', '## Beta heading', '', '- Gamma item'].join('\n')
-const RHYTHM_BLOCK_COUNT = 3
+// Five consecutive markdown blocks. The first three are #609's, three DIFFERENT element types so a margin
+// reset written narrowly (say `> p` only) fails the rhythm measurement the same way a missing one does;
+// #628 reads the <h2> for its type quartet. The blockquote and the ordered list are #629's, and they carry
+// all four of its nested cases: the quote holds a paragraph, a paragraph, a list and a nested quote, and
+// the ordered list is LOOSE — blank lines between and inside its items — which is the only thing that makes
+// react-markdown emit a <p> inside an <li>. (A tight item is bare inline content, which is why `- Gamma
+// item` above yields `<li>Gamma item</li>` and no paragraph.) Its second item ends in a nested list, which
+// puts a depth-2 list in the DOM for the indent monotonicity check.
+//
+// EXTENDED IN PLACE rather than answered with a sixth turn: the reply stream is indexed positionally
+// (CONTROL / SPACE_RUN / CODE / RHYTHM / TAIL) and an added turn would shift every index above. No second
+// <h2> for the same reason in reverse — #628's readHeadingTypeMetrics resolves `.bubble__markdown h2` and
+// would go strict-mode ambiguous.
+//
+// Assembled with join('\n') — an indented template literal would put four leading spaces on each line,
+// which CommonMark reads as an indented code block. The three leading spaces inside the ordered list are
+// deliberate and are its items' content column, which is what makes the continuation lines part of the item
+// rather than a new block.
+const RHYTHM_TEXT = [
+  'Alpha paragraph.',
+  '',
+  '## Beta heading',
+  '',
+  '- Gamma item',
+  '',
+  '> Delta quoted paragraph.',
+  '>',
+  '> Epsilon quoted paragraph.',
+  '>',
+  '> - Zeta quoted item',
+  '>',
+  '> > Eta nested quote.',
+  '',
+  '1. Theta first paragraph.',
+  '',
+  '   Iota second paragraph.',
+  '',
+  '2. Kappa first paragraph.',
+  '',
+  '   - Lambda nested item'
+].join('\n')
+const RHYTHM_BLOCK_COUNT = 5
+// The blockquote's four children and each loose item's two, asserted as the vacuity guard on every nested
+// measurement below: a fixture that stopped parsing the way CommonMark says it should would otherwise
+// report empty gap arrays and pass every loop.
+const RHYTHM_QUOTE_CHILD_COUNT = 4
+const RHYTHM_LOOSE_ITEM_CHILD_COUNTS = [2, 2]
+// Every ul/ol the fixture puts in the container: the tight `- Gamma item`, the one inside the blockquote,
+// the loose <ol>, and the depth-2 list inside its second item.
+const RHYTHM_LIST_COUNT = 4
 // The still-streaming tail. SINGLE newlines, not blank lines, and that choice is what makes the height
 // comparison discriminating: `pre-wrap` renders three line boxes, while CommonMark reads a single newline
 // as a SOFT break and `normal` collapses it to a space, giving one. A blank-line fixture would not tell
@@ -94,6 +138,18 @@ const TAIL = 4
 // disagree by 1 on a box that does not actually overflow. The same tolerance absorbs subpixel drift in the
 // box-to-box distances below.
 const SUBPIXEL_TOLERANCE_PX = 1
+
+// The width an `outside` list marker needs to the LEFT of the list's content box, at the bubble's
+// body-medium. THE ONLY LITERALS EITHER #629 TEST INTRODUCES, and they are unavoidable: these are font
+// metrics rather than theme values, ::marker exposes no geometry API, and e2e/ carries no screenshot or
+// visual-regression tooling — so they came from a one-off pixel scan (render the marker on a white ground
+// with the list's padding-inline-start zeroed, find the leftmost ink pixel in the item's row band). The
+// scan measured 16 / 25 / 34 of actual ink; the figures below are the ticket's and are ~3px the
+// conservative side of it, headroom that absorbs the font question — --font-sans falls back to system-ui
+// because Roboto is not bundled (tokens.css:41-43), so digit advance widths are platform-dependent.
+const SINGLE_DIGIT_MARKER_PX = 16
+const TWO_DIGIT_MARKER_PX = 28
+const THREE_DIGIT_MARKER_PX = 40
 
 // The typed message. A fixed literal, distinct from every reply text, so the user bubble can never be
 // mistaken for an assistant one by text.
@@ -288,6 +344,102 @@ const readHeadingTypeMetrics = (page: Page, index: number): Promise<HeadingTypeM
       }
     })
 
+interface NestedRhythmMetrics {
+  spaceTokenPx: number
+  quoteChildCount: number
+  quoteGapsPx: number[]
+  looseItemChildCounts: number[]
+  looseItemGapsPx: number[][]
+  looseItemToItemGapsPx: number[]
+}
+
+/**
+ * The distances between blocks ONE LEVEL INSIDE a blockquote and a loose list item, beside the --space-2
+ * token read off the same element — readRhythmMetrics' idiom, and what keeps this half free of a spacing
+ * literal too. readRhythmMetrics itself cannot answer this: it reads `el.children`, direct children only,
+ * so the nested half has no coverage without a measurement of its own.
+ *
+ * Both halves of the pair matter. `.bubble__markdown`'s flex `gap` applies strictly between flex ITEMS, and
+ * a blockquote and an <li> are block boxes whose children stack in normal flow — so these gaps are NOT the
+ * container's gap reaching one level down. They come from the UA's margin until a rule replaces it, which
+ * means 0px fails this measurement exactly as surely as the UA's 14px does.
+ */
+const readNestedRhythmMetrics = (page: Page, index: number): Promise<NestedRhythmMetrics> =>
+  assistantBubble(page, index)
+    .locator('.bubble__markdown')
+    .evaluate((el) => {
+      const gapsWithin = (parent: Element): number[] => {
+        const rects = Array.from(parent.children).map((child) => child.getBoundingClientRect())
+        return rects.slice(1).map((rect, i) => rect.top - rects[i].bottom)
+      }
+      // Document order, so this is the OUTER blockquote rather than the one nested inside it.
+      const quote = el.querySelector('blockquote')
+      if (!quote) throw new Error('the RHYTHM fixture rendered no blockquote')
+      const looseItems = Array.from(el.querySelectorAll('ol > li'))
+      const itemRects = looseItems.map((item) => item.getBoundingClientRect())
+      return {
+        spaceTokenPx: parseFloat(getComputedStyle(el).getPropertyValue('--space-2')),
+        quoteChildCount: quote.children.length,
+        quoteGapsPx: gapsWithin(quote),
+        looseItemChildCounts: looseItems.map((item) => item.children.length),
+        looseItemGapsPx: looseItems.map((item) => gapsWithin(item)),
+        looseItemToItemGapsPx: itemRects.slice(1).map((rect, i) => rect.top - itemRects[i].bottom)
+      }
+    })
+
+interface ListIndentMetrics {
+  spaceTokenPx: number
+  bubbleContentLeftPx: number
+  bubblePaddingLeftPx: number
+  threadPaddingLeftPx: number
+  lists: {
+    paddingInlineStartPx: number
+    contentLeftPx: number
+    ancestorContentLeftPx: number | null
+  }[]
+}
+
+/**
+ * Every list's declared indent and the three boxes the marker budget is arithmetic over: the list's own
+ * content edge, the bubble's, and the thread's inline padding. One evaluate returns the measurements AND
+ * the --space-4 token off the same element, so the expected side is the scale rather than `16` written
+ * down.
+ *
+ * The thread's padding is reached with closest() rather than a second locator so every number in the
+ * comparison is read at the same moment, from the same layout.
+ */
+const readListIndentMetrics = (page: Page, index: number): Promise<ListIndentMetrics> =>
+  assistantBubble(page, index)
+    .locator('.bubble__markdown')
+    .evaluate((el) => {
+      const contentLeft = (node: Element): number => {
+        const style = getComputedStyle(node)
+        return (
+          node.getBoundingClientRect().left +
+          parseFloat(style.borderLeftWidth) +
+          parseFloat(style.paddingLeft)
+        )
+      }
+      const bubble = el.closest('.bubble')
+      const thread = el.closest('.conversation__thread')
+      if (!bubble || !thread) throw new Error('the markdown container has no .bubble/.conversation__thread')
+      return {
+        spaceTokenPx: parseFloat(getComputedStyle(el).getPropertyValue('--space-4')),
+        bubbleContentLeftPx: contentLeft(bubble),
+        bubblePaddingLeftPx: parseFloat(getComputedStyle(bubble).paddingLeft),
+        threadPaddingLeftPx: parseFloat(getComputedStyle(thread).paddingLeft),
+        lists: Array.from(el.querySelectorAll('ul, ol')).map((list) => {
+          // parentElement first: closest() would match the list itself.
+          const ancestor = list.parentElement?.closest('ul, ol') ?? null
+          return {
+            paddingInlineStartPx: parseFloat(getComputedStyle(list).paddingInlineStart),
+            contentLeftPx: contentLeft(list),
+            ancestorContentLeftPx: ancestor ? contentLeft(ancestor) : null
+          }
+        })
+      }
+    })
+
 /** The thread scroll container's horizontal extent — a horizontal scrollbar iff these differ. */
 const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidth: number }> =>
   page
@@ -428,4 +580,95 @@ test('a markdown heading is typed from one step of the scale, not by the browser
   // Deliberately the whole quartet in one compare, so a failure names every property that drifted rather
   // than stopping at the first.
   expect(heading.computed).toEqual(heading.token)
+})
+
+test('consecutive blocks one level inside a list item or a blockquote sit that same token apart', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheFiveReplies(page)
+
+  const nested = await readNestedRhythmMetrics(page, RHYTHM)
+
+  // The vacuity guard, before any gap is compared: an empty children list produces an empty gap array, and
+  // every loop below would then pass over nothing.
+  expect(nested.quoteChildCount).toBe(RHYTHM_QUOTE_CHILD_COUNT)
+  expect(nested.looseItemChildCounts).toEqual(RHYTHM_LOOSE_ITEM_CHILD_COUNTS)
+
+  // #629's AC4. Three of its four named cases live in the blockquote — a paragraph after a paragraph, a
+  // list after a paragraph, a blockquote after a list — and the container's :361 reset cannot reach any of
+  // them, being direct-child only. RED at the UA's 14px before the fix; note that 0px is a failure here
+  // too, which is the whole point of the criterion: a rule that merely zeroed the leftover would leave
+  // these blocks touching, since flex `gap` never applies inside a block box.
+  for (const gap of nested.quoteGapsPx) {
+    expect(Math.abs(gap - nested.spaceTokenPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
+  }
+
+  // AC4's fourth case: the two paragraphs of a loose list item, and the paragraph-then-nested-list of the
+  // second one.
+  for (const gaps of nested.looseItemGapsPx) {
+    for (const gap of gaps) {
+      expect(Math.abs(gap - nested.spaceTokenPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
+    }
+  }
+
+  // The item boundary itself, which is where zeroing the leftover creates a regression rather than fixing
+  // one: today these items are held apart by exactly the 14px margin the reset removes, so without a step
+  // restored between them an item's own paragraphs would sit further apart than the items do.
+  for (const gap of nested.looseItemToItemGapsPx) {
+    expect(Math.abs(gap - nested.spaceTokenPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
+  }
+})
+
+test('a list indents from the spacing scale and leaves its marker room to paint', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheFiveReplies(page)
+
+  const indent = await readListIndentMetrics(page, RHYTHM)
+
+  // Vacuity guard again — an empty list array passes the loop below trivially.
+  expect(indent.lists.length).toBe(RHYTHM_LIST_COUNT)
+
+  for (const list of indent.lists) {
+    // #629's AC1, and the assertion carrying the RED: the UA stylesheet indents these 40px. Asserted on
+    // EVERY list in the container rather than on a chosen one, which is what discharges "at every nesting
+    // depth" for the indent — one value, all depths, no enumeration.
+    expect(list.paddingInlineStartPx).toBe(indent.spaceTokenPx)
+
+    if (list.ancestorContentLeftPx === null) {
+      // A list at the container's own level keeps its text column inside the bubble's content box.
+      expect(list.contentLeftPx).toBeGreaterThanOrEqual(
+        indent.bubbleContentLeftPx - SUBPIXEL_TOLERANCE_PX
+      )
+    } else {
+      // ...and a nested one sits strictly right of the list that holds it. Indent COMPOUNDS with depth, so
+      // nesting only ever adds slack to the marker budget below and depth 1 is its worst case.
+      expect(list.contentLeftPx).toBeGreaterThan(list.ancestorContentLeftPx)
+    }
+  }
+
+  // AC2, as box arithmetic over the indent and the two inline paddings. Be honest about what this half is:
+  // a BOUND, not a regression detector. All three hold at the UA's 40px as well, and they fire only if
+  // someone later narrows the indent, widens .bubble's inline padding or narrows the thread's. The RED for
+  // this test comes from the token assertion above. A pixel assertion on the marker itself is out of scope
+  // — see the marker constants for why.
+  //
+  // `list-style-position` defaults to `outside`, so the marker paints to the LEFT of the content box the
+  // loop above just pinned. Note also that readThreadWidths (below) cannot stand in for any of this:
+  // scrollWidth is blind to overflow on the left, which is the side a marker overhangs.
+  expect(indent.spaceTokenPx).toBeGreaterThanOrEqual(SINGLE_DIGIT_MARKER_PX)
+  // A two-digit marker overhangs into .bubble's own inline padding, and the bubble's fill paints its
+  // padding box — so it lands on the bubble rather than beside it.
+  expect(TWO_DIGIT_MARKER_PX - indent.spaceTokenPx).toBeLessThanOrEqual(indent.bubblePaddingLeftPx)
+  // A three-digit one reaches past the bubble into the thread's inline padding. That is still not clipped:
+  // .conversation__thread declares overflow-y: auto, so its other axis computes to `auto` and a scroll
+  // container clips at its PADDING box — and left-side overflow in LTR is unreachable by scrolling, which
+  // makes this a hard edge rather than a scrollbar.
+  expect(THREE_DIGIT_MARKER_PX - indent.spaceTokenPx).toBeLessThanOrEqual(
+    indent.bubblePaddingLeftPx + indent.threadPaddingLeftPx
+  )
 })

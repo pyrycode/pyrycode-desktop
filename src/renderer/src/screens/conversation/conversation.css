@@ -450,6 +450,101 @@
   font-weight: var(--text-label-large-weight);
 }
 
+/* #629 — a list's and a blockquote's indent, and the block rhythm one level inside either. These are the
+   last two constructs in here still laid out by the UA stylesheet: ul/ol carry padding-inline-start: 40px,
+   and <blockquote> carries margin-inline: 40px — indentation is its ONLY visual signal, and on both sides.
+   Inside a bubble capped at min(680px, 75%) and already padded 14px each side (:295), 40px per side is a
+   large bite out of the measure. The two share one rule block because they share one leftover: :361 is a
+   DIRECT-CHILD selector, so every block one level down — a <p> in a blockquote, a <p> in a loose <li>, a
+   list in a blockquote, a blockquote in a blockquote — still carries its UA margin-block. :350-353 hands
+   exactly that over to this ticket. (A list inside a LIST is not among them: the UA stylesheet already
+   zeroes `:is(ul, ol, menu, dir) :is(ul, ol, menu, dir)`, measured at 0px. That selector takes no `div`
+   ancestor, which is why a top-level <ul> in here does keep its 14px and :361 stays load-bearing.)
+
+   THE INDENT IS --space-4, the scale's floor for this rather than a wider step. list-style-position
+   defaults to `outside`, so a marker paints to the LEFT of the list's content box, and 16px is the smallest
+   step at which a bullet and a one-digit ordered marker sit fully inside that box — both measure exactly
+   16px, so anything narrower puts the commonest marker of all outside it. Wider buys headroom that is not
+   needed, because the overhang lands in padding that already exists: `10.` needs 28px and overhangs 12px
+   into .bubble's own 14px, and the bubble's fill paints its padding box, so the marker lands ON the bubble;
+   `100.` needs 40px and overhangs 24px into that 14 plus .conversation__thread's 16 (:240) = 30px. That 30
+   is a HARD edge rather than a scrollbar — the thread declares overflow-y: auto, so its other axis computes
+   to `auto`, a scroll container clips at its PADDING box, and left-side overflow in LTR is unreachable by
+   scrolling. Indent also COMPOUNDS with depth and lists are where depth actually lives: at --space-6 a
+   three-deep list would sit 72px in. One step for the whole reply, too — the blockquote's 4px bar plus
+   --space-3 is also 16px, and it is the same step the thread insets its bubbles by.
+
+   THE BLOCKQUOTE TRADES ITS 40px FOR A LEADING BAR, the idiom this file already carries four times
+   (.conversation__banner, .bubble--stall, .bubble--compacting, .modal-rejection — each a 4px border-left in
+   a role colour). Neutral, never --color-error or --color-primary: those two ARE the status vocabulary
+   those four own, so a blockquote wearing one would read as a stall or a compaction to someone scanning the
+   same thread. Between the two neutral border roles the choice is not taste: against the daemon bubble's
+   --color-surface-container-high fill, --color-outline is a 4.6:1 luminance contrast and
+   --color-outline-variant is 1.5:1. A bar that is the blockquote's only signal besides indentation is a
+   meaningful non-text graphic, and 3:1 is the floor it has to clear. (The variant reads fine on .code-block
+   below, which sits on the darker --color-surface.) BAR ONLY, and deliberately no muted text:
+   --color-on-surface-variant on a daemon bubble is this file's transient-working-state signal — exactly
+   what .bubble--thinking and .bubble--compacting use — and a settled blockquote must not join that class.
+   Same argument as the error and primary bars, and it is the natural next reach for whoever reads this.
+
+   THE RHYTHM ONE LEVEL DOWN HAS TO BE ESTABLISHED, not merely uncovered, which is why the last two rules
+   are a pair rather than one reset. Flex `gap` applies strictly between flex ITEMS, and a blockquote and an
+   <li> are block boxes whose children stack in normal flow with no gap at all — so zeroing the UA leftover
+   gives 0px, not :358's 8px, and 0px fails the criterion as surely as 14px does. Not a flex column cloned
+   from :355 either, which CANNOT be done for <li>: `list-item` combines only with flow / flow-root, so
+   display: flex computes the outer display away and the marker disappears. One mechanism for both
+   containers rather than two. Margin collapsing does not disturb it — the only margin in play on any
+   adjacent pair is the later sibling's top, so the collapsed value is that margin.
+
+   `li + li` IS A DELIBERATE CHANGE, not a side effect. A LOOSE list's items are held apart today by the
+   14px margin on the <p> inside each item; zeroing that for the nested rhythm takes them to 0px, which
+   would show 8px between an item's own two paragraphs and nothing at the item boundary — intra-item spacing
+   wider than inter-item, which reads as broken. Restoring the step also moves a TIGHT list from 0px to 8px.
+   That is visible, on the commonest construct in a reply, and it is the intended outcome: one rhythm number
+   for everything in this container is what :358's single gap already embodies. Rejected: `li:has(> p) + li`,
+   which would restore loose lists only and preserve CommonMark's loose/tight distinction — but :has()
+   appears nowhere in this codebase and would be introduced to protect a distinction this container flattens
+   by intent.
+
+   DESCENDANT selectors for the indent and the bar (the .bubble__markdown pre precedent, :374-377), so a
+   list in a blockquote and a blockquote in a list item are reached at every depth; `>` for the rhythm pair,
+   just as deliberately, so it applies once per level instead of compounding down the tree. Logical
+   properties where the UA declares them — margin-inline, padding-inline-start — so each override is
+   one-for-one with the thing it replaces, which is :362's reasoning; physical border-left because that is
+   how all four existing bars are written, and its 4px WIDTH is a raw literal there too, as border widths in
+   this file always are.
+
+   Five omissions, each load-bearing. No color: the accent IS the border, plus the muted-text argument
+   above. No padding-block on the blockquote — the 8px above and below it already comes from :358. No
+   list-style-position: `inside` would dodge the marker question by reflowing the marker into the text
+   column, which is a different construct. No overflow and no max-width on the list, because the marker
+   arithmetic depends on the thread's existing clip rather than on a new one (:369-371 is the
+   anti-precedent). No word-break: inherited from .bubble (:298), #607's precedent. And a top-level fence is
+   untouched — it is a DIRECT child of the container, so neither `li >` nor `blockquote >` reaches it and
+   nothing here declares a property .code-block sets; a fence nested inside one of these two does gain the
+   8px from its neighbour, which is the point. */
+.bubble__markdown ul,
+.bubble__markdown ol {
+  padding-inline-start: var(--space-4);
+}
+
+.bubble__markdown blockquote {
+  margin-inline: 0;
+  padding-inline-start: var(--space-3);
+  border-left: 4px solid var(--color-outline);
+}
+
+.bubble__markdown li > *,
+.bubble__markdown blockquote > * {
+  margin-block: 0;
+}
+
+.bubble__markdown li > * + *,
+.bubble__markdown blockquote > * + *,
+.bubble__markdown li + li {
+  margin-block-start: var(--space-2);
+}
+
 /* #623 — a fenced code block's chrome (Figma 16:45): surface fill (deliberately NOT the bubble's own
    --color-surface-container-high — the block reads as a step darker than what it sits in), 1px
    outline-variant border, 12px radius. Nothing else: no display (its two children are block-level and

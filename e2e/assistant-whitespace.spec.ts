@@ -238,6 +238,56 @@ const readRhythmMetrics = (page: Page, index: number): Promise<RhythmMetrics> =>
       }
     })
 
+interface TypeQuartet {
+  fontSize: string
+  lineHeight: string
+  letterSpacing: string
+  fontWeight: string
+}
+
+interface HeadingTypeMetrics {
+  computed: TypeQuartet
+  token: TypeQuartet
+}
+
+/**
+ * A heading's live type quartet inside a settled bubble's container, beside the four --text-title-large-*
+ * tokens read off that same element. Both halves come from one evaluate so the comparison is against the
+ * scale rather than against `22px` written down — the --space-2 idiom of readRhythmMetrics above, and what
+ * keeps this spec free of type literals too.
+ *
+ * The fixture's heading is the RHYTHM block's `<h2>`. One level of six is enough: it proves the class of
+ * failure that matters (a heading typed by the UA stylesheet rather than by the theme), and the reply
+ * stream is indexed positionally, so adding a turn to reach another level would shift every index above.
+ */
+const readHeadingTypeMetrics = (page: Page, index: number): Promise<HeadingTypeMetrics> =>
+  assistantBubble(page, index)
+    .locator('.bubble__markdown h2')
+    .evaluate((el) => {
+      const style = getComputedStyle(el)
+      // Blink serialises a computed letter-spacing of zero as the `normal` keyword, and title-large's
+      // tracking token is `0px` — one computed value spelled two ways. Both sides pass through this, so
+      // the comparison is over values and not over spellings.
+      const tracking = (value: string): string => {
+        const trimmed = value.trim()
+        return trimmed === 'normal' ? '0px' : trimmed
+      }
+      return {
+        computed: {
+          fontSize: style.fontSize,
+          lineHeight: style.lineHeight,
+          letterSpacing: tracking(style.letterSpacing),
+          fontWeight: style.fontWeight
+        },
+        token: {
+          fontSize: style.getPropertyValue('--text-title-large-size').trim(),
+          lineHeight: style.getPropertyValue('--text-title-large-line').trim(),
+          letterSpacing: tracking(style.getPropertyValue('--text-title-large-tracking')),
+          fontWeight: style.getPropertyValue('--text-title-large-weight').trim()
+        }
+      }
+    })
+
 /** The thread scroll container's horizontal extent — a horizontal scrollbar iff these differ. */
 const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidth: number }> =>
   page
@@ -355,4 +405,27 @@ test('consecutive markdown blocks sit one spacing token apart, flush at the bubb
   // `gap`, which applies strictly BETWEEN items, once the UA margins are gone.
   expect(Math.abs(rhythm.firstOffsetPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
   expect(Math.abs(rhythm.lastOffsetPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
+})
+
+test('a markdown heading is typed from one step of the scale, not by the browser', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheFiveReplies(page)
+
+  const heading = await readHeadingTypeMetrics(page, RHYTHM)
+
+  // #628's AC1 and AC5 — the three things review can only confirm by eye. That a rule under the container
+  // REACHES a heading at all: without one this <h2> keeps the UA stylesheet's 1.5em/bold, which is neither
+  // the step's size nor any weight the scale carries (it holds 400 and 500 only). That its values come from
+  // the SCALE and not from literals: the expected side is the element's own custom properties, so a
+  // hand-written `22px` in the rule would still pass while a hand-written `21px` could not — which is why
+  // the no-literal claim rests on the diff at review and this test carries the rest. And that all four
+  // properties come from ONE step: a quartet mixed from two steps fails on whichever property was taken
+  // from elsewhere.
+  //
+  // Deliberately the whole quartet in one compare, so a failure names every property that drifted rather
+  // than stopping at the first.
+  expect(heading.computed).toEqual(heading.token)
 })

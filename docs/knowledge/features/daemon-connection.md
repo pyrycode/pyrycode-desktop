@@ -441,8 +441,9 @@ dormant — all three exhaustive renderer bridges no-op the new arm; the real co
   `stallDetected`/`apiRetry`/`compacting` convention, not the `queueState`/background-task one.
   Deliberately stateless, same as `apiRetry`/`compacting`: no dedup, so a verbatim repeat still produces
   an event. Not `assertNever`-guarded in this inner switch; the round-trip test is the guard. No new
-  method on this factory — `model_announced` is inbound-only. Ships dormant; the announced-model store
-  #588 is the first consumer.
+  method on this factory — `model_announced` is inbound-only. Ships dormant no longer: [the
+  announced-model store (#588, shipped)](announced-model-store.md) is the first consumer,
+  still dormant pending #560's render surface.
 - [#328 codebase notes](../codebase/328.md) / [Relay supervisor](relay-supervisor.md) / [Noise relay driver](noise-relay-driver.md) — the `relay-link-up`/`relay-link-down{code}` driver events + the two new `onDriverEvent` cases that classify the raw close code into the renderer-facing `relayLinkChanged{status}` `DaemonEvent` (the relay-**socket** leg, distinct from this module's own session-level `connecting`/`connected`/`failed`). Ships dormant; first of three slices toward a two-dot connection-status indicator.
 - [Inbound message decode](inbound-message-decode.md) / [#68](../codebase/68.md) — `parseInboundMessage`, the transport-layer decoder the `case 'message'` arm calls; it owns the wire boundary (size guard, `decodeEnvelope`, per-field narrowing) so this arm stays a thin IPC map.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — the driver this constructs and drives; it named this consumer as its missing piece. Owns the reconnect loop / fresh-handshake-per-connect / fatal-code classification this module does **not**.

@@ -361,3 +361,74 @@ test('sending from far up the history jumps to the bottom and leaves the thread 
   await expect(assistantBubbles.last()).toHaveText(replyText(REPLY_TURNS + 1))
   await expectPinnedToBottom(page)
 })
+
+// #603: re-opening a discussion lands at the most recent messages. The proof for the claim
+// ConversationScreen.tsx:157-159 already makes — the pin "must not survive a remount (ADR 0006), so a
+// re-entered thread starts pinned again". That guarantee holds today as an emergent product of three
+// INDEPENDENT choices — `following` starts `true`, Back swaps a different component type into the same
+// position so React destroys the subtree, and the dep-free layout effect pins before paint — any one of
+// which could be changed without anyone noticing this broke. Nothing tested it until here.
+//
+// This is re-ENTRY, not first open, because re-entry is the only reachable form of the complaint: the
+// timeline has no history backfill (its only writers are the live stream and the composer's echo, and
+// buildClientHello never sends `last_seen_ts`), so opening a DIFFERENT discussion always starts empty and
+// `.conversation__thread` does not even mount. The leg rests on rows already in the store rather than a
+// second send — buildReplyFrames answers only the PRIMER — which is what makes this a "content already
+// present on open" proof rather than a second live stream.
+test('re-opening a discussion lands at the most recent messages and leaves the thread pinned', async ({
+  launchPairedApp
+}) => {
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames })
+
+  await primeOverflowingThread(page)
+
+  // Park the operator at the very top — the programmatic idiom of the two tests above, for their reasons.
+  // The rAF settle is NOT optional and its hazard direction is test 3's: skipping it leaves the queued
+  // scroll event undispatched, so a broken app — one whose flag SURVIVED the remount — would re-enter
+  // still following and land at the bottom with no feature under test at all.
+  await page.locator('.conversation__thread').evaluate((el) => {
+    el.scrollTop = 0
+  })
+  await settleScrollEvent(page)
+
+  // The precondition guard. Without it the test cannot distinguish "re-entry pulled the view down" from
+  // "the view was never up" — the primer leaves the thread resting at the bottom.
+  const before = await readThreadMetrics(page)
+  expect(before.scrollTop).toBe(0)
+
+  // Leave. Back dispatches the shell's `back` route flip and touches no store; PairedShellView then returns
+  // a DIFFERENT component type at that same position (PairedShell.tsx:88-97), so React destroys the
+  // subtree and the pin's ref and flag go with it. Awaiting the list is the unmount gate — the thread's DOM
+  // node is gone once the list is on screen.
+  await page.locator('.conversation__back').click()
+  await expect(page.locator('section[aria-label="Conversations"]')).toBeVisible()
+
+  // Re-enter the SAME row, through the real product-UI click the fixture itself performs — never a forced
+  // route dispatch or store mutation. activateConversation resets the timeline only when the active
+  // conversation id CHANGES (activateConversation.ts:74), and this is the same seeded id, so every row
+  // survives the round trip. One seeded row keeps the bare selector unambiguous.
+  await page.locator('.channel-list__row-open').click()
+  await expect(page.locator('.conversation')).toBeVisible()
+
+  // The rows survived, and the thread is showing the RECENT ones. The count is the "same conversation, no
+  // reset" claim; the last bubble's text is the user story's "most recent messages" claim. Exact text is
+  // safe here for the primer's reason verbatim — that turn's `turn_end` appended a turnBoundary, so the
+  // trailing streaming cursor is not on this bubble.
+  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  await expect(assistantBubbles).toHaveCount(REPLY_TURNS)
+  await expect(assistantBubbles.last()).toHaveText(replyText(REPLY_TURNS))
+
+  // Non-vacuity on the RE-ENTERED thread specifically, not merely in the primer: this is a freshly mounted
+  // scroll node, and a thread shorter than its viewport reads as at-bottom unconditionally.
+  const reEntered = await readThreadMetrics(page)
+  expect(reEntered.scrollHeight).toBeGreaterThan(reEntered.clientHeight)
+  await expectPinnedToBottom(page)
+
+  // Left PINNED, not merely positioned: one further pushed frame keeps the bottom with no manual scroll.
+  // A `tool_use` rather than an assistant delta on purpose — one frame, one unambiguous arrival gate and no
+  // `turn_end` follow-up, so this step needs no settle of its own. Its row is tens of pixels tall, an order
+  // of magnitude above AT_BOTTOM_TOLERANCE_PX, so a thread that had merely SAT at the old bottom fails here.
+  daemon.pushFrame(toolUseFrame())
+  await expect(page.locator('.tool-row')).toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
+  await expectPinnedToBottom(page)
+})

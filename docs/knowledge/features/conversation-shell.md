@@ -1644,8 +1644,15 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   whitespace-only, no active conversation) never re-arms the flag and leaves no armed pin behind for the
   next unrelated arriving item to yank. Because the re-assert layout effect has no dependency array,
   "jump to the bottom now" and "stay pinned while the reply streams" are the same fact observed at two
-  times — an operator who scrolls up again mid-stream still wins, unchanged from #601. Opening a
-  conversation at the bottom (#603) remains the one not-yet-built trigger meant to ride this mechanism.
+  times — an operator who scrolls up again mid-stream still wins, unchanged from #601. **Re-entry lands at
+  the bottom** ([#603](../codebase/603.md)) closes the family with zero production code: the original
+  "open at the top of history" premise didn't survive refinement (no backfill exists — opening a
+  *different* discussion always starts empty), so the only reachable case is re-opening the *same*
+  discussion. That already worked, as an emergent product of the id-gated timeline reset
+  (`activateConversation.ts:74-77`), Back unmounting `ConversationScreen` via a different-component-type
+  swap (`PairedShell.tsx:88-97`), and `following`'s `true` initial value pinning before paint on the fresh
+  mount — three independent facts, none added for this ticket, now locked by an e2e test rather than left
+  as an untested accident.
 
 ## Related
 

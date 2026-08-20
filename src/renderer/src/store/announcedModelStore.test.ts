@@ -125,4 +125,46 @@ describe('announcedModelStore', () => {
     store.getState().setAnnouncedModel(announced())
     expect(store.getState().setAnnouncedModel).toBe(before)
   })
+
+  it('clearAnnouncedModel returns a held announcement to not-yet-announced (#593 AC1)', () => {
+    const store = createAnnouncedModelStore({ announced: announced({ model: 'model-on-A' }) })
+    store.getState().clearAnnouncedModel()
+    expect(store.getState().announced).toBeNull()
+    expect(selectAnnouncedModel(store.getState())).toBeNull()
+  })
+
+  it('clearAnnouncedModel drops a degenerate empty-identifier record to null, not to that record (#593 AC1)', () => {
+    // The one case that distinguishes the two sentinels the store deliberately keeps apart: a received
+    // `{ model: '', truncated: false }` is a REAL announcement while held, but the pairing-ended state is
+    // the freshly-launched `null` — never an announcement carrying an empty identifier.
+    const store = createAnnouncedModelStore({ announced: { model: '', truncated: false } })
+    store.getState().clearAnnouncedModel()
+    expect(selectAnnouncedModel(store.getState())).toBeNull()
+  })
+
+  it('clearAnnouncedModel is unconditional — clearing an already-clear store stays null (#593 AC3)', () => {
+    const store = createAnnouncedModelStore()
+    store.getState().clearAnnouncedModel()
+    expect(selectAnnouncedModel(store.getState())).toBeNull()
+    store.getState().clearAnnouncedModel()
+    expect(selectAnnouncedModel(store.getState())).toBeNull()
+  })
+
+  it('a clear does not make the store one-shot — a later announcement records normally', () => {
+    const store = createAnnouncedModelStore({ announced: announced({ model: 'model-on-A' }) })
+    store.getState().clearAnnouncedModel()
+    store.getState().setAnnouncedModel(announced({ model: 'model-on-B', truncated: true }))
+    expect(selectAnnouncedModel(store.getState())).toEqual({
+      model: 'model-on-B',
+      truncated: true
+    })
+  })
+
+  it('keeps the clearAnnouncedModel reference stable across updates', () => {
+    const store = createAnnouncedModelStore()
+    const before = store.getState().clearAnnouncedModel
+    store.getState().setAnnouncedModel(announced())
+    store.getState().clearAnnouncedModel()
+    expect(store.getState().clearAnnouncedModel).toBe(before)
+  })
 })

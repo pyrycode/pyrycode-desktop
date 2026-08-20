@@ -379,6 +379,77 @@
   white-space: pre-wrap;
 }
 
+/* #628 — a markdown heading's type. Until now this was the ONE heading in the app the browser still typed:
+   every other <h1>/<h2> in the renderer carries an explicit rule taking all four of size / line-height /
+   letter-spacing / weight from a single scale step, and a heading in here fell through to the UA
+   stylesheet's 2em..0.67em at `bold` instead. Bold is not even reachable from the theme — the scale carries
+   400 and 500 only — so the weight came from the browser as much as the size did.
+
+   FOUR STEPS FOR SIX LEVELS, so two collapses are forced: the scale offers exactly four steps at or above
+   .bubble's own body-medium (24, 22, 16, 14) and no level may render smaller than the bubble's body text.
+   Which four is settled by how the renderer ALREADY uses each step, not by taste: headline-small types five
+   screen and dialog titles (.pairing__title, .permission-modal__title, .create-folder__title,
+   .save-as-channel__title, .rename-conversation__title), title-large two screen titles (.archive__title,
+   .settings__title), title-medium its only two consumers and both titles (.channel-list__title,
+   .archive__row-title), and label-large .settings__section-header — a small heading over a group. That is
+   the app's own title vocabulary, in order.
+
+   body-large is the step deliberately NOT used, though it also sits above body-medium: its fourteen
+   consumers are row body text (.settings__server-row-label, .run-config__model-name,
+   .channel-info__row-label and the rest — including .run-config__yolo-title, which is named "title" and is
+   a <p> labelling a toggle row). It is also weight 400, the same as .bubble's body-medium, at the loosest
+   tracking in the scale: an h4 there would differ from the surrounding prose by 2px of size and nothing
+   else, while the h5 beneath it carried a weight step. The ladder would read upside down.
+
+   Where the levels group follows the precedent that the STEP FOLLOWS THE ROLE, NOT THE TAG — this app
+   already types the same <h2> element at headline-small in four dialogs and at label-large in settings. So:
+   h1/h2 are the reply's title and its major sections (the levels an assistant reply actually uses) and each
+   earns its own step; h3/h4 are subsection headings at the renderer's row/section-title step; h5/h6 are
+   minor run-in headings at exactly what .settings__section-header uses. h5/h6 match the bubble's body SIZE
+   and still read as headings by separating on weight and tracking (500/0.1 against body-medium's 400/0.25)
+   — the same discriminator .settings__section-header itself relies on.
+
+   DESCENDANT selectors, not `>`, so a heading nested in a blockquote or a list item is sized too — the
+   .bubble__markdown pre precedent directly above. Such a nested heading is not a direct child of the
+   container and so keeps its UA margin-block; that leftover reset is #629's, shared with nested paragraphs
+   and lists, and this ticket adds and removes no margin anywhere.
+
+   Four omissions, each load-bearing rather than forgotten. No margin: .bubble__markdown > * already zeroes
+   it for direct children (and e2e/assistant-whitespace.spec.ts measures the resulting 8px rhythm, so one
+   added here would fail it). No color: headings inherit --color-on-surface from .bubble--daemon, and this
+   introduces no new colour. No font-family: --font-sans inherits from .conversation and the UA heading
+   rules set size, weight and margin only, the reasoning .code-block__header already records. No word-break:
+   inherited from .bubble, deliberately not restated (#607's precedent, followed by #623). */
+.bubble__markdown h1 {
+  font-size: var(--text-headline-small-size);
+  line-height: var(--text-headline-small-line);
+  letter-spacing: var(--text-headline-small-tracking);
+  font-weight: var(--text-headline-small-weight);
+}
+
+.bubble__markdown h2 {
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+  letter-spacing: var(--text-title-large-tracking);
+  font-weight: var(--text-title-large-weight);
+}
+
+.bubble__markdown h3,
+.bubble__markdown h4 {
+  font-size: var(--text-title-medium-size);
+  line-height: var(--text-title-medium-line);
+  letter-spacing: var(--text-title-medium-tracking);
+  font-weight: var(--text-title-medium-weight);
+}
+
+.bubble__markdown h5,
+.bubble__markdown h6 {
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
 /* #623 — a fenced code block's chrome (Figma 16:45): surface fill (deliberately NOT the bubble's own
    --color-surface-container-high — the block reads as a step darker than what it sits in), 1px
    outline-variant border, 12px radius. Nothing else: no display (its two children are block-level and

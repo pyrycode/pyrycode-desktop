@@ -21,7 +21,6 @@ import {
   WorkspaceChip,
   isTurnRunning,
   InterruptButton,
-  ScreenSnapshotView,
   ThreadOverflowMenuView,
   ChannelInfoSheetView,
   requestArchiveConversation,
@@ -799,77 +798,6 @@ describe('InterruptButton — the running-turn interrupt affordance (#307)', () 
     // The client-owned accessible name (icon-only control), never a daemon string; conveys both
     // "stop" and "interrupt" (AC4). Keyboard activation is free from the native <button> (AC4).
     expect(markup).toContain('aria-label="Stop the running turn"')
-  })
-})
-
-// #324: the screen-snapshot action & display. ScreenSnapshotView is the exported pure view bundling the
-// request button and the display region (the InterruptButton posture, but carrying the display too since
-// action + display are one surface, per the ticket's one-`s` sizing note) — server-render it with injected
-// props to prove every render branch without a store. The store-bound ScreenSnapshotControl is untested
-// glue (the InterruptControl / QueuedBacklogControl posture); the activation→command proof lives in
-// requestScreenSnapshot.test.ts (the `node` env fires no clicks). The disconnected + null-snapshot container
-// smoke lives in the store-binding block below.
-describe('ScreenSnapshotView — the screen-snapshot action & display (#324)', () => {
-  const noop = (): void => {}
-  const ts = '2026-07-13T00:00:00Z'
-
-  it('shows the empty placeholder and no screen when no snapshot has arrived (null, AC3)', () => {
-    const markup = renderToStaticMarkup(
-      <ScreenSnapshotView snapshot={null} canRequest={true} onRequest={noop} />
-    )
-    expect(markup).toContain('screen-snapshot__empty')
-    expect(markup).toContain('No screen snapshot yet')
-    // The null state is structurally distinct from a received blank screen: no <pre>.
-    expect(markup).not.toContain('screen-snapshot__screen')
-    expect(markup).not.toContain('<pre')
-  })
-
-  it('shows the held screen text in a <pre>, not the placeholder, once a snapshot arrives (AC3/AC5)', () => {
-    const markup = renderToStaticMarkup(
-      <ScreenSnapshotView snapshot={{ text: 'hello world', ts }} canRequest={true} onRequest={noop} />
-    )
-    expect(markup).toContain('screen-snapshot__screen')
-    expect(markup).toContain('hello world')
-    expect(markup).not.toContain('screen-snapshot__empty')
-    expect(markup).not.toContain('No screen snapshot yet')
-  })
-
-  it('tells a received blank screen apart from "no snapshot yet": empty text still renders the <pre> (AC3)', () => {
-    const markup = renderToStaticMarkup(
-      <ScreenSnapshotView snapshot={{ text: '', ts }} canRequest={true} onRequest={noop} />
-    )
-    // A real received blank screen ({ text: '', ts }) renders the <pre> (present, empty content) —
-    // structurally distinct from the null placeholder.
-    expect(markup).toContain('screen-snapshot__screen')
-    expect(markup).not.toContain('screen-snapshot__empty')
-  })
-
-  it('renders the screen text as escaped plain text, never live HTML (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ScreenSnapshotView snapshot={{ text: '<b>x</b>', ts }} canRequest={true} onRequest={noop} />
-    )
-    // Auto-escaped React children — untrusted daemon-relayed content renders as literal characters, never
-    // an injected element (no dangerouslySetInnerHTML). Apostrophe-free fixture (renderToStaticMarkup
-    // escapes `'` → `&#x27;`, the standing desktop lesson).
-    expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
-    expect(markup).not.toContain('<b>x</b>')
-  })
-
-  it('renders the request button enabled while connected (AC1/AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <ScreenSnapshotView snapshot={null} canRequest={true} onRequest={noop} />
-    )
-    const requestButton = markup.match(/<button[^>]*class="screen-snapshot__request"[^>]*>/)?.[0] ?? ''
-    expect(requestButton).not.toBe('')
-    expect(requestButton).not.toContain('disabled')
-  })
-
-  it('disables the request button while not connected (AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <ScreenSnapshotView snapshot={null} canRequest={false} onRequest={noop} />
-    )
-    const requestButton = markup.match(/<button[^>]*class="screen-snapshot__request"[^>]*>/)?.[0] ?? ''
-    expect(requestButton).toContain('disabled')
   })
 })
 
@@ -1676,22 +1604,6 @@ describe('ConversationScreen — store binding', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__interrupt')
     expect(markup).not.toContain('interrupt-button')
-  })
-
-  // #324: the screen-snapshot control mounts against the initial disconnected + null-snapshot stores
-  // (zustand v5's useStore reads getInitialState() under server render → status disconnected, snapshot
-  // null). So the request button renders DISABLED (the composer-send-gate parallel — disconnected is the
-  // only server-render-reachable branch, AC2) and the "no snapshot yet" placeholder shows with no <pre>
-  // (AC3). The showing / enabled / populated branches are proven on the pure ScreenSnapshotView describe
-  // above. Also keeps window.pyry out of the container render — the bridge is dereferenced only in the
-  // onRequest click closure, so the server render never touches it.
-  it('mounts the disconnected, no-snapshot stores: the request button is disabled and the empty placeholder shows (AC2/AC3)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    const requestButton = markup.match(/<button[^>]*class="screen-snapshot__request"[^>]*>/)?.[0] ?? ''
-    expect(requestButton).toContain('disabled')
-    expect(markup).toContain('screen-snapshot__empty')
-    expect(markup).toContain('No screen snapshot yet')
-    expect(markup).not.toContain('screen-snapshot__screen')
   })
 
   it('renders the composer with a text input and an accessible send control', () => {

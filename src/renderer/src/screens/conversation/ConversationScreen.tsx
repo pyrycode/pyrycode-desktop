@@ -48,12 +48,6 @@ import { isAtBottom } from './threadScrollPosition'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { sendInterrupt } from './sendInterrupt'
-import { requestScreenSnapshot } from './requestScreenSnapshot'
-import {
-  useScreenSnapshotStore,
-  selectScreenSnapshot,
-  type ScreenSnapshot
-} from '../../store/screenSnapshotStore'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
@@ -211,11 +205,6 @@ export function ConversationScreen({
           both non-populated panel readings unreachable through the UI. It carries no count badge — a badge
           would need its own roster subscription, which is the panel's job and #580's design call. */}
       <BackgroundTaskTrigger onOpen={() => setPanelOpen(true)} />
-      {/* #324: the screen-snapshot action & display — a request button (gated on the same connection read
-          the composer's send-gate uses) plus a bounded <pre> panel showing the held daemon screen text
-          (#323's store). Always visible (button + placeholder-or-<pre>); the <pre> is CSS-bounded so a large
-          screen dump scrolls internally rather than shoving the composer off-screen. */}
-      <ScreenSnapshotControl />
       {/* #307: the running-turn interrupt control — a standalone block, right-aligned over the
           composer's send side, shown only while a turn is running (phase thinking or responding) and
           retracting on the daemon's turn_state{idle}. Renders nothing at idle. */}
@@ -1018,88 +1007,6 @@ function InterruptControl(): JSX.Element | null {
   )
 }
 
-// #324: the client-owned request-button label (the EMPTY_THREAD_COPY / INTERRUPT_LABEL idiom). The button
-// carries visible text, so this string IS its accessible name — never a daemon string. A single static
-// label covers both the initial request and a later re-request (a "refresh"); a snapshot-aware label swap
-// is optional polish, not an AC.
-const SCREEN_SNAPSHOT_REQUEST_LABEL = 'Show daemon screen'
-
-// #324: the "no snapshot received yet" placeholder copy (the EMPTY_THREAD_COPY idiom) — module-level and
-// client-owned, apostrophe-free (renderToStaticMarkup escapes `'`), never a daemon string. Distinct from a
-// received blank screen: this shows only while the store holds `null`; a received `{ text: '', ts }` renders
-// an empty <pre> instead (AC3).
-const SCREEN_SNAPSHOT_EMPTY_COPY = 'No screen snapshot yet'
-
-// #324: the screen-snapshot action & display — one surface (the request button + the display region),
-// bundled as a single pure view because action + display ship as one `s` (a request button with nothing to
-// render is dead UI; a display with no trigger only shows unsolicited pushes). Pure props-in/markup-out and
-// exported so tests server-render it with injected props (no store), the InterruptButton posture.
-//
-// Takes `snapshot: ScreenSnapshot | null` (null = no screen received yet), `canRequest: boolean` (the
-// connection gate the container derives from composerAvailability — the SAME send-gate read the composer
-// uses, AC2), and a REQUIRED injected `onRequest` effect (the "a view that cannot act is a bug" rule) — the
-// container binds it to requestScreenSnapshot; the view never touches window.pyry.
-//
-// AC4 — the untrusted-text sink: `snapshot.text` is daemon-relayed content rendered as AUTO-ESCAPED React
-// children inside the <pre> (`{snapshot.text}`), never dangerouslySetInnerHTML / innerHTML. Any terminal
-// control sequences or HTML render as literal characters — the assistantText / toolCall / workspaceCwd
-// posture already in this file. The <pre> gives monospace + whitespace preservation (a terminal screen);
-// ANSI-to-styling is explicitly out of scope (a separate fidelity follow-up). The display region is
-// discriminated on the null-vs-value distinction so "no snapshot yet" (the placeholder, no <pre>) is
-// structurally distinct from a received blank screen (an empty <pre>, no placeholder) — AC3.
-export function ScreenSnapshotView({
-  snapshot,
-  canRequest,
-  onRequest
-}: {
-  snapshot: ScreenSnapshot | null
-  canRequest: boolean
-  onRequest: () => void
-}): JSX.Element {
-  return (
-    <div className="screen-snapshot">
-      <button
-        type="button"
-        className="screen-snapshot__request"
-        disabled={!canRequest}
-        onClick={onRequest}
-      >
-        {SCREEN_SNAPSHOT_REQUEST_LABEL}
-      </button>
-      {snapshot === null ? (
-        <p className="screen-snapshot__empty">{SCREEN_SNAPSHOT_EMPTY_COPY}</p>
-      ) : (
-        <pre className="screen-snapshot__screen">{snapshot.text}</pre>
-      )}
-    </div>
-  )
-}
-
-// #324: the store-bound container for the screen-snapshot control. Reads the connection status (for the
-// gate) and the held screen snapshot (#323's store), binds the injected request effect, and mounts the pure
-// view. Two narrow-slice reads, both orthogonal to the timeline, so this re-renders only on a connection
-// change or a new snapshot (AC3 reactivity is free — #323's setSnapshot replaces the object, most-recent
-// wins). window.pyry.sendCommand is dereferenced ONLY inside the onRequest click closure (the
-// InterruptControl / Composer.handleSubmit discipline), so the server-rendered container smoke never touches
-// the bridge. In-file and not exported, like InterruptControl. No new store, no new bridge, no daemon-event
-// re-subscription — #323 already populates the store app-wide; this only reads it.
-function ScreenSnapshotControl(): JSX.Element {
-  const status = useSessionStore(selectStatus)
-  const snapshot = useScreenSnapshotStore(selectScreenSnapshot)
-  // #448: the request targets the ACTIVE conversation — the daemon validates conversation_id and
-  // rejects an unknown one, so the helper no-ops when no conversation is active.
-  const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
-  return (
-    <ScreenSnapshotView
-      snapshot={snapshot}
-      canRequest={composerAvailability(status).canSend}
-      onRequest={() =>
-        requestScreenSnapshot(activeConversationId, { sendCommand: window.pyry.sendCommand })
-      }
-    />
-  )
-}
-
 // #296: the client-owned accessible name for the drop control (the EMPTY_THREAD_COPY / WORKSPACE_CHIP_LABEL
 // idiom). An icon-only button has no visible text, so aria-label supplies its accessible name (the
 // .composer__send / .status-sheet__close pattern already in this file). Never a daemon string.
@@ -1874,7 +1781,7 @@ export function ConnectionStatusIndicator({
 
 // The store-bound container (#330). Reads both stores with narrow single-slice selectors — the relay leg
 // from relayLinkStore (#329), the daemon leg from sessionStore — and passes the mapped legs to the pure
-// view (the ScreenSnapshotControl two-store precedent). No window.pyry, no IPC, no effects: a pure read,
+// view (the QueuedBacklogControl two-store precedent). No window.pyry, no IPC, no effects: a pure read,
 // so the server-rendered smoke test touches no bridge (initial state → two "Offline" dots, AC3 no false
 // green). The two narrow selectors re-render this control only on its own leg's change.
 function ConnectionStatusIndicatorControl(): JSX.Element {

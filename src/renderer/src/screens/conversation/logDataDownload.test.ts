@@ -70,7 +70,8 @@ describe('toDownloadAction', () => {
       { type: 'connecting' },
       { type: 'disconnected' },
       {
-        type: 'snapshotReceived',
+        type: 'runConfigReceived',
+        sessionId: 'sess-1',
         model: 'Opus 4.7',
         effort: 'high',
         yolo: false,

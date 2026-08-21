@@ -11,7 +11,11 @@ snapshot fetch](screen-snapshot-fetch.md) feature's reply, consumed by the [Run 
 store](run-config-store.md)'s data path ([#187](../codebase/187.md)) instead of the session store.
 [#191](../codebase/191.md) extended that member with two more always-present fields,
 `used_tokens`/`window_tokens` (pyrycode/pyrycode#857) — the context-window usage figures the render
-sibling [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192) will consume.
+sibling [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192) consumed. **Both `snapshotReceived`
+and its `screenSnapshotReceived` sibling (below) are removed as of [#621](../codebase/621.md)** — the
+run-config store moved onto the dedicated `runConfigReceived` reply at #491/#500, leaving
+`snapshotReceived` unconsumed, and `screenSnapshotReceived` never outlived its dormancy past #619. Kept
+in this doc's history below for context; neither is a current `DaemonEvent` member.
 
 [#199](../codebase/199.md) added a fifth and sixth no-`SessionAction` member, `assistantDelta` /
 `turnEnd` — the transport slice (L1) of the structured-stream render vertical, consumed by the
@@ -71,15 +75,18 @@ bridge; the real consumer is the render sibling [#242](https://github.com/pyryco
 on this arm carries that warning forward since this ticket has no DOM sink of its own.
 
 [#316](../codebase/316.md) added a nineteenth no-`SessionAction` member, `screenSnapshotReceived` — a
-**deliberate widening**, the opposite move from every content-minimised member above. It carries the
+**deliberate widening**, the opposite move from every content-minimised member above. It carried the
 rendered-screen `text` (and its `ts`) that `snapshotReceived` ([#180](../codebase/180.md)) deliberately
-drops, now that the display slice [#324](../codebase/324.md) needs it. Emitted from the **same**
-`case 'snapshot'` seam as `snapshotReceived` — one decoded `screen_snapshot` frame now fires both
+dropped, once the display slice [#324](../codebase/324.md) needed it. Emitted from the **same**
+`case 'snapshot'` seam as `snapshotReceived` — one decoded `screen_snapshot` frame fired both
 events, each a fresh named-field literal bounding its own two/five fields. Consumed by neither
-existing bridge; `screenSnapshotReceived` is held by the [screen-snapshot store](screen-snapshot-store.md)'s
+existing bridge; `screenSnapshotReceived` was held by the [screen-snapshot store](screen-snapshot-store.md)'s
 observer (#323), whose sole reader, #324's `ScreenSnapshotControl`, was removed by
-[#618](../codebase/618.md) — the store keeps receiving the event regardless. See
-[screen snapshot fetch](screen-snapshot-fetch.md) for the full data-flow update.
+[#618](../codebase/618.md), and the store and bridge themselves by [#619](../codebase/619.md) — the
+event kept firing into zero subscribers regardless, until
+**[#621](../codebase/621.md) removed the member itself**, along with `snapshotReceived` and the
+`case 'snapshot'` emit that produced both. See [screen snapshot fetch](screen-snapshot-fetch.md) for
+the full data-flow history.
 
 ## What it does
 
@@ -114,9 +121,8 @@ export type DaemonEvent =
   | { type: 'debugBundleProgress'; chunksReceived: number }
   | { type: 'debugBundleSaved'; path: string }
   | { type: 'debugBundleFailed'; reason: DebugBundleFailure }
-  | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean
+  | { type: 'runConfigReceived'; sessionId: string; model: string; effort: string; yolo: boolean
       ; used_tokens: number; window_tokens: number }
-  | { type: 'screenSnapshotReceived'; text: string; ts: string }
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
@@ -135,33 +141,39 @@ export type DaemonEvent =
   | { type: 'sessionSettingsRejected'; changeId: string }
 ```
 
+`snapshotReceived` and `screenSnapshotReceived` — the two members that occupied this spot through
+#620 — are gone as of [#621](../codebase/621.md); `runConfigReceived` (added at #491, shown above at
+its position between the debug-bundle members and `assistantDelta`) had already superseded
+`snapshotReceived` as the run-config sheet's data source. See § History below the bullet list for what
+the two removed members carried while they existed.
+
 - **The six session-lifecycle members map 1:1 onto [session-store](session-store.md) `SessionAction` arms** — the four connection-lifecycle events plus a single-message event and a message-**batch** event. Member and field names mirror `SessionAction`'s (`ack`, `error`, `message`, `messages`) so #19's mapping is nearly an identity.
 - **The three debug-bundle members ([#168](../codebase/168.md)) map to *no* `SessionAction`.** `debugBundleProgress{chunksReceived}` / `debugBundleSaved{path}` / `debugBundleFailed{reason}` are consumed by the download UI ([#72](https://github.com/pyrycode/pyrycode-desktop/issues/72)), not the session store — the [daemon-event bridge](daemon-event-bridge.md)'s `translateDaemonEvent` maps all three to `null` and the bridge skips the dispatch. `DebugBundleFailure` is a **coarse, closed** three-value category enum by design: the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed) collapses the transport's finer 5-value `BundleFailReason` ([debug-bundle reassembly](debug-bundle-reassembly.md)) plus any save errno onto these three, so the renderer never learns transport internals. None of the three carries a token, key, raw frame, or bundle bytes — only a count, a local filesystem path, and a category.
 - **`snapshotReceived{model,effort,yolo,used_tokens,window_tokens}`** ([#180](../codebase/180.md);
-  extended with the two usage ints by [#191](../codebase/191.md)) **also maps to *no*
-  `SessionAction`**, consumed instead by the [Run configuration store](run-config-store.md)'s data
-  path ([#187](../codebase/187.md)) — which as of #191 still copies out only `model`/`effort`/`yolo`,
-  ignoring the two ints until [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192). It is
-  a **dedicated minimal shape**, deliberately **not** a reuse of the wire `ScreenSnapshotPayload` it
-  is derived from — that wire type also carries `text` (the rendered screen) and `ts`/
-  `conversation_id`, none of which this member has a field for. See [screen snapshot
-  fetch](screen-snapshot-fetch.md) for why that's the load-bearing content-minimisation control, not
-  an incidental narrowing.
-- **`screenSnapshotReceived{text,ts}`** ([#316](../codebase/316.md)) also maps to *no* `SessionAction`,
-  emitted from the **same** `case 'snapshot'` seam as `snapshotReceived` — one `screen_snapshot` frame
-  now fires both events. Unlike `snapshotReceived`, this is a **deliberate, security-reviewed
-  widening**: it carries exactly the two fields `snapshotReceived` was built to exclude (`text`, the
-  rendered daemon screen, and `ts`, its RFC3339 timestamp), reversing #180's drop now that a consumer
-  exists (the display slice #324, split from #318 via the [screen-snapshot store](screen-snapshot-store.md)'s
-  #323). Like `assistantDelta`, `text` IS the render payload and crosses IPC on purpose — the
-  boundary defended upstream is the fail-closed decode (`parseScreenSnapshotPayload`, unchanged since
-  #180), not this internal channel. The emit is a **fresh named-field literal**
+  extended with the two usage ints by [#191](../codebase/191.md); **removed [#621](../codebase/621.md)**)
+  mapped to *no* `SessionAction`, consumed by the [Run configuration store](run-config-store.md)'s data
+  path ([#187](../codebase/187.md)) until [#491/#500](run-config-store.md#moved-off-screen_snapshot-491500)
+  moved that store onto the dedicated `runConfigReceived` reply instead, leaving this member
+  unconsumed. It was a **dedicated minimal shape**, deliberately **not** a reuse of the wire
+  `ScreenSnapshotPayload` it was derived from — that wire type also carried `text` (the rendered
+  screen) and `ts`/`conversation_id`, none of which this member had a field for. See [screen snapshot
+  fetch](screen-snapshot-fetch.md) for the load-bearing content-minimisation control this was, not an
+  incidental narrowing, and for the full removal history.
+- **`screenSnapshotReceived{text,ts}`** ([#316](../codebase/316.md); **removed [#621](../codebase/621.md)**)
+  also mapped to *no* `SessionAction`, emitted from the **same** `case 'snapshot'` seam as
+  `snapshotReceived` — one `screen_snapshot` frame fired both events. Unlike `snapshotReceived`, it
+  was a **deliberate, security-reviewed widening**: it carried exactly the two fields
+  `snapshotReceived` was built to exclude (`text`, the rendered daemon screen, and `ts`, its RFC3339
+  timestamp), reversing #180's drop once a consumer existed (the display slice #324, split from #318
+  via the [screen-snapshot store](screen-snapshot-store.md)'s #323). Like `assistantDelta`, `text` WAS
+  the render payload and crossed IPC on purpose — the boundary defended upstream was the fail-closed
+  decode (`parseScreenSnapshotPayload`, which still exists — only the emit was removed), not this
+  internal channel. The emit was a **fresh named-field literal**
   (`{ text: inbound.snapshot.text, ts: inbound.snapshot.ts }`), never a spread of the decoded payload, so
-  the widening is bounded to exactly these two fields — `conversation_id`/`model`/`effort`/`yolo`/the two
-  usage ints stay on `snapshotReceived` only. `text` is untrusted daemon-relayed content: #324
-  renders it as plain text, never HTML (the `conversationCreated`/`sessionTransition`/`queueState`
-  warning applied to a fourth field family). Consumed by none of the three existing bridges; ships
-  dormant.
+  the widening was bounded to exactly these two fields. `text` was untrusted daemon-relayed content:
+  #324 rendered it as plain text, never HTML — but #324 was itself removed by
+  [#618](../codebase/618.md), and this member never gained another reader before #619 deleted the
+  store that held it and #621 deleted the member itself.
 - **`assistantDelta{turnId,seq,text}` / `turnEnd{turnId,stopReason}`** ([#199](../codebase/199.md))
   also map to *no* `SessionAction`, consumed instead by the renderer timeline bridge
   [#202](../codebase/202.md) will build. Field names are renamed from the wire's `snake_case`
@@ -350,10 +362,12 @@ export type DaemonEvent =
   [the announced-model store](announced-model-store.md), #588 (shipped, still dormant pending #560's
   render surface). Claude's own identity report for the turn (its `system`/`init` line),
   answering what the spawn argument cannot: the daemon knows what it *requested*, only claude knows what
-  it *got*. **`model` collides by name with two arms above and means the opposite thing** —
-  `snapshotReceived` and `runConfigReceived` both carry a `model: string` meaning the per-session
+  it *got*. **`model` collides by name with an arm above and means the opposite thing** —
+  `runConfigReceived` carries a `model: string` meaning the per-session
   *override* (`''` = "inherited default, no override"); this one means what claude *announced*, and in
-  the ordinary case the two disagree (the override is `''` while claude has named a concrete model). The
+  the ordinary case the two disagree (the override is `''` while claude has named a concrete model).
+  (Through [#621](../codebase/621.md), `snapshotReceived` carried the same colliding field too — the
+  warning named both; it now names only the surviving arm.) The
   wire field name is kept (no drift, ADR 0002); the distinction is drawn in the arm's own comment, the
   way the daemon's own payload doc draws it. `model` is held verbatim — not reliably dated, need not
   appear in any published model list, so a lookup miss on #588's side is ordinary, not an error.
@@ -431,7 +445,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **No runtime shape validation at the preload.** The producer is our own trusted main process; a `zod`-style validator would add a dependency to defend against a bug, not an attacker (a compromised main process is already game-over). Revisit only if a less-trusted producer ever sends on this channel.
 - **`connected.ack` carries the whole `HelloAckPayload`.** Narrow to `{ server_id, conn_id }` later only if #19/#12 prove the UI needs less — mirrors [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md)'s deferral.
 - **The three debug-bundle members now have a real producer.** [#168](../codebase/168.md) declared them inert; the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md)) now calls `emitDaemonEvent` with `debugBundleProgress`/`debugBundleSaved`/`debugBundleFailed` from the composition root.
-- **`snapshotReceived` has a real producer from the start.** [#180](../codebase/180.md) wires `emitDaemonEvent` for it directly from `daemonConnection.ts`'s inbound `case 'message'` arm, the same choke point as `messageReceived`/`messagesReceived` — no separate orchestrator, unlike the debug-bundle members (a snapshot has no multi-step progress to coordinate).
+- **`snapshotReceived` had a real producer from the start, until #621 removed it.** [#180](../codebase/180.md) wired `emitDaemonEvent` for it directly from `daemonConnection.ts`'s inbound `case 'snapshot'` arm, the same choke point as `screenSnapshotReceived` below — no separate orchestrator, unlike the debug-bundle members. [#621](../codebase/621.md) deleted that whole `case` block, taking both members' emits with it.
 - **`assistantDelta`/`turnEnd` had a real producer but no traffic through #178.** [#199](../codebase/199.md) wired `emitDaemonEvent` for both from the same `case 'message'` choke point; the daemon sent neither until [#179](../codebase/179.md) advertised the `interactive` capability — a Strangler-Fig decode path with a real emitter and zero live callers until then, proven only by unit tests driving `daemonConnection` directly. Now live.
 - **`conversationsReceived` has a real producer, but no request trigger yet in this ticket.** [#139](../codebase/139.md) wires `emitDaemonEvent` for it from the same `case 'message'` choke point, and also adds the outbound `requestConversations` [command](command-channel.md) — but nothing calls `sendCommand({type:'requestConversations'})` until [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)'s store fires it on connect. Unlike `assistantDelta`/`turnEnd` (blocked on a daemon capability flip), this is blocked only on the sibling ticket landing.
 - **`turnState` had a real producer but no traffic through #178 — same capability gate as `assistantDelta`/`turnEnd`.** [#214](../codebase/214.md) wired `emitDaemonEvent` for it from the same `case 'message'` choke point, giving `selectPhase` a real source for the first time; no `turn_state` frame reached it until [#179](../codebase/179.md) flipped `interactive`. Proven only by unit tests driving `daemonConnection` and `timelineBridge` directly, and by the timeline store's own no-churn round-trip test, until then. Now live.
@@ -443,7 +457,7 @@ onDaemonEvent: (listener: (event: DaemonEvent) => void): (() => void) => {
 - **`toolResult` had a real producer but no traffic through #178 — same capability gate.** [#229](../codebase/229.md) wired `emitDaemonEvent` for it from the same `case 'message'` choke point, giving `selectItems` its first real *resolved* `toolCall`; no `tool_result` frame reached it until [#179](../codebase/179.md) flipped `interactive`. Proven only by unit tests driving `daemonConnection` and `timelineBridge` directly (the latter through a real `createTimelineStore()`), and by the reducer's existing `fillResult` correlation tests (#121), until then. Now live.
 - **`queueState` is wired at the same `case 'message'` choke point as `toolUse`/`toolResult`, but its traffic is not known to be gated behind the `interactive` capability flip.** [#292](../codebase/292.md) added the emit from `daemonConnection.ts` directly, alongside `tool-use`/`tool-result`/`conversations`; unlike those turn-stream arms, `queue_state` is daemon **state** (#720) that can change independent of any turn being interactive, so — unlike the documented #178/#179 gate for `turnState`/`toolUse`/`toolResult`/`modalShown` — no capability precondition is asserted here. Proven only by unit tests driving `daemonConnection` and all three bridges directly; a live daemon `queue_state` frame has not yet been observed through #178.
 - **`modalAnswerRejected` is correlated, not decoded.** [#248](../codebase/248.md) added a fifteenth member, `modalAnswerRejected{modalId}` — the only member built entirely from main-side memory rather than a wire field: the daemon `error` (#116) that follows a rejected `modal_answer` carries no `modal_id`, so `daemonConnection.ts` attributes it via a FIFO queue of its own outstanding answered ids (push-on-send, dequeue-on-error, drain-on-accept, reset-on-dial). Consumed by neither `daemonEventBridge` nor `timelineBridge` (both null it); the real, still-dormant owner is the [modal store + bridge](modal-store-bridge.md) — render lands in #249.
-- **`screenSnapshotReceived` shares its producer's choke point with `snapshotReceived`, not a new one.** [#316](../codebase/316.md) added the second `emitDaemonEvent` call inside the same `case 'snapshot'` block `snapshotReceived` already occupies — the first member to be emitted from an *existing* member's exact call site rather than a new `case` or a new orchestrator. Both fire on every `screen_snapshot` reply; `screen_snapshot` is always-available (ADR-025, not gated on `interactive` — see [screen snapshot fetch](screen-snapshot-fetch.md)), so unlike `assistantDelta`/`turnState`/`toolUse`, this member had live traffic from the moment #180 shipped the underlying request/reply, not gated behind [#179](../codebase/179.md).
+- **`screenSnapshotReceived` shared its producer's choke point with `snapshotReceived`, not a new one — and both were removed together.** [#316](../codebase/316.md) added the second `emitDaemonEvent` call inside the same `case 'snapshot'` block `snapshotReceived` already occupied — the first member to be emitted from an *existing* member's exact call site rather than a new `case` or a new orchestrator. Both fired on every `screen_snapshot` reply; `screen_snapshot` is always-available (ADR-025, not gated on `interactive` — see [screen snapshot fetch](screen-snapshot-fetch.md)), so unlike `assistantDelta`/`turnState`/`toolUse`, this member had live traffic from the moment #180 shipped the underlying request/reply, not gated behind [#179](../codebase/179.md). Sharing one choke point meant [#621](../codebase/621.md) removed both emits in the same deletion — there was no seam to split the removal on either.
 - **`sessionSettingsRejected` is correlated by lookup, not by FIFO memory.** [#269](../codebase/269.md) added a seventeenth member, sharing the *same* `daemon-error` wire trigger as `modalAnswerRejected` above but a different attribution mechanism: unlike the FIFO (which cannot disambiguate two outstanding answers of the same kind and picks oldest-first), `daemon-error` here is looked up in `pendingSettings` by its own `Envelope.in_reply_to` — a precise per-request match, not a queue position. On a match this precedence gate **consumes the frame entirely**, skipping both the bundle reassembler and the `modalAnswerRejected` FIFO shift; on no match, both fire exactly as before #269. Consumed by none of the three existing bridges; the real consumer is the [Run configuration write store](run-settings-write-store.md) ([#256](../codebase/256.md), shipped), same as `sessionSettingsUpdated`.
 
 ## Security posture
@@ -459,7 +473,8 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [Debug-bundle reassembly (inbound)](debug-bundle-reassembly.md) / [#116](../codebase/116.md) — source of the finer `BundleFailReason` (5 values) the [orchestrator](debug-bundle-orchestrator.md) (#169) maps onto this channel's coarse `DebugBundleFailure` (3 values)
 - [Command channel](command-channel.md) / [#168](../codebase/168.md) — the mirror-image `requestDebugBundle` command that triggers the download this channel's three new members report on
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the real producer of the three debug-bundle members, wired at the composition root
-- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `snapshotReceived` member (survives), its `requestSnapshot` [command channel](command-channel.md) mirror (removed [#620](../codebase/620.md)), and the content-minimisation reasoning behind its dedicated (non-wire-type-reusing) shape
+- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `snapshotReceived` member (removed [#621](../codebase/621.md)), its `requestSnapshot` [command channel](command-channel.md) mirror (removed [#620](../codebase/620.md)), and the content-minimisation reasoning behind its dedicated (non-wire-type-reusing) shape
+- [#621 codebase notes](../codebase/621.md) — removed `snapshotReceived` and `screenSnapshotReceived` from the `DaemonEvent` union and the shared `case 'snapshot'` emit that produced both; a well-formed `screen_snapshot` frame now decodes and is silently dropped, producing no event
 - [Thread timeline (conversation model)](thread-timeline.md) / [#199](../codebase/199.md) — the `assistantDelta`/`turnEnd` members, the transport slice of the structured-stream render vertical, and the deliberate content-carrying divergence from `snapshotReceived`'s minimisation pattern
 - [Inbound message decode](inbound-message-decode.md) / [#199](../codebase/199.md) — the `assistant_delta`/`turn_end` decode this channel's two new members are constructed from
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `conversationsReceived` member, its `requestConversations` [command channel](command-channel.md) mirror, and why it reuses the wire row type verbatim instead of a hand-built minimal shape
@@ -469,7 +484,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#492 codebase notes](../codebase/492.md) — the `apiRetry` member, `stallDetected`'s peer but **not** nullary: carries `active`/`current`/`total` (`conversation_id` dropped), because the render slice #493 needs "attempt N/M" and the wire gives it nowhere else. Not onset-only and not deduped, unlike every prior status-liveness member; consumed as a no-op by all three exhaustive bridges at ship time
 - [#493 codebase notes](../codebase/493.md) — the render slice: the [conversation timeline store](conversation-timeline-store.md)'s bridge claims `apiRetry` as a seventh owned arm, feeding a new `apiRetry: ApiRetryStatus | null` scalar `ApiRetryIndicator` renders, with the clearing semantics deliberately inverted from `stalled`
 - [#495 codebase notes](../codebase/495.md) — the `compacting` member, `apiRetry`'s peer but **banner-only**: carries only `active` (`conversation_id` dropped), since the wire streams no compaction progress for the render slice #496 to carry a counter from. Like `apiRetry`, not onset-only and not deduped; consumed as a no-op by all three exhaustive bridges at ship time
-- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member, the nineteenth no-`SessionAction` arm and, unlike every prior member, a deliberate **widening** (not a minimisation): carries exactly the `text`/`ts` fields `snapshotReceived` (#180) was built to exclude, emitted from that same member's `case 'snapshot'` seam; consumed as a no-op by all three exhaustive bridges, real consumer is the [screen-snapshot store](screen-snapshot-store.md) (#323) and the display slice #324
+- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member (removed [#621](../codebase/621.md)), the nineteenth no-`SessionAction` arm and, unlike every prior member, a deliberate **widening** (not a minimisation): carried exactly the `text`/`ts` fields `snapshotReceived` (#180) was built to exclude, emitted from that same member's `case 'snapshot'` seam; consumed as a no-op by all three exhaustive bridges, real consumer was the [screen-snapshot store](screen-snapshot-store.md) (#323) and the display slice #324, both removed by #618/#619 before this member itself was
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member, the fourth arm the `timelineBridge` owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member, the twelfth no-`SessionAction` arm and the vertical's last transport slice; the fifth arm the `timelineBridge` owns and the first to resolve an existing `ThreadItem` in place rather than append one or set a scalar

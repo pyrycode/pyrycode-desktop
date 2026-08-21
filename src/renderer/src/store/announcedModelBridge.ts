@@ -33,8 +33,8 @@ import { announcedModelStore, type AnnouncedModel } from './announcedModelStore'
  * the three typecheck-gating exhaustive bridges. `null` here means "not our arm", NEVER "bad data": a
  * malformed payload is already rejected upstream, where #587's decoder throws WireDecodeError inside
  * daemonConnection's decode guard and no event is emitted at all. React-free → unit-testable without a
- * DOM. The two `model`-carrying arms it must NOT pick up are `snapshotReceived` and `runConfigReceived`,
- * whose `model` is the per-session OVERRIDE — the opposite value (events.ts:179-185).
+ * DOM. The other `model`-carrying arm it must NOT pick up is `runConfigReceived`, whose `model` is
+ * the per-session OVERRIDE — the opposite value (see the `modelAnnounced` arm's doc in events.ts).
  */
 export function translateModelAnnounced(event: DaemonEvent): AnnouncedModel | null {
   switch (event.type) {

@@ -46,14 +46,6 @@ describe('translateQueueState', () => {
       { type: 'connected', ack },
       { type: 'disconnected' },
       { type: 'messageReceived', message },
-      {
-        type: 'snapshotReceived',
-        model: '',
-        effort: '',
-        yolo: false,
-        used_tokens: 0,
-        window_tokens: 0
-      },
       { type: 'conversationsReceived', conversations: [] },
       {
         type: 'sessionTransition',

@@ -14,19 +14,20 @@ view to replace it was discussed and deliberately deferred, not built.
 
 ## What stayed, and what's next
 
-The `screenSnapshotReceived` event and its wire types are **not** removed by #619 — see
-[Screen snapshot fetch](screen-snapshot-fetch.md), which still emits `screenSnapshotReceived` off the
-daemon's unsolicited `snapshot` push, now to zero renderer subscribers. The outbound `requestSnapshot`
-transport command, its connection method, and its dedicated envelope builder **were** removed, by
-[#620](../codebase/620.md) — so nothing in this client can trigger that push anymore, though the
-inbound decode still tolerates one arriving unprompted. The three exhaustive renderer bridges
-(`daemonEventBridge`/`timelineBridge`/`modalBridge`) still carry compile-forced `screenSnapshotReceived`
-no-op arms, pending [#621](https://github.com/pyrycode/pyrycode-desktop/issues/621) (removes the event
-member itself) and [#622](https://github.com/pyrycode/pyrycode-desktop/issues/622) (removes the inbound
-decode). A handful of comments in `announcedModelStore.ts`/`announcedModelBridge.ts`/
-`serverInfoLoader.ts` still cite this store and `ScreenSnapshotData` as a design precedent — left in
-place for [#635](https://github.com/pyrycode/pyrycode-desktop/issues/635), which sweeps the whole
-series' stranded citations in one pass.
+The outbound `requestSnapshot` transport command, its connection method, and its dedicated envelope
+builder were removed by [#620](../codebase/620.md) — so nothing in this client can trigger the daemon's
+`snapshot` push anymore. The `screenSnapshotReceived` event itself (and its sibling
+`snapshotReceived`) is now **also gone**, removed by [#621](../codebase/621.md) along with the
+`case 'snapshot':` emit that produced it and the three exhaustive renderer bridges'
+(`daemonEventBridge`/`timelineBridge`/`modalBridge`) compile-forced no-op arms for it — a well-formed
+`screen_snapshot` frame is decoded and silently dropped, producing no event at all. Only the inbound
+decode survives (`parseScreenSnapshotPayload`, the `kind: 'snapshot'` `InboundDaemonMessage` arm),
+dead code pending [#622](../codebase/622.md). See [Screen snapshot fetch](screen-snapshot-fetch.md)
+for the full data-flow history. A handful of comments in
+`announcedModelStore.ts`/`announcedModelBridge.ts`/`serverInfoLoader.ts` still cite this store and
+`ScreenSnapshotData` as a design precedent — left in place for
+[#635](https://github.com/pyrycode/pyrycode-desktop/issues/635), which sweeps the whole series'
+stranded citations in one pass.
 
 ## Related
 
@@ -39,3 +40,5 @@ series' stranded citations in one pass.
 - [#618 codebase notes](../codebase/618.md) — removed `ScreenSnapshotControl`, leaving this store
   reader-less.
 - [#619 codebase notes](../codebase/619.md) — deleted the store and bridge outright.
+- [#621 codebase notes](../codebase/621.md) — removed the `screenSnapshotReceived` event itself (and
+  its sibling `snapshotReceived`) along with the three bridges' no-op arms.

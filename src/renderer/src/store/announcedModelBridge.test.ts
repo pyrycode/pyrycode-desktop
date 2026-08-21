@@ -53,22 +53,14 @@ describe('translateModelAnnounced', () => {
     expect(result).not.toBe(event)
   })
 
-  it('returns null for a sample of unrelated daemon events, INCLUDING the two name-colliding arms', () => {
-    // snapshotReceived and runConfigReceived both carry a `model: string` meaning the per-session
-    // OVERRIDE — the opposite value (events.ts:179-185). The filter must never pick one up and mistake
-    // it for claude's announcement.
+  it('returns null for a sample of unrelated daemon events, INCLUDING the name-colliding arm', () => {
+    // runConfigReceived also carries a `model: string`, but it means the per-session OVERRIDE — the
+    // opposite value (see the `modelAnnounced` arm's doc in events.ts). The filter must never pick it
+    // up and mistake it for claude's announcement.
     const others: DaemonEvent[] = [
       { type: 'connecting' },
       { type: 'disconnected' },
       { type: 'messageReceived', message },
-      {
-        type: 'snapshotReceived',
-        model: '',
-        effort: '',
-        yolo: false,
-        used_tokens: 0,
-        window_tokens: 0
-      },
       {
         type: 'runConfigReceived',
         sessionId: 's',

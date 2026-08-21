@@ -240,14 +240,6 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       { type: 'debugBundleSaved', path: '/downloads/bundle.tar.gz' },
       { type: 'debugBundleFailed', reason: 'unavailable' },
       {
-        type: 'snapshotReceived',
-        model: 'claude-x',
-        effort: 'high',
-        yolo: true,
-        used_tokens: 45000,
-        window_tokens: 200000
-      },
-      {
         type: 'conversationsReceived',
         conversations: [
           {
@@ -283,9 +275,6 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
         conversationId: 'conv-1',
         queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
       },
-      // screen-snapshot text ships dormant (#316); its consumer is the display slice #318, not the
-      // timeline store — it is not a turn-stream ThreadItem.
-      { type: 'screenSnapshotReceived', text: 'rendered screen', ts: '2026-07-08T00:00:00Z' },
       // relay-link status ships dormant (#328); its consumer is the relay-link store #329, not the
       // timeline store — the relay socket leg is not a turn-stream item.
       { type: 'relayLinkChanged', status: 'connected' },

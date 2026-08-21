@@ -736,8 +736,10 @@ anything from it. Because the sheet body is conditionally mounted
 so "request once per open" reduces to "request once per mount" — a `useRef(false)` guard makes that
 hold even under React StrictMode's dev double-invoke. A second effect subscribes to
 `window.pyry.onDaemonEvent` (off-handle cleanup, the `daemonEventBridge` idiom) and writes each
-arriving `snapshotReceived` verbatim into the [Run configuration store](run-config-store.md)'s
-single setter. See [Run configuration store](run-config-store.md) for the full data-path design and
+arriving `runConfigReceived` verbatim into the [Run configuration store](run-config-store.md)'s
+single setter (originally `snapshotReceived`, moved onto the dedicated reply at #491/#500 — see [Run
+configuration store § Moved off screen_snapshot](run-config-store.md#moved-off-screen_snapshot-491500)).
+See [Run configuration store](run-config-store.md) for the full data-path design and
 [#187 codebase notes](../codebase/187.md) for patterns established.
 
 ### Run configuration Model/Effort/YOLO sections (#188)
@@ -811,7 +813,8 @@ paths [Run configuration write store](run-settings-write-store.md) already conve
 The fourth and last section of the read-only surface, mounted between `YoloSection` and the sibling
 `LogDataSection` per Figma order. Widens the [Run configuration store](run-config-store.md)'s held
 `RunConfigSnapshot` (and the `toRunConfigSnapshot` copy) by the two usage figures [#191](../codebase/191.md)
-already carries on `snapshotReceived` — `usedTokens`/`windowTokens` — and renders them as:
+already carries on the transport event (originally `snapshotReceived`, now `runConfigReceived`,
+#491/#500) — `usedTokens`/`windowTokens` — and renders them as:
 
 - **Available (`windowTokens > 0`):** a usage line — `` `${pct}% used (${abbreviateTokens(usedTokens)}
   of ${abbreviateTokens(windowTokens)} tokens)` `` — above a `role="progressbar"` track/fill whose fill
@@ -1653,7 +1656,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
-- [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`; also hosted the `requestSnapshot` command (removed #620) and the `screenSnapshotReceived` event #324's now-removed control used to send and render (#316, #324, removed #618)
+- [Screen snapshot fetch](screen-snapshot-fetch.md) — the original transport data path (#180, extended #191) `<RunConfigData/>` consumed via `snapshotReceived` until #491/#500 moved it onto [Run configuration store](run-config-store.md)'s `runConfigReceived`; also hosted the `requestSnapshot` command (removed #620), the `screenSnapshotReceived` event #324's now-removed control used to send and render (#316, #324, removed #618), and both events removed outright by [#621](../codebase/621.md)
 - [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323), reader-less since [#618](../codebase/618.md) removed `ScreenSnapshotControl`, its former sole consumer (#324), then deleted outright by [#619](../codebase/619.md)
 - [Relay-link store](relay-link-store.md) — the dedicated store (#329) `<ConnectionStatusIndicatorControl/>` reads via `selectRelayLinkStatus`, its first real consumer; combined at render time with [session store](session-store.md)'s `ConnectionStatus` (#330)
 - [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` now also writes to this store's `dispatch` as the `userText` producer, and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is now translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` reads the store's new `selectStalled` (#317, transport #315); `<ApiRetryIndicator/>` reads the store's new `selectApiRetry`, and the exported `shouldShowThinking` predicate reads it alongside `selectPhase` to narrow `<ThinkingIndicator/>`'s gate (#493, transport #492); `<CompactingIndicator/>` reads the store's new `selectCompacting`, and `shouldShowThinking` gains a second clause reading it to narrow `<ThinkingIndicator/>`'s gate again (#496, transport #495)

@@ -1,22 +1,44 @@
 # Run configuration store
 
 The renderer's held copy of the active session's **Model / Effort / YOLO** settings — a dedicated,
-unidirectional Zustand store fed by an on-open `screen_snapshot` fetch, so the [Run configuration
+unidirectional Zustand store fed by an on-open fetch, so the [Run configuration
 sheet](conversation-shell.md#run-configuration-sheet-177) can display how the session is running.
 
 Introduced in [#187](../codebase/187.md), split A (data path) of
 [#181](https://github.com/pyrycode/pyrycode-desktop/issues/181) — itself split from
-[#156](../codebase/156.md). Consumes the transport [#180](../codebase/180.md) already shipped
-(`requestSnapshot` command, `snapshotReceived` event). This store itself delivered no visible
-surface; the sibling [#188](../codebase/188.md) renders the three sections
-(`RunConfigSections`/`RunConfigView`) from the values it holds.
+[#156](../codebase/156.md). Originally consumed the transport [#180](../codebase/180.md) had shipped
+(`requestSnapshot` command, `snapshotReceived` event, sourced from a `screen_snapshot` reply — a
+picture of the terminal that carried the run configuration as a side-load). **Moved onto the
+dedicated `requestSessionSettings` command / `runConfigReceived` event at #491/#500** (see § Moved
+off `screen_snapshot` below) — a daemon with no terminal to photograph, which is every daemon on the
+stream-json interactive runner, refused the old reply outright and left the sheet permanently inert
+on that runner; the new reply is daemon-wide and answers on both runners, and also finally carries a
+session id to address writes to. This store itself delivered no visible surface at #187; the sibling
+[#188](../codebase/188.md) renders the three sections (`RunConfigSections`/`RunConfigView`) from the
+values it holds.
 
-[#191](../codebase/191.md) extended `snapshotReceived` with two more fields, `used_tokens` /
+[#191](../codebase/191.md) extended the transport event with two more fields, `used_tokens` /
 `window_tokens` (context-window usage) — this store required **zero** change at the time, exactly as
 the `toRunConfigSnapshot`'s explicit-copy comment predicted. [#192](../codebase/192.md) is that
 extension: it widens both the held `RunConfigSnapshot` and the `toRunConfigSnapshot` copy by the two
 figures (`usedTokens`/`windowTokens`) and renders the fourth read-only section, **Context window**,
 from them — see below.
+
+## Moved off `screen_snapshot` (#491/#500)
+
+`screen_snapshot` is refused outright whenever there is no terminal to photograph — always, on the
+stream-json interactive runner — so the sheet was inert in production despite #187–#192 shipping a
+working data path. #491 moved the fetch onto `request_session_settings` /
+`runConfigReceived`, a reply the runner actually answers, and dropped the active-conversation
+dependency in the same move: the new request is **bare** (no `conversation_id`) because the reply is
+daemon-wide, so there is no id to resolve first and no `conversation.not_found` to fire into. #500
+added the session id half — `runConfigReceived.sessionId` is now also written, to the
+[session-id store](session-id-store.md), on the same frame as the settings fields (see § The data
+path below) — because the sheet's write-side controls ([Run configuration write
+store](run-settings-write-store.md), #256/#257) need a session to address a `set_session_settings`
+change to, and `screen_snapshot` never carried one at all. [#621](../codebase/621.md) later removed
+`snapshotReceived`/`screen_snapshot`'s daemon events entirely, once this move left them unconsumed
+everywhere — see [Screen snapshot fetch](screen-snapshot-fetch.md).
 
 [#257](../codebase/257.md) later made the Model/Effort/YOLO sections **interactive**: this store's
 `snapshot` remains the read-only daemon base, now composed *underneath* the adjacent
@@ -27,10 +49,11 @@ render.
 
 ## What it does
 
-Requests a fresh `screen_snapshot` every time the Run configuration sheet opens, and holds the
-arriving `model` / `effort` / `yolo` in a read-only store until the next one arrives. Deliberately
-**not** a [session store](session-store.md) facet: a snapshot never touches connection/messages
-state and vice versa, so a snapshot arrival re-renders only components selecting this slice.
+Requests the session settings fresh every time the Run configuration sheet opens
+(`requestSessionSettings`, bare — no conversation id), and holds the arriving `model` / `effort` /
+`yolo` (plus the two usage figures, #192) in a read-only store until the next one arrives.
+Deliberately **not** a [session store](session-store.md) facet: a settings arrival never touches
+connection/messages state and vice versa, so it re-renders only components selecting this slice.
 
 ## How it works
 
@@ -73,24 +96,41 @@ path unit-tests with plain spies — no React, no store, no Electron:
 
 ```ts
 toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | null
-// snapshotReceived → {model, effort, yolo, usedTokens, windowTokens} verbatim (explicit copy, not a
-// spread — keeps the store shape immune to DaemonEvent gaining an unrelated field later; #192 maps
-// the wire snake_case used_tokens/window_tokens to the store's camelCase); every other event → null.
+// runConfigReceived → {model, effort, yolo, usedTokens, windowTokens} verbatim (explicit copy, not a
+// spread — keeps the store shape immune to DaemonEvent gaining an unrelated field later; the two
+// usage figures map the wire snake_case used_tokens/window_tokens to the store's camelCase); every
+// other event → null.
+
+toSnapshotSessionId(event: DaemonEvent): string | null
+// runConfigReceived → event.sessionId; every other event → null. '' is a real daemon value ("no
+// session to address") held verbatim, never coerced to null — the `!== null` write-gate (below)
+// preserves it, matching sessionIdBridge's discipline.
 
 requestRunConfigSnapshot(sendCommand): void
-// Fires one requestSnapshot command for MILESTONE_CONVERSATION_ID (imported from composerSend.ts —
-// the single source of truth a future conversation-selection ticket replaces). Inline typed literal,
-// no shared constructor — commands.ts has no requestSnapshot builder and adding one would touch a
-// shared file for a one-line nicety.
+// Fires one bare requestSessionSettings command (#491) — no conversation id, since the reply is
+// daemon-wide. Inline typed literal, no shared constructor.
 
-subscribeRunConfig(onDaemonEvent, setSnapshot): () => void
-// onDaemonEvent(event => { const s = toRunConfigSnapshot(event); if (s) setSnapshot(s) }) — returns
-// the off handle (the daemonEventBridge cleanup idiom).
+subscribeRunConfig(onDaemonEvent, setSnapshot, setSessionId): () => void
+// One listener feeds BOTH setters from the SAME event: onDaemonEvent(event => {
+//   const s = toRunConfigSnapshot(event); if (s) setSnapshot(s)
+//   const id = toSnapshotSessionId(event); if (id !== null) setSessionId(id)
+// }). Returns the off handle (the daemonEventBridge cleanup idiom). Deliberately one subscription,
+// not two: the settings and the session id they describe arrive on one frame and are only
+// meaningful together — splitting them would let the sheet show one session's values while
+// addressing another.
 ```
 
-`toRunConfigSnapshot` returns `null` via a plain `default`, not `assertNever` — this filter
-intentionally consumes only `snapshotReceived`; permanent, not a gap to close. Exhaustiveness over
-`DaemonEvent` is enforced exactly once, in `daemonEventBridge.ts`.
+`toRunConfigSnapshot`/`toSnapshotSessionId` return `null` via a plain `default`, not `assertNever` —
+these filters intentionally consume only `runConfigReceived`; permanent, not a gap to close.
+Exhaustiveness over `DaemonEvent` is enforced exactly once, in `daemonEventBridge.ts`.
+
+**Second ingress into the session-id store.** `subscribeRunConfig`'s `setSessionId` write is the
+*second* source for the [session-id store](session-id-store.md) — the first, `sessionIdBridge`,
+consumes the unsolicited `session_transition` marker and stays reactive-only. Neither source is
+preferred; arrival order wins, the store's existing contract. Preferring the marker would be wrong
+right after an eviction (it still names the *previous* id, so this route's next read is the only
+correct value); preferring this route would be wrong after a `/clear` while the sheet sits open with
+a now-stale id (the marker carries the genuinely newer one).
 
 ### The React binding (`src/renderer/src/screens/conversation/RunConfigData.tsx`)
 
@@ -102,24 +142,28 @@ effects, never during render, so it server-renders to empty markup without a bri
 
 Two effects, each with its own StrictMode-correct idiom:
 
-- **Subscription** — `subscribeRunConfig(window.pyry.onDaemonEvent, s => runConfigStore.getState().setSnapshot(s))`
+- **Subscription** — `subscribeRunConfig(window.pyry.onDaemonEvent, s => runConfigStore.getState().setSnapshot(s), id => sessionIdStore.getState().setSessionId(id))`
   in a `useEffect(() => …, [])` returning the off handle as cleanup. Nets exactly one live listener
-  across a StrictMode double-mount (the `daemonEventBridge` idiom).
+  across a StrictMode double-mount (the `daemonEventBridge` idiom), declared *before* the request
+  effect so the listener is live before the request goes out.
 - **Request** — `requestRunConfigSnapshot(window.pyry.sendCommand)`, guarded by a `useRef(false)`
   one-shot flag so the effect (which has no symmetric "un-request" cleanup) fires the request
   exactly once even under the StrictMode dev double-invoke. A genuine close→reopen is a *new*
-  component instance with a fresh ref, so it re-requests — exactly one request per open.
+  component instance with a fresh ref, so it re-requests — exactly one request per open. #491 dropped
+  the old active-conversation dependency, so a sheet opened before any conversation resolved no
+  longer fires nothing at all.
 
 ### Data flow
 
 ```
 sheet opens → <RunConfigData/> mounts
-  → subscribeRunConfig(onDaemonEvent, setSnapshot)         [listener live before the request goes out]
-  → requestRunConfigSnapshot(sendCommand)                  [one requestSnapshot, guarded by useRef]
+  → subscribeRunConfig(onDaemonEvent, setSnapshot, setSessionId)  [listener live before the request goes out]
+  → requestRunConfigSnapshot(sendCommand)                          [one bare requestSessionSettings, guarded by useRef]
 
-daemon → screen_snapshot → snapshotReceived{model,effort,yolo,used_tokens,window_tokens}
-  → onDaemonEvent → toRunConfigSnapshot → setSnapshot(s)
+daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,used_tokens,window_tokens}
+  → onDaemonEvent → toRunConfigSnapshot → setSnapshot(s)  AND  toSnapshotSessionId → setSessionId(id)
   → runConfigStore                                          [most recent snapshot wins]
+  → sessionIdStore                                          [id held verbatim, including '']
   → RunConfigSections (#188/#192): useRunConfigStore(selectSnapshot)
 ```
 
@@ -129,8 +173,9 @@ daemon → screen_snapshot → snapshotReceived{model,effort,yolo,used_tokens,wi
   `import { useRunConfigStore, selectSnapshot } from '@renderer/store/runConfigStore'`.
 - **Mount point:** `src/renderer/src/screens/conversation/ConversationScreen.tsx`, inside
   `<StatusSheet>` — `RunConfigData` (write) first, `RunConfigSections` (read, #188) second.
-- **Conversation id:** `MILESTONE_CONVERSATION_ID` (`'default'`) from `composerSend.ts` — the one
-  place a future conversation-selection ticket replaces.
+- **No conversation id.** Since #491 the fetch is bare — `requestSessionSettings` carries no
+  `conversation_id`, and the reply is daemon-wide. `MILESTONE_CONVERSATION_ID` (`composerSend.ts`) is
+  no longer read by this path.
 
 ## Running model section (#560)
 
@@ -159,28 +204,36 @@ contract, the three-state table, and the forgery-resistance property.
   flight. Revisit only if this surfaces a stale-value concern.
 - **A response landing after an instant close is simply dropped** — the listener unsubscribed with
   the container; the store keeps its prior value and the next open re-requests. No app-level
-  always-on listener; `screen_snapshot` is request/response, so it only arrives while a request is
-  outstanding (sheet open).
-- **No correlation.** Same as [#180](../codebase/180.md): any `screen_snapshot` that arrives is
-  decoded and emitted unconditionally — safe today given a single in-flight fetch against a single
-  conversation.
+  always-on listener; the reply only arrives while a request is outstanding (sheet open).
+- **No correlation.** Any `session_settings` reply that arrives is decoded and emitted
+  unconditionally — safe today given a single in-flight fetch and no `conversation_id` to
+  disambiguate at all (the reply is daemon-wide, #491).
 - **Fire-and-forget request.** `sendCommand` is `void`; a bridge failure is swallowed upstream — no
   result to await, no error surface in this store.
+- **`sessionId: ''` is a real value, not an absence.** It means "the daemon has no session to
+  address"; the write-side gate (`isAddressableSessionId`, in `runSettingsControls`) is what turns it
+  into an inert sheet — this store and its data path hold it verbatim.
 
 ## Related
 
 - [Session store](session-store.md) — the structural precedent this store's DI-factory → singleton
   → hook → selectors shape mirrors, contrasted on reducer-vs-single-setter.
+- [Session-id store](session-id-store.md) — the second write destination this data path feeds
+  (`toSnapshotSessionId`/`setSessionId`, #491/#500); `sessionIdBridge` is the store's other,
+  reactive-only ingress.
 - [Daemon-event bridge](daemon-event-bridge.md) — the `assertNever`-guarded consumer whose
-  `snapshotReceived → null` arm (added in [#180](../codebase/180.md)) reserved this feature's
-  consumer role.
-- [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport half: the `request_snapshot` /
-  `screen_snapshot` wire round trip and the content-minimisation seam that keeps the rendered screen
-  `text` off this event.
+  `runConfigReceived → null` arm reserves this feature's consumer role (originally
+  `snapshotReceived → null`, added at [#180](../codebase/180.md); re-pointed at #491/#500).
+- [Screen snapshot fetch](screen-snapshot-fetch.md) — the original transport half this store fetched
+  from through #491: the `request_snapshot`/`screen_snapshot` round trip and the
+  content-minimisation seam that kept the rendered screen `text` off `snapshotReceived`. Superseded
+  for this store's purposes by `request_session_settings`/`runConfigReceived`; both old events were
+  later removed outright by [#621](../codebase/621.md).
 - [Conversation shell](conversation-shell.md) — the Run configuration sheet
   `RunConfigData` mounts inside.
-- [Composer send](composer-send.md) — hosts `MILESTONE_CONVERSATION_ID`, the single source of truth
-  for the conversation id this store's fetch uses.
+- [Run configuration write store](run-settings-write-store.md) / [#256 codebase
+  notes](../codebase/256.md) — the reason #500 added the session-id half: the write-side controls
+  need an address to send a `set_session_settings` change to.
 - [#187 codebase notes](../codebase/187.md) — implementation summary and patterns established.
 - [#188 codebase notes](../codebase/188.md) — the three read-only sections
   (`RunConfigSections`/`RunConfigView`) that read `selectSnapshot`.

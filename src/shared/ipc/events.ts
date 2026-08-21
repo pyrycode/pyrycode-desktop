@@ -57,23 +57,17 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * discriminated union on `type`. The session-lifecycle members
  * (connecting | connected | disconnected | failed | messageReceived | messagesReceived) map
  * 1:1 onto the session-store's SessionAction arms — #19 maps them with no gaps and no spares.
- * The debug-bundle members (debugBundleProgress | debugBundleSaved | debugBundleFailed, #168)
- * and `snapshotReceived` (#180) map to NO SessionAction — they are consumed by the download UI
- * (#72) and the Run configuration render bridge (#181) respectively, not the session store, so the
+ * The debug-bundle members (debugBundleProgress | debugBundleSaved | debugBundleFailed, #168) map
+ * to NO SessionAction — the download UI (#72) consumes them, not the session store, so the
  * renderer bridge translates them to `null` (see daemonEventBridge).
  *
  * Spans transport-lifecycle events (`connecting`/`disconnected`, from the transport
  * supervisor) and daemon-originated events (`connected`/`failed`/messages, derived from
  * validated wire envelopes upstream). Never carries a token, key, raw frame, or bundle bytes
- * (AC4): the session members reuse only wire payload types, the debug-bundle members carry
- * only a count, a local path, and the closed DebugBundleFailure enum, and `snapshotReceived`
- * (#180) carries the three session-settings fields plus two usage ints (#191) — five fields, a
- * DEDICATED minimal shape, deliberately NOT reusing ScreenSnapshotPayload, so the sensitive
- * rendered-screen `text` never rides `snapshotReceived` (the run-config arm); `text` crosses only
- * on the dedicated `screenSnapshotReceived` arm (#316), where it is the render payload for the
- * live-screen view (#318). Session member and field names mirror
- * SessionAction's so #19's mapping is near-identity, while the two unions stay separately declared
- * per layer.
+ * (AC4): the session members reuse only wire payload types, and the debug-bundle members carry
+ * only a count, a local path, and the closed DebugBundleFailure enum. Session member and field
+ * names mirror SessionAction's so #19's mapping is near-identity, while the two unions stay
+ * separately declared per layer.
  */
 export type DaemonEvent =
   | { type: 'connecting' }
@@ -85,32 +79,20 @@ export type DaemonEvent =
   | { type: 'debugBundleProgress'; chunksReceived: number }
   | { type: 'debugBundleSaved'; path: string }
   | { type: 'debugBundleFailed'; reason: DebugBundleFailure }
-  | {
-      type: 'snapshotReceived'
-      model: string
-      effort: string
-      yolo: boolean
-      used_tokens: number
-      window_tokens: number
-    }
-  // The run-configuration arm (#491). Same five fields as snapshotReceived above PLUS the
-  // `sessionId` the run-config sheet needs to address a set_session_settings to, sourced from the
-  // dedicated `session_settings` reply instead of scraped off a screen photograph.
+  // The run-configuration arm (#491). Six fields: the session's `model` / `effort` / `yolo` plus its
+  // two context-window ints (#191), and the `sessionId` the run-config sheet needs to address a
+  // set_session_settings to. All six come from the dedicated `session_settings` reply.
   //
-  // Why a separate arm rather than widening snapshotReceived: they carry the same values from
-  // DIFFERENT wire replies with different availability. screen_snapshot is refused outright
-  // whenever there is no terminal to photograph — which is always, on the stream-json interactive
-  // runner — so its copies are unreachable on the runner in production. Collapsing the two would
-  // hide exactly the coupling this ticket exists to break.
+  // The sheet was moved onto that reply at #491/#500, off the screen-photograph path it read
+  // before: a screen_snapshot is refused outright whenever there is no terminal to photograph —
+  // which is always, on the stream-json interactive runner — so the sheet was inert in production.
+  // That is why this arm exists, and why its values must keep coming from a reply the runner
+  // actually answers.
   //
   // `sessionId: ''` is a real value meaning "the daemon has no session to address" and MUST NOT be
   // coerced to null; the sheet's gate treats it as not-addressable. A session id is a routing id,
   // not a secret (the conversation_id / sessionTransition convention), and no token, key, raw
   // frame, or rendered screen `text` can ride this arm.
-  //
-  // snapshotReceived is left in place and is unconsumed after this ticket; retiring it is a
-  // follow-up, deliberately not bundled here (its emit is covered by a security-reviewed
-  // no-echo assertion).
   | {
       type: 'runConfigReceived'
       sessionId: string
@@ -120,21 +102,10 @@ export type DaemonEvent =
       used_tokens: number
       window_tokens: number
     }
-  // The dedicated rendered-screen arm (#316, split from #147). Carries ONLY the rendered daemon screen
-  // `text` (the wire ScreenSnapshotPayload.text) and its `ts` (the RFC3339 timestamp string) — no token,
-  // key, raw frame, conversation_id, or run-config field (those ride snapshotReceived, above). A
-  // DELIBERATE, security-reviewed WIDENING: it reverses #180's text-drop now that a consumer exists.
-  // Like assistantDelta, `text` IS the render payload and crosses IPC deliberately — the boundary
-  // defended upstream is the fail-closed decode (parseScreenSnapshotPayload, #180), not this internal
-  // channel. `text` is UNTRUSTED daemon-relayed content: the display slice #318 (the first consumer)
-  // must render it as PLAIN TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML), mirroring the
-  // identical warning on conversationCreated / sessionTransition / queueState. This slice has no DOM
-  // sink; the constraint is inherited for #318. Ships dormant — all three exhaustive bridges no-op it.
-  | { type: 'screenSnapshotReceived'; text: string; ts: string }
-  // The two v2 interactive-stream arms (#199). Unlike snapshotReceived, `text` IS the render payload
-  // (#203) and crosses IPC deliberately — the boundary defended upstream is the fail-closed decode, not
-  // this internal channel. Consumed by the renderer timeline bridge (#202), not the session store.
-  // camelCase per AC3; carry only turnId / seq / text / stopReason — no token, key, or raw frame.
+  // The two v2 interactive-stream arms (#199). `text` IS the render payload (#203) and crosses IPC
+  // deliberately — the boundary defended upstream is the fail-closed decode, not this internal
+  // channel. Consumed by the renderer timeline bridge (#202), not the session store. camelCase per
+  // AC3; carry only turnId / seq / text / stopReason — no token, key, or raw frame.
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   // The coarse turn-lifecycle arm (#214). Carries only `state` (a closed 3-value wire enum);
@@ -176,13 +147,13 @@ export type DaemonEvent =
   // daemon mapping gap like unrecognizedMessage: an IDENTITY report, answering what the spawn argument
   // cannot — the daemon knows what it REQUESTED, only claude knows what it GOT.
   //
-  // `model` COLLIDES BY NAME WITH TWO ARMS ABOVE AND MEANS THE OPPOSITE THING. snapshotReceived and
-  // runConfigReceived both carry a `model: string` meaning the per-session OVERRIDE, where `''` means
-  // "inherited default, no override". This one means what claude ANNOUNCED, and in the ordinary case
-  // the two disagree: the override is `''` while claude has named a concrete model. Both values are
-  // destined for the same run-configuration sheet, so the collision is live rather than theoretical.
-  // The daemon's wire field name is kept (no drift, ADR 0002) and the distinction is drawn here, the
-  // way the daemon's own payload doc draws it.
+  // `model` COLLIDES BY NAME WITH AN ARM ABOVE AND MEANS THE OPPOSITE THING. runConfigReceived
+  // carries a `model: string` meaning the per-session OVERRIDE, where `''` means "inherited default,
+  // no override". This one means what claude ANNOUNCED, and in the ordinary case the two disagree:
+  // the override is `''` while claude has named a concrete model. Both values are destined for the
+  // same run-configuration sheet, so the collision is live rather than theoretical. The daemon's wire
+  // field name is kept (no drift, ADR 0002) and the distinction is drawn here, the way the daemon's
+  // own payload doc draws it.
   //
   // The identifier is VERBATIM: not reliably dated, and it need not appear in any published model list
   // (requesting `claude-haiku-4-5` yields it back undated), so a MISS on #588's lookup is ORDINARY,
@@ -327,8 +298,8 @@ export type DaemonEvent =
   // log is not printed in production, so before this the drop left no trace anywhere).
   //
   // A DELIBERATE, security-reviewed WIDENING, and the widest on this union: `raw` is unbounded,
-  // unstructured, model-adjacent JSON. It crosses IPC for the same reason `screenSnapshotReceived.text`
-  // does — the raw text IS the render payload, and there is no summary that could replace it, because
+  // unstructured, model-adjacent JSON. It crosses IPC for the same reason `assistantDelta.text` does —
+  // the raw text IS the render payload, and there is no summary that could replace it, because
   // the whole point is showing an operator the bytes we could not interpret. The boundary defended is
   // the fail-closed decode upstream (parseUnrecognizedMessagePayload: closed-enum `site`, required
   // strings, required boolean), not this internal channel. The daemon caps `raw` at 16 KiB and the
@@ -337,9 +308,9 @@ export type DaemonEvent =
   //
   // `raw` and `messageType` are UNTRUSTED daemon-relayed content: the consumer must render them as PLAIN
   // TEXT, NEVER HTML (no innerHTML / dangerouslySetInnerHTML) and never into an attribute or a URL —
-  // mirroring the identical warning on screenSnapshotReceived / conversationCreated / sessionTransition
-  // / queueState. React escapes text children, so a `<pre>{raw}</pre>` is inert; those two sinks are the
-  // only ways to break that, and neither appears in the consumer.
+  // mirroring the identical warning on conversationCreated / sessionTransition / queueState. React
+  // escapes text children, so a `<pre>{raw}</pre>` is inert; those two sinks are the only ways to
+  // break that, and neither appears in the consumer.
   //
   // `messageType` is deliberately allowed to be the empty string — the `undecodable` site means nothing
   // decoded, so no type was ever read. `conversation_id` is dropped at the emit (single active
@@ -358,14 +329,14 @@ export type DaemonEvent =
   // string), `occurredAt` (RFC3339Nano, an opaque unparsed string), and `workspaceCwd` (`string | null`
   // — the new workspace dir for a `workspace_change`, `null` for `clear` / `idle_evict`, wire nullability
   // PRESERVED, never coerced to ''). Only `previous_session_id` is dropped at the emit (#285) — it has no
-  // consumer. A session_id is a routing id, not a secret (the conversation_id / snapshotReceived
-  // convention), so no token, key, or raw frame can ride this arm. `workspaceCwd` is an UNTRUSTED
-  // daemon-supplied filesystem path: the render slice #286 must render it as plain text, NEVER HTML (no
-  // innerHTML / dangerouslySetInnerHTML) — mirroring the identical warning on conversationCreated /
+  // consumer. A session_id is a routing id, not a secret (the conversation_id convention), so no token,
+  // key, or raw frame can ride this arm. `workspaceCwd` is an UNTRUSTED daemon-supplied filesystem
+  // path: the render slice #286 must render it as plain text, NEVER HTML (no innerHTML /
+  // dangerouslySetInnerHTML) — mirroring the identical warning on conversationCreated /
   // conversationUpdated. This ticket has no DOM sink; the constraint is inherited here for #286.
   // Consumed by the renderer holder (#259) and the delimiter slice (#286, not yet built), so all three
-  // exhaustive bridges no-op it for now — matching how snapshotReceived was a no-op in daemonEventBridge
-  // until #187.
+  // exhaustive bridges no-op it for now — matching how stallDetected was a no-op in daemonEventBridge
+  // until #317.
   | {
       type: 'sessionTransition'
       newSessionId: string

@@ -101,14 +101,6 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       { type: 'debugBundleSaved', path: '/downloads/bundle.tar.gz' },
       { type: 'debugBundleFailed', reason: 'unavailable' },
       {
-        type: 'snapshotReceived',
-        model: 'claude-x',
-        effort: 'high',
-        yolo: true,
-        used_tokens: 45000,
-        window_tokens: 200000
-      },
-      {
         type: 'conversationsReceived',
         conversations: [
           {
@@ -151,9 +143,6 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       },
       // stall ships dormant (#315); its render consumer is #317, not the modal store.
       { type: 'stallDetected' },
-      // screen-snapshot text ships dormant (#316); its consumer is the display slice #318, not the
-      // modal store.
-      { type: 'screenSnapshotReceived', text: 'rendered screen', ts: '2026-07-08T00:00:00Z' },
       // relay-link status ships dormant (#328); its consumer is the relay-link store #329, not the
       // modal store.
       { type: 'relayLinkChanged', status: 'connected' },

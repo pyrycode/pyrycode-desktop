@@ -40,14 +40,6 @@ describe('translateSessionTransition', () => {
       { type: 'connecting' },
       { type: 'disconnected' },
       { type: 'messageReceived', message },
-      {
-        type: 'snapshotReceived',
-        model: '',
-        effort: '',
-        yolo: false,
-        used_tokens: 0,
-        window_tokens: 0
-      },
       { type: 'conversationsReceived', conversations: [] }
     ]
     for (const event of others) expect(translateSessionTransition(event)).toBeNull()

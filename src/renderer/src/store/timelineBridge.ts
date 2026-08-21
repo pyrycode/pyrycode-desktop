@@ -138,7 +138,6 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'debugBundleProgress':
     case 'debugBundleSaved':
     case 'debugBundleFailed':
-    case 'snapshotReceived':
     case 'conversationsReceived':
     case 'conversationCreated':
     case 'conversationUpdated':
@@ -152,27 +151,25 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'sessionSettingsRejected':
     case 'modalAnswerRejected':
     case 'queueState':
-    case 'screenSnapshotReceived':
     case 'relayLinkChanged':
     case 'notificationActivated':
     case 'backgroundTaskStarted':
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
     case 'modelAnnounced':
-      // No timeline event: the session store (#19), download UI (#72), Run configuration bridge
-      // (#181), conversation-list store (#208), modal store + bridge (#223, and the #249 rejection
-      // render), the create render slice (#242), the #261 / #256 session-settings consumers
-      // (confirmed + rejected #269), the #293 queue store (queueState), the #376 list-reflect slice
-      // (conversationDeleted), the #382 recent-workspaces store (recentWorkspacesReceived), the #157
-      // Create-folder dialog (workspaceFolderCreated), and the #397 round-trip store
-      // (workspaceFolderRejected) consume these — not the timeline store. sessionSettingsUpdated, sessionSettingsRejected, and modalAnswerRejected are
-      // NOT timeline items — unlike turnState and, since #286, sessionTransition, none drives a timeline
-      // row. queueState is deliberately in this null group: `queue_state` is daemon STATE, not a
-      // turn-stream item (#720), so it is NOT folded into reduceTimeline — the load-bearing #720 decision.
+      // No timeline event: the session store (#19), download UI (#72), conversation-list store
+      // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
+      // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
+      // queue store (queueState), the #376 list-reflect slice (conversationDeleted), the #382
+      // recent-workspaces store (recentWorkspacesReceived), the #157 Create-folder dialog
+      // (workspaceFolderCreated), and the #397 round-trip store (workspaceFolderRejected) consume
+      // these — not the timeline store. sessionSettingsUpdated, sessionSettingsRejected, and
+      // modalAnswerRejected are NOT timeline items — unlike turnState and, since #286,
+      // sessionTransition, none drives a timeline row. queueState is deliberately in this null group:
+      // `queue_state` is daemon STATE, not a turn-stream item (#720), so it is NOT folded into
+      // reduceTimeline — the load-bearing #720 decision.
       // (stallDetected #315 is now an owned arm — #317 wired its `stalled` scalar above.)
-      // screenSnapshotReceived (#316) still ships dormant — its consumer is the display slice #318 (the
-      // live-screen view), not the timeline store; it is not a turn-stream `ThreadItem` either.
-      // relayLinkChanged (#328) likewise ships dormant — its consumer is the relay-link store #329 (the
+      // relayLinkChanged (#328) ships dormant — its consumer is the relay-link store #329 (the
       // two-dot indicator), not the timeline store; the relay socket leg is not a turn-stream item.
       // notificationActivated (#393) is consumed by the notificationActivatedBridge → the paired `open`
       // nav, not the timeline store; a notification click is not a turn-stream item.

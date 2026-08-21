@@ -71,7 +71,6 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'debugBundleProgress':
     case 'debugBundleSaved':
     case 'debugBundleFailed':
-    case 'snapshotReceived':
     case 'assistantDelta':
     case 'turnEnd':
     case 'turnState':
@@ -89,7 +88,6 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'sessionSettingsRejected':
     case 'queueState':
     case 'stallDetected':
-    case 'screenSnapshotReceived':
     case 'relayLinkChanged':
     case 'notificationActivated':
     case 'apiRetry':
@@ -99,16 +97,16 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
     case 'modelAnnounced':
-      // No modal event: the session store (#19), download UI (#72), Run configuration bridge (#181),
-      // conversation-list store (#208), timeline store (#202), create render slice (#242), the #259
-      // session-id holder, the #261 / #256 session-settings consumers (confirmed + rejected #269),
-      // the #293 queue store (queueState), the #317 stall-render slice (stallDetected), the #318
-      // display slice (screenSnapshotReceived), the #329 relay-link store (relayLinkChanged), the
-      // #376 list-reflect slice (conversationDeleted), the #382 recent-workspaces store
-      // (recentWorkspacesReceived), the #157 Create-folder dialog (workspaceFolderCreated), the #397
-      // round-trip store (workspaceFolderRejected), and the #393 notificationActivatedBridge
-      // (notificationActivated → the paired `open` nav) consume these — not the modal store. apiRetry
-      // (#492) ships dormant; its render consumer is #493 — a retry status line is not a modal.
+      // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
+      // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /
+      // #256 session-settings consumers (confirmed + rejected #269), the #293 queue store
+      // (queueState), the #317 stall-render slice (stallDetected), the #329 relay-link store
+      // (relayLinkChanged), the #376 list-reflect slice (conversationDeleted), the #382
+      // recent-workspaces store (recentWorkspacesReceived), the #157 Create-folder dialog
+      // (workspaceFolderCreated), the #397 round-trip store (workspaceFolderRejected), and the #393
+      // notificationActivatedBridge (notificationActivated → the paired `open` nav) consume these —
+      // not the modal store. apiRetry (#492) ships dormant; its render consumer is #493 — a retry
+      // status line is not a modal.
       // compacting (#495) ships dormant likewise; its render consumer is #496 — a compaction banner is
       // not a modal either. unrecognizedMessage ships dormant too; its render consumer is the timeline
       // row — a diagnostic the operator reads at leisure is emphatically not a modal, since nothing is

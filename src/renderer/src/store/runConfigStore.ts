@@ -1,8 +1,8 @@
 // The Run configuration sheet's held snapshot: the session's current model / reasoning effort /
 // YOLO state, as one unidirectional source of truth. Pure renderer state — no IPC, no preload
-// bridge, no transport. The data path (runConfigSnapshot.ts) requests a fresh snapshot on sheet
-// open and writes the arriving `snapshotReceived` fields here via the single setter; #188's sections
-// read the held values through the selectors.
+// bridge, no transport. The data path (runConfigSnapshot.ts) requests the session settings on sheet
+// open and writes the arriving `runConfigReceived` fields here via the single setter (#491/#500 moved
+// it onto that dedicated reply); #188's sections read the held values through the selectors.
 //
 // A dedicated store (a separate consumer, per #180's landed comments), NOT a session-store facet: a
 // snapshot never touches connection/messages state and vice versa, so the two stores stay orthogonal
@@ -17,7 +17,8 @@ import { useStore } from 'zustand'
 
 /** The session-settings fields the sheet displays. Fields are plain `string`/`boolean`, so an
  *  empty model, an empty effort (inherited default), or `yolo: false` (permissions enforced) are
- *  held verbatim by construction — never coerced (AC5). Mirrors the `snapshotReceived` event shape.
+ *  held verbatim by construction — never coerced (AC5). Mirrors the `runConfigReceived` event shape,
+ *  minus its `sessionId` (the session-id store holds that).
  *
  *  `usedTokens` / `windowTokens` are the session's context-window usage figures (#192), held for the
  *  Context window gauge. Both required (parallel to model/effort/yolo — held verbatim, never coerced):

@@ -1310,77 +1310,19 @@ describe('createDaemonConnection — inbound screen_snapshot decode (#180, #316)
     return ctx
   }
 
-  it('decodes an inbound screen_snapshot into BOTH snapshotReceived (run-config) and screenSnapshotReceived (text), #316', async () => {
+  it('emits NOTHING for a WELL-FORMED screen_snapshot — decoded, then dropped (#621)', async () => {
     const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
 
-    drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(SNAPSHOT) })
-
-    const events = emitted(sink)
-    const runConfig = events.filter((e) => e.type === 'snapshotReceived')
-    expect(runConfig).toEqual([
-      {
-        type: 'snapshotReceived',
-        model: 'claude-opus-4-8',
-        effort: 'high',
-        yolo: true,
-        used_tokens: 45000,
-        window_tokens: 200000
-      }
-    ])
-    // The dedicated screen-text arm (#316) emits ALONGSIDE snapshotReceived, carrying ONLY text + ts.
-    expect(events.filter((e) => e.type === 'screenSnapshotReceived')).toEqual([
-      { type: 'screenSnapshotReceived', text: 'secret rendered screen', ts: '2026-07-08T00:00:00Z' }
-    ])
-    // text / ts ride only screenSnapshotReceived, NEVER the run-config snapshotReceived arm (AC2).
-    expect(JSON.stringify(runConfig)).not.toContain('secret rendered screen')
-    expect(JSON.stringify(runConfig)).not.toContain('2026-07-08T00:00:00Z')
-    // conversation_id is dropped from BOTH events (no consumer).
-    expect(JSON.stringify(events)).not.toContain('conv-1')
-  })
-
-  it('carries an empty text through to screenSnapshotReceived as the value "", not dropped (#316)', async () => {
-    const { sink, drivers } = await connected()
-
-    const emptyText: ScreenSnapshotPayload = { ...SNAPSHOT, text: '' }
-    drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(emptyText) })
-
-    expect(emitted(sink).find((e) => e.type === 'screenSnapshotReceived')).toEqual({
-      type: 'screenSnapshotReceived',
-      text: '',
-      ts: '2026-07-08T00:00:00Z'
-    })
-  })
-
-  it('decodes the empty-model/effort and yolo:false defaults as those values (AC3)', async () => {
-    const { sink, drivers } = await connected()
-
-    const defaults: ScreenSnapshotPayload = { ...SNAPSHOT, model: '', effort: '', yolo: false }
-    drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(defaults) })
-
-    expect(emitted(sink).find((e) => e.type === 'snapshotReceived')).toEqual({
-      type: 'snapshotReceived',
-      model: '',
-      effort: '',
-      yolo: false,
-      used_tokens: 45000,
-      window_tokens: 200000
-    })
-  })
-
-  it('carries used_tokens:0 / window_tokens:0 through as those values, not dropped/defaulted (#191, AC3)', async () => {
-    const { sink, drivers } = await connected()
-
-    const zeros: ScreenSnapshotPayload = { ...SNAPSHOT, used_tokens: 0, window_tokens: 0 }
-    drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(zeros) })
-
-    expect(emitted(sink).find((e) => e.type === 'snapshotReceived')).toEqual({
-      type: 'snapshotReceived',
-      model: 'claude-opus-4-8',
-      effort: 'high',
-      yolo: true,
-      used_tokens: 0,
-      window_tokens: 0
-    })
+    // The frame that used to emit two events now emits none: the run-config half moved to the
+    // dedicated session_settings reply (#491/#500) and the rendered-screen half lost its display
+    // slice (#619), so the connection drops the decoded payload on the floor. Asserted as a call
+    // COUNT (the malformed-frame idiom below), which pins "no event at all" rather than "not these
+    // two". The decode itself survives this slice and comes out in #622.
+    expect(() =>
+      drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(SNAPSHOT) })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 
   it('drops a malformed screen_snapshot without emitting or throwing (fail-closed)', async () => {

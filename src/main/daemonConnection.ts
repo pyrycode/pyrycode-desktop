@@ -561,37 +561,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             }
             return
           }
-          case 'snapshot':
-            // One screen_snapshot frame emits TWO events (#316). `conversation_id` is dropped (no
-            // consumer); the run-config fields ride the dedicated minimal snapshotReceived shape (NOT a
-            // reuse of ScreenSnapshotPayload — a naive "reuse the wire type" would leak `text`); `text`
-            // + `ts` ride the dedicated screenSnapshotReceived arm below (the live-screen data path),
-            // never folded into snapshotReceived. The two ints are non-secret context-window counts.
-            emitDaemonEvent(sink, {
-              type: 'snapshotReceived',
-              model: inbound.snapshot.model,
-              effort: inbound.snapshot.effort,
-              yolo: inbound.snapshot.yolo,
-              used_tokens: inbound.snapshot.used_tokens,
-              window_tokens: inbound.snapshot.window_tokens
-            })
-            // The rendered-screen data path (#316), a deliberate security-reviewed widening of #180's
-            // text-drop. A fresh literal with named fields (the assistant-delta idiom), never a spread
-            // of inbound.snapshot — so ONLY `text` + `ts` cross; a future decoder that grew a field
-            // cannot smuggle it onto this arm. No log call here: the content-free screen_snapshot
-            // diagnostic stays in inboundMessage.ts, so `text` is never written to a sink (AC3).
-            emitDaemonEvent(sink, {
-              type: 'screenSnapshotReceived',
-              text: inbound.snapshot.text,
-              ts: inbound.snapshot.ts
-            })
-            return
           case 'session-settings':
             // The run-configuration data path (#491). A fresh literal with named fields, never a
             // spread of inbound.sessionSettings — so a future decoder that grew a field cannot
             // smuggle it across. snake→camel for the id only (`sessionId`), matching the
-            // sessionTransition arm; the five value fields keep their wire names, matching
-            // snapshotReceived, so a consumer reading either arm reads the same shape.
+            // sessionTransition arm; the five value fields keep their wire names, so the event
+            // reads the way the daemon's reply does.
             //
             // `session_id: ''` crosses VERBATIM. It is the daemon saying "I have no session to
             // address", which the sheet's gate must be able to see; coercing it to null here would

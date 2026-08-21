@@ -19,9 +19,8 @@ function assertNever(event: never): never {
  * fails to compile (assertNever). The session-lifecycle arms are pass-through except `failed`,
  * which copies the wire ErrorPayload's fields into a fresh store-owned ConnectionError — an
  * explicit copy, not a spread, so the store shape stays immune to ErrorPayload gaining an
- * unrelated field later. The three debug-bundle arms (#168) and `snapshotReceived` (#180) return
- * `null`: they are consumed by the download UI (#72) and the Run configuration render bridge (#181)
- * respectively, not the session store, so they dispatch nothing. The `assertNever` guard stays
+ * unrelated field later. The three debug-bundle arms (#168) return `null`: the download UI (#72)
+ * consumes them, not the session store, so they dispatch nothing. The `assertNever` guard stays
  * load-bearing — a future variant is still a compile error.
  */
 export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
@@ -49,11 +48,6 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'debugBundleSaved':
     case 'debugBundleFailed':
       // No session-store action: the download UI (#72) consumes these, not the session store.
-      return null
-    case 'snapshotReceived':
-      // No session-store action: the Run configuration render bridge (#181) consumes this, not the
-      // session store. Added here (not "zero renderer change") because the assertNever guard below
-      // makes every new DaemonEvent member a compile error until it has a case — #181 adds the facet.
       return null
     case 'assistantDelta':
     case 'turnEnd':
@@ -108,7 +102,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'sessionTransition':
       // No session-store action: the #259 holder (not yet built) retains the current session id, not
       // the session store. Present only because the assertNever guard below makes a new arm a compile
-      // error (the snapshotReceived-was-a-no-op-until-#187 precedent).
+      // error.
       return null
     case 'sessionSettingsUpdated':
     case 'sessionSettingsRejected':
@@ -128,12 +122,7 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'stallDetected':
       // No session-store action: the render slice (#317, not yet built) surfaces the stall indicator, not
       // the session store. Present only because the assertNever guard below makes a new arm a compile
-      // error (the snapshotReceived-was-a-no-op-until-#187 precedent).
-      return null
-    case 'screenSnapshotReceived':
-      // No session-store action: the display slice (#318, not yet built) renders the screen text, not the
-      // session store. Present only because the assertNever guard below makes a new arm a compile error
-      // (the snapshotReceived-was-a-no-op-until-#187 precedent).
+      // error.
       return null
     case 'apiRetry':
       // No session-store action: the render slice (#493, not yet built) surfaces the retry indicator and
@@ -150,9 +139,9 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
     case 'modelAnnounced':
       // No session-store action: the announced-model store (#588, not yet built) holds the identifier
       // claude named for the turn, not the session store — which holds no model state at all (its
-      // `model` neighbours on snapshotReceived / runConfigReceived are the per-session OVERRIDE, a
-      // different value that goes elsewhere). Present only because the assertNever guard below makes a
-      // new arm a compile error (the compacting-was-a-no-op-until-#496 precedent).
+      // `model` neighbour on runConfigReceived is the per-session OVERRIDE, a different value that
+      // goes elsewhere). Present only because the assertNever guard below makes a new arm a compile
+      // error (the compacting-was-a-no-op-until-#496 precedent).
       return null
     case 'backgroundTaskStarted':
       // No session-store action: the background-task store (#567, not yet built) holds the set of tasks

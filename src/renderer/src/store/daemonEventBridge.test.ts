@@ -100,19 +100,6 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(translateDaemonEvent({ type: 'debugBundleFailed', reason: 'unavailable' })).toBeNull()
   })
 
-  it('snapshotReceived → null (consumed by the Run configuration render bridge #181, not the session store)', () => {
-    expect(
-      translateDaemonEvent({
-        type: 'snapshotReceived',
-        model: 'claude-opus-4-8',
-        effort: 'high',
-        yolo: true,
-        used_tokens: 45000,
-        window_tokens: 200000
-      })
-    ).toBeNull()
-  })
-
   it('assistantDelta → null (consumed by the renderer timeline bridge #202, not the session store)', () => {
     expect(
       translateDaemonEvent({ type: 'assistantDelta', turnId: 'turn-1', seq: 0, text: 'slice' })
@@ -249,16 +236,6 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
 
   it('stallDetected → null (consumed by the render slice #317, not the session store)', () => {
     expect(translateDaemonEvent({ type: 'stallDetected' })).toBeNull()
-  })
-
-  it('screenSnapshotReceived → null (consumed by the display slice #318, not the session store)', () => {
-    expect(
-      translateDaemonEvent({
-        type: 'screenSnapshotReceived',
-        text: 'rendered screen',
-        ts: '2026-07-08T00:00:00Z'
-      })
-    ).toBeNull()
   })
 
   it('relayLinkChanged → null (consumed by the relay-link store #329, not the session store)', () => {

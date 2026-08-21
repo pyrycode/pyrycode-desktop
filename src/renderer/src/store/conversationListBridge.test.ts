@@ -66,15 +66,7 @@ describe('translateConversationsEvent', () => {
     const others: DaemonEvent[] = [
       { type: 'connecting' },
       { type: 'disconnected' },
-      { type: 'messageReceived', message },
-      {
-        type: 'snapshotReceived',
-        model: '',
-        effort: '',
-        yolo: false,
-        used_tokens: 0,
-        window_tokens: 0
-      }
+      { type: 'messageReceived', message }
     ]
     for (const event of others) expect(translateConversationsEvent(event)).toBeNull()
   })

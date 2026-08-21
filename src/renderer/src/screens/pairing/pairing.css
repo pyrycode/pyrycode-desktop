@@ -1,29 +1,344 @@
 /*
- * Pairing dialog styles, from the mobile "Paste pairing code" dialog (Figma node
- * 19-54) stretched to the desktop window. Every color/type/spacing value resolves
- * to a theme token from theme/tokens.css — the only literals are bare structural
- * geometry (100%, the card's max-width, the paste field's fixed min-height, the
- * ~55% placeholder opacity, and the M3 0.38 disabled opacity), none of which is a
- * theme value. The reviewing/confirming fingerprint block is desktop-specific
- * (not drawn in the Figma node) and reuses the same card tokens.
+ * Pairing screen styles. The file serves TWO treatments at once, kept separable
+ * rather than merged so the confirm phase can be lifted onto the page treatment in
+ * one move once it has a frame of its own:
+ *
+ *   .pairing-page — the PASTE phase, from desktop's OWN Figma frame (node 103-2901,
+ *     1280x1024), a full-window page sharing the welcome screen's skeleton (#665).
+ *   .pairing-card — the reviewing/confirming/paired phases, still the mobile "Paste
+ *     pairing code" dialog (node 19-54) stretched to the window. Untouched by #665;
+ *     Juhana will draw a desktop frame for them later.
+ *
+ * The two are SIBLINGS, not overrides: neither undoes a property the other sets.
+ * `.pairing` itself is reduced to what both share, and it stays on the root element
+ * in EVERY phase because it is an e2e contract (see PairingScreen.tsx on
+ * smoke.spec.ts:81).
+ *
+ * The reuse of the welcome frame is TOKEN-LEVEL AND VISUAL, never code-level: this
+ * codebase has no shared cross-screen CSS at all (six per-screen stylesheets whose
+ * only shared input is theme/tokens.css), so the page treatment is restated here
+ * under its own class names rather than importing welcome.css or reaching for
+ * .welcome__*. If the duplication across welcome / pairing / the eventual confirm
+ * frame becomes painful once all three exist, that is a follow-up with three
+ * consumers in hand — not a seam guessed at from one and a half.
+ *
+ * Every color/type/spacing value resolves to a theme token from theme/tokens.css.
+ * The only literals are bare structural geometry, none of which is a theme value,
+ * and they are exactly: 100%, flex: 1, the card's max-width, the field's 56/48/40px
+ * boxes and its 24px glyph, the 1px active indicator, the glow's percentage
+ * geometry, the two CTA rows' 56px height, the field fill's 0.72 opacity, the
+ * footer's 0.55 opacity, and the M3 0.38 disabled opacity.
  */
 
-/* The dialog card. Placement/centering in the app shell is a later navigation
-   slice (mounting is out of scope); max-width + margin keep it dialog-shaped and
-   horizontally centered wherever it lands, rather than stretching edge-to-edge. */
+/* What both treatments share — and the class every outside consumer binds to. */
 .pairing {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* The dialog card, verbatim from what .pairing carried before #665 split it. Its
+   max-width + margin keep it dialog-shaped and horizontally centered wherever it
+   lands, rather than stretching edge-to-edge. */
+.pairing-card {
   gap: var(--space-4);
   width: 100%;
   max-width: 420px;
   margin: var(--space-6) auto;
   padding: var(--space-6);
   background: var(--color-surface-container-high);
-  color: var(--color-on-surface);
   border-radius: var(--radius-lg);
+}
+
+/*
+ * The full-window frame (Figma 103:2901). justify-content: space-between is the
+ * frame's own: the field takes the free space, the CTA stack pins to the bottom.
+ * height: 100% rides the html/body/#root chain in index.css:5-9 — both mount sites
+ * (App.tsx:51 and PairedShell.tsx:123-129) render this screen as a bare child with
+ * no wrapper element, so the chain resolves exactly as .welcome's does.
+ *
+ * The glow is DERIVED FROM THIS FRAME, not copied from welcome.css:42 — the two are
+ * close but not identical. Figma's radial fill is `radialGradient(r=10)` under
+ * matrix(88.233 -2.9848 3.0359 89.745 608.93 304.22), stopping at
+ * rgba(19,74,116,1) = --color-primary-container at 0 and alpha 0 at 0.7. Column
+ * norms x10 give semi-axes 882.8 x 898.0, so the 0.7 stop reaches full transparency
+ * at 617.9 x 628.6px = 48% x 61% of the 1280x1024 box, centred at (47.6%, 29.7%).
+ * The same arithmetic on welcome's matrix yields 48% x 56%, which is what
+ * welcome.css:42 already ships — so the method is validated against a known-good
+ * result, and the delta here is real and purely vertical: 56% -> 61%. Expressed as
+ * PERCENTAGES, not px, because the window is resizable and a px-sized glow would
+ * drift off-centre on resize (welcome.css:16-33 has the long form).
+ *
+ * Deliberately NOT reproduced: the M3/Elevation Light/3 drop shadow on 103:2903 —
+ * two black shadows at 0.15/0.30 alpha behind a near-black canvas are imperceptible,
+ * and reproducing them would mean inventing an elevation token family for no visual
+ * gain. Same call welcome.css:29-32 made for the same shadow.
+ */
+.pairing-page {
+  height: 100%;
+  justify-content: space-between;
+  padding: var(--space-7) var(--space-8);
+  background:
+    radial-gradient(ellipse 48% 61% at 48% 30%, var(--color-primary-container), transparent),
+    var(--color-surface);
+}
+
+/* Figma 103:2902/2903 — takes the free space above the pinned CTAs and centres the
+   field group in it. The frame insets the 1088px field inside the 1216px content
+   column, i.e. 64px each side (--space-16), which is what makes the field visibly
+   narrower than the full-width Pair pill below. min-height: 0 lets it shrink below
+   its content in a short window instead of pushing the CTAs off (welcome.css:48-49).
+
+   Figma centres the field's 56px box alone, its supporting line overflowing below
+   the measured height; here the two are in normal flow, so centring the pair sits
+   the field ~10px higher than the frame draws it. On a 1024px-tall page that is
+   imperceptible, and optically centring the whole group is the better of the two. */
+.pairing-page__hero {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 var(--space-16);
+}
+
+/*
+ * The M3 filled field's container (Figma 103:2904). Corners on the TOP TWO only, per
+ * the filled variant; the drawn 4px maps to --radius-xs (6px), this file's
+ * established +2px snap (see .rename-conversation__field for the same move).
+ *
+ * The fill is --color-surface at 72% (Figma rgba(16,19,26,0.72); --color-surface is
+ * rgb(16,20,24), within 2/255). It lands on a dedicated pseudo-element at `opacity`
+ * rather than as an rgba()/color-mix() literal — the house rule at
+ * conversation.css:1263-1268, "opacity is not a color literal" — which happens to
+ * mirror the frame's own State-layer child.
+ *
+ * The active indicator is a 1px bottom line rather than a fourth border, so `inset:
+ * 0` on the fill (which resolves against the PADDING box) never covers it.
+ * on-surface-variant is the dark-scheme role for the #49454F the frame's export
+ * strokes, which is M3's LIGHT on-surface-variant.
+ */
+.pairing-field {
+  position: relative;
+  border-bottom: 1px solid var(--color-on-surface-variant);
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+}
+
+.pairing-field::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--color-surface);
+  border-radius: inherit;
+  opacity: 0.72;
+}
+
+/* M3's focus affordance for a filled field, and the only interactive state the frame
+   does not draw for it. It preserves what .pairing__paste:focus-visible did before
+   #665 without inventing a 2px-indicator token. */
+.pairing-field:focus-within {
+  border-bottom-color: var(--color-primary);
+}
+
+/* THE ROW MUST BE POSITIONED. The fill above is absolute with z-index: auto, and an
+   absolutely-positioned box paints above its non-positioned in-flow siblings — so
+   without `position: relative` here the fill would hide the label, the value and the
+   glyph behind it. One declaration, and no negative z-index needed.
+
+   Figma's State-layer pads 16px left and 4px top/bottom with no right padding: the
+   48px trailing slot is flush to the container's right edge. */
+.pairing-field__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: var(--space-1) 0 var(--space-1) var(--space-4);
+}
+
+/* Figma's Content frame — a 48px box holding the 16px label over the 24px value,
+   4px padded top and bottom (4 + 16 + 24 + 4 = 48). min-width: 0 keeps a long pasted
+   value inside the flex row instead of widening it past the field. */
+.pairing-field__content {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 48px;
+  padding: var(--space-1) 0;
+}
+
+/* Drawn small-and-top over an empty input, so this is a PERSISTENT label, not an M3
+   float-on-focus animation. No animation is in scope. */
+.pairing-field__label {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* Reset to a borderless field so the container's fill and bottom indicator are the
+   only chrome — the .rename-conversation__input treatment (channels.css:592-606).
+   A single-line input WILL scroll horizontally on a real payload (a few hundred
+   base64url characters against roughly 110 visible); that is the frame's intent, the
+   operator pastes rather than reads, and the clear control beside it is exactly the
+   escape hatch a non-scannable field needs. */
+.pairing-field__input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--color-on-surface);
   font-family: var(--font-sans);
+  font-size: var(--text-body-large-size);
+  line-height: var(--text-body-large-line);
+  letter-spacing: var(--text-body-large-tracking);
+  font-weight: var(--text-body-large-weight);
+}
+
+/* Figma draws a 48x48 trailing slot holding a 40x40 round state layer around a 24x24
+   glyph: 4 + 40 + 4 fills that slot exactly, so the margin does the inset and no
+   extra element is needed. The field's width jumps by this slot as the first
+   character is typed — inherent to not drawing the control on an empty field, and
+   not worth reserving space for. */
+.pairing-field__clear {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: 0 var(--space-1);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  cursor: pointer;
+}
+
+/* Neither state is drawn in the frame; both follow the .pairing__button convention
+   (:422-428 below). On this round button the hover surface doubles as M3's state
+   layer. */
+.pairing-field__clear:hover {
+  background: var(--color-surface-container);
+}
+
+.pairing-field__clear:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.pairing-field__clear-icon {
+  width: 24px;
+  height: 24px;
+}
+
+/* Figma's Supporting text slot (I103:2904;52798:24384) — pt-4 px-16, a 16px line in
+   a 20px box. In normal flow below the field rather than absolutely positioned: same
+   result, less machinery. Exactly one of the two rules below always renders, so the
+   slot never collapses and an error causes no layout shift. */
+.pairing-field__supporting {
+  margin: 0;
+  padding: var(--space-1) var(--space-4) 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* No dedicated error token exists in tokens.css; --color-tertiary (#ffb59f) is the
+   M3 dark error-adjacent warm color and the palette's only attention color, so it
+   stands in for the inline validation message. The error state is not drawn in the
+   frame, so there is no visual reference to diverge from. (Carried over from
+   .pairing__error, which the <textarea> took with it.) */
+.pairing-field__supporting--error {
+  color: var(--color-tertiary);
+}
+
+/* Figma 103:2905 — the three rows pinned to the bottom. Geometrically identical to
+   the welcome frame's CTA block (both are 1216x172: two 56px rows and a 24+8px
+   footer, 12px gaps), minus the leading icon. */
+.pairing-page__ctas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+/* The filled pill. --radius-lg is already the drawn 28px, so it needs no new token.
+   NOTE the frame names lie: these two CTA frames are still called "Primary CTA — I
+   already have pyrycode" / "Secondary CTA — Set up pyrycode first", inherited from
+   the welcome frame, while the labels drawn inside them read Pair and Cancel. The
+   labels are authoritative. */
+.pairing-page__pair {
+  box-sizing: border-box;
+  width: 100%;
+  height: 56px;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+  cursor: pointer;
+}
+
+/* A bare centred text row at the same 56px height as the pill — welcome's setup row,
+   but a <button> rather than an external link, since Cancel is an in-app seam. */
+.pairing-page__cancel {
+  box-sizing: border-box;
+  width: 100%;
+  height: 56px;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+  cursor: pointer;
+}
+
+.pairing-page__cancel:hover:not(:disabled) {
+  background: var(--color-surface-container);
+}
+
+.pairing-page__pair:focus-visible,
+.pairing-page__cancel:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+.pairing-page__pair:disabled,
+.pairing-page__cancel:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+/* Plain text, never a link — the welcome footer's reasoning unchanged. The 0.55
+   opacity is the value welcome.css:203 already ships for this same line; the
+   contrast question was raised and settled there, and diverging now would only make
+   the two frames inconsistent. */
+.pairing-page__footer {
+  margin: 0;
+  padding-top: var(--space-2);
+  text-align: center;
+  color: var(--color-on-surface-variant);
+  opacity: 0.55;
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
 }
 
 .pairing__title {
@@ -49,51 +364,6 @@
 .pairing__accent {
   font-family: var(--font-mono);
   color: var(--color-tertiary);
-}
-
-/* min-height (not a fixed height) so the field grows with a pasted multi-line
-   payload; the design's 4px radius maps to --radius-xs (6px), a 2px difference
-   that is imperceptible and keeps the value tokenized. */
-.pairing__paste {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 96px;
-  resize: vertical;
-  padding: var(--space-3) var(--space-4);
-  background: transparent;
-  color: var(--color-on-surface);
-  border: 1px solid var(--color-outline);
-  border-radius: var(--radius-xs);
-  outline: none;
-  font-family: var(--font-mono);
-  font-size: var(--text-body-medium-size);
-  line-height: var(--text-body-medium-line);
-}
-
-.pairing__paste::placeholder {
-  color: var(--color-on-surface-variant);
-  opacity: 0.55;
-}
-
-.pairing__paste:focus-visible {
-  border-color: var(--color-primary);
-}
-
-.pairing__paste:disabled {
-  opacity: 0.55;
-}
-
-/* No dedicated error token exists in tokens.css; --color-tertiary (#ffb59f) is
-   the M3 dark error-adjacent warm color and the palette's only attention color,
-   so it stands in for the inline validation message. The error state is not
-   drawn in the Figma node, so there is no visual reference to diverge from. */
-.pairing__error {
-  margin: 0;
-  color: var(--color-tertiary);
-  font-size: var(--text-body-medium-size);
-  line-height: var(--text-body-medium-line);
-  letter-spacing: var(--text-body-medium-tracking);
-  font-weight: var(--text-body-medium-weight);
 }
 
 /* Prominent monospace fingerprint block: 8 verbatim byte-pairs, spaced for

@@ -78,7 +78,7 @@ try {
   log('app launched')
 
   // --- 3. Pair through the real UI.
-  const pasteBox = page.locator('textarea[aria-label="Pairing code"]')
+  const pasteBox = page.locator('[aria-label="Pairing code"]')
   await pasteBox.waitFor({ state: 'visible', timeout: 15000 })
   await pasteBox.fill(payload)
   await page.getByRole('button', { name: 'Pair', exact: true }).click()

@@ -12,9 +12,17 @@ import {
 import type { PairingErrorReason } from '@shared/ipc/pairing'
 
 // The desktop pairing screen: paste the payload printed by `pyry pair --print`, review the
-// server-key fingerprint the background process derives, and confirm. Styled from the mobile
-// "Paste pairing code" dialog (Figma node 19-54) stretched to the window; the reviewing/confirming
-// phases are desktop-specific (the human fingerprint-verify step mobile's paste path skipped, #53).
+// server-key fingerprint the background process derives, and confirm. The PASTE phase is drawn from
+// desktop's OWN Figma frame (node 103-2901, 1280x1024) — a full-window page sharing the welcome
+// screen's skeleton (#665). The reviewing/confirming phases still wear the mobile "Paste pairing
+// code" dialog card (19-54) stretched to the window; they are desktop-specific (the human
+// fingerprint-verify step mobile's paste path skipped, #53) and have no frame yet, so the flow looks
+// deliberately inconsistent between the two treatments until that design lands.
+//
+// SECRET HYGIENE. The pasted payload is a bearer token (mobile's PasteCodeDialog.kt:25-26 carries the
+// rule verbatim: it "must never reach Log.*"). It lives in reducer state, is handed opaquely to the
+// one submitPairingPaste call, and reaches no logger, no diagnostic channel, and no console. The
+// clear control below writes a CONSTANT empty string — it never reads the value it discards.
 //
 // PairingView is pure (props in, markup out — what the tests render); PairingScreen is the thin
 // container owning the reducer and the two handler-driven IPC calls, mirroring the tested
@@ -33,6 +41,24 @@ const ERROR_COPY: Record<PairingErrorReason, string> = {
   'persist-failed': 'Couldn’t save the pairing — your system keychain may be unavailable.'
 }
 
+/**
+ * Client-owned paste-phase copy — module-level constants (the WELCOME_COPY / ARCHIVE_COPY idiom).
+ *
+ * `footer` is RESTATED here rather than imported from WelcomeScreen.tsx even though the two frames
+ * draw the same line: this codebase has no shared cross-screen module or stylesheet, and a
+ * cross-screen import would make the pairing screen depend on the welcome screen's internals for a
+ * string. The separator is U+00B7 MIDDLE DOT, not a hyphen or a bullet.
+ *
+ * `instruction` is flat text, deliberately WITHOUT the `<code className="pairing__accent">` wrapper
+ * the deleted instruction paragraph gave `pyry pair --print`. M3 supporting text is a single 12px
+ * type role, and the frame draws its supporting slot empty, so a mono accent inside it would be a
+ * visual invention with no reference. `.pairing__accent` survives untouched for ReviewCard.
+ */
+const PAIRING_COPY = {
+  instruction: 'Run pyry pair --print on your server and paste the output here.',
+  footer: 'Open source · github.com/pyrycode/pyrycode-desktop'
+} as const
+
 export interface PairingViewProps {
   state: PairingState
   onPasteChange: (paste: string) => void
@@ -41,13 +67,21 @@ export interface PairingViewProps {
   onCancel: () => void
 }
 
-/** Pure presentational component — no hooks, no state, no effects. One render per phase. */
+/**
+ * Pure presentational component — no hooks, no state, no effects. One render per phase.
+ *
+ * The root carries `.pairing` in EVERY phase and adds the treatment as a second class. That is a
+ * contract, not a style choice: e2e/smoke.spec.ts:81 binds `page.locator('.pairing')` ONCE and
+ * asserts it visible on the paste phase (:86) and count 0 after Cancel (:93). Renaming the paste
+ * phase's root would fail the first outright and make the second pass for the wrong reason.
+ */
 export function PairingView(props: PairingViewProps): JSX.Element {
   const { state, onPasteChange, onSubmit, onConfirm, onCancel } = props
+  const isPaste = state.phase === 'editing' || state.phase === 'submitting'
   return (
-    <div className="pairing">
-      {(state.phase === 'editing' || state.phase === 'submitting') && (
-        <EntryCard
+    <div className={`pairing ${isPaste ? 'pairing-page' : 'pairing-card'}`}>
+      {isPaste && (
+        <EntryPage
           paste={state.paste}
           error={state.phase === 'editing' ? state.error : null}
           busy={state.phase === 'submitting'}
@@ -69,7 +103,13 @@ export function PairingView(props: PairingViewProps): JSX.Element {
   )
 }
 
-function EntryCard({
+/**
+ * The paste phase as the full-window Pair Screen (Figma 103-2901): the M3 filled field centred in the
+ * free space, the CTA stack pinned to the bottom. No heading — the frame draws none, and this renderer
+ * has no visually-hidden utility to compensate with (adding one is unticketed); the screen is left
+ * navigable by its one named field and two named buttons.
+ */
+function EntryPage({
   paste,
   error,
   busy,
@@ -86,38 +126,135 @@ function EntryCard({
 }): JSX.Element {
   return (
     <>
-      <h1 className="pairing__title">Paste pairing code</h1>
-      <p className="pairing__instruction">
-        Run <code className="pairing__accent">pyry pair --print</code> on your server and paste the
-        output here.
-      </p>
-      <textarea
-        className="pairing__paste"
-        aria-label="Pairing code"
-        placeholder="pyry://home.lan:7117?token=…"
-        value={paste}
-        disabled={busy}
-        onChange={(e) => onPasteChange(e.target.value)}
-      />
-      {error !== null && (
-        <p className="pairing__error" role="alert">
-          {ERROR_COPY[error]}
-        </p>
-      )}
-      <div className="pairing__actions">
-        <button type="button" className="pairing__button" disabled={busy} onClick={onCancel}>
-          Cancel
-        </button>
+      <div className="pairing-page__hero">
+        <div className="pairing-field">
+          {/* The row, not the field, is the positioned element: .pairing-field's translucent-fill
+              pseudo is absolutely positioned, and an absolute box with z-index: auto paints ABOVE
+              its non-positioned in-flow siblings — so without this the fill would hide the label,
+              the value and the glyph. See pairing.css on the painting order. */}
+          <div className="pairing-field__row">
+            <div className="pairing-field__content">
+              {/* Visual only, and NOT a wrapping <label>. Two reasons, both load-bearing: HTML
+                  forbids interactive content inside a <label>, so the clear <button> could not sit
+                  in this row under that idiom; and a label would put a SECOND element under the
+                  accessible name "Pairing code". aria-hidden keeps the accessibility tree at exactly
+                  one — the input below — which is C1 restated for the a11y tree. The accepted cost
+                  is that clicking the label text does not focus the input; the input takes the rest
+                  of the 48px content box, so nearly all of the field's surface is the input itself. */}
+              <span className="pairing-field__label" aria-hidden="true">
+                Pairing code
+              </span>
+              {/*
+                `aria-label` is an EXPLICIT ATTRIBUTE, never an accessible name inherited from a
+                wrapping <label>. Six consumers outside this screen match the raw attribute and would
+                all go dark on a name that emits no attribute: the CSS attribute selector
+                `[aria-label="Pairing code"]` (e2e/unpair-repair.spec.ts:42,73,
+                e2e/paired-shell-navigation.spec.ts:47, e2e/fixtures/pairingArrival.ts:54) and the
+                rendered-markup substring marker (App.test.tsx:22, PairedShell.test.tsx:32). Three of
+                those are count-0 assertions that pass VACUOUSLY against a stale selector, so the
+                breakage would be silent; PairingScreen.test.tsx counts the attribute to catch it.
+
+                type="text", never `password` (it would mask a value the operator may need to eyeball)
+                and never `url` (the payload is a base64url blob, not a URL — see
+                src/main/pairingPayload.ts:89). No `name`, no `id`, and no <form> ancestor, with
+                autocomplete off and spellcheck off: a bearer token must not reach the autofill,
+                spellcheck, or password-manager surfaces the old <textarea> never attracted. Vendor
+                manager opt-outs (data-1p-ignore and friends) are deliberately absent — browser
+                extensions cannot inject into this sandboxed renderer, so they would be dead weight.
+
+                No placeholder: the frame draws none (the label is persistent), and the one this
+                replaces — `pyry://home.lan:7117?token=…` — MISDESCRIBED the payload, which
+                parsePairingPayload requires to be strict base64url.
+              */}
+              <input
+                type="text"
+                className="pairing-field__input"
+                aria-label="Pairing code"
+                autoComplete="off"
+                spellCheck={false}
+                value={paste}
+                disabled={busy}
+                onChange={(e) => onPasteChange(e.target.value)}
+              />
+            </div>
+            {/* Deliberately absent on an empty field, diverging from the frame (which draws it
+                always): offering "clear" with nothing to clear is noise. `paste !== ''`, not
+                `.trim()`, because a field holding only whitespace is still worth clearing. It never
+                renders `disabled` — even mid-submit it needs no guard, since pairingReducer's
+                `paste-changed` arm returns state unchanged outside `editing`
+                (pairingState.ts:67-70), making the click an already-safe no-op. Its own accessible
+                name is distinct from both "Pairing code" (which would break the count above) and
+                "Pair" (which the ten pairingArrival drives and live-drive.mjs match with
+                `exact: true` while this control is on screen). */}
+            {paste !== '' && (
+              <button
+                type="button"
+                className="pairing-field__clear"
+                aria-label="Clear pairing code"
+                onClick={() => onPasteChange('')}
+              >
+                <ClearIcon />
+              </button>
+            )}
+          </div>
+        </div>
+        {/*
+          The supporting slot the M3 field component already has (Figma I103:2904;52798:24384, drawn
+          empty in this instance) holds the instruction OR the error, never both and never neither —
+          so the 20px line never collapses and an error causes no layout shift. TWO elements rather
+          than one whose `role` flips: a role="alert" element is announced when it is INSERTED, and
+          flipping the role on a live element at the same moment its text changes is unreliable
+          across screen readers. This keeps the already-working announce mechanism verbatim. Mobile
+          routes its pairing error through the same slot (PasteCodeDialog.kt:40-45).
+        */}
+        {error === null ? (
+          <p className="pairing-field__supporting">{PAIRING_COPY.instruction}</p>
+        ) : (
+          <p className="pairing-field__supporting pairing-field__supporting--error" role="alert">
+            {ERROR_COPY[error]}
+          </p>
+        )}
+      </div>
+      <div className="pairing-page__ctas">
         <button
           type="button"
-          className="pairing__button"
+          className="pairing-page__pair"
           disabled={busy || paste.trim() === ''}
           onClick={onSubmit}
         >
           {busy ? 'Pairing…' : 'Pair'}
         </button>
+        <button type="button" className="pairing-page__cancel" disabled={busy} onClick={onCancel}>
+          Cancel
+        </button>
+        {/* A <p>, never an <a> — the welcome screen's footer reasoning applies unchanged: a link
+            here would be a second, unspecified external-open surface. */}
+        <p className="pairing-page__footer">{PAIRING_COPY.footer}</p>
       </div>
     </>
+  )
+}
+
+/**
+ * The M3 kit's `cancel` glyph in its unfilled form — an outlined ring with an x, the shape classic
+ * Material Icons ships as `highlight_off`. Inline JSX rather than a bundled .svg: that is the house
+ * idiom (WelcomeScreen.tsx:105-107, ConversationScreen.tsx:1259-1268) and the renderer ships no .svg
+ * files at all. The path is the canonical 24-box art, whose ring already spans 2..22 — i.e. the 20x20
+ * glyph inset 8.33% inside a 24x24 box that the frame exports, so the plain `0 0 24 24` viewBox
+ * reproduces it at the drawn size with no re-scaling. aria-hidden: the button names the action.
+ */
+function ClearIcon(): JSX.Element {
+  return (
+    <svg
+      className="pairing-field__clear-icon"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M14.59 8 12 10.59 9.41 8 8 9.41 10.59 12 8 14.59 9.41 16 12 13.41 14.59 16 16 14.59 13.41 12 16 9.41zM12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2m0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8" />
+    </svg>
   )
 }
 

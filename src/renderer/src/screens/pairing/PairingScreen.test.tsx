@@ -11,6 +11,11 @@ import type { PairingBridge, PairingState } from './pairingState'
 // pure runSubmit/runConfirm/pairingReducer seams in pairingState.test.ts.
 const noop = (): void => {}
 
+// The literal attribute six consumers outside this screen match on — the App.test.tsx:22 /
+// PairedShell.test.tsx:32 PAIRING_MARKER idiom, restated here because this is the file that owns
+// the markup those markers point at.
+const PAIRING_FIELD_MARKER = 'aria-label="Pairing code"'
+
 function renderView(state: PairingState): string {
   return renderToStaticMarkup(
     <PairingView
@@ -24,32 +29,73 @@ function renderView(state: PairingState): string {
 }
 
 describe('PairingView', () => {
-  it('editing (empty paste): renders the title, instruction, textarea, and a disabled Pair', () => {
+  it('editing (empty paste): renders the field, the supporting instruction, and a disabled Pair', () => {
     const markup = renderView({ phase: 'editing', paste: '', error: null })
-    expect(markup).toContain('Paste pairing code')
     expect(markup).toContain('pyry pair --print')
-    expect(markup).toContain('<textarea')
+    expect(markup).toContain(PAIRING_FIELD_MARKER)
+    expect(markup).toContain('<input')
     expect(markup).toContain('Cancel')
     expect(markup).toContain('Pair')
     expect(markup).toContain('disabled')
+    // AC3 — no clear control with nothing to clear. This is also what keeps the `disabled`
+    // assertion above honest: Pair is the ONLY disabled control in this state.
+    expect(markup).not.toContain('Clear pairing code')
   })
 
-  it('editing with a non-empty paste: Pair is enabled', () => {
+  it('editing with a non-empty paste: Pair is enabled and the clear control appears', () => {
     const markup = renderView({ phase: 'editing', paste: 'pyry://x', error: null })
-    // The only disable-able control in editing is Pair; a non-empty paste enables it.
+    // The only disable-able control in editing is Pair; a non-empty paste enables it. The clear
+    // control asserted below must never render `disabled` (AC3), which this also covers.
     expect(markup).not.toContain('disabled')
+    expect(markup).toContain('aria-label="Clear pairing code"')
   })
 
-  it('editing with an error: renders the mapped inline validation message', () => {
+  // The one branch of the new control the four editing cases cannot reach. AC3's "never renders
+  // disabled" holds "including while busy", and the `disabled` substring proxy the cases above lean
+  // on stops working here — the input and both CTAs carry it in flight — so this asserts the clear
+  // control's PRESENCE instead. It needs no disabled-guard of its own: pairingReducer's
+  // `paste-changed` arm returns state unchanged outside `editing` (pairingState.ts:67-70), which is
+  // what makes a mid-submit click an already-safe no-op.
+  it('submitting: the clear control is still rendered and Pair shows the in-flight label', () => {
+    const markup = renderView({ phase: 'submitting', paste: 'pyry://x' })
+    expect(markup).toContain('aria-label="Clear pairing code"')
+    expect(markup).toContain('Pairing…')
+  })
+
+  it('editing with an error: the supporting line shows the mapped message INSTEAD of the instruction', () => {
     const markup = renderView({ phase: 'editing', paste: 'bad', error: 'invalid-paste' })
     expect(markup).toContain('valid pairing code')
+    // AC4's slot holds one line or the other, never both — pinned so a future edit cannot
+    // quietly stack the error under the instruction and collapse the 20px slot's geometry.
+    expect(markup).not.toContain('pyry pair --print')
   })
 
   it('after a coerced infra failure: the error line shows and no control is disabled', () => {
     const markup = renderView({ phase: 'editing', paste: 'pyry://x', error: 'malformed-request' })
     expect(markup).toContain('Something went wrong sending the code.')
-    // Covers Cancel, the textarea and Pair in one assertion — the screen is answerable again.
+    // Covers Cancel, the input, Pair and the clear control in one assertion — the screen is
+    // answerable again.
     expect(markup).not.toContain('disabled')
+  })
+
+  // The deterministic net under C1, a contract enforced only by six string-matching consumers
+  // outside this file (four e2e attribute selectors, two rendered-markup substring markers). A
+  // wrapping <label>, a duplicated attribute, or a second element adopting the name would leave
+  // every one of them silently matching nothing — three of those consumers are count-0
+  // assertions that pass vacuously against a stale selector. Counting here fails loudly instead.
+  it('editing: exactly one element carries the literal aria-label="Pairing code"', () => {
+    const markup = renderView({ phase: 'editing', paste: 'pyry://x', error: null })
+    expect(markup.split(PAIRING_FIELD_MARKER)).toHaveLength(2)
+  })
+
+  // The unit-tier tripwire under C2: smoke.spec.ts binds `.pairing` ONCE and asserts it visible on
+  // the paste phase and count 0 after Cancel, so dropping the class from either treatment makes the
+  // negative half pass for the wrong reason.
+  it('the root keeps the .pairing class in both the page and the card treatment', () => {
+    expect(renderView({ phase: 'editing', paste: '', error: null })).toContain('class="pairing ')
+    expect(
+      renderView({ phase: 'reviewing', paste: 'pyry://x', fingerprint: 'aa:bb:cc:dd:ee:ff:11:22' })
+    ).toContain('class="pairing ')
   })
 
   it('reviewing: renders the fingerprint and Confirm/Cancel', () => {

@@ -517,7 +517,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // Aliasing the shared `items` is safe because the reducer only ever spreads it into a new
       // array, never mutates it (pinned by the purity block). The `sessionStore.ts` #166 rationale.
       return initialTimelineState
-    case 'reconnected':
+    case 'reconnected': {
       // #538: the reconnect reconcile — the narrower sibling of `reset` above, deliberately adjacent so
       // the contrast (full wipe vs chrome-only) reads in one screen. `apiRetry` and `compacting` are
       // cleared ONLY by a wire falling edge (the two un-widened guards at :271/:288 are why), so an edge
@@ -552,11 +552,13 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // backlog (#878) on connect — never `api_retry` / `compacting` / `turn_state` — so a status still
       // genuinely live across the reconnect shows nothing until the daemon's next edge. A briefly-missing
       // banner over a permanently-stuck one; do not engineer around it here.
-      return state.phase === 'idle' &&
+      const nothingLive =
+        state.phase === 'idle' &&
         !state.stalled &&
         state.apiRetry === null &&
         !state.compacting &&
         !state.localSendPending
+      return nothingLive
         ? state
         : {
             items: state.items,
@@ -566,6 +568,7 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             compacting: false,
             localSendPending: false
           }
+    }
     default:
       return assertNever(event)
   }

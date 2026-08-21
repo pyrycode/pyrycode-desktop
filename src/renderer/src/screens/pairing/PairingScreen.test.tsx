@@ -50,6 +50,18 @@ describe('PairingView', () => {
     expect(markup).toContain('aria-label="Clear pairing code"')
   })
 
+  // The one branch of the new control the four editing cases cannot reach. AC3's "never renders
+  // disabled" holds "including while busy", and the `disabled` substring proxy the cases above lean
+  // on stops working here — the input and both CTAs carry it in flight — so this asserts the clear
+  // control's PRESENCE instead. It needs no disabled-guard of its own: pairingReducer's
+  // `paste-changed` arm returns state unchanged outside `editing` (pairingState.ts:67-70), which is
+  // what makes a mid-submit click an already-safe no-op.
+  it('submitting: the clear control is still rendered and Pair shows the in-flight label', () => {
+    const markup = renderView({ phase: 'submitting', paste: 'pyry://x' })
+    expect(markup).toContain('aria-label="Clear pairing code"')
+    expect(markup).toContain('Pairing…')
+  })
+
   it('editing with an error: the supporting line shows the mapped message INSTEAD of the instruction', () => {
     const markup = renderView({ phase: 'editing', paste: 'bad', error: 'invalid-paste' })
     expect(markup).toContain('valid pairing code')

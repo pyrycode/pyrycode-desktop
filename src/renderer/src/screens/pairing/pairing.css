@@ -136,10 +136,21 @@
 }
 
 /* M3's focus affordance for a filled field, and the only interactive state the frame
-   does not draw for it. It preserves what .pairing__paste:focus-visible did before
-   #665 without inventing a 2px-indicator token. */
+   does not draw for it. .pairing-field__input clears its own outline, so this IS the
+   whole keyboard-focus indicator — which is why it cannot be a colour change alone:
+   --color-on-surface-variant (#c2c7cf, L=0.5684) and --color-primary (#9dcbfc,
+   L=0.5691) are 1.00:1 to each other, so in greyscale or with a blue-yellow
+   deficiency the hue flip is imperceptible. The box-shadow adds a SECOND 1px line
+   directly under the border, doubling the indicator's thickness — the non-colour cue
+   M3's own filled field uses, and ~10:1 against the page behind it.
+   Outset, not `inset`: an inset shadow paints under the ::before fill above and would
+   be washed out by its 72% surface. Shadows do not affect layout, so unlike a
+   border-bottom-width change this costs no 1px shift. The inset-box-shadow-as-hairline
+   idiom is conversation.css:2135-2141; 1px is structural geometry, not a theme value
+   (see the file header's literal carve-out). */
 .pairing-field:focus-within {
   border-bottom-color: var(--color-primary);
+  box-shadow: 0 1px 0 var(--color-primary);
 }
 
 /* THE ROW MUST BE POSITIONED. The fill above is absolute with z-index: auto, and an
@@ -198,6 +209,17 @@
   line-height: var(--text-body-large-line);
   letter-spacing: var(--text-body-large-tracking);
   font-weight: var(--text-body-large-weight);
+}
+
+/* Replaces the affordance `.pairing__paste:disabled` took with the <textarea>. Because
+   the rule above sets `color` explicitly, the UA's own disabled colour is overridden,
+   so without this the field would render identically enabled and disabled and the
+   pill's `Pairing…` would be the only in-flight cue. 0.38 is the M3 disabled value
+   already used by .pairing-page__pair:disabled and .pairing__button:disabled. Only the
+   value dims: the clear control beside it stays at full strength because it deliberately
+   never renders `disabled` (AC3) and a dimmed control would read as inert. */
+.pairing-field__input:disabled {
+  opacity: 0.38;
 }
 
 /* Figma draws a 48x48 trailing slot holding a 40x40 round state layer around a 24x24

@@ -1,4 +1,4 @@
-import { useReducer } from 'react'
+import { useReducer, useRef } from 'react'
 import './pairing.css'
 import {
   initialPairingState,
@@ -124,6 +124,15 @@ function EntryPage({
   onSubmit: () => void
   onCancel: () => void
 }): JSX.Element {
+  // The clear control UNMOUNTS ITSELF (it is gone the moment `paste` is ''), and a self-removing
+  // control drops document.activeElement to <body> — ejecting a keyboard or screen-reader user to
+  // the top of the tab order right after a successful action, on a screen with no heading and only
+  // three named controls. Focus goes back to the input, which is where the user wants to be after
+  // clearing anyway. The `setState-then-ref.current?.focus()` shape is the house focus-return idiom
+  // (ConversationScreen.tsx:2099-2107). A ref is SSR-safe, so this leaves the server-rendered test
+  // tier — and the props-in/markup-out arrangement — undisturbed.
+  const inputRef = useRef<HTMLInputElement>(null)
+
   return (
     <>
       <div className="pairing-page__hero">
@@ -167,6 +176,7 @@ function EntryPage({
                 parsePairingPayload requires to be strict base64url.
               */}
               <input
+                ref={inputRef}
                 type="text"
                 className="pairing-field__input"
                 aria-label="Pairing code"
@@ -185,13 +195,20 @@ function EntryPage({
                 (pairingState.ts:67-70), making the click an already-safe no-op. Its own accessible
                 name is distinct from both "Pairing code" (which would break the count above) and
                 "Pair" (which the ten pairingArrival drives and live-drive.mjs match with
-                `exact: true` while this control is on screen). */}
+                `exact: true` while this control is on screen).
+
+                onPasteChange takes a CONSTANT — this handler never reads the secret it discards.
+                The focus call runs before React commits, so it lands on the input while this button
+                is still mounted; the unmount that follows then cannot strand focus on <body>. */}
             {paste !== '' && (
               <button
                 type="button"
                 className="pairing-field__clear"
                 aria-label="Clear pairing code"
-                onClick={() => onPasteChange('')}
+                onClick={() => {
+                  onPasteChange('')
+                  inputRef.current?.focus()
+                }}
               >
                 <ClearIcon />
               </button>
@@ -204,13 +221,30 @@ function EntryPage({
           so the 20px line never collapses and an error causes no layout shift. TWO elements rather
           than one whose `role` flips: a role="alert" element is announced when it is INSERTED, and
           flipping the role on a live element at the same moment its text changes is unreliable
-          across screen readers. This keeps the already-working announce mechanism verbatim. Mobile
-          routes its pairing error through the same slot (PasteCodeDialog.kt:40-45).
+          across screen readers. Mobile routes its pairing error through the same slot
+          (PasteCodeDialog.kt:40-45).
+
+          THE KEYS ARE LOAD-BEARING — DO NOT DELETE THEM. They look redundant (this is not a list),
+          but without them the two branches are not two elements to React, only to a reader. The
+          reconciler matches the slot on `key` (updateSlot: `newChild.key === key`, both null here),
+          then updateElement sees `current.elementType === elementType` ('p' === 'p') and calls
+          useFiber — the existing fiber and its DOM NODE ARE REUSED. No Placement effect, so a
+          failed submit would add role="alert" to a LIVE node in the same commit that rewrites its
+          text, which is exactly the flip ruled out above. Distinct keys make the reconciler delete
+          and place instead, restoring the genuine insertion `main` got for free when the slot was
+          empty until an error arrived. Nothing at the server-render tier can see this — the markup
+          is identical either way — so this comment is the only guard.
         */}
         {error === null ? (
-          <p className="pairing-field__supporting">{PAIRING_COPY.instruction}</p>
+          <p key="instruction" className="pairing-field__supporting">
+            {PAIRING_COPY.instruction}
+          </p>
         ) : (
-          <p className="pairing-field__supporting pairing-field__supporting--error" role="alert">
+          <p
+            key="error"
+            className="pairing-field__supporting pairing-field__supporting--error"
+            role="alert"
+          >
             {ERROR_COPY[error]}
           </p>
         )}

@@ -168,21 +168,30 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   // second click cannot race the arm. CONFIRM by clicking "Delete" again → onDeleteConfirm fires
   // delete_conversation and closes the sheet; the daemon removes the registry row and replies
   // conversation_deleted { id } correlated by in_reply_to → the app re-lists → the list returns only the
-  // seed. ---
+  // seed, AND (#652) the app leaves the thread by itself. ---
   await overflowTrigger.click()
   await page.getByRole('menuitem', { name: 'Channel info' }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(
     page.getByText('Delete this conversation permanently? This cannot be undone.')
   ).toBeVisible()
+  // #652's non-vacuity anchor: the thread surface is HERE before the confirming click, so the 1→0 delta
+  // below is a transition this click caused, not an assertion against a surface that was never mounted.
+  await expect(page.locator('.conversation')).toHaveCount(1)
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
+
+  // #652 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back
+  // click (the `.conversation__back` click that used to stand here is gone: the control is unmounted by
+  // the time it would run). This 1→0 delta is the navigation proof; it auto-waits the whole
+  // delete → conversation_deleted → exit round trip against the real daemon.
+  await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // AC5 — gone from the active Channel List (the load-bearing "deleted from store" proof: this is the one
   // surface where the created row WAS visible pre-delete — Gap B kept it in the list even while archived —
-  // so its removal here is sound). Back to the list; assert the 2→1 row drop (auto-waiting the delete
-  // re-list), then that the survivor is the promoted seed and the non-promoted created row is gone —
-  // affordance counts, NOT title (both rows render "Untitled").
-  await page.locator('.conversation__back').click()
+  // so its removal here is sound). The 2→1 row drop auto-waits the delete re-list, then the survivor is
+  // the promoted seed and the non-promoted created row is gone — affordance counts, NOT title (both rows
+  // render "Untitled"). Note this row count does NOT prove the navigation above — it is driven by the
+  // re-list, which worked before #652; the `.conversation` delta is what pins the return.
   await expect(page.locator('.channel-list__row-open')).toHaveCount(1, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })

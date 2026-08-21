@@ -96,8 +96,10 @@ export function ConversationScreen({
   // re-rendering unrelated facets.
   const items = useTimelineStore(selectItems)
   // #215: the coarse `phase` scalar, read beside the items slice (mirrors the selectItems → Timeline
-  // line above). The container derives the indicator state and passes only that down, so no
-  // daemon-supplied string reaches the view (AC3 is a type-level guarantee, not a convention).
+  // line above). The container derives the indicator state and passes only that down, so the LABEL CHOICE
+  // is a closed client-owned union rather than a daemon value. (#649 narrows the original claim here: the
+  // indicator now also takes one separately-named `toolName` prop derived from `items`, which IS a daemon
+  // string — deliberately, per the operator's 2026-08-20 decision. See ThinkingIndicator below.)
   // Selecting only `phase` adds no meaningful churn — the container already re-renders per items delta.
   // Inert in production until #179 flips `interactive` (phase stays `idle`), so the indicator is null.
   const phase = useTimelineStore(selectPhase)
@@ -179,8 +181,15 @@ export function ConversationScreen({
       <Timeline items={items} now={now} scrollPin={scrollPin} />
       {/* #648: the gate now tracks the WHOLE running turn (thinking or responding), so a turn spent mostly
           in tool calls no longer reads as a frozen screen; the label tracks the phase. #493/#496 still
-          narrow it — a live api-retry, or a live compaction, supersedes this indicator in either phase. */}
-      <ThinkingIndicator state={workingIndicatorState({ phase, apiRetry, compacting })} />
+          narrow it — a live api-retry, or a live compaction, supersedes this indicator in either phase.
+          #649: and the label now NAMES the open tool, derived from the same `items` array Timeline is
+          mapping one line above (no second subscription) — so a long turn says what it is doing, not just
+          that it is busy. Two derivations, two props: the closed client-owned label choice, and the one
+          daemon string. */}
+      <ThinkingIndicator
+        state={workingIndicatorState({ phase, apiRetry, compacting })}
+        toolName={openToolName(items)}
+      />
       {/* #493: the api-error retry status — mounted directly after its supersede peer, before the stall
           indicator. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge (turn
           activity leaves it showing — the deliberate inverse of the stall indicator). Renders nothing at
@@ -781,9 +790,27 @@ export const THINKING_COPY = 'Thinking…'
 // string — the wire carries no label for this state, so the guarantee holds by construction.
 export const WORKING_COPY = 'Working…'
 
+// #649: the label that names the tool the daemon currently has open — the answer to the operator's
+// remaining complaint, that WORKING_COPY reads identically for a 40 ms file read and a four-minute build.
+// A function rather than a constant because this copy has a hole, but BOTH fixed runs (the leading verb
+// and the trailing U+2026) live inside it, so "the fixed copy is client-owned and only the name is
+// daemon-supplied" is true of one readable unit. Apostrophe-free (renderToStaticMarkup escapes `'` →
+// `&#x27;`, the standing desktop lesson), U+2026 not three dots, matching its four sibling constants.
+// It deliberately does NOT contain WORKING_COPY: the named label REPLACES the generic one rather than
+// extending it. The name is returned verbatim — escaping is the renderer's job (React auto-escapes the
+// text child), and pre-escaping here would double-escape and would be the very "new mechanism" the
+// escaping AC pins against.
+export function toolWorkingCopy(name: string): string {
+  return `Running ${name}…`
+}
+
 // #648: which of the two client-owned labels the indicator shows. A two-member union rather than a
 // boolean, because a boolean cannot carry two labels; deliberately NOT `TurnPhase`, which would hand the
 // view the store type and make `'idle'` representable-but-illegal inside the shown branch.
+//
+// #649: deliberately NOT widened to a third member carrying the tool name. Folding the daemon string in
+// here would dissolve the client-owned half into the same type as the daemon half, which is exactly the
+// distinction that ticket asks to preserve; the name rides a second, separately-named prop instead.
 export type WorkingIndicatorState = 'thinking' | 'working'
 
 // #215: the working indicator — Timeline's twin over the coarse `phase` scalar rather than the
@@ -799,26 +826,67 @@ export type WorkingIndicatorState = 'thinking' | 'working'
 // go blank. The `| null` lives on the prop and the return type, not inside the alias (the
 // `ApiRetryStatus | null` shape below).
 //
-// Still NOT `phase: TurnPhase` and still not a plain `string` label — the union keeps AC5 ("no
-// daemon-supplied string reaches this view") a type-level guarantee rather than a convention: the prop's
-// only inhabitants are two client-owned literals and null, so the view structurally cannot render a daemon
-// string. The container does the derivation, via `workingIndicatorState` below.
+// `state` is still NOT `phase: TurnPhase` and still not a plain `string` label — the union keeps the LABEL
+// CHOICE a closed set of client-owned literals. The container does that derivation, via
+// `workingIndicatorState` below.
 //
-// null → null (zero layout footprint, AC3 — exactly like Timeline returning null on an empty list). Both
-// labels wear the SAME interim treatment: the daemon-bubble surface with muted text (a transient
+// #649 DELIBERATELY REVERSES the other half of #648's guarantee, which read here as "the view structurally
+// cannot render a daemon string". Per the operator's 2026-08-20 decision the indicator now names the open
+// tool, and a tool name is by definition daemon-supplied. The reversal is narrow by construction, and this
+// is what survives of the original claim:
+//
+//   - the label choice stays a closed client-owned union (`state`), unwidened;
+//   - exactly ONE separately-named prop (`toolName`) carries the single daemon string;
+//   - the fixed copy around that name is client-owned (`toolWorkingCopy` above);
+//   - the name reaches the DOM only as an auto-escaped React text child — the identical posture the
+//     tool row two rows up already applies to the SAME string (`item.name`, `:551`), never
+//     dangerouslySetInnerHTML, no HTML sink. So the indicator adds no exposure that is not already on
+//     screen, which is precisely the operator's reasoning for the decision.
+//
+// `toolName` is REQUIRED, not optional: an optional prop would let the container silently omit it, and
+// nothing in this repo could catch that — every container test renders the idle store (zustand v5 reads
+// getInitialState() under server render), so `tsc` is the only available detector and the type must be the
+// one that fails.
+//
+// Precedence: the `state === null` guard runs FIRST, so #493's and #496's supersede rules are reached
+// before any tool label can render — a live api-retry or compaction still hides the indicator entirely in
+// either phase, and an open tool cannot resurrect it. `toolName` then wins over the phase-derived copy,
+// which makes `{ state: 'thinking', toolName: 'Bash' }` well-defined rather than illegal; it should not
+// arise (the daemon flips to `responding` on the first tool step), so it is a defined edge, not a
+// defended one.
+//
+// null → null (zero layout footprint, AC3 — exactly like Timeline returning null on an empty list). All
+// three labels wear the SAME interim treatment: the daemon-bubble surface with muted text (a transient
 // affordance), pending the deferred desktop-design pass (the mobile Figma has no indicator node at all —
-// the gap already recorded for #215/#317/#493/#496). No new element, no new class, no CSS change.
+// the gap already recorded for #215/#317/#493/#496). The tool branch adds ONE modifier, carrying the
+// one-line bound an unbounded daemon string needs (see .bubble--tool-label in conversation.css); the two
+// unnamed labels render byte-identical markup to #648's, so their assertions stand as regression evidence.
+//
+// The label is a SINGLE text child, not constant-plus-span like ApiRetryIndicator below. That is
+// load-bearing for the bound: one text run ellipsizes as one unit, so on overflow the client `…` is
+// truncated away and replaced by the ellipsis the truncation itself draws. Splitting the name into its own
+// span would render `Running some-long-na…  …` — two ellipses — and buys nothing, since the name needs no
+// distinct type or colour here (there is no Figma node for this state; the indicator is one muted run).
 export function ThinkingIndicator({
-  state
+  state,
+  toolName
 }: {
   state: WorkingIndicatorState | null
+  toolName: string | null
 }): JSX.Element | null {
   if (state === null) return null
+  // One wrapper, one bubble, two varying pieces — the toolCall row's `rowClass` idiom above (:545), which
+  // likewise varies only a className and keeps a single return. Writing the tool case as its own early
+  // return would duplicate the wrapper markup, and a drifted copy is exactly what makes the two unnamed
+  // labels stop being byte-identical to #648's.
+  const bubbleClass = `bubble bubble--daemon bubble--thinking${
+    toolName !== null ? ' bubble--tool-label' : ''
+  }`
+  const label =
+    toolName !== null ? toolWorkingCopy(toolName) : state === 'thinking' ? THINKING_COPY : WORKING_COPY
   return (
     <div className="conversation__thinking">
-      <div className="bubble bubble--daemon bubble--thinking">
-        {state === 'thinking' ? THINKING_COPY : WORKING_COPY}
-      </div>
+      <div className={bubbleClass}>{label}</div>
     </div>
   )
 }
@@ -906,6 +974,37 @@ export function shouldShowThinking(status: ThreadStatus): boolean {
 export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
   if (!shouldShowThinking(status)) return null
   return status.phase === 'thinking' ? 'thinking' : 'working'
+}
+
+// #649: the `name` of the most recently started still-open tool call, or null if none is open. A pure read
+// over the `items` slice the container already holds — "a tool is running right now" is `result === null`
+// on a `toolCall` item, so this needs no new wire field, no daemon change, no new store state and no new
+// subscription. It lives here beside `workingIndicatorState` rather than in threadTimeline.ts, following
+// this file's own precedent that pure derivations over store types live with the view that consumes them
+// (`isTurnRunning` below is exactly that shape), which keeps the store untouched.
+//
+// "Most recently started" is the LAST such item in array order: `items` is append-only and `fillResult`
+// (threadTimeline.ts:213) fills in place without reordering, so array order IS start order. Descending
+// scan with an early return — deliberately NOT `Array.prototype.findLast`, which is ES2023 and would fail
+// `npm run typecheck` against tsconfig.web.json's `lib: ["ES2020", …]`.
+//
+// Total over its input: an empty array, an array with no `toolCall`, and an array whose calls are all
+// resolved each return null, which renders #648's generic behaviour. The name is returned VERBATIM — no
+// trim, no emptiness check, no length cap. A whitespace-only name would render `Running …`, which is
+// degraded rather than broken and is unobserved (the wire requires a name and every real tool has one);
+// the CSS bound holds the slot at any length, so no character cap is warranted either.
+//
+// Known, deliberately undefended: an interrupted turn can leave a `toolCall` permanently unresolved, and
+// the next turn's indicator would then name that stale tool. The timeline already shows that call as a
+// permanently pending 50%-dimmed row (#230), so the label mirrors what is on screen rather than
+// contradicting it. If the operator observes a wrong name after an interrupt, the cheap fix is to stop the
+// scan at the first `turnBoundary`, scoping it to the current turn — one extra condition in this loop.
+export function openToolName(items: readonly ThreadItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]
+    if (item.kind === 'toolCall' && item.result === null) return item.name
+  }
+  return null
 }
 
 // #493: the api-retry indicator — the StallIndicator twin over the `apiRetry` status record. The daemon

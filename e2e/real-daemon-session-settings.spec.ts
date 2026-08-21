@@ -1,4 +1,5 @@
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // #481 — the missing half of #442. `set_session_settings` (model / effort / YOLO from the run-config
 // sheet) shipped with no real-wire test: #442 scoped "run-controls over the real wire" but closed with
@@ -44,14 +45,7 @@ test('real daemon persists a session-settings write and returns it on a fresh re
     server_static_pubkey: daemon.pairFields.server_static_pubkey
   })
 
-  const pasteBox = page.locator('textarea[aria-label="Pairing code"]')
-  const fingerprint = page.locator('[aria-label="Server key fingerprint"]')
-
-  await expect(pasteBox).toBeVisible()
-  await pasteBox.fill(payload)
-  await page.getByRole('button', { name: 'Pair', exact: true }).click()
-  await expect(fingerprint).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await pairFromUnpairedLaunch(page, payload)
 
   // The seeded promoted row rendering IS the connected gate (the launchPairedApp idiom): it appears
   // only once the handshake completed and the auto-fired list_conversations reply came back.

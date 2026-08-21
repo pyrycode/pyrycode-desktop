@@ -242,6 +242,20 @@ Teardown must run on **every** exit path — success, test failure, and a failur
   row is in the store. Only the *reason* in their comments changed, from "the row isn't in the store yet"
   to "the list isn't mounted to show it". Gap B (archived rows never leave the active list,
   `partitionByPromotion`, #469) is untouched.
+- **[#661](../codebase/661.md) funnels every unpaired-launch pairing drive through one shared step.**
+  Ten sites — `launchPairedApp.ts` and nine `real-*` specs — each ran the identical six lines after an
+  unpaired launch (locate the pairing textarea → wait → fill → click `Pair` → wait for the fingerprint
+  card → click `Confirm`). All ten now call the new **`e2e/fixtures/pairingArrival.ts`**'s
+  `pairFromUnpairedLaunch(page, payload)` instead. Behaviour-preserving (zero production LOC, the six
+  lines moved verbatim), and the seam is drawn *after* `Confirm` — post-confirm readiness gates
+  (list→thread + Send-enabled for the fixture, a per-flow gate for each `real-*` spec) stay in each
+  caller. `pairingArrival.ts` imports only `@playwright/test`, never `launchPairedApp.ts` or
+  `realDaemon.ts` — both call `base.extend` at module scope, so importing either would drag a second
+  fixture extension into specs that must keep using the other one. `e2e/unpair-repair.spec.ts` is
+  deliberately not a caller and stays byte-unchanged: its two pairing-textarea locators follow a
+  mid-session unpair flip and serve as a teardown proof, not a drive, and #662 relies on this file
+  staying untouched as its negative control. This is now the harness's single edit point for changing
+  what an unpaired launch lands on.
 
 ## Related
 
@@ -271,6 +285,9 @@ Teardown must run on **every** exit path — success, test failure, and a failur
 - [#515 codebase notes](../codebase/515.md) — closed Gap A (`shouldRefreshList` now covers `conversationCreated`); zero e2e assertion changes, comment-only reconciliation across #440/#451/#452.
 - [#546 codebase notes](../codebase/546.md) — deleted the retired `electronApp.ts` fixture (zero importers).
 - [#517 codebase notes](../codebase/517.md) — closed the teardown-on-setup-failure leak in `realDaemon.ts`'s `page`/`relay` and `smoke.spec.ts`'s local `page`; added `withIsolatedElectronApp`.
+- [#661 codebase notes](../codebase/661.md) — extracted `e2e/fixtures/pairingArrival.ts`, the shared
+  unpaired-launch pairing-arrival step all ten drive sites (the fixture + nine `real-*` specs) now call;
+  the one-line edit point #662 needs to change the unpaired entry point.
 - [Push-notification preference store](push-notification-preference-store.md) / [#408 codebase notes](../codebase/408.md) — the `pyry.pushNotificationsEnabled` `localStorage` contract [#466](../codebase/466.md) is the first e2e to prove survives a full app relaunch.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md) — Electron + electron-vite emitting `out/main` · `out/renderer`, the layout the launch target depends on.
 - Cross-project prior art: pyrycode `#68` shipped the same spawn+cleanup harness-primitive + one-smoke shape (Go, `internal/e2e/`), with UI scenarios as separate tickets. This mirrors that shape in TypeScript/Playwright.

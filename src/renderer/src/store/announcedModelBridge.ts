@@ -2,7 +2,7 @@
 // daemon event (#587's transport half decodes claude's `system` / `init` line into `model` +
 // `truncated` and emits it) and lands each announcement in the app-singleton `announcedModelStore` the
 // run-configuration sheet (#560) reads. Reactive-only — like sessionIdBridge (#259) / queueBridge
-// (#293) / screenSnapshotBridge (#323) and unlike conversationListBridge (#208) / runConfigSnapshot
+// (#293) and unlike conversationListBridge (#208) / runConfigSnapshot
 // (#187), the daemon PUSHES the announcement unsolicited, so there is NO request half: no command
 // sent, no connected-edge trigger (the trigger is the turn's init line).
 //
@@ -24,12 +24,12 @@ import { announcedModelStore, type AnnouncedModel } from './announcedModelStore'
 
 /**
  * The filter: map the one owned arm to its announcement, every other DaemonEvent to `null`. A FRESH
- * named-field literal `{ model: event.model, truncated: event.truncated }` (the screenSnapshotBridge /
- * queueBridge idiom — never `return event`, never a spread) so `type` never reaches the store and the
+ * named-field literal `{ model: event.model, truncated: event.truncated }` (the queueBridge
+ * idiom — never `return event`, never a spread) so `type` never reaches the store and the
  * store shape stays immune to the `modelAnnounced` arm gaining an unrelated field later;
  * daemonConnection.ts:686 already made the identical call one layer up. `default: null` — not an
  * `assertNever` — because ignoring the rest is this path's intended, permanent behavior: it is an
- * independent subscriber (the sessionIdBridge / queueBridge / screenSnapshotBridge posture), not one of
+ * independent subscriber (the sessionIdBridge / queueBridge posture), not one of
  * the three typecheck-gating exhaustive bridges. `null` here means "not our arm", NEVER "bad data": a
  * malformed payload is already rejected upstream, where #587's decoder throws WireDecodeError inside
  * daemonConnection's decode guard and no event is emitted at all. React-free → unit-testable without a
@@ -67,7 +67,7 @@ export function subscribeAnnouncedModel(
 
 /**
  * The announced-model data-path binding — a headless component mounted app-level in App.tsx, alongside
- * ScreenSnapshotData: one stable, app-lifetime listener with no subscribe/unsubscribe churn as the
+ * QueueData: one stable, app-lifetime listener with no subscribe/unsubscribe churn as the
  * route flips, because a `modelAnnounced` announcement rides the turn's init line and can arrive at any
  * time — including before the run-configuration sheet (#560) is ever opened — so the latest
  * announcement must be retained regardless of which screen is shown. A component (not a hook) isolates

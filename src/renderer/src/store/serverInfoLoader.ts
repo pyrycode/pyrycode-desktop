@@ -46,7 +46,7 @@ export function loadServerInfo(
  * Settings tree (#333/#334), NOT app-level: an app-level one-shot-at-launch would run before pairing
  * (→ unavailable → null) and never re-run, leaving Settings blank after a same-session pair. Mounting
  * when the Settings screen opens fetches a fresh, correct read every time. Ships DORMANT here — no
- * consumer mounts it in this ticket (the modalBridge / screenSnapshotBridge precedent).
+ * consumer mounts it in this ticket (the modalBridge precedent).
  *
  * The effect reuses the App.tsx `pairingStatus` one-shot shape: an `active` flag guards the write so a
  * StrictMode double-mount nets exactly one applied write (the first mount's cleanup flips `active`

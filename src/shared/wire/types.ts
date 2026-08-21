@@ -213,7 +213,7 @@ export interface SessionSettingsUpdatedPayload {
  * `omitempty`), so every zero value is a real answer rather than an absence.
  *
  * The answer to a bare `request_session_settings`, and the run-configuration sheet's source of
- * truth (#491). It replaces reading these values off `ScreenSnapshotPayload`, which still carries
+ * truth (#491). It replaces reading these values off the daemon's `screen_snapshot` reply, which still carries
  * copies: that reply is a picture of the terminal, and a daemon on the stream-json interactive
  * runner has no terminal, so it answers `server.binary_offline` and the settings — which have
  * nothing to do with a terminal — were refused along with it. On the runner in production that left
@@ -246,7 +246,7 @@ export interface SessionSettingsPayload {
  * text` — all always present (no `omitempty`). One incremental slice of the assistant reply on the
  * v2 interactive stream, which REPLACES the coarse `message` fan-out (pyrycode #699): assistant text
  * arrives only here once #179 flips `interactive` on. `text` is the render payload (#203), carried
- * verbatim; unlike `screen_snapshot.text` it is NOT dropped downstream. See #199.
+ * verbatim. See #199.
  */
 export interface AssistantDeltaPayload {
   conversation_id: string

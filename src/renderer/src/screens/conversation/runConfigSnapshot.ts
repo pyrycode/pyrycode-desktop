@@ -11,7 +11,7 @@
 // on the stream-json interactive runner — refused the whole reply and the sheet got nothing. It
 // also never carried a session id at all, so even on the terminal runner the controls had no
 // address to write to and stayed permanently inert. `request_session_settings` answers both, on
-// both runners. The live-screen view still uses `screen_snapshot`; only the sheet moved.
+// both runners. The live-screen view that also read it was itself removed (#618-#622).
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { RunConfigSnapshot } from '../../store/runConfigStore'

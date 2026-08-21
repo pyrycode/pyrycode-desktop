@@ -616,6 +616,70 @@
   font-family: var(--font-mono);
 }
 
+/* #630 — INLINE code, which is by construction everything the pair above does not reach. react-markdown
+   routes a FENCE's contents through <code> as well, and a fence with no info string leaves that <code>
+   carrying no class at all — attribute-identical to an inline one (AssistantMarkdown.tsx:103-105 declines
+   a `code` override for exactly that reason and hands the case here). So className cannot discriminate and
+   only ANCESTRY can.
+
+   OF THE TWO FORMS THAT SAY IT, the complex-:not() is the one that fails SAFE. `code:not(.code-block__body
+   code)` means "not INSIDE a fenced body" and stays excluded however deep the <code> sits; the
+   child-combinator alternative, `:not(.code-block__body) > code`, tests only the PARENT and would start
+   painting inline chrome inside a fence the day anything wraps that content — syntax highlighting being
+   the concrete future that does, since a highlighter's whole output is spans around the code. AC3 is the
+   trap this construct exists around, so the form that cannot regress into it wins. :not() takes the
+   specificity of its argument, so this computes to (0,2,2) against `.code-block__body code`'s (0,1,1) —
+   a consequence rather than a weapon: the two match DISJOINT element sets by construction, so they never
+   compete and source order between them is irrelevant. (Every :not() already in this file takes a SIMPLE
+   argument — six :not(:disabled) and two :not([aria-readonly]) — so a complex one, carrying a descendant
+   combinator, is new here. Supported since Chromium 88; the e2e below is what actually exercises it.)
+
+   NO font-size, AND NONE OF THE REST OF THE QUARTET. Inline code takes its CONTAINER's step, and every
+   container in here is already typed from the scale: body-medium from .bubble (:295) in prose, and #628's
+   headline-small / title-large / title-medium / label-large in h1-h6. That is precisely what lets ONE rule
+   cover a paragraph, a heading, a list item, a blockquote and an <em>/<strong> with no per-context
+   override. .code-block__body's body-small does NOT transfer to here: it takes the whole quartet because
+   it is a BLOCK and owns its line box, whereas an inline run can take only the size — the other three
+   belong to the line it sits in — and this file has 67 rules declaring the full quartet and zero declaring
+   font-size alone. It would also break headings, and not merely visually: at body-small a <code> in an
+   <h1> renders at 12px inside 24px prose AND stands the heading's block 4px taller (33 -> 37 measured), a
+   smaller font producing a bigger box. And the optical premise behind stepping down ("mono looks bigger")
+   is uncalibratable, because --font-mono is not bundled (tokens.css:41-43) and so resolves per platform.
+   In the renderer that actually SHIPS it is wrong-signed: measured at 14px in Electron 33, the stack falls
+   through to the generic — Menlo here — at an x-height of 7.66px against --font-sans's 7.37px, making mono
+   the LARGER of the two already, so a step down would correct in the wrong direction. The same declaration
+   measures 6.32px under chromium_headless_shell-1208. One declaration, a 21% swing between two Chromium
+   builds, is not something a fixed step can correct. `font-size: inherit` was the other candidate: it
+   computes identically to declaring nothing and would restate an inherited value, which this file has now
+   declined three times (#607, #623, #628).
+
+   font-family IS declared, because the UA stylesheet carries `code { font-family: monospace }` and a
+   DECLARATION beats an inherited value whatever its origin — :610-613's argument, and measured: without
+   this the computed family is the bare generic, not the token's stack. The FILL is what carries AC1's
+   "more than font family alone": --color-surface is the fill .code-block already uses (:553), so inline
+   and fenced code read as one code surface, and the ink stays the inherited --color-on-surface, making the
+   pair .conversation's own base fill/ink combination (:9-19). No new colour, so no contrast question.
+   --radius-xs and --space-1 are the scale's smallest radius and smallest step, and some horizontal padding
+   is required or the fill clips the glyphs.
+
+   Six further omissions, each load-bearing. No padding-block: measured, --space-1 on the block axis grows
+   the inline box from 16px to 24px inside a 20px line box, and an inline box does not grow the line box it
+   sits in, so the chip would overlap its neighbouring line. The vertical breathing room is the
+   line-height's existing leading, which is exactly what that 16-in-20 already is. No margin: #629 owns
+   the rhythm one level down (:490-497) and one added here would collide with it. No white-space, no
+   overflow-wrap and no word-break: break-word inherits from .bubble (:298), and a restatement here is
+   exactly how the long-token wrap would be lost (#607's precedent, followed by #623, #628 and #629). No
+   box-decoration-break: the default `slice` paints a wrapped run as ONE chip broken across lines, taking
+   the start padding on its first fragment and the end padding on its last, while `clone` would repeat both
+   on every fragment and add width inside the measure. No color, per above. And no display and no
+   vertical-align — the inline box IS the construct, and anything else changes what wraps. */
+.bubble__markdown code:not(.code-block__body code) {
+  padding-inline: var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+}
+
 /* #203 — the streaming cursor (Figma node 16:56): the ▎ glyph (U+258E) trailing the in-progress
    assistant bubble's text run, inline, inheriting .bubble's on-surface color and body-medium size —
    no color/type literal of its own. A subtle blink conveys the live-streaming state; the static caret

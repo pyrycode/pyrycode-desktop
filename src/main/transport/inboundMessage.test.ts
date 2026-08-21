@@ -43,7 +43,11 @@ function encodeBundleDone(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 8, type: 'debug_bundle_done', ts: FIXED_TS, payload })
 }
 
-/** A `screen_snapshot` envelope's plaintext bytes, wrapping an arbitrary payload (#180). */
+/**
+ * A `screen_snapshot` envelope's plaintext bytes, wrapping an arbitrary payload. No longer a modeled
+ * type (#622): this now builds THE unmodeled frame this file pins — a realistic wire type the daemon
+ * can still emit and that the decoder deliberately does not narrow.
+ */
 function encodeSnapshot(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 9, type: 'screen_snapshot', ts: FIXED_TS, payload })
 }
@@ -196,7 +200,11 @@ function encodeUnrecognized(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 25, type: 'unrecognized_message', ts: FIXED_TS, payload })
 }
 
-/** A fully-populated, well-formed screen_snapshot payload. */
+/**
+ * The payload the daemon used to send on a `screen_snapshot` (#180). Retained after #622 unmodeled the
+ * type, so the pins below exercise a realistic frame rather than an empty one — and, for the log pin,
+ * one carrying sensitive rendered terminal text.
+ */
 const SNAPSHOT = {
   conversation_id: 'conv-1',
   text: 'rendered screen contents',
@@ -596,88 +604,40 @@ describe('parseInboundMessage — debug-bundle fail-closed (#116, AC3/AC4)', () 
   })
 })
 
-describe('parseInboundMessage — screen_snapshot recognition (#180, additive)', () => {
-  it('narrows a full screen_snapshot into { kind: snapshot } with all eight fields', () => {
-    expect(parseInboundMessage(encodeSnapshot(SNAPSHOT))).toEqual({
-      kind: 'snapshot',
-      snapshot: SNAPSHOT
-    })
+describe('parseInboundMessage — screen_snapshot is no longer modeled (#622)', () => {
+  it('returns null for a well-formed screen_snapshot, without throwing (AC2)', () => {
+    // `Envelope.type` is an open union (`EnvelopeType | string`), so dropping the modeled member does
+    // not make this frame unrepresentable or fatal — it falls to the tolerant `default` arm. Pinned
+    // rather than assumed: a client that crashed on an unexpected type would be the worse failure.
+    expect(parseInboundMessage(encodeSnapshot(SNAPSHOT))).toBeNull()
   })
 
-  it('decodes empty model/effort and yolo:false as those values, never as absent (AC3)', () => {
-    const defaults = { ...SNAPSHOT, model: '', effort: '', yolo: false }
-    expect(parseInboundMessage(encodeSnapshot(defaults))).toEqual({
-      kind: 'snapshot',
-      snapshot: defaults
-    })
-  })
-
-  it('decodes used_tokens:0 / window_tokens:0 as those values, never as absent (#191, AC3)', () => {
-    const zeros = { ...SNAPSHOT, used_tokens: 0, window_tokens: 0 }
-    expect(parseInboundMessage(encodeSnapshot(zeros))).toEqual({
-      kind: 'snapshot',
-      snapshot: zeros
-    })
-  })
-
-  it('drops unknown server keys, keeping only the eight known fields (forward-compat)', () => {
-    const withExtras = { ...SNAPSHOT, tokens_used: 512, extra: 'ignore-me' }
-    expect(parseInboundMessage(encodeSnapshot(withExtras))).toEqual({
-      kind: 'snapshot',
-      snapshot: SNAPSHOT
-    })
-  })
-
-  it('still routes a message / message_chunk to its existing kind (additive, unchanged)', () => {
-    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
-  })
-})
-
-describe('parseInboundMessage — screen_snapshot fail-closed (#180, AC2/AC3)', () => {
-  it('throws when any of the five string fields is missing or non-string', () => {
+  it('returns null for a malformed screen_snapshot payload rather than throwing (AC3)', () => {
+    // What used to be the fail-closed set is inert: no arm inspects this payload any more, so each of
+    // these reaches the `default` arm by exactly the path the well-formed frame takes.
     const bad: unknown[] = [
       { ...SNAPSHOT, conversation_id: undefined },
-      { ...SNAPSHOT, text: undefined },
       { ...SNAPSHOT, ts: 42 },
-      { ...SNAPSHOT, model: undefined },
-      { ...SNAPSHOT, effort: null }
+      { ...SNAPSHOT, yolo: 'nope' },
+      { ...SNAPSHOT, used_tokens: '45000' }
     ]
     for (const payload of bad) {
-      expect(() => parseInboundMessage(encodeSnapshot(payload))).toThrow(WireDecodeError)
+      expect(parseInboundMessage(encodeSnapshot(payload))).toBeNull()
     }
   })
 
-  it('throws when yolo is missing or non-boolean (a string/number is not a valid value)', () => {
-    const bad: unknown[] = [
-      { conversation_id: 'c', text: 't', ts: 's', model: 'm', effort: 'e' }, // yolo absent
-      { ...SNAPSHOT, yolo: 'true' },
-      { ...SNAPSHOT, yolo: 1 },
-      { ...SNAPSHOT, yolo: null }
-    ]
-    for (const payload of bad) {
-      expect(() => parseInboundMessage(encodeSnapshot(payload))).toThrow(WireDecodeError)
-    }
+  it('returns null when a screen_snapshot payload is not an object at all', () => {
+    // Pins that the isRecord gate is GONE rather than relaxed — the payload is never read.
+    expect(parseInboundMessage(encodeSnapshot('nope'))).toBeNull()
+    expect(parseInboundMessage(encodeSnapshot(['a']))).toBeNull()
   })
 
-  it('throws when used_tokens or window_tokens is missing or non-number (#191, AC2)', () => {
-    const bad: unknown[] = [
-      { ...SNAPSHOT, used_tokens: undefined }, // used_tokens absent
-      { ...SNAPSHOT, window_tokens: undefined }, // window_tokens absent
-      { ...SNAPSHOT, used_tokens: '45000' }, // stringified number
-      { ...SNAPSHOT, window_tokens: null }, // JSON null (never a valid value)
-      { ...SNAPSHOT, used_tokens: true } // boolean is not a number
-    ]
-    for (const payload of bad) {
-      expect(() => parseInboundMessage(encodeSnapshot(payload))).toThrow(WireDecodeError)
-    }
-  })
-
-  it('throws when a screen_snapshot payload is not an object', () => {
-    expect(() => parseInboundMessage(encodeSnapshot('nope'))).toThrow(WireDecodeError)
-    expect(() => parseInboundMessage(encodeSnapshot(['a']))).toThrow(WireDecodeError)
-  })
-
-  it('throws on an oversized snapshot plaintext even when the JSON is a valid snapshot', () => {
+  it('still throws on an oversized plaintext of an UNMODELED type — the size guard precedes the type switch', () => {
+    // Retained from the deleted fail-closed block, and retitled to state what it now uniquely proves.
+    // Every sibling oversize test in this file uses a MODELED envelope type; after #622 this is the
+    // only one whose type is unmodeled, so it is the sole proof that MAX_PLAINTEXT_BYTES bounds a
+    // frame BEFORE the switch can route it to the tolerant `default` arm. "Unmodeled types are
+    // tolerated" must never become readable as "unmodeled types are unbounded" (AC5).
     const bytes = new TextEncoder().encode(
       JSON.stringify({
         id: 9,
@@ -688,6 +648,14 @@ describe('parseInboundMessage — screen_snapshot fail-closed (#180, AC2/AC3)', 
     )
     expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
     expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+
+  it('still routes a message / message_chunk to its existing kind (no widening)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+    expect(parseInboundMessage(encodeChunk({ messages: [MSG_A] }))).toEqual({
+      kind: 'chunk',
+      messages: [MSG_A]
+    })
   })
 })
 
@@ -3224,7 +3192,7 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
   })
 
-  it('logs a screen_snapshot content-free, never text / model / effort (#180)', () => {
+  it('logs a screen_snapshot on the UNMODELED path, still never text / model / effort (#622)', () => {
     const { log, lines } = captureLog()
     const SECRET_TEXT = 'secret-rendered-terminal-output'
     const plaintext = encodeSnapshot({ ...SNAPSHOT, text: SECRET_TEXT })
@@ -3233,7 +3201,12 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
 
     expect(lines).toHaveLength(1)
     const record = JSON.parse(lines[0])
-    expect(record.event).toBe('inbound-decoded')
+    // The record moves arm — inbound-decoded → inbound-unmodeled — and the anti-leak guarantee is what
+    // has to survive the move. This is the only log pin in the file whose frame carries sensitive
+    // RENDERED TERMINAL OUTPUT; the sibling `default`-arm pins use `ack` with an empty payload and so
+    // have nothing to leak. Content-free by construction: the arm logs `envelope.type` and the frame's
+    // byte length + hash, and never reads the payload.
+    expect(record.event).toBe('inbound-unmodeled')
     expect(record.code).toBe('screen_snapshot')
     expect(record.bytes).toBe(plaintext.length)
     expect(record.hash).toMatch(HEX64)
@@ -3243,12 +3216,31 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines[0]).not.toContain('claude-opus-4-8')
   })
 
-  it('does NOT log on a malformed screen_snapshot throw path (#180)', () => {
-    const { log, lines } = captureLog()
-    expect(() => parseInboundMessage(encodeSnapshot({ ...SNAPSHOT, yolo: 'nope' }), log)).toThrow(
-      WireDecodeError
-    )
-    expect(lines).toHaveLength(0)
+  it('records a malformed screen_snapshot indistinguishably from a well-formed one (#622, AC3)', () => {
+    // The inversion of the old "does NOT log on a malformed throw path" pin, and a deliberate part of
+    // this removal: the payload is no longer inspected, so the malformed frame no longer throws and
+    // therefore DOES leave a record. Asserted as the indistinguishability PROPERTY — comparing the two
+    // records against each other is stronger than asserting each alone, and names the whole diagnostic
+    // cost of the removal: the two frames now differ only in byte length and hash.
+    const wellFormed = captureLog()
+    const malformed = captureLog()
+
+    expect(parseInboundMessage(encodeSnapshot(SNAPSHOT), wellFormed.log)).toBeNull()
+    expect(
+      parseInboundMessage(encodeSnapshot({ ...SNAPSHOT, yolo: 'nope' }), malformed.log)
+    ).toBeNull()
+
+    expect(wellFormed.lines).toHaveLength(1)
+    expect(malformed.lines).toHaveLength(1)
+    const good = JSON.parse(wellFormed.lines[0])
+    const bad = JSON.parse(malformed.lines[0])
+
+    expect(bad.event).toBe(good.event)
+    expect(bad.code).toBe(good.code)
+    expect(Object.keys(bad).sort()).toEqual(Object.keys(good).sort())
+    // ...and differ ONLY in the two frame-shape fields, which describe bytes rather than content.
+    expect(bad.bytes).not.toBe(good.bytes)
+    expect(bad.hash).not.toBe(good.hash)
   })
 
   it('logs an assistant_delta content-free, never the delta text / turn_id / seq (#199)', () => {

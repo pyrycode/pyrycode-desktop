@@ -19,11 +19,12 @@ builder were removed by [#620](../codebase/620.md) — so nothing in this client
 `snapshot` push anymore. The `screenSnapshotReceived` event itself (and its sibling
 `snapshotReceived`) is now **also gone**, removed by [#621](../codebase/621.md) along with the
 `case 'snapshot':` emit that produced it and the three exhaustive renderer bridges'
-(`daemonEventBridge`/`timelineBridge`/`modalBridge`) compile-forced no-op arms for it — a well-formed
-`screen_snapshot` frame is decoded and silently dropped, producing no event at all. Only the inbound
-decode survives (`parseScreenSnapshotPayload`, the `kind: 'snapshot'` `InboundDaemonMessage` arm),
-dead code pending [#622](../codebase/622.md). See [Screen snapshot fetch](screen-snapshot-fetch.md)
-for the full data-flow history. A handful of comments in
+(`daemonEventBridge`/`timelineBridge`/`modalBridge`) compile-forced no-op arms for it. The inbound
+decode itself (`parseScreenSnapshotPayload`, the `kind: 'snapshot'` `InboundDaemonMessage` arm) was
+removed in turn by [#622](../codebase/622.md), along with the `screen_snapshot`/`ScreenSnapshotPayload`
+wire types — nothing in this client can send, decode, or receive a screen-snapshot frame today; a
+well-formed frame arriving anyway falls to the decoder's tolerant `default` arm. See
+[Screen snapshot fetch](screen-snapshot-fetch.md) for the full data-flow history. A handful of comments in
 `announcedModelStore.ts`/`announcedModelBridge.ts`/`serverInfoLoader.ts` still cite this store and
 `ScreenSnapshotData` as a design precedent — left in place for
 [#635](https://github.com/pyrycode/pyrycode-desktop/issues/635), which sweeps the whole series'
@@ -42,3 +43,5 @@ stranded citations in one pass.
 - [#619 codebase notes](../codebase/619.md) — deleted the store and bridge outright.
 - [#621 codebase notes](../codebase/621.md) — removed the `screenSnapshotReceived` event itself (and
   its sibling `snapshotReceived`) along with the three bridges' no-op arms.
+- [#622 codebase notes](../codebase/622.md) — removed the inbound decode itself and the
+  `screen_snapshot`/`ScreenSnapshotPayload` wire types; the last of the five removal slices.

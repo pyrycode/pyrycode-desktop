@@ -26,7 +26,6 @@ import { createDebugBundleDownload, type DebugBundleDownload } from './debugBund
 import {
   MAX_PLAINTEXT_BYTES,
   type SendMessagePayload,
-  type ScreenSnapshotPayload,
   type CreateConversationPayload,
   type CreateWorkspaceFolderPayload,
   type PromoteConversationPayload,
@@ -1289,8 +1288,8 @@ describe('createDaemonConnection — send (outbound send_message)', () => {
   })
 })
 
-describe('createDaemonConnection — inbound screen_snapshot decode (#180, #316)', () => {
-  const SNAPSHOT: ScreenSnapshotPayload = {
+describe('createDaemonConnection — an inbound screen_snapshot reaches no renderer event (#622)', () => {
+  const SNAPSHOT = {
     conversation_id: 'conv-1',
     text: 'secret rendered screen',
     ts: '2026-07-08T00:00:00Z',
@@ -1310,22 +1309,23 @@ describe('createDaemonConnection — inbound screen_snapshot decode (#180, #316)
     return ctx
   }
 
-  it('emits NOTHING for a WELL-FORMED screen_snapshot — decoded, then dropped (#621)', async () => {
+  it('emits NOTHING for a WELL-FORMED screen_snapshot — unmodeled, then dropped', async () => {
     const { sink, drivers } = await connected()
     const before = sink.webContents.send.mock.calls.length
 
     // The frame that used to emit two events now emits none: the run-config half moved to the
     // dedicated session_settings reply (#491/#500) and the rendered-screen half lost its display
-    // slice (#619), so the connection drops the decoded payload on the floor. Asserted as a call
-    // COUNT (the malformed-frame idiom below), which pins "no event at all" rather than "not these
-    // two". The decode itself survives this slice and comes out in #622.
+    // slice (#619). #622 then unmodeled the type outright, so `parseInboundMessage` returns null and
+    // the connection has nothing to drop. Asserted as a call COUNT (the malformed-frame idiom below),
+    // which pins "no event at all" rather than "not these two" — the only coverage that a
+    // screen_snapshot arriving at the REAL connection produces no renderer event.
     expect(() =>
       drivers[0].emit({ type: 'message', plaintext: snapshotPlaintext(SNAPSHOT) })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 
-  it('drops a malformed screen_snapshot without emitting or throwing (fail-closed)', async () => {
+  it('drops a malformed screen_snapshot without emitting or throwing (unmodeled, never inspected)', async () => {
     const { sink, drivers } = await connected()
     const before = sink.webContents.send.mock.calls.length
 

@@ -5,7 +5,8 @@ The **untrusted→trusted boundary for a decrypted daemon message**. The [Noise 
 Introduced in [#68](../codebase/68.md). It fills the last no-op arm the [daemon connection](daemon-connection.md) left behind — [#62](../codebase/62.md) wired the handshake-status path but left the inbound-message arm a `// TODO`. This ticket produces the `messageReceived` / `messagesReceived` events that feed the already-complete renderer pipeline: the [daemon-event channel](daemon-event-channel.md) ([#18](../codebase/18.md)) carries them, the [daemon-event bridge](daemon-event-bridge.md) ([#19](../codebase/19.md)) translates them into `SessionAction`s, and the [session store](session-store.md) ([#2](../codebase/2.md)) appends them (deduped by `message_id`, arrival order preserved).
 
 [#180](../codebase/180.md) extended this boundary again, additively, with a `screen_snapshot` →
-`snapshot` kind for the [screen snapshot fetch](screen-snapshot-fetch.md) feature — see below.
+`snapshot` kind for the [screen snapshot fetch](screen-snapshot-fetch.md) feature. **Removed by
+[#622](../codebase/622.md)** — see below.
 
 [#199](../codebase/199.md) extended it a fourth time, additively, with `assistant_delta` →
 `assistant-delta` and `turn_end` → `turn-end` kinds — the transport slice (L1) of the structured-stream
@@ -191,7 +192,7 @@ export type InboundDaemonMessage =
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }   // #116, additive
   | { kind: 'bundle-done'; total: number }                    // #116, additive
   | { kind: 'daemon-error'; inReplyTo?: number }               // #116, additive — content-free; inReplyTo added by #269
-  | { kind: 'snapshot'; snapshot: ScreenSnapshotPayload }      // #180, additive
+  // { kind: 'snapshot'; snapshot: ScreenSnapshotPayload } — #180, additive; REMOVED #622
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }  // #199, additive
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }              // #199, additive
   | { kind: 'conversations'; conversations: ConversationSummary[] }  // #139, additive
@@ -212,13 +213,14 @@ export type InboundDaemonMessage =
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }  // #566, additive
 
 // Decode + route + narrow one decrypted app-message plaintext:
-//  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/`screen_snapshot`/
+//  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/
 //                            `assistant_delta`/`turn_end`/`conversations`/`turn_state`/`stall`/
 //                            `api_retry`/`compacting`/`model_announced`/`tool_use`/`modal_shown`/
 //                            `modal_dismissed`/`tool_result`/`conversation_created`/`session_transition`/
 //                            `session_settings_updated`/`background_task_started`/
 //                            `background_task_updated`/`background_task_roster`
-//                            envelope, fully narrowed
+//                            envelope, fully narrowed (`screen_snapshot` was modeled here #180-#622;
+//                            removed, now falls to the unmodeled `default` arm)
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
 export function parseInboundMessage(
@@ -229,9 +231,25 @@ export function parseInboundMessage(
 
 **Extended by [#116](../codebase/116.md), additively.** The `message` / `message_chunk` recognition and narrowing described below are unchanged byte-for-byte. Three more kinds are now recognized *before* the `default` (unmodeled) branch: `debug_bundle_chunk` → `{ kind: 'bundle-chunk', seq, data }` (base64-decoded via the codec's **strict** `base64StdDecode` right at this boundary, so the [reassembler](debug-bundle-reassembly.md) downstream stays byte-pure), `debug_bundle_done` → `{ kind: 'bundle-done', total }`, and `error` → `{ kind: 'daemon-error' }` (content-free — no `ErrorPayload` field is narrowed). A new `requireNumber` helper sits beside `requireString` for the two numeric fields (`seq`/`total`). Modeling `error` is a deliberate, generally-applicable change: it moves from silently-dropped `inbound-unmodeled` to a modeled, content-free `inbound-decoded(code: 'error')` for **every** `error` frame, bundle-related or not — see the diagnostic-logging table below.
 
-**Extended again by [#180](../codebase/180.md), additively.** `screen_snapshot` → `{ kind: 'snapshot', snapshot: ScreenSnapshotPayload }` via `parseScreenSnapshotPayload`, the [screen snapshot fetch](screen-snapshot-fetch.md) feature's decode half — **still present today**, the sole surviving piece of that feature, pending [#622](../codebase/622.md). A new `requireBoolean` helper sits beside `requireString`/`requireNumber` for the reply's `yolo` field — it checks the value's *type*, never its truthiness, so `false` decodes as a real value (permissions enforced) rather than a missing field; the same discipline applies to `model`/`effort`, where `''` means "inherited daemon default," never "absent" (all fields are always present on the wire, no `omitempty`). Unlike the bundle kinds, the `snapshot` kind carries the **full** decoded payload — including `text`, the rendered screen — through this boundary; through [#621](../codebase/621.md), the content-minimisation drop of `text`/`ts`/`conversation_id` happened one layer up, at the `daemonConnection.ts` consumer arm (see [daemon connection](daemon-connection.md) and [screen snapshot fetch](screen-snapshot-fetch.md)). **#621 deleted that consumer arm entirely** — the decoded value is still produced here, but nothing downstream reads it anymore.
+**Extended again by [#180](../codebase/180.md), additively; removed by [#622](../codebase/622.md).**
+Historical: `screen_snapshot` → `{ kind: 'snapshot', snapshot: ScreenSnapshotPayload }` via
+`parseScreenSnapshotPayload`, the [screen snapshot fetch](screen-snapshot-fetch.md) feature's decode
+half. It introduced the `requireBoolean` helper (beside `requireString`/`requireNumber`) for the
+reply's `yolo` field — checking the value's *type*, never its truthiness, so `false` decoded as a real
+value rather than a missing field; that helper is still used by every later boolean field
+(`is_error`, `is_promoted`, `active`, …) and outlived the kind that introduced it. Unlike the bundle
+kinds, `snapshot` carried the **full** decoded payload — including `text`, the rendered screen —
+through this boundary; [#621](../codebase/621.md) deleted the `daemonConnection.ts` consumer arm that
+minimised it before emit, and [#622](../codebase/622.md) then deleted the decode itself: `parseInboundMessage`
+no longer produces a `snapshot` kind at all, and a `screen_snapshot` envelope now falls to the
+`default` arm below like any other unmodeled type.
 
-**Extended a third time by [#191](../codebase/191.md), additively.** Two more required numeric fields join `ScreenSnapshotPayload` after `yolo` — `used_tokens` / `window_tokens` (pyrycode/pyrycode#857) — decoded via two more `requireNumber` calls (`ScreenSnapshotPayload` now has eight always-present fields). `0` decodes as the value `0`, never as absence (the same discipline the bundle `seq`/`total` already established). Through #621, these two ints were **not** dropped at the content-minimisation seam one layer up — unlike `text`/`ts`/`conversation_id`, they crossed to the renderer as part of the `snapshotReceived` event (see [screen snapshot fetch](screen-snapshot-fetch.md)); that event, and the consumer arm that emitted it, are now gone, so today the decoded values go nowhere.
+**Extended a third time by [#191](../codebase/191.md), additively; removed with the kind by [#622](../codebase/622.md).**
+Historical: two more required numeric fields joined `ScreenSnapshotPayload` after `yolo` —
+`used_tokens` / `window_tokens` (pyrycode/pyrycode#857) — via two more `requireNumber` calls
+(`ScreenSnapshotPayload` reached eight always-present fields). `0` decoded as the value `0`, never as
+absence — the same discipline the bundle `seq`/`total` had already established, and every later
+numeric field (`current`/`total` on `api_retry`, `dropped_tasks`) still follows.
 
 **Extended a fourth time by [#199](../codebase/199.md), additively.** `assistant_delta` → `{ kind: 'assistant-delta', delta: AssistantDeltaPayload }` via `parseAssistantDeltaPayload`, and `turn_end` → `{ kind: 'turn-end', turnEnd: TurnEndPayload }` via `parseTurnEndPayload` — both built on the existing `isRecord`/`requireString`/`requireNumber` helpers verbatim, no new helper needed (neither payload has a boolean). `AssistantDeltaPayload{conversation_id, turn_id, seq, text}` (`seq: 0` and `text: ''` decode as real values, never absences — same type-not-truthiness discipline as `yolo`) and `TurnEndPayload{conversation_id, turn_id, stop_reason}` are both four-or-fewer required strings/numbers, no `omitempty`. These are the two v2 interactive-stream events (pyrycode #607, `protocol-mobile.md`) that will replace the coarse `message` fan-out once [#179](https://github.com/pyrycode/pyrycode-desktop/issues/179) flips the `interactive` capability on — until then this decode path sits Strangler-Fig alongside the coarse path, receiving nothing. **Unlike every kind above, the consumer arm carries the decoded `text` onward rather than minimising it** — see § The consumer arm and [thread timeline](thread-timeline.md) for why this is a deliberate divergence, not a lapse.
 
@@ -322,7 +340,6 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
    - `'message'` → `{ kind: 'message', message: parseMessagePayload(payload) }`
    - `'message_chunk'` → `{ kind: 'chunk', messages: parseMessageChunkPayload(payload).messages }`
    - `'debug_bundle_chunk'` / `'debug_bundle_done'` / `'error'` → the three additive kinds ([#116](../codebase/116.md), see above) — narrowed and content-free-logged as `inbound-decoded` before the `default` branch is ever reached. `'error'`'s `daemon-error` kind widened with the already-decoded `Envelope.in_reply_to` as `inReplyTo?: number` ([#269](../codebase/269.md)) — propagated, not re-parsed; still no `ErrorPayload` field is narrowed.
-   - `'screen_snapshot'` → `{ kind: 'snapshot', snapshot }` ([#180](../codebase/180.md), extended [#191](../codebase/191.md)) — narrowed via `parseScreenSnapshotPayload` (fail-closed, all eight fields required-present), then content-free-logged as `inbound-decoded(code: 'screen_snapshot')` before the `default` branch.
    - `'assistant_delta'` → `{ kind: 'assistant-delta', delta }` / `'turn_end'` → `{ kind: 'turn-end', turnEnd }` ([#199](../codebase/199.md)) — narrowed via `parseAssistantDeltaPayload` / `parseTurnEndPayload`, each content-free-logged as `inbound-decoded(code: 'assistant_delta' | 'turn_end')` before the `default` branch. The two v2 interactive-stream kinds that graduate out of `inbound-unmodeled` once #179 flips `interactive` on.
    - `'conversations'` → `{ kind: 'conversations', conversations }` ([#139](../codebase/139.md)) — narrowed via `parseConversationsPayload`, content-free-logged as `inbound-decoded(code: 'conversations')` before the `default` branch — **deliberately no `count` field**, unlike `message_chunk`'s log (a conversation count is more identifying than a message-batch size).
    - `'turn_state'` → `{ kind: 'turn-state', turnState }` ([#214](../codebase/214.md)) — narrowed via `parseTurnStatePayload` (the `role`-style closed-enum check on `state`), content-free-logged as `inbound-decoded(code: 'turn_state')` before the `default` branch. The third v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`.
@@ -354,7 +371,6 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `message` | `inbound-decoded` | `code: 'message'`, `bytes: plaintext.length`, `hash` |
 | modeled `message_chunk` | `inbound-decoded` | `code: 'message_chunk'`, `bytes`, `count: messages.length`, `hash` |
 | modeled `debug_bundle_chunk` / `debug_bundle_done` / `error` ([#116](../codebase/116.md)) | `inbound-decoded` | `code: <the type>`, `bytes`, `hash` — never `seq`/`total`/`data`/the daemon's `ErrorPayload` text, and (since [#269](../codebase/269.md) widened `error`'s decode) never its `inReplyTo` either — a routing id, not logged |
-| modeled `screen_snapshot` ([#180](../codebase/180.md), extended [#191](../codebase/191.md)) | `inbound-decoded` | `code: 'screen_snapshot'`, `bytes`, `hash` — never `text`/`conversation_id`/`model`/`effort`/`yolo`/`used_tokens`/`window_tokens` |
 | modeled `assistant_delta` / `turn_end` ([#199](../codebase/199.md)) | `inbound-decoded` | `code: 'assistant_delta' \| 'turn_end'`, `bytes`, `hash` — never `text`/`turn_id`/`seq`/`stop_reason`/`conversation_id`, even though the consumer arm carries `text` onward to the renderer (the log stays content-free regardless of what the event carries) |
 | modeled `conversations` ([#139](../codebase/139.md)) | `inbound-decoded` | `code: 'conversations'`, `bytes`, `hash` — never `id`/`name`/`cwd`/`is_promoted`/`is_archived`/`last_message_ts`/`last_used_at`, and deliberately **no `count`** |
 | modeled `turn_state` ([#214](../codebase/214.md)) | `inbound-decoded` | `code: 'turn_state'`, `bytes`, `hash` — never `state`/`conversation_id` |
@@ -370,6 +386,15 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `background_task_roster` ([#566](../codebase/566.md)) | `inbound-decoded` | `code: 'background_task_roster'`, `bytes`, `hash` — never `conversation_id`/`tasks`/`dropped_tasks`, least of all a row's `description` (a literal command line); deliberately **no `count`** either, though `DiagnosticEvent` already has one — the roster size is itself a fact about the user's session; narrows before logging, so a malformed frame leaves no record |
 | modeled `model_announced` ([#587](../codebase/587.md)) | `inbound-decoded` | `code: 'model_announced'`, `bytes`, `hash` — never `conversation_id`/`model`/`truncated`, least of all `model` (claude-authored text that crossed the subprocess trust boundary); narrows before logging, so a malformed frame leaves no record |
 | unmodeled (`default`) | `inbound-unmodeled` | `code: envelope.type.slice(0, 64)`, `bytes`, `hash` |
+
+**A removal moves a type's traffic between rows, and can flip whether a malformed frame logs at
+all.** `screen_snapshot` was a modeled `inbound-decoded` row through [#621](../codebase/621.md); since
+[#622](../codebase/622.md) removed the kind, it logs via the `unmodeled` row instead —
+`code: 'screen_snapshot'` still appears (the daemon-supplied `envelope.type`, capped as always), but
+the event name changed and, because the modeled arm's fail-closed parser is gone, a **malformed**
+`screen_snapshot` now also logs (previously the throw happened before any `event()` call and left no
+record at all). The two outcomes are deliberately indistinguishable beyond `bytes`/`hash` — see
+[#622's codebase notes](../codebase/622.md) for the test that pins this as a property.
 
 Load-bearing details:
 
@@ -409,13 +434,14 @@ case 'message': {
     case 'daemon-error':
       reassembler?.fail('daemon-error')
       return
-    // case 'snapshot' — REMOVED #621. Through #620 this content-minimised text/ts/conversation_id
-    // and emitted only the settings fields plus the two usage ints (#191) as `snapshotReceived`
-    // (and, since #316, a second `screenSnapshotReceived{text,ts}` widening emit alongside it). Both
-    // events and this whole case are gone; `inbound.kind === 'snapshot'` now falls through this
-    // switch unhandled, so a well-formed screen_snapshot frame decodes and is silently dropped.
+    // case 'snapshot' — emit REMOVED #621, kind itself REMOVED #622. Through #620 this
+    // content-minimised text/ts/conversation_id and emitted only the settings fields plus the two
+    // usage ints (#191) as `snapshotReceived` (and, since #316, a second
+    // `screenSnapshotReceived{text,ts}` widening emit alongside it). Both events, this case, and the
+    // `InboundDaemonMessage` kind that fed it are all gone — `inbound.kind` can no longer be
+    // `'snapshot'` at all; a screen_snapshot frame is now `null` before this switch is even reached.
     case 'assistant-delta':
-      // #199: UNLIKE 'snapshot', text IS carried onward — it's the render payload, not a secret.
+      // #199: UNLIKE the old 'snapshot' kind (removed #622), text IS carried onward — it's the render payload, not a secret.
       // conversation_id is still dropped (single active conversation; #202's bridge scopes identity).
       // A fresh named-field literal, never a spread of the decoded payload.
       emitDaemonEvent(sink, {
@@ -528,8 +554,8 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **An empty `message_chunk` emits `messagesReceived` with `[]`.** A zero-length batch is a valid, harmless event. If the daemon is later found to never send empty chunks, dropping them is a trivial future tightening — not this boundary's concern.
 - **Unmodeled envelope types are ignored but no longer *silent*.** `ack` / `backfill_since` / etc. still return `null` and emit no `DaemonEvent` — decoding/routing them is out of scope. Since [#130](../codebase/130.md) they *are* logged content-free (`inbound-unmodeled` — capped type + size + hash), so an unforeseen kind leaves a diagnosable footprint even though the runtime behavior is unchanged. `error` was in this bucket until [#116](../codebase/116.md) promoted it to a modeled, content-free `daemon-error` kind (see above) — it is no longer in the unmodeled set.
 - **The three bundle kinds emit no `DaemonEvent` at this boundary.** Unlike `message`/`message_chunk`, `bundle-chunk`/`bundle-done`/`daemon-error` never map to a `DaemonEvent` *here* — `parseInboundMessage` only produces the `InboundDaemonMessage` kind; routing it onward is the consumer's ([daemon connection](daemon-connection.md)) job. `bundle-chunk`/`bundle-done` always route to the [debug-bundle reassembler](debug-bundle-reassembly.md)'s injected `BundleConsumer` instead ([#116](../codebase/116.md)). `daemon-error` did too, unconditionally, until [#269](../codebase/269.md): the consumer now correlates its (this ticket's) `inReplyTo` against a pending `set_session_settings` request *first*, and on a match emits `sessionSettingsRejected` instead of routing to the reassembler/modal-FIFO — see [daemon connection](daemon-connection.md) § Set-session-settings rejected correlation. A caller that also waits on daemon events must drive its own wait from the consumer's `complete`/`fail`, not the event sink, for the no-match case.
-- **The `snapshot` kind emits a *narrower* `DaemonEvent` than it decodes ([#180](../codebase/180.md), extended [#191](../codebase/191.md)).** Unlike the bundle kinds (no event) or `message`/`message_chunk` (event mirrors the decode), `screen_snapshot` decodes all eight fields here but the consumer arm emits only five (`model`/`effort`/`yolo`/`used_tokens`/`window_tokens`) — `text`/`ts`/`conversation_id` are dropped at `daemonConnection.ts`, not at this boundary. See [screen snapshot fetch](screen-snapshot-fetch.md) for why the drop happens one layer up.
-- **`assistant-delta`/`turn-end` deliberately break that narrowing pattern ([#199](../codebase/199.md)).** The consumer arm drops only `conversation_id` and carries `turn_id`/`seq`/`text` (renamed to camelCase) or `turn_id`/`stop_reason` onward in full — `text` is the render payload, not a secret to minimise. Don't generalize "new inbound kind ⇒ the consumer strips fields" from the `snapshot` precedent; check whether the field is sensitive-to-the-renderer (drop it, like `screen_snapshot.text`) or is the thing the renderer exists to show (carry it, like this).
+- **The `snapshot` kind used to emit a *narrower* `DaemonEvent` than it decoded ([#180](../codebase/180.md)/[#191](../codebase/191.md), both removed [#622](../codebase/622.md)).** Historical precedent: `screen_snapshot` decoded all eight fields here but the consumer arm emitted only five (`model`/`effort`/`yolo`/`used_tokens`/`window_tokens`) — `text`/`ts`/`conversation_id` were dropped at `daemonConnection.ts`, not at this boundary. See [screen snapshot fetch](screen-snapshot-fetch.md) for the full history; the kind and its decode no longer exist.
+- **`assistant-delta`/`turn-end` deliberately broke that narrowing pattern ([#199](../codebase/199.md)).** The consumer arm drops only `conversation_id` and carries `turn_id`/`seq`/`text` (renamed to camelCase) or `turn_id`/`stop_reason` onward in full — `text` is the render payload, not a secret to minimise. Don't generalize "new inbound kind ⇒ the consumer strips fields" from the old `snapshot` precedent; check whether the field is sensitive-to-the-renderer (drop it, like `screen_snapshot.text` used to be) or is the thing the renderer exists to show (carry it, like this).
 - **`assistant_delta`/`turn_end` were received by nobody through #178.** Desktop withheld the `interactive` capability until [#179](../codebase/179.md) turned it on; until then these two cases were exercised only by direct unit tests, not a live daemon — a textbook Strangler-Fig: the decode path existed and was tested before the traffic that would use it did. Now live.
 - **`conversations` has no request trigger yet either, but for a different reason.** [#139](../codebase/139.md) ships both the decode path *and* the outbound `requestConversations` command, but nothing in this ticket calls `sendCommand({type:'requestConversations'})` — that's [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)'s on-connect trigger. Unlike `assistant_delta`/`turn_end`, this is blocked only on a sibling renderer ticket, not a daemon capability flip — the daemon would answer today if asked.
 - **`turn_state` was received by nobody through #178, for the same reason as `assistant_delta`/`turn_end`.** [#214](../codebase/214.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). Unlike those two, its consumer arm has nothing to carry-vs-drop debate over: `state` is a closed 3-value enum, so there's no sensitive-vs-render-payload distinction to make; only `conversation_id` is dropped.
@@ -549,8 +575,9 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 
 - [#68 codebase notes](../codebase/68.md) — implementation summary, patterns, lessons (the boundary's introduction).
 - [Debug-bundle reassembly (inbound)](debug-bundle-reassembly.md) / [#116 codebase notes](../codebase/116.md) — the additive extension of this boundary: three new recognized kinds, the `error`-modeling change, and the `requireNumber` narrowing helper.
-- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180 codebase notes](../codebase/180.md) — the second additive extension: the `snapshot` kind, `parseScreenSnapshotPayload`, and the new `requireBoolean` helper; the content-minimisation drop of `text`/`ts`/`conversation_id` happens one layer up in [daemon connection](daemon-connection.md), not here.
-- [#191 codebase notes](../codebase/191.md) — the third additive extension: two more `requireNumber` fields (`used_tokens`/`window_tokens`) on `ScreenSnapshotPayload`.
+- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180 codebase notes](../codebase/180.md) — the second additive extension: the `snapshot` kind, `parseScreenSnapshotPayload`, and the new `requireBoolean` helper; the content-minimisation drop of `text`/`ts`/`conversation_id` happened one layer up in [daemon connection](daemon-connection.md), not here. Removed by [#622](../codebase/622.md).
+- [#191 codebase notes](../codebase/191.md) — the third additive extension: two more `requireNumber` fields (`used_tokens`/`window_tokens`) on `ScreenSnapshotPayload`. Removed with the rest of the type by [#622](../codebase/622.md).
+- [#622 codebase notes](../codebase/622.md) — removed the `screen_snapshot` kind, `parseScreenSnapshotPayload`, and the `ScreenSnapshotPayload`/`screen_snapshot` wire types outright; the last of #180/#191's additions to fall. A `screen_snapshot` frame now routes through the `default` (unmodeled) arm, pinned by test rather than assumed, given the open `EnvelopeType | string` union.
 - [#199 codebase notes](../codebase/199.md) — the fourth additive extension: `assistant_delta`/`turn_end`, the two v2 interactive-stream kinds, and the deliberate content-carrying divergence from the `snapshot` kind's minimisation pattern.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139 codebase notes](../codebase/139.md) — the fifth additive extension: the `conversations` kind, `parseConversationSummary`/`parseConversationsPayload`, and the new `requireStringOrNull` helper (the codec's first nullable-field checker).
 - [Conversation timeline store](conversation-timeline-store.md) / [#214 codebase notes](../codebase/214.md) — the sixth additive extension: the `turn_state` kind, `parseTurnStatePayload`, and the closed-enum idiom's second instance (cloned from `role`, not `requireString`).

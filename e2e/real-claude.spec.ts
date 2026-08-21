@@ -1,5 +1,6 @@
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // #483/T9 — exercise the stream-json interactive runner, matching production (the Mac daemon runs
 // interactive_runner: stream-json). The PTY path is the rollback, not what ships; the interactive gate
@@ -101,17 +102,11 @@ test('real claude streams a reply into a UI-created conversation for two consecu
     server_static_pubkey: daemon.pairFields.server_static_pubkey
   })
 
-  const pasteBox = page.locator('textarea[aria-label="Pairing code"]')
-  const fingerprint = page.locator('[aria-label="Server key fingerprint"]')
   const conversation = page.locator('.conversation')
   const sendButton = page.getByRole('button', { name: 'Send' })
   const composer = page.getByPlaceholder('Message…')
 
-  await expect(pasteBox).toBeVisible()
-  await pasteBox.fill(payload)
-  await page.getByRole('button', { name: 'Pair', exact: true }).click()
-  await expect(fingerprint).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await pairFromUnpairedLaunch(page, payload)
 
   // --- Create the conversation THROUGH THE UI (#448) — the operator flow, not a pre-bound seed. ---
   // Pairing lands on the Channel List. The fixture's seeded row renders only after the real daemon's

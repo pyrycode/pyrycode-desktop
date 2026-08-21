@@ -1,4 +1,5 @@
 import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // The credential-light real-daemon tier (#439) — a real spawned `pyry` daemon on #251's content-blind
 // routing relay, gating on the `pyry` binary ALONE (no `claude`, no Anthropic credential). It exists to
@@ -54,14 +55,7 @@ test('real daemon persists a rename round-trip, visible in the channel list', as
     server_static_pubkey: daemon.pairFields.server_static_pubkey
   })
 
-  const pasteBox = page.locator('textarea[aria-label="Pairing code"]')
-  const fingerprint = page.locator('[aria-label="Server key fingerprint"]')
-
-  await expect(pasteBox).toBeVisible()
-  await pasteBox.fill(payload)
-  await page.getByRole('button', { name: 'Pair', exact: true }).click()
-  await expect(fingerprint).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await pairFromUnpairedLaunch(page, payload)
 
   // --- Readiness gate: the Rename pencil renders ONLY for a promoted row, so its visibility proves the
   // whole chain — handshake complete → session `connected` → the auto-fired `list_conversations` returned

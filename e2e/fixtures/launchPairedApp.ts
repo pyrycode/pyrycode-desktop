@@ -16,6 +16,7 @@ import { startFakeDaemon, type FakeDaemon, type FakeDaemonOptions } from '../../
 import { encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
+import { pairFromUnpairedLaunch } from './pairingArrival'
 import type {
   ConversationSummary,
   ConversationsPayload,
@@ -196,8 +197,10 @@ export const test = base.extend<PairedAppFixtures>({
         return { page, app, daemon, forwarder, userDataDir }
       }
 
-      // --- Drive the real pairing UI → the connected conversation thread. All pairing/navigation
-      // selectors live here; per-flow assertion selectors stay in the specs. ---
+      // --- Drive the real pairing UI → the connected conversation thread. The pairing drive itself is
+      // the shared arrival step (#661, ./pairingArrival) — the one place #662 edits when the unpaired
+      // entry point moves; the navigation selectors below live here, per-flow assertion selectors stay
+      // in the specs. ---
       //
       // The fake target's coordinates flow into the app through the PASTED payload (the point of
       // driving the pairing UI), not through env. relay = the forwarder's client leg (loopback ws://,
@@ -210,17 +213,7 @@ export const test = base.extend<PairedAppFixtures>({
         server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64')
       })
 
-      const pasteBox = page.locator('textarea[aria-label="Pairing code"]')
-      // Settle the pending→pairing route before pasting. `exact` on Pair avoids the busy `Pairing…`
-      // label and the `Cancel` button.
-      await expect(pasteBox).toBeVisible()
-      await pasteBox.fill(payload)
-      await page.getByRole('button', { name: 'Pair', exact: true }).click()
-
-      // Fingerprint card proves #97 active — reached only because parsePairingPayload accepted the
-      // loopback ws:// relay. Its presence is the proof; no need to compare the fingerprint text.
-      await expect(page.locator('[aria-label="Server key fingerprint"]')).toBeVisible()
-      await page.getByRole('button', { name: 'Confirm', exact: true }).click()
+      await pairFromUnpairedLaunch(page, payload)
 
       // #140: the paired route enters at the ChannelList — drive the one real list→thread step by
       // clicking the seeded row. This is a REAL product-UI navigation (`.channel-list__row-open`,

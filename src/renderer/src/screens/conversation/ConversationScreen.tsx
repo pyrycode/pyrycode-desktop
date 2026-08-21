@@ -23,7 +23,8 @@ import {
   selectPhase,
   selectStalled,
   selectApiRetry,
-  selectCompacting
+  selectCompacting,
+  selectLocalSendPending
 } from '../../store/timelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
@@ -121,6 +122,12 @@ export function ConversationScreen({
   // twice per compaction, and the reducer returns the same state reference on a verbatim repeated frame,
   // so it adds no re-render churn beyond the items delta already here.
   const compacting = useTimelineStore(selectCompacting)
+  // #650: the locally-opened working-indicator window, read beside `compacting` (the selectCompacting line
+  // above). The FIRST renderer-sourced slice among these five — the operator's own send opened it, not the
+  // daemon — and the container passes only the plain boolean into the derivation, so no daemon-supplied
+  // string reaches the view through it. It flips at most twice per turn and every carry-through reducer arm
+  // preserves the state reference, so it adds no re-render churn beyond the items delta already here.
+  const localSendPending = useTimelineStore(selectLocalSendPending)
   // #278: the conversation the thread is showing, snapshotted when the new discussion was created
   // (PairedShell's conversation_created callback). The container derives it and passes it down; the
   // pure WorkspaceChip self-gates to null. A narrow single-slice read — activeConversation changes
@@ -185,9 +192,13 @@ export function ConversationScreen({
           #649: and the label now NAMES the open tool, derived from the same `items` array Timeline is
           mapping one line above (no second subscription) — so a long turn says what it is doing, not just
           that it is busy. Two derivations, two props: the closed client-owned label choice, and the one
-          daemon string. */}
+          daemon string.
+          #650: and the window now opens the moment the composer accepts the submit, rather than a network
+          round-trip later — closing the blank window in FRONT of a turn, as #648 closed the one behind it.
+          The local signal composes INSIDE the gate, so #493's and #496's supersede rules apply to it
+          unchanged; it stays out of `phase`, so the interrupt control below is untouched by it. */}
       <ThinkingIndicator
-        state={workingIndicatorState({ phase, apiRetry, compacting })}
+        state={workingIndicatorStateWithLocalSend({ phase, apiRetry, compacting }, localSendPending)}
         toolName={openToolName(items)}
       />
       {/* #493: the api-error retry status — mounted directly after its supersede peer, before the stall
@@ -974,6 +985,43 @@ export function shouldShowThinking(status: ThreadStatus): boolean {
 export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
   if (!shouldShowThinking(status)) return null
   return status.phase === 'thinking' ? 'thinking' : 'working'
+}
+
+// #650: the locally-opened window — the indicator now opens the moment the composer accepts a submit,
+// rather than waiting a network round-trip for the daemon's first `turn_state`. Composed ON the pair above
+// rather than added as a fourth `ThreadStatus` field: a fourth field would break 19 status literals in the
+// test file as pure retyping with not one expectation changed, and those literals are exactly the standing
+// regression evidence that #493's and #496's supersede rules survived #648. This is #648's own recorded
+// lesson applied a second time — compose on a proven gate, do not retype its assertions.
+//
+// Three statements, no new branch logic, and the third is the load-bearing one:
+//  1. The daemon's answer WINS — a non-null result is returned unchanged, so every daemon-opened case is
+//     byte-identical to today, including the label a send issued mid-turn must not relabel.
+//  2. No local send pending ⇒ null: today's behaviour verbatim, and AC1's refused-submit case (a submit
+//     the composer refuses dispatches no `userText`, so the flag never opens and no code runs at all).
+//  3. Otherwise ASK THE SAME GATE what it would say for a turn that has just begun, by re-calling it with
+//     one field substituted. Three properties fall out of writing it as a re-call rather than a fresh
+//     expression: (a) #493's and #496's supersede clauses are INHERITED, not restated — a live retry or
+//     compaction still returns null because the same two clauses evaluate, so there is no second place the
+//     rule lives and it cannot drift; (b) the label is `'thinking'`, which is both honest (the operator has
+//     pressed Enter and nothing has been produced — precisely what the daemon's own `thinking` phase means)
+//     and FLICKER-FREE, since the daemon's first `turn_state{thinking}` then changes nothing at the seam
+//     this ticket exists to smooth, where `'working'` would have flipped Working → Thinking → Working;
+//     (c) `workingIndicatorState`'s claim above that `'idle'` is unreachable in its second branch stays
+//     literally true, because the synthetic record carries `'thinking'`, never `'idle'`.
+//
+// The synthetic `phase` NEVER escapes this function: it is not stored, not passed to a view, and not seen
+// by `isTurnRunning`. Its one job is gate reuse. That is also why the signal lives in a scalar beside
+// `phase` rather than in `phase` itself — the interrupt control reads `selectPhase` alone, so a locally
+// opened window structurally cannot arm a stop button for a turn the daemon has not started (AC4).
+export function workingIndicatorStateWithLocalSend(
+  status: ThreadStatus,
+  localSendPending: boolean
+): WorkingIndicatorState | null {
+  const daemonState = workingIndicatorState(status)
+  if (daemonState !== null) return daemonState
+  if (!localSendPending) return null
+  return workingIndicatorState({ ...status, phase: 'thinking' })
 }
 
 // #649: the `name` of the most recently started still-open tool call, or null if none is open. A pure read

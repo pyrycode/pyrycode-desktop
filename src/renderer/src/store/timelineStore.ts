@@ -53,5 +53,6 @@ export {
   selectPhase,
   selectStalled,
   selectApiRetry,
-  selectCompacting
+  selectCompacting,
+  selectLocalSendPending
 } from './threadTimeline'

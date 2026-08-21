@@ -159,7 +159,7 @@ export interface ApiRetryStatus {
   total: number
 }
 
-/** The whole timeline state: ordered content + the coarse lifecycle phase + the three chrome scalars. */
+/** The whole timeline state: ordered content + the coarse lifecycle phase + the four chrome scalars. */
 export interface TimelineState {
   items: readonly ThreadItem[]
   phase: TurnPhase
@@ -176,6 +176,25 @@ export interface TimelineState {
   // to hold — `| null` would invent a third state the wire cannot produce, and a record would cargo-cult
   // #493's structure past the reason for it. Chrome beside `items`, never a ThreadItem row.
   compacting: boolean
+  // #650: whether the operator's own send is still waiting for the daemon's first word — the working
+  // indicator's locally-opened window, so the gap between pressing Enter and the daemon's first event is
+  // not a dead screen. THE FIRST RENDERER-SOURCED CHROME SCALAR, and that provenance (marked by the
+  // `local` prefix) is the whole of what distinguishes it from the three above: `stalled`, `apiRetry` and
+  // `compacting` are daemon facts with a daemon edge, whereas this one is opened by the operator's act
+  // with no daemon involvement at all. That is why its clear rules match none of the three:
+  //  - NOT self-cleared by turn activity (`stalled`'s rule): content can arrive before any `turn_state`,
+  //    and clearing on it would blank the indicator mid-turn while `phase` is still idle.
+  //  - NOT cleared only by a daemon falling edge (`apiRetry`/`compacting`'s rule): a send that never
+  //    reaches the daemon has no falling edge to wait for, and a status clearable only by one sticks
+  //    forever when the edge is lost (the 2026-07-30 review finding #538 answered). So: a LIFECYCLE
+  //    clear — any `turn_state` (the daemon has spoken; its phase is now authoritative), plus
+  //    `reconnected` and `reset`. Two of the early-outs below widened for it; see those two arms.
+  // Deliberately NOT a fourth `TurnPhase` member: `TurnPhase` is a wire mirror (:11, and `wire/types.ts`
+  // names it from the other side), so a renderer-local member would let a caller dispatch a fabricated
+  // daemon phase through `turnState`'s daemon-provenance arm. Living outside `phase` also keeps
+  // `isTurnRunning` — the interrupt control's only gate — structurally unable to see this signal, so a
+  // locally-opened window can never arm a stop button for a turn the daemon has not started.
+  localSendPending: boolean
 }
 
 /** Compile-time exhaustiveness guard: a new ThreadEvent arm without a case is a type error. */
@@ -233,6 +252,12 @@ function fillResult(
  * events never touch `phase`, `turnState` never touches `items`. Mirrors `reduceSession`: a
  * `switch` on the sealed union with an `assertNever` default, and same-reference returns when
  * nothing changes so unchanged slices do not churn selectors.
+ *
+ * #650 qualifies that invariant without weakening it: content events may touch CHROME. They already
+ * did — `assistantDelta` / `toolUse` / `toolResult` all write `stalled: false` — and `userText` now
+ * writes `localSendPending: true`, making it the first chrome write from a RENDERER-sourced content
+ * event. `phase` itself stays daemon-only, so "content events never touch `phase`" remains literally
+ * true; it is the narrower reading — "the chrome scalars are all daemon-sourced" — that no longer is.
  */
 export function reduceTimeline(state: TimelineState, event: ThreadEvent): TimelineState {
   switch (event.type) {
@@ -244,7 +269,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         phase: state.phase,
         stalled: false,
         apiRetry: state.apiRetry,
-        compacting: state.compacting
+        compacting: state.compacting,
+        localSendPending: state.localSendPending
       }
     case 'toolUse':
       // Turn activity — clears a live stall (AC2). Already appends a fresh `items`, so just carry
@@ -264,7 +290,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         phase: state.phase,
         stalled: false,
         apiRetry: state.apiRetry,
-        compacting: state.compacting
+        compacting: state.compacting,
+        localSendPending: state.localSendPending
       }
     case 'toolResult': {
       const items = fillResult(state.items, event.toolUseId, {
@@ -278,6 +305,11 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // #493/#496: the guard deliberately does NOT widen for `apiRetry` or `compacting` — both have an
       // explicit wire falling edge, so turn activity must LEAVE them showing (the inverse of `stalled`);
       // both are carried through unchanged on both paths.
+      // #650: `localSendPending` follows apiRetry/compacting here, not `stalled` — turn content is not
+      // the daemon's word on the turn's lifecycle (it can arrive before any `turn_state`), so clearing
+      // on it would blank the indicator mid-turn while `phase` is still idle. Carried on both paths,
+      // and for the same reason the guard does NOT widen for it: an orphan result against a live local
+      // window must stay the same-reference no-op it is today.
       return items === state.items && !state.stalled
         ? state
         : {
@@ -285,7 +317,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             phase: state.phase,
             stalled: false,
             apiRetry: state.apiRetry,
-            compacting: state.compacting
+            compacting: state.compacting,
+            localSendPending: state.localSendPending
           }
     }
     case 'turnState':
@@ -295,14 +328,24 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // #493/#496: the guard deliberately does NOT widen for `apiRetry` or `compacting` — a turn-state
       // change arriving mid-retry or mid-compaction is expected and must leave the status showing (the
       // inverse of `stalled`); both are carried unchanged.
-      return event.state === state.phase && !state.stalled
+      // #650: this arm CLOSES a locally-opened working-indicator window — the daemon has spoken, so its
+      // phase is authoritative from here and the local stand-in has done its job. Any state closes it,
+      // including `idle`, which is why the no-churn guard widens a SECOND time with
+      // `&& !state.localSendPending`: the local window opens at `idle` and the daemon's terminal
+      // `turn_state` is `idle` too, so without this clause the common case early-outs and the indicator
+      // never comes down. Decided, not missed: a send issued while the PREVIOUS turn is still finishing
+      // has its window closed by that turn's `turn_state{idle}`, so the indicator can go briefly dark
+      // until the daemon reports the new turn — the ticket's own reading, and the queued-message path
+      // (#293/#294) is where that case properly lives.
+      return event.state === state.phase && !state.stalled && !state.localSendPending
         ? state
         : {
             items: state.items,
             phase: event.state,
             stalled: false,
             apiRetry: state.apiRetry,
-            compacting: state.compacting
+            compacting: state.compacting,
+            localSendPending: false
           }
     case 'turnEnd':
       // Appends a boundary; does NOT reset phase — the daemon emits `turn_state: 'idle'` separately.
@@ -316,18 +359,32 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         phase: state.phase,
         stalled: state.stalled,
         apiRetry: state.apiRetry,
-        compacting: state.compacting
+        compacting: state.compacting,
+        localSendPending: state.localSendPending
       }
     case 'userText':
       // A whole user message: fresh tail-append (never coalesced), `phase` untouched — the `turnEnd`
       // arm's discipline. Always a new `items` array (a fresh append is always a change). NOT in AC2's
       // clear set: a renderer-sourced echo is not daemon turn activity, so `stalled` is carried unchanged.
+      //
+      // #650: and this arm OPENS the working indicator's local window. It can carry that meaning because
+      // this dispatch IS the composer's accept signal: `userText` has exactly one production writer
+      // (`composerSend.ts`, the optimistic echo), sitting below both of `submitMessage`'s `false` returns
+      // and above its `return true`, and the daemon streams no user-message event in interactive mode. So
+      // "the arm fired" and "the composer accepted the submit" are the same fact, and a refused submit
+      // (whitespace-only, no active conversation) opens nothing because no code runs at all. IF A SECOND
+      // `userText` PRODUCER IS EVER ADDED — a history backfill is the obvious candidate — it must be
+      // re-examined against this arm, because backfilled messages are not pending sends.
+      //
+      // A redundant open (already pending) is deliberately NOT special-cased into a same-reference no-op:
+      // this arm always builds a fresh `items` array, so it has never returned the same reference.
       return {
         items: [...state.items, { kind: 'userText', text: event.text }],
         phase: state.phase,
         stalled: state.stalled,
         apiRetry: state.apiRetry,
-        compacting: state.compacting
+        compacting: state.compacting,
+        localSendPending: true
       }
     case 'sessionBoundary':
       // A whole boundary marker: fresh tail-append (never coalesced), `phase` untouched — the `userText` /
@@ -346,7 +403,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         phase: state.phase,
         stalled: state.stalled,
         apiRetry: state.apiRetry,
-        compacting: state.compacting
+        compacting: state.compacting,
+        localSendPending: state.localSendPending
       }
     case 'unrecognizedMessage':
       // A whole diagnostic marker: fresh tail-append, `phase` untouched — the `sessionBoundary` /
@@ -374,12 +432,15 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         phase: state.phase,
         stalled: state.stalled,
         apiRetry: state.apiRetry,
-        compacting: state.compacting
+        compacting: state.compacting,
+        localSendPending: state.localSendPending
       }
     case 'stallDetected':
       // #317: onset-only stall — set the scalar, leave `items`/`phase` untouched. A redundant onset (the
       // stall is already live) is a same-reference no-op, mirroring the pure-duplicate discipline of the
-      // other arms. `apiRetry` and `compacting` are independent facts, carried through unchanged.
+      // other arms. `apiRetry` and `compacting` are independent facts, carried through unchanged, and
+      // #650's `localSendPending` joins them: a stall is not the daemon's word on whether the operator's
+      // send was answered, so it neither opens nor closes the local window.
       return state.stalled
         ? state
         : {
@@ -387,7 +448,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             phase: state.phase,
             stalled: true,
             apiRetry: state.apiRetry,
-            compacting: state.compacting
+            compacting: state.compacting,
+            localSendPending: state.localSendPending
           }
     case 'apiRetry': {
       // #493: the two-edged api-retry status — set from the rising edge, cleared ONLY by the falling one.
@@ -405,7 +467,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
               phase: state.phase,
               stalled: state.stalled,
               apiRetry: null,
-              compacting: state.compacting
+              compacting: state.compacting,
+              localSendPending: state.localSendPending
             }
       }
       // The rising edge re-fires as the count climbs and the daemon may repeat an identical frame (no
@@ -419,7 +482,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         phase: state.phase,
         stalled: state.stalled,
         apiRetry: { current: event.current, total: event.total },
-        compacting: state.compacting
+        compacting: state.compacting,
+        localSendPending: state.localSendPending
       }
     }
     case 'compacting':
@@ -429,7 +493,8 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // a verbatim repeat of EITHER edge, the wire has no dedup — returns the SAME state reference, so
       // the status never stacks, duplicates, or flickers (AC3). `items`/`phase` are untouched on every
       // path: compaction is transient chrome, and it neither opens, closes, nor alters a turn (AC5).
-      // `stalled` and `apiRetry` are independent daemon facts, carried through unchanged.
+      // `stalled` and `apiRetry` are independent daemon facts, carried through unchanged, and #650's
+      // `localSendPending` joins them for the same reason it does on the stall arm.
       return state.compacting === event.active
         ? state
         : {
@@ -437,13 +502,16 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             phase: state.phase,
             stalled: state.stalled,
             apiRetry: state.apiRetry,
-            compacting: event.active
+            compacting: event.active,
+            localSendPending: state.localSendPending
           }
     case 'reset':
-      // All five fields clear in one step. Returning the shared const rather than a hand-written
+      // All six fields clear in one step. Returning the shared const rather than a hand-written
       // literal is what makes the equality with `initialTimelineState` an identity instead of a
-      // coincidence — a sixth `TimelineState` field is cleared for free, where a literal would
-      // silently keep the stale value and still compile. It also buys two properties: a second reset
+      // coincidence — a seventh `TimelineState` field is cleared for free, where a literal would
+      // silently keep the stale value and still compile. (#650's `localSendPending` is the sixth, and
+      // it cost this arm nothing: a conversation switch or an unpair leaves no locally-opened window
+      // behind, for free.) It also buys two properties: a second reset
       // is a no-op reference (idempotent), and `items` stays the SAME reference, so a no-op reset
       // churns no `selectItems` subscriber where a fresh `[]` would re-render every one of them.
       // Aliasing the shared `items` is safe because the reducer only ever spreads it into a new
@@ -456,18 +524,26 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // lost to a disconnect leaves the banner stuck until the app restarts. `protocol-mobile.md`
       // § Reconnect / Backfill splits reconnect by data type: Mode B (control state) resets and rebuilds
       // from whatever the daemon re-asserts, while Mode A (the transcript) reconciles by cursor backfill.
-      // The four chrome scalars are Mode B; `items` is Mode A, which is exactly why it survives BY
+      // The five chrome scalars are Mode B; `items` is Mode A, which is exactly why it survives BY
       // REFERENCE here — a fresh array would blank nothing but would re-render every `selectItems`
       // subscriber, and the shared `initialTimelineState.items` would blank the transcript outright.
       //
       // Hand-written literal, NOT `{ ...initialTimelineState, items: state.items }`: the spread would
-      // clear a future sixth field for free, and "for free" is the wrong default here — a sixth field
+      // clear a future seventh field for free, and "for free" is the wrong default here — a new field
       // could be durable Mode A content (wrongly wiped) as easily as Mode B chrome (rightly cleared).
-      // The explicit five fields make a sixth a COMPILE ERROR in this arm, forcing that classification.
+      // The explicit six fields make a seventh a COMPILE ERROR in this arm, forcing that classification.
       // (`reset` returning the shared constant is the deliberate opposite: it clears everything, so
       // "for free" is unambiguously right there.) It is also this file's idiom — every arm writes all
-      // five out. The early-out predicate below is the one thing the compiler cannot keep in sync: a
-      // sixth chrome field must be added to it by hand.
+      // six out. The early-out predicate below is the one thing the compiler cannot keep in sync: a
+      // new chrome field must be added to it by hand.
+      //
+      // #650 is that classification for the sixth field, and it is Mode B: a locally-opened working
+      // indicator is client-owned transient chrome, and it carries the reconnect hazard in its sharpest
+      // form — opened with no daemon involvement, so if the send never reached the daemon there may be no
+      // falling edge at all to wait for (pyrycode #1062 records the daemon side: an abandoned conversation
+      // gets no `turn_state{idle}`, its client expected to self-clear). Hence the fourth predicate clause:
+      // a state whose ONLY live chrome is a locally-opened window must NOT early-out, or an indicator
+      // opened for a turn that ended while the app was offline is still showing after a fresh handshake.
       //
       // Nothing live to clear ⇒ the SAME state reference, so a first connect, or a reconnect with clean
       // chrome, churns no subscriber (the #415 `modalPrompts` shape).
@@ -476,14 +552,19 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
       // backlog (#878) on connect — never `api_retry` / `compacting` / `turn_state` — so a status still
       // genuinely live across the reconnect shows nothing until the daemon's next edge. A briefly-missing
       // banner over a permanently-stuck one; do not engineer around it here.
-      return state.phase === 'idle' && !state.stalled && state.apiRetry === null && !state.compacting
+      return state.phase === 'idle' &&
+        !state.stalled &&
+        state.apiRetry === null &&
+        !state.compacting &&
+        !state.localSendPending
         ? state
         : {
             items: state.items,
             phase: 'idle',
             stalled: false,
             apiRetry: null,
-            compacting: false
+            compacting: false,
+            localSendPending: false
           }
     default:
       return assertNever(event)
@@ -495,7 +576,8 @@ export const initialTimelineState: TimelineState = {
   phase: 'idle',
   stalled: false,
   apiRetry: null,
-  compacting: false
+  compacting: false,
+  localSendPending: false
 }
 
 /** Selectors — the read surface, mirroring `sessionStore`'s. */
@@ -504,3 +586,4 @@ export const selectPhase = (s: TimelineState): TurnPhase => s.phase
 export const selectStalled = (s: TimelineState): boolean => s.stalled
 export const selectApiRetry = (s: TimelineState): ApiRetryStatus | null => s.apiRetry
 export const selectCompacting = (s: TimelineState): boolean => s.compacting
+export const selectLocalSendPending = (s: TimelineState): boolean => s.localSendPending

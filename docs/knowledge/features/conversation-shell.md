@@ -76,7 +76,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
 ├── ThinkingIndicator          .conversation__thinking (null when idle; holds through responding since #648, #215)
-│   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…" or "Working…", #648)
+│   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…"/"Working…"/"Running <tool>…", #648, #649)
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
 │   └── ConnectionStatusIndicatorControl .status-row__connection (two dots, inside .status-row__summary, #330)
 ├── BackgroundTaskTrigger      .background-task-trigger (StatusRow sibling, unconditional, #581)
@@ -952,7 +952,7 @@ dead region — `Timeline` is now the conversation's single thread surface. See
 [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) below and
 [#203 codebase notes](../codebase/203.md) for the original design and code review record.
 
-### Thinking / working indicator (#215, held for the whole running turn since #648)
+### Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649)
 
 `Timeline`'s structural twin over the coarse `phase` scalar (`TurnPhase`, [ADR 0008](../decisions/0008-thread-timeline-model.md))
 rather than the `items` list, mounted immediately after it:
@@ -961,6 +961,7 @@ rather than the `items` list, mounted immediately after it:
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
 └── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })}
+                                 toolName={openToolName(items)}
 ```
 
 The daemon opens a turn with `turn_state{thinking}` before any `assistant_delta` (pyrycode #632), so
@@ -974,23 +975,34 @@ claims a competing region) holding `<div className="bubble bubble--daemon bubble
 === 'working'` — the same daemon-bubble surface, text muted to `--color-on-surface-variant`, for both
 labels. Both labels are static, client-owned constants, never `phase` itself.
 
-**Union input, not `phase` and not a `string` — the type-level guarantee widened, not weakened.** The
-view's prop is `state: WorkingIndicatorState | null` (`WorkingIndicatorState = 'thinking' | 'working'`),
-never `phase: TurnPhase` (which would make the illegal `'idle'` branch representable) and never a plain
-`string` (which would reopen the hole the type exists to close). "No daemon-supplied string is rendered
-by this slice" stays a **type-level guarantee**: the prop's only inhabitants are two client-owned
-literals and `null`. The container does the derivation via `workingIndicatorState`, not the view. No
-animation shipped (an optional pulse was explicitly non-load-bearing per spec); the interim treatment is
+**Union input, not `phase` and not a `string` — the label CHOICE stays a type-level guarantee; naming
+the tool is a deliberate, narrow exception to it, since [#649](../codebase/649.md).** The view's `state`
+prop is `state: WorkingIndicatorState | null` (`WorkingIndicatorState = 'thinking' | 'working'`), never
+`phase: TurnPhase` (which would make the illegal `'idle'` branch representable) and never a plain
+`string` (which would reopen the hole the type exists to close). Through #648 this was "no
+daemon-supplied string is rendered by this slice, full stop" — the prop's only inhabitants were two
+client-owned literals and `null`. #649 named the daemon's currently-open tool in the label (per the
+operator's 2026-08-20 decision: the tool row two lines above the indicator already renders the same
+`name` as an escaped inert React child, so the indicator adds no new exposure) and had to reverse that
+guarantee to do it. What survives, narrowed rather than dropped: the **label choice** (`state`) is still
+a closed client-owned union, unwidened; the daemon string rides a second, separately-typed, *required*
+`toolName: string | null` prop; the fixed copy around the name (`toolWorkingCopy`) stays a client-owned
+constant; and the name reaches the DOM only as an auto-escaped text child, never through an HTML sink.
+`state === null` is checked first, so #493's and #496's supersede rules still hide the indicator entirely
+in either phase — an open tool cannot resurrect it. The container does both derivations
+(`workingIndicatorState` and `openToolName`) over values it already holds, not the view. No animation
+shipped (an optional pulse was explicitly non-load-bearing per spec); the interim treatment is
 deliberately minimal, since the locked mobile design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no
 dedicated working-indicator node — the polished version rolls into the deferred desktop-design pass.
 
 Was dormant until [#179](../codebase/179.md) flipped `interactive` (`phase` stayed `idle` in
 production until then, the same posture as `Timeline`); now live. Code review flagged one non-gating
 NIT: `.conversation__thinking` has no live region (`role="status"`), so a screen reader won't announce
-it appearing, disappearing, **or its label changing mid-turn since #648** — still unaddressed, deferred
-to the desktop-design pass. See [#215 codebase notes](../codebase/215.md) for the full original design
-and [#648 codebase notes](../codebase/648.md) for the whole-turn broadening, patterns established, and
-open questions.
+it appearing, disappearing, **or its label changing mid-turn since #648, or naming a tool since #649** —
+still unaddressed, deferred to the desktop-design pass. See [#215 codebase notes](../codebase/215.md) for
+the full original design, [#648 codebase notes](../codebase/648.md) for the whole-turn broadening, and
+[#649 codebase notes](../codebase/649.md) for the tool-naming reversal, patterns established, and the
+deferred stale-open-`toolCall` risk (cross-referenced against pyrycode #1243).
 
 **Gate narrowed in [#493](../codebase/493.md), narrowed again in [#496](../codebase/496.md), broadened
 in [#648](../codebase/648.md):** `shouldShowThinking(status)` is `isTurnRunning(status.phase) &&
@@ -1016,6 +1028,26 @@ app (2026-08-20) surfaced this as a screen that looked frozen for most of a turn
 receives no signal finer than `responding` inside the tool loop, `WORKING_COPY` ("Working…") is
 deliberately generic rather than naming tool activity — a copy like "Running tools…" would be a lie
 whenever the turn is actually still streaming text.
+
+**Named since [#649](../codebase/649.md): `WORKING_COPY` is superseded by the specific tool name whenever
+one is actually open**, closing the operator's remaining complaint that `WORKING_COPY` read identically
+for a 40 ms file read and a four-minute build. This doesn't reopen the lie #215 avoided, because it isn't
+derived from `phase` at all — it's a direct, independent read of `items` (`openToolName`): a `toolCall`
+item (`threadTimeline.ts:42-50`) carries `name` and starts `result: null`, filled in place when the
+correlated `toolResult` arrives, so "a tool is open right now" and "which one, if more than one" (the
+last such item in array order — `items` is append-only, `fillResult` fills in place without reordering)
+are both facts already sitting in the store, not an inference over `phase`. `openToolName(items)` is
+computed alongside `workingIndicatorState` at the same call site and passed as the indicator's second,
+required `toolName: string | null` prop; when it is non-null it replaces the phase-derived copy with
+`` `Running ${name}…` `` (`toolWorkingCopy`) rather than sitting beside it, and reverts to the generic copy
+the moment the tool's `toolResult` fills the item — no further `turn_state` needed. Renders through a new
+`.bubble--tool-label` CSS modifier (`.tool-row__summary`'s one-line-ellipsis bound, not `.tool-row__name`'s
+never-truncates one — see [#649 codebase notes](../codebase/649.md)) so a long tool name never wraps
+to a second line or moves the composer. One deliberately undefended edge: an interrupted turn can leave a
+`toolCall` permanently `result: null`, so the *next* turn's indicator could name that stale tool — the
+timeline already shows that call as a permanently pending, dimmed row (#230), so the label would mirror
+what's already on screen rather than contradict it; the fix if ever observed is scoping the scan to stop
+at the current turn's `turnBoundary`.
 
 ### Api-retry indicator (#493)
 
@@ -1592,7 +1624,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md); the summary slot's first content in [#330](../codebase/330.md).** `StatusRow`'s summary region now holds the two-dot connection indicator (#330); the `model · effort · context%` run-config text itself is still unbuilt and lands as a sibling beside the dots. `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), [Run configuration Context window section](#run-configuration-context-window-section-192), and [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
 - **`ConnectionStatusIndicator({ relay, daemon })` / `ConnectionStatusIndicatorControl`** — **bound in [#330](../codebase/330.md).** `ConnectionStatusIndicator` is the exported pure view (both legs as props, matrix proven by direct server-render); `ConnectionStatusIndicatorControl` is the in-file container reading `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)`, mounted inside `StatusRow`'s summary slot. See [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md).** Reads the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply. See [Structured-stream timeline render](#structured-stream-timeline-render-203) and [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
-- **`ThinkingIndicator({ state })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md); prop widened and gate broadened to hold across the whole running turn in [#648](../codebase/648.md).** `Timeline`'s twin over the store's `selectPhase` (plus `apiRetry`/`compacting`), mounted right after it. See [Thinking / working indicator](#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648) above.
+- **`ThinkingIndicator({ state, toolName })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md); prop widened and gate broadened to hold across the whole running turn in [#648](../codebase/648.md); gained the required `toolName` prop naming the open tool in [#649](../codebase/649.md).** `Timeline`'s twin over the store's `selectPhase` (plus `apiRetry`/`compacting`) and, since #649, a second independent derivation `openToolName(items)` over the same `items` slice `Timeline` reads. See [Thinking / working indicator](#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649) above.
 - **`StallIndicator({ isStalled })`** — **bound in [#317](../codebase/317.md).** `ThinkingIndicator`'s own twin over the store's new `selectStalled`, mounted as its sibling right after it. See [Stall indicator](#stall-indicator-317) above.
 - **`ApiRetryIndicator({ retry })`** — **bound in [#493](../codebase/493.md).** `ThinkingIndicator`'s supersede peer over the store's new `selectApiRetry`, mounted right after `ThinkingIndicator` and before `StallIndicator`; also narrows `ThinkingIndicator`'s own gate via the new `shouldShowThinking` predicate. See [Api-retry indicator](#api-retry-indicator-493) above.
 - **`CompactingIndicator({ isCompacting })`** — **bound in [#496](../codebase/496.md).** `ThinkingIndicator`'s second supersede peer over the store's new `selectCompacting`, mounted right after `ApiRetryIndicator` and before `StallIndicator`; extends `shouldShowThinking` by one field and one clause. See [Compacting indicator](#compacting-indicator-496) above.

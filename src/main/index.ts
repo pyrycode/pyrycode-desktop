@@ -298,18 +298,13 @@ app.whenReady().then(() => {
       case 'sendMessage':
         connection.send(command.payload)
         return
-      case 'requestSnapshot':
-        // Direct to the connection method (mirrors sendMessage), no facade — a snapshot has no
-        // orchestrator/consumer, unlike requestDebugBundle. Inert no-op when not connected (#180).
-        connection.requestSnapshot(command.payload)
-        return
       case 'requestSessionSettings':
-        // Direct to the connection method (mirrors requestSnapshot), no facade — a run-config read
+        // Direct to the connection method (mirrors sendMessage), no facade — a run-config read
         // has no orchestrator/consumer. Bare: no payload, because the reply is daemon-wide (#491).
         connection.requestSessionSettings()
         return
       case 'requestConversations':
-        // Direct to the connection method (mirrors requestSnapshot), no orchestrator — a list request
+        // Direct to the connection method (mirrors sendMessage), no orchestrator — a list request
         // has no consumer/reassembler. Inert no-op when not connected (#139).
         connection.requestConversations()
         return
@@ -321,7 +316,7 @@ app.whenReady().then(() => {
         connection.requestRecentWorkspaces()
         return
       case 'answerModal':
-        // Direct to the connection method (mirrors requestSnapshot), no orchestrator. The method
+        // Direct to the connection method (mirrors sendMessage), no orchestrator. The method
         // mints the answer_token main-side and sends modal_answer. Inert no-op when not connected (#236).
         connection.answerModal(command.payload)
         return
@@ -330,7 +325,7 @@ app.whenReady().then(() => {
         connection.cancelModal(command.payload)
         return
       case 'createConversation':
-        // Direct to the connection method (mirrors requestSnapshot), no orchestrator — a create request
+        // Direct to the connection method (mirrors sendMessage), no orchestrator — a create request
         // has no consumer/reassembler. Sends create_conversation; the daemon replies with one
         // conversation_created → conversationCreated event. Inert no-op when not connected (#241).
         connection.createConversation(command.payload)
@@ -343,7 +338,7 @@ app.whenReady().then(() => {
         connection.createWorkspaceFolder(command.payload)
         return
       case 'dequeueMessage':
-        // Direct to the connection method (mirrors requestSnapshot), no orchestrator — a dequeue is
+        // Direct to the connection method (mirrors sendMessage), no orchestrator — a dequeue is
         // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
         connection.dequeueMessage(command.payload)
@@ -399,7 +394,7 @@ app.whenReady().then(() => {
         connection.changeWorkspace(command.payload)
         return
       case 'setSessionSettings':
-        // Direct to the connection method (mirrors requestSnapshot), no orchestrator. Sends
+        // Direct to the connection method (mirrors sendMessage), no orchestrator. Sends
         // set_session_settings; the daemon replies with one session_settings_updated (decoded by #264,
         // correlated by #261). The renderer-minted `changeId` rides through so main can match the reply
         // back to this change (never onto the wire). Inert no-op when not connected (#263).

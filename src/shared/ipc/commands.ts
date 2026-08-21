@@ -7,9 +7,9 @@
 // So this module ships isRendererCommand — the runtime guard the main receiver applies at the
 // renderer→main boundary. Downstream consumers (#11/transport) receive only validated commands.
 //
-// The payload-bearing members (sendMessage, requestSnapshot) reuse wire payload types from
-// ../wire/types verbatim; the bare member (requestDebugBundle) carries no payload at all — never a
-// token, key, or raw frame in any case. AC5 is enforced by construction: no member has a field that
+// The payload-bearing members (sendMessage) reuse wire payload types from ../wire/types verbatim;
+// the bare member (requestDebugBundle) carries no payload at all — never a token, key, or raw frame
+// in any case. AC5 is enforced by construction: no member has a field that
 // could hold a secret (QrPayload/HelloClientPayload tokens, InnerFrameV2 bytes are not
 // referenced here), so a developer cannot serialize one onto this channel.
 //
@@ -17,7 +17,6 @@
 // relative import here and in those callers (see tsconfig.node.json).
 import type {
   SendMessagePayload,
-  RequestSnapshotPayload,
   ModalAnswerPayload,
   ModalCancelPayload,
   CreateConversationPayload,
@@ -72,8 +71,6 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * discriminated union on `type`. Ten members today: `sendMessage`, whose `payload` reuses the
  * wire SendMessagePayload verbatim so no field is remapped between layers; the bare
  * `requestDebugBundle` (#168), which carries NO payload because the bundle is daemon-global;
- * `requestSnapshot` (#180), whose `payload` reuses the wire RequestSnapshotPayload (a
- * `conversation_id` routing id, not a secret) to ask the daemon for the current screen_snapshot;
  * the bare `requestConversations` (#139), which carries NO payload — the daemon returns every
  * conversation; the bare `requestRecentWorkspaces` (#380), which likewise carries NO payload — the
  * daemon returns the recent-workspaces list (its reply is decoded to a `recentWorkspacesReceived`
@@ -127,7 +124,6 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 export type RendererCommand =
   | { type: 'sendMessage'; payload: SendMessagePayload }
   | { type: 'requestDebugBundle' }
-  | { type: 'requestSnapshot'; payload: RequestSnapshotPayload }
   | { type: 'requestSessionSettings' }
   | { type: 'requestConversations' }
   | { type: 'requestRecentWorkspaces' }
@@ -169,8 +165,8 @@ export function answerModalCommand(fields: AnswerModalCommandPayload): RendererC
 
 /**
  * Wrap a modal cancel (`modal_id` only) into a well-formed command (#236). Pure; reuses the wire
- * ModalCancelPayload verbatim (the sendMessage / requestSnapshot "reuse wire types, no remapping"
- * convention). No token, no secret — `modal_id` is the sole correlation key (ADR 0009).
+ * ModalCancelPayload verbatim (the sendMessage "reuse wire types, no remapping" convention). No
+ * token, no secret — `modal_id` is the sole correlation key (ADR 0009).
  */
 export function cancelModalCommand(fields: ModalCancelPayload): RendererCommand {
   return { type: 'cancelModal', payload: fields }
@@ -179,8 +175,8 @@ export function cancelModalCommand(fields: ModalCancelPayload): RendererCommand 
 /**
  * Wrap already-assembled dequeue fields (`conversation_id` + `queued_msg_id`) into a well-formed
  * command (#300) — asks the daemon to drop one queued-but-not-yet-run message. Pure; reuses the wire
- * DequeueMessagePayload verbatim (the sendMessage / requestSnapshot "reuse wire types, no remapping"
- * convention). Dropping a queued message is UNGATED (#720): no token to mint, so — unlike
+ * DequeueMessagePayload verbatim (the sendMessage "reuse wire types, no remapping" convention).
+ * Dropping a queued message is UNGATED (#720): no token to mint, so — unlike
  * answerModalCommand — the payload is the wire type directly, not an Omit-derivative. The
  * RendererCommand return type is the compile-time guarantee (AC1).
  */
@@ -214,8 +210,6 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'requestDebugBundle':
       // Bare member: no payload to validate, so a well-formed `type` is complete acceptance.
       return true
-    case 'requestSnapshot':
-      return 'payload' in value && isRequestSnapshotPayload(value.payload)
     case 'requestSessionSettings':
       // Bare member (#491): no payload to validate, so a well-formed `type` is complete acceptance.
       return true
@@ -278,14 +272,6 @@ function isSendMessagePayload(value: unknown): value is SendMessagePayload {
   )
 }
 
-/** The untrusted renderer→main boundary guard for the requestSnapshot payload (#180) — the reason
- *  this ticket is security-sensitive. Mirrors isSendMessagePayload: one `conversation_id` string
- *  check (a routing id, not a secret). Pure; never throws. */
-function isRequestSnapshotPayload(value: unknown): value is RequestSnapshotPayload {
-  if (typeof value !== 'object' || value === null) return false
-  return 'conversation_id' in value && typeof value.conversation_id === 'string'
-}
-
 /** The untrusted renderer→main boundary guard for the answerModal payload (#236) — the modal
  *  resolution's boundary check (why the command half is security-sensitive). Mirrors
  *  isSendMessagePayload: `modal_id` AND `option_id` string. Structural minimum — a smuggled
@@ -302,7 +288,7 @@ function isAnswerModalPayload(value: unknown): value is AnswerModalCommandPayloa
 }
 
 /** The untrusted renderer→main boundary guard for the cancelModal payload (#236). Mirrors
- *  isRequestSnapshotPayload: one `modal_id` string check (the sole correlation key, not a secret).
+ *  isUnarchiveConversationPayload: one `modal_id` string check (the sole correlation key, not a secret).
  *  Pure; never throws. */
 function isCancelModalPayload(value: unknown): value is ModalCancelPayload {
   if (typeof value !== 'object' || value === null) return false
@@ -347,20 +333,20 @@ function isPromoteConversationPayload(value: unknown): value is PromoteConversat
 }
 
 /** The untrusted renderer→main boundary guard for the archiveConversation payload (#363) — the reason
- *  the command half is security-sensitive. The mirror-image twin of isUnarchiveConversationPayload,
- *  mirroring isRequestSnapshotPayload (the single-`conversation_id`-string precedent): one present-and-string
- *  check — a literal `null`, a missing key, and a non-string are all rejected. Checks the TYPE of the field,
- *  NOT emptiness. Structural minimum — a smuggled extra field is not rejected here; the main-side sender's
- *  fresh-literal construction bounds the wire to exactly the one modeled field. Pure; never throws. */
+ *  the command half is security-sensitive. The mirror-image twin of isUnarchiveConversationPayload: one
+ *  present-and-string check — a literal `null`, a missing key, and a non-string are all rejected. Checks
+ *  the TYPE of the field, NOT emptiness. Structural minimum — a smuggled extra field is not rejected
+ *  here; the main-side sender's fresh-literal construction bounds the wire to exactly the one modeled
+ *  field. Pure; never throws. */
 function isArchiveConversationPayload(value: unknown): value is ArchiveConversationPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'conversation_id' in value && typeof value.conversation_id === 'string'
 }
 
 /** The untrusted renderer→main boundary guard for the unarchiveConversation payload (#346) — the reason
- *  the command half is security-sensitive. Mirrors isRequestSnapshotPayload (the single-`conversation_id`-
- *  string precedent): one present-and-string check — a literal `null`, a missing key, and a non-string are
- *  all rejected. Structural minimum — a smuggled extra field is not rejected here; the main-side sender's
+ *  the command half is security-sensitive. The single-`conversation_id`-string precedent: one
+ *  present-and-string check — a literal `null`, a missing key, and a non-string are all rejected.
+ *  Structural minimum — a smuggled extra field is not rejected here; the main-side sender's
  *  fresh-literal construction bounds the wire to exactly the one modeled field. Pure; never throws. */
 function isUnarchiveConversationPayload(value: unknown): value is UnarchiveConversationPayload {
   if (typeof value !== 'object' || value === null) return false
@@ -368,10 +354,10 @@ function isUnarchiveConversationPayload(value: unknown): value is UnarchiveConve
 }
 
 /** The untrusted renderer→main boundary guard for the deleteConversation payload (#364) — the reason
- *  the command half is security-sensitive. An exact clone of isUnarchiveConversationPayload, mirroring
- *  isRequestSnapshotPayload (the single-`conversation_id`-string precedent): one present-and-string check
- *  — a literal `null`, a missing key, and a non-string are all rejected. Checks the TYPE of the field,
- *  NOT emptiness (an empty string passes; the daemon polices it). Structural minimum — a smuggled extra
+ *  the command half is security-sensitive. An exact clone of isUnarchiveConversationPayload (the
+ *  single-`conversation_id`-string precedent): one present-and-string check — a literal `null`, a missing
+ *  key, and a non-string are all rejected. Checks the TYPE of the field, NOT emptiness (an empty string
+ *  passes; the daemon polices it). Structural minimum — a smuggled extra
  *  field is not rejected here; the main-side sender's fresh-literal construction bounds the wire to
  *  exactly the one modeled field. Delete is the PERMANENT verb, but the transport guard is identical to
  *  unarchive's — the destructive-action gate is the user-facing confirmation (#367), not a second factor

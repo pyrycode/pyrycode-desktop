@@ -40,25 +40,47 @@ npm test             # unit tests (vitest)
 
 `npm run build` is the salvage gate and part of the QA gate.
 
+The e2e tiers, on top of the unit tests:
+
+```bash
+npm run e2e              # fake-transport Playwright suite (the default tier; real-* specs are gated out)
+npm run e2e:real-claude  # real pyry daemon + real claude liveness specs
+npm run e2e:real:gate    # the same specs, non-zero exit when zero tests executed
+```
+
+The real-claude tiers need `pyry` and `claude` on PATH plus a credential: `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` with a readable `~/.claude.json`. The trap: without the credential the real suite silently skips every spec and still exits 0, so read the skip reasons, never the exit code. `e2e:real:gate` exists to turn that all-skip into a non-zero exit.
+
 ## Layout
 
 ```
 src/
-├── main/           # Electron background process: window, and later the transport
-│   └── index.ts
-├── preload/        # the bridge between the background process and the window
-│   └── index.ts
-├── renderer/       # the React window
-│   ├── index.html
+├── main/            # Electron background process: connection driver, pairing, secure storage, IPC handlers
+│   └── transport/   # Noise session, relay connection + supervisor, wire codec, envelope builders, test fakes
+├── preload/         # the bridge between the background process and the window
+├── renderer/        # the React window
 │   └── src/
-│       ├── main.tsx
-│       ├── App.tsx
-│       └── index.css
-└── shared/         # code used by both sides
-    └── wire/       # ported wire types + the Noise variant constant
+│       ├── screens/ # pairing, conversation, channels, settings, archive
+│       ├── store/   # Zustand stores + daemon-event bridges
+│       └── theme/   # design tokens
+└── shared/          # code used by both sides
+    ├── ipc/         # typed command, event, and pairing channels
+    └── wire/        # ported wire types + the Noise variant constant
+e2e/                 # Playwright suites: fake-transport default tier + real-daemon/real-claude specs
+├── fixtures/        # app launch, fake conversation state, real-daemon spawn
+└── reporters/       # the zero-executed gate
+docs/                # PROJECT-MEMORY, knowledge base (features, decisions, codebase notes), specs
+scripts/             # live-drive.mjs (live-relay pre-ship gate), electron-digest-check.mjs
 ```
 
 The transport, the Noise session, the relay connection supervisor, and the wire codec belong under `src/main/`. The screens, the state stores, and the event rendering belong under `src/renderer/`. Shared types belong under `src/shared/`.
+
+## Reading path
+
+1. `docs/PROJECT-MEMORY.md` — conventions and what the project is.
+2. `docs/knowledge/INDEX.md` — the map of features, decisions, and codebase notes.
+3. Your ticket's spec in `docs/specs/architecture/<N>-*.md`.
+
+Live-gate state lives in `docs/knowledge/features/live-e2e-runbook.md` § Current real-claude gate state.
 
 ## Conventions
 

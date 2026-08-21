@@ -14,9 +14,12 @@ An Electron desktop remote head for the pyry daemon running on pyrybox, reached 
 - Test-first. Unidirectional state. Sealed event shapes on a `type` discriminant.
 - Build gate: `npm run build`. Test gate: `npm test`.
 
-## First milestone
+## Milestones
 
-The connect-send-stream round-trip. Pair through the relay, send a message, watch the structured reply stream back. UI mirrors mobile first, diverges later.
+- First milestone, the connect-send-stream round-trip — pair through the relay, send a message, watch the structured reply stream back — proved live 2026-07-15.
+- Feature parity with the mobile client reached 2026-07-14.
+- First full 8/8 real-claude gate 2026-07-26.
+- UI mirrors mobile first, diverges later.
 
 ## Design references
 

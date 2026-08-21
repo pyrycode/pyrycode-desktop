@@ -234,7 +234,7 @@ daemon → screen_snapshot frame → onDriverEvent 'message' → parseInboundMes
       → DAEMON_EVENT_CHANNEL → daemonEventBridge (→ null, no SessionAction) → run-config store (#187,
         still 3-field — usage consumption is #192)
       → emitDaemonEvent {type:'screenSnapshotReceived', text, ts}   [#316, second emit, same frame]
-      → DAEMON_EVENT_CHANNEL → all three bridges (→ null) → screenSnapshotStore (#323) → display slice #324
+      → DAEMON_EVENT_CHANNEL → all three bridges (→ null)   [no renderer consumer since #619]
 ```
 
 ## Error handling
@@ -271,9 +271,10 @@ that failure is actually observed (evidence-based-fix).
   ([#187](../codebase/187.md)) through #191.
 - **Rendering the `text` field** — [#316](../codebase/316.md) surfaced `text`/`ts` across IPC via the
   dedicated `screenSnapshotReceived` event (see §5 above); [#323](../codebase/323.md) added the
-  [dedicated renderer store](screen-snapshot-store.md) that retains the latest value;
-  [#324](../codebase/324.md) added the request action and the `<pre>` display that reads it, removed
-  in turn by [#618](../codebase/618.md) (the store and this transport path stay).
+  [dedicated renderer store](screen-snapshot-store.md) that retained the latest value;
+  [#324](../codebase/324.md) added the request action and the `<pre>` display that read it, removed
+  in turn by [#618](../codebase/618.md), with the store and bridge themselves deleted by
+  [#619](../codebase/619.md) (this transport path stays — see #620–#622).
 - **Daemon `error` reply correlation** — see § Correlation above.
 
 ## Related
@@ -285,7 +286,8 @@ that failure is actually observed (evidence-based-fix).
   surfaces `text`/`ts` via a second, dedicated `screenSnapshotReceived` emit at the same seam;
   unblocked the display slice, since split into #323 (store) + #324 (action + view).
 - [Screen-snapshot store](screen-snapshot-store.md) / [#323 codebase notes](../codebase/323.md) —
-  the dedicated renderer store + reactive-only observer that retains this event's `text`/`ts`.
+  the dedicated renderer store + reactive-only observer that retained this event's `text`/`ts`;
+  deleted by [#619](../codebase/619.md).
 - [#324 codebase notes](../codebase/324.md) — the request action + `<pre>` display, the first and
   only consumer of the store above; removed by [#618](../codebase/618.md).
 - [Daemon connection](daemon-connection.md) — hosts `requestSnapshot()`, the `send` twin.

@@ -1,0 +1,208 @@
+/*
+ * Welcome screen styles, from desktop's OWN Figma frame (node 103-744, 1280x1024) rather than the
+ * mobile frame stretched to the window — a first for this renderer. Every color / type / spacing value
+ * references a theme token from theme/tokens.css; no color/type/spacing literal lives here. The bare
+ * structural literals are layout geometry (the pairing.css convention), and they are exactly: 100%,
+ * flex: 1, the mark's 184x208 box, the copy column's 560px max-width, the two CTA rows' 56px height,
+ * the CTA icon's 20px box, the footer's 0.55 opacity, and the glow's percentage geometry.
+ *
+ * Three token gaps this screen opened are filled in tokens.css rather than inlined: --color-on-primary
+ * (the M3 role for a label on a --color-primary fill), the display-large type style, and --space-7/8/16.
+ * The design's 10px icon-to-label gap maps to --space-2 (8px), a 2px difference that is imperceptible
+ * and keeps the value tokenized — the pairing.css:54-56 / :130-131 snap-and-comment move, used there
+ * twice in one file for exactly this situation.
+ */
+
+/*
+ * The frame. justify-content: space-between is Figma 103:744 (and mobile's Arrangement.SpaceBetween):
+ * the hero takes the free space, the CTA stack pins to the bottom. height: 100% rides the
+ * html/body/#root chain in index.css:5-9, so the screen fills the window when #658 mounts it;
+ * box-sizing keeps the frame padding inside that 100%.
+ *
+ * The glow is the frame's dominant visual and both sources agree on it: Figma's radial fill is centred
+ * at (608.93, 304.22) in the 1280x1024 box — (47.6%, 29.7%) — reaching full transparency at an ending
+ * ellipse of roughly 48% x 56% of the box, and mobile independently uses centre (0.48w, 0.30h)
+ * (WelcomeScreen.kt:54-56). Expressed as PERCENTAGES, not px: the window is 1100x800 and resizable, so
+ * a px-sized glow would drift off-centre the moment the user resizes. Both stops are tokens; Chromium
+ * interpolates gradients in premultiplied alpha, so fading to `transparent` leaves no grey halo.
+ *
+ * Deliberately NOT reproduced from the frame: the hero's M3/Elevation Light/3 drop shadow (two black
+ * shadows at 0.15/0.30 alpha behind light text on a near-black canvas — imperceptible, and it would
+ * mean inventing an elevation token family for no visual gain) and the root frame's 4px radius (a Figma
+ * frame artifact; the real window has no rounded content box).
+ */
+.welcome {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: var(--space-7) var(--space-8);
+  background:
+    radial-gradient(ellipse 48% 56% at 48% 30%, var(--color-primary-container), transparent),
+    var(--color-surface);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* Figma 103:745 — takes the free space above the pinned CTAs and centres the hero on both axes.
+   min-height: 0 lets it shrink below its content in a short window instead of pushing the CTAs off. */
+.welcome__hero-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Figma 103:746 — the horizontal hero: mark left, copy right. This row direction is what makes the
+   desktop frame differ from mobile's vertical stack. */
+.welcome__hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-16);
+}
+
+/* Figma 103:748. The colour is the mark's own: the SVG fills with currentColor, mirroring mobile
+   tinting the same drawable with colorScheme.primary (WelcomeScreen.kt:76). flex-shrink: 0 keeps the
+   mark at its drawn size while the copy column absorbs a narrow window.
+ *
+ * scaleY(-1) reproduces the transform BOTH Figma frames place on this mark (`-rotate-180 -scale-x-100`
+ * on 103:749, and the same on mobile's 80:2), which is a vertical flip of what mobile's
+ * ic_pyry_logo.xml actually draws. Measured on the rendered silhouettes: unflipped mismatches the
+ * Figma asset by 11.3%, flipped by 4.0% (antialiasing noise), and the two Figma frames agree with each
+ * other to 2.6% — so the flip is design intent, not a placement artifact on the new desktop frame. The
+ * mobile APP ships the drawable unflipped, i.e. it diverges from its own design here; matching the
+ * frame is this ticket's brief ("per Figma 103-744"), and reverting is this one line if that reading
+ * turns out to be wrong. Kept as a transform rather than by editing the path data so the `d` and the
+ * viewBox still come from one source (see WelcomeScreen.tsx on the 2x-viewport trap). */
+.welcome__mark {
+  flex-shrink: 0;
+  width: 184px;
+  height: 208px;
+  transform: scaleY(-1);
+  color: var(--color-primary);
+}
+
+/* Figma 103:751. max-width rather than the frame's fixed width: at the 1100px default the hero
+   (184 + 64 + 560) fits comfortably, and a max-width lets the column shrink gracefully instead of
+   overflowing once the window is narrower. A real responsive story belongs with #658 or later. */
+.welcome__copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  max-width: 560px;
+}
+
+/* Figma 103:752 — title and subtitle bound tighter to each other than to the body paragraph. */
+.welcome__title-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.welcome__title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-display-large-size);
+  line-height: var(--text-display-large-line);
+  letter-spacing: var(--text-display-large-tracking);
+  font-weight: var(--text-display-large-weight);
+}
+
+.welcome__subtitle,
+.welcome__body {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-title-large-size);
+  line-height: var(--text-title-large-line);
+  letter-spacing: var(--text-title-large-tracking);
+  font-weight: var(--text-title-large-weight);
+}
+
+/* Figma 103:756 — the three full-width rows pinned to the bottom of the frame. */
+.welcome__ctas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+/* Figma 103:757 — the filled pill. --radius-lg is already the drawn 28px, so the pill needs no new
+   token. The gap is the design's 10px snapped to --space-2 (see the file header). */
+.welcome__pair {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 56px;
+  padding: 0 var(--space-6);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+/* Figma 103:758 — inherits the pill's colour so the stroked icon tracks the label beside it. */
+.welcome__pair-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.welcome__pair-label {
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+/* Figma 103:765/766 — a bare centred text row, the same 56px height as the pill. It is an anchor (the
+   click mechanism, see WelcomeScreen.tsx), so text-decoration is cleared to render as the drawn row. */
+.welcome__setup {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  color: var(--color-on-surface);
+  text-decoration: none;
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+  cursor: pointer;
+}
+
+/* Neither interactive state is drawn in the frame; both follow the .pairing__button convention
+   (:152-158) — a container surface on hover for the bare row, an outline for keyboard focus on both,
+   so the two CTAs stay reachable without a pointer. */
+.welcome__setup:hover {
+  background: var(--color-surface-container);
+}
+
+.welcome__pair:focus-visible,
+.welcome__setup:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* Figma 103:767/768 — plain text, never a link. The 0.55 opacity is the drawn value (and mobile's
+   alpha = 0.55f), applied over the token colour rather than baked into a new dimmed colour token. */
+.welcome__footer {
+  margin: 0;
+  padding-top: var(--space-2);
+  text-align: center;
+  color: var(--color-on-surface-variant);
+  opacity: 0.55;
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+}

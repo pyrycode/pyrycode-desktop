@@ -952,7 +952,7 @@ dead region — `Timeline` is now the conversation's single thread surface. See
 [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) below and
 [#203 codebase notes](../codebase/203.md) for the original design and code review record.
 
-### Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649)
+### Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649, opens on send since #650)
 
 `Timeline`'s structural twin over the coarse `phase` scalar (`TurnPhase`, [ADR 0008](../decisions/0008-thread-timeline-model.md))
 rather than the `items` list, mounted immediately after it:
@@ -960,7 +960,8 @@ rather than the `items` list, mounted immediately after it:
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-└── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })}
+└── ThinkingIndicator           state={workingIndicatorStateWithLocalSend(
+                                          { phase, apiRetry, compacting }, localSendPending)}
                                  toolName={openToolName(items)}
 ```
 
@@ -995,17 +996,40 @@ shipped (an optional pulse was explicitly non-load-bearing per spec); the interi
 deliberately minimal, since the locked mobile design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no
 dedicated working-indicator node — the polished version rolls into the deferred desktop-design pass.
 
+**Opens locally on send since [#650](../codebase/650.md), closes robustly.** Through #649 the
+indicator stayed dark from Enter until the daemon's first event — the composer's optimistic echo
+landed as a `userText` timeline item, but `phase` stayed `idle` until `turn_state{thinking}`
+arrived, so a slow network round-trip looked identical to a dead app. #650 closes that window with
+a new [timeline-store](conversation-timeline-store.md) scalar, `localSendPending: boolean`, set by
+the same `userText` dispatch that posts the echo (no new event: that dispatch already *is* the
+composer's accept signal). `phase` itself stays daemon-only — a wire mirror, and the one field
+`InterruptControl` reads — so the local open cannot arm the interrupt affordance. The mount site
+now calls a second exported derivation, `workingIndicatorStateWithLocalSend(status,
+localSendPending)`, composed *on top of* `workingIndicatorState` rather than folded into
+`ThreadStatus`: the daemon's answer wins when non-null, otherwise a pending local send re-calls the
+same gate with `phase: 'thinking'` substituted, inheriting #493's/#496's supersede clauses for
+free and picking the flicker-free `'thinking'` label (the daemon's first real `turn_state{thinking}`
+then changes nothing at the seam). Closes on any daemon `turn_state`, on a reconnect reconcile (the
+sharpest form of the #538 hazard — a locally-opened window has no daemon-side edge to wait for at
+all if the send never arrives, corroborated by pyrycode #1062), and for free on a timeline `reset`
+(conversation switch, unpair). `ThreadStatus`, `shouldShowThinking` and `workingIndicatorState`
+stay textually untouched. See [#650 codebase notes](../codebase/650.md) for the full reducer
+arm-by-arm classification and the e2e mount-timing repair it also required.
+
 Was dormant until [#179](../codebase/179.md) flipped `interactive` (`phase` stayed `idle` in
 production until then, the same posture as `Timeline`); now live. Code review flagged one non-gating
 NIT: `.conversation__thinking` has no live region (`role="status"`), so a screen reader won't announce
 it appearing, disappearing, **or its label changing mid-turn since #648, or naming a tool since #649** —
 still unaddressed, deferred to the desktop-design pass. See [#215 codebase notes](../codebase/215.md) for
-the full original design, [#648 codebase notes](../codebase/648.md) for the whole-turn broadening, and
+the full original design, [#648 codebase notes](../codebase/648.md) for the whole-turn broadening,
 [#649 codebase notes](../codebase/649.md) for the tool-naming reversal, patterns established, and the
-deferred stale-open-`toolCall` risk (cross-referenced against pyrycode #1243).
+deferred stale-open-`toolCall` risk (cross-referenced against pyrycode #1243), and
+[#650 codebase notes](../codebase/650.md) for the local-send open/close and the e2e mount-timing
+repair it forced.
 
 **Gate narrowed in [#493](../codebase/493.md), narrowed again in [#496](../codebase/496.md), broadened
-in [#648](../codebase/648.md):** `shouldShowThinking(status)` is `isTurnRunning(status.phase) &&
+in [#648](../codebase/648.md), composed on — not touched — by [#650](../codebase/650.md):**
+`shouldShowThinking(status)` is `isTurnRunning(status.phase) &&
 status.apiRetry === null && !status.compacting` — reusing the same `isTurnRunning` predicate
 `InterruptControl` already gated on (`thinking || responding`), rather than the bare `phase ===
 'thinking'` comparison #215 shipped. A separate, new `workingIndicatorState(status)` composes **on top

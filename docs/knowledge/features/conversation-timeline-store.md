@@ -94,16 +94,35 @@ contract draws. `daemonEventBridge.ts` and `sessionStore.ts` remain independent 
 `connected` edge, untouched by this ticket — this is the [`modalStore` #415](../codebase/415.md) /
 `queueStore` #197 reconcile shape applied a third time, not a centralisation of the edge.
 
+[#650](../codebase/650.md) added a sixth `TimelineState` scalar, `localSendPending: boolean`, but
+**not** a tenth owned arm — no new `DaemonEvent`, no new bridge case. It is the first chrome scalar
+written by a renderer-sourced event rather than a daemon one: the existing `userText` arm (the
+composer's optimistic echo, live since [#179](../codebase/179.md)) now also sets
+`localSendPending: true`, opening the working indicator's window the moment the composer accepts a
+submit rather than a network round-trip later. Every other arm classifies it: `turnState` and
+`reconnected` close it (the daemon speaking, or a reconcile, is authoritative), `reset` clears it
+for free via the shared constant, and the eight turn-content arms (`assistantDelta`/`toolUse`/
+`toolResult`/`turnEnd`/`sessionBoundary`/`stallDetected`/`apiRetry`/`compacting`) all carry it
+through unchanged — the deliberate inverse of `stalled`, since content can arrive before any
+`turn_state` and clearing on it would blank the indicator mid-turn. Both of the reducer's
+compiler-invisible early-outs (`turnState`'s no-churn guard, `reconnected`'s `nothingLive`
+predicate) gained a matching widened clause, the same shape as `stalled`'s guard in #317.
+`selectLocalSendPending` joins the read surface. See [Conversation shell § Thinking / working
+indicator](conversation-shell.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649)
+for the view-side composition.
+
 ## What it does
 
 Turns the nine owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
 `reduceTimeline`, exposing `selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/
-`selectCompacting` as the only read surface. A stream arrival (an `assistant_delta` chunk, a `turn_end`
-marker, a `tool_use` call, its `tool_result` outcome, a `stall` onset, an `api_retry` edge, a
-`compacting` edge) re-renders only components selecting a timeline slice — orthogonal to `sessionStore`
-and `runConfigStore`. The ninth arm, `connected`→`reconnected` ([#538](../codebase/538.md)), is not
-stream content at all — it is the connection-lifecycle reconcile that clears the timeline's transient
-chrome on a fresh handshake.
+`selectCompacting`/`selectLocalSendPending` as the read surface. A stream arrival (an
+`assistant_delta` chunk, a `turn_end` marker, a `tool_use` call, its `tool_result` outcome, a `stall`
+onset, an `api_retry` edge, a `compacting` edge) re-renders only components selecting a timeline
+slice — orthogonal to `sessionStore` and `runConfigStore`. The ninth arm, `connected`→`reconnected`
+([#538](../codebase/538.md)), is not stream content at all — it is the connection-lifecycle reconcile
+that clears the timeline's transient chrome on a fresh handshake. `localSendPending`
+([#650](../codebase/650.md)) is written by neither path: it is set by the renderer-sourced `userText`
+event the composer dispatches directly (see below), the store's one non-bridge write source.
 
 ## How it works
 
@@ -115,7 +134,7 @@ export type TimelineStore = TimelineState & { dispatch: (event: ThreadEvent) => 
 createTimelineStore(init?)   // vanilla createStore — one isolated instance per test (DI seam)
 timelineStore                 // app-wide singleton
 useTimelineStore(selector)    // narrow-slice React binding: useStore(timelineStore, selector)
-export { selectItems, selectPhase, selectStalled, selectApiRetry, selectCompacting } from './threadTimeline'   // re-exported, never redefined
+export { selectItems, selectPhase, selectStalled, selectApiRetry, selectCompacting, selectLocalSendPending } from './threadTimeline'   // re-exported, never redefined
 ```
 
 Mirrors `createSessionStore`'s DI-factory → singleton → hook → selectors structure (ADR 0004), but
@@ -201,8 +220,16 @@ daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel, co
 
 fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{connected, ack}
    → window.pyry.onDaemonEvent → subscribeTimeline → translateTimelineEvent → { type: 'reconnected' }
-   → timelineStore.dispatch → reduceTimeline → phase/stalled/apiRetry/compacting cleared, items untouched
+   → timelineStore.dispatch → reduceTimeline → phase/stalled/apiRetry/compacting/localSendPending cleared,
+                                                 items untouched
    (#538 — a separate, connection-lifecycle path alongside the stream path above, not a stream arrival)
+
+operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ optimistic echo
+   → timelineStore.dispatch({ type: 'userText', text }) → reduceTimeline → localSendPending: true
+   → selectLocalSendPending (read by ConversationScreen's workingIndicatorStateWithLocalSend, composed
+                              on top of #215's shouldShowThinking/workingIndicatorState gate)
+   (#650 — renderer-sourced, no daemon frame, no bridge involvement; closed by the next turnState,
+    reconnected, or reset arm above, never by a fourth path of its own)
 ```
 
 ## Configuration and usage
@@ -231,8 +258,8 @@ fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{
   which reads it alongside `phase`/`apiRetry` to narrow `ThinkingIndicator`'s gate a second time. See
   [Conversation shell § Compacting indicator](conversation-shell.md#compacting-indicator-496).
 - Import surface: `import { useTimelineStore, selectItems, selectPhase, selectStalled, selectApiRetry,
-  selectCompacting } from '@renderer/store/timelineStore'` and `import { useTimelineBridge } from
-  '@renderer/store/timelineBridge'`.
+  selectCompacting, selectLocalSendPending } from '@renderer/store/timelineStore'` and
+  `import { useTimelineBridge } from '@renderer/store/timelineBridge'`.
 - No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
   transport (single active conversation); the bridge translates and dispatches unconditionally.
 - **`connected` → `reconnected` needs no reader wiring** ([#538](../codebase/538.md)) — it drives the
@@ -240,6 +267,12 @@ fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{
   [#317](../codebase/317.md)/[#493](../codebase/493.md)/[#496](../codebase/496.md)/[#215](../codebase/215.md)
   already wired to `ConversationScreen`'s indicators; a reconnect just clears the value those existing
   readers already subscribe to.
+- **`selectLocalSendPending` has a real source as of [#650](../codebase/650.md) (the composer's
+  `userText` dispatch) and its one reader as of the same ticket** — `ConversationScreen`'s
+  `workingIndicatorStateWithLocalSend(status, localSendPending)`, composed on top of (not folded
+  into) #215's `workingIndicatorState` gate, so #493's/#496's supersede clauses are inherited rather
+  than restated. See [Conversation shell § Thinking / working
+  indicator](conversation-shell.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649).
 
 ## Edge cases and limitations
 
@@ -280,6 +313,19 @@ fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{
   `api_retry`/`compacting`/`turn_state`, so a status genuinely still live across the reconnect shows no
   banner until the daemon's next edge. Accepted by design: a briefly-missing banner beats a
   permanently-stuck one.
+- **`localSendPending` is the one chrome scalar with no daemon falling edge at all — a bridge
+  reconcile is not optional the way it is for `apiRetry`/`compacting` ([#650](../codebase/650.md)).**
+  A send whose bridge call throws still posts the echo (`composerSend.ts`'s swallowed-failure
+  contract), so the window opens for a message that never left the machine, and with the connection
+  still up there is nothing that closes it until a `turn_state`, a reconnect, a conversation switch,
+  or an unpair. This is the send-failure surface #650 deliberately left out of scope, not an
+  oversight — engineering a timeout around it would be new client state defending an unobserved
+  failure mode.
+- **A send issued while the previous turn is still finishing closes the *new* window on the
+  *previous* turn's `turn_state{idle}` ([#650](../codebase/650.md)).** `turnState`'s clear is
+  unconditional on any phase, so the indicator can go briefly dark before the daemon reports the new
+  turn. Decided as the ticket-sanctioned reading rather than defended — the queued-message path
+  (#293/#294) is where that case properly lives.
 
 ## Related
 
@@ -361,3 +407,9 @@ fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{
   new arm clears `phase`/`stalled`/`apiRetry`/`compacting` while preserving `items` by reference — the
   Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md) / `queueStore` #197 already have.
   `daemonEventBridge.ts` and `sessionStore.ts` stay independent consumers of the same `connected` edge.
+- [#650 codebase notes](../codebase/650.md) — adds a sixth `TimelineState` scalar,
+  `localSendPending`, and `selectLocalSendPending`, but no tenth owned arm: it is written by the
+  existing renderer-sourced `userText` arm rather than any `DaemonEvent`, closed by `turnState` and
+  `reconnected` (both early-outs widened to match) and cleared for free by `reset`. First reader:
+  `ConversationScreen`'s `workingIndicatorStateWithLocalSend`, composed on `workingIndicatorState`
+  rather than folded into `ThreadStatus`.

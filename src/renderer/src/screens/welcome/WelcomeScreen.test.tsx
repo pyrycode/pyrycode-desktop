@@ -49,8 +49,8 @@ describe('WelcomeView', () => {
   })
 
   it('still renders the primary CTA with onPair omitted — the dormant state (AC3)', () => {
-    // Nothing mounts this screen yet (#658 does), so the navigation prop is optional and a click is a
-    // no-op. The button must render regardless; an `onPair!()` call would throw here instead.
+    // AppView supplies the prop since #662, but it stays optional, so a click without one is a no-op.
+    // The button must render regardless; an `onPair!()` call would throw here instead.
     let markup: string | undefined
     expect(() => {
       markup = renderView()

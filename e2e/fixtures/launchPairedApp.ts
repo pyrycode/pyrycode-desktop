@@ -198,9 +198,9 @@ export const test = base.extend<PairedAppFixtures>({
       }
 
       // --- Drive the real pairing UI → the connected conversation thread. The pairing drive itself is
-      // the shared arrival step (#661, ./pairingArrival) — the one place #662 edits when the unpaired
-      // entry point moves; the navigation selectors below live here, per-flow assertion selectors stay
-      // in the specs. ---
+      // the shared arrival step (#661, ./pairingArrival) — the one place #662 edited when the unpaired
+      // entry point moved behind the welcome screen; the navigation selectors below live here, per-flow
+      // assertion selectors stay in the specs. ---
       //
       // The fake target's coordinates flow into the app through the PASTED payload (the point of
       // driving the pairing UI), not through env. relay = the forwarder's client leg (loopback ws://,

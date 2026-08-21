@@ -6,12 +6,12 @@ import './welcome.css'
 // mobile frame stretched to the window; mobile's vertical counterpart is WelcomeScreen.kt, and the
 // copy, the mark, and the two CTAs are inherited from it.
 //
-// THE SCREEN SHIPS DORMANT — nothing mounts it. Making it the launch destination is #658, so the pair
-// CTA's navigation is an optional prop in the PairingScreen.tsx:163 "future navigation seam" posture.
-// That is also why there is no e2e tier for this slice: Playwright cannot reach an unrendered screen.
+// The screen shipped DORMANT in #657 — nothing mounted it. #662 made it the unpaired app root, so the
+// pair CTA now navigates; the prop stays optional (the PairingScreen.tsx:163 seam posture) because
+// WelcomeView's dormant-state test renders it without one, and AppView supplies it at the mount site.
 //
 // WelcomeView is pure (props in, markup out — what the tests render); WelcomeScreen is the thin
-// container, a passthrough today, so #658 has a container to mount and the split is already in place
+// container, a passthrough today, so #662 had a container to mount and the split is already in place
 // when a container concern arrives. It deliberately touches no bridge and no store — unlike
 // PairingScreen (`bridge ?? window.pyry`, :175) it never dereferences `window`, which is what makes
 // rendering it with no Electron bridge present trivially safe rather than stub-dependent.
@@ -46,7 +46,7 @@ const WELCOME_COPY = {
 const SETUP_URL = 'https://pyryco.de/setup'
 
 export interface WelcomeViewProps {
-  onPair?: () => void // the dormant navigation seam — PairingScreen.tsx:163's posture (#658 supplies it)
+  onPair?: () => void // the navigation seam — PairingScreen.tsx:163's posture (#662 supplies it)
 }
 
 /** Pure presentational component — no hooks, no state, no effects, no async work. */
@@ -163,7 +163,7 @@ function QrFrameIcon(): JSX.Element {
 }
 
 /**
- * Thin container — a passthrough today. It exists so #658 has a container to mount and so the
+ * Thin container — a passthrough today. It exists so #662 had a container to mount and so the
  * view/container split is already in place when a container concern arrives. No hooks, no store read,
  * no `window.pyry` dereference: keeping it bridge-free is what makes rendering it with no Electron
  * bridge present impossible to fail.

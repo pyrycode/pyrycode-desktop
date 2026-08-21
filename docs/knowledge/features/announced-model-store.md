@@ -35,8 +35,9 @@ Deliberately **not** a [run configuration store](run-config-store.md) facet, on 
 the architect's spec: lifetime mismatch (that store's data path requests a fresh snapshot on sheet
 open; this holder is App-level always-listening), all three exhaustive bridges already name this as a
 distinct thing in their permanent no-op comments, the `model` field name **collides and means the
-opposite** on `snapshotReceived`/`runConfigReceived` (the per-session *override*, not what claude
-announced), and `runConfigStore`'s own `snapshot: null` already spends its not-yet sentinel.
+opposite** on `runConfigReceived` (the per-session *override*, not what claude announced — through
+[#621](../codebase/621.md), `snapshotReceived` carried the same colliding field too), and
+`runConfigStore`'s own `snapshot: null` already spends its not-yet sentinel.
 
 ## How it works
 
@@ -90,8 +91,8 @@ path unit-tests with plain spies:
 translateModelAnnounced(event: DaemonEvent): AnnouncedModel | null
 // modelAnnounced → { model: event.model, truncated: event.truncated } — a FRESH named-field literal,
 // never `return event`, never a spread, so `type` never reaches the store. Every other event → null,
-// including (critically) snapshotReceived and runConfigReceived, whose own `model: string` means the
-// per-session OVERRIDE — the opposite value.
+// including (critically) runConfigReceived, whose own `model: string` means the per-session OVERRIDE
+// — the opposite value. (Through #621, snapshotReceived carried the same colliding field too.)
 
 subscribeAnnouncedModel(onDaemonEvent, setAnnouncedModel): () => void
 // onDaemonEvent(event => { const a = translateModelAnnounced(event); if (a !== null) setAnnouncedModel(a) })
@@ -165,7 +166,8 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 ## Related
 
 - [#587 codebase notes](../codebase/587.md) — the transport half: `modelAnnounced` decode, the
-  `truncated` field, and the `model`-name collision with `snapshotReceived`/`runConfigReceived`.
+  `truncated` field, and the `model`-name collision with `runConfigReceived` (and, through
+  [#621](../codebase/621.md), `snapshotReceived`).
 - [#588 codebase notes](../codebase/588.md) — implementation summary, patterns established, and the
   pairing-scoped-clear deferral.
 - [Daemon-event channel](daemon-event-channel.md) — the `modelAnnounced` `DaemonEvent` arm and the

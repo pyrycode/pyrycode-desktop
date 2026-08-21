@@ -7,6 +7,7 @@ import {
   selectStalled,
   selectApiRetry,
   selectCompacting,
+  selectLocalSendPending,
   type ThreadEvent,
   type ThreadItem,
   type TimelineState
@@ -571,6 +572,120 @@ describe('reduceTimeline — compaction status (#496)', () => {
   })
 })
 
+// #650: the locally-opened working-indicator window — the FIRST renderer-sourced chrome scalar. The four
+// scalars above it are daemon facts with a daemon edge; this one is opened by the operator's own act with
+// no daemon involvement, which is exactly why its clear rules differ from all four.
+describe('reduceTimeline — the locally-opened working indicator (#650)', () => {
+  it('userText opens the window from the initial state (AC1)', () => {
+    const state = run([userText('hello')])
+    expect(state.localSendPending).toBe(true)
+    // The orthogonality this file documents SURVIVES: the content event still never touches `phase`,
+    // it touches chrome — exactly as `assistantDelta` already writes `stalled`.
+    expect(state.phase).toBe('idle')
+    expect(state.items).toEqual([{ kind: 'userText', text: 'hello' }])
+  })
+
+  it('the initial state holds no locally-opened window', () => {
+    expect(initialTimelineState.localSendPending).toBe(false)
+    expect(selectLocalSendPending(initialTimelineState)).toBe(false)
+    expect(selectLocalSendPending(run([userText('typed')]))).toBe(true)
+  })
+
+  it('a second userText while already pending still appends — never a same-reference no-op', () => {
+    // `userText` always builds a fresh `items` array, so this arm has never returned the same reference
+    // and must not start: a redundant open is not a no-op case worth special-casing.
+    const opened = run([userText('one')])
+    const next = reduceTimeline(opened, userText('two'))
+    expect(next).not.toBe(opened)
+    expect(next.items).toHaveLength(2)
+    expect(next.localSendPending).toBe(true)
+  })
+
+  it('every turnState closes it — the daemon has spoken, its phase is authoritative (AC2)', () => {
+    for (const phase of ['idle', 'thinking', 'responding'] as const) {
+      expect(run([userText('typed'), { type: 'turnState', state: phase }]).localSendPending).toBe(false)
+    }
+  })
+
+  it('closes on turn_state{idle} even when the phase is ALREADY idle (AC2)', () => {
+    // The no-churn early-out trap, and the COMMON case rather than a corner: the local window opens at
+    // `idle` and the daemon's terminal turn_state is `idle` too, so without the widened guard the arm
+    // returns the same state and the window never closes. This is the single test that fails without it.
+    const opened = run([userText('typed')])
+    expect(opened.phase).toBe('idle')
+
+    const next = reduceTimeline(opened, { type: 'turnState', state: 'idle' })
+
+    expect(next).not.toBe(opened)
+    expect(next.localSendPending).toBe(false)
+    expect(next.phase).toBe('idle')
+    expect(next.items).toBe(opened.items)
+  })
+
+  it('does not latch closed — a second send re-opens the window', () => {
+    const state = run([userText('one'), { type: 'turnState', state: 'idle' }, userText('two')])
+    expect(state.localSendPending).toBe(true)
+  })
+
+  it('a reconnect closes it even when it is the ONLY live chrome (AC3)', () => {
+    // The `reconnected` early-out predicate is the one thing the compiler cannot keep in sync, and this
+    // is precisely the state AC3 was written for: a window opened for a turn that ended while the app
+    // was offline, with nothing else live to drag the fold past the early-out.
+    const opened = run([userText('typed')])
+    expect(opened.phase).toBe('idle')
+    expect(opened.stalled).toBe(false)
+    expect(opened.apiRetry).toBeNull()
+    expect(opened.compacting).toBe(false)
+
+    const next = reduceTimeline(opened, reconnected())
+
+    expect(next).not.toBe(opened)
+    expect(next.localSendPending).toBe(false)
+    // Mode A survives the Mode B clear, as for the other four scalars.
+    expect(next.items).toBe(opened.items)
+  })
+
+  it('a reset closes it, for free, via the shared initial constant (AC5)', () => {
+    const next = reduceTimeline(run([userText('typed')]), reset())
+    expect(next).toBe(initialTimelineState)
+    expect(next.localSendPending).toBe(false)
+  })
+
+  it('content events do NOT close it — the deliberate inverse of `stalled`', () => {
+    // Content can arrive before any turn_state, so clearing here would blank the indicator mid-turn
+    // while `phase` is still idle. Only a daemon lifecycle edge closes the window.
+    expect(run([userText('typed'), delta('A', 'hi')]).localSendPending).toBe(true)
+    expect(run([userText('typed'), toolUse('A', 't1')]).localSendPending).toBe(true)
+    expect(
+      run([userText('typed'), toolUse('A', 't1'), toolResult('A', 't1')]).localSendPending
+    ).toBe(true)
+  })
+
+  it('turnEnd does NOT close it — the paired turn_state{idle} is what clears', () => {
+    // Clearing here would regress: a send issued while the previous turn is finishing would have its
+    // fresh window closed by the PREVIOUS turn's boundary.
+    expect(run([userText('typed'), turnEnd('A')]).localSendPending).toBe(true)
+  })
+
+  it('the independent chrome facts and markers leave it alone', () => {
+    expect(run([userText('typed'), stall()]).localSendPending).toBe(true)
+    expect(run([userText('typed'), apiRetry(true, 1, 3)]).localSendPending).toBe(true)
+    expect(run([userText('typed'), compacting(true)]).localSendPending).toBe(true)
+    expect(run([userText('typed'), sessionBoundary()]).localSendPending).toBe(true)
+    expect(run([userText('typed'), unrecognized()]).localSendPending).toBe(true)
+  })
+
+  it('the carry-through no-op arms stay same-reference with the window open', () => {
+    const opened = run([userText('typed')])
+    expect(reduceTimeline(opened, apiRetry(false))).toBe(opened) // falling edge, no live retry
+    expect(reduceTimeline(opened, compacting(false))).toBe(opened) // verbatim-repeated edge
+    expect(reduceTimeline(opened, toolResult('A', 'orphan'))).toBe(opened) // orphan result
+    const stalled = reduceTimeline(opened, stall())
+    expect(reduceTimeline(stalled, stall())).toBe(stalled) // redundant stall onset
+    expect(stalled.localSendPending).toBe(true)
+  })
+})
+
 describe('reduceTimeline — purity', () => {
   it('does not mutate the input state, its items array, or an existing item on coalesce', () => {
     const start = run([delta('A', 'Hel')])
@@ -617,20 +732,22 @@ describe('initial state + selectors', () => {
 })
 
 describe('reduceTimeline — reset', () => {
-  /** A state dirty on all five fields. The stall goes LAST: a turnState is turn activity and
-   *  would clear it (the #317 semantics). */
+  /** A state dirty on all six fields. The stall goes LAST: a turnState is turn activity and
+   *  would clear it (the #317 semantics). #650: and the userText goes AFTER the turnState, for the
+   *  mirror-image reason — a turnState clears `localSendPending`, so the original leading position
+   *  left this helper clean on the new field and the clear below would have proved nothing about it. */
   function dirty(): TimelineState {
     return run([
-      userText('typed'),
       delta('A', 'hi'),
       { type: 'turnState', state: 'thinking' },
+      userText('typed'),
       apiRetry(true, 3, 10),
       compacting(true),
       stall()
     ])
   }
 
-  it('clears all five fields from a fully dirty state (AC2)', () => {
+  it('clears all six fields from a fully dirty state (AC2)', () => {
     const state = dirty()
     // Precondition: genuinely dirty on every field — otherwise reset proves nothing.
     expect(state.items.length).toBeGreaterThan(0)
@@ -638,6 +755,7 @@ describe('reduceTimeline — reset', () => {
     expect(state.stalled).toBe(true)
     expect(state.apiRetry).not.toBeNull()
     expect(state.compacting).toBe(true)
+    expect(state.localSendPending).toBe(true)
 
     const next = reduceTimeline(state, reset())
 
@@ -646,6 +764,7 @@ describe('reduceTimeline — reset', () => {
     expect(next.stalled).toBe(initialTimelineState.stalled)
     expect(next.apiRetry).toBe(initialTimelineState.apiRetry)
     expect(next.compacting).toBe(initialTimelineState.compacting)
+    expect(next.localSendPending).toBe(initialTimelineState.localSendPending)
   })
 
   it('returns the shared initial constant, not a fresh literal', () => {
@@ -673,26 +792,28 @@ describe('reduceTimeline — reset', () => {
 })
 
 describe('reduceTimeline — reconnected', () => {
-  /** A state dirty on all five fields — the `reset` block's helper. The stall goes LAST: a
-   *  turnState is turn activity and would clear it (the #317 semantics). */
+  /** A state dirty on all six fields — the `reset` block's helper, including its #650 ordering:
+   *  the stall goes LAST (a turnState is turn activity and would clear it, the #317 semantics) and
+   *  the userText goes AFTER the turnState (a turnState clears `localSendPending`). */
   function dirty(): TimelineState {
     return run([
-      userText('typed'),
       delta('A', 'hi'),
       { type: 'turnState', state: 'thinking' },
+      userText('typed'),
       apiRetry(true, 3, 10),
       compacting(true),
       stall()
     ])
   }
 
-  it('clears all four chrome scalars in one step (AC1)', () => {
+  it('clears all five chrome scalars in one step (AC1)', () => {
     const state = dirty()
     // Precondition: genuinely dirty on every scalar — otherwise the clear proves nothing.
     expect(state.phase).toBe('thinking')
     expect(state.stalled).toBe(true)
     expect(state.apiRetry).not.toBeNull()
     expect(state.compacting).toBe(true)
+    expect(state.localSendPending).toBe(true)
 
     const next = reduceTimeline(state, reconnected())
 
@@ -700,6 +821,7 @@ describe('reduceTimeline — reconnected', () => {
     expect(next.stalled).toBe(false)
     expect(next.apiRetry).toBeNull()
     expect(next.compacting).toBe(false)
+    expect(next.localSendPending).toBe(false)
   })
 
   it('leaves items untouched BY REFERENCE, so no selectItems subscriber re-renders (AC2)', () => {
@@ -717,8 +839,16 @@ describe('reduceTimeline — reconnected', () => {
   it('returns the same state reference against already-clean chrome (AC3)', () => {
     expect(reduceTimeline(initialTimelineState, reconnected())).toBe(initialTimelineState)
     // The case that pins the early-out predicate rather than the trivial initial-state one: dirty on
-    // `items` (a real transcript), clean on all four chrome scalars — a first connect mid-transcript.
-    const contentOnly = run([userText('typed'), delta('A', 'hi'), turnEnd('A')])
+    // `items` (a real transcript), clean on all five chrome scalars — a first connect mid-transcript.
+    // #650: the trailing `turn_state{idle}` is what makes the transcript chrome-clean now — the echo
+    // opens the local window and the daemon's terminal idle is what closes it, so a completed turn is
+    // the honest shape of "a real transcript with nothing live".
+    const contentOnly = run([
+      userText('typed'),
+      delta('A', 'hi'),
+      turnEnd('A'),
+      { type: 'turnState', state: 'idle' }
+    ])
     expect(contentOnly.items.length).toBeGreaterThan(0)
     expect(reduceTimeline(contentOnly, reconnected())).toBe(contentOnly)
   })

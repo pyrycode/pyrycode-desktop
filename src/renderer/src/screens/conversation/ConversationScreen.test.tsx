@@ -8,6 +8,7 @@ import {
   THINKING_COPY,
   WORKING_COPY,
   workingIndicatorState,
+  workingIndicatorStateWithLocalSend,
   openToolName,
   toolWorkingCopy,
   StallIndicator,
@@ -951,6 +952,106 @@ describe('workingIndicatorState — which client-owned label the running turn sh
       const status = { phase, apiRetry: null, compacting: false }
       expect(workingIndicatorState(status) !== null).toBe(shouldShowThinking(status))
     }
+  })
+})
+
+// #650: the window the operator opens by pressing Enter, composed ON `workingIndicatorState` above rather
+// than added as a fourth `ThreadStatus` field. That choice is what leaves every status literal in the two
+// blocks above standing verbatim — they remain the regression evidence that #493's and #496's supersede
+// rules survived. It also means the supersede rules are INHERITED here rather than restated: the third
+// branch re-calls the same gate with one field substituted, so there is no second place the rule lives.
+// Pure calls, no rendering.
+describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650)', () => {
+  it('opens the window at idle while a local send is pending, labelled thinking (AC1)', () => {
+    expect(
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, true)
+    ).toBe('thinking')
+  })
+
+  it('opens nothing at idle with no local send pending — todays behaviour, unchanged (AC1)', () => {
+    expect(
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, false)
+    ).toBeNull()
+  })
+
+  it('delegates unchanged wherever the daemon has already opened the window', () => {
+    // The daemon's answer wins: for every phase and both pending values, a non-null daemon answer is
+    // returned byte-identical, so no daemon-opened case changed behaviour at all.
+    for (const phase of ['thinking', 'responding', 'idle'] as const) {
+      for (const pending of [true, false]) {
+        const status = { phase, apiRetry: null, compacting: false }
+        const daemon = workingIndicatorState(status)
+        if (daemon !== null) {
+          expect(workingIndicatorStateWithLocalSend(status, pending)).toBe(daemon)
+        }
+      }
+    }
+  })
+
+  it('keeps the daemon label for a send issued mid-turn — responding stays working (AC1)', () => {
+    expect(
+      workingIndicatorStateWithLocalSend(
+        { phase: 'responding', apiRetry: null, compacting: false },
+        true
+      )
+    ).toBe('working')
+  })
+
+  it('inherits the retry supersede rule — a live retry hides a locally-opened window too', () => {
+    expect(
+      workingIndicatorStateWithLocalSend(
+        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: false },
+        true
+      )
+    ).toBeNull()
+  })
+
+  it('inherits it for an unknown-count retry too — presence supersedes, not the counter', () => {
+    expect(
+      workingIndicatorStateWithLocalSend(
+        { phase: 'idle', apiRetry: { current: 0, total: 0 }, compacting: false },
+        true
+      )
+    ).toBeNull()
+  })
+
+  it('inherits the compaction supersede rule too', () => {
+    expect(
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true }, true)
+    ).toBeNull()
+  })
+
+  it('is superseded while both compacting and retrying', () => {
+    expect(
+      workingIndicatorStateWithLocalSend(
+        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: true },
+        true
+      )
+    ).toBeNull()
+  })
+
+  it('hands over to the daemon with no label flicker at the seam (AC2)', () => {
+    // The local window is labelled exactly what the daemon's first turn_state says, so the moment the
+    // daemon takes over is invisible. `working` would have flipped Working → Thinking → Working at the
+    // one seam this ticket exists to smooth.
+    expect(
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, true)
+    ).toBe(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false }))
+  })
+
+  it('opens the window WITHOUT arming the interrupt control (AC4)', () => {
+    // The behavioural half: the indicator shows while `phase` is still the daemon-owned `idle`, and
+    // isTurnRunning — InterruptControl's only gate — is false for that same phase, so no stop button
+    // renders for a turn the daemon has not started.
+    //
+    // The structural half is type-level and no assertion here can reach it (renderer tests are
+    // server-render only, so no container render can drive store state): InterruptControl reads
+    // `selectPhase` alone, isTurnRunning admits only a TurnPhase, and InterruptButton takes
+    // `isRunning: boolean` — the new scalar has no path into any of the three.
+    expect(
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, true)
+    ).not.toBeNull()
+    expect(isTurnRunning('idle')).toBe(false)
   })
 })
 

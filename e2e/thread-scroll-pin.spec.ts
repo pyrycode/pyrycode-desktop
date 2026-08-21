@@ -134,7 +134,9 @@ const sessionTransitionFrame = (): Uint8Array =>
   })
 
 /** The coarse turn-phase scalar. `thinking` mounts the working indicator (and the interrupt control) —
- *  chrome BETWEEN the thread and the composer, which is what the fourth criterion is about. */
+ *  chrome BETWEEN the thread and the composer, which is what the fourth criterion is about. `idle` closes
+ *  both, and since #650 it is also what closes the window the composer's own accept opens locally, which is
+ *  why the primer's reply stream ends with one. */
 const turnStateFrame = (state: WireTurnState): Uint8Array =>
   encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
@@ -164,10 +166,19 @@ const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
       const payload = envelope.payload as SendMessagePayload
       if (payload.conversation_id !== SEEDED_ROW.id) return []
       if (payload.text !== PRIMER_TEXT) return []
-      return Array.from({ length: REPLY_TURNS }, (_, index) => [
-        assistantDeltaFrame(index + 1),
-        turnEndFrame(index + 1)
-      ]).flat()
+      return [
+        ...Array.from({ length: REPLY_TURNS }, (_, index) => [
+          assistantDeltaFrame(index + 1),
+          turnEndFrame(index + 1)
+        ]).flat(),
+        // The turn's terminal phase. Faithful first — a real daemon ends every turn with it, and
+        // `turn_end` is NOT that signal (it appends a boundary and leaves `phase` alone; the pairing
+        // threadTimeline.ts documents on its `turnEnd` arm). #650 then made it LOAD-BEARING: the composer's
+        // accept now opens the working indicator locally, so without this frame the primer would leave
+        // `.conversation__thinking` mounted for the rest of the run and the fourth criterion below would
+        // measure an element that was already on screen. `primeOverflowingThread` gates on it.
+        turnStateFrame('idle')
+      ]
     }
     default:
       return [seedConversationsFrame()]
@@ -207,6 +218,15 @@ async function primeOverflowingThread(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(assistantBubbles).toHaveCount(REPLY_TURNS, { timeout: STREAM_TIMEOUT_MS })
   await expect(assistantBubbles.last()).toHaveText(replyText(REPLY_TURNS))
+
+  // #650: the primer's turn has fully ENDED — the stream's trailing `turn_state{idle}` closed the working
+  // indicator that the composer's accept opened locally. This is a NON-VACUITY gate of the same kind as the
+  // overflow check below, and it is here in the shared primer for the same reason: so no test can run a
+  // chrome-mount assertion before it. Without it the fourth criterion's `turn_state{thinking}` would find
+  // `.conversation__thinking` already mounted and produce byte-identical markup — its `toBeVisible` would
+  // pass against an element that never mounted, over a viewport that never shrank. It is also the settle
+  // gate for the last frame in the stream, so the metrics below are read against a final layout.
+  await expect(page.locator('.conversation__thinking')).toHaveCount(0, { timeout: STREAM_TIMEOUT_MS })
 
   const { scrollHeight, clientHeight } = await readThreadMetrics(page)
   expect(scrollHeight).toBeGreaterThan(clientHeight)
@@ -266,6 +286,10 @@ test('an arriving item of every kind leaves a bottom-resting thread at the botto
   // raises the maximum scroll offset, so the browser never clamps scrollTop and no scroll event fires —
   // the tracked flag is untouched by construction, and the re-assert returns the view to the new bottom.
   // A raw re-measurement at arrival time would instead read "not at bottom" and silently un-pin here.
+  //
+  // This frame MOUNTS the indicator rather than finding it already there — the primer's zero-count gate is
+  // what makes that true, and it is not optional (#650). The wait below cannot tell the two apart on its
+  // own: `toBeVisible` reads the element's current state, not which frame put it on screen.
   daemon.pushFrame(turnStateFrame('thinking'))
   await expect(page.locator('.conversation__thinking')).toBeVisible({ timeout: STREAM_TIMEOUT_MS })
   await expectPinnedToBottom(page)

@@ -34,12 +34,18 @@ import type {
 //      fixture's completion signal (Send enabled) is gated on that same `connected`, so by the time
 //      launchPairedApp resolves `connected` has already fired; no rekey/reconnect happens in this spec, so
 //      no further `connected` wipes the backlog. Push queue_state ONLY AFTER launch resolves — never before.
-//   3. Interrupt phase-gating: isTurnRunning(phase) is `thinking || responding`, and since #648 it gates
-//      BOTH the interrupt control and ThinkingIndicator. So turn_state{thinking} mounts BOTH
-//      the interrupt button and the running indicator; turn_state{idle} returns `phase` to idle and
-//      retracts BOTH — the crisp "both gone" assertion. turn_end is NOT the quiescing signal (it appends a
-//      turn boundary but does not reset `phase`, threadTimeline.ts:200); only turn_state{idle} retracts the
+//   3. Interrupt phase-gating: isTurnRunning(phase) is `thinking || responding`, and since #648 the same
+//      running-turn reading gates the ThinkingIndicator too. So turn_state{thinking} lights BOTH the
+//      interrupt button and the running indicator; turn_state{idle} returns `phase` to idle and retracts
+//      BOTH — the crisp "both gone" assertion. turn_end is NOT the quiescing signal (it appends a turn
+//      boundary but does not reset `phase`, threadTimeline.ts); only turn_state{idle} retracts the
 //      phase-gated controls. TurnPhase has no literal `running` — do not push that value.
+//      SINCE #650 THE TWO CONTROLS NO LONGER SHARE ONE GATE, and the delivered-echo plant below is exactly
+//      where that bites: the composer's accept opens the working indicator LOCALLY, through a scalar beside
+//      `phase` that the interrupt control cannot see. So after the plant the indicator is already mounted
+//      while `phase` is still idle, and the interrupt leg's "thinking mounts the running indicator" half
+//      would assert against an element that was on screen the whole time. The plant closes its own window
+//      with a turn_state{idle} to keep that half honest — see the AC block.
 //
 // TWO-PART ASSERTION PER MUTATION (both drop and interrupt are non-optimistic — dropQueuedMessage.ts /
 // sendInterrupt.ts only emit a frame, the store is never mutated locally): (a) act, (b) expect.poll the
@@ -159,6 +165,13 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
   await page.getByPlaceholder('Message…').fill(DELIVERED_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(deliveredUser).toHaveCount(1)
+
+  // #650: close the working-indicator window the accept above opened locally (fact 3). The fake no-ops
+  // send_message, so nothing else ever would — and a real daemon ends every turn with this frame anyway,
+  // including one it answered with nothing. The zero-count gate is the load-bearing half: it is what makes
+  // the interrupt leg's indicator assertion measure a MOUNT rather than an element already on screen.
+  daemon.pushFrame(turnStateFrame('idle'))
+  await expect(runningIndicator).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // Push the queue snapshot (AFTER launch resolved → past the `connected` backlog reset, fact 2; under
   // SEEDED_ROW.id → selected by the active-conversation backlog, fact 1). The live subscription re-renders.

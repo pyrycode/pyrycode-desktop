@@ -82,18 +82,27 @@ const CODE_TEXT = ['```', LONG_TOKEN_TEXT, '```'].join('\n')
 // <h2> for the same reason in reverse — #628's readHeadingTypeMetrics resolves `.bubble__markdown h2` and
 // would go strict-mode ambiguous.
 //
+// #630 THREADS INLINE CODE THROUGH THOSE SAME BLOCKS rather than adding any of its own, which is why
+// every count below still holds unchanged: a code span is INLINE content, so it lands inside a block that
+// already exists and moves no child count at any level. Its seven spans cover the container set that
+// ticket's single rule has to work in — a paragraph, this <h2>, a tight <li>, a blockquote, and nested
+// inside <em> and <strong> — plus LONG_TOKEN_TEXT a second time, in the paragraph, as the wrapping case.
+// Placing them in EXISTING lines is the paragraph above's "no sixth turn" argument applied one level down.
+//
 // Assembled with join('\n') — an indented template literal would put four leading spaces on each line,
 // which CommonMark reads as an indented code block. The three leading spaces inside the ordered list are
 // deliberate and are its items' content column, which is what makes the continuation lines part of the item
-// rather than a new block.
+// rather than a new block. These lines are SINGLE-quoted, so a markdown backtick needs no escaping; the
+// long token is concatenated in rather than switching its line to a template literal, where every backtick
+// on it would then need one.
 const RHYTHM_TEXT = [
-  'Alpha paragraph.',
+  'Alpha paragraph with `alpha_inline` and `' + LONG_TOKEN_TEXT + '` in it.',
   '',
-  '## Beta heading',
+  '## Beta heading with `beta_inline`',
   '',
-  '- Gamma item',
+  '- Gamma item with `gamma_inline`',
   '',
-  '> Delta quoted paragraph.',
+  '> Delta quoted paragraph with `delta_inline`.',
   '>',
   '> Epsilon quoted paragraph.',
   '>',
@@ -103,9 +112,9 @@ const RHYTHM_TEXT = [
   '',
   '1. Theta first paragraph.',
   '',
-  '   Iota second paragraph.',
+  '   Iota second paragraph, *emphasis holding `iota_inline`*.',
   '',
-  '2. Kappa first paragraph.',
+  '2. Kappa first paragraph, **strong holding `kappa_inline`**.',
   '',
   '   - Lambda nested item'
 ].join('\n')
@@ -118,6 +127,15 @@ const RHYTHM_LOOSE_ITEM_CHILD_COUNTS = [2, 2]
 // Every ul/ol the fixture puts in the container: the tight `- Gamma item`, the one inside the blockquote,
 // the loose <ol>, and the depth-2 list inside its second item.
 const RHYTHM_LIST_COUNT = 4
+// Every code span the RHYTHM fixture puts in the container — the vacuity guard for #630's measurements,
+// in the same shape as the four counts above. This bubble holds no fence, so every <code> under it is an
+// inline one and the loop can assert over all of them rather than over a chosen subset.
+const RHYTHM_INLINE_CODE_COUNT = 7
+// The element types that one rule has to reach through. Read as each span's ANCESTOR CHAIN rather than as
+// its parent, because the containers do not nest uniformly: a code span in a blockquote lands inside the
+// <p> CommonMark wraps the quote's content in, and one in a list item sits directly in the <li> when the
+// list is tight but inside a <p> when it is loose.
+const RHYTHM_INLINE_CODE_CONTEXTS = ['p', 'h2', 'li', 'blockquote', 'em', 'strong']
 // The still-streaming tail. SINGLE newlines, not blank lines, and that choice is what makes the height
 // comparison discriminating: `pre-wrap` renders three line boxes, while CommonMark reads a single newline
 // as a SOFT break and `normal` collapses it to a space, giving one. A blank-line fixture would not tell
@@ -138,6 +156,12 @@ const TAIL = 4
 // disagree by 1 on a box that does not actually overflow. The same tolerance absorbs subpixel drift in the
 // box-to-box distances below.
 const SUBPIXEL_TOLERANCE_PX = 1
+
+// The two computed values that mean "nothing declared this". Named rather than written inline because
+// they are the whole content of the exclusion assertions, where the point is the ABSENCE of a treatment
+// and not a value taken from the scale — so no token can stand in for them.
+const TRANSPARENT = 'rgba(0, 0, 0, 0)'
+const NO_LENGTH = '0px'
 
 // The width an `outside` list marker needs to the LEFT of the list's content box, at the bubble's
 // body-medium. THE ONLY LITERALS EITHER #629 TEST INTRODUCES, and they are unavoidable: these are font
@@ -440,6 +464,140 @@ const readListIndentMetrics = (page: Page, index: number): Promise<ListIndentMet
       }
     })
 
+interface InlineCodeEntry {
+  text: string
+  ancestorTags: string[]
+  blockAncestorTag: string | null
+  blockAncestorFontSize: string | null
+  fontFamily: string
+  fontSize: string
+  backgroundColor: string
+  borderTopLeftRadius: string
+  paddingLeft: string
+  paddingRight: string
+  whiteSpace: string
+  wordBreak: string
+  overflowWrap: string
+  clientRectCount: number
+}
+
+interface InlineCodeMetrics {
+  entries: InlineCodeEntry[]
+  monoToken: string
+  radiusToken: string
+  spaceToken: string
+  bodyMediumSizeToken: string
+  titleLargeSizeToken: string
+  codeBlockBackgroundColor: string
+  bubbleWordBreak: string
+  bubbleOverflowWrap: string
+}
+
+/**
+ * Every inline code span in a settled bubble's container, each measured value BESIDE the token read off
+ * the same live element — readHeadingTypeMetrics' idiom, and what keeps this half of the spec free of a
+ * colour, size, spacing or radius literal too.
+ *
+ * Two of the expected values are not custom properties and are read as live elements instead, which says
+ * the intent more exactly than a resolved colour would. The fill is the `.code-block` element's own, so
+ * "inline and fenced code are one code surface" is the assertion rather than a hex string; the wrapping
+ * pair is `.bubble`'s own, so "nothing here re-declared what it inherits" is the assertion rather than a
+ * guess at how Blink serialises `word-break: break-word`.
+ *
+ * `--font-mono` needs one normalisation: computed style serialises a quoted family name with DOUBLE
+ * quotes, while the token's source text uses single ones and carries the declaration's leading space.
+ * Both sides pass through `family()`, so the comparison is over the stack and not over its spelling —
+ * the `normal`/`0px` tracking normaliser above, same reason.
+ */
+const readInlineCodeMetrics = (page: Page, index: number): Promise<InlineCodeMetrics> =>
+  assistantBubble(page, index)
+    .locator('.bubble__markdown')
+    .evaluate((el) => {
+      const family = (value: string): string => value.trim().replace(/"/g, "'")
+      const style = getComputedStyle(el)
+      const bubble = el.closest('.bubble')
+      // The fenced block lives in a DIFFERENT bubble (the CODE turn), so it is reached through the thread
+      // rather than through this container. Both reads happen inside this one evaluate, off one layout.
+      const codeBlock = el.closest('.conversation__thread')?.querySelector('.code-block')
+      if (!bubble) throw new Error('the markdown container has no .bubble ancestor')
+      if (!codeBlock) throw new Error('the thread rendered no .code-block to read the code fill from')
+      const bubbleStyle = getComputedStyle(bubble)
+      return {
+        monoToken: family(style.getPropertyValue('--font-mono')),
+        radiusToken: style.getPropertyValue('--radius-xs').trim(),
+        spaceToken: style.getPropertyValue('--space-1').trim(),
+        bodyMediumSizeToken: style.getPropertyValue('--text-body-medium-size').trim(),
+        titleLargeSizeToken: style.getPropertyValue('--text-title-large-size').trim(),
+        codeBlockBackgroundColor: getComputedStyle(codeBlock).backgroundColor,
+        bubbleWordBreak: bubbleStyle.wordBreak,
+        bubbleOverflowWrap: bubbleStyle.overflowWrap,
+        entries: Array.from(el.querySelectorAll('code')).map((code) => {
+          const codeStyle = getComputedStyle(code)
+          const ancestorTags: string[] = []
+          // The nearest ancestor that is NOT an inline box: the element an inline run actually takes its
+          // font-size from, and so the one the no-per-context-override claim is about. Walking stops at
+          // the container itself, which is the flex column and never an ancestor worth naming.
+          let block: Element | null = null
+          for (let node = code.parentElement; node && node !== el; node = node.parentElement) {
+            ancestorTags.push(node.tagName.toLowerCase())
+            if (block === null && getComputedStyle(node).display !== 'inline') block = node
+          }
+          return {
+            text: code.textContent ?? '',
+            ancestorTags,
+            blockAncestorTag: block ? block.tagName.toLowerCase() : null,
+            blockAncestorFontSize: block ? getComputedStyle(block).fontSize : null,
+            fontFamily: family(codeStyle.fontFamily),
+            fontSize: codeStyle.fontSize,
+            backgroundColor: codeStyle.backgroundColor,
+            borderTopLeftRadius: codeStyle.borderTopLeftRadius,
+            paddingLeft: codeStyle.paddingLeft,
+            paddingRight: codeStyle.paddingRight,
+            whiteSpace: codeStyle.whiteSpace,
+            wordBreak: codeStyle.wordBreak,
+            overflowWrap: codeStyle.overflowWrap,
+            // One rect per line fragment: >1 is the proof the run actually wrapped rather than merely
+            // being allowed to.
+            clientRectCount: code.getClientRects().length
+          }
+        })
+      }
+    })
+
+interface FenceCodeMetrics {
+  fontFamily: string
+  fontSize: string
+  backgroundColor: string
+  borderTopLeftRadius: string
+  paddingLeft: string
+  paddingRight: string
+  monoToken: string
+  bodySmallSizeToken: string
+}
+
+/**
+ * The <code> INSIDE a fenced block's body, read the same way — the AC3 half. This is the languageless
+ * fence, which is the strictly harder case for the ancestry exclusion: its <code> carries no class at all,
+ * so it is attribute-identical to an inline one and only its position in the tree tells them apart.
+ */
+const readFenceCodeMetrics = (page: Page, index: number): Promise<FenceCodeMetrics> =>
+  assistantBubble(page, index)
+    .locator('.code-block__body code')
+    .evaluate((el) => {
+      const family = (value: string): string => value.trim().replace(/"/g, "'")
+      const style = getComputedStyle(el)
+      return {
+        fontFamily: family(style.fontFamily),
+        fontSize: style.fontSize,
+        backgroundColor: style.backgroundColor,
+        borderTopLeftRadius: style.borderTopLeftRadius,
+        paddingLeft: style.paddingLeft,
+        paddingRight: style.paddingRight,
+        monoToken: family(style.getPropertyValue('--font-mono')),
+        bodySmallSizeToken: style.getPropertyValue('--text-body-small-size').trim()
+      }
+    })
+
 /** The thread scroll container's horizontal extent — a horizontal scrollbar iff these differ. */
 const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidth: number }> =>
   page
@@ -671,4 +829,103 @@ test('a list indents from the spacing scale and leaves its marker room to paint'
   expect(THREE_DIGIT_MARKER_PX - indent.spaceTokenPx).toBeLessThanOrEqual(
     indent.bubblePaddingLeftPx + indent.threadPaddingLeftPx
   )
+})
+
+test('inline code reads as code in every container, at whatever step that container is typed at', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheFiveReplies(page)
+
+  const inline = await readInlineCodeMetrics(page, RHYTHM)
+
+  // The vacuity guard, before any style is compared: an empty entry list would pass every loop below
+  // over nothing. The context check is the other half of it — the count alone would still hold if all
+  // seven spans had collapsed into the same container.
+  expect(inline.entries.length).toBe(RHYTHM_INLINE_CODE_COUNT)
+  const contexts = [...new Set(inline.entries.flatMap((entry) => entry.ancestorTags))]
+  expect(contexts).toEqual(expect.arrayContaining(RHYTHM_INLINE_CODE_CONTEXTS))
+
+  for (const entry of inline.entries) {
+    // #630's AC1 and AC2 in one loop, over EVERY span rather than a chosen one: that is what discharges
+    // "a single rule, no per-context override" — one set of expectations, all six containers, no
+    // enumeration. RED before the rule exists on all four of the properties below.
+    //
+    // The family carries the RED most plainly: the UA stylesheet declares `code { font-family: monospace }`
+    // and a declaration beats an inherited value whatever its origin, so without a declaration of our own
+    // the computed value is the bare generic rather than the token's stack.
+    expect(entry.fontFamily).toBe(inline.monoToken)
+    // AC1's "more than font family alone", and AC5's "no new colour" at the same time: the expected value
+    // is the FENCED block's own live fill, so what is asserted is that inline and fenced code share one
+    // code surface — not that some particular hex was typed into the rule.
+    expect(entry.backgroundColor).toBe(inline.codeBlockBackgroundColor)
+    expect(entry.borderTopLeftRadius).toBe(inline.radiusToken)
+    expect(entry.paddingLeft).toBe(inline.spaceToken)
+    expect(entry.paddingRight).toBe(inline.spaceToken)
+
+    // AC1's "at a size taken from the type scale", as the structural property that makes ONE rule work in
+    // all six containers: the span takes its nearest block ancestor's step, and every such ancestor in
+    // here is already typed from the scale (.bubble's body-medium in prose, #628's quartets in h1-h6). An
+    // absolute step declared on inline code would fail this in the heading, and AC2 forbids patching that
+    // per context.
+    expect(entry.fontSize).toBe(entry.blockAncestorFontSize)
+
+    // AC4's non-regression half. The wrap is INHERITED behaviour — .bubble's word-break: break-word — and
+    // the risk this ticket carries is a rule that re-declares it or white-space and defeats it. Comparing
+    // against .bubble's own computed values rather than against written-down keywords is what makes this
+    // spelling-agnostic.
+    expect(entry.whiteSpace).toBe('normal')
+    expect(entry.wordBreak).toBe(inline.bubbleWordBreak)
+    expect(entry.overflowWrap).toBe(inline.bubbleOverflowWrap)
+  }
+
+  // ...and the size claim named against the SCALE in two different steps, so "takes its container's step"
+  // cannot be satisfied by everything happening to sit at one size. The heading case is the discriminating
+  // one: 22px here and 14px in the prose, from the same rule.
+  const inProse = inline.entries.filter((entry) => entry.blockAncestorTag === 'p')
+  expect(inProse.length).toBeGreaterThan(0)
+  for (const entry of inProse) expect(entry.fontSize).toBe(inline.bodyMediumSizeToken)
+  const inHeading = inline.entries.filter((entry) => entry.blockAncestorTag === 'h2')
+  expect(inHeading.length).toBe(1)
+  expect(inHeading[0].fontSize).toBe(inline.titleLargeSizeToken)
+
+  // AC4's geometric half: the long unbroken span actually broke across lines (one client rect per line
+  // fragment), and the thread still has no horizontal scrollbar. Both are needed — a span that refused to
+  // wrap would overflow its block, and that overflow propagates outward to the thread.
+  const longToken = inline.entries.find((entry) => entry.text === LONG_TOKEN_TEXT)
+  expect(longToken?.clientRectCount).toBeGreaterThan(1)
+
+  const thread = await readThreadWidths(page)
+  expect(thread.scrollWidth).toBeLessThanOrEqual(thread.clientWidth + SUBPIXEL_TOLERANCE_PX)
+})
+
+test('none of the inline-code treatment reaches the contents of a fenced block', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheFiveReplies(page)
+
+  const fence = await readFenceCodeMetrics(page, CODE)
+
+  // #630's AC3, and the reason the whole ticket has a selector decision in it. react-markdown routes a
+  // fence's contents through <code> too, and THIS fence declares no info string — so its <code> carries no
+  // class at all and is attribute-identical to an inline one. Only ancestry tells them apart, and these
+  // four assertions are what a rule written as `.bubble__markdown code` would fail: the chip's fill, its
+  // radius and its padding would all land inside the block.
+  //
+  // Vacuity is the live risk here, an exclusion test being exactly the shape that passes when it proves
+  // nothing. Deleting `:not(.code-block__body code)` from the rule turns these red, which was confirmed by
+  // hand before this shipped.
+  expect(fence.backgroundColor).toBe(TRANSPARENT)
+  expect(fence.borderTopLeftRadius).toBe(NO_LENGTH)
+  expect(fence.paddingLeft).toBe(NO_LENGTH)
+  expect(fence.paddingRight).toBe(NO_LENGTH)
+
+  // ...and the two properties #623 DOES own here are still its own values, so "excluded" means untouched
+  // rather than merely un-chipped: the body's body-small step (which an absolute size on inline code would
+  // have overridden) and the mono family from `.code-block__body code`.
+  expect(fence.fontSize).toBe(fence.bodySmallSizeToken)
+  expect(fence.fontFamily).toBe(fence.monoToken)
 })

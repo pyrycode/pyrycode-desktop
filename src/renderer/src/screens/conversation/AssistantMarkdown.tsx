@@ -79,6 +79,60 @@ function fenceLanguage(children: ReactNode): string | null {
 }
 
 /**
+ * An absolute http/https URL, authority and all. Anchored, with no quantified group to backtrack on, so
+ * it carries no ReDoS exposure on an unbounded daemon-supplied href.
+ */
+const ABSOLUTE_WEB_URL = /^https?:\/\//i
+
+/**
+ * The href VERBATIM when it is an absolute http/https URL carrying an authority; null otherwise.
+ *
+ * This is #610's whole allowlist, and it is enforced HERE — in the renderer, at render time, before any
+ * anchor element exists. It deliberately does not lean on the main-process guards: a `javascript:` href
+ * executes in the document rather than navigating it, so `will-navigate` (src/main/index.ts:79) would
+ * never see it. It narrows to match `setWindowOpenHandler` (:56) rather than the other way round —
+ * `mailto:` is permitted by react-markdown's built-in `urlTransform` but denied by that handler, and a
+ * link that renders live and then silently does nothing is worse than one that renders as text.
+ *
+ * It FAILS CLOSED, like `fenceLanguage` above: every shape that is not an allowed link returns null and
+ * renders as the link's visible text — a complete UI state, not a degraded one. There is no error path.
+ * Nothing is logged on the null path either: the value is untrusted daemon text and the repo's
+ * diagnostics are content-free (#126).
+ *
+ * The RETURN IS THE ORIGINAL STRING, never `url.href`. The parser normalises — it adds a trailing slash
+ * to `https://example.com` and punycodes/percent-encodes a non-ASCII authority — and the criterion is
+ * that an allowed link carries its href unchanged. The parse decides; the original renders.
+ */
+function allowedLinkHref(href: string | undefined): string | null {
+  // react-markdown types the prop as optional, so this is the shape check, not a scheme decision.
+  if (href === undefined) return null
+  let url: URL
+  try {
+    // NO BASE ARGUMENT, and that is the reject-without-resolving rule rather than an omission: every
+    // relative, protocol-relative, empty and unparseable href throws right here. Resolving instead would
+    // make the same reply behave differently in the two builds — under the dev server the document base
+    // is http:, so `./doc.md` would resolve to a web scheme and be ALLOWED, while a packaged build's
+    // file: base would deny the identical href.
+    url = new URL(href)
+  } catch {
+    return null
+  }
+  // THE ALLOWLIST — the one line to read when asking which schemes ship. `protocol` is lowercased by the
+  // parser, so `HTTPS://…` matches by construction and a toLowerCase() here would be noise.
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  // THE BASE-INDEPENDENCE GUARD, not a second scheme check, and deliberately not fused with the test
+  // above even though it implies it today: `http:example.com` is a scheme with NO AUTHORITY, so it parses
+  // absolutely and passes the allowlist, but the browser still resolves it against the document base when
+  // the click navigates — to the dev server unpackaged, to the real host when packaged. Requiring the
+  // authority is also what keeps this check and the main process's independent one (index.ts:56, which
+  // re-derives the scheme from the URL it is handed) in agreement: with it, the string checked here and
+  // the string that process receives are the same URL. Fusing the two conditions would mean a later
+  // widening of the allowlist silently dropped that.
+  if (!ABSOLUTE_WEB_URL.test(href)) return null
+  return href
+}
+
+/**
  * Element overrides. The link and image rules are load-bearing — neither falls out of "raw HTML
  * disabled", because a conforming CommonMark renderer emits a real `<a href>` and a real `<img src>`
  * from link and image syntax whatever the HTML setting. The `pre` rule is #623's block chrome.
@@ -88,13 +142,33 @@ function fenceLanguage(children: ReactNode): string | null {
  * passing. Each override renders its own values and nothing else.
  */
 const components: Components = {
-  // Links are deny-first in this slice: the visible link text, no anchor element, for every href
-  // including http/https ones. So no URL reaches the DOM by any path, and no click target reaches
-  // the main-process guards. #610 opens the http/https allowlist; react-markdown's built-in
-  // `urlTransform` (which already blanks a javascript: href) is the mechanism it re-enables — this
-  // module deliberately does not rely on it, since a javascript: URL executes in the document rather
-  // than navigating it and would never be seen by will-navigate.
-  a: ({ children }) => <>{children}</>,
+  // #610 opened the allowlist to exactly http/https, and THIS override is where it is enforced — not
+  // react-markdown's built-in `urlTransform`, which stays at its default and is a prior, independent
+  // narrowing nothing here depends on. Measured against the pinned react-markdown 10.1.0: the transform
+  // BLANKS a denied href, it does not remove the anchor, so relying on it emits `<a href="">` for the
+  // javascript:, data:, file:, custom-scheme and empty cases — an anchor, a click target and the literal
+  // string `href`, all three of which the deny criterion forbids. Only an override can render no element
+  // at all, and a denied href renders exactly what every href used to: the visible link text.
+  //
+  // `target="_blank"` IS THE CLICK MECHANISM, not decoration. It is what makes the click a window-open
+  // request, which setWindowOpenHandler (src/main/index.ts:56) answers by handing the URL to
+  // shell.openExternal and denying the in-app window on every path. A plain anchor would instead be a
+  // same-document navigation, which will-navigate (:79) cancels — so the link would look correct and do
+  // NOTHING. `rel="noreferrer"` makes the anchor correct in isolation rather than correct-only-because-
+  // another-process guards it; the handler never constructs the child window, so no opener relationship
+  // exists for it to sever, and it is belt to that suspender rather than the control.
+  //
+  // Bound by the never-spread rule above: `href` and `children` are destructured and nothing else is
+  // passed through, so `title` and every other attribute react-markdown supplies is dropped.
+  a: ({ href, children }) => {
+    const allowed = allowedLinkHref(href)
+    if (allowed === null) return <>{children}</>
+    return (
+      <a href={allowed} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    )
+  },
   // Image syntax must produce no element that fetches a remote resource. The CSP's absent img-src is
   // the independent second layer (deterministic policy, different fabric), but the rule here is that
   // no fetching element is CREATED — not merely that the fetch fails. Alt text renders in its place.

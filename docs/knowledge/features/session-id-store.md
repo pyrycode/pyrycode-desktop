@@ -54,6 +54,10 @@ conversation's id actually changing — a same-id re-open leaves the held sessio
 [#531](../codebase/531.md) (unpair / pair-another-server) added the second, unconditional call site, via
 [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx) — the pairing
 itself is ending there, so unlike #530's gate there is no id to compare against.
+[#652](../codebase/652.md) (the deleted-open-discussion exit) added a third, via
+[`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
+gated on the id like #530's, but comparing against a *deleted* conversation's id rather than a
+*newly-opened* one's.
 
 ### The data path (`src/renderer/src/store/sessionIdBridge.ts`)
 
@@ -161,3 +165,6 @@ daemon → transport (#254) → sessionTransition{newSessionId}
 - [#531 codebase notes](../codebase/531.md) — `clearSessionId`'s second production caller: a pairing
   ending (unpair / pair-another-server), unconditional, via
   [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+- [#652 codebase notes](../codebase/652.md) — `clearSessionId`'s third production caller: the open
+  discussion being deleted, gated on the id like #530's, via
+  [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652).

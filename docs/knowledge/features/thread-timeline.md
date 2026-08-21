@@ -252,6 +252,10 @@ Nothing imports this module yet.
   conversation's id actually changing. [#531](../codebase/531.md) (unpair / pair-another-server, shipped)
   added the second, unconditional site, via
   [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  [#652](../codebase/652.md) (the deleted-open-discussion exit, shipped) added the third, via
+  [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
+  gated on the id like #530's, but comparing against the just-deleted conversation's id rather than a
+  newly-opened one's.
 - **[#538](../codebase/538.md) (shipped)** added a twelfth arm, the nullary `reconnected` — the second
   arm that is neither daemon- nor user-content-derived, but unlike `reset` it **is** bridge-produced:
   `timelineBridge.ts` maps the `connected` daemon edge onto it (moved out of the null fall-through
@@ -311,12 +315,14 @@ Nothing imports this module yet.
   carries no progress data at all — banner-only, no counter, no percentage — so the state is a plain
   `boolean` rather than a `| null` record; there is nothing for a falling edge to discard.
 - **`reset` had no dispatch site as of [#528](../codebase/528.md); [#530](../codebase/530.md) shipped
-  the first, [#531](../codebase/531.md) the second.** A conversation switch clears the timeline via
-  `activateConversation`, gated on the active conversation's id actually changing — a re-open of the
-  already-active conversation clears nothing, since the timeline has no history backfill and a
-  redundant reset would destroy rows that never come back. A pairing ending (unpair / pair-another-
-  server) clears it via `clearPairingScopedState`, unconditionally — there the pairing itself is over,
-  so no id gate applies.
+  the first, [#531](../codebase/531.md) the second, [#652](../codebase/652.md) the third.** A
+  conversation switch clears the timeline via `activateConversation`, gated on the active conversation's
+  id actually changing — a re-open of the already-active conversation clears nothing, since the timeline
+  has no history backfill and a redundant reset would destroy rows that never come back. A pairing ending
+  (unpair / pair-another-server) clears it via `clearPairingScopedState`, unconditionally — there the
+  pairing itself is over, so no id gate applies. The open discussion being deleted clears it via
+  `exitActiveConversation`, gated on the id like #530's — a `conversationDeleted` naming any other
+  conversation clears nothing.
 - **A retry or compaction genuinely still live across a reconnect shows no banner until the daemon's
   next edge** ([#538](../codebase/538.md)), an accepted residual, not a bug to engineer around. The
   daemon's connect-time re-assertion set is the outstanding modal (#877) and the queued backlog (#878)

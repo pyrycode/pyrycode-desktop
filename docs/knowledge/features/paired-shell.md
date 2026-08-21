@@ -54,6 +54,11 @@ or frames, so not security-sensitive.
   also snapshotted into the [active-conversation store](conversation-shell.md#workspace-chip-278) so
   the thread's workspace chip can read its `cwd` ([#278](../codebase/278.md)). Still no new route, nav
   arm, or subscription — one existing callback now does two things instead of one.
+- [#652](../codebase/652.md) added a **fourth** trigger for `back` specifically, not `open`: deleting
+  the discussion currently open in the thread now returns to `list` on the daemon's own confirmation.
+  Unlike the three `open` triggers above, this reuses the existing absolute `back` transition — no new
+  `PairedNav` arm, no `PairedRoute` member — via `useConversationDeletedExit` mounted beside
+  `useConversationCreatedNav`. See [below](#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652).
 
 ## How it works
 
@@ -292,6 +297,124 @@ two adjacent lines in one file and inherits `runUnpair`'s existing ok-only fail-
 closes (`sessionStore`'s reset used to live in `unpairAction.ts` alone; see [Session
 store](session-store.md) and [Unpair channel](unpair-channel.md)).
 
+### The delete exit (`exitActiveConversation.ts` + `conversationDeletedBridge.ts`, #652)
+
+Before this, deleting the discussion currently open in the thread fired `delete_conversation`
+([Conversation delete](conversation-delete.md)) and closed the Channel Info sheet — and nothing else
+happened. The row left the Channel List (the existing re-list already worked), but the thread stayed
+open, rendering rows for a discussion the daemon no longer held, and stayed recorded as the active
+conversation — so the two thread actions that carry a conversation id (composer send, queued-message
+drop) kept addressing an id the daemon would answer with `conversation.not_found`, silently, since the
+app has no send-failure surface.
+
+`exitActiveConversation` (`src/renderer/src/exitActiveConversation.ts`) is the pure decision, a third
+sibling of `activateConversation` and `clearPairingScopedState`, co-located with them:
+
+```ts
+export interface ExitActiveConversationDeps {
+  getActiveConversation: () => ConversationCreatedPayload | null
+  dispatchTimeline: (event: ThreadEvent) => void
+  clearActiveConversation: () => void
+  clearSessionId: () => void
+  navigateToList: () => void
+}
+
+export function exitActiveConversation(deps: ExitActiveConversationDeps, conversationId: string): void {
+  if (deps.getActiveConversation()?.id !== conversationId) return
+  deps.dispatchTimeline({ type: 'reset' })
+  deps.clearActiveConversation()
+  deps.clearSessionId()
+  deps.navigateToList()
+}
+```
+
+- **The gate is the id**, read through a getter at invocation time — `activateConversation`'s
+  documented reason applies verbatim: the bridge callback is held in a ref refreshed by a bare
+  (post-commit) effect, so a callback closing over a render-time value could compare against a stale
+  previous. A mismatch — including no active conversation at all — is a total no-op. This is reachable,
+  not theoretical: delete can only be fired from the Channel Info sheet, mounted inside the thread, so
+  the two ids always agree at request time, but the operator can go back and open a *different*
+  discussion while the confirmation is in flight.
+- **What the gate means**, stated explicitly in the source so it isn't over-read: "this id names the
+  conversation on screen," **not** "this reply answers a delete I issued." `daemonConnection.ts` emits
+  `conversationDeleted` unconditionally on decode with no `in_reply_to` correlation state threaded
+  (#375's deliberate decision — the bare `id` is self-sufficient). The fail-direction is safe: every
+  move the gate triggers is a clear.
+- **Clear, then navigate — three stores, not `clearPairingScopedState`'s five.** `dispatchTimeline({
+  type: 'reset' })` → `clearActiveConversation()` → `clearSessionId()`, then `navigateToList()` last, so
+  no observer sees the Channel List rendered against the deleted discussion's thread state. The pairing
+  has **not** ended here — the daemon connection is alive and the operator lands on a working Channel
+  List — so `sessionStore`'s reset and `announcedModelStore`'s clear (both in
+  `clearPairingScopedState`'s five) are deliberately excluded: resetting the session store would blank a
+  live connection status into a false disconnected state, and the announced model is daemon-scoped, not
+  conversation-scoped. `queueStore` is excluded too — the queued backlog is selected by matching the
+  active conversation id, and a `null` active id yields the stable empty backlog via the existing `''`
+  sentinel, so no stale queued row can render regardless.
+- **Idempotent by construction.** After a successful exit `activeConversation` is `null`, so a second
+  delivery of the same id fails the gate — no flag, no guard.
+- **Total.** No return value, no throw path, no logging — a diagnostic here would want the conversation
+  id, which ADR 0007's content-free rule forbids, and there's no observed failure to instrument.
+- **The security payload**, the one `activateConversation` and `clearPairingScopedState` already
+  document: clearing the session id makes `RunConfigSections`' `onChange` `undefined`, so the Run
+  configuration controls render inert instead of addressing a YOLO / auto-approval write to a session
+  that belonged to a conversation the daemon has just destroyed.
+
+`conversationDeletedBridge.ts` is the event seam, the `conversationCreatedBridge` twin — three exports,
+the same `translate* → subscribe* → use*` shape, and **strictly narrower**: it subscribes to the
+daemon's `conversationDeleted` reply and sends nothing (the delete command itself is fired by the
+Channel Info sheet's confirm). `translateConversationDeleted` returns the arm's bare `id` string
+(`default: null` for everything else — the intended permanent filter, not `assertNever`, mirroring
+`translateConversationCreated`). `subscribeConversationDeleted` guards on `!== null`, not truthiness —
+here that distinction is materially load-bearing, not just idiom: a degenerate `''` id is falsy but is
+still a real value the daemon could emit, and a truthiness check would silently drop the exit for it.
+`useConversationDeletedExit` is the React glue, the `useConversationCreatedNav` shape verbatim
+(ref-held latest callback, empty-dep subscribe effect, off-handle cleanup, `window.pyry` dereferenced
+only inside the effect so `PairedShell` stays server-renderable).
+
+**A second subscription on `conversationDeleted` is correct, not a duplicate.**
+[Conversation list store](conversation-list-store.md)'s `conversationListBridge` already consumes this
+same event app-level to re-request the list; that listener sends a command, this one does not, so a
+delete still fires exactly one re-list. It's the arrangement `conversationListBridge.ts` already
+documents for `conversationCreated`: the two listeners touch disjoint state (`conversationListStore` vs.
+timeline / active conversation / session id), so their delivery order is irrelevant.
+
+Wired in `PairedShell`, beside `useConversationCreatedNav`:
+
+```ts
+const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> = {
+  getActiveConversation: () => activeConversationStore.getState().activeConversation,
+  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
+  clearSessionId: () => sessionIdStore.getState().clearSessionId()
+}
+
+useConversationDeletedExit((conversationId) =>
+  exitActiveConversation(
+    { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
+    conversationId
+  )
+)
+```
+
+`exitConversationDeps` sits at module scope, the `activateDeps`/`clearPairingDeps` idiom — each effect
+reaches its singleton through `getState()` inside the arrow body, so nothing is dereferenced at module
+load and nothing is read during render. `navigateToList` is the one effect that can't live at module
+scope (it needs the container's `dispatch`), hence the `Omit` — it makes the missing field explicit
+rather than leaving a partial object silently typed as complete. `{ type: 'back' }` reuses the existing
+absolute `back` arm unchanged, which already lands on `list` — no new `PairedNav` arm, no `PairedRoute`
+member, no reducer edit. `PairedShell` still subscribes to no store, so its "re-renders only on its own
+nav dispatch" and server-renderable properties hold.
+
+**Reachable edge case, not fixed:** `back` is absolute, so the exit navigates to `list` from wherever
+the operator happens to be, not only from the thread. A delayed `conversationDeleted` confirmation
+arriving after the operator left the thread *without* opening a different discussion (Delete → Back →
+Settings, then the confirmation lands) still fires `dispatch({ type: 'back' })` and yanks them to the
+Channel List from Settings/Archive/PairServer. The fail direction is benign — the three clears are
+correct and wanted in that window, and `list` is a valid destination — so this was left as an
+observation for [#653](../codebase/653.md)'s seam discussion rather than fixed here; the actual fix
+would be route-aware navigation, not a wider gate. See [#652 codebase notes](../codebase/652.md) for
+the full design rationale and code review.
+
 ### The app-shell seam (`App.tsx`)
 
 The `conversation` case in `AppView` swaps its direct `<ConversationScreen>` render for
@@ -436,6 +559,9 @@ running model — when the pairing itself ends; see [#531](../codebase/531.md) a
 - [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the IPC boundary `onUnpaired` ultimately calls; [#531](../codebase/531.md) moved the session reset that used to run inside its first caller (`runUnpair`) to this file
 - [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `timelineStore`'s `reset` arm ([#528](../codebase/528.md)) gets its first production dispatch site via `activateConversation` and its second via `clearPairingScopedState`
 - [Session-id store](session-id-store.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `clearSessionId` ([#529](../codebase/529.md)) gets its first production caller via `activateConversation` and its second via `clearPairingScopedState`
+- [Conversation delete (transport)](conversation-delete.md) / [#652](../codebase/652.md) — the
+  `conversationDeleted` event this file's `conversationDeletedBridge` is a second, independent
+  subscriber to, and the wiring gap it closes (the thread used to stay open on a deleted discussion)
 - [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the single-active-conversation, `conversation_id`-free event model that is why `activateConversation` has to gate on the id rather than filter by conversation
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — the ephemeral-state rule `PairedShell`'s `useReducer` follows
 - [#140 codebase notes](../codebase/140.md) · Spec: `docs/specs/architecture/140-list-thread-navigation-shell.md`
@@ -452,3 +578,8 @@ running model — when the pairing itself ends; see [#531](../codebase/531.md) a
 - [#593 codebase notes](../codebase/593.md) · Spec: `docs/specs/architecture/593-announced-model-pairing-clear.md`
   — widens `clearPairingScopedState` to a fifth store, `announcedModelStore`, closing the deferral
   #588 flagged and #560 made observable.
+- [#652 codebase notes](../codebase/652.md) · Spec:
+  `docs/specs/architecture/652-delete-open-conversation-returns-to-list.md` — adds
+  `exitActiveConversation` + `conversationDeletedBridge.ts`, a third id-gated clear-and-move helper
+  beside `activateConversation` and `clearPairingScopedState`, driven by the daemon's `conversationDeleted`
+  confirmation rather than a click.

@@ -150,8 +150,25 @@ Delete pill click (Channel Info sheet, #377) → opens inline confirm, no wire e
   → daemon's fresh conversationsReceived omits the deleted row → setConversations → row disappears
 ```
 
+## The thread exit ([#652](../codebase/652.md))
+
+`conversationDeleted{id}` now has a **second**, independent subscriber. [Paired
+shell](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652)'s
+`conversationDeletedBridge` reacts to the same event the list-reflect above already consumes — that
+listener sends a command (re-request the list), this one sends none, so a delete still fires exactly
+one re-list. If the deleted `id` names the conversation currently open in the thread, `exitActiveConversation`
+clears the timeline, the active-conversation record and the daemon session id, then returns to the
+Channel List — closing the second-order defect where a deleted-but-still-active conversation kept
+receiving the composer send and the queued-message drop after the row had already left the list. A
+`conversationDeleted` naming any *other* conversation (or arriving with no active conversation at all)
+is a no-op for this subscriber, so its delivery order relative to the list-reflect above is irrelevant.
+See [#652 codebase notes](../codebase/652.md) for the full design.
+
 ## Related
 
+- [Paired shell](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) /
+  [#652](../codebase/652.md) — the thread-side consumer of `conversationDeleted`, closing the
+  wiring gap where the thread stayed open (and stayed active) after its discussion was deleted.
 - [Conversation archive (transport)](conversation-archive.md) / [Conversation unarchive
   (transport)](conversation-unarchive.md) / [#363](../codebase/363.md) /
   [#346](../codebase/346.md) — the siblings this slice clones field-for-field for everything except

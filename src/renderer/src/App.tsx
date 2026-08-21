@@ -8,7 +8,6 @@ import { ConversationListData } from './store/conversationListBridge'
 import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
 import { QueueData } from './store/queueBridge'
-import { ScreenSnapshotData } from './store/screenSnapshotBridge'
 import { RelayLinkData } from './store/relayLinkBridge'
 import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
 import { AnnouncedModelData } from './store/announcedModelBridge'
@@ -105,19 +104,14 @@ function App(): JSX.Element {
   // snapshot into the keyed queue store for the render slice (#294), on the same App-level
   // always-listening rationale — a snapshot can arrive before #294 is ever mounted, and (per daemon
   // #878/#879) several for different conversations can arrive back-to-back. Reactive-only, no gate.
-  // ScreenSnapshotData (#323) is a fifth sibling headless leaf: it lands each unsolicited
-  // `screenSnapshotReceived` marker into the screen-snapshot store for the display slice (#324), on the
-  // same App-level always-listening rationale — a snapshot can arrive before #324 is ever mounted, so
-  // the latest rendered screen must be retained regardless of which screen is shown. Reactive-only, no
-  // gate. Ships dormant — it populates the store, but nothing renders it yet (#324).
-  // BackgroundTaskRosterData (#573) is the SEVENTH headless leaf (count the JSX below, not these
+  // BackgroundTaskRosterData (#573) is the SIXTH headless leaf (count the JSX below, not these
   // comments — RelayLinkData landed without one): it lands each unsolicited `backgroundTaskRoster`
   // snapshot into the keyed roster store for the panel slice (#568), on the same App-level
   // always-listening rationale — a roster can arrive before #568 is ever mounted and for a
   // conversation the user is not looking at. Reactive-only, no gate. Ships dormant. Its `connected`
   // branch is the sole enforcement of AC5 (no previous pairing's tasks survive a re-handshake), which
   // is why this store is deliberately absent from clearPairingScopedState.
-  // AnnouncedModelData (#588) is the EIGHTH headless leaf: it lands each unsolicited `modelAnnounced`
+  // AnnouncedModelData (#588) is the SEVENTH headless leaf: it lands each unsolicited `modelAnnounced`
   // announcement into the announced-model store for the run-configuration sheet (#560), on the same
   // App-level always-listening rationale — the announcement rides the turn's init line, so it can
   // arrive long before that sheet is ever opened. Reactive-only, no gate. Ships dormant. Unlike its
@@ -130,7 +124,6 @@ function App(): JSX.Element {
       <SessionIdData />
       <RunSettingsWriteData />
       <QueueData />
-      <ScreenSnapshotData />
       <RelayLinkData />
       <BackgroundTaskRosterData />
       <AnnouncedModelData />

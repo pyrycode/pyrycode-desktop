@@ -96,7 +96,7 @@ export function ConversationScreen({
   // re-rendering unrelated facets.
   const items = useTimelineStore(selectItems)
   // #215: the coarse `phase` scalar, read beside the items slice (mirrors the selectItems → Timeline
-  // line above). The container derives the `isThinking` boolean and passes only that down, so no
+  // line above). The container derives the indicator state and passes only that down, so no
   // daemon-supplied string reaches the view (AC3 is a type-level guarantee, not a convention).
   // Selecting only `phase` adds no meaningful churn — the container already re-renders per items delta.
   // Inert in production until #179 flips `interactive` (phase stays `idle`), so the indicator is null.
@@ -177,10 +177,10 @@ export function ConversationScreen({
         onChange={() => setPickerOpen(true)}
       />
       <Timeline items={items} now={now} scrollPin={scrollPin} />
-      {/* #493/#496: the thinking gate NARROWS — a live api-retry, or a live compaction, supersedes the
-          generic thinking indicator. With neither in flight the predicate is exactly the pre-#493
-          `phase === 'thinking'`, so thinking behaviour is unchanged. */}
-      <ThinkingIndicator isThinking={shouldShowThinking({ phase, apiRetry, compacting })} />
+      {/* #648: the gate now tracks the WHOLE running turn (thinking or responding), so a turn spent mostly
+          in tool calls no longer reads as a frozen screen; the label tracks the phase. #493/#496 still
+          narrow it — a live api-retry, or a live compaction, supersedes this indicator in either phase. */}
+      <ThinkingIndicator state={workingIndicatorState({ phase, apiRetry, compacting })} />
       {/* #493: the api-error retry status — mounted directly after its supersede peer, before the stall
           indicator. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge (turn
           activity leaves it showing — the deliberate inverse of the stall indicator). Renders nothing at
@@ -765,27 +765,60 @@ export function WorkspaceChip({
   )
 }
 
-// #215: the thinking indicator — Timeline's twin over the coarse `phase` scalar rather than the
+// #215: the thinking copy — hoisted by #648 out of the JSX below into a module-level, client-owned
+// constant, joining its three siblings (STALL_COPY / API_RETRY_COPY / COMPACTING_COPY). The VALUE is
+// unchanged: apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson)
+// with the U+2026 ellipsis character. Exported, unlike module-private STALL_COPY, so the tests assert
+// against the constant rather than a duplicated literal (#648 AC5).
+export const THINKING_COPY = 'Thinking…'
+
+// #648: the copy for the rest of the running turn. During `responding` the client genuinely cannot tell
+// tool work from text streaming — the daemon sends no further turn_state inside the tool loop — so there
+// is no finer signal to key off and a copy like "Running tools…" would be a lie roughly half the time.
+// One generic word answers the operator's actual complaint ("this looks frozen"), is lexically distinct
+// from THINKING_COPY (AC2), and matches the one-word register of its direct peer rather than the sentence
+// register of the three problem/housekeeping states. Apostrophe-free, U+2026 ellipsis, never a daemon
+// string — the wire carries no label for this state, so the guarantee holds by construction.
+export const WORKING_COPY = 'Working…'
+
+// #648: which of the two client-owned labels the indicator shows. A two-member union rather than a
+// boolean, because a boolean cannot carry two labels; deliberately NOT `TurnPhase`, which would hand the
+// view the store type and make `'idle'` representable-but-illegal inside the shown branch.
+export type WorkingIndicatorState = 'thinking' | 'working'
+
+// #215: the working indicator — Timeline's twin over the coarse `phase` scalar rather than the
 // items list. The daemon opens a turn with `turn_state{thinking}` before any assistant_delta
 // (pyrycode #632), so during that window there are no timeline items and the thread shows nothing;
 // this affordance covers "the daemon is working, no text yet" — distinct from #203's streaming cursor
 // (which covers text already arriving on an assistantText tail). Pure props-in/markup-out and exported
-// so tests server-render an injected boolean with no store.
+// so tests server-render an injected state with no store.
 //
-// Takes `isThinking: boolean`, NOT `phase: TurnPhase` — the boolean makes AC3 ("no daemon-supplied
-// string is rendered") a type-level guarantee: the view structurally cannot render a daemon string
-// because it never receives one. The container does the trivial `phase === 'thinking'` derivation.
-// The visible label is a client-owned constant, not `phase`. A plain boolean guard (no switch /
-// assertNever — there is no union to discriminate).
+// #648: the prop widens from `isThinking: boolean` to `WorkingIndicatorState | null` so the indicator can
+// hold for the WHOLE running turn with a label that tracks the phase — the daemon flips to `responding` on
+// the first reply token or tool step and stays there silently, which is exactly where the screen used to
+// go blank. The `| null` lives on the prop and the return type, not inside the alias (the
+// `ApiRetryStatus | null` shape below).
 //
-// isThinking false → null (zero layout footprint, AC2 — exactly like Timeline returning null on an
-// empty list); the interim treatment reuses the daemon-bubble surface with muted text (a transient
-// affordance), pending the deferred desktop-design pass (the mobile Figma has no thinking node).
-export function ThinkingIndicator({ isThinking }: { isThinking: boolean }): JSX.Element | null {
-  if (!isThinking) return null
+// Still NOT `phase: TurnPhase` and still not a plain `string` label — the union keeps AC5 ("no
+// daemon-supplied string reaches this view") a type-level guarantee rather than a convention: the prop's
+// only inhabitants are two client-owned literals and null, so the view structurally cannot render a daemon
+// string. The container does the derivation, via `workingIndicatorState` below.
+//
+// null → null (zero layout footprint, AC3 — exactly like Timeline returning null on an empty list). Both
+// labels wear the SAME interim treatment: the daemon-bubble surface with muted text (a transient
+// affordance), pending the deferred desktop-design pass (the mobile Figma has no indicator node at all —
+// the gap already recorded for #215/#317/#493/#496). No new element, no new class, no CSS change.
+export function ThinkingIndicator({
+  state
+}: {
+  state: WorkingIndicatorState | null
+}): JSX.Element | null {
+  if (state === null) return null
   return (
     <div className="conversation__thinking">
-      <div className="bubble bubble--daemon bubble--thinking">Thinking…</div>
+      <div className="bubble bubble--daemon bubble--thinking">
+        {state === 'thinking' ? THINKING_COPY : WORKING_COPY}
+      </div>
     </div>
   )
 }
@@ -842,17 +875,37 @@ export interface ThreadStatus {
 // and "may be stuck") and still co-render, but retrying against an API error is NOT compatible — claude is
 // not making progress on the request, it is re-attempting a failed call, so the retry status replaces the
 // thinking indicator rather than sitting beside it. Narrowing the gate (rather than deriving a
-// mutually-exclusive status union in the container) keeps ThinkingIndicator's tested `isThinking: boolean`
-// contract untouched and both views pure and independently unit-testable — the isTurnRunning precedent of
-// extracting the named predicate. Presence supersedes, not the counter: an unknown-count retry
-// (`{ current: 0, total: 0 }`) hides thinking exactly like a known one.
+// mutually-exclusive status union in the container) keeps both views pure and independently
+// unit-testable — the isTurnRunning precedent of extracting the named predicate. Presence supersedes, not
+// the counter: an unknown-count retry (`{ current: 0, total: 0 }`) hides thinking exactly like a known one.
 //
 // #496: the second superseder — a live compaction hides thinking too. Claude is not thinking about the
 // user's request while compacting, it is rewriting its own context, so "thinking" would be a false
 // reading of a silent screen (the premise of #496). The exclusion is scoped to the thinking indicator
 // ONLY: compaction, retry, and stall may all co-render, since they are independent daemon facts.
+//
+// #648: the phase clause BROADENS from `phase === 'thinking'` to the whole running turn, closing the
+// divergence isTurnRunning's own comment below flags. The daemon emits `turn_state{thinking}` only while
+// claude produces thinking text; the first reply token or tool step flips it to `responding` and nothing
+// further arrives until the turn ends, so the narrow gate left a tool-heavy turn looking like a frozen
+// screen. This REUSES isTurnRunning rather than re-deriving the test — one predicate, two consumers. Both
+// supersede clauses are untouched, so a retry or a compaction still replaces the indicator in the newly
+// covered phase exactly as it did in `thinking`. The name stays `shouldShowThinking` because the component
+// it gates is still `ThinkingIndicator`, whose identifier this ticket freezes; renaming the gate alone
+// would leave the pair inconsistent (a rename is its own Strangler-Fig chore).
 export function shouldShowThinking(status: ThreadStatus): boolean {
-  return status.phase === 'thinking' && status.apiRetry === null && !status.compacting
+  return isTurnRunning(status.phase) && status.apiRetry === null && !status.compacting
+}
+
+// #648: the label discriminant, composed ON the gate above rather than duplicating it — it delegates the
+// whole show/hide decision and adds only the choice between the two client-owned labels. Keeping the gate
+// and the discriminant as one function pair (rather than folding both into a single union-returning
+// predicate) leaves #493's and #496's nine supersede assertions standing verbatim as AC4's regression
+// evidence. `'idle'` is unreachable in the second branch because the gate already excluded it, so there is
+// no third case and no assertNever.
+export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
+  if (!shouldShowThinking(status)) return null
+  return status.phase === 'thinking' ? 'thinking' : 'working'
 }
 
 // #493: the api-retry indicator — the StallIndicator twin over the `apiRetry` status record. The daemon

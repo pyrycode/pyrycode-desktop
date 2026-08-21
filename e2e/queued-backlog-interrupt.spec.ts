@@ -34,8 +34,8 @@ import type {
 //      fixture's completion signal (Send enabled) is gated on that same `connected`, so by the time
 //      launchPairedApp resolves `connected` has already fired; no rekey/reconnect happens in this spec, so
 //      no further `connected` wipes the backlog. Push queue_state ONLY AFTER launch resolves — never before.
-//   3. Interrupt phase-gating: isTurnRunning(phase) is `thinking || responding` (gates the interrupt
-//      control) and ThinkingIndicator gates on `phase === 'thinking'`. So turn_state{thinking} mounts BOTH
+//   3. Interrupt phase-gating: isTurnRunning(phase) is `thinking || responding`, and since #648 it gates
+//      BOTH the interrupt control and ThinkingIndicator. So turn_state{thinking} mounts BOTH
 //      the interrupt button and the running indicator; turn_state{idle} returns `phase` to idle and
 //      retracts BOTH — the crisp "both gone" assertion. turn_end is NOT the quiescing signal (it appends a
 //      turn boundary but does not reset `phase`, threadTimeline.ts:200); only turn_state{idle} retracts the

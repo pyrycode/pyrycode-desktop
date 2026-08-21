@@ -3,7 +3,7 @@ import { buildCreateConversation } from './createConversationEnvelope'
 import { decodeEnvelope, WireEncodeError } from './codec'
 import { MAX_PLAINTEXT_BYTES, type CreateConversationPayload } from '../../shared/wire/types'
 
-// The pure builder mirrors buildRequestSnapshot: (id, ts, payload) → serialized create_conversation
+// The pure builder mirrors buildSendMessage: (id, ts, payload) → serialized create_conversation
 // bytes, no clock/counter/side-effects. It uses the REAL codec so the assertions pin actual wire
 // bytes — including the load-bearing subtlety that the three nullable fields serialize as explicit
 // `null`s (JSON.stringify keeps them), exactly the daemon's own encoding (#241).

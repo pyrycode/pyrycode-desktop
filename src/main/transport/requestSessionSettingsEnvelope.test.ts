@@ -24,8 +24,8 @@ describe('buildRequestSessionSettings', () => {
   it('carries no conversation id or any other selector', () => {
     // The reply is daemon-wide. If a selector ever appears here, the daemon handler's "no
     // attacker-controlled field selects another session's data" reasoning stops holding, and the
-    // request would also become rejectable with conversation.not_found — which this verb, unlike
-    // request_snapshot, must never be.
+    // request becomes rejectable for an id the daemon cannot resolve. This verb carries no selector
+    // at all: an empty payload leaves nothing for the daemon to resolve, and nothing to reject.
     const envelope = decodeEnvelope(buildRequestSessionSettings({ id: 1, ts: FIXED_TS }))
     expect(Object.keys(envelope.payload as Record<string, unknown>)).toHaveLength(0)
   })

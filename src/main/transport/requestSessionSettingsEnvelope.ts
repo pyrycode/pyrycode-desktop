@@ -3,8 +3,8 @@
 // force, and the context-window occupancy (#491). A sibling to requestDebugBundleEnvelope.ts,
 // following the same one-concern-per-file split the module already uses.
 //
-// It is the BARE control frame, NOT the payload-carrying requestSnapshotEnvelope: the daemon's reply
-// is daemon-wide, so there is no conversation_id or any other field a client could use to select
+// It is the BARE control frame, NOT the payload-carrying sendMessageEnvelope: the daemon's reply is
+// daemon-wide, so there is no conversation_id or any other field a client could use to select
 // another session's data. That also means it cannot be rejected with `conversation.not_found`.
 //
 // MAIN-PROCESS ONLY. It imports codec.ts (Node `Buffer`). Never re-export it through any renderer

@@ -7,7 +7,7 @@ import {
   type ModalCancelPayload
 } from '../../shared/wire/types'
 
-// The pure builders mirror buildRequestSnapshot: (id, ts, payload) → serialized bytes, no
+// The pure builders mirror buildSendMessage: (id, ts, payload) → serialized bytes, no
 // clock/counter/side-effects. They use the REAL codec so the assertions pin actual wire bytes.
 // Both are outbound-only (client → daemon) — there is no decode path for these modal-resolution
 // frames, so the round-trip only proves the encode side is byte-faithful.

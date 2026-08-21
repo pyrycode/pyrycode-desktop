@@ -2,8 +2,8 @@
 // SetSessionSettingsPayload into the `set_session_settings` early-data bytes the Noise session (#7) /
 // relay driver (#50) carry as an opaque Uint8Array — the outbound "set" that changes one session's
 // model / reasoning effort / YOLO (pyrycode #844 wire vocab, #845 handler). A sibling to
-// requestSnapshotEnvelope.ts / createConversationEnvelope.ts, following the same one-concern-per-file
-// split the module already uses.
+// createConversationEnvelope.ts, following the same one-concern-per-file split the module already
+// uses.
 //
 // UNLIKE its siblings this builder is more than a dumb wrapper: it OWNS the omitempty PRESENCE
 // CONTRACT. The daemon's fields are `Model, Effort *string; YOLO *bool` with `,omitempty`, so a non-nil
@@ -12,7 +12,7 @@
 // ONLY when the command field is present (`!== undefined`). This conditional-key construction doubles as
 // the deterministic anti-smuggling net (#236's fresh-literal posture): the literal names exactly the
 // four modeled keys, so any renderer-smuggled extra field the structural-minimum guard admitted is
-// dropped here. The connection method therefore stays a faithful requestSnapshot twin (passes `payload`
+// dropped here. The connection method therefore stays a faithful `send` twin (passes `payload`
 // straight through) — the presence contract lives here per AC2 (the golden test targets this builder),
 // a deliberate divergence from createConversation/answerModal (which build their fresh literal in the
 // connection method). See #263.
@@ -25,7 +25,7 @@ import type { Envelope, SetSessionSettingsPayload } from '../../shared/wire/type
 /**
  * Inputs the consumer (createDaemonConnection.setSessionSettings) supplies — the envelope id counter,
  * the wall clock, and the already-validated payload. Kept explicit (not read from globals) so the
- * builder is pure and trivially unit-testable, exactly like buildRequestSnapshot.
+ * builder is pure and trivially unit-testable, exactly like buildSendMessage.
  */
 export interface SetSessionSettingsInput {
   /** The set_session_settings Envelope's numeric id (the consumer's id counter). */

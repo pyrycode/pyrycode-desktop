@@ -4,10 +4,10 @@
 // outstanding permission/trust modal the daemon raised via `modal_shown` (#201, rendered by #224).
 // Two halves of one concern — resolving an outstanding modal, keyed solely by `modal_id` (no
 // `conversation_id`, ADR 0009) — so they share this file, following the same one-concern-per-file
-// split the module already uses (sendMessageEnvelope.ts / requestSnapshotEnvelope.ts). Both are
-// PAYLOAD-carrying builders (a `modal_id` correlates the frame), NOT bare control frames. This slice
-// ships the builders in isolation: the command path that mints the `answer_token` and calls these is
-// #236, the renderer buttons that trigger it are #237.
+// split the module already uses (sendMessageEnvelope.ts). Both are PAYLOAD-carrying builders (a
+// `modal_id` correlates the frame), NOT bare control frames. This slice ships the builders in
+// isolation: the command path that mints the `answer_token` and calls these is #236, the renderer
+// buttons that trigger it are #237.
 //
 // MAIN-PROCESS ONLY. They import codec.ts (Node `Buffer`). Never re-export them through any renderer
 // barrel — the raw bytes must stay out of the web layer.
@@ -18,7 +18,7 @@ import type { Envelope, ModalAnswerPayload, ModalCancelPayload } from '../../sha
  * Inputs the consumer (#236 `createDaemonConnection.answerModal`) supplies — the envelope id counter,
  * the wall clock, and the already-formed payload (with the main-side-minted `answer_token`). Kept
  * explicit (not read from globals) so the builder is pure and trivially unit-testable, exactly like
- * buildRequestSnapshot.
+ * buildSendMessage.
  */
 export interface ModalAnswerInput {
   /** The modal_answer Envelope's numeric id (the consumer's id counter). */
@@ -31,7 +31,7 @@ export interface ModalAnswerInput {
 
 /**
  * Build the `modal_answer` early-data bytes: a `modal_answer` Envelope wrapping the payload,
- * serialized to UTF-8 via encodeEnvelope. Same shape as buildRequestSnapshot — a real payload, keyed
+ * serialized to UTF-8 via encodeEnvelope. Same shape as buildSendMessage — a real payload, keyed
  * by `modal_id`.
  *
  * MAY throw WireEncodeError when the serialized envelope exceeds MAX_PLAINTEXT_BYTES; the sole caller
@@ -50,7 +50,7 @@ export function buildModalAnswer(input: ModalAnswerInput): Uint8Array {
 /**
  * Inputs the consumer (#236 `createDaemonConnection.cancelModal`) supplies — the envelope id counter,
  * the wall clock, and the `{ modal_id }` payload. Kept explicit so the builder is pure, exactly like
- * buildRequestSnapshot.
+ * buildSendMessage.
  */
 export interface ModalCancelInput {
   /** The modal_cancel Envelope's numeric id (the consumer's id counter). */

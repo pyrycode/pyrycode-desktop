@@ -2,7 +2,7 @@
 // CreateConversationPayload into the `create_conversation` early-data bytes the Noise session (#7) /
 // relay driver (#50) carry as an opaque Uint8Array — the outbound "ask" that makes the daemon create a
 // fresh conversation and reply with one `conversation_created` frame. A sibling to
-// sendMessageEnvelope.ts / requestSnapshotEnvelope.ts, following the same one-concern-per-file split.
+// sendMessageEnvelope.ts, following the same one-concern-per-file split.
 //
 // MAIN-PROCESS ONLY. It imports codec.ts (Node `Buffer`). Never re-export it through any renderer
 // barrel — the raw bytes must stay out of the web layer.
@@ -12,7 +12,7 @@ import type { Envelope, CreateConversationPayload } from '../../shared/wire/type
 /**
  * Inputs the consumer (createDaemonConnection.createConversation) supplies — the envelope id counter,
  * the wall clock, and the already-validated payload. Kept explicit (not read from globals) so the
- * builder is pure and trivially unit-testable, exactly like buildRequestSnapshot.
+ * builder is pure and trivially unit-testable, exactly like buildSendMessage.
  */
 export interface CreateConversationInput {
   /** The create_conversation Envelope's numeric id (the consumer's id counter). */
@@ -25,7 +25,7 @@ export interface CreateConversationInput {
 
 /**
  * Build the `create_conversation` early-data bytes: a `create_conversation` Envelope wrapping the
- * payload, serialized to UTF-8 via encodeEnvelope. Same shape as buildRequestSnapshot.
+ * payload, serialized to UTF-8 via encodeEnvelope. Same shape as buildSendMessage.
  *
  * JSON.stringify PRESERVES the three fields' explicit `null` values (it drops only `undefined`), so an
  * all-null payload serializes to `{"is_promoted":null,"name":null,"cwd":null}` — exactly the daemon's

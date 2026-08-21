@@ -28,7 +28,6 @@ import { MAX_PLAINTEXT_BYTES } from '../../shared/wire/types'
 import type {
   MessagePayload,
   MessageChunkPayload,
-  ScreenSnapshotPayload,
   AssistantDeltaPayload,
   TurnEndPayload,
   TurnStatePayload,
@@ -93,9 +92,6 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * decodeEnvelope (#269), propagated (not re-decoded, no ErrorPayload parsed) so the consumer can
  * correlate the error back to a pending `set_session_settings` request and surface a rejection;
  * `undefined` when the frame omits it (correlation fails closed). Still surfaces NO error content.
- * The `snapshot` kind (#180)
- * carries the full decoded ScreenSnapshotPayload; the consumer (#62) drops all but model/effort/yolo
- * before emitting, so the sensitive `text` never crosses IPC.
  *
  * The two interactive-stream kinds (#199) carry the decoded AssistantDeltaPayload / TurnEndPayload.
  * Unlike `snapshot`, the assistant delta `text` IS the render payload — the consumer carries it onward
@@ -260,7 +256,6 @@ export type InboundDaemonMessage =
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }
   | { kind: 'bundle-done'; total: number }
   | { kind: 'daemon-error'; inReplyTo?: number }
-  | { kind: 'snapshot'; snapshot: ScreenSnapshotPayload }
   | { kind: 'assistant-delta'; delta: AssistantDeltaPayload }
   | { kind: 'turn-end'; turnEnd: TurnEndPayload }
   | { kind: 'turn-state'; turnState: TurnStatePayload }
@@ -443,32 +438,6 @@ function parseDebugBundleDonePayload(payload: unknown): { total: number } {
     throw new WireDecodeError('malformed debug_bundle_done payload')
   }
   return { total: requireNumber(payload, 'total') }
-}
-
-/**
- * Narrow an opaque payload into a ScreenSnapshotPayload (#180). Fail-closed like parseMessagePayload:
- * every field is required-present — an empty `model`/`effort` and `yolo:false` are valid VALUES
- * (inherited daemon default / permissions enforced), never absences (AC2/AC3), so a missing or
- * mistyped field throws WireDecodeError rather than defaulting. Returns only the eight known fields;
- * unknown server-added keys are tolerated (forward-compat, matching parseMessagePayload) but not
- * copied through. Its messages name the failure category only — no field value is interpolated (the
- * `text` / `conversation_id` could echo sensitive rendered output). The two usage ints (#191) are
- * `used_tokens` / `window_tokens` — required numbers like the bundle `seq` / `total`, so a missing
- * field or a non-number throws (AC2) and `0` is decoded as the value `0`, never treated as absent (AC3).
- */
-function parseScreenSnapshotPayload(payload: unknown): ScreenSnapshotPayload {
-  if (!isRecord(payload)) {
-    throw new WireDecodeError('malformed screen_snapshot payload')
-  }
-  const conversation_id = requireString(payload, 'conversation_id')
-  const text = requireString(payload, 'text')
-  const ts = requireString(payload, 'ts')
-  const model = requireString(payload, 'model')
-  const effort = requireString(payload, 'effort')
-  const yolo = requireBoolean(payload, 'yolo')
-  const used_tokens = requireNumber(payload, 'used_tokens')
-  const window_tokens = requireNumber(payload, 'window_tokens')
-  return { conversation_id, text, ts, model, effort, yolo, used_tokens, window_tokens }
 }
 
 /**
@@ -1217,9 +1186,8 @@ function parseModalDismissedPayload(payload: unknown): ModalDismissedPayload {
 /**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
- * `debug_bundle_done` / `error` → `daemon-error`, #116), a `screen_snapshot` → `snapshot` (#180), an
- * `assistant_delta` → `assistant-delta` and a `turn_end` → `turn-end` (#199), a `conversations` →
- * `conversations` (#139),
+ * `debug_bundle_done` / `error` → `daemon-error`, #116), an `assistant_delta` → `assistant-delta` and
+ * a `turn_end` → `turn-end` (#199), a `conversations` → `conversations` (#139),
  * `null` for a well-formed envelope of any OTHER type (ignored, AC5), or throws WireDecodeError — the
  * single failure type, so the consumer's one catch covers oversized / malformed / unparseable /
  * mistyped alike (fail-closed, AC4).
@@ -1283,20 +1251,6 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'bundle-done', total }
-    }
-    case 'screen_snapshot': {
-      // Narrow BEFORE logging so a malformed snapshot throws first and leaves no record. No decoded
-      // field (text / conversation_id / model / effort / yolo) is ever logged — only the frame's byte
-      // length + one-way hash, reusing the existing content-free field set (no new DiagnosticEvent
-      // field, so #131's renderer pin is untouched). The consumer drops all but model/effort/yolo.
-      const snapshot = parseScreenSnapshotPayload(envelope.payload)
-      diagnosticLog?.event({
-        event: 'inbound-decoded',
-        code: 'screen_snapshot',
-        bytes: plaintext.length,
-        hash: hashPlaintext(plaintext)
-      })
-      return { kind: 'snapshot', snapshot }
     }
     case 'session_settings': {
       // Narrow BEFORE logging so a malformed reply throws first and leaves no record. No decoded

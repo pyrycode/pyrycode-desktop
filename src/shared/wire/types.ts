@@ -54,7 +54,6 @@ export type EnvelopeType =
   // session's data. Answered by `session_settings`, correlated on in_reply_to. SSOT pyrycode #491.
   | 'request_session_settings'
   | 'session_settings'
-  | 'screen_snapshot'
   | 'assistant_delta'
   | 'turn_end'
   | 'turn_state'
@@ -238,32 +237,6 @@ export interface SessionSettingsPayload {
   /** Current context size on the latest usage-bearing transcript entry; NOT a running total. */
   used_tokens: number
   /** Context-window size (200000 today); `0` = usage seam unwired — do NOT render a percentage. */
-  window_tokens: number
-}
-
-/**
- * Inbound `screen_snapshot` reply (daemon → client). Mirrors the daemon's
- * internal/protocol/snapshot.go ScreenSnapshotPayload field-for-field, wire order
- * `conversation_id, text, ts, model, effort, yolo, used_tokens, window_tokens` — all always present
- * (no `omitempty`). ADR-025's always-available, parser-independent snapshot: NOT gated on the
- * `interactive` capability, so a paired non-interactive client can request it (pyrycode #847). See
- * #180; the two usage fields are #191 (pyrycode #857).
- */
-export interface ScreenSnapshotPayload {
-  conversation_id: string
-  /** The rendered screen text. Decoded at the transport boundary but NEVER surfaced past it (#180). */
-  text: string
-  /** RFC3339 (the daemon's `time.Time` serialises to a string). */
-  ts: string
-  /** Active model; '' = inherited daemon default (never treated as absent). */
-  model: string
-  /** Reasoning effort; '' = inherited daemon default. */
-  effort: string
-  /** Permissions posture; `false` = permissions enforced. */
-  yolo: boolean
-  /** Current context size on the latest usage-bearing transcript entry; NOT a running total (#191). */
-  used_tokens: number
-  /** Context-window size (200000 today); `0` = usage seam unwired/unavailable (#191). */
   window_tokens: number
 }
 

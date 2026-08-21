@@ -4,7 +4,11 @@ Electron desktop remote head for [Pyrycode](https://github.com/pyrycode/pyrycode
 
 ## Status
 
-Skeleton only. The goal of the first milestone is a full round-trip: pair with the pyry daemon on pyrybox through the content-blind relay, send a message, and watch the structured reply stream back. For now the UI is the mobile design stretched to the window size, built against the same mobile Figma file. A desktop-specific layout is deferred until the app is fully functioning.
+The first milestone is done. The app pairs with the pyry daemon through the content-blind relay, sends messages, and streams structured replies back, and its author now uses it as his day-to-day client rather than driving it as a test.
+
+**The desktop-specific layout is no longer deferred. It is designed and being built**, and it replaces the mobile design stretched to the window size that the app has worn until now. The shape is a fixed 400 pixel sidebar holding two trees, channels above and chats below, grouped under a host and then by workspace, beside a chat pane that fills the rest of the window. The minimum window width is 800. The input footer carries the actions menu, the permission mode, the model, the effort level, the context reading and the attachment button.
+
+Build against that layout, not against the mobile one. The Figma is [node 102-4](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=102-4) and every slice of it is a ticket on board #7.
 
 ## What this is
 

@@ -7,8 +7,11 @@ built from desktop's **own** Figma frame (`103-744`, 1280×1024, a horizontal he
 right) rather than the mobile frame stretched to the window.
 
 Introduced in [#657](../codebase/657.md), split from #612 alongside #658 (dormant/route-root split — see
-[#612 notes](../codebase/612.md) if present, or the split memory). **Ships dormant: nothing mounts it.**
-Making it the [app shell](app-shell.md)'s launch destination is #658's job, not this ticket's.
+[#612 notes](../codebase/612.md) if present, or the split memory). **Shipped dormant in #657 — nothing
+mounted it.** #658 was itself later split into #661 (e2e scaffolding) and
+[#662](../codebase/662.md) (the actual route-root wiring). **As of #662, this is the [app shell](app-shell.md)'s
+launch destination for every non-paired outcome** — the screen is live, not dormant, and its `onPair`
+prop is wired.
 
 ## What it does
 
@@ -16,8 +19,10 @@ Making it the [app shell](app-shell.md)'s launch destination is #658's job, not 
   (title `Pyrycode`, subtitle `Control multiple Claude server instances.`, and a body paragraph),
   centred in the space above three full-width rows pinned to the bottom of the window.
 - A primary CTA, `I already have pyrycode` — a filled pill with a leading QR-frame icon — calls an
-  **optional** `onPair` prop on click. With no `onPair` supplied (the current, dormant state), the
-  button renders and clicking it is a no-op.
+  `onPair` prop on click. The prop stays typed as **optional** (`WelcomeView`'s dormant-state test
+  renders it with none, and `WelcomeScreen`'s own container leaves it a passthrough), but as of
+  [#662](../codebase/662.md) the [app shell](app-shell.md) supplies it at the one mount site, navigating
+  to the pairing screen.
 - A secondary CTA, `Set up pyrycode first` — a plain anchor (`target="_blank"`) — opens
   `https://pyryco.de/setup` in the OS browser. It is never a same-window navigation and never opens an
   Electron child window; see "How it works" for the mechanism.
@@ -39,12 +44,12 @@ src/renderer/src/
 
 The `PairingScreen`/`ArchiveScreen` split, taken to its minimum: `WelcomeView` is pure (props in, markup
 out — what the tests render), `WelcomeScreen` is a passthrough container with no hooks, no store read,
-and no `window.pyry` dereference. It exists only so #658 has a container to mount; today it does nothing
-`WelcomeView` doesn't already do.
+and no `window.pyry` dereference. It existed from #657 so #662 would have a container to mount; today it
+still does nothing `WelcomeView` doesn't already do.
 
 ```ts
 export interface WelcomeViewProps {
-  onPair?: () => void // the dormant navigation seam — PairingScreen.tsx:163's posture
+  onPair?: () => void // the navigation seam — PairingScreen.tsx:163's posture (#662 supplies it)
 }
 export function WelcomeView(props: WelcomeViewProps): JSX.Element   // pure
 export function WelcomeScreen(props?: WelcomeViewProps): JSX.Element // passthrough, bridge-free
@@ -133,18 +138,22 @@ two comments that are now wrong.
   pass tightening contrast on this line should change one number.
 - **The mark is a placeholder in the design itself** — Figma names its node "Pyry Logo (placeholder)".
   Porting mobile's drawable is the faithful choice today; a final mark is an unticketed follow-up.
-- **No e2e coverage.** Nothing mounts this screen, so Playwright cannot reach it — the pair CTA's actual
-  navigation (once #658 wires `onPair`) and the setup CTA's actual OS-browser launch are both untested
-  end-to-end until #658 lands. Server-render (`renderToStaticMarkup`) tests cover copy, structure, and
-  the exact anchor markup instead.
+- **The pair CTA now has e2e coverage; the setup CTA still does not.** [#662](../codebase/662.md) made
+  the screen reachable, so all ten `pairFromUnpairedLaunch` drives (`e2e/fixtures/pairingArrival.ts`)
+  now click through it, and `smoke.spec.ts` adds a dedicated welcome→pairing→Cancel→welcome round trip.
+  The secondary `Set up pyrycode first` anchor's actual OS-browser launch remains untested end-to-end —
+  Playwright reaches the screen now, but nothing drives that link. Server-render
+  (`renderToStaticMarkup`) tests continue to cover its exact markup instead.
 
 ## Related
 
-- [Pairing input screen](pairing-input-screen.md) — the screen this one currently precedes in the app
-  shell's actual routing (unchanged by this ticket); the `onPaired?`/`onCancel?` dormant-prop posture
-  this screen's `onPair?` copies verbatim.
-- [App shell (router)](app-shell.md) — will gain the launch-time route to this screen in #658; untouched
-  by #657.
-- [#657 codebase notes](../codebase/657.md) · Spec: `docs/specs/architecture/657-welcome-screen.md`
-- Parent: #612, split into #657 (this screen, shipped dormant) + #658 (route-root wiring, not yet
-  shipped).
+- [Pairing input screen](pairing-input-screen.md) — the screen this one now precedes in the app shell's
+  actual routing, as of [#662](../codebase/662.md); the `onPaired?`/`onCancel?` posture this screen's
+  `onPair?` copied verbatim is, since #662, wired on both sides.
+- [App shell (router)](app-shell.md) — gained the launch-time route to this screen in
+  [#662](../codebase/662.md); untouched by #657.
+- [#657 codebase notes](../codebase/657.md) · [#662 codebase notes](../codebase/662.md) · Spec:
+  `docs/specs/architecture/657-welcome-screen.md`,
+  `docs/specs/architecture/662-welcome-as-unpaired-root.md`
+- Parent: #612, split into #657 (this screen, shipped dormant) + #658, itself split into #661 (e2e
+  scaffolding) + #662 (route-root wiring — the screen is now live).

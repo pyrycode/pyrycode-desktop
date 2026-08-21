@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { PairedShell } from './PairedShell'
 import { PairingScreen } from './screens/pairing/PairingScreen'
+import { WelcomeScreen } from './screens/welcome/WelcomeScreen'
 import { useDaemonEventBridge } from './store/daemonEventBridge'
 import { useTimelineBridge } from './store/timelineBridge'
 import { useModalBridge } from './store/modalBridge'
@@ -20,21 +21,34 @@ function assertNever(route: never): never {
 
 /**
  * The pure route→screen view — no hooks, no effects — mirroring how PairingView lives beside
- * PairingScreen. `pending` renders neither screen (AC3). The pairing branch deliberately does NOT
- * pass `onCancel`: when unpaired the pairing screen is the app root, so cancel's correct app-shell
- * behavior is "stay put", which is exactly the absence of a navigating handler (AC5). Wiring a
- * navigating onCancel would risk exposing the conversation screen before pairing.
+ * PairingScreen. `pending` renders neither screen (AC3).
+ *
+ * #662 relocated the unpaired root from the pairing screen to the welcome screen, which is what
+ * finally gives the pairing screen's `onCancel` seam a meaning. While pairing WAS the root, cancel's
+ * only correct app-shell behaviour was "stay put" — the absence of a navigating handler — because a
+ * navigating one would have had nowhere safe to go. Now it has: cancel lands on `welcome`, never on
+ * the conversation screen, so supplying the handler is both safe and necessary and ADR 0005's
+ * fail-safe is untouched.
+ *
+ * The two navigation props are named after the event that occurred, matching onPaired/onUnpaired —
+ * deliberately not `onPair`, which is one letter from `onPaired` in a five-prop object. Both are
+ * REQUIRED: the value of the assertNever guard below is that it compile-forces the wiring, and an
+ * optional prop would let App forget the CTA handler and still build a dead-end root.
  */
 export function AppView(props: {
   route: AppRoute
   onPaired: () => void
   onUnpaired: () => void
+  onPairRequested: () => void // the welcome screen's primary CTA was pressed
+  onPairingCancelled: () => void // the pairing screen's Cancel fired
 }): JSX.Element | null {
   switch (props.route) {
     case 'pending':
       return null
+    case 'welcome':
+      return <WelcomeScreen onPair={props.onPairRequested} />
     case 'pairing':
-      return <PairingScreen onPaired={props.onPaired} />
+      return <PairingScreen onPaired={props.onPaired} onCancel={props.onPairingCancelled} />
     case 'conversation':
       // #140: the conversation route now mounts the inner list ⇄ thread shell (PairedShell) rather
       // than dropping straight into a single ConversationScreen. onUnpaired threads through unchanged.
@@ -66,9 +80,12 @@ function App(): JSX.Element {
 
   useEffect(() => {
     // One mount-time read. Fail-safe in both directions: routeForStatus sends every non-paired
-    // outcome to the pairing screen, and a rejected invoke (handler absent — should not happen per
-    // #79) also lands on pairing, never the conversation screen. The `active` flag makes the
-    // StrictMode double-mount net exactly one applied setRoute.
+    // outcome to the welcome screen, and a rejected invoke (handler absent — should not happen per
+    // #79) also lands on welcome, never the conversation screen. The catch arm is the one non-paired
+    // path that bypasses routeForStatus entirely, which is why it is spelled out here rather than
+    // inferred. It stays SILENT deliberately: a rejection from the pairing-status invoke can carry a
+    // userData path or internal state, and the renderer console is readable by anything that can open
+    // DevTools. The `active` flag makes the StrictMode double-mount net exactly one applied setRoute.
     let active = true
     window.pyry
       .pairingStatus()
@@ -76,7 +93,7 @@ function App(): JSX.Element {
         if (active) setRoute(routeForStatus(status))
       })
       .catch(() => {
-        if (active) setRoute('pairing')
+        if (active) setRoute('welcome')
       })
     return () => {
       active = false
@@ -88,6 +105,10 @@ function App(): JSX.Element {
   // and mount the other with no restart. The unpair path clears the stored pairing BEFORE this flip
   // (in runUnpair), so the launch-status invariant "conversation only when paired" still holds if the
   // user relaunches immediately after.
+  // onUnpaired stays on 'pairing' AFTER #662 moved the launch fallback to 'welcome', deliberately: it
+  // is a mid-session flip, not a launch status, and an operator who just unpaired is re-pairing. The
+  // two new arrows are the user-action half #662 adds — welcome's CTA into pairing, and pairing's
+  // Cancel back out to welcome (never to conversation, so the fail-safe is untouched).
   // ConversationListData is a headless leaf mounted app-level alongside the daemon-event bridge: it
   // keeps the conversation-list store live for #141 regardless of the current route. A component (not
   // a hook here) deliberately isolates its connected-gate `useSessionStore` read, so status flips
@@ -131,6 +152,8 @@ function App(): JSX.Element {
         route={route}
         onPaired={() => setRoute('conversation')}
         onUnpaired={() => setRoute('pairing')}
+        onPairRequested={() => setRoute('pairing')}
+        onPairingCancelled={() => setRoute('welcome')}
       />
     </>
   )

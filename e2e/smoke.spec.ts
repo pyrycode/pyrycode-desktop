@@ -9,9 +9,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // Smoke: the whole assembled app boots and its shell renders. On a genuinely-unpaired boot the
-// #80/#84 app-shell router sends the launch to the PairingScreen, so the shell that renders is the
-// pairing screen (`.pairing`) — the conversation screen never mounts unpaired. This is the single
-// assertion the harness ships with; the real UI scenarios (pairing, send, stream) live in
+// #80/#84 app-shell router sends the launch to the WelcomeScreen (#662 relocated that root off the
+// PairingScreen), so the shell that renders is the welcome screen (`.welcome`) — the conversation
+// screen never mounts unpaired. The real UI scenarios (pairing, send, stream) live in
 // pair-to-conversation.spec.ts.
 //
 // The launch is LOCAL, not the shared ./fixtures/electronApp fixture: that fixture stays
@@ -62,9 +62,35 @@ const test = base.extend<{ page: Page }>({
 })
 
 test('the app shell renders the unpaired-boot screen in the launched window', async ({ page }) => {
-  // `.pairing` is the PairingScreen root (App.tsx routes every non-paired launch to it). The locator
-  // auto-waits through the async pending→pairing route transition (App starts `pending` → null, then
-  // pairingStatus() resolves not-paired → setRoute('pairing')); presence proves the shell rendered in
-  // the real launched window. Assert the container, not a specific control, to stay robust to copy.
-  await expect(page.locator('.pairing')).toBeVisible()
+  // `.welcome` is the WelcomeScreen root (App.tsx routes every non-paired launch to it since #662).
+  // The locator auto-waits through the async pending→welcome route transition (App starts `pending` →
+  // null, then pairingStatus() resolves not-paired → setRoute('welcome')); presence proves the shell
+  // rendered in the real launched window. Assert the container, not a specific control, to stay robust
+  // to copy.
+  await expect(page.locator('.welcome')).toBeVisible()
+})
+
+// #662 AC3/AC4 in the real launched window. The unit tier cannot reach this: renderer tests are
+// server-render only (renderToStaticMarkup), so no callback can fire and no route can flip. The ten
+// pairingArrival drives prove the welcome→pairing hop, but NOTHING else exercises Cancel — before this
+// test, AC4 shipped with no executable coverage at all. Reusing the same isolated unpaired launch (no
+// fake relay, no daemon) keeps it in this file: the round trip touches only App-level route state, so
+// it needs no pairing plumbing and nothing secret-bearing is typed, filled, or asserted on.
+test('the welcome CTA opens pairing and Cancel returns to welcome', async ({ page }) => {
+  const welcome = page.locator('.welcome')
+  const pairing = page.locator('.pairing')
+
+  await expect(welcome).toBeVisible()
+
+  // AC3: the primary CTA is a user action into the pairing screen, and welcome unmounts behind it.
+  await page.getByRole('button', { name: 'I already have pyrycode', exact: true }).click()
+  await expect(pairing).toBeVisible()
+  await expect(welcome).toHaveCount(0)
+
+  // AC4: Cancel on the entry card (the phase an unpaired launch arrives in) lands back on welcome —
+  // never the conversation screen, which the count-0 assertion below pins alongside the return.
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(welcome).toBeVisible()
+  await expect(pairing).toHaveCount(0)
+  await expect(page.locator('.conversation')).toHaveCount(0)
 })

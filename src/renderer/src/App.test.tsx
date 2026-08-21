@@ -11,16 +11,50 @@ import { sessionStore } from './store/sessionStore'
 // onPaired→setRoute glue are guaranteed by composing the tested routeForStatus mapping and AppView.
 const noop = (): void => {}
 
-// A conversation-screen marker that never appears on the pairing screen, and vice versa.
+// A per-screen marker unique to each of the three mounted screens.
 const CONVERSATION_MARKER = 'aria-label="Send"'
 const PAIRING_MARKER = 'Paste pairing code'
+// The welcome screen's primary CTA copy (WELCOME_COPY.pairCta) — unique to that screen, and the very
+// affordance #662's AC3 is about.
+const WELCOME_MARKER = 'I already have pyrycode'
 
 describe('AppView', () => {
   it("route='pending' renders neither screen — an empty, neutral paint (AC3)", () => {
     // The pending phase mounts no screen; the dark canvas (color-scheme: dark) shows through.
     expect(
-      renderToStaticMarkup(<AppView route="pending" onPaired={noop} onUnpaired={noop} />)
+      renderToStaticMarkup(
+        <AppView
+          route="pending"
+          onPaired={noop}
+          onUnpaired={noop}
+          onPairRequested={noop}
+          onPairingCancelled={noop}
+        />
+      )
     ).toBe('')
+  })
+
+  // Deliberately AHEAD of the route='pairing' describe below: that one installs and removes a
+  // globalThis.window stub in beforeEach/afterEach, and this case's whole point is that the welcome
+  // route needs no stub. Sitting first keeps the absent-stub assertion honest regardless of hook
+  // ordering, so an ordering mistake fails loudly instead of passing on a leaked stub.
+  it("route='welcome' shows the welcome screen and neither other screen (#662 AC2)", () => {
+    // NO globalThis.window stub, mirroring WelcomeScreen.test.tsx:96 — WelcomeScreen touches no bridge
+    // and no store, so the ABSENT stub is part of the assertion. Adding the App.test.tsx:29-35 idiom
+    // here would contradict that shipped assertion's stated rationale.
+    expect('window' in globalThis).toBe(false)
+    const markup = renderToStaticMarkup(
+      <AppView
+        route="welcome"
+        onPaired={noop}
+        onUnpaired={noop}
+        onPairRequested={noop}
+        onPairingCancelled={noop}
+      />
+    )
+    expect(markup).toContain(WELCOME_MARKER)
+    expect(markup).not.toContain(PAIRING_MARKER)
+    expect(markup).not.toContain(CONVERSATION_MARKER)
   })
 
   describe("route='pairing'", () => {
@@ -36,7 +70,13 @@ describe('AppView', () => {
 
     it('shows the pairing screen and never the conversation screen (AC2)', () => {
       const markup = renderToStaticMarkup(
-        <AppView route="pairing" onPaired={noop} onUnpaired={noop} />
+        <AppView
+          route="pairing"
+          onPaired={noop}
+          onUnpaired={noop}
+          onPairRequested={noop}
+          onPairingCancelled={noop}
+        />
       )
       expect(markup).toContain(PAIRING_MARKER)
       expect(markup).not.toContain(CONVERSATION_MARKER)
@@ -57,7 +97,13 @@ describe('AppView', () => {
       // render seeds no store, so the always-present list wrapper is empty inside — asserting the
       // wrapper marker is sufficient and stable.
       const markup = renderToStaticMarkup(
-        <AppView route="conversation" onPaired={noop} onUnpaired={noop} />
+        <AppView
+          route="conversation"
+          onPaired={noop}
+          onUnpaired={noop}
+          onPairRequested={noop}
+          onPairingCancelled={noop}
+        />
       )
       expect(markup).toContain('aria-label="Conversations"')
       expect(markup).not.toContain(CONVERSATION_MARKER)

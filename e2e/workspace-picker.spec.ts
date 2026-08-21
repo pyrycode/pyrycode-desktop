@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test'
 import { test, expect } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
@@ -107,6 +108,36 @@ function capturingWorkspaceFake(
   }
 }
 
+/**
+ * #653 AC4's pin: changing the open discussion's workspace must leave the operator IN its thread. Both
+ * blocks below already close on `.workspace-picker__row` → count 0, which passes just as well if the app
+ * wrongly navigated to the Channel List — a vacuous pass. This makes it non-vacuous in two steps.
+ *
+ * Step 1 is the SYNC POINT, and it is what does the real work. A `change_workspace` is answered with a
+ * `conversation_updated`, on which `shouldRefreshList` fires a fresh `list_conversations` from the very
+ * same listener that would have to have processed the event. So a `list_conversations` appearing AFTER the
+ * `change_workspace` proves the renderer has handled the update a wrongly-gated implementation would
+ * navigate on — without it, step 2 could assert "still in the thread" before the event even arrived. The
+ * index comparison (not mere existence) matters: the connect-time re-list is already in `captured`.
+ *
+ * Step 2 is the positive "still here" the count-0 assertions cannot give. The re-list is answered from the
+ * fake's state where the seed is `is_archived: false`, so the correct implementation's predicate returns
+ * null and nothing moves.
+ */
+async function expectStillInThreadAfterUpdate(page: Page, captured: Envelope[]): Promise<void> {
+  await expect
+    .poll(
+      () => {
+        const changeIndex = captured.findIndex((e) => e.type === 'change_workspace')
+        if (changeIndex === -1) return false
+        return captured.slice(changeIndex + 1).some((e) => e.type === 'list_conversations')
+      },
+      { timeout: ROUNDTRIP_TIMEOUT_MS }
+    )
+    .toBe(true)
+  await expect(page.locator('.conversation')).toHaveCount(1)
+}
+
 test('recent-pick: choosing a recent workspace emits change_workspace and closes the picker', async ({
   launchPairedApp
 }) => {
@@ -141,6 +172,11 @@ test('recent-pick: choosing a recent workspace emits change_workspace and closes
 
   // onChoose closed the picker (its onClose unmounts the sheet tree).
   await expect(page.locator('.workspace-picker__row')).toHaveCount(0)
+
+  // #653 AC4 — changing the open discussion's workspace must NOT navigate. The count-0 assertion above
+  // passes just as well if the app wrongly bounced to the Channel List, so it proves nothing on its own;
+  // these two lines make the pin real.
+  await expectStillInThreadAfterUpdate(page, captured)
 })
 
 test('create-folder: create → workspace_folder_created chains change_workspace with the returned path', async ({
@@ -194,4 +230,8 @@ test('create-folder: create → workspace_folder_created chains change_workspace
   // The whole picker tree unmounted (AC's "picker/dialog closes"): both the dialog and the recent rows are gone.
   await expect(page.locator('.create-folder')).toHaveCount(0)
   await expect(page.locator('.workspace-picker__row')).toHaveCount(0)
+
+  // #653 AC4 — the create-folder chain ends in the same change_workspace, so it drives the same
+  // conversation_updated → re-list cycle and needs the same non-vacuous pin as the recent-pick block.
+  await expectStillInThreadAfterUpdate(page, captured)
 })

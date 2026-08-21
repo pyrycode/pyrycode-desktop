@@ -119,10 +119,21 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   // bare thread — no `.status-sheet__close` needed. ---
   await overflowTrigger.click()
   await page.getByRole('menuitem', { name: 'Channel info' }).click()
+  // #653's non-vacuity anchor (the #652 idiom): the thread surface is HERE before the confirming click —
+  // the Channel Info sheet renders INSIDE ConversationScreen — so the 1→0 delta below is a transition this
+  // click caused, not an assertion against a surface that was never mounted.
+  await expect(page.locator('.conversation')).toHaveCount(1)
   await page.getByRole('button', { name: 'Archive', exact: true }).click()
 
-  // Nav to the Archive view (sheet already closed → no scrim over the back button).
-  await page.locator('.conversation__back').click()
+  // #653 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back click
+  // (the `.conversation__back` click that used to stand here is gone: the control is unmounted by the time
+  // it would run). This 1→0 delta is the load-bearing navigation proof, and it auto-waits TWO round trips
+  // against the real daemon, not one: archive → conversation_updated → re-list request → conversations →
+  // exit.
+  await expect(page.locator('.conversation')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
+
+  // Nav to the Archive view. With the manual Back gone, this click can only resolve because the app
+  // navigated by itself — but it is corroboration, not the proof; the delta above is.
   await page.locator('.channel-list__archive').click()
 
   // AC3 — Discussions 0→1: the archived non-promoted row lands in Discussions (partitionArchived filters

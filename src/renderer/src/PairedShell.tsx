@@ -8,6 +8,7 @@ import { PairingScreen } from './screens/pairing/PairingScreen'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
 import { useConversationDeletedExit } from './store/conversationDeletedBridge'
+import { useArchivedActiveConversationExit } from './store/conversationArchivedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { usePushNotify } from './store/pushNotifyBridge'
 import { activateConversation, type ActivateConversationDeps } from './activateConversation'
@@ -166,6 +167,22 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
       conversationId
     )
+  )
+  // #653: the archive half of the same exit — the SAME decision, a different trigger, and no new deps
+  // object. Archiving has no confirmation event that says so: `conversation_updated` fires identically on
+  // rename and change-workspace, both reachable on the open discussion from inside its own thread, so the
+  // signal is DERIVED from the daemon's authoritative list instead (see conversationArchivedBridge). Still
+  // the same rule as the two navs above — navigate on the DAEMON's word, not on the click — so an archive
+  // the daemon never confirms leaves the operator in the thread (AC5). The id getter is
+  // `exitConversationDeps`' own `getActiveConversation`, so the bridge's gate and the helper's gate read
+  // the SAME source and cannot disagree about which conversation is on screen.
+  useArchivedActiveConversationExit(
+    () => exitConversationDeps.getActiveConversation()?.id ?? null,
+    (conversationId) =>
+      exitActiveConversation(
+        { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
+        conversationId
+      )
   )
   // #393: a notification click drives the same list→thread `open` nav (focus the window + show the
   // active conversation's thread). Crucially NO setActiveConversation — the nullary arm carries no

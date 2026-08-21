@@ -41,7 +41,7 @@ export interface DaemonConnection {
   reconnect(): void  // #82: tear down any driver + dial fresh, re-sourcing the record; no-op once stopped
   send(payload: SendMessagePayload): void  // #65: encrypt a send_message onto the live session
   requestDebugBundle(): void  // #115: encrypt a bare request_debug_bundle control frame onto the live session
-  requestSnapshot(payload: RequestSnapshotPayload): void  // #180: encrypt a request_snapshot onto the live session
+  // requestSnapshot(payload) — #180, removed #620: encrypted a request_snapshot onto the live session
   requestConversations(): void  // #139: encrypt a bare list_conversations control frame onto the live session
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
@@ -54,17 +54,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
 **`requestDebugBundle()` was added in [#115](../codebase/115.md)** — a **structural twin of `send`** for the debug-bundle download's outbound "ask". It builds a **bare `request_debug_bundle` control envelope** (no payload struct, no `conversation_id`, no session selector — the bundle is daemon-global) via `buildRequestDebugBundle` and hands the bytes to `driver.sendMessage`. It **shares the same `nextEnvelopeId` counter** as `send` (no second counter — ids stay monotonic across interleaved calls), is an idempotent no-op when not connected, and never throws (parity #490). The renderer command that calls it is wired by the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed — the orchestrator half of #118's split; the IPC contract itself shipped in [#168](debug-bundle-request.md)). See the [debug-bundle request](debug-bundle-request.md) feature doc for the full contract, including why "no payload" is a present-but-empty `payload: {}` rather than an omission.
 
-**`requestSnapshot(payload)` was added in [#180](../codebase/180.md)** — the outbound half of an
-on-demand fetch of the session's current model/effort/YOLO via the daemon's always-available
-`screen_snapshot` reply (ADR-025, not gated on `interactive`). Unlike `requestDebugBundle`, it is the
-**`send` twin, not a consumer-failing twin**: a snapshot has no consumer, so it stays an inert no-op
-(`driver === null` → return) rather than failing a `BundleConsumer`. It builds a **payload-carrying**
-`request_snapshot` envelope (a real `conversation_id`, unlike the bare debug-bundle frame) via
-`buildRequestSnapshot`, shares the one `nextEnvelopeId` counter, and never throws (parity #490). The
-reply is routed through the same `case 'message'` → `parseInboundMessage` seam as everything else
-(see below) — no new driver event, no reassembler, no consumer. See the [screen snapshot
-fetch](screen-snapshot-fetch.md) feature doc for the full round trip, including the content-minimisation
-seam that drops the reply's `text` field before it reaches `emitDaemonEvent`.
+**`requestSnapshot(payload)` was added in [#180](../codebase/180.md) and removed in
+[#620](../codebase/620.md).** It was the outbound half of an on-demand fetch of the session's current
+model/effort/YOLO via the daemon's always-available `screen_snapshot` reply (ADR-025, not gated on
+`interactive`). Unlike `requestDebugBundle`, it was the **`send` twin, not a consumer-failing twin**:
+a snapshot had no consumer, so it stayed an inert no-op (`driver === null` → return) rather than
+failing a `BundleConsumer`. It built a **payload-carrying** `request_snapshot` envelope (a real
+`conversation_id`, unlike the bare debug-bundle frame) via `buildRequestSnapshot` (also deleted),
+shared the one `nextEnvelopeId` counter, and never threw (parity #490). #620 removed the method, its
+interface declaration, and its entry in the returned object literal — the `DaemonConnection` interface
+no longer declares it. The reply's inbound decode is unaffected: it still routes through the same
+`case 'message'` → `parseInboundMessage` seam (see below), pending removal in #621/#622. See the
+[screen snapshot fetch](screen-snapshot-fetch.md) feature doc for the full history, including the
+content-minimisation seam that drops the reply's `text` field before it reaches `emitDaemonEvent`.
 
 **`requestConversations()` was added in [#139](../codebase/139.md)** — the outbound half of the
 [conversation list fetch](conversation-list-fetch.md). Like `requestSnapshot`, it is the **`send`
@@ -414,7 +416,7 @@ dormant — all three exhaustive renderer bridges no-op the new arm; the real co
 - [Outbound send path](outbound-send-path.md) / [#65](../codebase/65.md) — the `send(payload)` entry point added to this factory, the `buildSendMessage` envelope builder it drives, and the composition-root `onCommand` registration that routes a `sendMessage` command to it.
 - [Debug-bundle request](debug-bundle-request.md) / [#115](../codebase/115.md) — the `requestDebugBundle()` method added to this factory (a structural twin of `send` sharing the same `nextEnvelopeId` counter), and the bare `request_debug_bundle` control-frame builder it drives.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the composition-root consumer that calls `requestDebugBundle(consumer)` from the `onCommand` switch.
-- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `requestSnapshot(payload)` method added to this factory (the `send` twin, not `requestDebugBundle`'s consumer-failing twin), the payload-carrying `buildRequestSnapshot` builder it drives, and the `snapshot` inbound kind + content-minimisation seam in the `case 'message'` consumer arm.
+- [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `requestSnapshot(payload)` method added to this factory (the `send` twin, not `requestDebugBundle`'s consumer-failing twin) and the payload-carrying `buildRequestSnapshot` builder it drove, both removed by [#620](../codebase/620.md); the `snapshot` inbound kind + content-minimisation seam in the `case 'message'` consumer arm survives, pending #621/#622.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `requestConversations()` method added to this factory (another `send` twin, but bare like `requestDebugBundle`'s builder), the `buildListConversations` builder it drives, and the `conversations` inbound kind + verbatim (no-drop) emit in the `case 'message'` consumer arm.
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turn-state` inbound kind + the new `case 'turn-state'` consumer emit (`conversation_id` dropped, `state` carried), feeding the timeline bridge's `phase`. No new method on this factory — `turn_state` is inbound-only, unlike `requestSnapshot`/`requestConversations`.
 - [#315 codebase notes](../codebase/315.md) — the `stall` inbound kind + the new `case 'stall'` consumer emit, a fresh **nullary** `{ type: 'stallDetected' }` literal (`conversation_id`, the payload's only field, is dropped — nothing else to carry). Not `assertNever`-guarded in this inner switch; the round-trip test is the guard. No new method on this factory — `stall` is inbound-only, and onset-only (no request/reply pair, no clearing frame).

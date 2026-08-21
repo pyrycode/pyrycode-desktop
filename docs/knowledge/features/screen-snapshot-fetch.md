@@ -1,11 +1,20 @@
 # Screen snapshot fetch (Model / Effort / YOLO)
 
-The **on-demand data path** that lets the desktop client ask the pyry daemon for the current
-session's model, reasoning effort, YOLO (permissions) posture, and context-window usage, so the
-[Run configuration sheet](conversation-shell.md) can display how the session is running. A client
-sends the `request_snapshot` v2 control envelope carrying a `conversation_id`; the daemon answers
-`screen_snapshot` with `{conversation_id, text, ts, model, effort, yolo, used_tokens,
-window_tokens}`.
+**The outbound half is removed ([#620](../codebase/620.md)).** This doc originally described a full
+round trip — the client sending `request_snapshot`, the daemon answering `screen_snapshot`. The
+client can no longer send the request: `requestSnapshot`, `buildRequestSnapshot`,
+`RequestSnapshotPayload` and the `request_snapshot` wire member are all gone (§§2–3, and the command
+surface below, are historical). **The inbound `screen_snapshot` decode and its two events survive**,
+pending [#621](https://github.com/pyrycode/pyrycode-desktop/issues/621)/[#622](https://github.com/pyrycode/pyrycode-desktop/issues/622),
+which take those out in turn — after which this feature has no surviving pieces at all.
+
+Originally: the **on-demand data path** that let the desktop client ask the pyry daemon for the
+current session's model, reasoning effort, YOLO (permissions) posture, and context-window usage, so
+the [Run configuration sheet](conversation-shell.md) could display how the session is running. A
+client sent the `request_snapshot` v2 control envelope carrying a `conversation_id`; the daemon
+answers `screen_snapshot` with `{conversation_id, text, ts, model, effort, yolo, used_tokens,
+window_tokens}` — still true of the daemon and of the surviving inbound decode, just no longer
+triggerable from this client.
 
 Introduced in [#180](../codebase/180.md), split A of [#156](../codebase/156.md). Transport data path
 only — request → reply → one typed event. No UI, no store facet; those landed as a second-level
@@ -31,23 +40,22 @@ desktop client never advertises `interactive` (see the [hello exchange](hello-ex
 never hardcodes it), yet this fetch works today because the daemon serves `screen_snapshot` to any
 paired, non-interactive connection.
 
-## The five pieces (the `send_message` spine)
+## The five pieces (the `send_message` spine) — two now removed
 
 | Piece | File | Role |
 |---|---|---|
-| `RequestSnapshotPayload` / `ScreenSnapshotPayload` | `src/shared/wire/types.ts` | ported wire types, field-for-field with the daemon |
-| `buildRequestSnapshot` | `src/main/transport/requestSnapshotEnvelope.ts` (new) | pure outbound envelope builder |
-| `requestSnapshot(payload)` | `src/main/daemonConnection.ts` | connection method — the `send` twin |
-| `parseScreenSnapshotPayload` + `snapshot` kind | `src/main/transport/inboundMessage.ts` | fail-closed inbound decode |
-| `requestSnapshot` command / `snapshotReceived` event | `src/shared/ipc/commands.ts` / `events.ts` | the two sealed-union members |
+| ~~`RequestSnapshotPayload`~~ / `ScreenSnapshotPayload` | `src/shared/wire/types.ts` | `RequestSnapshotPayload` removed #620; `ScreenSnapshotPayload` survives, ported wire type field-for-field with the daemon |
+| ~~`buildRequestSnapshot`~~ | ~~`src/main/transport/requestSnapshotEnvelope.ts`~~ | **deleted #620** — was the pure outbound envelope builder |
+| ~~`requestSnapshot(payload)`~~ | `src/main/daemonConnection.ts` | **removed #620** — was the connection method, the `send` twin |
+| `parseScreenSnapshotPayload` + `snapshot` kind | `src/main/transport/inboundMessage.ts` | fail-closed inbound decode — survives, pending #621/#622 |
+| ~~`requestSnapshot` command~~ / `snapshotReceived` event | `src/shared/ipc/commands.ts` / `events.ts` | the command member removed #620; the event survives, pending #621/#622 |
 
 ### 1. Wire types (`src/shared/wire/types.ts`)
 
-```ts
-export interface RequestSnapshotPayload {
-  conversation_id: string
-}
+`RequestSnapshotPayload` was removed in #620; `ScreenSnapshotPayload` (the inbound reply shape)
+survives:
 
+```ts
 export interface ScreenSnapshotPayload {
   conversation_id: string
   text: string       // rendered screen — decoded, NEVER surfaced past transport
@@ -60,7 +68,8 @@ export interface ScreenSnapshotPayload {
 }
 ```
 
-`request_snapshot` / `screen_snapshot` join `EnvelopeType`. **All eight `ScreenSnapshotPayload`
+`screen_snapshot` is a member of `EnvelopeType` (`request_snapshot` was removed alongside
+`RequestSnapshotPayload` in #620). **All eight `ScreenSnapshotPayload`
 fields are always present on the wire (no `omitempty`)** — an empty `model`/`effort` means
 "inherited daemon default," `yolo: false` means "permissions enforced," and `window_tokens: 0` means
 "usage seam unwired/unavailable" (a fresh session instead reports `window_tokens: 200000`,
@@ -69,9 +78,10 @@ optional-with-fallback. `used_tokens`/`window_tokens` were added in [#191](../co
 (pyrycode/pyrycode#857); this ticket carries them faithfully as values without normalizing or
 interpreting them (that's [#192](https://github.com/pyrycode/pyrycode-desktop/issues/192)'s job).
 
-### 2. The outbound builder (`requestSnapshotEnvelope.ts`, new)
+### 2. The outbound builder (`requestSnapshotEnvelope.ts`) — deleted #620
 
-A structural clone of [`buildSendMessage`](outbound-send-path.md) — **payload-carrying**, not the
+Historical — the file no longer exists. It was a structural clone of
+[`buildSendMessage`](outbound-send-path.md) — **payload-carrying**, not the
 bare [`buildRequestDebugBundle`](debug-bundle-request.md). The daemon rejects an empty/unknown
 `conversation_id` with `conversation.not_found`, so (unlike the debug bundle, which is daemon-global)
 there is a real payload to wrap:
@@ -90,7 +100,10 @@ export function buildRequestSnapshot(input: RequestSnapshotInput): Uint8Array
 MAY throw `WireEncodeError` over `MAX_PLAINTEXT_BYTES`; the sole caller (`daemonConnection.requestSnapshot`)
 catches and drops.
 
-### 3. The connection method (`daemonConnection.ts`)
+### 3. The connection method (`daemonConnection.ts`) — removed #620
+
+Historical — `requestSnapshot` no longer exists on `DaemonConnection`; see
+[daemon connection](daemon-connection.md).
 
 ```ts
 function requestSnapshot(payload: RequestSnapshotPayload): void {
@@ -192,26 +205,19 @@ the full adversarial walkthrough.
 
 ### The command + event surface (`commands.ts` / `events.ts`)
 
+The `RendererCommand` member and its guard were removed in #620; the `DaemonEvent` member survives:
+
 ```ts
-// RendererCommand
-| { type: 'requestSnapshot'; payload: RequestSnapshotPayload }
-
-function isRequestSnapshotPayload(value: unknown): value is RequestSnapshotPayload {
-  if (typeof value !== 'object' || value === null) return false
-  return 'conversation_id' in value && typeof value.conversation_id === 'string'
-}
-
 // DaemonEvent
 | { type: 'snapshotReceived'; model: string; effort: string; yolo: boolean
     ; used_tokens: number; window_tokens: number }
 ```
 
-Both ride the **existing generic** `sendCommand`/`onDaemonEvent` channels — no new IPC channel, no
-new preload method. `isRequestSnapshotPayload` is the untrusted renderer→main boundary guard (mirrors
-`isSendMessagePayload`) and is the reason this ticket carries `security-sensitive`. `index.ts`'s
-`onCommand` switch routes `requestSnapshot` directly to `connection.requestSnapshot(command.payload)`
-— no facade, unlike `requestDebugBundle`'s orchestrator, because a snapshot has no download-progress
-state to coordinate.
+The event rides the **existing generic** `onDaemonEvent` channel — no new IPC channel, no new preload
+method. `isRendererCommand`'s `case 'requestSnapshot'` and the standalone `isRequestSnapshotPayload`
+guard function are both gone; a `{ type: 'requestSnapshot', … }` shape now falls through the switch's
+default-deny (asserted by a positive test in `commands.test.ts`), and `index.ts`'s `onCommand` switch
+no longer has a case that reaches `connection.requestSnapshot` — that method doesn't exist either.
 
 **Renderer touch, despite the "zero renderer change" framing.** `daemonEventBridge.ts`'s
 `translateDaemonEvent` is the only exhaustive `DaemonEvent` consumer (`assertNever`-guarded), so
@@ -221,8 +227,12 @@ adding `snapshotReceived` forced one case there too: `case 'snapshotReceived': r
 
 ## Data flow
 
+The outbound half (everything above the blank line) is **removed as of #620** — there is no longer a
+client-side trigger for a `screen_snapshot` reply. The inbound half survives, defensively, pending
+#621/#622:
+
 ```
-window → sendCommand({type:'requestSnapshot', payload:{conversation_id}})
+[REMOVED #620] window → sendCommand({type:'requestSnapshot', payload:{conversation_id}})
       → COMMAND_CHANNEL → onCommand (isRendererCommand → isRequestSnapshotPayload guard)
       → connection.requestSnapshot(payload)
       → buildRequestSnapshot → driver.sendMessage  [inert no-op if not connected]
@@ -237,13 +247,16 @@ daemon → screen_snapshot frame → onDriverEvent 'message' → parseInboundMes
       → DAEMON_EVENT_CHANNEL → all three bridges (→ null)   [no renderer consumer since #619]
 ```
 
+Nothing in this client sends `request_snapshot` anymore, so in practice a `screen_snapshot` frame can
+only arrive if the daemon sends one unprompted — [correlation was always absent](#correlation-is-deliberately-absent),
+so the decode path tolerates that unconditionally, same as before #620.
+
 ## Error handling
 
 | Failure | Layer | Behaviour |
 |---|---|---|
-| Renderer sends malformed `requestSnapshot` | `isRendererCommand`/`isRequestSnapshotPayload` | dropped at boundary |
-| Not connected when `requestSnapshot` called | `daemonConnection` | inert no-op; no throw, no event |
-| Over-cap / driver throw on send | try/catch | caught, dropped |
+| ~~Renderer sends malformed `requestSnapshot`~~ | ~~`isRendererCommand`/`isRequestSnapshotPayload`~~ | **N/A since #620** — the shape now falls through to the switch's default-deny as an unrecognized command, same as any other unknown type |
+| ~~Not connected when `requestSnapshot` called~~ | ~~`daemonConnection`~~ | **N/A since #620** — the method no longer exists |
 | Malformed / oversized / mistyped `screen_snapshot` | `parseScreenSnapshotPayload` | throws `WireDecodeError`; dropped at the consumer's catch; no event |
 | Missing settings field | `parseScreenSnapshotPayload` | throws — never a partial value |
 | Daemon answers `error` instead of `screen_snapshot` | existing `error → daemon-error` routing | no reassembler in flight → no-op; no event, no hang |
@@ -274,11 +287,16 @@ that failure is actually observed (evidence-based-fix).
   [dedicated renderer store](screen-snapshot-store.md) that retained the latest value;
   [#324](../codebase/324.md) added the request action and the `<pre>` display that read it, removed
   in turn by [#618](../codebase/618.md), with the store and bridge themselves deleted by
-  [#619](../codebase/619.md) (this transport path stays — see #620–#622).
+  [#619](../codebase/619.md), and the outbound half of this transport path removed by
+  [#620](../codebase/620.md) — the inbound decode and its two events are all that remains, pending
+  #621/#622.
 - **Daemon `error` reply correlation** — see § Correlation above.
 
 ## Related
 
+- [#620 codebase notes](../codebase/620.md) — removed the outbound half (`requestSnapshot`,
+  `buildRequestSnapshot`, `RequestSnapshotPayload`, the `request_snapshot` wire member); the inbound
+  decode and its two events are what remains of this feature.
 - [#180 codebase notes](../codebase/180.md) — implementation summary, patterns, lessons.
 - [#191 codebase notes](../codebase/191.md) — the `used_tokens`/`window_tokens` extension to this
   feature (pyrycode/pyrycode#857).
@@ -290,10 +308,11 @@ that failure is actually observed (evidence-based-fix).
   deleted by [#619](../codebase/619.md).
 - [#324 codebase notes](../codebase/324.md) — the request action + `<pre>` display, the first and
   only consumer of the store above; removed by [#618](../codebase/618.md).
-- [Daemon connection](daemon-connection.md) — hosts `requestSnapshot()`, the `send` twin.
+- [Daemon connection](daemon-connection.md) — hosted `requestSnapshot()`, the `send` twin, until #620.
 - [Inbound message decode](inbound-message-decode.md) — hosts `parseScreenSnapshotPayload` and the
   `snapshot` `InboundDaemonMessage` kind.
-- [Command channel](command-channel.md) — the `requestSnapshot` `RendererCommand` member + guard.
+- [Command channel](command-channel.md) — hosted the `requestSnapshot` `RendererCommand` member +
+  guard until #620.
 - [Daemon-event channel](daemon-event-channel.md) — the `snapshotReceived` `DaemonEvent` member.
 - [Daemon-event bridge](daemon-event-bridge.md) — the renderer-side `assertNever` consumer that
   tolerates `snapshotReceived` by returning `null`.

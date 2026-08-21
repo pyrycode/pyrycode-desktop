@@ -220,10 +220,11 @@ Teardown must run on **every** exit path — success, test failure, and a failur
   the flip from a paired, connected thread back to the app-root `PairingScreen`, previously uncovered.
   `e2e/unpair-repair.spec.ts` has two blocks: block A (one launch, since Cancel keeps the session) drives
   the two-phase `UnpairControl` — `Cancel` keeps the thread mounted with `Send` enabled and the app-root
-  `textarea[aria-label="Pairing code"]` at count 0, then re-opening and `Confirm` (same launch) flips to
+  pairing field (`[aria-label="Pairing code"]` — element-agnostic since [#664](../codebase/664.md)) at
+  count 0, then re-opening and `Confirm` (same launch) flips to
   the app-root pairing screen; block B (its own launch, since a fatal close is terminal) surfaces the
   `Re-pair` affordance (#167) via a new [fake relay forwarder](fake-relay-forwarder.md) hook,
-  `closeClientLeg(4401)`, and confirms it too returns to the app-root pairing screen. The textarea's
+  `closeClientLeg(4401)`, and confirms it too returns to the app-root pairing screen. The field's
   visibility is the return-to-pairing proof and its count-0 absence is the session-intact proof — a clean
   case (no round-trip needed, unlike #465's Cancel→Settings) because both #464 exits flip the *top-level*
   `App` route and unmount `PairedShell` entirely, so the app-root pairing route is simply not mounted while
@@ -244,7 +245,7 @@ Teardown must run on **every** exit path — success, test failure, and a failur
   `partitionByPromotion`, #469) is untouched.
 - **[#661](../codebase/661.md) funnels every unpaired-launch pairing drive through one shared step.**
   Ten sites — `launchPairedApp.ts` and nine `real-*` specs — each ran the identical six lines after an
-  unpaired launch (locate the pairing textarea → wait → fill → click `Pair` → wait for the fingerprint
+  unpaired launch (locate the pairing field → wait → fill → click `Pair` → wait for the fingerprint
   card → click `Confirm`). All ten now call the new **`e2e/fixtures/pairingArrival.ts`**'s
   `pairFromUnpairedLaunch(page, payload)` instead. Behaviour-preserving (zero production LOC, the six
   lines moved verbatim), and the seam is drawn *after* `Confirm` — post-confirm readiness gates
@@ -252,10 +253,20 @@ Teardown must run on **every** exit path — success, test failure, and a failur
   caller. `pairingArrival.ts` imports only `@playwright/test`, never `launchPairedApp.ts` or
   `realDaemon.ts` — both call `base.extend` at module scope, so importing either would drag a second
   fixture extension into specs that must keep using the other one. `e2e/unpair-repair.spec.ts` is
-  deliberately not a caller and stays byte-unchanged: its two pairing-textarea locators follow a
+  deliberately not a caller and stays byte-unchanged: its two pairing-field locators follow a
   mid-session unpair flip and serve as a teardown proof, not a drive, and #662 relies on this file
   staying untouched as its negative control. This is now the harness's single edit point for changing
   what an unpaired launch lands on.
+- **[#664](../codebase/664.md) re-points every non-owning site at the pairing field's accessible name
+  alone.** Six sites the ticket named plus five prose-only sites its own selector-grep couldn't see (11
+  total, across the same five files `#661`/`#662` had already touched) dropped `textarea[aria-label=
+  "Pairing code"]` and the `Paste pairing code` card-heading marker for the bare
+  `[aria-label="Pairing code"]` idiom — element-agnostic and heading-agnostic, so #665's restyle (an M3
+  filled `<input>`, no heading) can land without a silent-green cascade across `e2e/`, which is outside
+  both tsconfigs, or the two `renderToStaticMarkup` unit markers. Retired the half of `pairingArrival.ts`
+  INVARIANT 4 that told the reader not to finish this sweep (its named negative-control purpose had
+  already been served); kept the still-true half, that `unpair-repair.spec.ts` is not a
+  `pairFromUnpairedLaunch` caller. Zero production code.
 
 ## Related
 

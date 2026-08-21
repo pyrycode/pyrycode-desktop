@@ -10,7 +10,7 @@ import {
 } from './announcedModelBridge'
 import { createAnnouncedModelStore, selectAnnouncedModel } from './announcedModelStore'
 
-// Framework-free data-path tests with injected spies (the screenSnapshotBridge / sessionIdBridge
+// Framework-free data-path tests with injected spies (the sessionIdBridge
 // idiom): no React, no Electron. The real store is wired only for the not-yet-announced → announced
 // seam tests.
 
@@ -204,10 +204,10 @@ describe('subscribeAnnouncedModel', () => {
 })
 
 describe('AnnouncedModelData (container)', () => {
-  // Server-render sanity — the ScreenSnapshotData / QueueData idiom. The binding is headless (renders
+  // Server-render sanity — the QueueData idiom. The binding is headless (renders
   // null) and dereferences window.pyry only inside effects, so a server render (effects never run)
   // produces empty markup without a bridge mock. Effect timing (deps/StrictMode) is verified by
-  // inspection against the ScreenSnapshotData off-handle-as-cleanup idiom, not unit-tested.
+  // inspection against the QueueData off-handle-as-cleanup idiom, not unit-tested.
   it('server-renders to empty markup without touching window.pyry', () => {
     let markup = 'not-empty'
     expect(() => {

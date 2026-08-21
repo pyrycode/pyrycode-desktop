@@ -7,7 +7,7 @@ import {
 } from './announcedModelStore'
 
 // Plain-function store tests over isolated createAnnouncedModelStore() instances — the
-// screenSnapshotStore.test / runConfigStore.test idiom. No React, no bridge: the store is pure renderer
+// runConfigStore.test idiom. No React, no bridge: the store is pure renderer
 // state with a single set-on-event mutation. `model` is held VERBATIM (untrusted, model-influenced
 // daemon-relayed text; the plain-text-never-HTML rendering discipline belongs to #560) — no normalising,
 // no lowercasing, no allow-list, no family regex, no shape check.

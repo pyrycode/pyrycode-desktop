@@ -441,8 +441,8 @@ function parseDebugBundleDonePayload(payload: unknown): { total: number } {
 }
 
 /**
- * Narrow an opaque payload into a SessionSettingsPayload (#491). Fail-closed like
- * parseScreenSnapshotPayload: every field is required-present, because every zero value here is a
+ * Narrow an opaque payload into a SessionSettingsPayload (#491). Fail-closed: every field is
+ * required-present, because every zero value here is a
  * real ANSWER rather than an absence. `session_id: ''` means "the daemon has no session to
  * address", `model`/`effort: ''` mean "inherited daemon default", `yolo: false` means permissions
  * enforced, and `window_tokens: 0` means the usage reader is unwired. Defaulting any of them would
@@ -465,8 +465,8 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
 }
 
 /**
- * Narrow an opaque payload into an AssistantDeltaPayload (#199). Fail-closed like
- * parseScreenSnapshotPayload: every field is required-present — `seq:0` and `text:''` are valid VALUES
+ * Narrow an opaque payload into an AssistantDeltaPayload (#199). Fail-closed: every field is
+ * required-present — `seq:0` and `text:''` are valid VALUES
  * (a turn's first slice / an empty slice), never absences, so requireNumber / requireString check the
  * TYPE not truthiness. Returns only the four known fields; unknown server-added keys are tolerated
  * (forward-compat) but not copied through. Its messages name the failure category only — the `text` /
@@ -1256,7 +1256,7 @@ export function parseInboundMessage(
       // Narrow BEFORE logging so a malformed reply throws first and leaves no record. No decoded
       // field is ever logged — not the session id, not the model / effort / yolo, not the usage
       // ints — only the frame's byte length + one-way hash, reusing the existing content-free field
-      // set. Mirrors the screen_snapshot arm above.
+      // set. Mirrors the assistant_delta arm below.
       const sessionSettings = parseSessionSettingsPayload(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',

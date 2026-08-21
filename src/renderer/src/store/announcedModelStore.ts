@@ -4,7 +4,7 @@
 // event (#587 decodes claude's `system` / `init` line) and writes its `model`/`truncated` here via the
 // single setter; #560 reads them through the selector.
 //
-// A dedicated store (the screenSnapshotStore / runConfigStore precedent, #323 / #187), NOT a
+// A dedicated store (the runConfigStore precedent, #187), NOT a
 // runConfigStore facet, on four grounds. (a) Lifetime: runConfigStore's data path requests a fresh
 // snapshot on sheet open (runConfigStore.ts:1-5), whereas this holder must be App-level
 // always-listening — an announcement rides the turn's init line whether or not any sheet is open.
@@ -73,7 +73,7 @@ export interface AnnouncedModel {
  *  but #587 deliberately declined a second client-side suppression, so `requireString` admits `''` and
  *  the decoder passes it through from a non-conforming or hostile daemon.
  *
- *  The record-`|`-null shape (the screenSnapshotStore / runConfigStore idiom) is load-bearing rather
+ *  The record-`|`-null shape (the runConfigStore idiom) is load-bearing rather
  *  than stylistic. The flat alternative `{ model: string | null; truncated: boolean }` would force
  *  `truncated` to carry a value before any announcement exists, contradicting "`false` is a VALUE,
  *  never an absence" (events.ts:194). Wrapping both fields behind one nullable makes "not yet
@@ -99,8 +99,8 @@ export const initialAnnouncedModelState: AnnouncedModelState = { announced: null
  * VERBATIM REPEAT. The repeat is not noise — per events.ts:208-209 the transport holds no state, so a
  * consumer sees exactly one event per daemon frame, and a repeat is the signal that the value is still
  * current; suppressing it would discard information. One consequence, stated rather than discovered:
- * each write produces a fresh object identity, so a verbatim repeat does re-notify subscribers (exactly
- * as screenSnapshotStore behaves; #560 memoises if it ever matters). Memory is O(1) regardless of how
+ * each write produces a fresh object identity, so a verbatim repeat does re-notify subscribers (#560
+ * memoises if it ever matters). Memory is O(1) regardless of how
  * many announcements arrive — the store holds exactly one record and replaces it, so a flooding hostile
  * relay costs one allocation per frame, not an unbounded append.
  *

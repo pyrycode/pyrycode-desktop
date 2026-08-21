@@ -15,7 +15,7 @@ Gives a fresh-install user a terminal-free way to pair the app with their daemon
 
 A typed validation error (malformed payload, disallowed relay, malformed key, expired pending, or persist failure) is surfaced **inline** and nothing is stored. The screen never receives or renders the `token` or `server_static_pubkey` — only the fingerprint (a hash) and a value-free error category cross the bridge.
 
-**Where the screen mounts:** #55 built this screen as a self-contained, testable unit exposing optional `onPaired` / `onCancel` seams, deferring app-level navigation. The [app shell](app-shell.md) wired those seams in [#80](../codebase/80.md): `App` shows this screen on any non-`paired` launch outcome and advances to the [conversation screen](conversation-shell.md) when `onPaired` fires. `onCancel` is deliberately left unwired — when unpaired this screen is the app root, so cancel stays put.
+**Where the screen mounts:** #55 built this screen as a self-contained, testable unit exposing optional `onPaired` / `onCancel` seams, deferring app-level navigation. The [app shell](app-shell.md) wired `onPaired` in [#80](../codebase/80.md): `App` advances to the [conversation screen](conversation-shell.md) when it fires. Until [#662](../codebase/662.md), `onCancel` was deliberately left unwired — this screen was the app root for every non-`paired` launch outcome, so cancel had nowhere to go and stayed put instead. #662 relocated the root to the [welcome screen](welcome-screen.md), which is what finally gave `onCancel` a safe destination: `App` now wires it to navigate back to `welcome`, never to `conversation`, so this screen is reached only by user action — the welcome screen's CTA, or the mid-session "Pair another server" / post-unpair flip.
 
 ## How it works
 
@@ -123,11 +123,12 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 - **A rejected or throwing bridge invoke** (handler absent/unregistered, invoke racing registration, non-serializable reply) is coerced to `malformed-request` rather than left to wedge the screen in `submitting`/`confirming` with Cancel disabled ([#513](../codebase/513.md)).
 - **`paired` renders a success marker** ("Paired ✓"), but the [app shell](app-shell.md) unmounts this screen the moment `onPaired` fires ([#80](../codebase/80.md)) — `confirm-succeeded` both flips the reducer to `paired` and calls `onPaired`, and `App`'s `setRoute('conversation')` swaps the screen out — so the marker is effectively superseded by navigation rather than lingering.
 - **Container interaction is not click-simulated** — no DOM harness. The interaction is proven on the pure `runSubmit`/`runConfirm`/`pairingReducer` seams; only the thin container glue is untested (the precedented gap, mirroring `useDaemonEventBridge`).
-- **Dark scheme only**; the card is dialog-shaped (`max-width` + centered margin). Its placement is now decided by the [app shell](app-shell.md) ([#80](../codebase/80.md)): when unpaired it is the full-window app root, not a dialog over another screen.
+- **Dark scheme only**; the card is dialog-shaped (`max-width` + centered margin). Its placement is decided by the [app shell](app-shell.md): as of [#662](../codebase/662.md) it is a full-window screen reached by user action (no longer the unpaired app root, which is now [welcome](welcome-screen.md)), not a dialog over another screen.
 
 ## Related
 
-- [App shell](app-shell.md) / [#80](../codebase/80.md) — the router that mounts this screen when unpaired and consumes its `onPaired` seam to advance to the conversation screen.
+- [App shell](app-shell.md) / [#80](../codebase/80.md), [#662](../codebase/662.md) — the router that mounts this screen on a user-initiated pair request (was: on any unpaired launch) and consumes both its `onPaired` and, since #662, `onCancel` seams.
+- [Welcome screen](welcome-screen.md) / [#662](../codebase/662.md) — the screen this one now follows in the app shell's routing; `onCancel` returns there.
 - [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — the typed request/response channel + preload methods this screen drives; the held-state model behind `confirm-failed → editing`.
 - [Pairing-confirmation](pairing-confirmation.md) / [#53](../codebase/53.md) — where the 23-char fingerprint is derived; the human-verify step this screen presents.
 - [Pairing-payload gate](pairing-payload-gate.md) / [#52](../codebase/52.md) — the parse + relay-allowlist stage behind the submit path.

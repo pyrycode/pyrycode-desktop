@@ -4,7 +4,11 @@ Electron desktop remote head for [Pyrycode](https://github.com/pyrycode/pyrycode
 
 ## Status
 
-Skeleton only. The goal of the first milestone is a full round-trip: pair with the pyry daemon on pyrybox through the content-blind relay, send a message, and watch the structured reply stream back. For now the UI is the mobile design stretched to the window size, built against the same mobile Figma file. A desktop-specific layout is deferred until the app is fully functioning.
+The first milestone is done. The app pairs with the pyry daemon through the content-blind relay, sends messages, and streams structured replies back, and its author now uses it as his day-to-day client rather than driving it as a test.
+
+**The desktop-specific layout is no longer deferred. It is designed and being built**, and it replaces the mobile design stretched to the window size that the app has worn until now. The shape is a fixed 400 pixel sidebar holding two trees, channels above and chats below, grouped under a host and then by workspace, beside a chat pane that fills the rest of the window. The minimum window width is 800. The input footer carries the actions menu, the permission mode, the model, the effort level, the context reading and the attachment button.
+
+Build against that layout, not against the mobile one. The Figma is [node 102-4](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=102-4) and every slice of it is a ticket on board #7.
 
 ## What this is
 
@@ -64,6 +68,17 @@ The transport, the Noise session, the relay connection supervisor, and the wire 
 - **Keep the transport out of the window.** Anything touching keys, sockets, or the Noise handshake lives in the background process.
 - **No direct push to `main`.** PR plus review.
 - **The wire types match mobile.** Change them only alongside a daemon or mobile change.
+- **Daemon text may be rendered, escaped and length-bounded.** It is not forbidden content, and the tool rows already show it on purpose. What it may never reach is a raw-markup sink or a log. So no `innerHTML` and no `dangerouslySetInnerHTML`, never into an attribute or a URL, and never as a filename, a cache key or a lookup path. The rule that a string must be a client-owned constant is scoped to chrome that speaks in the app's own voice, such as notification copy, not to text the daemon is reporting. Operator ruling, 2026-08-20.
+
+## Driving a running session
+
+Some things are changed by sending an ordinary message rather than by a command on the wire, because claude intercepts a message whose text begins with a slash and runs it instead of passing it to the model. Measured against claude 2.1.220 on 2026-08-21: an unknown one comes back as a synthetic assistant reply reading "Unknown command", at zero turns and zero cost.
+
+- **Model and effort** reach a running session as `/model <family>` or `/effort <level>`. A family alias resolves to the newest model in that family, and claude announces the resolved dated identifier on its next turn. That announcement is the only way to confirm what is actually running, so show it rather than the requested value.
+- **Reset and compact** are `/clear` and `/compact`.
+- **The available commands are workspace-dependent**, so a command that exists in one working directory may not exist in another. Do not assume a slash command is present.
+
+None of this needs a new command type or a wire change.
 
 ## Don't
 

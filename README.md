@@ -4,7 +4,7 @@ Desktop client for [Pyrycode](https://github.com/pyrycode/pyrycode). Drive a pyr
 
 ## Status
 
-Early. Skeleton only. A sibling to the Android client `pyrycode-mobile`, sharing the same encrypted wire protocol. This is a personal project under active development.
+In daily use by its author, and under active development. Pairing, messaging and streaming replies all work over the relay, and a desktop-specific layout is being built to replace the phone layout the window currently wears. A sibling to the Android client `pyrycode-mobile`, sharing the same encrypted wire protocol. This is a personal project.
 
 ## Stack
 

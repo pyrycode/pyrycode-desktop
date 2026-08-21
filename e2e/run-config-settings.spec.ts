@@ -189,7 +189,7 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
     page.locator('.run-config__effort-segment', { hasText: new RegExp(`^${level}$`) })
   const yoloSwitch = page.getByRole('switch', { name: 'Auto-accept tool calls' })
 
-  // AC1 — open the sheet from the collapsed status row (mounts RunConfigData → request_snapshot, and
+  // AC1 — open the sheet from the collapsed status row (mounts RunConfigData → request_session_settings, and
   // RunConfigSections). Then assert operability + baseline (auto-waits over the async session-id + snapshot
   // arrival + re-render): the model rows are operable buttons (role="button" is present ONLY when a session
   // id gates the handler on), the baseline model/effort/yolo are selected, and the switch is operable

@@ -3,9 +3,9 @@ import { buildSetSessionSettings } from './setSessionSettingsEnvelope'
 import { decodeEnvelope, WireEncodeError } from './codec'
 import { MAX_PLAINTEXT_BYTES, type SetSessionSettingsPayload } from '../../shared/wire/types'
 
-// The pure builder mirrors buildRequestSnapshot: (id, ts, payload) → serialized set_session_settings
+// The pure builder mirrors buildSendMessage: (id, ts, payload) → serialized set_session_settings
 // bytes, no clock/counter/side-effects, over the REAL codec so the assertions pin actual wire bytes.
-// UNLIKE requestSnapshot it is more than a mechanical clone: it enforces the omitempty PRESENCE
+// UNLIKE buildSendMessage it is more than a mechanical clone: it enforces the omitempty PRESENCE
 // CONTRACT (pyrycode #844/#845) — a field present at its zero value ('' / false) crosses the wire; an
 // unset (`undefined`) field is ABSENT from the payload (not null, not a coerced zero). That present-zero
 // vs omitted matrix is the heart of this slice, so it is exercised exhaustively below.

@@ -2,7 +2,7 @@
 // envelope bytes the Noise session (#7) / relay driver (#50) carry as an opaque Uint8Array — the
 // outbound "ask" that makes the daemon reply with the current conversation list. A sibling to
 // requestDebugBundleEnvelope.ts, following the same one-concern-per-file split the module already
-// uses. Thinner than buildRequestSnapshot: `list_conversations` is a BARE control frame — no payload
+// uses. Thinner than buildSendMessage: `list_conversations` is a BARE control frame — no payload
 // struct, no conversation_id (the request selects nothing; the daemon returns every conversation).
 //
 // MAIN-PROCESS ONLY. It imports codec.ts (Node `Buffer`). Never re-export it through any renderer

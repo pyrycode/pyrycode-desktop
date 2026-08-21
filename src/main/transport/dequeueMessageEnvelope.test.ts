@@ -3,7 +3,7 @@ import { buildDequeueMessage } from './dequeueMessageEnvelope'
 import { decodeEnvelope, WireEncodeError } from './codec'
 import { MAX_PLAINTEXT_BYTES, type DequeueMessagePayload } from '../../shared/wire/types'
 
-// The pure builder mirrors buildRequestSnapshot: (id, ts, payload) → serialized dequeue_message bytes,
+// The pure builder mirrors buildSendMessage: (id, ts, payload) → serialized dequeue_message bytes,
 // no clock/counter/side-effects. It uses the REAL codec so the assertions pin actual wire bytes.
 // `dequeue_message` is an ungated control frame (SSOT pyrycode #720) — it carries a real payload
 // (the conversation_id + the queued_msg_id the daemon's msgqueue.Remove deletes), but no nonce and

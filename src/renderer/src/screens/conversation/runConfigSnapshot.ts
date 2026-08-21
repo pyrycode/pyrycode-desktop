@@ -45,9 +45,9 @@ export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | nul
 
 /**
  * Fire exactly one `requestSessionSettings` (#491). Bare — no conversation id — because the reply is
- * daemon-wide, so unlike the old `requestSnapshot` route there is no id to validate and no
- * conversation_not_found to fire into. That is why this takes no argument: the sheet no longer
- * depends on having an active conversation resolved before it can populate.
+ * daemon-wide, so there is no id to validate and no conversation_not_found to fire into. That is why
+ * this takes no argument: the sheet no longer depends on having an active conversation resolved
+ * before it can populate.
  * Fire-and-forget, like the composer's send: `sendCommand` is `void`, so there is no result to await.
  */
 export function requestRunConfigSnapshot(sendCommand: (command: RendererCommand) => void): void {

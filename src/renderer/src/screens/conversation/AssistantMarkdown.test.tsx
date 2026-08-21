@@ -95,13 +95,46 @@ describe('AssistantMarkdown', () => {
     expect(markup).toContain('Tom &amp; Jerry')
   })
 
-  it('renders link syntax as its visible text with no anchor (AC3)', () => {
+  // #610 OPENED THE ALLOWLIST, so the three cases below — which asserted the deny-first treatment on
+  // `https:` hrefs — are rewritten rather than deleted: the same three link SYNTAXES are still the
+  // subject, only the expected markup moved. The `javascript:` case keeps its assertions verbatim, and
+  // it is now one member of the denied SET enumerated further down.
+  //
+  // Each accepted case pins the whole anchor as ONE string. `target="_blank"` is in it deliberately and
+  // is not decoration: it is what routes the click to setWindowOpenHandler (index.ts:56) and thence to
+  // shell.openExternal. Without it the click is a same-document navigation that will-navigate cancels,
+  // so the link would look right and do nothing — a failure no separate attribute assertion distinguishes
+  // from success as clearly as one composed string does.
+  it('renders an https link as an anchor carrying its href and text unchanged (AC1)', () => {
     const markup = render('see [click me](https://example.com) here')
-    expect(markup).toContain('click me')
+    expect(markup).toContain(
+      '<a href="https://example.com" target="_blank" rel="noreferrer">click me</a>'
+    )
     expect(markup).toContain('here')
-    expect(markup).not.toContain('<a ')
-    expect(markup).not.toContain('href')
-    expect(markup).not.toContain('example.com')
+  })
+
+  it('renders an http link as an anchor too, matching the window-open handler (AC1)', () => {
+    // AC1 names BOTH schemes and the rewrites above cover only https:. The allowlist admits plaintext
+    // http: because setWindowOpenHandler does (index.ts:63) and the two must agree — narrowing both to
+    // https: would be a main-process change, so it is not this ticket's.
+    const markup = render('[plain](http://example.com/a)')
+    expect(markup).toContain(
+      '<a href="http://example.com/a" target="_blank" rel="noreferrer">plain</a>'
+    )
+  })
+
+  it('renders a reference-style link as an anchor on its resolved target (AC1)', () => {
+    const markup = render(lines('[label][ref]', '', '[ref]: https://ref.example/target'))
+    expect(markup).toContain(
+      '<a href="https://ref.example/target" target="_blank" rel="noreferrer">label</a>'
+    )
+  })
+
+  it('renders an autolink as an anchor whose href and text are both the URL (AC1)', () => {
+    const markup = render('<https://example.com>')
+    expect(markup).toContain(
+      '<a href="https://example.com" target="_blank" rel="noreferrer">https://example.com</a>'
+    )
   })
 
   it('gives a javascript: href the same no-anchor treatment (AC3)', () => {
@@ -111,18 +144,52 @@ describe('AssistantMarkdown', () => {
     expect(markup).not.toContain('javascript:')
   })
 
-  it('renders a reference-style link as its label, resolving to no anchor (AC3)', () => {
-    const markup = render(lines('[label][ref]', '', '[ref]: https://ref.example/target'))
-    expect(markup).toContain('label')
-    expect(markup).not.toContain('<a')
-    expect(markup).not.toContain('ref.example')
+  // The rest of AC2's denied set, one case per input rather than one render holding all of them: the
+  // claim below is about the WHOLE emitted markup, so a shared render would have every fixture's absence
+  // assertion answered by some other fixture's presence.
+  //
+  // Every link text is `t` — free of the substring `href`, which the claim forbids anywhere in the
+  // markup and which a fixture named `[href](…)` would supply from its own visible text while the code
+  // under test behaved correctly.
+  const denied: Array<[string, string]> = [
+    ['a data: href', '[t](data:text/html,hello)'],
+    ['a file: href', '[t](file:///etc/passwd)'],
+    // Permitted by react-markdown's built-in urlTransform but DENIED by setWindowOpenHandler, so a live
+    // mail link would silently do nothing when clicked. The renderer narrows to match the handler.
+    ['a mailto: href', '[t](mailto:a@b.example)'],
+    ['an arbitrary custom scheme', '[t](pyry-evil://do/thing)'],
+    // Rejected WITHOUT being resolved against the app's own document: under the dev server the base is
+    // http: and this would resolve to a web scheme, while a packaged build's file: base would not — the
+    // two builds must agree, and this test tier has no document base at all.
+    ['a relative href', '[t](./doc.md)'],
+    ['a protocol-relative href', '[t](//example.com/x)'],
+    ['an empty href', '[t]()'],
+    // The angle-bracket form, NOT `[t](not a url)`: the latter is not link syntax in CommonMark at all
+    // and renders as literal text, so it would pass without the predicate ever seeing it. This one
+    // reaches the override as `not%20a%20url`, which is what makes it a real test of the parse.
+    ['a string that does not parse as a URL', '[t](<not a url>)'],
+    // A scheme with NO AUTHORITY. It parses absolutely and its protocol IS on the allowlist, so the
+    // scheme test alone admits it — but the browser still resolves it against the document base when the
+    // click navigates (http://localhost:5173/example.com under the dev server, http://example.com/ when
+    // packaged). It is the only guard on the authority condition; without this case that condition can be
+    // deleted as a redundant second scheme check with every other test here still green.
+    ['a scheme carrying no authority', '[t](http:example.com)']
+  ]
+
+  it.each(denied)('renders %s as its visible text with no anchor (AC2)', (_name, markdown) => {
+    // ONE exact-markup claim rather than a toContain/not.toContain triple. It makes all three of those
+    // statements at once — the visible text rendered, no `<a` exists, no `href` appears — and adds the
+    // one they cannot: the denied URL reached the markup nowhere at all. It is also what fails an
+    // implementation that leans on urlTransform alone, which emits `<a href="">t</a>` here: an anchor, a
+    // click target, and the literal string `href`, all three of which AC2 forbids.
+    expect(render(markdown)).toBe('<p>t</p>')
   })
 
-  it('renders an autolink as visible text with no anchor (AC3)', () => {
-    const markup = render('<https://example.com>')
-    // The URL is visible TEXT here — that is the point; what must not exist is the click target.
-    expect(markup).toContain('https://example.com')
-    expect(markup).not.toContain('<a')
+  it('leaves a bare URL typed as plain text inert, with no anchor (AC2)', () => {
+    // The no-remark-gfm design, asserted rather than assumed. A bare URL is not a link in CommonMark, so
+    // nothing here has an href to allow or deny; the plugin that would manufacture one is the thing
+    // AssistantMarkdown.tsx's header comment and ADR 0010 both name as excluded.
+    expect(render('https://example.com')).toBe('<p>https://example.com</p>')
   })
 
   it('renders image syntax as its alt text, producing no fetching element (AC4)', () => {

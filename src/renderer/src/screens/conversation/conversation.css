@@ -680,6 +680,46 @@
   font-family: var(--font-mono);
 }
 
+/* #610 — a link in an assistant reply. This is the app's FIRST anchor: nothing else under
+   src/renderer/src renders an <a>, so without this rule one would ship at pure UA defaults —
+   -webkit-link blue and a UA underline — inside a dark themed bubble. The mock draws no link treatment
+   of its own (Figma 16:43 contains no anchor), so both declarations are derived from the tokens rather
+   than read off the design; a bespoke link style would be a Figma-side addition to that node first.
+
+   --color-primary is the app's interactive/selected role — the archive tab's underline
+   (.archive__tab[aria-selected='true']), the dialog action labels (.save-as-channel__cancel /
+   .save-as-channel__save, .rename-conversation__save), .pairing__button and .settings__section-header.
+   The apparent objection is this file's own "status vocabulary" comment above
+   .bubble--compacting, but that is scoped to the four 4px leading accent bars on bubbles, a different
+   construct — not a prohibition on the token.
+
+   THE UNDERLINE IS LOAD-BEARING, not decorative, which is why it is declared rather than left to the UA.
+   On the bubble fill --color-surface-container-high, --color-primary measures 8.5:1 and is comfortably
+   legible — but against the surrounding prose ink --color-on-surface it is only 1.31:1, far below the 3:1
+   WCAG technique G183 asks for when colour is the ONLY cue separating a link from the text around it. So
+   colour alone cannot carry "distinguishable from the prose"; the underline is what actually does.
+   text-decoration is used nowhere else in src/ today — this is its first use, hence the note.
+
+   :visited needs no rule of its own: an author normal declaration beats a UA normal declaration whatever
+   the UA rule's specificity, so this one rule displaces -webkit-link in both states.
+
+   Four omissions, each load-bearing. No text-underline-offset — it would need a px literal, and the
+   criterion admits no size value (`underline` is a keyword, not one). No hover/focus treatment: no rule
+   for either exists anywhere in src/ yet, and inventing the app's first one is a separate, app-wide
+   question. No margin, no font-family and no word-break — all inherited, and restating a settled value is
+   how it gets lost (#607's precedent, followed by #623, #628, #629 and #630). And nothing about a <code>
+   inside link text: #630's rule is ancestry-scoped, so it still matches there, and the code span inherits
+   this colour onto its own --color-surface fill at 10.9:1.
+
+   DESCENDANT selector, matching .bubble__markdown pre / h1…h6 / the code rule above, so an anchor nested
+   in a list item, a blockquote or a heading is reached. Its reach in the other direction is the whole of
+   "and nothing else": .bubble__markdown has exactly one call site (ConversationScreen.tsx:522, the settled
+   assistant reply) and no <a> is rendered anywhere else in the renderer. */
+.bubble__markdown a {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
 /* #203 — the streaming cursor (Figma node 16:56): the ▎ glyph (U+258E) trailing the in-progress
    assistant bubble's text run, inline, inheriting .bubble's on-surface color and body-medium size —
    no color/type literal of its own. A subtle blink conveys the live-streaming state; the static caret

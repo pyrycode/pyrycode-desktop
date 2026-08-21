@@ -59,6 +59,12 @@ or frames, so not security-sensitive.
   Unlike the three `open` triggers above, this reuses the existing absolute `back` transition — no new
   `PairedNav` arm, no `PairedRoute` member — via `useConversationDeletedExit` mounted beside
   `useConversationCreatedNav`. See [below](#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652).
+- [#653](../codebase/653.md) added a **fifth** `back` trigger, the archive sibling of #652's delete
+  trigger: the discussion currently open in the thread returning to `list` once the daemon's
+  authoritative conversation list shows it archived. Same reused `back` transition, same
+  `exitActiveConversation` decision, unmodified — only the trigger differs, and it is derived (a level
+  predicate over `conversationsReceived`) rather than a dedicated wire event, since `conversationUpdated`
+  as decoded cannot say *what* changed. See [below](#the-archive-exit-conversationarchivedbridgets-653).
 
 ## How it works
 
@@ -414,6 +420,90 @@ correct and wanted in that window, and `list` is a valid destination — so this
 observation for [#653](../codebase/653.md)'s seam discussion rather than fixed here; the actual fix
 would be route-aware navigation, not a wider gate. See [#652 codebase notes](../codebase/652.md) for
 the full design rationale and code review.
+
+### The archive exit (`conversationArchivedBridge.ts`, #653)
+
+Before this, archiving the discussion currently open in the thread fired `archive_conversation` and
+closed the Channel Info sheet — and nothing else happened. The row left the Channel List (#469's
+`partitionActive` already filtered `is_archived` rows), but the thread stayed open, rendering rows for a
+discussion filed away, still accepting input.
+
+`exitActiveConversation` — #652's decision above — is reused **unmodified**. Only the trigger is new,
+and it can't be a dedicated wire event the way #652's `conversationDeleted` is: the daemon's
+`conversation_updated` reply, as desktop decodes it, carries no archive flag at all
+(`ConversationUpdatedPayload` is five fields, and `inboundMessage.ts` names `is_archived` as a
+tolerated-but-not-copied key), and it fires identically on rename, promote and change-workspace — three
+of which are reachable on the open discussion from inside its own thread. Gating on the event's mere
+*occurrence* would bounce the operator out on a rename or a workspace change, trading this bug for a
+worse one.
+
+The signal is instead **derived from the daemon's authoritative conversation list**, in a new module,
+`conversationArchivedBridge.ts` — the `conversationCreatedBridge`/`conversationDeletedBridge` shape, and
+the first of the three that **owns no wire arm**:
+
+```ts
+export function archivedActiveConversationId(
+  conversations: readonly ConversationSummary[] | null,
+  activeConversationId: string | null
+): string | null {
+  if (conversations === null || activeConversationId === null) return null
+  const row = conversations.find((conversation) => conversation.id === activeConversationId)
+  return row !== undefined && row.is_archived ? activeConversationId : null
+}
+```
+
+- **A level predicate, not an edge** — evaluated against every `conversationsReceived`, with no notion of
+  "the operator clicked Archive." This is what makes the AC "becomes archived ⇒ returns to the list"
+  trigger-agnostic for free: any refresh that reveals the flag fires the exit, whoever caused it,
+  including a **second client's** archive — pyrycode#881 delivers `conversation_updated` correlated to
+  the requester via `c.Reply`, not broadcast, so another client's archive produces no event on this client
+  at all; the flag only surfaces on this client's own next `list_conversations`, and the level predicate
+  picks it up then (eventually, not live — a daemon fan-out gap, not a client design choice).
+- **Four `null` arms, each required rather than defensive:** not-loaded (`conversations === null`), no
+  thread open (`activeConversationId === null`), the row absent (a **delete**, owned by #652's bridge —
+  this predicate must not double-claim it), and the row present but `is_archived: false` (the rename /
+  change-workspace regression-pin arm).
+- **Rows are read off the event, not `conversationListStore`.** Both are written by the same
+  `conversationsReceived` delivery, so they can't disagree, but reading the event removes any dependence
+  on whether `ConversationListData`'s app-level listener happened to run first — the same
+  no-ordering-contract arrangement `conversationListBridge.ts` already documents for `conversationCreated`.
+  In practice the store write does land first, which means this exit has **no stale-row window at all**:
+  by the time it fires, `partitionActive` has already dropped the archived row from the Channel List —
+  strictly better than #652's delete path, where the nav precedes the re-list by a round trip.
+- **`translateConversationsEvent` is imported from `conversationListBridge`, not re-declared.** This
+  bridge and the list bridge key off the same `conversationsReceived` arm — unlike the created/deleted
+  bridges, which each own a distinct one — so the switch has exactly one place to update.
+
+`subscribeArchivedActiveConversation` and `useArchivedActiveConversationExit` mirror
+`conversationDeletedBridge`'s shape exactly (ref-held latest callback, empty-dep subscribe effect,
+off-handle cleanup, `window.pyry` dereferenced only inside the effect).
+
+Wired in `PairedShell`, directly beneath the #652 wiring, with **no new deps object**:
+
+```ts
+useArchivedActiveConversationExit(
+  () => exitConversationDeps.getActiveConversation()?.id ?? null,
+  (conversationId) =>
+    exitActiveConversation(
+      { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
+      conversationId
+    )
+)
+```
+
+`exitConversationDeps` (#652's module-scope deps object) supplies both the bridge's id getter and the
+helper's own gate from the same source, so the two structurally cannot disagree about which conversation
+is on screen — a double gate (bridge decides, helper re-checks) kept deliberately redundant so
+`exitActiveConversation` ships unmodified.
+
+**Inherits #652's absolute-`back` limitation, and the window is wider here.** The confirmation this
+trigger waits on costs two round trips (archive → `conversation_updated` → `list_conversations` →
+`conversations`) rather than #652's one, and "archive, then go check the Archive screen" is a more
+natural operator flow than its delete equivalent — so a delayed archive confirmation landing while the
+operator has stepped into Settings, Archive or Pair-server is more likely to yank them there than the
+delete case is. Unobserved, every move is a clear, and this was explicitly left unfixed — a route-aware
+`back` is its own ticket covering both halves. See [#653 codebase notes](../codebase/653.md) for the full
+design rationale, the security review, and code review.
 
 ### The app-shell seam (`App.tsx`)
 

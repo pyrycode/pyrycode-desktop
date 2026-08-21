@@ -1,14 +1,14 @@
 # Pairing input screen
 
-The desktop's paste-only pairing screen: the user pastes the payload printed by `pyry pair --print` on pyrybox, reviews the server-key **fingerprint** the background process derives, and explicitly **confirms** to persist the pairing — or **cancels**, discarding the paste. It is the renderer equivalent of mobile's "Paste pairing code" dialog (Figma node `19-54`), plus the desktop-specific human fingerprint-verify step mobile's paste path skipped ([#53](pairing-confirmation.md)).
+The desktop's paste-only pairing screen: the user pastes the payload printed by `pyry pair --print` on pyrybox, reviews the server-key **fingerprint** the background process derives, and explicitly **confirms** to persist the pairing — or **cancels**, discarding the paste. The paste phase renders as a full-window page on desktop's own Figma frame (`103-2901`, [#665](../codebase/665.md)); the fingerprint-review phase is still the renderer equivalent of mobile's "Paste pairing code" dialog (Figma node `19-54`), plus the desktop-specific human fingerprint-verify step mobile's paste path skipped ([#53](pairing-confirmation.md)).
 
-Introduced in [#55](../codebase/55.md). Lives entirely under `src/renderer/src/screens/pairing/` — it never touches the token, server key, socket, or Noise handshake; those stay in the background process (ADR [0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md "keep the transport out of the window"). It drives the existing [pairing IPC channel](pairing-ipc-channel.md) (#54) and holds only the paste string it collects and the fingerprint/reason it gets back.
+Introduced in [#55](../codebase/55.md); the paste phase restyled onto its own frame in [#665](../codebase/665.md). Lives entirely under `src/renderer/src/screens/pairing/` — it never touches the token, server key, socket, or Noise handshake; those stay in the background process (ADR [0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md "keep the transport out of the window"). It drives the existing [pairing IPC channel](pairing-ipc-channel.md) (#54) and holds only the paste string it collects and the fingerprint/reason it gets back.
 
 ## What it does
 
 Gives a fresh-install user a terminal-free way to pair the app with their daemon:
 
-1. **Paste** the `pyry pair --print` payload into a monospace field.
+1. **Paste** the `pyry pair --print` payload into the field.
 2. **Submit** — the pasted payload crosses the bridge to main, which parses it, validates the relay against the allowlist, and derives the server-key fingerprint; the screen displays the **fingerprint** for review.
 3. **Review** — the user compares the displayed fingerprint byte-for-byte against what `pyry pair` printed / what the phone shows.
 4. **Confirm** — the pairing is persisted (in main, via `safeStorage`) only on explicit confirm; **Cancel** discards the paste without persisting.
@@ -27,7 +27,7 @@ The screen decomposes into a **pure, React-free core** (`pairingState.ts`) and a
 src/renderer/src/screens/pairing/
 ├── pairingState.ts        # phase machine + effect-runners + formatter (pure, React-free)
 ├── pairingState.test.ts   # reducer + runners + formatter tests (node env, no DOM)
-├── PairingScreen.tsx       # PairingView (pure) + EntryCard/ReviewCard + PairingScreen (container)
+├── PairingScreen.tsx       # PairingView (pure) + EntryPage/ReviewCard + PairingScreen (container)
 ├── PairingScreen.test.tsx  # renderToStaticMarkup per-phase render tests
 └── pairing.css             # card + field + buttons + fingerprint, all token-based
 ```
@@ -85,7 +85,22 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 
 ### View + container (`PairingScreen.tsx`)
 
-- **`PairingView`** — a pure presentational component (props in, markup out; no hooks, no state, no effects). It renders the card `<div className="pairing">` and switches on `state.phase`: the `EntryCard` (title, `pyry pair --print` instruction with a mono accent, controlled `<textarea>`, inline error row, `[Cancel, Pair]`) for `editing`/`submitting`, the `ReviewCard` (title, fingerprint block, caption, `[Cancel, Confirm]`) for `reviewing`/`confirming`, and a success marker for `paired`. This is what `renderToStaticMarkup` renders in tests, one call per phase.
+- **`PairingView`** — a pure presentational component (props in, markup out; no hooks, no state, no effects). The root always carries the `.pairing` class — every outside consumer of the screen (`e2e/smoke.spec.ts:81`) binds that one class and expects it present in every phase — plus a phase-derived treatment class, `.pairing-page` or `.pairing-card`:
+
+  ```ts
+  const isPaste = state.phase === 'editing' || state.phase === 'submitting'
+  // className={`pairing ${isPaste ? 'pairing-page' : 'pairing-card'}`}
+  ```
+
+  `editing`/`submitting` render `EntryPage` — the full-window paste page ([#665](../codebase/665.md)) described below. `reviewing`/`confirming` render `ReviewCard` (title, fingerprint block, caption, `[Cancel, Confirm]`) — still the 420px `.pairing-card` dialog inherited from mobile's `19-54`, unchanged since #55. `paired` renders a success marker. This is what `renderToStaticMarkup` renders in tests, one call per phase.
+
+  **`EntryPage`** ([#665](../codebase/665.md)) is a full-window page drawn from desktop's own Figma frame `103-2901` — a radial glow over `--color-surface`, the welcome screen's `--space-7`/`--space-8` frame padding, and a bottom-pinned CTA stack. It replaced the `EntryCard` dialog #55 shipped (card `<h1>`, instruction paragraph, controlled `<textarea>`, inline error row) with:
+
+  - an M3 **filled** text field: a persistent (non-floating) `Pairing code` label as an `aria-hidden` `<span>` above a single-line `<input aria-label="Pairing code">`, a 1px bottom active indicator, and a trailing **clear control** — a 40px round button, present only when the paste is non-empty, that writes a constant `''` through `onPasteChange` and returns focus to the input on click. No wrapping `<label>`: HTML forbids interactive content inside one (the clear button couldn't share the row), and a wrapping label would put a second element under the accessible name "Pairing code", which is exactly the ambiguity [#664](../codebase/664.md) had just removed for the six outside consumers that match the raw `aria-label` attribute.
+  - a supporting-text slot below the field holding **either** the instruction (`Run pyry pair --print on your server and paste the output here.`) **or** the mapped error, never both — rendered as two `<p>` elements with **distinct `key`s** (`key="instruction"` / `key="error"`), not a single element whose `role` toggles. This is load-bearing, not stylistic: two same-tag JSX branches at the same position with no key reconcile to *one* DOM node in React, so an unkeyed version was mutating a live node's `role` to `alert` in the same commit that changed its text — an insert-vs-mutate distinction screen readers do not reliably announce. See [#665 codebase notes](../codebase/665.md) for the full reconciliation trace.
+  - a three-row CTA stack: the `Pair` pill (full-width, disabled while `paste` is empty/whitespace or while `busy`, shows `Pairing…` in flight), a bare `Cancel` text row, and the `Open source · github.com/pyrycode/pyrycode-desktop` footer.
+
+  No heading — the frame draws none, and the renderer has no visually-hidden utility to compensate with; the screen is left navigable by its one named field and two named buttons.
 - **`PairingScreen`** — the thin container: `const [state, dispatch] = useReducer(pairingReducer, initialPairingState)`, plus handlers that dispatch the intent then dispatch the awaited runner result. Async is **handler-driven, not effect-driven** — there is no `useEffect`, so no StrictMode double-invoke concern (the deliberate divergence from `daemonEventBridge`, which subscribes for its display lifetime). `onConfirm` fires `onPaired?.()` on `confirm-succeeded`; `onCancel` fires `onCancel?.()`.
 
 **Error-reason → inline copy** is a value-free `Record<PairingErrorReason, string>` in the view — the five coarse #54 categories mapped to fixed copy, no interpolation of any inbound value:
@@ -100,7 +115,14 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 
 ### Styling
 
-`pairing.css` renders the Figma node `19-54` card (`surface-container-high` background, `--radius-lg` corners, `--space-6` padding) stretched to the window with a `max-width: 420px`. Every color/type/spacing resolves to a `tokens.css` token; only bare structural geometry is literal. The screen needs three tokens #55 added to `tokens.css`: `--color-primary` (`#9dcbfc`, button labels), the `--text-headline-small-*` set (title), and the `--text-label-large-*` set (button labels). The inline error reuses `--color-tertiary` (no dedicated error token exists — see [#55 notes](../codebase/55.md)). See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
+`pairing.css` now serves **two treatments** from one file, kept deliberately separable (siblings, not overrides — neither undoes a property the other sets) so the confirm phase can be lifted onto the page treatment in one move once it has a frame of its own ([#665](../codebase/665.md)):
+
+- **`.pairing-card`** — the reviewing/confirming/paired phases: the original Figma `19-54` card (`surface-container-high` background, `--radius-lg` corners, `--space-6` padding, `max-width: 420px`), byte-for-byte what `.pairing` carried before #665 split it out.
+- **`.pairing-page`** — the paste phase: desktop's own frame `103-2901`. `height: 100%` (rides the `html`/`body`/`#root` chain both mount sites leave bare), `--space-7`/`--space-8` frame padding, and a radial glow **derived from this frame's own Figma matrix, not copied from `welcome.css`** — the two frames' glows are close but not identical (48%×61% here vs. welcome's 48%×56%, same centre, purely vertical delta). The `.pairing-field*` block is the M3 filled field: a `::before` pseudo carries the 72% translucent fill at `opacity` (never a bare `rgba()`/`color-mix()` literal, per the house rule), and the field's row needs `position: relative` because the absolutely-positioned fill would otherwise paint above its non-positioned siblings.
+
+Both `.pairing` (the shared base — box model, colour, font) and the outside-bound contract described above stay constant across the split. Every color/type/spacing resolves to a `tokens.css` token; the file's header names the remaining bare-literal geometry explicitly (the 56/48/40/24px boxes, the 1px indicator, the glow percentages, the 0.72/0.55/0.38 opacities) — no new tokens were added for #665. The inline error still reuses `--color-tertiary` (no dedicated error token exists — see [#55 notes](../codebase/55.md)). The `reuse` of the welcome frame is **token-level and visual only** — this codebase has no shared cross-screen CSS at all, so the page treatment is restated under its own class names rather than importing `welcome.css` or reaching for `.welcome__*`. See [ADR 0003](../decisions/0003-m3-theme-tokens-css-custom-properties.md).
+
+The field's keyboard-focus indicator is an **outset** `box-shadow` on `:focus-within` (doubling the 1px border into a 2px line) rather than a colour change alone — a hue-only flip between `--color-on-surface-variant` and `--color-primary` measured at 1.00:1 luminance contrast, imperceptible in greyscale or under a blue-yellow deficiency ([#665 code review](../codebase/665.md) finding).
 
 ## State + concurrency model
 
@@ -122,8 +144,9 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 - **A failed confirm** cannot retry with Confirm — the main pending record is already consumed, so the screen returns to `editing` for a fresh submit (paste preserved).
 - **A rejected or throwing bridge invoke** (handler absent/unregistered, invoke racing registration, non-serializable reply) is coerced to `malformed-request` rather than left to wedge the screen in `submitting`/`confirming` with Cancel disabled ([#513](../codebase/513.md)).
 - **`paired` renders a success marker** ("Paired ✓"), but the [app shell](app-shell.md) unmounts this screen the moment `onPaired` fires ([#80](../codebase/80.md)) — `confirm-succeeded` both flips the reducer to `paired` and calls `onPaired`, and `App`'s `setRoute('conversation')` swaps the screen out — so the marker is effectively superseded by navigation rather than lingering.
-- **Container interaction is not click-simulated** — no DOM harness. The interaction is proven on the pure `runSubmit`/`runConfirm`/`pairingReducer` seams; only the thin container glue is untested (the precedented gap, mirroring `useDaemonEventBridge`).
-- **Dark scheme only**; the card is dialog-shaped (`max-width` + centered margin). Its placement is decided by the [app shell](app-shell.md): as of [#662](../codebase/662.md) it is a full-window screen reached by user action (no longer the unpaired app root, which is now [welcome](welcome-screen.md)), not a dialog over another screen.
+- **Container interaction is not click-simulated** — no DOM harness. The interaction is proven on the pure `runSubmit`/`runConfirm`/`pairingReducer` seams; only the thin container glue is untested (the precedented gap, mirroring `useDaemonEventBridge`). The clear control's click is likewise unexercised at the test tier for the same reason — a recorded gap, not an oversight ([#665](../codebase/665.md)).
+- **Dark scheme only.** As of [#665](../codebase/665.md) the paste phase (`editing`/`submitting`) is a full-window page on its own Figma frame (`103-2901`); the reviewing/confirming/paired phases are still the 420px dialog card. The flow is deliberately inconsistent between the two treatments until the confirm phase gets its own frame — recorded as an accepted, temporary state, not a bug. Its placement in the app is decided by the [app shell](app-shell.md): as of [#662](../codebase/662.md) it is reached by user action (no longer the unpaired app root, which is now [welcome](welcome-screen.md)), not a dialog over another screen.
+- **Mutually exclusive same-tag JSX siblings need distinct `key`s if either carries insertion-only semantics** (e.g. `role="alert"`). Without a key, React reconciles both branches to one DOM node and mutates it instead of replacing it — see [#665 codebase notes](../codebase/665.md) for the full trace; the fix here is only complete because the reducer forces `error` to `null` between any two errors, so the slot provably alternates and two same-key errors in a row can't occur.
 
 ## Related
 
@@ -136,4 +159,6 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the sibling renderer screen; the `renderToStaticMarkup` + theme-token discipline reused here.
 - [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) — `useReducer` for ephemeral screen state · [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the store shape this deliberately does *not* use.
 - [#513 codebase notes](../codebase/513.md) — the rejected-invoke recovery fix that made `runSubmit`/`runConfirm` total functions.
-- [#55 codebase notes](../codebase/55.md) · Spec: `docs/specs/architecture/55-pairing-input-screen.md`
+- [#664 codebase notes](../codebase/664.md) — swept every outside consumer onto `aria-label="Pairing code"` alone, ahead of #665's element swap.
+- [#665 codebase notes](../codebase/665.md) — restyled the paste phase onto desktop's own Figma frame (`103-2901`); the `EntryCard` → `EntryPage` rewrite, the `.pairing-card`/`.pairing-page` split, the clear control, and the keyed-supporting-slot reconciliation fix described above.
+- [#55 codebase notes](../codebase/55.md) · Spec: `docs/specs/architecture/55-pairing-input-screen.md` — the original `EntryCard`/`<textarea>` shipment; left as a historical record of what shipped at the time, superseded by #665 above.

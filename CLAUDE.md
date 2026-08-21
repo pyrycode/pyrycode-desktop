@@ -68,6 +68,17 @@ The transport, the Noise session, the relay connection supervisor, and the wire 
 - **Keep the transport out of the window.** Anything touching keys, sockets, or the Noise handshake lives in the background process.
 - **No direct push to `main`.** PR plus review.
 - **The wire types match mobile.** Change them only alongside a daemon or mobile change.
+- **Daemon text may be rendered, escaped and length-bounded.** It is not forbidden content, and the tool rows already show it on purpose. What it may never reach is a raw-markup sink or a log. So no `innerHTML` and no `dangerouslySetInnerHTML`, never into an attribute or a URL, and never as a filename, a cache key or a lookup path. The rule that a string must be a client-owned constant is scoped to chrome that speaks in the app's own voice, such as notification copy, not to text the daemon is reporting. Operator ruling, 2026-08-20.
+
+## Driving a running session
+
+Some things are changed by sending an ordinary message rather than by a command on the wire, because claude intercepts a message whose text begins with a slash and runs it instead of passing it to the model. Measured against claude 2.1.220 on 2026-08-21: an unknown one comes back as a synthetic assistant reply reading "Unknown command", at zero turns and zero cost.
+
+- **Model and effort** reach a running session as `/model <family>` or `/effort <level>`. A family alias resolves to the newest model in that family, and claude announces the resolved dated identifier on its next turn. That announcement is the only way to confirm what is actually running, so show it rather than the requested value.
+- **Reset and compact** are `/clear` and `/compact`.
+- **The available commands are workspace-dependent**, so a command that exists in one working directory may not exist in another. Do not assume a slash command is present.
+
+None of this needs a new command type or a wire change.
 
 ## Don't
 

@@ -8,6 +8,8 @@ import {
   THINKING_COPY,
   WORKING_COPY,
   workingIndicatorState,
+  openToolName,
+  toolWorkingCopy,
   StallIndicator,
   ApiRetryIndicator,
   API_RETRY_COPY,
@@ -434,7 +436,9 @@ describe('Timeline — the streamed assistant text', () => {
     )
     expect(userMarkup).toContain('bubble bubble--user')
     expect(userMarkup).not.toContain(MODIFIER)
-    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" />)).not.toContain(MODIFIER)
+    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)).not.toContain(
+      MODIFIER
+    )
     expect(renderToStaticMarkup(<StallIndicator isStalled={true} />)).not.toContain(MODIFIER)
     expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(MODIFIER)
     const retryMarkup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 3, total: 10 }} />)
@@ -442,7 +446,9 @@ describe('Timeline — the streamed assistant text', () => {
     // #609 (AC5): the markdown container is the assistant bubble's alone. Neither the user bubble nor any
     // of the four chrome affordances that reuse the daemon bubble's fill and measure gains it.
     expect(userMarkup).not.toContain(CONTAINER)
-    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" />)).not.toContain(CONTAINER)
+    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)).not.toContain(
+      CONTAINER
+    )
     expect(renderToStaticMarkup(<StallIndicator isStalled={true} />)).not.toContain(CONTAINER)
     expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(CONTAINER)
     expect(retryMarkup).not.toContain(CONTAINER)
@@ -596,17 +602,23 @@ describe('Timeline — the session-boundary delimiter (#286)', () => {
 // twin over a two-member union rather than a ThreadItem[] — pure (state in, markup out) — so a
 // server-rendered string proves both present affordances (thinking, working) and the zero-footprint
 // absent case. #648 widens the prop from `isThinking: boolean` to `WorkingIndicatorState | null`: still
-// NOT `phase`, so the view structurally cannot render a daemon-supplied string (AC5 — its prop's only
-// inhabitants are two client-owned literals and null). Injected state: no store, no IPC — the container's
-// running branches are unreachable under server render (zustand v5 reads getInitialState() → phase:
-// 'idle'), so the "showing" assertions live here, exactly like Timeline's populated assertions.
-describe('ThinkingIndicator — the running-turn working affordance (#215, #648)', () => {
+// NOT `phase`. Injected state: no store, no IPC — the container's running branches are unreachable under
+// server render (zustand v5 reads getInitialState() → phase: 'idle'), so the "showing" assertions live
+// here, exactly like Timeline's populated assertions.
+//
+// #649: the "no daemon string reaches this view" claim above is now DELIBERATELY narrowed, per the
+// operator's 2026-08-20 decision. The LABEL CHOICE is still a closed union of client-owned literals; one
+// separately-typed `toolName` prop carries the single daemon string, rendered as an auto-escaped React
+// text child exactly like the tool row's own `name` two rows above. What survives is the narrower half:
+// the fixed copy around the name stays client-owned. `toolName={null}` on the pre-existing cases below is
+// a mechanical prop addition — their assertions are #648's regression evidence and stand verbatim.
+describe('ThinkingIndicator — the running-turn working affordance (#215, #648, #649)', () => {
   it('is inert when no turn is running — renders nothing (zero layout footprint, AC3)', () => {
-    expect(renderToStaticMarkup(<ThinkingIndicator state={null} />)).toBe('')
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName={null} />)).toBe('')
   })
 
   it('shows the daemon-styled Thinking affordance while thinking', () => {
-    const markup = renderToStaticMarkup(<ThinkingIndicator state="thinking" />)
+    const markup = renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)
     // The stable test seam (the bubble__cursor role), the muted daemon-bubble treatment, and the
     // client-owned static label — the ellipsis glyph … (U+2026), no apostrophe to survive escaping.
     expect(markup).toContain('conversation__thinking')
@@ -618,7 +630,7 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648)
   })
 
   it('shows the generic working affordance on the same surface while running but not thinking (#648, AC1)', () => {
-    const markup = renderToStaticMarkup(<ThinkingIndicator state="working" />)
+    const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} />)
     // The same wrapper and the same muted modifier — one surface, two labels, no CSS change (AC1's
     // "the indicator is visible", not "a second indicator appears").
     expect(markup).toContain('conversation__thinking')
@@ -639,6 +651,85 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648)
     // STALL_COPY is module-private (#317) — asserted against its literal, as the CompactingIndicator
     // describe does.
     expect(WORKING_COPY).not.toBe('The turn seems to have stalled…')
+  })
+
+  it('names the open tool on the same surface, replacing the generic copy (#649, AC1)', () => {
+    const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName="Bash" />)
+    // The same wrapper and the same muted modifier — one surface, now three labels (AC1 is "the
+    // indicator names the tool", not "a second indicator appears").
+    expect(markup).toContain('conversation__thinking')
+    expect(markup).toContain('bubble--thinking')
+    expect(markup).toContain(toolWorkingCopy('Bash'))
+    // The named label REPLACES the generic one rather than sitting beside it.
+    expect(markup).not.toContain(WORKING_COPY)
+    expect(markup).not.toContain(THINKING_COPY)
+    // AC5's one-line bound rides on this modifier (see conversation.css). Asserted here because the
+    // declarations themselves have no vitest detector — server render has no layout engine — so the
+    // class being ON the element is the part a test can hold.
+    expect(markup).toContain('bubble--tool-label')
+  })
+
+  it('keeps the tool label off the two unnamed states — the modifier is the tool branch alone (AC3)', () => {
+    // The #648 labels must render byte-identical markup, so their assertions above stay AC3's
+    // regression evidence rather than being retyped against a moved target.
+    expect(renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} />)).not.toContain(
+      'bubble--tool-label'
+    )
+    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)).not.toContain(
+      'bubble--tool-label'
+    )
+  })
+
+  it('is still superseded with a tool open — the null state wins over the name (#649, AC3)', () => {
+    // The `state === null` guard runs FIRST, so #493's live api-retry and #496's live compaction still
+    // hide the indicator entirely in either phase; an open tool cannot resurrect it.
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName="Bash" />)).toBe('')
+  })
+
+  it('renders a hostile tool name as inert escaped text, never as markup (#649, AC4)', () => {
+    const hostile = '<img src=x onerror="alert(1)">'
+    const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName={hostile} />)
+    // Attribute-shaped guards, not a bare not.toContain: a `not.toContain('src=')` would pass
+    // vacuously. The name reaches the DOM only as an auto-escaped React text child (the tool row's own
+    // posture at ConversationScreen.tsx:551) — no dangerouslySetInnerHTML, no HTML sink.
+    expect(markup).toContain('Running &lt;img')
+    expect(markup).not.toContain('<img')
+    // No live event-handler attribute escaped out of the name. Matching on the QUOTE is what makes this
+    // a detector: escaped output carries a literal ` onerror=&quot;` run, so a bare /\son[a-z]+=/ would
+    // fail on correct output — it is the unescaped `="` that only an HTML sink could produce.
+    expect(markup).not.toMatch(/\son[a-z]+="/i)
+    expect(markup).not.toContain('alert(1)"')
+  })
+})
+
+// #649: the client-owned label that names the daemon's open tool. A function rather than a constant
+// because this copy has a hole — but BOTH fixed runs (the leading verb and the trailing U+2026) live
+// inside it, so "the fixed copy is client-owned and only the name is daemon-supplied" is true of one
+// readable unit. Pure calls, no rendering.
+describe('toolWorkingCopy — the client-owned label around the daemon tool name (#649)', () => {
+  it('pins its rendered value, so the copy cannot drift silently (AC4)', () => {
+    // The expect(THINKING_COPY).toBe('Thinking…') precedent — the value is held here rather than left
+    // to review. The U+2026 ellipsis character, matching its four siblings.
+    expect(toolWorkingCopy('Bash')).toBe('Running Bash…')
+  })
+
+  it('is apostrophe-free and lexically distinct from the four sibling labels (AC4)', () => {
+    const copy = toolWorkingCopy('Bash')
+    // renderToStaticMarkup escapes `'` → `&#x27;` — the standing desktop lesson.
+    expect(copy).not.toContain("'")
+    expect(copy).not.toBe(WORKING_COPY)
+    expect(copy).not.toBe(THINKING_COPY)
+    expect(copy).not.toBe(API_RETRY_COPY)
+    expect(copy).not.toBe(COMPACTING_COPY)
+    // The generic label must not be a substring either — the named label REPLACES it (AC1), so a
+    // "Working… on Bash" shape would make the replacement unobservable in the markup assertions above.
+    expect(copy).not.toContain(WORKING_COPY)
+  })
+
+  it('returns the daemon name verbatim — escaping is the renderers job, not this functions (AC4)', () => {
+    // Pre-escaping here would double-escape once React escapes the text child, and would be the "new
+    // mechanism" AC4 pins AGAINST. The function only wraps.
+    expect(toolWorkingCopy('<img src=x>')).toBe('Running <img src=x>…')
   })
 })
 
@@ -860,6 +951,80 @@ describe('workingIndicatorState — which client-owned label the running turn sh
       const status = { phase, apiRetry: null, compacting: false }
       expect(workingIndicatorState(status) !== null).toBe(shouldShowThinking(status))
     }
+  })
+})
+
+// #649: the open-tool derivation — a pure read over the `items` slice the container already holds, so
+// "a tool is running right now" needs no new wire field, no new store state and no new subscription.
+// Kept a separately-testable named helper (the isTurnRunning / workingIndicatorState precedent) rather
+// than inlined in the container, because the container's populated branch is unreachable under server
+// render. Pure calls, no rendering.
+describe('openToolName — which tool the running turn currently has open (#649)', () => {
+  // `items` is append-only and fillResult fills IN PLACE without reordering, so array order IS start
+  // order — the whole basis of the "most recently started" tie-break below.
+  function openCall(toolUseId: string, name: string): ThreadItem {
+    return { kind: 'toolCall', turnId: 't1', toolUseId, name, inputSummary: 'src/a.ts', result: null }
+  }
+  function resolvedCall(toolUseId: string, name: string): ThreadItem {
+    return {
+      kind: 'toolCall',
+      turnId: 't1',
+      toolUseId,
+      name,
+      inputSummary: 'src/a.ts',
+      result: { isError: false, resultSummary: '12 lines' }
+    }
+  }
+
+  it('finds nothing in an empty timeline', () => {
+    expect(openToolName([])).toBeNull()
+  })
+
+  it('finds nothing in a timeline with no tool calls at all', () => {
+    const items: ThreadItem[] = [
+      { kind: 'userText', text: 'run the build' },
+      { kind: 'assistantText', turnId: 't1', text: 'on it' }
+    ]
+    expect(openToolName(items)).toBeNull()
+  })
+
+  it('names the tool of a call whose result is still null (AC1)', () => {
+    expect(openToolName([openCall('u1', 'Bash')])).toBe('Bash')
+  })
+
+  it('names nothing once the call resolves — no turn_state needed (AC2)', () => {
+    // The toolResult filling the item is sufficient on its own: the label is derived purely from
+    // `items`, so fillResult returning a new array is the entire clearing mechanism.
+    expect(openToolName([resolvedCall('u1', 'Bash')])).toBeNull()
+  })
+
+  it('names the most recently started of several open at once (AC1s tie-break)', () => {
+    expect(openToolName([openCall('u1', 'Read'), openCall('u2', 'Bash')])).toBe('Bash')
+  })
+
+  it('selects on result === null, not on position — a later resolved call does not win', () => {
+    // The discriminating case: a naive "last toolCall" read would answer Bash here.
+    expect(openToolName([openCall('u1', 'Read'), resolvedCall('u2', 'Bash')])).toBe('Read')
+  })
+
+  it('falls back to the earlier open call when the later one resolves (AC2)', () => {
+    const items = [openCall('u1', 'Read'), openCall('u2', 'Bash')]
+    expect(openToolName(items)).toBe('Bash')
+    // The fillResult shape: a NEW array with a copied item, which is what re-renders the container.
+    const afterResult = [items[0], resolvedCall('u2', 'Bash')]
+    expect(openToolName(afterResult)).toBe('Read')
+  })
+
+  it('reverts to no name once every call has resolved (AC2)', () => {
+    expect(openToolName([resolvedCall('u1', 'Read'), resolvedCall('u2', 'Bash')])).toBeNull()
+  })
+
+  it('ignores non-toolCall items sitting after the open call', () => {
+    const items: ThreadItem[] = [
+      openCall('u1', 'Bash'),
+      { kind: 'assistantText', turnId: 't1', text: 'building…' }
+    ]
+    expect(openToolName(items)).toBe('Bash')
   })
 })
 

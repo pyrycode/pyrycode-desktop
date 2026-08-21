@@ -757,6 +757,35 @@
   color: var(--color-on-surface-variant);
 }
 
+/* #649 — the tool-naming variant of the label above. The daemon tool name is unbounded, so this is
+   .tool-row__summary's treatment (:951, also used for the untrusted cwd run at :186) — the one bound in
+   this file that holds a LONE unbounded untrusted string. Deliberately NOT .tool-row__name's `flex: 0 0
+   auto` + nowrap, the semantic match: that never truncates, which it can only afford because
+   .tool-row__summary sits beside it absorbing the overflow. The indicator has no such neighbour.
+
+   white-space: nowrap is the job — .bubble's word-break: break-word wraps a long name to a second line,
+   which would move the composer. nowrap also collapses a newline inside a daemon name, so an embedded \n
+   cannot break the line either. overflow: hidden then does two things: it clips the run to the bubble
+   (nowrap text would otherwise paint outside it) and it is the precondition for text-overflow, which
+   applies only when overflow is not visible.
+
+   min-width: 0 is NOT load-bearing here, contrary to the spec's reasoning — measured, not assumed. The
+   flex item's content-based automatic minimum is itself clamped by a definite max main size, and .bubble
+   already sets max-width: min(680px, 75%), so the cap holds with or without this line (all four
+   min-width x overflow combinations measured 679px against a 396-char name; removing .bubble's max-width
+   as a control blew out to 3089px). It stays for exact parity with the two sibling rules above, which
+   carry the identical four-declaration block, and it keeps the bound honest if that cap is ever relaxed.
+
+   Named --tool-label, not --thinking-tool, so it does not contain `bubble--thinking` as a substring: a
+   modifier that did would make every existing toContain('bubble--thinking') pass even if the base class
+   were dropped. No new token, no colour or type literal — it inherits the muted treatment above. */
+.bubble--tool-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* #317 — the stall-indicator wrapper. The .conversation__thinking shape (flex: 0 0 auto so it never
    claims a competing flex region beside the timeline; the thread's --space-4 inset keeps the bubble
    left-aligned and thread-consistent), since the stall indicator sits in the same message-list region.

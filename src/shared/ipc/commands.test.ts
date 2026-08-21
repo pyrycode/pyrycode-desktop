@@ -150,6 +150,12 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand({ payload })).toBe(false)
     expect(isRendererCommand({ type: '', payload })).toBe(false)
     expect(isRendererCommand({ type: 'connect', payload })).toBe(false)
+    // The screen-snapshot verb retired in #620 is now just another unknown type: the shape below was
+    // structurally VALID before that removal and now falls through the switch to default-deny, so a
+    // stale renderer bundle or a replayed message is dropped at the boundary rather than dispatched.
+    expect(isRendererCommand({ type: 'requestSnapshot', payload: { conversation_id: 'c1' } })).toBe(
+      false
+    )
   })
 
   it('rejects a send-message command with no payload', () => {
@@ -181,26 +187,6 @@ describe('isRendererCommand', () => {
     // existing generic sendCommand bridge — no new preload method or IPC channel exists to test.
     const command: RendererCommand = { type: 'requestDebugBundle' }
     expect(isRendererCommand(command)).toBe(true)
-  })
-
-  it('accepts a well-formed requestSnapshot command carrying a string conversation_id (#180)', () => {
-    // Compile-time proof the member is in RendererCommand, hence reachable through the existing
-    // generic sendCommand bridge — no new preload method or IPC channel exists.
-    const command: RendererCommand = { type: 'requestSnapshot', payload: { conversation_id: 'c1' } }
-    expect(isRendererCommand(command)).toBe(true)
-    // A structurally-extra field is harmless (structural minimum), like sendMessage.
-    expect(
-      isRendererCommand({ type: 'requestSnapshot', payload: { conversation_id: 'c1' }, extra: 1 })
-    ).toBe(true)
-  })
-
-  it('rejects a requestSnapshot with a missing payload or a non-string conversation_id (#180)', () => {
-    expect(isRendererCommand({ type: 'requestSnapshot' })).toBe(false)
-    expect(isRendererCommand({ type: 'requestSnapshot', payload: null })).toBe(false)
-    expect(isRendererCommand({ type: 'requestSnapshot', payload: {} })).toBe(false)
-    expect(isRendererCommand({ type: 'requestSnapshot', payload: { conversation_id: 42 } })).toBe(
-      false
-    )
   })
 
   it('accepts the bare requestConversations command (no payload — the request carries nothing) (#139)', () => {
@@ -288,7 +274,7 @@ describe('isRendererCommand', () => {
   it('accepts a well-formed cancelModal command carrying a string modal_id (#236)', () => {
     const command: RendererCommand = cancelModalCommand({ modal_id: 'md-1' })
     expect(isRendererCommand(command)).toBe(true)
-    // A structurally-extra field is harmless (structural minimum), like requestSnapshot.
+    // A structurally-extra field is harmless (structural minimum), like sendMessage.
     expect(isRendererCommand({ type: 'cancelModal', payload: { modal_id: 'md-1' }, extra: 1 })).toBe(
       true
     )
@@ -303,7 +289,7 @@ describe('isRendererCommand', () => {
 
   it('accepts a well-formed createConversation command with all-null fields (daemon defaults) (#241)', () => {
     // The guard checks the TYPE, so a literal null is an accepted value ("let the daemon choose"),
-    // while a missing/undefined key is rejected. No constructor exists (requestSnapshot precedent):
+    // while a missing/undefined key is rejected. No constructor exists (the unarchiveConversation precedent):
     // #242 builds the literal inline, so this is proven through an inline literal typed as the union.
     const allNull: CreateConversationPayload = { is_promoted: null, name: null, cwd: null }
     const command: RendererCommand = { type: 'createConversation', payload: allNull }
@@ -377,9 +363,8 @@ describe('isRendererCommand', () => {
   })
 
   it('accepts a well-formed unarchiveConversation command with a conversation_id string (#346)', () => {
-    // Mirrors requestSnapshot: a single required-string field, no constructor (the renderer in #348 builds
-    // the literal inline). A structurally-extra field is harmless (structural minimum); the main-side fresh
-    // literal drops it.
+    // A single required-string field, no constructor (the renderer in #348 builds the literal inline).
+    // A structurally-extra field is harmless (structural minimum); the main-side fresh literal drops it.
     const payload: UnarchiveConversationPayload = { conversation_id: 'c1' }
     const command: RendererCommand = { type: 'unarchiveConversation', payload }
     expect(isRendererCommand(command)).toBe(true)
@@ -661,7 +646,7 @@ describe('isRendererCommand', () => {
 
   it('accepts a well-formed notify command for each closed kind (#391)', () => {
     // The ONLY member whose guard tests closed-set membership, not `typeof === "string"`. No
-    // constructor exists (the requestSnapshot precedent): #392 builds the literal inline, proven
+    // constructor exists (the unarchiveConversation precedent): #392 builds the literal inline, proven
     // here through inline literals typed as the union.
     const turnComplete: RendererCommand = { type: 'notify', payload: { kind: 'turn-complete' } }
     const prompt: RendererCommand = { type: 'notify', payload: { kind: 'prompt' } }

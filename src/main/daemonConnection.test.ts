@@ -26,7 +26,6 @@ import { createDebugBundleDownload, type DebugBundleDownload } from './debugBund
 import {
   MAX_PLAINTEXT_BYTES,
   type SendMessagePayload,
-  type RequestSnapshotPayload,
   type ScreenSnapshotPayload,
   type CreateConversationPayload,
   type CreateWorkspaceFolderPayload,
@@ -1290,8 +1289,7 @@ describe('createDaemonConnection — send (outbound send_message)', () => {
   })
 })
 
-describe('createDaemonConnection — requestSnapshot (screen_snapshot request/reply, #180)', () => {
-  const PAYLOAD: RequestSnapshotPayload = { conversation_id: 'conv-1' }
+describe('createDaemonConnection — inbound screen_snapshot decode (#180, #316)', () => {
   const SNAPSHOT: ScreenSnapshotPayload = {
     conversation_id: 'conv-1',
     text: 'secret rendered screen',
@@ -1311,45 +1309,6 @@ describe('createDaemonConnection — requestSnapshot (screen_snapshot request/re
     ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
     return ctx
   }
-
-  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
-    const { connection, drivers } = build()
-
-    expect(() => connection.requestSnapshot(PAYLOAD)).not.toThrow()
-    expect(drivers).toHaveLength(0)
-  })
-
-  it('after handshake-complete, forwards one request_snapshot envelope with id 2 and the payload', async () => {
-    const { connection, drivers } = await connected()
-
-    connection.requestSnapshot(PAYLOAD)
-
-    expect(drivers[0].sent).toHaveLength(1)
-    const envelope = decodeEnvelope(drivers[0].sent[0])
-    expect(envelope.type).toBe('request_snapshot')
-    expect(envelope.id).toBe(2)
-    expect(envelope.ts).toBe(FIXED_TS)
-    expect(envelope.payload).toEqual(PAYLOAD)
-  })
-
-  it('shares the one envelope-id counter with send (no second counter)', async () => {
-    const { connection, drivers } = await connected()
-
-    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
-    connection.requestSnapshot(PAYLOAD)
-
-    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
-    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
-  })
-
-  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
-    const { connection, drivers } = build({ throwOnSend: true })
-    connection.start()
-    await tick()
-    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
-
-    expect(() => connection.requestSnapshot(PAYLOAD)).not.toThrow()
-  })
 
   it('decodes an inbound screen_snapshot into BOTH snapshotReceived (run-config) and screenSnapshotReceived (text), #316', async () => {
     const { sink, drivers } = await connected()

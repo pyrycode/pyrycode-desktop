@@ -1462,10 +1462,12 @@ discussed and deliberately deferred, not built.
 
 **What stayed, and what's since gone.** [`screenSnapshotStore`](screen-snapshot-store.md) and its
 bridge stayed reader-less through #618's scope, then were deleted outright by
-[#619](../codebase/619.md) — the `requestSnapshot` IPC command and the wire types remain
-#620–#622's removals. See [#324 codebase notes](../codebase/324.md) for the original design and
-patterns established, [#618 codebase notes](../codebase/618.md) for the visible-surface removal and
-its comment re-anchors, and [#619 codebase notes](../codebase/619.md) for the state-layer removal.
+[#619](../codebase/619.md). The outbound `requestSnapshot` IPC command and its wire type were then
+removed by [#620](../codebase/620.md); the inbound decode and its two events remain #621/#622's
+removals. See [#324 codebase notes](../codebase/324.md) for the original design and patterns
+established, [#618 codebase notes](../codebase/618.md) for the visible-surface removal and its comment
+re-anchors, [#619 codebase notes](../codebase/619.md) for the state-layer removal, and [#620 codebase
+notes](../codebase/620.md) for the outbound-transport removal.
 
 ### Channel Info sheet (#365)
 
@@ -1651,7 +1653,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
 - [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
-- [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`; also the `requestSnapshot` command and `screenSnapshotReceived` event #324's now-removed control used to send and render (#316, #324, removed #618)
+- [Screen snapshot fetch](screen-snapshot-fetch.md) — the transport data path (#180, extended #191) `<RunConfigData/>` consumes via `snapshotReceived`; also hosted the `requestSnapshot` command (removed #620) and the `screenSnapshotReceived` event #324's now-removed control used to send and render (#316, #324, removed #618)
 - [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323), reader-less since [#618](../codebase/618.md) removed `ScreenSnapshotControl`, its former sole consumer (#324), then deleted outright by [#619](../codebase/619.md)
 - [Relay-link store](relay-link-store.md) — the dedicated store (#329) `<ConnectionStatusIndicatorControl/>` reads via `selectRelayLinkStatus`, its first real consumer; combined at render time with [session store](session-store.md)'s `ConnectionStatus` (#330)
 - [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the store and model `<Timeline/>` reads via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx`; `<ThinkingIndicator/>` reads the same store's `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` now also writes to this store's `dispatch` as the `userText` producer, and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is now translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` reads the store's new `selectStalled` (#317, transport #315); `<ApiRetryIndicator/>` reads the store's new `selectApiRetry`, and the exported `shouldShowThinking` predicate reads it alongside `selectPhase` to narrow `<ThinkingIndicator/>`'s gate (#493, transport #492); `<CompactingIndicator/>` reads the store's new `selectCompacting`, and `shouldShowThinking` gains a second clause reading it to narrow `<ThinkingIndicator/>`'s gate again (#496, transport #495)

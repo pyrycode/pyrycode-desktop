@@ -47,7 +47,6 @@ export type EnvelopeType =
   | 'request_debug_bundle'
   | 'debug_bundle_chunk'
   | 'debug_bundle_done'
-  | 'request_snapshot'
   | 'set_session_settings'
   | 'session_settings_updated'
   // v2-only bare phone→binary control frame — asks for the current run configuration. Carries NO
@@ -167,16 +166,6 @@ export interface SendMessagePayload {
   conversation_id: string
   message_id: string
   text: string
-}
-
-/**
- * Outbound `request_snapshot` payload (client → daemon). Mirrors the daemon's
- * RequestSnapshotPayload{ConversationID string}: names the conversation whose current screen to
- * snapshot. Unlike `request_debug_bundle` (a bare, daemon-global control frame), this carries a real
- * payload — the daemon rejects an empty/unknown id with `conversation.not_found`. See #180.
- */
-export interface RequestSnapshotPayload {
-  conversation_id: string
 }
 
 /**

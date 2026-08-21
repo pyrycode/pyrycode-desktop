@@ -30,7 +30,6 @@ import type {
 import { buildClientHello, parseHelloAck } from './transport/helloExchange'
 import { buildSendMessage } from './transport/sendMessageEnvelope'
 import { buildRequestDebugBundle } from './transport/requestDebugBundleEnvelope'
-import { buildRequestSnapshot } from './transport/requestSnapshotEnvelope'
 import { buildRequestSessionSettings } from './transport/requestSessionSettingsEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
 import { buildRecentWorkspaces } from './transport/recentWorkspacesEnvelope'
@@ -62,7 +61,6 @@ import {
   CAPABILITY_INTERACTIVE,
   type HelloAckPayload,
   type SendMessagePayload,
-  type RequestSnapshotPayload,
   type CreateConversationPayload,
   type CreateWorkspaceFolderPayload,
   type PromoteConversationPayload,
@@ -149,17 +147,8 @@ export interface DaemonConnection {
    */
   send(payload: SendMessagePayload): void
   /**
-   * Encrypt a payload-carrying `request_snapshot` control envelope onto the live session — asks the
-   * daemon for the current `screen_snapshot` (its model / effort / yolo) for the given conversation.
-   * The `send` TWIN, not `requestDebugBundle`: a snapshot has no consumer, so it is an inert no-op
-   * when not connected (`driver === null` → return), never a `consumer.fail`. The reply arrives
-   * asynchronously as one `snapshotReceived` DaemonEvent (or, if the daemon rejects the id, an
-   * `error` that is dropped today — see #180 Out of scope). NEVER throws out of the module (parity #490).
-   */
-  requestSnapshot(payload: RequestSnapshotPayload): void
-  /**
    * Ask the daemon for the current run configuration (#491). Bare — no payload — because the reply
-   * is daemon-wide. Inert no-op when not connected, like requestSnapshot.
+   * is daemon-wide. Inert no-op when not connected, like send.
    */
   requestSessionSettings(): void
   /**
@@ -168,8 +157,8 @@ export interface DaemonConnection {
    * consumer to fail, so it is an inert no-op when not connected (`driver === null` → return). The
    * reply arrives asynchronously as one `conversationsReceived` DaemonEvent, consumed by the
    * conversation-list store (#208), not the session store. Bare — no payload argument. It has no
-   * caller in this ticket; #208 triggers it via `sendCommand` on connect (as #181 triggered
-   * `requestSnapshot`). NEVER throws out of the module (parity #490).
+   * caller in this ticket; #208 triggers it via `sendCommand` on connect. NEVER throws out of the
+   * module (parity #490).
    */
   requestConversations(): void
   /**
@@ -309,7 +298,7 @@ export interface DaemonConnection {
    * remembered against the request's envelope id and echoed onto the confirmed event so the renderer can
    * tell two same-`session_id` changes apart. `changeId` NEVER rides the wire (the builder consumes only
    * `payload`). An empty/unknown `session_id` is the daemon's `session.not_found` to reject (no main-side
-   * guard, like `requestSnapshot`). Its caller is the interactive Run-config controls (#257); ships
+   * guard, like `archiveConversation`). Its caller is the interactive Run-config controls (#257); ships
    * dormant. NEVER throws out of the module (parity #490).
    */
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void
@@ -1170,31 +1159,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
-  function requestSnapshot(payload: RequestSnapshotPayload): void {
-    // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
-    // mid-bootstrap, or bootstrap-failed). A snapshot has no consumer to fail; a request sent while
-    // disconnected simply produces no reply.
-    if (driver === null) return
-    try {
-      // Shares the one monotonic nextEnvelopeId with send / requestDebugBundle — no second counter —
-      // so ids stay unique across interleaved calls (the daemon correlates replies by id).
-      const bytes = buildRequestSnapshot({ id: nextEnvelopeId, ts: now(), payload })
-      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
-      driver.sendMessage(bytes)
-    } catch {
-      // Never throw out of the module (parity #490): an over-cap plaintext (WireEncodeError) or any
-      // driver/wasm throw. The caught object is DROPPED (classify-don't-forward, inherited #62).
-    }
-  }
-
   function requestConversations(): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A list request has no consumer to fail; a request sent
     // while disconnected simply produces no reply.
     if (driver === null) return
     try {
-      // Shares the one monotonic nextEnvelopeId with send / requestSnapshot / requestDebugBundle — no
-      // second counter — so ids stay unique across interleaved calls (the daemon correlates by id).
+      // Shares the one monotonic nextEnvelopeId with send / requestDebugBundle — no second counter —
+      // so ids stay unique across interleaved calls (the daemon correlates by id).
       const bytes = buildListConversations({ id: nextEnvelopeId, ts: now() })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
@@ -1210,9 +1182,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // while disconnected simply produces no reply, and the sheet re-requests on its next open.
     if (driver === null) return
     try {
-      // Shares the one monotonic nextEnvelopeId with send / requestSnapshot / requestDebugBundle —
-      // no second counter — so ids stay unique across interleaved calls (the daemon correlates the
-      // session_settings reply by in_reply_to).
+      // Shares the one monotonic nextEnvelopeId with send / requestDebugBundle — no second counter —
+      // so ids stay unique across interleaved calls (the daemon correlates the session_settings reply
+      // by in_reply_to).
       const bytes = buildRequestSessionSettings({ id: nextEnvelopeId, ts: now() })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
@@ -1228,7 +1200,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // while disconnected simply produces no reply.
     if (driver === null) return
     try {
-      // Shares the one monotonic nextEnvelopeId with send / requestConversations / requestSnapshot — no
+      // Shares the one monotonic nextEnvelopeId with send / requestConversations — no
       // second counter — so ids stay unique across interleaved calls (the daemon correlates by id).
       const bytes = buildRecentWorkspaces({ id: nextEnvelopeId, ts: now() })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
@@ -1248,8 +1220,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Build a FRESH literal naming exactly the three modeled fields — never a spread of `payload`.
       // This is the deterministic net that bounds the wire to exactly is_promoted / name / cwd,
       // ignoring any renderer-smuggled extra field the structural-minimum guard let through (#236's
-      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / requestSnapshot /
-      // requestConversations — no second counter — so ids stay unique across interleaved calls.
+      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / requestConversations —
+      // no second counter — so ids stay unique across interleaved calls.
       const bytes = buildCreateConversation({
         id: nextEnvelopeId,
         ts: now(),
@@ -1280,8 +1252,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Build a FRESH literal naming exactly the two modeled fields — never a spread of `payload`. This
       // is the deterministic net that bounds the wire to exactly parent / name, ignoring any
       // renderer-smuggled extra field the structural-minimum guard let through (the createConversation
-      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / createConversation /
-      // requestSnapshot — no second counter — so ids stay unique across interleaved calls.
+      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / createConversation —
+      // no second counter — so ids stay unique across interleaved calls.
       const bytes = buildCreateWorkspaceFolder({
         id: envelopeId,
         ts: now(),
@@ -1312,8 +1284,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Build a FRESH literal naming exactly the two modeled fields — never a spread of `payload`.
       // This is the deterministic net that bounds the wire to exactly conversation_id / queued_msg_id,
       // ignoring any renderer-smuggled extra field the structural-minimum guard let through (#236's
-      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / requestSnapshot /
-      // createConversation — no second counter — so ids stay unique across interleaved calls.
+      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / createConversation —
+      // no second counter — so ids stay unique across interleaved calls.
       const bytes = buildDequeueMessage({
         id: nextEnvelopeId,
         ts: now(),
@@ -1338,8 +1310,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     if (driver === null) return
     try {
       // Bare control frame — no payload arg (the requestConversations shape, not dequeueMessage's
-      // fresh-literal payload). Shares the one monotonic nextEnvelopeId with send / requestSnapshot /
-      // requestConversations — no second counter — so ids stay unique across interleaved calls.
+      // fresh-literal payload). Shares the one monotonic nextEnvelopeId with send / requestConversations —
+      // no second counter — so ids stay unique across interleaved calls.
       const bytes = buildInterrupt({ id: nextEnvelopeId, ts: now() })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
@@ -1360,8 +1332,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Build a FRESH literal naming exactly the three modeled fields — never a spread of `payload`.
       // This is the deterministic net that bounds the wire to exactly conversation_id / name / cwd,
       // ignoring any renderer-smuggled extra field the structural-minimum guard let through (#236's
-      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / createConversation /
-      // requestSnapshot — no second counter — so ids stay unique across interleaved calls.
+      // fresh-literal posture). Shares the one monotonic nextEnvelopeId with send / createConversation —
+      // no second counter — so ids stay unique across interleaved calls.
       const bytes = buildPromoteConversation({
         id: nextEnvelopeId,
         ts: now(),
@@ -1390,7 +1362,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Build a FRESH literal naming exactly the one modeled field — never a spread of `payload`. This is
       // the deterministic net that bounds the wire to exactly conversation_id, ignoring any renderer-
       // smuggled extra field the structural-minimum guard let through (#236's fresh-literal posture).
-      // Shares the one monotonic nextEnvelopeId with send / unarchiveConversation / requestSnapshot — no
+      // Shares the one monotonic nextEnvelopeId with send / unarchiveConversation — no
       // second counter — so ids stay unique across interleaved calls.
       const bytes = buildArchiveConversation({
         id: nextEnvelopeId,
@@ -1418,7 +1390,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Build a FRESH literal naming exactly the one modeled field — never a spread of `payload`. This is
       // the deterministic net that bounds the wire to exactly conversation_id, ignoring any renderer-
       // smuggled extra field the structural-minimum guard let through (#236's fresh-literal posture).
-      // Shares the one monotonic nextEnvelopeId with send / promoteConversation / requestSnapshot — no
+      // Shares the one monotonic nextEnvelopeId with send / promoteConversation — no
       // second counter — so ids stay unique across interleaved calls.
       const bytes = buildUnarchiveConversation({
         id: nextEnvelopeId,
@@ -1446,7 +1418,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Build a FRESH literal naming exactly the one modeled field — never a spread of `payload`. This is
       // the deterministic net that bounds the wire to exactly conversation_id, ignoring any renderer-
       // smuggled extra field the structural-minimum guard let through (#236's fresh-literal posture).
-      // Shares the one monotonic nextEnvelopeId with send / unarchiveConversation / requestSnapshot — no
+      // Shares the one monotonic nextEnvelopeId with send / unarchiveConversation — no
       // second counter — so ids stay unique across interleaved calls.
       const bytes = buildDeleteConversation({
         id: nextEnvelopeId,
@@ -1526,7 +1498,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A settings change has no consumer to fail; a request sent
     // while disconnected simply produces no reply. No empty-session_id guard: an empty/unknown id is
-    // the daemon's `session.not_found` to reject (mirrors requestSnapshot's empty conversation_id).
+    // the daemon's `session.not_found` to reject (mirrors archiveConversation's empty conversation_id).
     if (driver === null) return
     // Capture the id BEFORE the build increments it, so the pending entry is keyed by this request's
     // envelope id — the value the daemon echoes as in_reply_to on the confirming reply (#261).
@@ -1535,7 +1507,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Pass `payload` straight through — the builder owns the FRESH literal + the omitempty presence
       // contract (conditional key assignment), which doubles as the anti-smuggling net. `changeId` is
       // NEVER passed to the builder — it stays off the wire. Shares the one monotonic nextEnvelopeId
-      // with send / requestSnapshot — no second counter — so ids stay unique across interleaved calls.
+      // with send — no second counter — so ids stay unique across interleaved calls.
       const bytes = buildSetSessionSettings({ id: nextEnvelopeId, ts: now(), payload })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
@@ -1690,7 +1662,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       driver?.stop()
     },
     send,
-    requestSnapshot,
     requestSessionSettings,
     requestConversations,
     requestRecentWorkspaces,

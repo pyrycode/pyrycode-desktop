@@ -5,6 +5,9 @@ import {
   MessageThread,
   Timeline,
   ThinkingIndicator,
+  THINKING_COPY,
+  WORKING_COPY,
+  workingIndicatorState,
   StallIndicator,
   ApiRetryIndicator,
   API_RETRY_COPY,
@@ -431,7 +434,7 @@ describe('Timeline — the streamed assistant text', () => {
     )
     expect(userMarkup).toContain('bubble bubble--user')
     expect(userMarkup).not.toContain(MODIFIER)
-    expect(renderToStaticMarkup(<ThinkingIndicator isThinking={true} />)).not.toContain(MODIFIER)
+    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" />)).not.toContain(MODIFIER)
     expect(renderToStaticMarkup(<StallIndicator isStalled={true} />)).not.toContain(MODIFIER)
     expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(MODIFIER)
     const retryMarkup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 3, total: 10 }} />)
@@ -439,7 +442,7 @@ describe('Timeline — the streamed assistant text', () => {
     // #609 (AC5): the markdown container is the assistant bubble's alone. Neither the user bubble nor any
     // of the four chrome affordances that reuse the daemon bubble's fill and measure gains it.
     expect(userMarkup).not.toContain(CONTAINER)
-    expect(renderToStaticMarkup(<ThinkingIndicator isThinking={true} />)).not.toContain(CONTAINER)
+    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" />)).not.toContain(CONTAINER)
     expect(renderToStaticMarkup(<StallIndicator isStalled={true} />)).not.toContain(CONTAINER)
     expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(CONTAINER)
     expect(retryMarkup).not.toContain(CONTAINER)
@@ -589,25 +592,53 @@ describe('Timeline — the session-boundary delimiter (#286)', () => {
   })
 })
 
-// #215: the thinking indicator bound to the coarse `phase` scalar. ThinkingIndicator is the Timeline
-// twin over a boolean rather than a ThreadItem[] — pure (isThinking in, markup out) — so a
-// server-rendered string proves both the present affordance (thinking) and the zero-footprint absent
-// case. Boolean input, not `phase`: the view structurally cannot render a daemon-supplied string
-// (AC3). Injected boolean: no store, no IPC — the container's `thinking` branch is unreachable under
-// server render (zustand v5 reads getInitialState() → phase: 'idle'), so the "showing" assertion lives
-// here, exactly like Timeline's populated assertions.
-describe('ThinkingIndicator — the pre-text working affordance', () => {
-  it('is inert when not thinking — renders nothing (zero layout footprint, AC2)', () => {
-    expect(renderToStaticMarkup(<ThinkingIndicator isThinking={false} />)).toBe('')
+// #215/#648: the working indicator bound to the coarse `phase` scalar. ThinkingIndicator is the Timeline
+// twin over a two-member union rather than a ThreadItem[] — pure (state in, markup out) — so a
+// server-rendered string proves both present affordances (thinking, working) and the zero-footprint
+// absent case. #648 widens the prop from `isThinking: boolean` to `WorkingIndicatorState | null`: still
+// NOT `phase`, so the view structurally cannot render a daemon-supplied string (AC5 — its prop's only
+// inhabitants are two client-owned literals and null). Injected state: no store, no IPC — the container's
+// running branches are unreachable under server render (zustand v5 reads getInitialState() → phase:
+// 'idle'), so the "showing" assertions live here, exactly like Timeline's populated assertions.
+describe('ThinkingIndicator — the running-turn working affordance (#215, #648)', () => {
+  it('is inert when no turn is running — renders nothing (zero layout footprint, AC3)', () => {
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} />)).toBe('')
   })
 
   it('shows the daemon-styled Thinking affordance while thinking', () => {
-    const markup = renderToStaticMarkup(<ThinkingIndicator isThinking={true} />)
+    const markup = renderToStaticMarkup(<ThinkingIndicator state="thinking" />)
     // The stable test seam (the bubble__cursor role), the muted daemon-bubble treatment, and the
     // client-owned static label — the ellipsis glyph … (U+2026), no apostrophe to survive escaping.
     expect(markup).toContain('conversation__thinking')
     expect(markup).toContain('bubble--thinking')
-    expect(markup).toContain('Thinking…')
+    expect(markup).toContain(THINKING_COPY)
+    // #648 hoisted this literal out of the JSX into an exported constant; its rendered text must not
+    // change, so the value is pinned here rather than left to review.
+    expect(THINKING_COPY).toBe('Thinking…')
+  })
+
+  it('shows the generic working affordance on the same surface while running but not thinking (#648, AC1)', () => {
+    const markup = renderToStaticMarkup(<ThinkingIndicator state="working" />)
+    // The same wrapper and the same muted modifier — one surface, two labels, no CSS change (AC1's
+    // "the indicator is visible", not "a second indicator appears").
+    expect(markup).toContain('conversation__thinking')
+    expect(markup).toContain('bubble--thinking')
+    expect(markup).toContain(WORKING_COPY)
+    // The label tracks the phase (AC2): the thinking copy is NOT what a tool-heavy stretch shows.
+    expect(markup).not.toContain(THINKING_COPY)
+  })
+
+  it('carries two client-owned labels, lexically distinct from each other and their siblings (AC2, AC5)', () => {
+    // Reachable without rendering (AC5) — both exported, following API_RETRY_COPY / COMPACTING_COPY.
+    expect(WORKING_COPY).not.toBe(THINKING_COPY)
+    // Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson).
+    expect(WORKING_COPY).not.toContain("'")
+    expect(THINKING_COPY).not.toContain("'")
+    expect(WORKING_COPY).not.toBe(API_RETRY_COPY)
+    expect(WORKING_COPY).not.toBe(COMPACTING_COPY)
+    // STALL_COPY is module-private (#317) — asserted against its literal, as the CompactingIndicator
+    // describe does.
+    expect(WORKING_COPY).not.toBe('The turn seems to have stalled…')
   })
 })
 
@@ -725,7 +756,12 @@ describe('CompactingIndicator — the auto-compaction affordance (#496)', () => 
 // a mutually-exclusive status union, so both indicator views stay pure and unchanged in their own props
 // (the isTurnRunning precedent of extracting the named gate). #496 extends `ThreadStatus` with one field
 // and this predicate with one clause — the second proof the seam grows by one of each.
-describe('shouldShowThinking — the retry- and compaction-supersede-thinking rule (#493, #496)', () => {
+//
+// #648 changes exactly one thing here: the phase clause becomes `isTurnRunning(phase)`, so the indicator
+// holds for the whole running turn. Both supersede clauses are textually untouched, and every assertion
+// below except the running-turn one stands verbatim from #493/#496 — they are the regression evidence
+// that broadening the phase clause did not weaken the supersede rules (AC4).
+describe('shouldShowThinking — the running-turn gate with the retry- and compaction-supersede rules (#493, #496, #648)', () => {
   it('shows the thinking indicator while thinking with nothing superseding it (AC4)', () => {
     expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: false })).toBe(true)
   })
@@ -757,10 +793,73 @@ describe('shouldShowThinking — the retry- and compaction-supersede-thinking ru
     expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: true })).toBe(false)
   })
 
-  it('leaves thinking-indicator behaviour unchanged when nothing is in flight (AC4)', () => {
-    // The pre-#493 gate was exactly `phase === 'thinking'`.
+  it('holds the indicator across the whole running turn when nothing is in flight (#648, AC1)', () => {
+    // #648 reverses the phase clause: the pre-#648 gate was exactly `phase === 'thinking'`, which let the
+    // indicator vanish for the tool-heavy bulk of a turn. It is now `isTurnRunning(phase)`, so `responding`
+    // shows. `idle` still hides — the gate never widens past a running turn.
     expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false })).toBe(false)
-    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: false })).toBe(false)
+    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: false })).toBe(true)
+  })
+
+  it('shows in both running phases and hides at idle — the isTurnRunning tie (#648, AC1, AC3)', () => {
+    // The gate now REUSES isTurnRunning rather than re-deriving the phase test, so the tie is asserted
+    // here rather than merely inherited: a future edit to either side that breaks agreement fails this.
+    for (const phase of ['thinking', 'responding'] as const) {
+      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false })).toBe(
+        isTurnRunning(phase)
+      )
+      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false })).toBe(true)
+    }
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false })).toBe(
+      isTurnRunning('idle')
+    )
+  })
+})
+
+// #648: the label discriminant, composed ON the gate above rather than duplicating it. Three outcomes —
+// null (nothing shows), 'thinking' and 'working' — so the two client-owned labels are chosen in one
+// place and the view receives a value it cannot confuse with a daemon string. Pure calls, no rendering.
+describe('workingIndicatorState — which client-owned label the running turn shows (#648)', () => {
+  it('picks the thinking label during the thinking slice (AC2)', () => {
+    expect(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false })).toBe(
+      'thinking'
+    )
+  })
+
+  it('picks the generic working label for the rest of the running turn (AC1, AC2)', () => {
+    // The phase that LASTS: the daemon flips to `responding` on the first reply token or tool step and
+    // sends no further turn_state until the turn ends, so this covers the tool-heavy silent stretch that
+    // used to show nothing at all.
+    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: false })).toBe(
+      'working'
+    )
+  })
+
+  it('picks nothing at idle — no wrapper, no empty chrome (AC3)', () => {
+    expect(workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: false })).toBeNull()
+  })
+
+  it('is superseded by a live retry in the newly covered phase too (AC4)', () => {
+    expect(
+      workingIndicatorState({ phase: 'responding', apiRetry: { current: 3, total: 10 }, compacting: false })
+    ).toBeNull()
+  })
+
+  it('is superseded by an unknown-count retry too — presence supersedes, not the counter (AC4)', () => {
+    expect(
+      workingIndicatorState({ phase: 'responding', apiRetry: { current: 0, total: 0 }, compacting: false })
+    ).toBeNull()
+  })
+
+  it('is superseded by a live compaction in the newly covered phase too (AC4)', () => {
+    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: true })).toBeNull()
+  })
+
+  it('agrees with the gate on every phase — it delegates, it is not a parallel rule (AC4)', () => {
+    for (const phase of ['thinking', 'responding', 'idle'] as const) {
+      const status = { phase, apiRetry: null, compacting: false }
+      expect(workingIndicatorState(status) !== null).toBe(shouldShowThinking(status))
+    }
   })
 })
 
@@ -1549,14 +1648,16 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('bubble__cursor')
   })
 
-  // #215: the thinking indicator mounts against the idle timeline store (getInitialState phase:
-  // 'idle'), so isThinking is false and it renders nothing — the inert render slice, layout unchanged
-  // until #179 flips `interactive` (AC4). The analog of the "no bubble__cursor" smoke above; the
-  // showing path is proven on the pure ThinkingIndicator describe.
-  it('mounts the idle timeline with no thinking indicator (the inert render slice, AC4)', () => {
+  // #215/#648: the working indicator mounts against the idle timeline store (getInitialState phase:
+  // 'idle'), so `workingIndicatorState` returns null and it renders nothing — the inert render slice,
+  // layout unchanged. The analog of the "no bubble__cursor" smoke above; both showing paths are proven
+  // on the pure ThinkingIndicator describe. #648 pins the idle container against the NEW label too: a
+  // gate that widened past a running turn would surface WORKING_COPY here.
+  it('mounts the idle timeline with no working indicator (the inert render slice, AC3)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__thinking')
-    expect(markup).not.toContain('Thinking…')
+    expect(markup).not.toContain(THINKING_COPY)
+    expect(markup).not.toContain(WORKING_COPY)
   })
 
   // #317: the stall indicator mounts against the initial timeline store (getInitialState stalled:

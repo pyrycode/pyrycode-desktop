@@ -75,8 +75,8 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278; onChange opens WorkspacePickerSheet, #383)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
-├── ThinkingIndicator          .conversation__thinking (null when idle/responding, #215)
-│   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…")
+├── ThinkingIndicator          .conversation__thinking (null when idle; holds through responding since #648, #215)
+│   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…" or "Working…", #648)
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
 │   └── ConnectionStatusIndicatorControl .status-row__connection (two dots, inside .status-row__summary, #330)
 ├── BackgroundTaskTrigger      .background-task-trigger (StatusRow sibling, unconditional, #581)
@@ -952,7 +952,7 @@ dead region — `Timeline` is now the conversation's single thread surface. See
 [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) below and
 [#203 codebase notes](../codebase/203.md) for the original design and code review record.
 
-### Thinking indicator (#215)
+### Thinking / working indicator (#215, held for the whole running turn since #648)
 
 `Timeline`'s structural twin over the coarse `phase` scalar (`TurnPhase`, [ADR 0008](../decisions/0008-thread-timeline-model.md))
 rather than the `items` list, mounted immediately after it:
@@ -960,42 +960,62 @@ rather than the `items` list, mounted immediately after it:
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-└── ThinkingIndicator           isThinking={useTimelineStore(selectPhase) === 'thinking'}
+└── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })}
 ```
 
 The daemon opens a turn with `turn_state{thinking}` before any `assistant_delta` (pyrycode #632), so
-during that window `Timeline` is `null` (no items yet) and, before this ticket, the thread showed
-nothing — a slow turn was indistinguishable from a stalled one. `ThinkingIndicator({ isThinking })` is
-`Timeline`'s twin: pure, exported, in-file, server-rendered from an injected boolean. `isThinking ===
-false` → `null` (zero footprint, the `Timeline`-on-empty-`items` precedent); `isThinking === true` → a
-`flex: 0 0 auto` `.conversation__thinking` wrapper (deliberately not the thread's `flex: 1 1 auto`, so
-it never claims a competing region) holding `<div className="bubble bubble--daemon
-bubble--thinking">Thinking…</div>` — the daemon-bubble surface, text muted to
-`--color-on-surface-variant`. The label is a static, client-owned constant, never `phase` itself.
+during that window `Timeline` is `null` (no items yet) and, before #215, the thread showed nothing — a
+slow turn was indistinguishable from a stalled one. `ThinkingIndicator({ state })` is `Timeline`'s twin:
+pure, exported, in-file, server-rendered from an injected value, never a store read of its own. `state
+=== null` → `null` (zero footprint, the `Timeline`-on-empty-`items` precedent); otherwise a `flex: 0 0
+auto` `.conversation__thinking` wrapper (deliberately not the thread's `flex: 1 1 auto`, so it never
+claims a competing region) holding `<div className="bubble bubble--daemon bubble--thinking">` with
+`THINKING_COPY` (`'Thinking…'`) when `state === 'thinking'` or `WORKING_COPY` (`'Working…'`) when `state
+=== 'working'` — the same daemon-bubble surface, text muted to `--color-on-surface-variant`, for both
+labels. Both labels are static, client-owned constants, never `phase` itself.
 
-**Boolean input, not `phase`.** The view's prop is `isThinking: boolean`, never `phase: TurnPhase` —
-this makes "no daemon-supplied string is rendered by this slice" a **type-level guarantee**: the view
-structurally cannot render a daemon string because it never receives one. The container does the
-trivial `phase === 'thinking'` derivation. No animation shipped (an optional pulse was explicitly
-non-load-bearing per spec); the interim treatment is deliberately minimal, since the locked mobile
-design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no dedicated thinking-indicator node — the polished
-version rolls into the deferred desktop-design pass.
+**Union input, not `phase` and not a `string` — the type-level guarantee widened, not weakened.** The
+view's prop is `state: WorkingIndicatorState | null` (`WorkingIndicatorState = 'thinking' | 'working'`),
+never `phase: TurnPhase` (which would make the illegal `'idle'` branch representable) and never a plain
+`string` (which would reopen the hole the type exists to close). "No daemon-supplied string is rendered
+by this slice" stays a **type-level guarantee**: the prop's only inhabitants are two client-owned
+literals and `null`. The container does the derivation via `workingIndicatorState`, not the view. No
+animation shipped (an optional pulse was explicitly non-load-bearing per spec); the interim treatment is
+deliberately minimal, since the locked mobile design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no
+dedicated working-indicator node — the polished version rolls into the deferred desktop-design pass.
 
 Was dormant until [#179](../codebase/179.md) flipped `interactive` (`phase` stayed `idle` in
 production until then, the same posture as `Timeline`); now live. Code review flagged one non-gating
 NIT: `.conversation__thinking` has no live region (`role="status"`), so a screen reader won't announce
-it appearing/disappearing — still unaddressed (not part of #179's scope), deferred to the
-desktop-design pass. See [#215 codebase notes](../codebase/215.md) for the full design, patterns
-established, and open questions.
+it appearing, disappearing, **or its label changing mid-turn since #648** — still unaddressed, deferred
+to the desktop-design pass. See [#215 codebase notes](../codebase/215.md) for the full original design
+and [#648 codebase notes](../codebase/648.md) for the whole-turn broadening, patterns established, and
+open questions.
 
-**Gate narrowed in [#493](../codebase/493.md), narrowed again in [#496](../codebase/496.md):**
-`isThinking` is no longer the bare `phase === 'thinking'` — it is `shouldShowThinking({ phase, apiRetry,
-compacting })`, which additionally requires `apiRetry === null && !compacting`. With no retry and no
-compaction in flight the predicate reduces to exactly the pre-#493 comparison, so thinking behaviour is
-unchanged; while either is live, the corresponding status below supersedes it. #496 extended the same
-`ThreadStatus` record and predicate by exactly one field and one clause — the seam #493 built by name
-for this ticket, not a second parallel gate. See [Api-retry indicator](#api-retry-indicator-493) and
-[Compacting indicator](#compacting-indicator-496) below.
+**Gate narrowed in [#493](../codebase/493.md), narrowed again in [#496](../codebase/496.md), broadened
+in [#648](../codebase/648.md):** `shouldShowThinking(status)` is `isTurnRunning(status.phase) &&
+status.apiRetry === null && !status.compacting` — reusing the same `isTurnRunning` predicate
+`InterruptControl` already gated on (`thinking || responding`), rather than the bare `phase ===
+'thinking'` comparison #215 shipped. A separate, new `workingIndicatorState(status)` composes **on top
+of** that gate rather than folding into it: `null` when `!shouldShowThinking(status)`, else `'thinking'`
+when `status.phase === 'thinking'`, else `'working'` (`'idle'` is unreachable in that second branch
+because the gate already excluded it). `shouldShowThinking` itself keeps its name, its `ThreadStatus`
+parameter, its `boolean` return, and both supersede clauses (`apiRetry === null && !compacting`)
+textually untouched — while either is live, the corresponding status below still supersedes this
+indicator, in **either** running phase now, not only `thinking`. #496 extended the same `ThreadStatus`
+record and predicate by exactly one field and one clause — the seam #493 built by name for this ticket,
+not a second parallel gate. See [Api-retry indicator](#api-retry-indicator-493) and [Compacting
+indicator](#compacting-indicator-496) below.
+
+**Why broaden rather than add a second indicator.** The daemon emits `turn_state{thinking}` only while
+claude is producing thinking text; the first reply token or the first tool step flips `phase` to
+`responding`, and no further `turn_state` arrives until the turn ends (pyrycode
+`cmd/pyry/interactive_turn_v2.go`). For a tool-heavy turn `responding` is the phase that *lasts*, and it
+was exactly the phase in which #215's gate showed nothing — the operator's first real use of the desktop
+app (2026-08-20) surfaced this as a screen that looked frozen for most of a turn. Because the client
+receives no signal finer than `responding` inside the tool loop, `WORKING_COPY` ("Working…") is
+deliberately generic rather than naming tool activity — a copy like "Running tools…" would be a lie
+whenever the turn is actually still streaming text.
 
 ### Api-retry indicator (#493)
 
@@ -1005,7 +1025,7 @@ mounted immediately after it — its supersede peer — and before `StallIndicat
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-├── ThinkingIndicator           isThinking={shouldShowThinking({ phase, apiRetry, compacting })} — narrowed again by #496
+├── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })} — narrowed again by #496, broadened by #648
 ├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)}
 ├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)} — #496, see below
 └── StallIndicator              isStalled={useTimelineStore(selectStalled)}
@@ -1054,7 +1074,7 @@ thinking-superseders (#493, #496) contiguously below the indicator they occlude,
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-├── ThinkingIndicator           isThinking={shouldShowThinking({ phase, apiRetry, compacting })}
+├── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })}
 ├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)}
 ├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)}
 └── StallIndicator              isStalled={useTimelineStore(selectStalled)}
@@ -1099,7 +1119,7 @@ immediately after it:
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-├── ThinkingIndicator           isThinking={shouldShowThinking({ phase, apiRetry, compacting })} — narrowed by #493, #496
+├── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })} — narrowed by #493, #496, broadened by #648
 ├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)} — #493, see above
 ├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)} — #496, see above
 └── StallIndicator              isStalled={useTimelineStore(selectStalled)}
@@ -1572,7 +1592,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md); the summary slot's first content in [#330](../codebase/330.md).** `StatusRow`'s summary region now holds the two-dot connection indicator (#330); the `model · effort · context%` run-config text itself is still unbuilt and lands as a sibling beside the dots. `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), [Run configuration Context window section](#run-configuration-context-window-section-192), and [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
 - **`ConnectionStatusIndicator({ relay, daemon })` / `ConnectionStatusIndicatorControl`** — **bound in [#330](../codebase/330.md).** `ConnectionStatusIndicator` is the exported pure view (both legs as props, matrix proven by direct server-render); `ConnectionStatusIndicatorControl` is the in-file container reading `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)`, mounted inside `StatusRow`'s summary slot. See [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md).** Reads the [conversation timeline store](conversation-timeline-store.md)'s `selectItems`. Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply. See [Structured-stream timeline render](#structured-stream-timeline-render-203) and [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
-- **`ThinkingIndicator({ isThinking })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md).** `Timeline`'s twin over the store's `selectPhase`, mounted right after it. See [Thinking indicator](#thinking-indicator-215) above.
+- **`ThinkingIndicator({ state })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md); prop widened and gate broadened to hold across the whole running turn in [#648](../codebase/648.md).** `Timeline`'s twin over the store's `selectPhase` (plus `apiRetry`/`compacting`), mounted right after it. See [Thinking / working indicator](#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648) above.
 - **`StallIndicator({ isStalled })`** — **bound in [#317](../codebase/317.md).** `ThinkingIndicator`'s own twin over the store's new `selectStalled`, mounted as its sibling right after it. See [Stall indicator](#stall-indicator-317) above.
 - **`ApiRetryIndicator({ retry })`** — **bound in [#493](../codebase/493.md).** `ThinkingIndicator`'s supersede peer over the store's new `selectApiRetry`, mounted right after `ThinkingIndicator` and before `StallIndicator`; also narrows `ThinkingIndicator`'s own gate via the new `shouldShowThinking` predicate. See [Api-retry indicator](#api-retry-indicator-493) above.
 - **`CompactingIndicator({ isCompacting })`** — **bound in [#496](../codebase/496.md).** `ThinkingIndicator`'s second supersede peer over the store's new `selectCompacting`, mounted right after `ApiRetryIndicator` and before `StallIndicator`; extends `shouldShowThinking` by one field and one clause. See [Compacting indicator](#compacting-indicator-496) above.

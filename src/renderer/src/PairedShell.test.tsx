@@ -25,9 +25,11 @@ const SETTINGS_MARKER = 'aria-label="Settings screen"'
 // entry button is `aria-label="Archive"` (no trailing "screen"), so it does not match this marker, and
 // neither do the thread's/settings' markers.
 const ARCHIVE_MARKER = 'aria-label="Archive screen"'
-// The pair-server view's marker (#152): the reused PairingScreen's EntryCard heading. Unique to the
-// pairing flow — neither the list, thread, nor settings markers match it.
-const PAIRING_MARKER = 'Paste pairing code'
+// The pair-server view's marker (#152): the reused PairingScreen's field accessible name
+// (PairingScreen.tsx:96) — the sole occurrence of that string in the whole renderer, so neither the
+// list, thread, settings, nor archive markers match it. #664 moved this off the EntryCard heading,
+// which #665's restyle removes; the accessible name survives that restyle.
+const PAIRING_MARKER = 'aria-label="Pairing code"'
 
 describe('PairedShellView', () => {
   describe("route='list'", () => {

@@ -10,12 +10,18 @@ import { test, expect } from './fixtures/launchPairedApp'
 // two test-only infra pieces (a fatal-close hook on the fake forwarder + exposing the forwarder on the
 // launcher handle) so the terminal-error path is reachable on the fake stack.
 //
-// The app-root PairingScreen's `Pairing code` textarea is the unambiguous teardown proof: while on the
+// The app-root PairingScreen's `Pairing code` field is the unambiguous teardown proof: while on the
 // thread the top-level pairing route is NOT mounted (both exits flip the App route, unmounting
-// PairedShell entirely), so `textarea[aria-label="Pairing code"]` has count 0; after the flip it is the
-// sole pairing surface. Its VISIBILITY proves the return-to-pairing; its ABSENCE (count 0) proves the
+// PairedShell entirely), so `[aria-label="Pairing code"]` has count 0; after the flip it is the sole
+// pairing surface. Its VISIBILITY proves the return-to-pairing; its ABSENCE (count 0) proves the
 // session stayed intact on Cancel. This is a top-level App-route flip, not the in-shell pair-another
 // route (#465), so there is no same-component ambiguity to disambiguate here.
+//
+// That accessible name is the WHOLE locator (#664) — never the element type, never the card heading,
+// both of which #665's restyle changes. What keeps the count-0 half honest is that ONE `pairingBox`
+// binding carries both directions in the first test: a stale selector yields count 0 too, so the
+// negative would pass vacuously, and only the `toBeVisible()` sharing that same binding catches it.
+// Do not inline the selector at either site, and do not split it into a second const.
 //
 // The four Unpair/Cancel/Confirm/Re-pair buttons all carry the `conversation__unpair` class, so they
 // are selected by role + accessible name (never by class); only one is present at a time given the
@@ -33,7 +39,7 @@ test('unpair: Cancel keeps the session, then Confirm returns to the app-root pai
 
   const thread = page.locator('.conversation')
   const send = page.getByRole('button', { name: 'Send' })
-  const pairingBox = page.locator('textarea[aria-label="Pairing code"]')
+  const pairingBox = page.locator('[aria-label="Pairing code"]')
   const forgetPrompt = page.getByText('Forget this pairing?')
   const unpair = page.getByRole('button', { name: 'Unpair', exact: true })
 
@@ -64,7 +70,7 @@ test('re-pair: a fatal relay close surfaces Re-pair, which returns to the app-ro
 }) => {
   const { page, forwarder } = await launchPairedApp()
 
-  const pairingBox = page.locator('textarea[aria-label="Pairing code"]')
+  const pairingBox = page.locator('[aria-label="Pairing code"]')
 
   // The client leg is connected once the fixture resolves (Send-enabled ⇐ the Noise handshake completed
   // over the live relay socket), so fire the fatal close immediately. 4401 ∈ the client's

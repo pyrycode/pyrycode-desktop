@@ -13,7 +13,13 @@ const noop = (): void => {}
 
 // A per-screen marker unique to each of the three mounted screens.
 const CONVERSATION_MARKER = 'aria-label="Send"'
-const PAIRING_MARKER = 'Paste pairing code'
+// The pairing field's accessible name (PairingScreen.tsx:96) — the sole occurrence of that string in
+// the whole renderer, so both negatives below stay honest. #664 moved this off the screen's card
+// heading, which #665's restyle removes; the accessible name survives that restyle and the element-type
+// change beneath it. Same accessible-name idiom as CONVERSATION_MARKER above. ONE const carries both
+// the negatives (welcome, conversation) and the positive (pairing) — the positive is what would catch a
+// typo that would otherwise make the negatives pass vacuously, so do not split it.
+const PAIRING_MARKER = 'aria-label="Pairing code"'
 // The welcome screen's primary CTA copy (WELCOME_COPY.pairCta) — unique to that screen, and the very
 // affordance #662's AC3 is about.
 const WELCOME_MARKER = 'I already have pyrycode'

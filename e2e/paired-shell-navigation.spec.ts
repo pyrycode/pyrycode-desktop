@@ -39,7 +39,12 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   const list = page.locator('section[aria-label="Conversations"]')
   const settings = page.locator('section[aria-label="Settings screen"]')
   const archive = page.locator('section[aria-label="Archive screen"]')
-  const pairingEntry = page.getByRole('heading', { name: 'Paste pairing code' })
+  // #664: the pairing route's hook is the field's accessible name ALONE — not the card heading, which
+  // #665's restyle removes, and not the element type, which it changes. Attribute selector, matching the
+  // idiom above; the accessible-name query helper is deliberately absent from this whole suite, since it
+  // resolves the label element as well as the control, and #665's filled field wraps the control in a
+  // <label> that would then match a second time — the very count ambiguity #664 removes.
+  const pairingField = page.locator('[aria-label="Pairing code"]')
 
   // 1. thread — the fixture's end-state (it drove list→thread by clicking the seeded row). The back-nav
   // chain begins here.
@@ -57,7 +62,7 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   // pairing entry surface here proves the route renders; it does NOT prove the session survived — the
   // pairServer route and the app-root pairing route render the SAME component (see the round-trip note).
   await page.getByRole('button', { name: 'Pair another server' }).click()
-  await expect(pairingEntry).toBeVisible()
+  await expect(pairingField).toBeVisible()
 
   // 5. ⭐ pairServer → settings via Cancel (AC: Cancel returns to the Settings screen — the teardown proof).
   // A torn-down session would leave the app-root pairing screen with no Settings to return to; the Settings

@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test'
 
 // The shared unpaired-launch pairing-arrival step (#661). Ten e2e sites — the fake-stack fixture
 // (launchPairedApp) and nine `real-*` specs — each ran the SAME six lines after an unpaired launch:
-// locate the pairing textarea, wait for it, fill it, click Pair, wait for the fingerprint card, click
+// locate the pairing field, wait for it, fill it, click Pair, wait for the fingerprint card, click
 // Confirm. Divergence begins only AFTER Confirm (the fixture's list→thread click and Send-enabled wait;
 // each real-* spec's own readiness gate), so the seam is drawn there and this module owns everything
 // above it. That paid off immediately: #662 moved what an unpaired launch lands on (the welcome screen,
@@ -20,7 +20,7 @@ import { expect, type Page } from '@playwright/test'
 //     would drag a second fixture extension into specs that must keep using the other one. That
 //     constraint is why this third home exists; it also rules out reusing either `encodePairingPayload`
 //     (private at launchPairedApp.ts:129, exported from realDaemon.ts) — deduping those is out of scope.
-//  2. `payload` is SECRET-BEARING and opaque. It is filled into the textarea and referenced nowhere
+//  2. `payload` is SECRET-BEARING and opaque. It is filled into the pairing field and referenced nowhere
 //     else: never asserted on (no `toHaveValue(payload)` — its failure diff would print the payload),
 //     never interpolated into a custom assertion message or a `test.step` title, never console-logged or
 //     attached to the report. Every assertion here reads DOM visibility only, so Playwright's own
@@ -28,12 +28,13 @@ import { expect, type Page } from '@playwright/test'
 //     the callers' secret-hygiene contract through the extraction.
 //  3. The step ENDS at Confirm. Post-confirm readiness gates differ per caller and are not this module's
 //     business; it introduces no wait and no timeout override of its own.
-//  4. `unpair-repair.spec.ts` is deliberately NOT a caller. Its two pairing-textarea locators sit after
+//  4. `unpair-repair.spec.ts` is deliberately NOT a caller. Its two pairing-field locators sit after
 //     a MID-SESSION unpair flip, not an unpaired launch, and serve as a teardown proof (count 0 while
-//     the thread is live, visible after the flip) rather than driving the form. Do not "finish the
-//     sweep": #662 used that file staying green AND byte-unchanged as the negative control for its
-//     deliberately-out-of-scope pin on the mid-session `onUnpaired` flip — which still routes to
-//     `pairing`, not `welcome`, so those two locators stay correct exactly as written.
+//     the thread is live, visible after the flip) rather than driving the form. That boundary still
+//     holds: converting it into a caller remains wrong and remains out of scope. (#664 re-pointed those
+//     two locators at the accessible name — the sweep #662 had deferred while it used that file staying
+//     byte-unchanged as its negative control. The mid-session `onUnpaired` flip stays out of scope and
+//     still routes to `pairing`, not `welcome`.)
 
 /**
  * Drive an unpaired launch — welcome screen, then the pairing form — to a confirmed pairing.
@@ -50,7 +51,7 @@ export async function pairFromUnpairedLaunch(page: Page, payload: string): Promi
   // the CTA copy churns.
   await page.getByRole('button', { name: 'I already have pyrycode', exact: true }).click()
 
-  const pasteBox = page.locator('textarea[aria-label="Pairing code"]')
+  const pasteBox = page.locator('[aria-label="Pairing code"]')
   // Not redundant after the hop above: this now proves the CTA actually LANDED on the pairing screen,
   // which is the only executable proof of #662's welcome→pairing navigation across all ten drives.
   // `exact` on Pair avoids the busy `Pairing…` label and the `Cancel` button.

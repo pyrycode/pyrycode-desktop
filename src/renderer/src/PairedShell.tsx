@@ -7,6 +7,7 @@ import { ArchiveScreen } from './screens/archive/ArchiveScreen'
 import { PairingScreen } from './screens/pairing/PairingScreen'
 import { nextPairedRoute, type PairedRoute } from './pairedRoute'
 import { useConversationCreatedNav } from './store/conversationCreatedBridge'
+import { useConversationDeletedExit } from './store/conversationDeletedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { usePushNotify } from './store/pushNotifyBridge'
 import { activateConversation, type ActivateConversationDeps } from './activateConversation'
@@ -14,6 +15,10 @@ import {
   clearPairingScopedState,
   type ClearPairingScopedStateDeps
 } from './clearPairingScopedState'
+import {
+  exitActiveConversation,
+  type ExitActiveConversationDeps
+} from './exitActiveConversation'
 import { activeConversationStore } from './store/activeConversationStore'
 import { announcedModelStore } from './store/announcedModelStore'
 import { sessionIdStore } from './store/sessionIdStore'
@@ -50,6 +55,21 @@ const activateDeps: ActivateConversationDeps = {
  * set with the announced running model, and because both call sites below pass this one object, that
  * was a single edit rather than two.
  */
+/**
+ * #652: the store wiring for the deleted-conversation exit, module scope for the same reason as the two
+ * objects above — each effect reaches its singleton through `getState()` inside the arrow body, so
+ * nothing is dereferenced at module load, nothing is read during render, and the object closes over no
+ * per-render value. `navigateToList` is the one effect that CANNOT live here: it needs the container's
+ * `dispatch`, so it is supplied at the call site and the `Omit` makes the missing field explicit rather
+ * than leaving a partial object silently typed as complete.
+ */
+const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> = {
+  getActiveConversation: () => activeConversationStore.getState().activeConversation,
+  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
+  clearSessionId: () => sessionIdStore.getState().clearSessionId()
+}
+
 const clearPairingDeps: ClearPairingScopedStateDeps = {
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
@@ -134,6 +154,19 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     activateConversation(activateDeps, created)
     dispatch({ type: 'open' })
   })
+  // #652: the delete confirmation → thread exit. Symmetric with the created-event nav above and driven
+  // by the same rule — navigate on the DAEMON's confirmation, not on the click — so a delete the daemon
+  // never confirms leaves the operator in the thread (AC5) rather than stranding them on a list that
+  // still shows the row. exitActiveConversation gates on the id, so a confirmation naming a different
+  // discussion (the operator opened another one while the reply was in flight) changes nothing (AC4).
+  // The per-render object allocation is free: the hook holds this inline arrow in a ref and re-reads it
+  // on each delivery, so nothing needs memoizing and the subscription never re-establishes.
+  useConversationDeletedExit((conversationId) =>
+    exitActiveConversation(
+      { ...exitConversationDeps, navigateToList: () => dispatch({ type: 'back' }) },
+      conversationId
+    )
+  )
   // #393: a notification click drives the same list→thread `open` nav (focus the window + show the
   // active conversation's thread). Crucially NO setActiveConversation — the nullary arm carries no
   // payload; in the single-active model "open" means "show the existing active conversation", so this

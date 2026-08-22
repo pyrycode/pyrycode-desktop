@@ -50,6 +50,8 @@ npm run e2e:real:gate    # the same specs, non-zero exit when zero tests execute
 
 The real-claude tiers need `pyry` and `claude` on PATH plus a credential: `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` with a readable `~/.claude.json`. The trap: without the credential the real suite silently skips every spec and still exits 0, so read the skip reasons, never the exit code. `e2e:real:gate` exists to turn that all-skip into a non-zero exit.
 
+**Renderer tests are static server renders, and nothing in this repo can click.** `vitest.config.ts` sets `environment: 'node'`, and there is no `jsdom`, no `happy-dom` and no `@testing-library` in the tree. Every renderer spec renders through `renderToStaticMarkup` and asserts on markup, so there is no DOM, no effects and no event handlers. Interaction belongs in the Playwright tiers above. When a component needs interactive state, make its rendered output a pure function of that state so both forms stay unit-testable, and cover the transition itself in `e2e/`. Adding a DOM environment is a deliberate, separate decision, never a side effect of the first ticket that wants one.
+
 ## Layout
 
 ```

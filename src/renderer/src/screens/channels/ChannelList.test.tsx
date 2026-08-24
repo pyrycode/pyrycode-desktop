@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ChannelListView } from './ChannelList'
+import { UNKNOWN_WORKSPACE_LABEL } from './channelListViewModel'
 
 // The #218 idiom: server-render the pure view with injected props — no DOM harness, no store. The
 // container's store read + Date.now() are the only impurities and are exercised by the shell tests.
@@ -69,6 +70,12 @@ const SECTION_HEADER_MARKER = 'class="channel-list__section-header"'
 const ROW_MARKER = 'class="channel-list__row"'
 const ROW_OPEN_MARKER = 'class="channel-list__row-open"'
 
+// The workspace row heading each group under a host row (#703) — structural class names, counted as the
+// same EXACT attribute-value substrings, so `class="channel-list__workspace"` cannot also match
+// `__workspace-icon` / `__workspace-label`.
+const WORKSPACE_ROW_MARKER = 'class="channel-list__workspace"'
+const WORKSPACE_LABEL_OPEN = 'class="channel-list__workspace-label">'
+
 const countOf = (markup: string, needle: string): number => markup.split(needle).length - 1
 
 // Reads the SHIPPED host labels back out of the render rather than restating the constant, so changing
@@ -76,6 +83,15 @@ const countOf = (markup: string, needle: string): number => markup.split(needle)
 const hostLabelsIn = (markup: string): string[] =>
   markup
     .split(HOST_LABEL_OPEN)
+    .slice(1)
+    .map((chunk) => chunk.slice(0, chunk.indexOf('<')))
+
+// The same read-it-back-out-of-the-render treatment for the workspace labels (#703). It matters more
+// here than for the host row: this label is DAEMON-derived, so the fixture — not a constant — decides
+// what renders, and the assertions must see the shipped text rather than restate an expectation.
+const workspaceLabelsIn = (markup: string): string[] =>
+  markup
+    .split(WORKSPACE_LABEL_OPEN)
     .slice(1)
     .map((chunk) => chunk.slice(0, chunk.indexOf('<')))
 
@@ -274,6 +290,81 @@ describe('ChannelListView', () => {
       const markup = bothTrees()
       expect(countOf(markup, ROW_MARKER)).toBe(2)
       expect(countOf(markup, ROW_OPEN_MARKER)).toBe(2)
+    })
+  })
+
+  describe('the workspace grouping under each host row (#703)', () => {
+    // One row per tree, both in the SAME workspace — so the counts the #710 guards pinned are the counts
+    // this describe expects too, and one group per tree is the shape the default e2e tier actually has.
+    const bothTrees = (): string =>
+      render([
+        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+
+    it('renders one workspace row per distinct cwd, in each tree independently (AC1)', () => {
+      // Both trees sharing one workspace: one workspace row each. The trees are not deduplicated — a
+      // workspace with rows in both trees appears in both (operator, 2026-08-21).
+      const shared = render([
+        row({ id: 'c1', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'c2', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'd1', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+      expect(countOf(shared, WORKSPACE_ROW_MARKER)).toBe(2)
+      // Splitting the promoted pair across two workspaces adds a third group, in the Channels tree only.
+      const split = render([
+        row({ id: 'c1', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'c2', is_promoted: true, cwd: '/home/me/beta' }),
+        row({ id: 'd1', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+      expect(countOf(split, WORKSPACE_ROW_MARKER)).toBe(3)
+      expect(workspaceLabelsIn(split)).toEqual(['alpha', 'beta', 'alpha'])
+    })
+
+    it('sits below its tree host row and above that group conversation rows (AC1)', () => {
+      const markup = bothTrees()
+      expect(markup.indexOf('>Channels<')).toBeLessThan(markup.indexOf(HOST_ROW_MARKER))
+      expect(markup.indexOf(HOST_ROW_MARKER)).toBeLessThan(markup.indexOf(WORKSPACE_ROW_MARKER))
+      expect(markup.indexOf(WORKSPACE_ROW_MARKER)).toBeLessThan(markup.indexOf(ROW_MARKER))
+    })
+
+    it('renders no workspace row when the list is empty or not yet loaded', () => {
+      // The workspace rows live INSIDE each section's existing `length > 0` gate, alongside the host
+      // row, so a zero-row tree renders no section label, no host row and no workspace row either.
+      expect(countOf(render(null), WORKSPACE_ROW_MARKER)).toBe(0)
+      expect(countOf(render([]), WORKSPACE_ROW_MARKER)).toBe(0)
+    })
+
+    it('joins no existing conversation-row, section-header or host-row match set', () => {
+      // The unit-level mirror of the 28-spec fixture hazard: `launchPairedApp.ts:224` clicks an
+      // UNFILTERED `.channel-list__row-open`, so a workspace row selectable as a conversation row would
+      // strict-violate at launch in every spec riding that fixture. Every count below is the count it
+      // had before this ticket.
+      const markup = bothTrees()
+      expect(countOf(markup, ROW_MARKER)).toBe(2)
+      expect(countOf(markup, ROW_OPEN_MARKER)).toBe(2)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
+    })
+
+    it('renders an untrusted cwd as escaped text, never live markup and never an attribute', () => {
+      // The twin of the untrusted-`name` test above. The label is the one place `cwd` becomes visible:
+      // an auto-escaped React child and nothing else — CLAUDE.md's 2026-08-20 ruling forbids it reaching
+      // an attribute, and #696's security review rejected `title={daemonText}` as a MUST FIX.
+      const markup = render([
+        row({ id: 'd1', name: 'x', cwd: '/home/me/<img src=x onerror=boom>' })
+      ])
+      expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
+      expect(markup).not.toContain('<img src=x onerror=boom>')
+      expect(markup).not.toContain('title=')
+    })
+
+    it('renders one clearly-labelled fallback group for a cwd with no usable segment (AC3)', () => {
+      // Read back out of the render rather than restated, so the row is proven present AND labelled —
+      // never silently dropped, never blank.
+      const markup = render([row({ id: 'd1', name: 'x', cwd: '/' })])
+      expect(workspaceLabelsIn(markup)).toEqual([UNKNOWN_WORKSPACE_LABEL])
+      expect(markup).toContain('x')
     })
   })
 })

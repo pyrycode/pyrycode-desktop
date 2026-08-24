@@ -2,9 +2,12 @@ import { describe, it, expect } from 'vitest'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   UNNAMED_LABEL,
+  UNKNOWN_WORKSPACE_LABEL,
   titleFor,
   partitionByPromotion,
   partitionActive,
+  workspaceLabelFor,
+  groupByWorkspace,
   formatLastActivity
 } from './channelListViewModel'
 
@@ -114,6 +117,117 @@ describe('partitionActive', () => {
     ])
     expect(channels).toHaveLength(0)
     expect(discussions).toHaveLength(0)
+  })
+})
+
+// #703: `cwd` is untrusted daemon text used as an opaque grouping key and a display label — never a
+// filesystem argument. The function must be TOTAL over `string` (no throw path, since a thrown error
+// would carry the offending cwd into an error boundary) and must never blank a label.
+describe('workspaceLabelFor', () => {
+  it('returns the last path segment, not the full path (AC2)', () => {
+    expect(workspaceLabelFor('/home/me/pyrycode')).toBe('pyrycode')
+  })
+
+  it('skips a trailing separator, repeated separators and a whitespace-only tail segment', () => {
+    expect(workspaceLabelFor('/home/me/pyrycode/')).toBe('pyrycode')
+    expect(workspaceLabelFor('/home/me/pyrycode//')).toBe('pyrycode')
+    expect(workspaceLabelFor('/home/me/  ')).toBe('me')
+  })
+
+  it('returns a relative single-segment cwd verbatim', () => {
+    expect(workspaceLabelFor('pyrycode')).toBe('pyrycode')
+  })
+
+  it('survives an unfamiliar separator convention without throwing or blanking', () => {
+    // `\` is deliberately NOT a separator: treating it as one would be an assumption about the daemon's
+    // host OS, and it would corrupt a legal Unix directory whose name contains a backslash. With no `/`
+    // present the whole value is its own single segment — survived, not silently reinterpreted. This
+    // row pins today's behaviour so a future Windows-daemon change is visible rather than silent.
+    expect(workspaceLabelFor('C:\\Users\\me\\proj')).toBe('C:\\Users\\me\\proj')
+  })
+
+  it('returns null when there is no usable segment at all (AC3)', () => {
+    expect(workspaceLabelFor('')).toBeNull()
+    expect(workspaceLabelFor('   ')).toBeNull()
+    expect(workspaceLabelFor('/')).toBeNull()
+    expect(workspaceLabelFor('//')).toBeNull()
+  })
+
+  it('does no parsing of its own — a markup-shaped segment comes back as an ordinary string', () => {
+    expect(workspaceLabelFor('/home/<script>alert(1)')).toBe('<script>alert(1)')
+  })
+})
+
+describe('groupByWorkspace', () => {
+  it('groups rows with an identical cwd into one group, in array order (AC1, AC4)', () => {
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '/home/me/alpha' }),
+      row({ id: 'b', cwd: '/home/me/alpha' })
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].label).toBe('alpha')
+    expect(groups[0].rows.map((r) => r.id)).toEqual(['a', 'b'])
+  })
+
+  it('normalises nothing — two spellings of one directory stay two groups (AC1)', () => {
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '/home/me/alpha' }),
+      row({ id: 'b', cwd: '/home/me/alpha/' })
+    ])
+    expect(groups.map((g) => g.key)).toEqual(['/home/me/alpha', '/home/me/alpha/'])
+    // Same label on both: the honest surface the ticket asks for, not a silent merge.
+    expect(groups.map((g) => g.label)).toEqual(['alpha', 'alpha'])
+  })
+
+  it('orders groups by first appearance and keeps interleaved rows in array order (AC4)', () => {
+    const groups = groupByWorkspace([
+      row({ id: 'a1', cwd: '/w/alpha' }),
+      row({ id: 'b1', cwd: '/w/beta' }),
+      row({ id: 'a2', cwd: '/w/alpha' })
+    ])
+    expect(groups.map((g) => g.label)).toEqual(['alpha', 'beta'])
+    expect(groups[0].rows.map((r) => r.id)).toEqual(['a1', 'a2'])
+    expect(groups[1].rows.map((r) => r.id)).toEqual(['b1'])
+  })
+
+  it('keeps first-appearance order for an integer-like cwd (AC4 — a Map, not a plain object)', () => {
+    // A plain-object accumulator enumerates integer-like string keys FIRST, in numeric order, whatever
+    // the insertion order — so `'2'` would jump ahead of `'/x'`. `cwd` is arbitrary untrusted text, so a
+    // relative cwd of `'2'` is a legal key. This is the test that makes "no sort anywhere" real.
+    const groups = groupByWorkspace([row({ id: 'a', cwd: '/x' }), row({ id: 'b', cwd: '2' })])
+    expect(groups.map((g) => g.label)).toEqual(['x', '2'])
+  })
+
+  it('collapses every unusable cwd into ONE clearly-labelled fallback group (AC3)', () => {
+    const groups = groupByWorkspace([
+      row({ id: 'a', cwd: '' }),
+      row({ id: 'b', cwd: '   ' }),
+      row({ id: 'c', cwd: '/' })
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].label).toBe(UNKNOWN_WORKSPACE_LABEL)
+    expect(groups[0].rows.map((r) => r.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('orders the fallback group by first appearance too, never pinned last (AC4)', () => {
+    const groups = groupByWorkspace([row({ id: 'a', cwd: '/' }), row({ id: 'b', cwd: '/w/beta' })])
+    expect(groups.map((g) => g.label)).toEqual([UNKNOWN_WORKSPACE_LABEL, 'beta'])
+  })
+
+  it('never folds a real workspace named like the fallback into the fallback group (AC3)', () => {
+    // The grouping key is the cwd itself, never a comparison against the fallback COPY — deriving it by
+    // comparing labels would swallow a real directory literally named "Unknown workspace".
+    const groups = groupByWorkspace([
+      row({ id: 'real', cwd: UNKNOWN_WORKSPACE_LABEL }),
+      row({ id: 'unusable', cwd: '/' })
+    ])
+    expect(groups.map((g) => g.rows.map((r) => r.id))).toEqual([['real'], ['unusable']])
+    // Both render the same label — the #716 display ambiguity — but they stay distinct groups.
+    expect(groups.map((g) => g.label)).toEqual([UNKNOWN_WORKSPACE_LABEL, UNKNOWN_WORKSPACE_LABEL])
+  })
+
+  it('returns an empty array for empty input', () => {
+    expect(groupByWorkspace([])).toEqual([])
   })
 })
 

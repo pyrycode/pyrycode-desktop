@@ -1422,7 +1422,7 @@ describe('createDaemonConnection — turn_state stream (#214)', () => {
     return ctx
   }
 
-  it('decodes an inbound turn_state into one turnState carrying only state (conversation_id dropped)', async () => {
+  it('decodes an inbound turn_state into one turnState carrying state + conversationId', async () => {
     for (const state of ['thinking', 'responding', 'idle'] as const) {
       const { sink, drivers } = await connected()
       const before = emitted(sink).length
@@ -1433,9 +1433,10 @@ describe('createDaemonConnection — turn_state stream (#214)', () => {
       })
 
       const events = emitted(sink).slice(before)
-      expect(events).toEqual([{ type: 'turnState', state }])
-      // conversation_id is dropped at the choke point (single active conversation; #202 scopes it).
-      expect(JSON.stringify(events)).not.toContain('conv-1')
+      expect(events).toEqual([{ type: 'turnState', state, conversationId: 'conv-1' }])
+      // conversation_id now CROSSES the choke point (#724) — it is the routing key the sidebar's
+      // per-conversation phase needs (#674). Copied by name at the emit, so this is the verbatim value.
+      expect(JSON.stringify(events)).toContain('conv-1')
     }
   })
 

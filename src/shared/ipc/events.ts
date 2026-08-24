@@ -108,10 +108,21 @@ export type DaemonEvent =
   // AC3; carry only turnId / seq / text / stopReason — no token, key, or raw frame.
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
-  // The coarse turn-lifecycle arm (#214). Carries only `state` (a closed 3-value wire enum);
-  // `conversation_id` is dropped at the emit (single active conversation). Consumed by the renderer
-  // timeline bridge (#202) → `phase`, not the session store. No token, key, or raw frame.
-  | { type: 'turnState'; state: WireTurnState }
+  // The coarse turn-lifecycle arm (#214, widened by #724). Carries `state` (a closed 3-value wire enum)
+  // and `conversationId` — the frame's `conversation_id`, copied BY NAME at the emit from an
+  // already-validated payload (the decode stays fail-closed: a missing or non-string id fails the whole
+  // line). It crosses for the reason backgroundTaskStarted's does — the "turn-stream item, or daemon
+  // state?" test — and per-conversation phase is daemon state: the sidebar must say a chat is thinking
+  // while the operator looks at a different one (#674). REQUIRED, never optional: an optional routing key
+  // invites `?? activeConversation` fallbacks, which is the misattribution this work exists to remove.
+  //
+  // The id is a daemon-asserted ROUTING KEY, not rendered text — none of the untrusted-text warnings on
+  // `model` / `description` / `raw` attach to it. It is never markup, a filename, a cache key, a lookup
+  // path, an attribute or a URL, and it reaches no log sink (emitDaemonEvent is log-free by construction).
+  // It STOPS at the renderer timeline bridge (#202), which rebuilds a fresh ThreadEvent with named fields
+  // and omits it → `phase`, not the session store; ThreadEvent does not carry it, and the consumers that
+  // key off the id are #674. No token, key, or raw frame.
+  | { type: 'turnState'; state: WireTurnState; conversationId: string }
   // The stall-liveness arm (#315). A NULLARY arm — the wire StallPayload's only field
   // (`conversation_id`) is dropped at the emit (single active conversation, matching turnState), so the
   // event carries no payload at all: no token, key, raw frame, or conversation content can ride it

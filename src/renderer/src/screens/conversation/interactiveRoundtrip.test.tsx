@@ -42,7 +42,7 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
     // Then the daemon's structured stream for one turn: thinking, two coalescing deltas, a tool
     // use + its correlated result, and the turn boundary.
     const stream: DaemonEvent[] = [
-      { type: 'turnState', state: 'thinking' },
+      { type: 'turnState', state: 'thinking', conversationId: 'conv-1' },
       { type: 'assistantDelta', turnId: 't1', seq: 0, text: 'Sure, ' },
       { type: 'assistantDelta', turnId: 't1', seq: 1, text: 'reading now.' },
       { type: 'toolUse', turnId: 't1', toolUseId: 'tu-1', name: 'read_file', inputSummary: 'schema.ts' },

@@ -50,7 +50,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
 
   it('turnState → a ThreadEvent turnState with the same state, a fresh object, for each phase', () => {
     for (const state of ['thinking', 'responding', 'idle'] as const) {
-      const event: DaemonEvent = { type: 'turnState', state }
+      const event: DaemonEvent = { type: 'turnState', state, conversationId: 'conv-1' }
       const translated = translateTimelineEvent(event)
       expect(translated).toEqual({ type: 'turnState', state })
       // A fresh literal, not a pass-through of the DaemonEvent object.
@@ -481,7 +481,7 @@ describe('subscribeTimeline', () => {
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
     for (const state of ['thinking', 'responding', 'idle'] as const) {
-      bridge.emit({ type: 'turnState', state })
+      bridge.emit({ type: 'turnState', state, conversationId: 'conv-1' })
       expect(selectPhase(store.getState())).toBe(state)
     }
   })
@@ -491,12 +491,12 @@ describe('subscribeTimeline', () => {
     const store = createTimelineStore()
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
-    bridge.emit({ type: 'turnState', state: 'thinking' })
+    bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     const afterFirst = store.getState()
     expect(selectPhase(afterFirst)).toBe('thinking')
 
     // Same state again — the reducer returns the same state object, so the store does not churn.
-    bridge.emit({ type: 'turnState', state: 'thinking' })
+    bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     expect(store.getState()).toBe(afterFirst)
   })
 

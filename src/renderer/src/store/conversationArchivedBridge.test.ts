@@ -143,7 +143,7 @@ describe('subscribeArchivedActiveConversation', () => {
 
     bridge.emit({ type: 'conversationCreated', conversation: created })
     bridge.emit({ type: 'conversationDeleted', id: ACTIVE_ID })
-    bridge.emit({ type: 'turnState', state: 'thinking' })
+    bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     expect(onArchived).not.toHaveBeenCalled()
   })
 

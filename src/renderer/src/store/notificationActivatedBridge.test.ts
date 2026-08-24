@@ -63,7 +63,7 @@ describe('subscribeNotificationActivated', () => {
     bridge.emit({ type: 'connecting' })
     bridge.emit({ type: 'messageReceived', message })
     bridge.emit({ type: 'conversationCreated', conversation: created })
-    bridge.emit({ type: 'turnState', state: 'thinking' })
+    bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     expect(onActivated).not.toHaveBeenCalled()
   })
 

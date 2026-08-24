@@ -113,7 +113,7 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
   })
 
   it('turnState → null (consumed by the renderer timeline bridge #202, not the session store)', () => {
-    expect(translateDaemonEvent({ type: 'turnState', state: 'thinking' })).toBeNull()
+    expect(translateDaemonEvent({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })).toBeNull()
   })
 
   it('toolUse → null (consumed by the renderer timeline bridge #202, not the session store)', () => {

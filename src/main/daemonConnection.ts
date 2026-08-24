@@ -603,10 +603,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'turn-state':
-            // The coarse-phase data path (#214). Emit a fresh literal carrying only `state`;
-            // `conversation_id` is DROPPED (single active conversation; #202's bridge scopes identity).
-            // The timeline bridge (#202), not the session store, maps this onto the reducer's `phase`.
-            emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
+            // The coarse-phase data path (#214, widened by #724). Emit a fresh literal carrying `state`
+            // plus `conversationId`, the latter copied BY NAME from the already-decoded, already-validated
+            // payload — never a spread of inbound.turnState (the assistant-delta idiom), so a decoder that
+            // later grows a field cannot smuggle it across IPC. The decode stays fail-closed upstream: a
+            // missing or non-string `conversation_id` drops the whole line without emitting.
+            //
+            // The id is a daemon-asserted routing key, not rendered text, and it reaches no sink on this
+            // leg. It stops at the timeline bridge (#202), which maps this onto the reducer's `phase` and
+            // omits the id; the consumers that route by conversation are #674.
+            emitDaemonEvent(sink, {
+              type: 'turnState',
+              state: inbound.turnState.state,
+              conversationId: inbound.turnState.conversation_id
+            })
             return
           case 'stall':
             // The stall-liveness data path (#315). Emit a fresh NULLARY literal; `conversation_id` is

@@ -117,7 +117,7 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       // The five arms timelineBridge OWNS but this bridge must null — the mirror-image proof.
       { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi' },
       { type: 'turnEnd', turnId: 'A', stopReason: 'end_turn' },
-      { type: 'turnState', state: 'thinking' },
+      { type: 'turnState', state: 'thinking', conversationId: 'conv-1' },
       { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' },
       {
         type: 'toolResult',

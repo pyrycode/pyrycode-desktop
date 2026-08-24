@@ -74,7 +74,7 @@ describe('translateConversationCreated', () => {
       { type: 'connecting' },
       { type: 'messageReceived', message },
       { type: 'conversationsReceived', conversations: [] },
-      { type: 'turnState', state: 'thinking' }
+      { type: 'turnState', state: 'thinking', conversationId: 'conv-1' }
     ]
     for (const event of others) expect(translateConversationCreated(event)).toBeNull()
   })
@@ -104,7 +104,7 @@ describe('subscribeConversationCreated', () => {
 
     bridge.emit({ type: 'messageReceived', message })
     bridge.emit({ type: 'conversationsReceived', conversations: [] })
-    bridge.emit({ type: 'turnState', state: 'thinking' })
+    bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     expect(onCreated).not.toHaveBeenCalled()
   })
 

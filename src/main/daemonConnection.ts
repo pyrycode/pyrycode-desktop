@@ -660,16 +660,25 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'compacting':
-            // The compaction-status data path (#495). Emit a fresh literal carrying only the edge,
-            // copied BY NAME from the already-decoded, already-validated payload — never a spread of
-            // inbound.compacting (the assistant-delta idiom), so a decoder that later grows a field
-            // cannot smuggle it across IPC. `conversation_id` is DROPPED (never referenced — single
-            // active conversation). Deliberately stateless: no dedup, no
-            // coalescing, no timer, no last-value memo, which is what gives the wire's "a repeated
-            // same-edge frame emits its own event" contract for free — #496 is idempotent on it. Not
-            // compile-forced (this inner switch has no assertNever) — the round-trip test guards this
-            // emit.
-            emitDaemonEvent(sink, { type: 'compacting', active: inbound.compacting.active })
+            // The compaction-status data path (#495, widened by #742). Emit a fresh literal carrying
+            // the edge + `conversationId`, both copied BY NAME from the already-decoded,
+            // already-validated payload — never a spread of inbound.compacting (the assistant-delta
+            // idiom), so a decoder that later grows a field cannot smuggle it across IPC. The decode
+            // stays fail-closed upstream: a missing or non-string `conversation_id` drops the whole
+            // line without emitting.
+            //
+            // The id is a daemon-asserted routing key, not rendered text, and it reaches no sink on
+            // this leg. It stops at the timeline bridge (#202), which rebuilds a one-field ThreadEvent
+            // and omits it; the consumers that route by conversation are #674. Deliberately stateless:
+            // no dedup, no coalescing, no timer, no last-value memo — and none keyed by the new id
+            // either, which is what gives the wire's "a repeated same-edge frame emits its own event"
+            // contract for free — #496 is idempotent on it. Not compile-forced (this inner switch has
+            // no assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'compacting',
+              active: inbound.compacting.active,
+              conversationId: inbound.compacting.conversation_id
+            })
             return
           case 'model-announced':
             // The announced-model data path (#587). Emit a fresh literal carrying the identifier and
@@ -703,9 +712,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // validated string[], so there is nothing left to strip — the `queued` precedent below), and
             // its `null` is preserved, never coerced to [].
             //
-            // `conversation_id` is KEPT — the deliberate divergence from compacting above.
-            // This frame carries no turn_id and opens no turn: it is daemon STATE, not a turn-stream
-            // item, so it follows the queue-state rule (#720) and #567 attributes tasks by id.
+            // `conversation_id` is KEPT by the rule, not by comparison with a neighbour: this frame
+            // carries no turn_id and opens no turn, so it is daemon STATE, not a turn-stream item —
+            // the queue-state rule (#720), and #567 attributes tasks by id.
             //
             // Deliberately stateless: no dedup, no task map, no correlation memory. The wire's ordering
             // is claude's, not the daemon's (a roster can arrive before the `started` for a task it

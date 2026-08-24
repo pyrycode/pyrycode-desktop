@@ -152,7 +152,7 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       // api-retry ships dormant (#492); its render consumer is #493, not the modal store.
       { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1' },
       // compaction status ships dormant (#495); its render consumer is #496, not the modal store.
-      { type: 'compacting', active: true },
+      { type: 'compacting', active: true, conversationId: 'conv-1' },
       // the parser-gap diagnostic ships dormant; its render consumer is the timeline row. Nothing is
       // waiting on an answer, so it is emphatically not a modal.
       {

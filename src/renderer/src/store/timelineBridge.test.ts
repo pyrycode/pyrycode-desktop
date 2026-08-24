@@ -228,7 +228,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
   })
 
   it('compacting → a ThreadEvent compacting carrying the edge, a fresh object (#496)', () => {
-    const event: DaemonEvent = { type: 'compacting', active: true }
+    const event: DaemonEvent = { type: 'compacting', active: true, conversationId: 'conv-1' }
     const translated = translateTimelineEvent(event)
     expect(translated).toEqual({ type: 'compacting', active: true })
     // A fresh literal, not a pass-through of the DaemonEvent object.
@@ -273,7 +273,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
   })
 
   it('compacting translates the falling edge verbatim — the reducer owns the clear (#496)', () => {
-    const event: DaemonEvent = { type: 'compacting', active: false }
+    const event: DaemonEvent = { type: 'compacting', active: false, conversationId: 'conv-1' }
     const translated = translateTimelineEvent(event)
     expect(translated).toEqual({ type: 'compacting', active: false })
     expect(translated).not.toBe(event)

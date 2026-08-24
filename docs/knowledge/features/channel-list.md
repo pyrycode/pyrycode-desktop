@@ -4,8 +4,9 @@ The paired region's [`list` route](paired-shell.md) — since [#670](../codebase
 always-mounted sidebar of the two-pane desktop shell, shown alongside `thread` rather than only on
 `list` — a pure render slice over the already-shipped
 [conversation list store](conversation-list-store.md), splitting the daemon's conversations into
-**Channels** (saved, `is_promoted === true`) above **Recent discussions** (ad-hoc,
-`is_promoted === false`), each row showing its title and a last-activity relative time. Mirrors the
+**Channels** (saved, `is_promoted === true`) above **Chats** (ad-hoc,
+`is_promoted === false`; labelled "Recent discussions" until the desktop-design relabel,
+[#709](../codebase/709.md)), each row showing its title and a last-activity relative time. Mirrors the
 mobile home screen (mobile #312). Replaces the throwaway `PlaceholderList` [#140](../codebase/140.md)
 shipped as a stand-in.
 
@@ -194,5 +195,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [Archive screen](archive-screen.md) / [#469 codebase notes](../codebase/469.md) — `partitionActive`,
   the dual of `partitionArchived`, fixing archived rows leaking into this list.
 - [#141 codebase notes](../codebase/141.md) · Spec: `docs/specs/architecture/141-channel-list-screen.md`
+- [#709 codebase notes](../codebase/709.md) — relabelled the non-promoted section header from the
+  mobile-era "Recent discussions" to the desktop design's "Chats" (Figma `106:3258`); the code-level
+  `discussions` partition, CSS classes and store fields kept their names.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open).

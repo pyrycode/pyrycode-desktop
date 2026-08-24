@@ -2802,6 +2802,65 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
     expect(JSON.stringify(events)).not.toContain('conv-1')
   })
 
+  it('carries the tool input map across to the renderer with its entries unchanged (#642)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: toolUsePlaintext({
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        tool_use_id: 'tu-1',
+        name: 'Read',
+        input_summary: 'reads /etc/hosts',
+        input: { file_path: '/etc/hosts', limit: '20' }
+      })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'toolUse',
+        turnId: 'turn-1',
+        toolUseId: 'tu-1',
+        name: 'Read',
+        inputSummary: 'reads /etc/hosts',
+        input: { file_path: '/etc/hosts', limit: '20' }
+      }
+    ])
+  })
+
+  it('emits an ABSENT input when the wire omitted it — the pre-#1678 daemon (#642)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: toolUsePlaintext({
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        tool_use_id: 'tu-1',
+        name: 'Read',
+        input_summary: 'reads /etc/hosts'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(events).toEqual([
+      {
+        type: 'toolUse',
+        turnId: 'turn-1',
+        toolUseId: 'tu-1',
+        name: 'Read',
+        inputSummary: 'reads /etc/hosts'
+      }
+    ])
+    // The deterministic reading of "absent": the emit assigns unconditionally, so the property
+    // exists holding `undefined` — which JSON.stringify omits. The consumer contract is
+    // `event.input === undefined`, never `'input' in event`. (`"inputSummary"` does not match.)
+    expect(JSON.stringify(events)).not.toContain('"input"')
+  })
+
   it('drops a malformed tool_use without emitting or throwing (fail-closed)', async () => {
     const { sink, drivers } = await connected()
     const before = sink.webContents.send.mock.calls.length

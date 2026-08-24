@@ -540,6 +540,32 @@ describe('tool-use wire vocabulary (#217)', () => {
       input_summary: 'reads /etc/hosts'
     })
   })
+
+  it('carries the tool input as an optional name→value map (#642)', () => {
+    const payload: ToolUsePayload = {
+      conversation_id: 'conv-1',
+      turn_id: 'turn-1',
+      tool_use_id: 'tu-1',
+      name: 'Read',
+      input_summary: 'reads /etc/hosts',
+      input: { file_path: '/etc/hosts', limit: '20' }
+    }
+    expect(payload.input).toEqual({ file_path: '/etc/hosts', limit: '20' })
+  })
+
+  it('admits a ToolUsePayload omitting `input` entirely — the field is OPTIONAL (#642)', () => {
+    // Compile-time: this literal type-checks only while `input` is optional. A later ticket making it
+    // required breaks HERE, which is the point — a pre-pyrycode#1678 daemon omits the key, and the
+    // client runs against daemon builds days apart (the conversation_updated.is_archived scar).
+    const payload: ToolUsePayload = {
+      conversation_id: 'conv-1',
+      turn_id: 'turn-1',
+      tool_use_id: 'tu-1',
+      name: 'Read',
+      input_summary: 'reads /etc/hosts'
+    }
+    expect(payload.input).toBeUndefined()
+  })
 })
 
 describe('tool-result wire vocabulary (#229)', () => {

@@ -366,11 +366,29 @@ export type DaemonEvent =
   // Consumed by #256 (pending→confirm/reject store, not yet built), so all three exhaustive bridges no-op
   // it for now — the sessionSettingsUpdated-was-a-no-op precedent.
   | { type: 'sessionSettingsRejected'; changeId: string }
-  // The tool-call arm (#217). Carries the four render fields (`conversation_id` dropped at the emit,
+  // The tool-call arm (#217). Carries the five render fields (`conversation_id` dropped at the emit,
   // single active conversation). Consumed by the renderer timeline bridge (#202) → a `toolCall` item,
   // not the session store. `name` / `inputSummary` are opaque daemon display text the render slice
-  // (#218) must render as plain text. No token, key, or raw frame.
-  | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string }
+  // (#218) must render as plain text. No token, key, or raw frame — `input` is a string→string record
+  // built solely from the decoded payload, so that claim survives it.
+  // `input` (#642) is the tool's own input fields, name → value. ABSENT means the WIRE omitted it (a
+  // pre-pyrycode#1678 daemon) — test `event.input === undefined`, never `'input' in event`; an empty
+  // map is a DIFFERENT fact ("this daemon sent no fields for this call") and is never collapsed into
+  // absence. Both its keys and its values are untrusted daemon display text under the same
+  // plain-text-NEVER-HTML constraint as `name` / `inputSummary`; the render slice (#645) owns that DOM
+  // sink. Key order is meaningless (alphabetical, a Go map artefact), the map may be incomplete (the
+  // daemon's total bound drops fields and names none — `inputSummary` stays the whole-input fallback),
+  // and the reserved keys `__proto__` / `constructor` / `prototype` can never appear (dropped by the
+  // decoder), so consumers must ITERATE rather than probe by key. See ToolUsePayload for the full
+  // contract.
+  | {
+      type: 'toolUse'
+      turnId: string
+      toolUseId: string
+      name: string
+      inputSummary: string
+      input?: Readonly<Record<string, string>>
+    }
   // The tool-result arm (#229). Carries the four render fields (`conversation_id` dropped at the emit).
   // Consumed by the renderer timeline bridge (#202), which folds it through `fillResult` to RESOLVE the
   // correlated `toolCall`'s result in place — not the session store. `isError` is a boolean (`false` =

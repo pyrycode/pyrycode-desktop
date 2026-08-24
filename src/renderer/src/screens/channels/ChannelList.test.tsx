@@ -56,6 +56,29 @@ const SAVE_MARKER = 'aria-label="Save as channel"'
 // present on saved (promoted) Channel rows, absent on Recent (unpromoted) discussion rows (AC1).
 const RENAME_MARKER = 'aria-label="Rename"'
 
+// The host row heading each tree (#710) — structural class names, not copy. These are counted as EXACT
+// attribute-value substrings: `renderToStaticMarkup` emits no comment markers, and the closing quote is
+// what keeps `class="channel-list__host"` from also matching `__host-icon` / `__host-label` (and
+// `class="channel-list__row"` from matching `__row-open`). That makes plain substring counting a precise
+// structural assertion — which is the whole point for AC4/AC5, where the hazard is an added element
+// joining an EXISTING Playwright locator's match set and raising a strict-mode violation.
+const HOST_ROW_MARKER = 'class="channel-list__host"'
+const HOST_ICON_MARKER = 'class="channel-list__host-icon"'
+const HOST_LABEL_OPEN = 'class="channel-list__host-label">'
+const SECTION_HEADER_MARKER = 'class="channel-list__section-header"'
+const ROW_MARKER = 'class="channel-list__row"'
+const ROW_OPEN_MARKER = 'class="channel-list__row-open"'
+
+const countOf = (markup: string, needle: string): number => markup.split(needle).length - 1
+
+// Reads the SHIPPED host labels back out of the render rather than restating the constant, so changing
+// the copy to something containing a section label's text fails the AC4 guard instead of passing it.
+const hostLabelsIn = (markup: string): string[] =>
+  markup
+    .split(HOST_LABEL_OPEN)
+    .slice(1)
+    .map((chunk) => chunk.slice(0, chunk.indexOf('<')))
+
 describe('ChannelListView', () => {
   it('not-yet-loaded (null): renders the wrapper but no header and no empty message (AC4)', () => {
     const markup = render(null)
@@ -192,5 +215,65 @@ describe('ChannelListView', () => {
     expect(render(null)).toContain(ARCHIVE_ENTRY_MARKER)
     expect(render([])).toContain(ARCHIVE_ENTRY_MARKER)
     expect(render([row({ id: 'd1', name: 'a discussion' })])).toContain(ARCHIVE_ENTRY_MARKER)
+  })
+
+  describe('the host row heading each tree (#710)', () => {
+    // One row per tree, so the row counts under AC5 are the counts they had before this ticket.
+    const bothTrees = (): string =>
+      render([
+        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true }),
+        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false })
+      ])
+
+    it('heads BOTH trees — one host row each, repeated on purpose (AC1)', () => {
+      // The repetition is deliberate (operator, 2026-08-21): a "deduplicated" single host level shared
+      // by the two trees fails here at 1.
+      const markup = bothTrees()
+      expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
+      expect(countOf(markup, HOST_ICON_MARKER)).toBe(2)
+    })
+
+    it('heads a single present tree with exactly one host row (AC1)', () => {
+      expect(countOf(render([row({ id: 'c1', is_promoted: true })]), HOST_ROW_MARKER)).toBe(1)
+      expect(countOf(render([row({ id: 'd1', is_promoted: false })]), HOST_ROW_MARKER)).toBe(1)
+    })
+
+    it('sits below its section label and above that tree conversation rows (AC1)', () => {
+      const markup = bothTrees()
+      expect(markup.indexOf('>Channels<')).toBeLessThan(markup.indexOf(HOST_ROW_MARKER))
+      expect(markup.indexOf(HOST_ROW_MARKER)).toBeLessThan(markup.indexOf(ROW_MARKER))
+    })
+
+    it('renders no host row when the list is empty or not yet loaded (AC3)', () => {
+      // A tree with zero rows renders neither a section label nor a host row — both promote specs use
+      // "a zero-row section renders no header" as their proxy for "the row moved sections", so an
+      // always-present host row would dissolve that proof.
+      expect(countOf(render(null), HOST_ROW_MARKER)).toBe(0)
+      expect(countOf(render([]), HOST_ROW_MARKER)).toBe(0)
+    })
+
+    it('leaves each section label singly selectable (AC4)', () => {
+      const markup = bothTrees()
+      // The invariant #709's spec parked for this ticket: still exactly two section-header elements, so
+      // the promote specs' `.channel-list__section-header` + hasText locators stay single-match.
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      // The independent second guard: Playwright's `hasText` with a string matches substrings
+      // case-INsensitively, so the shipped label must contain neither section label's text either way.
+      const labels = hostLabelsIn(markup)
+      expect(labels).toHaveLength(2)
+      for (const label of labels) {
+        expect(label.toLowerCase()).not.toContain('channels')
+        expect(label.toLowerCase()).not.toContain('chats')
+      }
+    })
+
+    it('does not join the conversation-row match set (AC5)', () => {
+      // The unit-level mirror of the 28-spec fixture hazard: `launchPairedApp.ts:224` clicks an
+      // UNFILTERED `.channel-list__row-open`, so a host row selectable as a conversation row would
+      // strict-violate at launch in every spec riding that fixture, not fail an assertion in two.
+      const markup = bothTrees()
+      expect(countOf(markup, ROW_MARKER)).toBe(2)
+      expect(countOf(markup, ROW_OPEN_MARKER)).toBe(2)
+    })
   })
 })

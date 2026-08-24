@@ -230,6 +230,58 @@ function NewConversationFab({ onClick }: { onClick: () => void }): JSX.Element {
   )
 }
 
+// The host row's visible label (#710) — a client-owned module-level constant in the SERVER_ROW_LABEL /
+// SETTINGS_COPY idiom, never a daemon string. `serverInfoStore` exposes `{ serverId, relayUrl }` one
+// import away and `ServerRow.tsx:37` already renders `serverId`; that is legitimate THERE — Settings is a
+// details surface and the value sits beside a "Server" label — but forbidden here, because this row is a
+// NAME slot, so an opaque identifier in it would read as the machine's name. #688 replaces this constant
+// with the operator-typed label. The word is "Server" rather than the design's "Host" because it is
+// already the app's own user-facing word for this machine (SERVER_ROW_LABEL, "Pair another server"), so
+// the sidebar and Settings → Connection read as one concept rather than two.
+const HOST_ROW_LABEL = 'Server'
+
+// The host row heading each tree (Figma 106:3094) — which machine the tree's conversations live on. It is
+// rendered INSIDE each section's existing `length > 0` gate, so "a tree with zero rows renders neither a
+// section label nor a host row" holds by construction with no new condition — and the promote specs' use
+// of a zero-row section as their "the row moved sections" proxy survives. Do not hoist it out of the gate.
+//
+// The row repeats in BOTH trees on purpose (operator, 2026-08-21); the trees are not deduplicated.
+//
+// Not interactive in this slice: a plain <div>, no <button>, no onClick, no aria-label (collapse is #704,
+// the two connection dots are #672 and get no pre-rendered slot here). The label carries the row's meaning,
+// so the glyph is aria-hidden — a second accessible name would be noise.
+//
+// The class names deliberately share no token — and no substring — with `channel-list__row`, `__row-open`
+// or `__section-header`, and the visible label contains neither "Channels" nor "Chats". Playwright locators
+// run in strict mode, so an element that JOINS an existing locator's match set raises a strict-mode
+// violation rather than an assertion failure; `launchPairedApp.ts:224` clicks an unfiltered
+// `.channel-list__row-open` and 28 specs ride that fixture. The two guards are independent, and neither
+// requires touching a single file under `e2e/`.
+//
+// Deliberate asymmetry: the STRUCTURAL naming stays "host" (the design's word, and what #672/#688/#703
+// stack onto) — class names are selectors, not copy. The one word the user sees is "Server".
+//
+// The glyph is a sixth inline Material path in this file's existing idiom — the `dns` server-rack, sized
+// 12px per the Figma node rather than the 24px the interactive buttons use, so it reads as a level marker
+// rather than a control.
+function HostRow(): JSX.Element {
+  return (
+    <div className="channel-list__host">
+      <svg
+        className="channel-list__host-icon"
+        viewBox="0 0 24 24"
+        width="12"
+        height="12"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
+      </svg>
+      <span className="channel-list__host-label">{HOST_ROW_LABEL}</span>
+    </div>
+  )
+}
+
 function renderBody(
   conversations: readonly ConversationSummary[] | null,
   now: number,
@@ -254,6 +306,7 @@ function renderBody(
       {channels.length > 0 && (
         <>
           <header className="channel-list__section-header">Channels</header>
+          <HostRow />
           {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
               only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
               AC1) — the symmetric counterpart to Save-as-channel on Recent rows. */}
@@ -268,6 +321,7 @@ function renderBody(
       {discussions.length > 0 && (
         <>
           <header className="channel-list__section-header">Chats</header>
+          <HostRow />
           {/* Chats rows pass the affordance so each row can be saved as a channel (#274, AC1). The
               header reads "Chats" (#709, Figma 106:3258); the code-level partition is still
               `discussions` — renaming that vocabulary was explicitly out of scope. */}

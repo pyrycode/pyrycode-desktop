@@ -102,10 +102,12 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * `conversation_id`); the fail-closed `state` enum check here is the boundary this slice defends.
  *
  * The `stall` kind (#315) carries the decoded StallPayload — the onset-only liveness signal the daemon
- * fans out to interactive clients when a turn goes quiet. The consumer drops `conversation_id` and emits
- * a NULLARY `stallDetected` event (the payload's only field is not carried); the fail-closed required
- * `conversation_id` string here is the boundary this slice defends. Ships dormant — the render slice
- * (#317) is the first consumer.
+ * fans out to interactive clients when a turn goes quiet. The consumer carries the payload's only field,
+ * `conversation_id`, onward by name as `conversationId` (#732) — per-conversation liveness is daemon
+ * state, so the sidebar can show a chat has gone quiet while the operator looks at a different one
+ * (#674). The fail-closed required `conversation_id` string here is the boundary this slice defends: a
+ * missing or non-string id fails the whole line rather than emitting a stall attributed to nothing.
+ * Ships dormant — the render slice (#317) is the first consumer.
  *
  * The `api-retry` kind (#492) carries the decoded ApiRetryPayload — the PTY-derived status peer of
  * `stall` the daemon fans out to interactive clients while claude retries against an API error. Unlike

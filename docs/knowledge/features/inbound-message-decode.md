@@ -72,10 +72,15 @@ envelope.in_reply_to }`. `undefined` when the frame omits it, which is exactly w
 the daemon's onset-only liveness signal on the same v2 interactive stream `turn_state`/`tool_use`
 belong to (pyrycode #638 wire vocab, #639 fan-out). `StallPayload{conversation_id}` is
 `TurnStatePayload` scaled to its one always-present field, so `parseStallPayload` is a single
-`requireString` call with **no enum check** — `stall` has no `state` to close over. The consumer arm
-drops the one decoded field (`conversation_id`) and emits a **nullary**
-`stallDetected` `DaemonEvent` — the only kind in this file whose event carries no field at all, since
-its one decoded field is the one dropped. Ships dormant; the render slice #317 is the first consumer, feeding a new `stalled` timeline-store scalar.
+`requireString` call with **no enum check** — `stall` has no `state` to close over. Ships dormant; the
+render slice #317 is the first consumer, feeding a new `stalled` timeline-store scalar. **[#732](../codebase/732.md)
+widened the consumer arm to carry `conversation_id` onward** (`conversationId`, copied by name) —
+until then it was dropped on the same single-active-conversation assumption `turn_state` shed in #724,
+which had made `stallDetected` the one arm in the file whose doc comments turned the drop itself into
+a security argument ("a nullary arm — nothing can ride it"). #732 replaces that argument rather than
+patching it, with the one #724 already established for `turnState`: a daemon-asserted routing key,
+never rendered as markup, never a filename/cache key/lookup path, and reaching no log sink. The id
+still stops at the renderer timeline bridge; `ThreadEvent.stallDetected` stays nullary.
 
 [#492](../codebase/492.md) added a fourteenth kind, `api_retry` → `api-retry` — the PTY-derived status peer
 of `stall` the daemon fans out while claude retries against an API error (pyrycode #1074). Unlike `stall`
@@ -495,9 +500,14 @@ case 'message': {
       })
       return
     case 'stall':
-      // #315: fresh NULLARY literal — the payload's only field (conversation_id) is dropped, so
-      // nothing crosses IPC at all. Onset-only; self-clear is #317's concern.
-      emitDaemonEvent(sink, { type: 'stallDetected' })
+      // #315, widened by #732: fresh named-field literal, mirrors 'turn-state'. conversationId now
+      // crosses too — copied by name, never a spread — as the routing key #674's per-conversation
+      // liveness needs. It stops at the renderer timeline bridge; ThreadEvent still doesn't carry it.
+      // Onset-only; self-clear is #317's concern.
+      emitDaemonEvent(sink, {
+        type: 'stallDetected',
+        conversationId: inbound.stall.conversation_id
+      })
       return
     case 'tool-use':
       // #217: fresh named-field literal, mirrors 'turn-state'. conversation_id dropped (single active
@@ -585,7 +595,7 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - **`assistant_delta`/`turn_end` were received by nobody through #178.** Desktop withheld the `interactive` capability until [#179](../codebase/179.md) turned it on; until then these two cases were exercised only by direct unit tests, not a live daemon — a textbook Strangler-Fig: the decode path existed and was tested before the traffic that would use it did. Now live.
 - **`conversations` has no request trigger yet either, but for a different reason.** [#139](../codebase/139.md) ships both the decode path *and* the outbound `requestConversations` command, but nothing in this ticket calls `sendCommand({type:'requestConversations'})` — that's [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208)'s on-connect trigger. Unlike `assistant_delta`/`turn_end`, this is blocked only on a sibling renderer ticket, not a daemon capability flip — the daemon would answer today if asked.
 - **`turn_state` was received by nobody through #178, for the same reason as `assistant_delta`/`turn_end`.** [#214](../codebase/214.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). Unlike those two, its consumer arm has nothing to carry-vs-drop debate over: `state` is a closed 3-value enum, so there's no sensitive-vs-render-payload distinction to make; only `conversation_id` is dropped.
-- **`stall` sat on the same `interactive`-capability gate, live since #179, and its consumer arm carries the least of any kind in the file — nothing.** [#315](../codebase/315.md) mirrors `turn_state`'s decode shape (a single `requireString`, no enum), but `StallPayload` has only the one field (`conversation_id`) and that field is the one dropped, so the emitted `stallDetected` is nullary — zero decoded daemon data crosses IPC, stronger than every prior kind. Onset-only: the daemon does not repeat it while the stall persists and sends no "cleared" frame; the client-side self-clear on next turn activity is the render slice [#317](https://github.com/pyrycode/pyrycode-desktop/issues/317)'s concern, not this boundary's.
+- **`stall` sat on the same `interactive`-capability gate, live since #179.** [#315](../codebase/315.md) mirrors `turn_state`'s decode shape (a single `requireString`, no enum); `StallPayload` has only the one field, `conversation_id`. At ship time the consumer arm dropped it, emitting a nullary `stallDetected` — zero decoded daemon data crossed IPC, the strongest content-minimisation posture of any kind in the file at the time. [#732](../codebase/732.md) later carried `conversation_id` onward as `conversationId`, the same daemon-asserted-routing-key widening [#724](../codebase/724.md) gave `turn_state`; it stops at the renderer timeline bridge. Onset-only throughout: the daemon does not repeat it while the stall persists and sends no "cleared" frame; the client-side self-clear on next turn activity is the render slice [#317](https://github.com/pyrycode/pyrycode-desktop/issues/317)'s concern, not this boundary's.
 - **`tool_use` was received by nobody through #178, same capability gate — and its two untrusted strings forward a render constraint.** [#217](../codebase/217.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). Like `assistant_delta`/`turn_end` (and unlike `turn_state`), the consumer arm carries content onward rather than minimising it: `name`/`input_summary` are opaque daemon-supplied strings that reach the render slice ([#218](../codebase/218.md)) as free text — rendered as plain text, never `dangerouslySetInnerHTML`, never re-parsed.
 - **`modal_shown`/`modal_dismissed` were received by nobody through #178, same capability gate.** [#201](../codebase/201.md) sat on the same `interactive`-capability gate, live since [#179](../codebase/179.md). The session and timeline bridges still discard the resulting `DaemonEvent` arms as `null` — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) ([#223](../codebase/223.md), shipped), with `useModalBridge` mounted since [#224](../codebase/224.md). `title`/`prompt`/each `options[].label` are untrusted `claude`-surfaced free text the render slice (#224) renders as plain text, the same constraint `tool_use` forwards.
 - **`default_option_id ∈ options[].id` is not cross-checked at this boundary.** `ModalShownPayload.default_option_id` decodes as a required string with no structural relationship enforced to `options`. A daemon sending a mismatched default is not rejected here — the cross-field invariant is deferred to the render slice ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)), where a mismatch just means nothing pre-highlights (harmless; answering still needs an explicit user action).
@@ -607,7 +617,8 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [#199 codebase notes](../codebase/199.md) — the fourth additive extension: `assistant_delta`/`turn_end`, the two v2 interactive-stream kinds, and the deliberate content-carrying divergence from the `snapshot` kind's minimisation pattern.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139 codebase notes](../codebase/139.md) — the fifth additive extension: the `conversations` kind, `parseConversationSummary`/`parseConversationsPayload`, and the new `requireStringOrNull` helper (the codec's first nullable-field checker).
 - [Conversation timeline store](conversation-timeline-store.md) / [#214 codebase notes](../codebase/214.md) — the sixth additive extension: the `turn_state` kind, `parseTurnStatePayload`, and the closed-enum idiom's second instance (cloned from `role`, not `requireString`).
-- [#315 codebase notes](../codebase/315.md) — the thirteenth additive extension: the `stall` kind, `parseStallPayload` (`turn_state`'s decode shape scaled to one field, no enum), and the onset-only liveness signal whose consumer arm emits a nullary `stallDetected` — the strongest content-minimisation posture in the file, since the one decoded field is the one dropped.
+- [#315 codebase notes](../codebase/315.md) — the thirteenth additive extension: the `stall` kind, `parseStallPayload` (`turn_state`'s decode shape scaled to one field, no enum), and the onset-only liveness signal whose consumer arm, at ship time, emitted a nullary `stallDetected` — the strongest content-minimisation posture in the file, since the one decoded field was the one dropped.
+- [#732 codebase notes](../codebase/732.md) — widened the `stallDetected` consumer arm to carry `conversation_id` onward as `conversationId`, replacing the retired "nullary ⇒ nothing can ride it" doc claim with the daemon-asserted-routing-key argument; the id stops at the renderer timeline bridge, and `ThreadEvent.stallDetected` stays nullary.
 - [#317 codebase notes](../codebase/317.md) — the render slice: consumes `stallDetected` as the timeline bridge's sixth owned arm, feeding the new `stalled` scalar `StallIndicator` renders.
 - [#492 codebase notes](../codebase/492.md) — the fourteenth additive extension: the `api_retry` kind, `parseApiRetryPayload` (`parseStallPayload`'s one-field template scaled to four, every field mapping onto an existing helper — `requireString`/`requireBoolean`/two `requireNumber` calls, no new check invented), and the not-onset-only, not-deduped peer of `stall` — the consumer arm carries `active`/`current`/`total` onward instead of emitting a nullary literal.
 - [#493 codebase notes](../codebase/493.md) — the render slice: the first consumer of `api_retry`, feeding a new `apiRetry: ApiRetryStatus | null` timeline-store scalar cleared only by the decoded `active: false` falling edge.

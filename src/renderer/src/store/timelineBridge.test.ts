@@ -188,7 +188,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
   })
 
   it('stallDetected → a nullary ThreadEvent stallDetected, a fresh object (#317)', () => {
-    const event: DaemonEvent = { type: 'stallDetected' }
+    const event: DaemonEvent = { type: 'stallDetected', conversationId: 'conv-1' }
     const translated = translateTimelineEvent(event)
     expect(translated).toEqual({ type: 'stallDetected' })
     // A fresh literal, not a pass-through of the DaemonEvent object.
@@ -610,7 +610,7 @@ describe('subscribeTimeline', () => {
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
     expect(selectStalled(store.getState())).toBe(false)
-    bridge.emit({ type: 'stallDetected' })
+    bridge.emit({ type: 'stallDetected', conversationId: 'conv-1' })
     expect(selectStalled(store.getState())).toBe(true)
   })
 

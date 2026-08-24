@@ -1208,7 +1208,9 @@ immediately after it:
 ```
 
 The daemon emits a one-shot `stall` signal when claude goes quiet mid-turn or the screen parser
-degrades ([#315](../codebase/315.md) decodes it into a nullary `stallDetected` `DaemonEvent`). Because
+degrades ([#315](../codebase/315.md) decodes it into a `stallDetected` `DaemonEvent`, nullary at ship
+time and later widened with `conversationId` by [#732](../codebase/732.md); the id stops at the
+renderer timeline bridge, so this view is unaffected). Because
 the daemon sends onset-only with no "cleared" frame, `reduceTimeline` self-clears the `stalled` scalar
 client-side on the next turn-activity event (`assistantDelta`/`toolUse`/`toolResult`/`turnState`) —
 this view only renders whatever the store currently holds. `StallIndicator({ isStalled })` is

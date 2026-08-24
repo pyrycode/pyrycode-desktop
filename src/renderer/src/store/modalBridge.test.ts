@@ -142,7 +142,7 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         queued: [{ queued_msg_id: 1, text: 'first', ts: '2026-07-10T00:00:00Z' }]
       },
       // stall ships dormant (#315); its render consumer is #317, not the modal store.
-      { type: 'stallDetected' },
+      { type: 'stallDetected', conversationId: 'conv-1' },
       // relay-link status ships dormant (#328); its consumer is the relay-link store #329, not the
       // modal store.
       { type: 'relayLinkChanged', status: 'connected' },

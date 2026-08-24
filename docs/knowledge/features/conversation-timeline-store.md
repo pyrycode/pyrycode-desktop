@@ -49,11 +49,15 @@ no render yet — that's the sibling slice [#230](https://github.com/pyrycode/py
 
 [#317](../codebase/317.md) added a sixth owned arm, `stallDetected` — the daemon's onset-only stall
 liveness signal ([#315](../codebase/315.md)), moved out of the inverse-filter `null` list it shipped
-dormant in. Unlike every prior owned arm, both the `DaemonEvent` and the `ThreadEvent` sides are
-**nullary** (`{ type: 'stallDetected' }`), so the mapping is arm-selection only — no field to filter or
-copy. `reduceTimeline`'s new arm sets a second scalar, `stalled: boolean`, beside `phase`; the four
-other owned arms (`assistantDelta`/`toolUse`/`toolResult`/`turnState`) now also clear it as a side
-effect of being turn activity. `selectStalled` joins `selectItems`/`selectPhase` as the read surface.
+dormant in. At ship time, unlike every prior owned arm, both the `DaemonEvent` and the `ThreadEvent`
+sides were **nullary** (`{ type: 'stallDetected' }`), so the mapping was arm-selection only — no field
+to filter or copy. [#732](../codebase/732.md) later widened the `DaemonEvent` side with
+`conversationId` (the same routing-key widening [#724](../codebase/724.md) did for `turnState`); the
+mapping is now a **filter**, not pure arm-selection — `translateTimelineEvent` still returns the fresh
+nullary `{ type: 'stallDetected' }` literal, so `ThreadEvent.stallDetected` alone stays nullary.
+`reduceTimeline`'s arm sets a second scalar, `stalled: boolean`, beside `phase`; the four other owned
+arms (`assistantDelta`/`toolUse`/`toolResult`/`turnState`) now also clear it as a side effect of being
+turn activity. `selectStalled` joins `selectItems`/`selectPhase` as the read surface.
 
 [#493](../codebase/493.md) added a seventh owned arm, `apiRetry` — the daemon's api-retry status signal
 ([#492](../codebase/492.md)), also moved out of the inverse-filter `null` list it shipped dormant in.
@@ -198,9 +202,11 @@ design from ADR 0008. `toolUse` is the first owned arm whose `ThreadEvent` count
 folds into an **appended `ThreadItem`** (a `toolCall`) rather than a text delta or a scalar; `toolResult`
 is the first to **resolve** one already appended — `reduceTimeline`'s `fillResult` (#121) correlates it to
 the pending `toolCall` by `toolUseId` and fills `result` in place, a same-reference no-op on an orphan or
-duplicate. `stallDetected` ([#317](../codebase/317.md)) is the first arm where **both** sides of the
-mapping are nullary — `DaemonEvent.stallDetected` and `ThreadEvent.stallDetected` are both
-`{ type: 'stallDetected' }`, so the case is pure arm-selection with no field to filter or copy.
+duplicate. `stallDetected` ([#317](../codebase/317.md)) was, at ship time, the first arm where **both** sides of
+the mapping were nullary — `DaemonEvent.stallDetected` and `ThreadEvent.stallDetected` both
+`{ type: 'stallDetected' }`, so the case was pure arm-selection with no field to filter or copy.
+[#732](../codebase/732.md) widened `DaemonEvent.stallDetected` with `conversationId`; the bridge case
+is now a filter (drops the id), and `ThreadEvent.stallDetected` is the only side still nullary.
 `apiRetry` ([#493](../codebase/493.md)) returns to the filter-and-copy shape — `DaemonEvent.apiRetry`
 and `ThreadEvent.apiRetry` are field-for-field identical (`active`/`current`/`total`) — but is the first
 status-liveness arm (after `stallDetected`) whose `reduceTimeline` handling translates an **edge into a
@@ -394,7 +400,9 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
 - [#179 codebase notes](../codebase/179.md) — flips `interactive` live, and adds `Composer`'s direct
   `userText` dispatch as this store's sixth write path (renderer-sourced, not bridge-translated).
 - [#315 codebase notes](../codebase/315.md) — the `stall` transport slice: wire type, decode, and the
-  nullary `stallDetected` `DaemonEvent` arm, shipped dormant (all three bridges nulled it).
+  (at ship time) nullary `stallDetected` `DaemonEvent` arm, shipped dormant (all three bridges nulled
+  it). [#732](../codebase/732.md) later widened the arm with `conversationId`; `ThreadEvent.stallDetected`
+  stays nullary, so this bridge's mapping is unaffected.
 - [#317 codebase notes](../codebase/317.md) — the render slice: moves `stallDetected` from this
   bridge's inverse-filter `null` list to a sixth owned arm, adds the `stalled` scalar and
   `selectStalled`, and gives it its first reader, `ConversationScreen`'s `StallIndicator`.

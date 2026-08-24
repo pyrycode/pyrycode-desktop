@@ -610,8 +610,33 @@ function TimelineRow({
 // the app to find out (operator's decision, 2026-08-21). The mock still has no expanded state, so the
 // body below takes .unrecognized-row__raw's visual language rather than inventing a second one.
 //
-// The COLLAPSED form is unchanged and is still exactly the two fields — this component holds no state
-// and nothing passes `expanded` yet; #697 owns the toggle, the container state and the e2e.
+// #697 supplied the missing half — the control that flips the flag. The chip on a RESOLVED row IS the
+// control (the Figma pill has two runs and no third slot, so a separate glyph button would add an
+// element the design does not model; making the pill itself the button adds none and leaves the
+// collapsed geometry identical). The COLLAPSED form is otherwise unchanged and is still exactly the two
+// fields.
+//
+// STATE PLACEMENT. A component-local `useState` — UnrecognizedRow's shape (:768), and what ADR 0006
+// asks for: the LOWEST scope that resets correctly. The container's four booleans (`sheetOpen`,
+// `channelInfoOpen`, `pickerOpen`, `panelOpen`, :140-156) sit at the screen because they are
+// SCREEN-level facts — one sheet at a time for the whole screen. A per-row disclosure is a ROW-level
+// fact, so it lives in the row; ADR 0006 names a scope, not the container. (The note at :539-540
+// forbids hooks written INLINE in a switch arm, not per-row state: an arm may return a component that
+// holds hooks, which is exactly what :597 already does.)
+//
+// Nothing needs clearing on a thread reset, and no useEffect resets anything: `reset` returns
+// initialTimelineState, whose `items` is `[]` (threadTimeline.ts), so Timeline renders <EmptyThread />
+// and every row unmounts with its boolean. The one reset path that leaves the screen mounted — the
+// in-thread `conversation_created` confirm (activateConversation.ts) — goes through that same arm.
+// And no row can inherit another's: Timeline keys by array index, which is stable per logical item
+// because the reducer only ever grows the tail or replaces a toolCall AT ITS OWN INDEX (fillResult,
+// via items.map) — never inserts, never reorders. So the pending → resolved transition keeps the same
+// instance and the same `false`, and the row appears already collapsed when its result lands.
+//
+// `defaultExpanded`, NOT `expanded`: #696's prop was a controlled value; it is now the mount-time
+// initial value, and React's own convention for that is the `default*` prefix (defaultValue,
+// defaultChecked). renderToStaticMarkup never re-renders, so #696's assertions hold verbatim under the
+// new name — a prop called `expanded` that a re-render cannot change would just be a quiet lie.
 //
 // SAFETY. `name`, `inputSummary` and `result.resultSummary` are untrusted daemon display text, and
 // `resultSummary` has the widest provenance on the timeline — whatever a tool returned, so file
@@ -624,14 +649,31 @@ function TimelineRow({
 // outbound request issued by a privileged renderer — a beacon whose URL the daemon chose. A <pre> with
 // text children cannot emit one. `resultSummary` is read in exactly two places below: as the <pre>'s
 // children, and in the `=== ''` comparison that selects the empty state.
+//
+// #697 made that posture LOAD-BEARING rather than belt-and-braces: before the toggle, the arm passed no
+// flag, so the result text was decoded, stored, and then never rendered. This is the first time a
+// hostile `resultSummary` reaches the DOM in the shipped product. Four sinks a disclosure control
+// invites are therefore declined ON PURPOSE, and each is a MUST FIX if it ever appears here:
+//   - NO aria-label. `Show result for ${item.name}` would interpolate daemon text into an ATTRIBUTE.
+//     The button's accessible name already comes from its text children plus aria-expanded — a screen
+//     reader announces "read_file, schema.ts, button, collapsed" with no attribute involved.
+//   - NO aria-controls / id pair. The APG disclosure pattern invites it and the obvious id source is
+//     `toolUseId` — a daemon string as both an attribute value and a lookup key, forbidden twice.
+//     aria-controls is optional in that pattern, and UnrecognizedRow ships without it. If a future
+//     ticket wants one, the id comes from React's useId(), never from the wire.
+//   - NO title. .tool-row__summary ellipsizes, which makes `title={item.inputSummary}` the natural next
+//     edit; it is the same forbidden shape #696 already declined for `resultSummary`.
+//   - NO log line for the toggle. Any useful one would carry `name`, `inputSummary` or `toolUseId` —
+//     daemon content in a log, which ADR 0007's content-free rule and CLAUDE.md both forbid.
 export function ToolRow({
   item,
-  expanded = false
+  defaultExpanded = false
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
-  expanded?: boolean
+  defaultExpanded?: boolean
 }): JSX.Element {
   const { result } = item
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const rowClass = result
     ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
     : 'tool-row'
@@ -640,13 +682,39 @@ export function ToolRow({
   // structural rather than two conditions that could drift apart. Carrying the narrowed ToolResult
   // rather than a boolean is what lets both readers below use it without re-checking for null.
   const body = expanded ? result : null
+  // The chip's two runs, declared once: the element forks below, the children never do.
+  const chipRuns = (
+    <>
+      <span className="tool-row__name">{item.name}</span>
+      <span className="tool-row__summary">{item.inputSummary}</span>
+    </>
+  )
   return (
     // tool-row--expanded is appended LAST so the collapsed prefix stays byte-stable.
     <div className={body ? `${rowClass} tool-row--expanded` : rowClass}>
-      <div className="tool-row__chip" data-thread-role="tool">
-        <span className="tool-row__name">{item.name}</span>
-        <span className="tool-row__summary">{item.inputSummary}</span>
-      </div>
+      {result ? (
+        // Gated on `result`, NOT on `expanded` — the same condition rowClass already reads, rather
+        // than a second predicate that could drift. A pending row must be non-activatable regardless
+        // of what `defaultExpanded` says, and `body` above already makes its body structurally
+        // unreachable; the chip fork is the same kind of structural fact. Not a disabled <button>
+        // either: that is still a control in the accessibility tree and would change the pending
+        // markup, where forking leaves the <div> branch below literally untouched.
+        <button
+          type="button"
+          className="tool-row__chip tool-row__chip--toggle"
+          data-thread-role="tool"
+          aria-expanded={expanded}
+          // Functional updater, never `setExpanded(!expanded)`: the latter reads a captured value and
+          // is a check-then-act race against React's batching (UnrecognizedRow:775's form).
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {chipRuns}
+        </button>
+      ) : (
+        <div className="tool-row__chip" data-thread-role="tool">
+          {chipRuns}
+        </div>
+      )}
       {body && (
         // A SIBLING of the chip, not a child: the chip is a single-line inline-flex pill with
         // overflow: hidden (conversation.css), so nesting a stacked body inside it would need a new

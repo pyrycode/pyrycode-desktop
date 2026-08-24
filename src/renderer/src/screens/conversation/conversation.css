@@ -944,6 +944,16 @@
   border-color: var(--color-error);
 }
 
+/* #696 — the expanded row. Turns the row into a column so the result body stacks under the chip; placed
+   here (immediately after the other modifiers) for the same source-order reason. align-items: flex-start
+   is load-bearing — the flex default `stretch` would blow the hug-width pill out to the full row. The
+   gap is .unrecognized-row's own column gap (:2462), since this is the same stacked shape. */
+.tool-row--expanded {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
 /* The chip (Figma node 16-29): surface-container fill, 1px outline-variant border, 12px radius. gap 8
    → --space-2; py 8 / px 12 → --space-2 / --space-3. max-width/min-width/overflow bound the chip so an
    arbitrarily long untrusted summary can't blow out the layout. */
@@ -982,6 +992,64 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* #696 — the expanded body, a sibling of the chip (the chip is a single-line pill with overflow: hidden,
+   so it cannot hold this). A CONTAINER, not a lone text node: #645 lands its per-input-field list in
+   here, above the result. max-width/min-width are what make a single 16000-character line scroll inside
+   the body rather than widen the row. */
+.tool-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* The result text. .unrecognized-row__raw's treatment (:2536) — the house style for a large untrusted
+   payload — with one deliberate deviation: the chip's --radius-sm instead of its --radius-md, since this
+   body sits under the chip and the two should read as one object.
+
+   white-space: pre, not pre-wrap: the rule at :365 puts a payload whose exact shape IS the content on
+   the keep-it-and-scroll side, and tool output is machine output (a listing, a diff, an aligned table)
+   where column position carries information — reflowing it at the row's measure mangles it. overflow:
+   auto then supplies the x-axis for the long unwrapped line for free.
+
+   max-height is a literal, copied from .unrecognized-row__raw:2538: there is no max-height token, every
+   other max-height in this file is a percentage, and a one-off bound shared with its own precedent does
+   not earn one. It is not there to stop the composer being pushed off screen — :371 already records that
+   .conversation__thread is its own scroll region and .composer its sibling, so that cannot happen. It is
+   there so one 64KB result cannot eat the whole thread viewport. */
+.tool-row__result {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--space-3) var(--space-bubble-x);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  white-space: pre;
+}
+
+/* The failed-tool body. The chip's own error device (:943) applied to the body, in the same descendant
+   shape. On the CONTAINER rather than the <pre> so it reaches the empty note too, and so #645's field
+   list inherits it without a fourth class. */
+.tool-row__body--error .tool-row__result {
+  border: 1px solid var(--color-error);
+}
+
+/* The empty-result note — client-owned copy, so it takes the sans note treatment
+   (.unrecognized-row__truncated's, :2551) and never the mono payload treatment above. */
+.tool-row__empty {
+  margin: 0;
   color: var(--color-on-surface-variant);
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);

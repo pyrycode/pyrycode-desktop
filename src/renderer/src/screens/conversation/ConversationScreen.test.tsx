@@ -19,6 +19,8 @@ import {
   UNRECOGNIZED_COPY,
   UNRECOGNIZED_TRUNCATED_COPY,
   unrecognizedSiteLabel,
+  ToolRow,
+  TOOL_RESULT_EMPTY_COPY,
   shouldShowThinking,
   QueuedBacklog,
   StatusSheet,
@@ -37,7 +39,7 @@ import {
 } from './ConversationScreen'
 import { composerAvailability, CONNECTION_BANNER_COPY } from './composerSend'
 import type { Message } from './messageViewModel'
-import type { ThreadItem } from '../../store/threadTimeline'
+import type { ThreadItem, ToolResult } from '../../store/threadTimeline'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import { sessionStore } from '../../store/sessionStore'
 
@@ -316,9 +318,11 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).not.toContain('tool-row--error')
   })
 
-  // #230/AC4: the resolved chip surfaces only `name` + `inputSummary` (the architect call against the
-  // Figma mock, which has no result-text slot). `resultSummary` is untrusted daemon text and is NOT
-  // rendered — a distinctive sentinel must not leak into the markup, so there's no new untrusted surface.
+  // #696 re-pointed this from #230/AC4. #230 declined to draw `resultSummary` at all; #696 draws it in
+  // an expanded body, so this is no longer "the row never surfaces the result" — it is the
+  // COLLAPSED-DEFAULT GUARD: a row rendered through the timeline switch passes no expanded flag, so the
+  // sentinel must still not leak. Body kept byte-identical on purpose; it is the only assertion pinning
+  // that #697's toggle has not silently become the default.
   it('does not surface result.resultSummary in the resolved chip (AC4)', () => {
     const items: ThreadItem[] = [
       {
@@ -332,6 +336,118 @@ describe('Timeline — the streamed assistant text', () => {
     ]
     const markup = renderToStaticMarkup(<Timeline items={items} />)
     expect(markup).not.toContain('RESULT_SUMMARY_SENTINEL_zzz')
+  })
+
+  // #696: the expanded tool row. `ToolRow` is exported so the expanded branch is reachable at all in
+  // this repo's server-render tier — nothing passes the flag yet (#697 owns the toggle, the state and
+  // the e2e), so `<Timeline>` can only ever produce the collapsed form. Every case below is a pure
+  // function of (item, expanded), rendered directly.
+  function toolItem(result: ToolResult | null): Extract<ThreadItem, { kind: 'toolCall' }> {
+    return {
+      kind: 'toolCall',
+      turnId: 't1',
+      toolUseId: 'u1',
+      name: 'read_file',
+      inputSummary: 'schema.ts',
+      result
+    }
+  }
+
+  it('draws no body with the expanded flag absent — the collapsed row is unchanged (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: 'RESULT_SENTINEL_zzz' })} />
+    )
+    expect(markup).toContain('class="tool-row tool-row--resolved"')
+    expect(markup).not.toContain('tool-row--expanded')
+    expect(markup).not.toContain('tool-row__body')
+    expect(markup).not.toContain('tool-row__result')
+    expect(markup).not.toContain('RESULT_SENTINEL_zzz')
+  })
+
+  it('draws the result body below an unchanged headline when expanded (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} expanded />
+    )
+    // The headline keeps its own modifiers; the expanded modifier is appended last.
+    expect(markup).toContain('class="tool-row tool-row--resolved tool-row--expanded"')
+    expect(markup).not.toContain('tool-row--error')
+    expect(markup).toContain('tool-row__chip')
+    expect(markup).toContain('data-thread-role="tool"')
+    expect(markup).toContain('tool-row__body')
+    expect(markup).not.toContain('tool-row__body--error')
+    expect(markup).toContain('tool-row__result')
+    // The body sits BELOW the headline: tool name, then input summary, then the result text.
+    expect(markup.indexOf('read_file')).toBeLessThan(markup.indexOf('schema.ts'))
+    expect(markup.indexOf('schema.ts')).toBeLessThan(markup.indexOf('184 lines'))
+  })
+
+  it('marks an error result body as distinguishable from a successful one (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: true, resultSummary: 'ENOENT' })} expanded />
+    )
+    expect(markup).toContain('class="tool-row tool-row--resolved tool-row--error tool-row--expanded"')
+    expect(markup).toContain('tool-row__body--error')
+    expect(markup).toContain('ENOENT')
+  })
+
+  // AC2's second half: command output is unreadable if the newlines collapse (the defect #607 fixed for
+  // assistant messages). The <pre> tag plus the surviving \n is what this tier can assert; the
+  // `white-space: pre` declaration itself is invisible to a server render.
+  it('preserves the newlines the daemon sent rather than collapsing them onto one line (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: 'line one\nline two' })} expanded />
+    )
+    expect(markup).toContain('<pre class="tool-row__result">line one\nline two</pre>')
+  })
+
+  it('draws no body for a pending row (result: null) regardless of the flag (AC3)', () => {
+    const markup = renderToStaticMarkup(<ToolRow item={toolItem(null)} expanded />)
+    expect(markup).toContain('class="tool-row"')
+    expect(markup).not.toContain('tool-row--expanded')
+    expect(markup).not.toContain('tool-row__body')
+    expect(markup).not.toContain('tool-row__result')
+    expect(markup).not.toContain('tool-row__empty')
+  })
+
+  it('renders an explicit empty state for an empty result, not a blank gap (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '' })} expanded />
+    )
+    expect(markup).toContain('tool-row__empty')
+    expect(markup).toContain(TOOL_RESULT_EMPTY_COPY)
+    expect(markup).not.toContain('tool-row__result')
+  })
+
+  // Pins the `=== ''` decision against a future `.trim()`: whitespace-only output is output the daemon
+  // actually sent, and trimming would relabel it as absent.
+  it('treats a whitespace-only result as real output, not the empty state', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '\n\n' })} expanded />
+    )
+    expect(markup).toContain('tool-row__result')
+    expect(markup).not.toContain('tool-row__empty')
+  })
+
+  // AC5: the result reaches the DOM only as auto-escaped React children — the posture `name` and
+  // `inputSummary` already hold. No apostrophes in the fixture (renderToStaticMarkup escapes ' →
+  // &#x27;, see the note above).
+  it('renders the result text as inert escaped children, never live markup (AC5)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '<img src=x onerror=alert(1)>' })}
+        expanded
+      />
+    )
+    expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(markup).not.toContain('<img')
+  })
+
+  it('still routes the toolCall arm through the timeline switch, collapsed (AC1)', () => {
+    const items: ThreadItem[] = [toolItem({ isError: false, resultSummary: 'ROUTED_SENTINEL_zzz' })]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup).toContain('tool-row__chip')
+    expect(markup).not.toContain('tool-row--expanded')
+    expect(markup).not.toContain('ROUTED_SENTINEL_zzz')
   })
 
   it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {

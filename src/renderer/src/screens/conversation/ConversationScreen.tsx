@@ -547,33 +547,13 @@ function TimelineRow({
         </div>
       )
     }
-    case 'toolCall': {
-      // #218: the tool row (Figma node 16-28) — a compact chip, not a message bubble, so
-      // data-thread-role="tool" (not "assistant") keeps it out of the daemon bubble count. `name` and
-      // `inputSummary` are untrusted daemon strings rendered as inert React children (auto-escaped) —
-      // never dangerouslySetInnerHTML, no markup/path interpretation — the assistantText posture above.
-      // `toolUseId` stays on the item as #121's correlation key, never a React key here (Timeline keys
-      // by array index).
-      //
-      // #230: the row resolves in place when `result` fills. Only the wrapper className varies with
-      // `item.result` (narrowed to ToolResult | null by this case) — the chip's inner markup is
-      // unchanged, so `resultSummary` is NOT surfaced (the Figma mock has no result-text slot; the
-      // not-pending + isError signals satisfy the story), keeping the untrusted surface at today's two
-      // fields. `tool-row--resolved` iff resolved (lifts .tool-row's 50% pending dimming, both
-      // outcomes); `tool-row--error` on top iff `result.isError` (the error accent). See conversation.css.
-      const { result } = item
-      const rowClass = result
-        ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
-        : 'tool-row'
-      return (
-        <div className={rowClass}>
-          <div className="tool-row__chip" data-thread-role="tool">
-            <span className="tool-row__name">{item.name}</span>
-            <span className="tool-row__summary">{item.inputSummary}</span>
-          </div>
-        </div>
-      )
-    }
+    case 'toolCall':
+      // #696 lifted the arm's body into ToolRow so the expanded branch is reachable from a test (there
+      // is no click in this repo's server-render tier, so nothing here could ever set the flag). The
+      // flag is deliberately NOT threaded through Timeline/TimelineRow: that would force #697's
+      // "which rows are expanded" state shape into this slice. Collapsed is the only form the switch
+      // produces.
+      return <ToolRow item={item} />
     case 'turnBoundary':
       // Structural marker only — no drawn element (Figma has no per-turn divider). Its sole
       // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.
@@ -617,6 +597,84 @@ function TimelineRow({
       return <UnrecognizedRow item={item} />
   }
 }
+
+// #218: the tool row (Figma node 16-28) — a compact chip, not a message bubble, so
+// data-thread-role="tool" (not "assistant") keeps it out of the daemon bubble count. `toolUseId` stays
+// on the item as #121's correlation key, never a React key here (Timeline keys by array index).
+//
+// #230: the row resolves in place when `result` fills. `tool-row--resolved` iff resolved (lifts
+// .tool-row's 50% pending dimming, both outcomes); `tool-row--error` on top iff `result.isError` (the
+// error accent). #230 additionally declined to draw `resultSummary` at all, because the Figma mock has
+// no result-text slot. #696 REVERSED that: the result text already reaches the renderer and was thrown
+// away at the last step, and a tool row that never shows what the tool returned makes the reader leave
+// the app to find out (operator's decision, 2026-08-21). The mock still has no expanded state, so the
+// body below takes .unrecognized-row__raw's visual language rather than inventing a second one.
+//
+// The COLLAPSED form is unchanged and is still exactly the two fields — this component holds no state
+// and nothing passes `expanded` yet; #697 owns the toggle, the container state and the e2e.
+//
+// SAFETY. `name`, `inputSummary` and `result.resultSummary` are untrusted daemon display text, and
+// `resultSummary` has the widest provenance on the timeline — whatever a tool returned, so file
+// contents, a fetched page, or shell output. All three reach the DOM ONLY as auto-escaped React
+// children: never dangerouslySetInnerHTML, never an attribute (not `title` — the answer to a body
+// clipped by its 240px bound is the scroll container, never a tooltip carrying the string into an
+// attribute — and not aria-label, data-*, key or id), never a URL, never a filename/cache key/lookup
+// path, never a log line. In particular NOT through AssistantMarkdown (imported into this same file,
+// two arms up): markdown yields links and images, and an <img src> in a daemon-relayed result is an
+// outbound request issued by a privileged renderer — a beacon whose URL the daemon chose. A <pre> with
+// text children cannot emit one. `resultSummary` is read in exactly two places below: as the <pre>'s
+// children, and in the `=== ''` comparison that selects the empty state.
+export function ToolRow({
+  item,
+  expanded = false
+}: {
+  item: Extract<ThreadItem, { kind: 'toolCall' }>
+  expanded?: boolean
+}): JSX.Element {
+  const { result } = item
+  const rowClass = result
+    ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
+    : 'tool-row'
+  // The one derived value behind both new markup facts — the wrapper modifier and the body element.
+  // Non-null iff `expanded && result !== null`, so AC3 (a pending row ignores the flag entirely) is
+  // structural rather than two conditions that could drift apart. Carrying the narrowed ToolResult
+  // rather than a boolean is what lets both readers below use it without re-checking for null.
+  const body = expanded ? result : null
+  return (
+    // tool-row--expanded is appended LAST so the collapsed prefix stays byte-stable.
+    <div className={body ? `${rowClass} tool-row--expanded` : rowClass}>
+      <div className="tool-row__chip" data-thread-role="tool">
+        <span className="tool-row__name">{item.name}</span>
+        <span className="tool-row__summary">{item.inputSummary}</span>
+      </div>
+      {body && (
+        // A SIBLING of the chip, not a child: the chip is a single-line inline-flex pill with
+        // overflow: hidden (conversation.css), so nesting a stacked body inside it would need a new
+        // wrapper around the two headline spans and change the collapsed markup. A container rather
+        // than a lone text node because #645 lands its per-input-field list in here, above the result.
+        <div className={`tool-row__body${body.isError ? ' tool-row__body--error' : ''}`}>
+          {body.resultSummary === '' ? (
+            // `=== ''` exactly — never `.trim()`, which would relabel whitespace-only output (real
+            // output the daemon sent) as absent, and never a falsy check, which would read as if
+            // `undefined` were reachable on a `string` field.
+            <p className="tool-row__empty">{TOOL_RESULT_EMPTY_COPY}</p>
+          ) : (
+            // <pre> + white-space: pre (conversation.css), not a <div>: a div inherits
+            // white-space: normal and collapses the daemon's newlines onto one line — the defect #607
+            // fixed for assistant messages. Tool output is machine output (a listing, a diff, a stack
+            // trace, an aligned table) where column position IS the information, so it keeps its exact
+            // shape and scrolls — the .unrecognized-row__raw side of the whitespace rule stated above
+            // .bubble__markdown pre in conversation.css, not the reflowing code-block side.
+            <pre className="tool-row__result">{body.resultSummary}</pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Shown in place of an expanded body when the daemon's result carried no text. Client-owned copy. */
+export const TOOL_RESULT_EMPTY_COPY = 'No output'
 
 // The collapsed/expanded diagnostic row. Built SPECIFIC, not generic: this is the first and only
 // expand-and-collapse in the repo, there is no <details> anywhere to reuse, and a reusable collapsible

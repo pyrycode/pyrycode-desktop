@@ -82,10 +82,11 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
   // --- FAB create-nav. The FAB dispatches requestNewConversation (name: null) → create_conversation
   // → the fake mints `created-1` (unnamed, non-promoted) and replies conversation_created →
   // useConversationCreatedNav sets it active and dispatches `open` → route `thread` (and, independently,
-  // #515's re-list lands the row in the store). Assert NAVIGATION into a thread, NOT list membership — the
-  // route is `thread`, so the Channel List is unmounted and there is nothing to assert against there. The
-  // overflow trigger is absent on the list and present on a thread, so its auto-wait IS the create-nav
-  // gate. ---
+  // #515's re-list lands the row in the store). Assert NAVIGATION into a thread, NOT list membership: the
+  // list re-renders on the re-list whether or not the app navigated, so a row assertion here would not
+  // separate the two. (Since #670 the list stays MOUNTED beside the thread, which only sharpens the
+  // point.) The overflow trigger is absent on the list and present on a thread, so its auto-wait IS the
+  // create-nav gate. ---
   await page.locator('.channel-list__fab').click()
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
   await expect(overflowTrigger).toBeVisible()
@@ -103,7 +104,11 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
   // click — the Channel Info sheet renders INSIDE ConversationScreen — so the 1→0 delta below is a
   // transition this click caused, not an assertion against a surface that was never mounted.
   await expect(page.locator('.conversation')).toHaveCount(1)
-  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  // #670: SCOPED to the chat pane. The two-pane shell keeps the Channel List mounted while a thread is
+  // open, and the list's own top-right entry is `aria-label="Archive"` too — so an unscoped name-exact
+  // query now matches TWO buttons and strict mode fails. The Channel-info sheet renders INSIDE
+  // ConversationScreen (see the sheet open above), so `.conversation` is a valid scoping root.
+  await page.locator('.conversation').getByRole('button', { name: 'Archive', exact: true }).click()
 
   // #653 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back click
   // (the `.conversation__back` click that used to stand here is gone: the control is unmounted by the time

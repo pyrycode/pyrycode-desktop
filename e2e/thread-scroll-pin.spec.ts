@@ -420,12 +420,14 @@ test('re-opening a discussion lands at the most recent messages and leaves the t
   const before = await readThreadMetrics(page)
   expect(before.scrollTop).toBe(0)
 
-  // Leave. Back dispatches the shell's `back` route flip and touches no store; PairedShellView then returns
-  // a DIFFERENT component type at that same position (PairedShell.tsx:88-97), so React destroys the
-  // subtree and the pin's ref and flag go with it. Awaiting the list is the unmount gate — the thread's DOM
-  // node is gone once the list is on screen.
+  // Leave. Back dispatches the shell's `back` route flip and touches no store; the two-pane shell's chat
+  // pane then renders `null` in place of the ConversationScreen, so React destroys the subtree and the
+  // pin's ref and flag go with it. #670 re-pointed the gate that follows: it used to await the LIST,
+  // which was a sound unmount proof only while the list and the thread were mutually exclusive. The list
+  // is now always on screen, so that assertion would pass instantly and the re-entry below could race
+  // the unmount — reading the thread's OWN disappearance restores the gate.
   await page.locator('.conversation__back').click()
-  await expect(page.locator('section[aria-label="Conversations"]')).toBeVisible()
+  await expect(page.locator('.conversation')).toHaveCount(0)
 
   // Re-enter the SAME row, through the real product-UI click the fixture itself performs — never a forced
   // route dispatch or store mutation. activateConversation resets the timeline only when the active

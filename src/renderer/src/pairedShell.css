@@ -1,0 +1,43 @@
+/*
+ * The two-pane desktop shell (#670), traced from Figma node 102-4 — Container 103:2963 laid out as one
+ * flex row over a --color-surface backdrop, holding Sidebar 103:736 (a fixed 400px column) beside Chat
+ * 103:2955 (which absorbs the rest). The geometry is self-checking against the 1280-wide frame:
+ * 20 + 400 + 20 + 820 + 20 = 1280.
+ *
+ * Every value is a theme token except the sidebar's 400px, which is structural geometry the ticket
+ * fixes by name (AC2), not a spacing step — the same carve-out channels.css makes for the FAB's square.
+ *
+ * The pane CARD treatment the Figma draws on both panes (an rgba(0,0,0,0.3) wash, rounded corners) is
+ * deliberately not here: .channel-list and .conversation each paint --color-surface on themselves, the
+ * same colour as this backdrop, so a wash on these wrappers would be painted over. Making it visible
+ * means editing both screen stylesheets, which the ticket rules out; the visual differentiation lands
+ * with the sidebar-tree and composer tickets that own each pane's interior.
+ */
+
+.paired-shell {
+  display: flex;
+  height: 100%;
+  /* index.css sets no global box-sizing, so the default content-box would add these 20px of padding
+     ON TOP of height:100% and overflow the window by 40px vertically. */
+  box-sizing: border-box;
+  gap: var(--space-5); /* Figma Container 103:2963 gap-[20px] */
+  padding: var(--space-5); /* Figma Container 103:2963 p-[20px] */
+  background: var(--color-surface);
+}
+
+/* Figma Sidebar 103:736 — w-[400px] shrink-0. Neither grows nor shrinks, so the column holds exactly
+   400px at every window width (AC2) and the pane below absorbs the whole delta. */
+.paired-shell__sidebar {
+  flex: 0 0 400px;
+  height: 100%;
+}
+
+/* Figma Chat 103:2955 — flex-[1_0_0] min-w-px. min-width:0 is load-bearing rather than defensive: a
+   flex item's default min-width:auto floors it at its content width, so one unbreakable descendant (a
+   long <pre>, a wide tool-result line) would push the item past its share and squeeze the sidebar off
+   its 400px. */
+.paired-shell__pane {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+}

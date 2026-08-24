@@ -117,7 +117,12 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   // the Channel Info sheet renders INSIDE ConversationScreen — so the 1→0 delta below is a transition this
   // click caused, not an assertion against a surface that was never mounted.
   await expect(page.locator('.conversation')).toHaveCount(1)
-  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  // #670: SCOPED to the chat pane, the same fix as the fake twin's — the two-pane shell keeps the
+  // Channel List (whose top-right entry is also `aria-label="Archive"`) mounted beside the thread, so
+  // an unscoped name-exact query matches two buttons and strict mode fails. This file is a `real-*`
+  // spec, gated out of the default Playwright config, so the break would have stayed SILENT until
+  // `npm run e2e:real:gate` — which is why it is fixed in the same pass, not left for the gate to find.
+  await page.locator('.conversation').getByRole('button', { name: 'Archive', exact: true }).click()
 
   // #653 AC1 — the app returns to the Channel List on the daemon's confirmation, with no manual Back click
   // (the `.conversation__back` click that used to stand here is gone: the control is unmounted by the time

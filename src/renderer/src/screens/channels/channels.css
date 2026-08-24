@@ -9,9 +9,10 @@
  * new-discussion FAB (#242).
  */
 
-/* The scroll column. PairedShellView returns this <section> directly, so — like .conversation — it is
-   a direct child of the block-level #root (height:100%), NOT a flex item of a paired-shell area. So it
-   fills the window with height:100% (mirroring .conversation), not the spec's inert `flex:1 1 auto`;
+/* The scroll column. Since #670 this <section> is the child of `.paired-shell__sidebar`, the shell's
+   fixed 400px flex item — so it fills that column with height:100% (mirroring .conversation), which is
+   also what it did as a direct child of the block-level #root before the two-pane shell. It carries no
+   width rule of its own, so the sidebar's 400px is the single place that width is decided.
    box-sizing:border-box keeps the vertical padding inside that 100% so the surface fills edge-to-edge
    (Figma 15-8) and long lists scroll inside this column rather than the window. */
 .channel-list {

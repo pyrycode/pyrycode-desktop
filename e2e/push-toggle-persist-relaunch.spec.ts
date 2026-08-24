@@ -24,7 +24,6 @@ import { test, expect } from './fixtures/launchPairedApp'
 
 test('push-notification toggle persists across an app relaunch', async ({ launchPairedApp }) => {
   const pushToggleName = 'Push notifications when claude responds'
-  const list = 'section[aria-label="Conversations"]'
   const settings = 'section[aria-label="Settings screen"]'
 
   // --- Launch 1: flip the toggle away from its ENABLED default. ---
@@ -32,8 +31,12 @@ test('push-notification toggle persists across an app relaunch', async ({ launch
 
   // thread → list (the fixture's default drive ends on the thread; Settings is reached list-side, the
   // #465 chain). Then list → Settings via the gear.
+  // #670 re-pointed the gate below: the two-pane shell keeps the list on screen at all times, so a
+  // list-visible assertion after a back click would pass for free and gate nothing (the `list` selector
+  // const went with it — the reuse arm at launch 2 has its own). The chat pane emptying is the real
+  // post-back signal, and it is still a genuine gate: the gear click must not race the route flip.
   await page.locator('.conversation__back').click()
-  await expect(page.locator(list)).toBeVisible()
+  await expect(page.locator('.conversation')).toHaveCount(0)
   await page.getByRole('button', { name: 'Settings' }).click()
   await expect(page.locator(settings)).toBeVisible()
 

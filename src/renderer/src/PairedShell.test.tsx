@@ -31,11 +31,23 @@ const ARCHIVE_MARKER = 'aria-label="Archive screen"'
 // which #665's restyle removes; the accessible name survives that restyle.
 const PAIRING_MARKER = 'aria-label="Pairing code"'
 
+// #670: the chat pane's identity, applied as ConversationScreen's `key`. A server-rendered string cannot
+// observe a REMOUNT (no reconciler runs, and `key` is not markup), so the "switching conversations without
+// leaving the thread remounts the pane" contract is proven in e2e — conversation-switch-remount.spec.ts.
+// What these call sites pin is the SIGNATURE: the prop is required, so a future call site that forgets to
+// give the pane an identity is a compile error rather than a silently unkeyed subtree. `null` on the routes
+// that mount no pane; a real id on the thread routes.
+const PANE_KEY = 'seed-conversation'
+
 describe('PairedShellView', () => {
   describe("route='list'", () => {
+    // #670 AC4: with no active conversation the chat pane mounts NO ConversationScreen — it renders
+    // `null`, not a mounted-but-blank thread. The absence assertion below is that proof at unit level
+    // (four e2e assertions lean on the same fact via `.conversation` toHaveCount(0)); the sidebar half
+    // is unchanged from #141.
     it('shows the Channel List wrapper and never the thread', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="list" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="list" paneKey={null} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(LIST_MARKER)
       expect(markup).not.toContain(CONVERSATION_MARKER)
@@ -51,17 +63,33 @@ describe('PairedShellView', () => {
 
     it('shows the conversation thread with its leading back affordance', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="thread" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="thread" paneKey={PANE_KEY} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(CONVERSATION_MARKER)
       expect(markup).toContain(BACK_MARKER)
     })
+
+    // #670 AC1: both panes at once. Opening a conversation no longer REPLACES the list — the two-pane
+    // shell renders the sidebar beside the thread, so the list marker is present on the THREAD route
+    // too. This is the unit-level "selecting a conversation does not hide the sidebar" proof; the
+    // geometric half (the sidebar's fixed 400px, the window's 800px floor) is e2e-only, since the node
+    // environment has no layout engine to measure against.
+    it('keeps the sidebar mounted beside the thread (#670, AC1)', () => {
+      const markup = renderToStaticMarkup(
+        <PairedShellView route="thread" paneKey={PANE_KEY} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+      )
+      expect(markup).toContain(LIST_MARKER)
+      expect(markup).toContain(CONVERSATION_MARKER)
+    })
   })
 
   describe("route='settings'", () => {
+    // #670 AC5: the two absence assertions below now also carry "Settings opens FULL SCREEN over both
+    // panes" — the settings arm replaces the whole two-pane shell rather than filling one pane. Do not
+    // delete them as redundant with the presence assertion; they are the over-both-panes proof.
     it('shows the Settings screen and neither the list nor the thread (#333)', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="settings" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="settings" paneKey={null} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(SETTINGS_MARKER)
       expect(markup).not.toContain(LIST_MARKER)
@@ -70,9 +98,11 @@ describe('PairedShellView', () => {
   })
 
   describe("route='archive'", () => {
+    // #670 AC5, the same reading as the settings block above: the two absence assertions are the
+    // "Archive opens full screen OVER both panes" proof, not redundancy.
     it('shows the Archive screen and neither the list nor the thread (#347)', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="archive" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="archive" paneKey={null} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(ARCHIVE_MARKER)
       expect(markup).not.toContain(LIST_MARKER)
@@ -91,10 +121,13 @@ describe('PairedShellView', () => {
       Reflect.deleteProperty(globalThis, 'window')
     })
 
+    // #670 AC5 again: `not.toContain(LIST_MARKER)` is the "Pair-another-server opens full screen over
+    // both panes" proof.
     it('reuses the existing pairing screen and shows neither the list nor the settings (#152, AC2)', () => {
       const markup = renderToStaticMarkup(
         <PairedShellView
           route="pairServer"
+          paneKey={null}
           onOpen={noop}
           onBack={noop}
           onOpenSettings={noop}

@@ -55,14 +55,14 @@ interface ToolResult { isError: boolean; resultSummary: string }
 
 type ThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string }
-  | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; result: ToolResult | null }
+  | { kind: 'toolCall'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>>; result: ToolResult | null }
   | { kind: 'turnBoundary'; turnId: string; stopReason: string }
   | { kind: 'userText'; text: string }
   | { kind: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
 
 type ThreadEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
-  | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string }
+  | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>> }
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
@@ -95,6 +95,15 @@ rule, not `stalled`'s: the wire's `compacting` frame also carries an explicit fa
 only on that edge and survives turn activity. It stays `boolean` rather than `apiRetry`'s `| null`
 record because the wire carries no counter to discard on clear — there is nothing for a `| null` shape
 to make "true by construction."
+
+**`toolCall.input` / `toolUse.input` ([#643](../codebase/643.md)) is not a sixth scalar** — it's an
+optional field on an existing arm/item pair, the tool's own input fields as name → value
+(pyrycode#1678, decoded at the transport by [#642](../codebase/642.md)). Absent means the wire omitted
+it (a pre-#1678 daemon); an empty map is the distinct fact "this daemon sent no fields for this call."
+Both the bridge and the reducer carry it unchanged and by reference — no store-level interpretation,
+no key singled out, no value shortened. Ships dormant: `reduceTimeline`'s `toolUse` arm appends it
+onto the `toolCall` item, but no render reads it yet — that's
+[#645](https://github.com/pyrycode/pyrycode-desktop/issues/645).
 
 ### The reducer
 
@@ -273,6 +282,11 @@ Nothing imports this module yet.
   `connected`-edge trigger — because the pairing itself is ending and no state in which `items`
   legitimately survives. `reduceTimeline`'s `reset` arm is unmodified; this ticket only wires a second
   call site.
+- **[#643](../codebase/643.md) (shipped)** widened the `toolUse` arm/`toolCall` item pair with one
+  optional field, `input` — no new arm, no new item kind. `reduceTimeline`'s pre-existing `toolUse`
+  arm and `fillResult` are otherwise unmodified; the reducer's appended literal gained one line
+  carrying the map by reference. No render — [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645)
+  is the still-open sibling slice.
 
 ## Edge cases and limitations
 
@@ -405,6 +419,10 @@ Nothing imports this module yet.
 - [#531 codebase notes](../codebase/531.md) — `reset`'s second production dispatch site: a pairing
   ending, unconditional, via
   [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+- [#642 codebase notes](../codebase/642.md) — the transport slice: decodes `tool_use.input` into the
+  optional `DaemonEvent.toolUse.input` field, shipped dormant.
+- [#643 codebase notes](../codebase/643.md) — widens the `toolUse`/`toolCall` pair with `input`, carried
+  unchanged and by reference through the bridge and the reducer; ships dormant.
 - [#538 codebase notes](../codebase/538.md) — the nullary `reconnected` arm: `timelineBridge.ts` maps
   the `connected` daemon edge onto it, clearing `phase`/`stalled`/`apiRetry`/`compacting` while
   preserving `items` by reference — the Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md)

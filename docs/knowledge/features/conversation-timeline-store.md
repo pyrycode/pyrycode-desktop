@@ -111,6 +111,16 @@ predicate) gained a matching widened clause, the same shape as `stalled`'s guard
 indicator](conversation-shell.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649)
 for the view-side composition.
 
+[#643](../codebase/643.md) widened the fourth owned arm, `toolUse` ([#217](../codebase/217.md)) — no
+new arm, one field added to both the `DaemonEvent` and `ThreadEvent` sides: the tool's input map
+carried to the IPC boundary by [#642](../codebase/642.md). Unlike every prior widen on this arm, this
+one also widens the `ThreadItem` the reducer appends (`toolCall.input`), not just the event — the
+bridge's fresh literal and the reducer's appended literal each gained one line, `input: event.input`,
+unconditional and by reference. Absence (a pre-pyrycode#1678 daemon) and an empty map stay distinct
+facts at both hops, pinned by tests asserting `=== undefined` rather than `'input' in …`. `fillResult`
+needed no change — its existing spread already preserves the field. Ships dormant: `selectItems`
+carries the field but nothing reads it yet — that's [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645).
+
 ## What it does
 
 Turns the nine owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
@@ -407,6 +417,11 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
   new arm clears `phase`/`stalled`/`apiRetry`/`compacting` while preserving `items` by reference — the
   Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md) / `queueStore` #197 already have.
   `daemonEventBridge.ts` and `sessionStore.ts` stay independent consumers of the same `connected` edge.
+- [#642 codebase notes](../codebase/642.md) — the transport slice: decodes `tool_use.input` into the
+  optional `DaemonEvent.toolUse.input` field, shipped dormant, carried to the IPC boundary.
+- [#643 codebase notes](../codebase/643.md) — widens the fourth owned arm's `ThreadEvent`/`ThreadItem`
+  pair with `input`, the first widen on this arm to also touch the appended item, not just the event.
+  Still dormant — [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645) renders it.
 - [#650 codebase notes](../codebase/650.md) — adds a sixth `TimelineState` scalar,
   `localSendPending`, and `selectLocalSendPending`, but no tenth owned arm: it is written by the
   existing renderer-sourced `userText` arm rather than any `DaemonEvent`, closed by `turnState` and

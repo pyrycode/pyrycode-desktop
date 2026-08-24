@@ -9,7 +9,7 @@ import {
   selectStalled,
   selectApiRetry
 } from './timelineStore'
-import type { ThreadItem } from './threadTimeline'
+import type { ThreadEvent, ThreadItem } from './threadTimeline'
 
 // Fixtures — plain wire-shaped data, mirroring daemonEventBridge.test.ts. No transport involved.
 const ack: HelloAckPayload = {
@@ -76,6 +76,74 @@ describe('translateTimelineEvent — the two owned arms', () => {
     })
     // A fresh literal, not a pass-through of the DaemonEvent object.
     expect(translated).not.toBe(event)
+  })
+
+  it('toolUse carries a several-field input map through unchanged, by reference (#643)', () => {
+    // Deliberately NOT alphabetical, so the key-order assertion has teeth, and deliberately
+    // non-numeric — JS reorders integer-like string keys ahead of the rest regardless of insertion
+    // order, which would make the assertion test the engine rather than the bridge.
+    const input = { pattern: 'TODO', path: '/src', output_mode: 'content' }
+    const event: DaemonEvent = {
+      type: 'toolUse',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Grep',
+      inputSummary: 'greps /src for TODO',
+      input
+    }
+    const translated = translateTimelineEvent(event) as Extract<ThreadEvent, { type: 'toolUse' }>
+    expect(translated).toEqual({
+      type: 'toolUse',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Grep',
+      inputSummary: 'greps /src for TODO',
+      input: { pattern: 'TODO', path: '/src', output_mode: 'content' }
+    })
+    // Keys and key order reach the ThreadEvent intact — nothing reshaped, reordered or filtered.
+    expect(Object.keys(translated.input ?? {})).toEqual(['pattern', 'path', 'output_mode'])
+    // The map is carried BY REFERENCE — never `{ ...event.input }`, which would turn an ABSENT map
+    // into an empty one — while the containing event is still a fresh literal.
+    expect(translated.input).toBe(input)
+    expect(translated).not.toBe(event)
+  })
+
+  it('toolUse with an ABSENT input map translates to `input === undefined` (#643)', () => {
+    // A pre-pyrycode#1678 daemon. Absence must survive the hop: `=== undefined`, never `'input' in …`
+    // (structured clone preserves an `undefined`-valued own property, so `in` is true either way).
+    const event: DaemonEvent = {
+      type: 'toolUse',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Read',
+      inputSummary: 'reads /etc/hosts'
+    }
+    const translated = translateTimelineEvent(event) as Extract<ThreadEvent, { type: 'toolUse' }>
+    expect(translated.input).toBe(undefined)
+    // The other five fields are unchanged.
+    expect(translated).toEqual({
+      type: 'toolUse',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Read',
+      inputSummary: 'reads /etc/hosts'
+    })
+  })
+
+  it('toolUse with an EMPTY input map translates to an empty map, never undefined (#643)', () => {
+    // The post-#1678 "this daemon sent no fields for this call" case — a different fact from absence,
+    // and never collapsed into it.
+    const event: DaemonEvent = {
+      type: 'toolUse',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Read',
+      inputSummary: 'reads /etc/hosts',
+      input: {}
+    }
+    const translated = translateTimelineEvent(event) as Extract<ThreadEvent, { type: 'toolUse' }>
+    expect(translated.input).not.toBe(undefined)
+    expect(translated.input).toEqual({})
   })
 
   it('toolResult → a ThreadEvent toolResult with the same fields, a fresh object', () => {

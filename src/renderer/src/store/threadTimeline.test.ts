@@ -23,6 +23,21 @@ function toolUse(turnId: string, toolUseId: string, name = 'Read'): ThreadEvent 
   return { type: 'toolUse', turnId, toolUseId, name, inputSummary: `${name}(${toolUseId})` }
 }
 
+/**
+ * #643's sibling of `toolUse(...)`, carrying the tool's own input fields. A separate builder rather
+ * than a widened `toolUse(...)`: widening would either reorder against the `name = 'Read'` default or
+ * push a present-but-`undefined` `input` into every existing caller's fixture. `toolUse(...)` itself
+ * stays the ABSENT-map builder (a pre-pyrycode#1678 daemon).
+ */
+function toolUseWithInput(
+  turnId: string,
+  toolUseId: string,
+  input: Readonly<Record<string, string>>,
+  name = 'Read'
+): ThreadEvent {
+  return { type: 'toolUse', turnId, toolUseId, name, inputSummary: `${name}(${toolUseId})`, input }
+}
+
 function toolResult(
   turnId: string,
   toolUseId: string,
@@ -202,6 +217,56 @@ describe('reduceTimeline — tool-result correlation', () => {
     const resolved = run([toolUse('A', 't1'), toolResult('A', 't1')])
     const dup = reduceTimeline(resolved, toolResult('A', 't1', true, 'second'))
     expect(dup).toBe(resolved)
+  })
+})
+
+describe('reduceTimeline — the tool input map (#643)', () => {
+  it('appends the map onto the toolCall unchanged, by reference, key order intact', () => {
+    // Deliberately NOT alphabetical, so the key-order assertion has teeth, and deliberately
+    // non-numeric — JS reorders integer-like string keys ahead of the rest regardless of insertion
+    // order, which would make the assertion test the engine rather than the reducer.
+    const input = { pattern: 'TODO', path: '/src', output_mode: 'content' }
+    const state = run([toolUseWithInput('A', 't1', input, 'Grep')])
+    const call = state.items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(call.input).toEqual({ pattern: 'TODO', path: '/src', output_mode: 'content' })
+    expect(Object.keys(call.input ?? {})).toEqual(['pattern', 'path', 'output_mode'])
+    // By reference — never `{ ...event.input }`, which would turn an ABSENT map into an empty one.
+    expect(call.input).toBe(input)
+  })
+
+  it('an ABSENT map yields an item whose map is absent, otherwise unchanged', () => {
+    // A pre-pyrycode#1678 daemon. Asserted `=== undefined`, never `'input' in item` — structured
+    // clone preserves an `undefined`-valued own property, so `in` would be true either way.
+    const state = run([toolUse('A', 't1', 'Bash')])
+    const call = state.items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(call.input).toBe(undefined)
+    expect(call).toEqual({
+      kind: 'toolCall',
+      turnId: 'A',
+      toolUseId: 't1',
+      name: 'Bash',
+      inputSummary: 'Bash(t1)',
+      result: null
+    })
+  })
+
+  it('an EMPTY map yields an item carrying an empty map, never undefined', () => {
+    // The post-#1678 "this daemon sent no fields for this call" case — a different fact from
+    // absence, and never collapsed into it.
+    const state = run([toolUseWithInput('A', 't1', {})])
+    const call = state.items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(call.input).not.toBe(undefined)
+    expect(call.input).toEqual({})
+  })
+
+  it('survives the tool-result fill — resolving the call leaves the map untouched', () => {
+    // A regression pin against a future edit to `fillResult`: its `{ ...item, result }` preserves the
+    // map by construction today, so this costs no production line.
+    const input = { command: 'ls -la', description: 'list the tree' }
+    const state = run([toolUseWithInput('A', 't1', input, 'Bash'), toolResult('A', 't1', false, 'ok')])
+    const call = state.items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(call.result).toEqual({ isError: false, resultSummary: 'ok' })
+    expect(call.input).toBe(input)
   })
 })
 

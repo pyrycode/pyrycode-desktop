@@ -45,6 +45,15 @@ export type ThreadItem =
       toolUseId: string
       name: string
       inputSummary: string
+      // #643: the tool's own input fields, name → value, carried from the `toolUse` event unchanged.
+      // ABSENT means the WIRE omitted it (a pre-pyrycode#1678 daemon) — test `item.input === undefined`,
+      // never `'input' in item`; an empty map is a DIFFERENT fact ("this daemon sent no fields for this
+      // call") and is never collapsed into absence. Both its keys and its values are untrusted daemon
+      // display text under the same plain-text-NEVER-HTML constraint as `name` / `inputSummary`; the
+      // render slice (#645) owns that DOM sink. Key order is meaningless (a Go map artefact) and the map
+      // may be incomplete (the daemon's total bound drops fields and names none — `inputSummary` stays
+      // the whole-input fallback), so a consumer ITERATES rather than probes by key.
+      input?: Readonly<Record<string, string>>
       // Starts null on the `toolUse`; filled in place when the correlated `toolResult` arrives.
       result: ToolResult | null
     }
@@ -91,7 +100,25 @@ export type ThreadEvent =
   // `seq` is carried for wire fidelity (and a future monotonicity guard) but not consulted —
   // arrival order is authoritative, per ADR 0004's caller-owns-ordering stance.
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
-  | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string }
+  // The tool-call arm. Field-for-field identical to the `toolUse` DaemonEvent (`events.ts:384-391`),
+  // so the bridge stays a filter + fresh copy, not a remap.
+  //
+  // #643: `input` is the tool's own input fields, name → value. ABSENT means the WIRE omitted it (a
+  // pre-pyrycode#1678 daemon) — test `event.input === undefined`, never `'input' in event`; an empty
+  // map is a DIFFERENT fact ("this daemon sent no fields for this call") and is never collapsed into
+  // absence. Both its keys and its values are untrusted daemon display text under the same
+  // plain-text-NEVER-HTML constraint as `name` / `inputSummary`; the render slice (#645) owns that DOM
+  // sink. Key order is meaningless (a Go map artefact) and the map may be incomplete, so a consumer
+  // ITERATES rather than probes by key. The reducer carries it onto the `toolCall` item verbatim —
+  // the headline pick, the shortening and the fallback are all #645's decisions, not the store's.
+  | {
+      type: 'toolUse'
+      turnId: string
+      toolUseId: string
+      name: string
+      inputSummary: string
+      input?: Readonly<Record<string, string>>
+    }
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
@@ -284,6 +311,11 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
             toolUseId: event.toolUseId,
             name: event.name,
             inputSummary: event.inputSummary,
+            // #643: carried onto the item verbatim — unconditional and BY REFERENCE. Never
+            // `{ ...event.input }`, which on an absent map yields `{}` and silently converts absence
+            // (a pre-pyrycode#1678 daemon) into emptiness. No key is singled out, nothing is
+            // shortened, dropped or reordered: the store owns no display opinion (#645 does).
+            input: event.input,
             result: null
           }
         ],

@@ -227,6 +227,11 @@ the two removed members carried while they existed.
   `input` is absent when the wire omitted it (a pre-pyrycode#1678 daemon), otherwise a string→string
   record with the three prototype-reserved keys already stripped at decode; ships dormant, #643 is the
   first consumer.
+
+[#643](../codebase/643.md) is that first consumer: the `timelineBridge`'s `toolUse` arm now assigns
+`input: event.input` onto its `ThreadEvent`, unconditional and by reference — the field crosses this
+channel's IPC boundary the same way every other field in the arm does, with no new drop and no new
+copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645) owns that.
 - **`modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,
   source}`** ([#201](../codebase/201.md)) also map to *no* `SessionAction`, consumed instead by the
   **third**, independent [modal store + bridge](modal-store-bridge.md), shipped in

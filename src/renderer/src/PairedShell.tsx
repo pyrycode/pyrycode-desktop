@@ -1,5 +1,5 @@
 import './pairedShell.css'
-import { useReducer } from 'react'
+import { useReducer, useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { ChannelList } from './screens/channels/ChannelList'
@@ -100,6 +100,11 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
  */
 export function PairedShellView(props: {
   route: PairedRoute
+  /** The identity of the chat pane's subtree — the active conversation's id, or null when none has been
+   *  activated in this shell. Applied as ConversationScreen's `key`, so a change REMOUNTS it. Required,
+   *  not optional: forgetting to wire it is the exact regression it exists to prevent, so it is a compile
+   *  error rather than a silent `undefined`. See the container's `paneKey` state for why it is a prop. */
+  paneKey: string | null
   onOpen: (conversation: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
@@ -139,7 +144,23 @@ export function PairedShellView(props: {
           </div>
           <div className="paired-shell__pane">
             {props.route === 'thread' ? (
-              <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
+              // `key` is the pane's IDENTITY, not decoration. Switching conversations from the
+              // now-always-mounted sidebar leaves the route on `thread` (`open` is absolute), so React
+              // reconciles two `thread` renders by PRESERVING this subtree — a path that was unreachable
+              // before the shell, because the list was unmounted while a thread was up. Every
+              // useState/useRef inside ConversationScreen was written on the assumption that a remount
+              // always separates two conversations — five of them say so in as many words (:137 the
+              // run-config sheet, :142 Channel info, :147 the workspace picker, :152 the background-task
+              // panel, :162 the scroll pin, each "resets on remount for free"), and the composer's draft
+              // (:1787) is the sharpest case: it would follow the operator into the conversation they
+              // switched to and be SENT there. That is AC4's "never a
+              // stale one from a previous selection", and the store-side clear (activateConversation)
+              // cannot cover it — it clears the timeline and session id, not screen-local state.
+              <ConversationScreen
+                key={props.paneKey}
+                onUnpaired={props.onUnpaired}
+                onBack={props.onBack}
+              />
             ) : null}
           </div>
         </div>
@@ -174,13 +195,29 @@ export function PairedShellView(props: {
  */
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
+  // The chat pane's identity (see PairedShellView's `paneKey` prop). Screen-local, ADR 0006, beside the
+  // nav reducer — deliberately NOT a subscription to activeConversationStore, which would make this
+  // container a store subscriber and give up the server-renderable invariant the two dep-object comments
+  // above assert. It does not need to be: the two paths that activate a conversation are BOTH right here
+  // (the created-event nav below and `onOpen`), each already holding the conversation it is activating, so
+  // the id is recorded from the nav action rather than read back out of a store. The set is exactly
+  // co-located with `activateConversation` — that call is the marker for "a third activation must record
+  // the id too". The nullary `open` (a notification click, below) records nothing on purpose: it means
+  // "show the conversation that is already active", so the pane's identity has not changed. Nothing clears
+  // it on the way out either: the exits (delete, archive, unpair, pair-another) all land on a route where
+  // the pane renders `null`, so the subtree is destroyed and a stale id cannot preserve anything.
+  const [paneKey, setPaneKey] = useState<string | null>(null)
   // The created-event → list→thread nav. #278: also record the created payload (its `cwd` feeds the
   // empty-thread workspace chip) — the callback already receives this payload and previously dropped it.
   // #530: recording now goes through activateConversation, which first clears the previous
   // conversation's timeline rows and daemon session id when the id actually changes — so a newly
   // created discussion opens on an empty thread instead of the last one's history.
+  // #670: the FAB's create is a conversation switch too when a thread is already open — `open` is
+  // absolute, so the route does not move and the pane would otherwise keep the previous discussion's
+  // composer draft. Re-key it on the minted id.
   useConversationCreatedNav((created) => {
     activateConversation(activateDeps, created)
+    setPaneKey(created.id)
     dispatch({ type: 'open' })
   })
   // #652: the delete confirmation → thread exit. Symmetric with the created-event nav above and driven
@@ -224,6 +261,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   return (
     <PairedShellView
       route={route}
+      paneKey={paneKey}
       // #448: opening a row records THAT conversation as active before navigating, the same
       // record-then-open the created-event path above performs — so the thread's wire actions (send,
       // snapshot, dequeue) target the clicked conversation's real id, not a placeholder. A
@@ -231,8 +269,12 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       // store accepts it structurally; most-recent-wins replacement is the store's contract. #530: the
       // record goes through activateConversation, which clears the previous conversation's rows and
       // session id ONLY when the id changes — a re-click of the already-active row keeps its thread.
+      // #670: this is the sidebar switch the two-pane shell exists to enable — clicking a row while a
+      // DIFFERENT conversation's thread is up. Re-keying the pane on the clicked id is what stops that
+      // thread's screen-local state from following the operator into the new one.
       onOpen={(conversation) => {
         activateConversation(activateDeps, conversation)
+        setPaneKey(conversation.id)
         dispatch({ type: 'open' })
       }}
       onOpenSettings={() => dispatch({ type: 'openSettings' })}

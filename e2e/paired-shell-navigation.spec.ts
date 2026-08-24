@@ -77,9 +77,12 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   const paneWidth = async (): Promise<number> =>
     (await page.locator('.paired-shell__pane').boundingBox())?.width ?? -1
 
+  // Both baselines poll, so the whole block is uniformly poll-based: the pane's own read is the value the
+  // post-resize delta is measured against, so taking it without a settle gate would be the one geometry
+  // read in this block that could observe a mid-layout frame.
   await expect.poll(sidebarWidth).toBe(SIDEBAR_WIDTH_PX)
+  await expect.poll(paneWidth).toBeGreaterThan(0)
   const paneBefore = await paneWidth()
-  expect(paneBefore).toBeGreaterThan(0)
 
   // setSize is asynchronous — it resolves in the main process before the renderer has laid out the new
   // viewport — so both post-resize assertions poll. Width delta only; the height is passed through

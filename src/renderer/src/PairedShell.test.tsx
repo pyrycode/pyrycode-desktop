@@ -31,6 +31,14 @@ const ARCHIVE_MARKER = 'aria-label="Archive screen"'
 // which #665's restyle removes; the accessible name survives that restyle.
 const PAIRING_MARKER = 'aria-label="Pairing code"'
 
+// #670: the chat pane's identity, applied as ConversationScreen's `key`. A server-rendered string cannot
+// observe a REMOUNT (no reconciler runs, and `key` is not markup), so the "switching conversations without
+// leaving the thread remounts the pane" contract is proven in e2e — conversation-switch-remount.spec.ts.
+// What these call sites pin is the SIGNATURE: the prop is required, so a future call site that forgets to
+// give the pane an identity is a compile error rather than a silently unkeyed subtree. `null` on the routes
+// that mount no pane; a real id on the thread routes.
+const PANE_KEY = 'seed-conversation'
+
 describe('PairedShellView', () => {
   describe("route='list'", () => {
     // #670 AC4: with no active conversation the chat pane mounts NO ConversationScreen — it renders
@@ -39,7 +47,7 @@ describe('PairedShellView', () => {
     // is unchanged from #141.
     it('shows the Channel List wrapper and never the thread', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="list" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="list" paneKey={null} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(LIST_MARKER)
       expect(markup).not.toContain(CONVERSATION_MARKER)
@@ -55,7 +63,7 @@ describe('PairedShellView', () => {
 
     it('shows the conversation thread with its leading back affordance', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="thread" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="thread" paneKey={PANE_KEY} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(CONVERSATION_MARKER)
       expect(markup).toContain(BACK_MARKER)
@@ -68,7 +76,7 @@ describe('PairedShellView', () => {
     // environment has no layout engine to measure against.
     it('keeps the sidebar mounted beside the thread (#670, AC1)', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="thread" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="thread" paneKey={PANE_KEY} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(LIST_MARKER)
       expect(markup).toContain(CONVERSATION_MARKER)
@@ -81,7 +89,7 @@ describe('PairedShellView', () => {
     // delete them as redundant with the presence assertion; they are the over-both-panes proof.
     it('shows the Settings screen and neither the list nor the thread (#333)', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="settings" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="settings" paneKey={null} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(SETTINGS_MARKER)
       expect(markup).not.toContain(LIST_MARKER)
@@ -94,7 +102,7 @@ describe('PairedShellView', () => {
     // "Archive opens full screen OVER both panes" proof, not redundancy.
     it('shows the Archive screen and neither the list nor the thread (#347)', () => {
       const markup = renderToStaticMarkup(
-        <PairedShellView route="archive" onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
+        <PairedShellView route="archive" paneKey={null} onOpen={noop} onBack={noop} onOpenSettings={noop} onOpenArchive={noop} onUnpaired={noop} onOpenPairServer={noop} onPairServerPaired={noop} onPairServerCancelled={noop} />
       )
       expect(markup).toContain(ARCHIVE_MARKER)
       expect(markup).not.toContain(LIST_MARKER)
@@ -119,6 +127,7 @@ describe('PairedShellView', () => {
       const markup = renderToStaticMarkup(
         <PairedShellView
           route="pairServer"
+          paneKey={null}
           onOpen={noop}
           onBack={noop}
           onOpenSettings={noop}

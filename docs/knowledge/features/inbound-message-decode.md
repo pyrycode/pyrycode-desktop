@@ -73,7 +73,7 @@ the daemon's onset-only liveness signal on the same v2 interactive stream `turn_
 belong to (pyrycode #638 wire vocab, #639 fan-out). `StallPayload{conversation_id}` is
 `TurnStatePayload` scaled to its one always-present field, so `parseStallPayload` is a single
 `requireString` call with **no enum check** — `stall` has no `state` to close over. The consumer arm
-drops the one decoded field (`conversation_id`, the `turnState` convention) and emits a **nullary**
+drops the one decoded field (`conversation_id`) and emits a **nullary**
 `stallDetected` `DaemonEvent` — the only kind in this file whose event carries no field at all, since
 its one decoded field is the one dropped. Ships dormant; the render slice #317 is the first consumer, feeding a new `stalled` timeline-store scalar.
 
@@ -170,8 +170,8 @@ check, no allow-list, no normalisation — the producer's own 256-byte cap
 it, and a client-invented rule would silently drop identifiers claude legitimately announces (not
 reliably dated, need not appear in any published list). `truncated` goes through `requireBoolean` and is
 never optional or defaulted — a defaulting reader would present a cut identifier as a complete one. The
-consumer arm carries `model`/`truncated` onward and drops `conversation_id` (the `turnState` convention
-— #588 holds a single value replaced per announcement). Ships dormant no longer: [the announced-model
+consumer arm carries `model`/`truncated` onward and drops `conversation_id` (#588 holds a single value
+replaced per announcement). Ships dormant no longer: [the announced-model
 store (#588, shipped)](announced-model-store.md) is the first consumer, still dormant
 pending #560's render surface.
 
@@ -495,8 +495,8 @@ case 'message': {
       })
       return
     case 'stall':
-      // #315: fresh NULLARY literal — the payload's only field (conversation_id) is dropped, the
-      // turnState convention, so nothing crosses IPC at all. Onset-only; self-clear is #317's concern.
+      // #315: fresh NULLARY literal — the payload's only field (conversation_id) is dropped, so
+      // nothing crosses IPC at all. Onset-only; self-clear is #317's concern.
       emitDaemonEvent(sink, { type: 'stallDetected' })
       return
     case 'tool-use':

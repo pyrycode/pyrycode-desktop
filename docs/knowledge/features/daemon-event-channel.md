@@ -46,6 +46,16 @@ bridge owns, and the first whose mapping produces a durable `ThreadItem` (a `too
 or a scalar. `name`/`inputSummary` are opaque daemon display text the render slice
 ([#218](https://github.com/pyrycode/pyrycode-desktop/issues/218)) must render as plain text.
 
+[#642](../codebase/642.md) widened this member — no new member, one field added — with a fifth,
+**optional** field: `input?: Readonly<Record<string, string>>`, the tool's own input fields as name →
+value (pyrycode#1678). Assigned unconditionally at the emit, `undefined` when the wire omitted it (a
+pre-#1678 daemon) — the consumer contract is `event.input === undefined`, never `'input' in event`.
+An empty map is a distinct fact ("this daemon sent no fields for this call") never collapsed into
+absence. Both keys and values are untrusted daemon display text under the same plain-text-never-HTML
+constraint as `name`/`inputSummary`; the three reserved keys `__proto__`/`constructor`/`prototype` can
+never appear (dropped at decode), so a consumer must iterate, never probe by key. Ships dormant; still
+consumed by neither existing bridge — #643 is the first.
+
 [#201](../codebase/201.md) added a tenth and eleventh no-`SessionAction` member, `modalShown` /
 `modalDismissed` — the transport slice of the modal vertical ([ADR
 0009](../decisions/0009-modal-prompt-model.md)), consumed by **neither** existing bridge; the real
@@ -128,7 +138,8 @@ export type DaemonEvent =
   | { type: 'conversationsReceived'; conversations: readonly ConversationSummary[] }
   | { type: 'turnState'; state: WireTurnState }
   | { type: 'stallDetected' }
-  | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string }
+  | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string
+      ; input?: Readonly<Record<string, string>> }
   | { type: 'modalShown'; modalId: string; class: WireModalClass; title: string; prompt: string
       ; options: readonly WireModalOption[]; defaultOptionId: string }
   | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }
@@ -206,13 +217,16 @@ the two removed members carried while they existed.
   all; zero decoded daemon data crosses this bridge for a `stall` frame. The daemon's onset-only
   liveness signal: emitted once on the rising edge, never repeated, no "cleared" counterpart — the
   client self-clears on next turn activity, in `reduceTimeline`'s `stalled`-scalar arms ([#317](../codebase/317.md)).
-- **`toolUse{turnId,toolUseId,name,inputSummary}`** ([#217](../codebase/217.md)) also maps to *no*
-  `SessionAction`, consumed instead by the [conversation timeline store](conversation-timeline-store.md)'s
-  bridge — the `timelineBridge`'s fourth owned arm. Unlike `turnState`, this is the first arm to drive a
-  real, durable `ThreadItem` (an appended `toolCall`, `result: null`) rather than a scalar or text delta —
-  see [ADR 0008](../decisions/0008-thread-timeline-model.md). `name`/`inputSummary` are opaque
-  daemon-supplied strings (the `stop_reason` #199 / `cwd` #139 posture); `conversation_id` is the one
-  field dropped.
+- **`toolUse{turnId,toolUseId,name,inputSummary,input?}`** ([#217](../codebase/217.md), `input` added by
+  [#642](../codebase/642.md)) also maps to *no* `SessionAction`, consumed instead by the [conversation
+  timeline store](conversation-timeline-store.md)'s bridge — the `timelineBridge`'s fourth owned arm.
+  Unlike `turnState`, this is the first arm to drive a real, durable `ThreadItem` (an appended
+  `toolCall`, `result: null`) rather than a scalar or text delta — see [ADR
+  0008](../decisions/0008-thread-timeline-model.md). `name`/`inputSummary` are opaque daemon-supplied
+  strings (the `stop_reason` #199 / `cwd` #139 posture); `conversation_id` is the one field dropped.
+  `input` is absent when the wire omitted it (a pre-pyrycode#1678 daemon), otherwise a string→string
+  record with the three prototype-reserved keys already stripped at decode; ships dormant, #643 is the
+  first consumer.
 - **`modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,
   source}`** ([#201](../codebase/201.md)) also map to *no* `SessionAction`, consumed instead by the
   **third**, independent [modal store + bridge](modal-store-bridge.md), shipped in
@@ -486,6 +500,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#495 codebase notes](../codebase/495.md) — the `compacting` member, `apiRetry`'s peer but **banner-only**: carries only `active` (`conversation_id` dropped), since the wire streams no compaction progress for the render slice #496 to carry a counter from. Like `apiRetry`, not onset-only and not deduped; consumed as a no-op by all three exhaustive bridges at ship time
 - [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member (removed [#621](../codebase/621.md)), the nineteenth no-`SessionAction` arm and, unlike every prior member, a deliberate **widening** (not a minimisation): carried exactly the `text`/`ts` fields `snapshotReceived` (#180) was built to exclude, emitted from that same member's `case 'snapshot'` seam; consumed as a no-op by all three exhaustive bridges, real consumer was the [screen-snapshot store](screen-snapshot-store.md) (#323) and the display slice #324, both removed by #618/#619 before this member itself was
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member, the fourth arm the `timelineBridge` owns, and the first to drive a durable `toolCall` item rather than text or a scalar
+- [#642 codebase notes](../codebase/642.md) — a field, not a member: `toolUse` widened with an optional fifth field, `input?: Readonly<Record<string, string>>`, still ships dormant on this arm — #643 is the first consumer
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member, the twelfth no-`SessionAction` arm and the vertical's last transport slice; the fifth arm the `timelineBridge` owns and the first to resolve an existing `ThreadItem` in place rather than append one or set a scalar
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `conversationCreated` member, the thirteenth no-`SessionAction` arm and the write-side twin of `conversationsReceived` (#139); consumed by neither existing bridge, real consumer is the render sibling #242

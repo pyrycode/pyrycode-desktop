@@ -92,9 +92,12 @@ is dropped anywhere in the chain.
 onset-only `stall` liveness signal on the same v2 stream `turnState`/`toolUse` belong to. Joins the
 `assistantDelta`/`turnEnd`/`turnState`/`toolUse`/`toolResult` fall-through group; its consumer is the
 [conversation timeline store](conversation-timeline-store.md)'s bridge, not the session store — the
-fourth arm to force a case in all three exhaustive `assertNever`-guarded switches at once. Unlike every
-prior member, it is **nullary**: `StallPayload`'s one field (`conversation_id`) is dropped at the emit,
-so this bridge's `null`-returning case discards a literal that already carries nothing.
+fourth arm to force a case in all three exhaustive `assertNever`-guarded switches at once. At ship
+time, unlike every prior member, it was **nullary**: `StallPayload`'s one field (`conversation_id`)
+was dropped at the emit, so this bridge's `null`-returning case discarded a literal that already
+carried nothing. [#732](../codebase/732.md) widened it with `conversationId`; this bridge's case is
+still `null`-returning, so it now discards a daemon-asserted routing key rather than nothing, and
+that id reaches no sink here.
 
 [#316](../codebase/316.md) added a nineteenth no-store-action member, `screenSnapshotReceived` — a
 **deliberate widening**, carrying the rendered-screen `text`/`ts` that `snapshotReceived`
@@ -102,7 +105,7 @@ so this bridge's `null`-returning case discards a literal that already carries n
 [#324](../codebase/324.md) needed it. Emitted from the same `case 'snapshot'` seam as
 `snapshotReceived`, so one decoded frame fired both events. Consumed by **none** of the three
 existing bridges; this bridge's `null`-returning case
-discarded a real, non-trivial payload (unlike `stallDetected`'s nullary literal) — the fifth arm to
+discarded a real, non-trivial payload (unlike `stallDetected`'s literal, nullary at the time) — the fifth arm to
 force a case in all three exhaustive `assertNever`-guarded switches at once, after
 `toolResult`/`conversationCreated`/`sessionTransition`/`stallDetected`. **Both `snapshotReceived` and
 `screenSnapshotReceived` were removed by [#621](../codebase/621.md)**, along with the `case` each
@@ -272,11 +275,11 @@ Before [#168](../codebase/168.md) this dispatched `translateDaemonEvent(event)` 
 - [Thread timeline (conversation model)](thread-timeline.md) / [#199](../codebase/199.md) — the `assistantDelta`/`turnEnd` members this bridge tolerates as a fifth and sixth `null`-returning case; both carry real content (unlike the four members above) but still map to `null` here because their consumer is [#202](../codebase/202.md)'s [conversation timeline store](conversation-timeline-store.md), not this session-store bridge
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `conversationsReceived` member this bridge tolerates as a seventh `null`-returning case; consumed by the conversation-list store [#208](https://github.com/pyrycode/pyrycode-desktop/issues/208), not this session-store bridge
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turnState` member this bridge tolerates as an eighth `null`-returning case; the third arm the timeline bridge owns, alongside `assistantDelta`/`turnEnd`
-- [#315 codebase notes](../codebase/315.md) — the `stallDetected` member this bridge tolerates as an eighteenth `null`-returning case, the fourth arm to force a case in all three exhaustive bridges at once; the only nullary member (its one decoded field, `conversation_id`, is dropped at the emit)
+- [#315 codebase notes](../codebase/315.md) — the `stallDetected` member this bridge tolerates as an eighteenth `null`-returning case, the fourth arm to force a case in all three exhaustive bridges at once; at ship time the only nullary member (its one decoded field, `conversation_id`, was dropped at the emit). [#732 codebase notes](../codebase/732.md) later widened it with `conversationId`; still a `null`-returning no-op here, and the id reaches no sink in this bridge.
 - [#317 codebase notes](../codebase/317.md) — the render slice that claims `stallDetected` as the [conversation timeline store](conversation-timeline-store.md) bridge's sixth owned arm (this bridge, the session store, still nulls it)
-- [#492 codebase notes](../codebase/492.md) — the `apiRetry` member this bridge tolerates as a further `null`-returning case: `stallDetected`'s peer, but non-nullary (carries `active`/`current`/`total`) and neither onset-only nor deduped
+- [#492 codebase notes](../codebase/492.md) — the `apiRetry` member this bridge tolerates as a further `null`-returning case: `stallDetected`'s status-liveness peer, carrying `active`/`current`/`total`, and neither onset-only nor deduped
 - [#493 codebase notes](../codebase/493.md) — the render slice that claims `apiRetry` as the [conversation timeline store](conversation-timeline-store.md) bridge's seventh owned arm (this bridge, the session store, still nulls it)
-- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member this bridge tolerated as a nineteenth `null`-returning case (removed [#621](../codebase/621.md)), the fifth arm to force a case in all three exhaustive bridges at once; unlike `stallDetected`, a deliberate widening carrying real content (`text`/`ts`) this bridge still discarded, since its consumer was the [screen-snapshot store](screen-snapshot-store.md)'s independent observer (#323) and the display slice #324, not the session store
+- [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member this bridge tolerated as a nineteenth `null`-returning case (removed [#621](../codebase/621.md)), the fifth arm to force a case in all three exhaustive bridges at once; unlike `stallDetected` at the time, a deliberate widening carrying real content (`text`/`ts`) this bridge still discarded, since its consumer was the [screen-snapshot store](screen-snapshot-store.md)'s independent observer (#323) and the display slice #324, not the session store
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member this bridge tolerates as a ninth `null`-returning case; the fourth arm the timeline bridge owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members this bridge tolerates as a tenth and eleventh `null`-returning case; unlike every prior member, the timeline bridge ALSO returns `null` for these — the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member this bridge tolerates as a twelfth `null`-returning case; the fifth arm the timeline bridge owns and the first to **resolve** an existing `ThreadItem` rather than append one or set a scalar; the first arm to force a case in three exhaustive `DaemonEvent` switches at once (session, timeline, and [modal store + bridge](modal-store-bridge.md))

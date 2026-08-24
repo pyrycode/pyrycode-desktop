@@ -236,11 +236,14 @@ Nothing imports this module yet.
   `formatLastActivity`). The fifth application of the "new timeline-item kind → bridge arm → render
   row" pattern (#218/#230/#245).
 - **[#317](../codebase/317.md) (shipped)** added the `stalled` scalar and the `stallDetected` arm —
-  the render consumer of [#315](../codebase/315.md)'s dormant nullary `DaemonEvent`. `timelineBridge.ts`
-  moved `stallDetected` from its inverse-filter `null` group to an owned arm (a fresh, field-identical
-  literal, since both sides are nullary); `ConversationScreen.tsx` gained `StallIndicator`, `Timeline`/
-  `ThinkingIndicator`'s twin. Unlike every prior extension, this one touches an **existing** scalar's
-  clearing logic rather than only adding a new arm — see Edge cases below for the widened no-op guards.
+  the render consumer of [#315](../codebase/315.md)'s dormant, at-ship-time-nullary `DaemonEvent`.
+  `timelineBridge.ts` moved `stallDetected` from its inverse-filter `null` group to an owned arm (a
+  fresh, field-identical literal, since both sides were nullary at the time); `ConversationScreen.tsx`
+  gained `StallIndicator`, `Timeline`/`ThinkingIndicator`'s twin. Unlike every prior extension, this
+  one touches an **existing** scalar's clearing logic rather than only adding a new arm — see Edge
+  cases below for the widened no-op guards. [#732](../codebase/732.md) later widened
+  `DaemonEvent.stallDetected` with `conversationId`; the bridge now filters it out rather than
+  arm-selecting a field-identical literal, and `ThreadEvent.stallDetected` alone stays nullary.
 - **[#493](../codebase/493.md) (shipped)** added the `apiRetry: ApiRetryStatus | null` scalar and the
   `apiRetry` arm — the render consumer of [#492](../codebase/492.md)'s dormant, non-nullary
   `DaemonEvent`. `timelineBridge.ts` moved `apiRetry` from its inverse-filter `null` group to an owned
@@ -405,8 +408,10 @@ Nothing imports this module yet.
   with a placeholder render arm.
 - [#179 codebase notes](../codebase/179.md) — the vertical's final piece: flips `interactive`, wires
   `userText`'s producer and real render row, and retires the coarse `MessageThread` in the same commit.
-- [#315 codebase notes](../codebase/315.md) — the transport slice: decodes `stall` into the nullary
-  `stallDetected` `DaemonEvent`, shipped dormant.
+- [#315 codebase notes](../codebase/315.md) — the transport slice: decodes `stall` into the (at ship
+  time) nullary `stallDetected` `DaemonEvent`, shipped dormant.
+- [#732 codebase notes](../codebase/732.md) — widened `stallDetected` with `conversationId`; the id
+  stops at the timeline bridge, so `ThreadEvent.stallDetected` above is unaffected.
 - [#317 codebase notes](../codebase/317.md) — the render slice: the `stalled` scalar, the
   `stallDetected` arm, and `StallIndicator` (see [Conversation shell § Stall
   indicator](conversation-shell.md#stall-indicator-317)).

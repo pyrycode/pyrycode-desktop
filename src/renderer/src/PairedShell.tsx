@@ -1,3 +1,4 @@
+import './pairedShell.css'
 import { useReducer } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
@@ -81,13 +82,16 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
 
 /**
  * The pure route→view of the paired region — no hooks, no effects — mirroring how AppView lives beside
- * App. `list` shows the Channel List home screen (#141); `thread` shows the existing store-backed
- * ConversationScreen with a back affordance; `settings` shows the Settings scaffold (#333); `archive`
- * shows the Archive scaffold (#347); `pairServer` re-opens the existing PairingScreen from inside the
- * paired app to switch daemons (#152). Every route renders, so there is no null arm. Adding a future
- * view is one new case, forced by the assertNever default (AC1: an added arm, not a rewrite). The
- * `settings` and `archive` cases reuse the same `onBack` as `thread` (all dispatch `back`, which the
- * absolute `back` arm lands on `list`).
+ * App. `list` and `thread` both show the #670 two-pane desktop shell: the Channel List sidebar (#141)
+ * beside a chat pane that holds the store-backed ConversationScreen on `thread` and nothing on `list`.
+ * `settings` shows the Settings scaffold (#333); `archive` shows the Archive scaffold (#347);
+ * `pairServer` re-opens the existing PairingScreen from inside the paired app to switch daemons (#152).
+ * Those last three replace the WHOLE shell with a full-screen <section> — that is #670's AC5 (Settings,
+ * Archive and Pair-another open over both panes) and it cost no edit, which is why the route model was
+ * left alone. Adding a future view is one new case, forced by the assertNever default (AC1: an added
+ * arm, not a rewrite). The `settings` and `archive` cases reuse the same `onBack` as `thread` (all
+ * dispatch `back`, which the absolute `back` arm lands on `list` — now "deselect the conversation and
+ * leave the pane empty" rather than "navigate away from the thread").
  *
  * The `pairServer` case passes no `bridge` to PairingScreen — production uses its `window.pyry` default
  * (bridge ?? window.pyry), the same as App's `pairing` route. The two seams are distinct destinations:
@@ -106,16 +110,40 @@ export function PairedShellView(props: {
   onPairServerCancelled: () => void
 }): JSX.Element {
   switch (props.route) {
+    // #670: `list` and `thread` stopped being alternative SCREENS and became one two-pane shell — the
+    // sidebar is mounted in both, and the route only decides whether the chat pane holds a thread. They
+    // share one arm because the markup is identical; the ternary below is the only fork. Combining the
+    // two labels is not a fallthrough (no statement sits between them), so assertNever still narrows to
+    // `never` and a sixth route member is still a compile error.
+    //
+    // Because both routes render ChannelList at the SAME element position, React preserves its subtree
+    // across the list↔thread flip instead of remounting it — safe and desirable here: ChannelList is
+    // bound to the live useConversationListStore and has no mount-time fetch a remount was refreshing,
+    // so its scroll position now survives opening a conversation.
+    //
+    // The pane renders `null`, never a mounted-but-blank ConversationScreen (AC4). That is load-bearing
+    // beyond the ticket's own wording: four e2e assertions use `.conversation` toHaveCount(0) as their
+    // "left the thread" proof, which a blank-but-mounted pane would time out. Per the operator, the
+    // empty pane stays genuinely empty — no placeholder, illustration or call to action; the wrapper
+    // <div> survives only as the layout slot.
     case 'list':
-      return (
-        <ChannelList
-          onOpen={props.onOpen}
-          onOpenSettings={props.onOpenSettings}
-          onOpenArchive={props.onOpenArchive}
-        />
-      )
     case 'thread':
-      return <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
+      return (
+        <div className="paired-shell">
+          <div className="paired-shell__sidebar">
+            <ChannelList
+              onOpen={props.onOpen}
+              onOpenSettings={props.onOpenSettings}
+              onOpenArchive={props.onOpenArchive}
+            />
+          </div>
+          <div className="paired-shell__pane">
+            {props.route === 'thread' ? (
+              <ConversationScreen onUnpaired={props.onUnpaired} onBack={props.onBack} />
+            ) : null}
+          </div>
+        </div>
+      )
     case 'settings':
       return <SettingsScreen onBack={props.onBack} onPairAnother={props.onOpenPairServer} />
     case 'archive':

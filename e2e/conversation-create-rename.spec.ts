@@ -67,9 +67,10 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   // the fake mints `created-1` (unnamed, non-promoted) and replies conversation_created →
   // useConversationCreatedNav sets it active and dispatches `open` → route `thread` (and, independently,
   // #515's re-list lands the row in the store, still unnamed). Assert NAVIGATION into a thread, NOT list
-  // membership — the route is `thread`, so the Channel List is unmounted and there is nothing to assert
-  // against there. The overflow trigger is absent on the list and present on a thread, so its auto-wait
-  // IS the create-nav gate.
+  // membership: the list re-renders on the re-list whether or not the app navigated, so a row assertion
+  // here would not separate the two. (Since #670 the list stays MOUNTED beside the thread, which only
+  // sharpens the point.) The overflow trigger is absent on the list and present on a thread, so its
+  // auto-wait IS the create-nav gate.
   await page.locator('.channel-list__fab').click()
   const overflowTrigger = page.locator('.conversation__overflow-trigger')
   await expect(overflowTrigger).toBeVisible()
@@ -81,10 +82,14 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
 
   // AC4 — sheet Rename round-trip. The Rename pill is one of three `.channel-info__action` buttons
   // (Rename / Archive / Delete), so `.channel-info__action` is NOT unique — target Rename by its
-  // accessible name. The list is unmounted while the thread + sheet are up, so no `.channel-list__rename`
-  // competes. The pill opens the same RenameConversationDialogView the list-row rename uses, prefilled
-  // "Untitled" (the created row is unnamed); `.fill` replaces the prefill.
-  await page.getByRole('button', { name: 'Rename', exact: true }).click()
+  // accessible name, SCOPED to the chat pane. #670 destroyed the invariant that used to stand here
+  // ("the list is unmounted while the thread + sheet are up, so no `.channel-list__rename` competes"):
+  // the two-pane shell keeps the list mounted beside the thread, and every list row carries an
+  // `aria-label="Rename"` pencil, so an unscoped query matches 1 + N buttons and strict mode fails. The
+  // Channel-info sheet renders INSIDE ConversationScreen, so `.conversation` is a valid scoping root.
+  // The pill opens the same RenameConversationDialogView the list-row rename uses, prefilled "Untitled"
+  // (the created row is unnamed); `.fill` replaces the prefill.
+  await page.locator('.conversation').getByRole('button', { name: 'Rename', exact: true }).click()
   await expect(page.locator('.rename-conversation')).toBeVisible()
   await page.locator('.rename-conversation__input').fill(NEW_TITLE)
   await page.locator('.rename-conversation__save').click()

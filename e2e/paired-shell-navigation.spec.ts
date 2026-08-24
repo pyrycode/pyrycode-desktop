@@ -22,14 +22,28 @@ import { test, expect } from './fixtures/launchPairedApp'
 // which the reducer lands on `settings`, so the Settings screen renders AGAIN with the shell (and session)
 // intact. Step 5's Settings assertion IS the teardown proof (the #440-realizability discipline).
 //
+// #670 folded the two-pane shell's GEOMETRY assertions (AC1-AC3) into step 1 rather than adding a second
+// test() block: they need the same launch on the same thread route, and each launch pays a full
+// handshake. They are the first assertions here that read layout (boundingBox) and the Electron window
+// (getSize / getMinimumSize) instead of pure DOM presence.
+//
 // SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM attributes / text /
-// visibility only; the pairing plumbing (synthetic token, fake static key) lives in launchPairedApp and is
-// never echoed. No failure diagnostic serialises a token, key, or plaintext.
+// visibility / geometry only; the pairing plumbing (synthetic token, fake static key) lives in
+// launchPairedApp and is never echoed. No failure diagnostic serialises a token, key, or plaintext.
+
+// #670: the two-pane shell's fixed sidebar width (Figma Sidebar 103:736, `w-[400px] shrink-0`) and the
+// window's minimum width, both asserted below. NARROWING rather than widening is deliberate: a wider
+// window can be clamped by the display's work area on a small CI screen, which would fail for a reason
+// that has nothing to do with the layout. 1100 (the launch width) − 200 = 900, comfortably above the
+// 800 floor, so neither clamp can fire and the delta is exactly what was asked for.
+const SIDEBAR_WIDTH_PX = 400
+const MIN_WINDOW_WIDTH_PX = 800
+const NARROW_BY_PX = 200
 
 test('paired shell: pair-another-server round-trip and the list/settings/archive back-chain', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp()
+  const { page, app } = await launchPairedApp()
 
   // Arrival hooks (distinctive root per screen) + the controls to leave/advance. The three back buttons
   // (thread / settings / archive) all expose the identical accessible name 'Back', so they are selected by
@@ -50,9 +64,53 @@ test('paired shell: pair-another-server round-trip and the list/settings/archive
   // chain begins here.
   await expect(thread).toBeVisible()
 
-  // 2. thread → list (AC: back from thread lands on list).
-  await page.locator('.conversation__back').click()
+  // 1a. #670 AC1 — BOTH panes at once. The fixture reached this line by CLICKING a list row, which is
+  // exactly the step that used to unmount the list, so the pair of assertions is non-vacuous by
+  // position: `list` visible HERE is the "selecting a conversation does not hide the sidebar" proof.
   await expect(list).toBeVisible()
+
+  // 1b. #670 AC2 — the sidebar is exactly 400px and stays 400px across a resize, while the chat pane
+  // absorbs the entire delta. boundingBox() returns null for a detached/hidden node; the ?? -1 sentinel
+  // (a width no real box can have) keeps the poll retrying instead of throwing on the way there.
+  const sidebarWidth = async (): Promise<number> =>
+    (await page.locator('.paired-shell__sidebar').boundingBox())?.width ?? -1
+  const paneWidth = async (): Promise<number> =>
+    (await page.locator('.paired-shell__pane').boundingBox())?.width ?? -1
+
+  await expect.poll(sidebarWidth).toBe(SIDEBAR_WIDTH_PX)
+  const paneBefore = await paneWidth()
+  expect(paneBefore).toBeGreaterThan(0)
+
+  // setSize is asynchronous — it resolves in the main process before the renderer has laid out the new
+  // viewport — so both post-resize assertions poll. Width delta only; the height is passed through
+  // unchanged so nothing here depends on the platform's title-bar chrome.
+  const [startWidth, startHeight] = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].getSize()
+  )
+  await app.evaluate(
+    ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
+    { width: startWidth - NARROW_BY_PX, height: startHeight }
+  )
+  await expect.poll(paneWidth).toBe(paneBefore - NARROW_BY_PX)
+  await expect.poll(sidebarWidth).toBe(SIDEBAR_WIDTH_PX)
+  // The window is deliberately LEFT narrowed for the rest of the drive — steps 3-8 are full-screen
+  // sections, so running them at 900px costs nothing and incidentally proves they render there too.
+
+  // 1c. #670 AC3 — the window cannot be sized below 800px wide. Read the constraint off the real
+  // BrowserWindow rather than trying to drive it past the floor: a setSize the OS clamps is
+  // indistinguishable from a setSize the app ignored, so the getter is the sharper observable.
+  const [minWidth] = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].getMinimumSize()
+  )
+  expect(minWidth).toBe(MIN_WINDOW_WIDTH_PX)
+
+  // 2. thread → list (AC: back from thread lands on list). #670 re-pointed this assertion: the list is
+  // now ALWAYS on screen, so `expect(list).toBeVisible()` here would pass for free and prove nothing.
+  // The real signal — the one the four archive/delete specs already rely on — is the chat pane emptying
+  // (AC4: `null`, not a mounted-but-blank ConversationScreen). Back's meaning became "deselect", and
+  // this is what deselecting looks like.
+  await page.locator('.conversation__back').click()
+  await expect(thread).toHaveCount(0)
 
   // 3. list → settings (open the gear entry).
   await page.getByRole('button', { name: 'Settings' }).click()

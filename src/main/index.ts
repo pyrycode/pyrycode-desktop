@@ -36,6 +36,10 @@ function createWindow(): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
+    // #670: the two-pane shell's floor. The sidebar is a fixed 400px, so below this the chat pane is
+    // squeezed to nothing; 800 leaves it 340px (800 − 20 gutter − 400 sidebar − 20 gap − 20 gutter).
+    // Width only — the ticket sets no height floor.
+    minWidth: 800,
     show: false,
     title: 'Pyrycode Desktop',
     webPreferences: {

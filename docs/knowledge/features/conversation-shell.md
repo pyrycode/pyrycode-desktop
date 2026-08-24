@@ -1247,6 +1247,9 @@ Figma node `16:28` — left-aligned in the thread, in the reducer's arrival orde
 </div>
 ```
 
+(The second run's text source changed under [#705](#collapsed-tool-row-headline-705) — see below; the
+element, classes and escaping posture described here are unchanged.)
+
 `name` and `inputSummary` — the daemon's untrusted `tool_use` précis, flagged for plain-text-only
 rendering back at the #217 decode boundary — are React children (auto-escaped), never
 `dangerouslySetInnerHTML`, the identical posture to the `assistantText` arm one case up.
@@ -1324,6 +1327,9 @@ wrapper and break the collapsed markup):
 </div>
 ```
 
+(As above, the second run's text source is [#705](#collapsed-tool-row-headline-705)'s picker, not raw
+`inputSummary`, as of that ticket.)
+
 `const body = expanded ? result : null` drives both the wrapper's `tool-row--expanded` modifier and the
 body element, so a pending row (`result === null`) is structurally incapable of showing a body no matter
 what the flag says. The result text's only sink is `<pre>` text children (`white-space: pre`, so
@@ -1381,6 +1387,67 @@ enriching the body through markdown); see the `SAFETY` comment block in `Convers
 
 See [#696 codebase notes](../codebase/696.md) and [#697 codebase notes](../codebase/697.md) for the full
 design, testing strategy, and patterns established.
+
+### Collapsed tool-row headline (#705)
+
+`inputSummary` was never designed as a headline — it's the daemon's whole tool input squeezed onto one
+line and cut for length, so for an `Edit` that is mostly replacement text the file path was usually
+truncated away entirely. #705 replaces the chip's second run with a headline picked from the tool's own
+input fields (`item.input?: Readonly<Record<string, string>>`, carried onto the item since #642/#643),
+falling back to `inputSummary` when nothing in `input` qualifies. No markup, class or CSS changed — only
+the text of `.tool-row__summary`, in both the pending `<div>` and the resolved `<button>` (both read the
+same `chipRuns` fragment, declared once in `ConversationScreen.tsx`), so this section supersedes the
+`{item.inputSummary}` shown above wherever the second run's *content* is concerned.
+
+`toolHeadline(source)` (`src/renderer/src/screens/conversation/toolHeadline.ts`) is one fallback chain,
+deliberately dumb — the expanded body ([#696/#697](#expandable-tool-call-result-696-toggle-697), and
+#706's per-field list once it lands) is one click away, so a wrong guess costs almost nothing, which is
+the argument against a smarter classifier here:
+
+1. `name === 'Bash'` exactly → `description`, else `command`. The fallback is load-bearing: measured
+   over 6459 real `Bash` calls, 1397 (22%) carry no `description` at all.
+2. Otherwise the first present, non-empty match in a fixed order: `file_path`, `path`, `notebook_path`,
+   `command`, `pattern`, `url`, `query`, `description`.
+3. Otherwise the first non-empty entry of `input`, in iteration order, whose value contains no line
+   break — this is what makes MCP tools work, since their input names (`symbol`, `fileKey`, `nodeId`, …)
+   mostly aren't on any fixed list.
+4. Otherwise `inputSummary`, exactly as before #705.
+
+Rule 1 is a precedence *override* for one tool name, not a terminal branch — when it selects nothing the
+chain falls through into rule 2, which is what makes "never blank" structural. Every rung requires a
+value that is present and `!== ''` (never `.trim() !== ''` — a real but unobserved residual, left
+unguarded per the ticket's own "don't improve the picker without new data" instruction). `input` absent
+and `input: {}` read identically: rules 1–3 have nothing to look at either way, so both fall through to
+rule 4 — the distinction between "pre-#642 daemon" and "daemon sent no fields" survives at the item but
+is not surfaced in the row.
+
+**Shortening is keyed on the field name the value came from, not on which rule fired.** [#644](../codebase/644.md)'s
+`shortenPath` runs only when the key is `file_path`, `path` or `notebook_path`; a `Bash` command line, a
+`pattern`, a `url`, a `query`, a `description` and a rule-3 catch-all all render unshortened — shortening
+a command line or a search pattern would mangle it into something that reads like a path and is not one.
+`shortenPath` itself stays a total function of one string that never decides *whether* its argument is a
+path; #705 is its first caller, and the doc comment it shipped with (describing a `kind`/`subject` shape
+that never made it onto the wire) was corrected in the same PR, comment-only.
+
+**Security posture**, extending #697's SAFETY block rather than restating it: the headline reaches the
+DOM only as auto-escaped React children of the same `.tool-row__summary` span that carried `inputSummary`
+before it — never `title=` (a natural next edit once shortening visibly discards information, and
+forbidden by CLAUDE.md's 2026-08-20 ruling), never linkified through `AssistantMarkdown` (rule 2 can
+promote a field literally named `url` into the render path), and the picked *value* only — never the
+input *key*, which is daemon-controlled display text too and drawing it is #706's separately reviewed
+call. No log line names the picked field or its value (ADR 0007's content-free rule).
+
+Wire facts this rests on ([#642](../codebase/642.md)'s spec, not the daemon ticket):
+key order on the wire is alphabetical (a Go map-marshalling artefact, so rule 3's order is deterministic
+per call); every value is already a string daemon-side, so `null`/`true`/`[1,2]` can arrive as those
+literal strings and rule 3 can land on one (an accepted miss — #706's field list covers the rest); the
+map may be incomplete (the daemon's 8500-rune total bound drops fields and names none), which is why rule
+4 keeps `inputSummary` as the whole-input fallback rather than retiring it; and a daemon-truncated value
+ends in `…` and renders that way.
+
+See [#705 codebase notes](../codebase/705.md) for the full design, the `noUncheckedIndexedAccess` trap
+(off in `tsconfig.web.json`, so `input[key]` types `string` while being `undefined` at runtime for an
+absent key), and patterns established.
 
 ### Permission modal (#224, answerable since #237, second-confirm since #226, rejection surface since #249, confirm marker scoped to its prompt since #511)
 

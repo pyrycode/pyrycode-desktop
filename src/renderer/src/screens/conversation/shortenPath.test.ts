@@ -3,7 +3,7 @@ import { KEPT_SEGMENTS, shortenPath } from './shortenPath'
 
 // The display rule is isolated in shortenPath.ts precisely so it can be tested here: vitest runs in the
 // `node` environment (vitest.config.ts:27) with no DOM, so renderer tests are renderToStaticMarkup string
-// assertions and the row that will draw this (#645) cannot be exercised as a live component at all.
+// assertions and the row that draws this (#705) cannot be exercised as a live component at all.
 // shortenPath takes one plain string and returns one, so it is a total function this environment covers
 // completely — every case below is a string literal in, a string literal out, with no mock, spy or
 // fixture.
@@ -54,7 +54,7 @@ describe('shortenPath', () => {
   })
 
   it('returns the empty string unchanged (AC2)', () => {
-    // A real case: pyrycode#1678 sends an empty subject for kinds with no meaningful one.
+    // A real case: the daemon may send an empty value for a field it has nothing to put in.
     expect(shortenPath('')).toBe('')
   })
 

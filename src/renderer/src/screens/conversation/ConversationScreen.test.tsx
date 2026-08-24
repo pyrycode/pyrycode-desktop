@@ -602,6 +602,169 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).not.toContain('KEY_SENTINEL_zzz')
   })
 
+  // #706: the expanded body's field list — every entry of `item.input`, drawn as its name and its
+  // value, above the result block. Deliberately LITERAL where #705 is selective: no shortening, no
+  // salience pick, no re-ordering, and no skipping the field #705 promoted into the headline. This
+  // list is the form that covers that pick's misses, so a field silently missing from it is worse
+  // than a repeated one.
+  //
+  // REGRESSION BASELINE, free of charge — but not by the mechanism #705's own note describes. The
+  // invariant that holds now is a DISJOINTNESS: the intersection of {carries `input`} and {renders
+  // `defaultExpanded`} is empty above. Every input-carrying case (:531-603) is collapsed or pending,
+  // so no body exists there at all; every defaultExpanded case (:365-494) omits `input`, so
+  // Object.entries yields [] and the body is byte-identical to #696's. If one of them needs editing
+  // to stay green, the render is conditioned wrongly rather than the test being stale.
+  //
+  // In particular ':596-603 never draws the input KEY' is NOT contradicted by this block: that is a
+  // PENDING row, where no body and therefore no field list is reachable, so it still pins what it
+  // always pinned — the collapsed CHIP draws no key. Its expanded counterpart is below.
+  const INPUT_NAME = (name: string): string => `<span class="tool-row__input-name">${name}</span>`
+
+  it('lists each input field above an unchanged result block (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: 'RESULT_SENTINEL_zzz' },
+          { file_path: 'PATH_SENTINEL_zzz', limit: 'LIMIT_SENTINEL_zzz' }
+        )}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain(INPUT_NAME('file_path'))
+    expect(markup).toContain('<pre class="tool-row__input-value">PATH_SENTINEL_zzz</pre>')
+    expect(markup).toContain(INPUT_NAME('limit'))
+    expect(markup).toContain('<pre class="tool-row__input-value">LIMIT_SENTINEL_zzz</pre>')
+    // #696's result block is untouched — same element, same lone class, same text.
+    expect(markup).toContain('<pre class="tool-row__result">RESULT_SENTINEL_zzz</pre>')
+    // Above it. `limit` is not the headline's pick (rule 2 takes `file_path`), so its only occurrence
+    // is the one in the body — which is what makes this an ordering fact about the body.
+    expect(markup.indexOf('LIMIT_SENTINEL_zzz')).toBeLessThan(markup.indexOf('RESULT_SENTINEL_zzz'))
+  })
+
+  it('renders the entries in arrival order and never re-sorts them (AC1)', () => {
+    // Keys inserted NON-alphabetically. Alphabetical ARRIVAL is a daemon-side Go map-marshalling
+    // artefact that no renderer test can pin; what is pinnable is the absence of a client transform,
+    // and a `.sort()` anywhere in the render would invert this exact order.
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { zulu: 'v_zulu_zzz', alpha: 'v_alpha_zzz', mike: 'v_mike_zzz' }
+        )}
+        defaultExpanded
+      />
+    )
+    // Positions are read off the NAME spans, not the values: the headline (rule 3) also carries the
+    // first entry's VALUE, so a value-keyed assertion would still pass under a sorted body.
+    expect(markup).toContain(INPUT_NAME('zulu'))
+    expect(markup.indexOf(INPUT_NAME('zulu'))).toBeLessThan(markup.indexOf(INPUT_NAME('alpha')))
+    expect(markup.indexOf(INPUT_NAME('alpha'))).toBeLessThan(markup.indexOf(INPUT_NAME('mike')))
+  })
+
+  it('keeps a trailing ellipsis marker the daemon added, unmodified (AC2)', () => {
+    // The daemon shortens a value at 4000 runes and marks it with U+2026. The client never
+    // re-truncates and never strips the marker: a value that legitimately ends in one is
+    // indistinguishable from a shortened one, a cost the daemon already accepted.
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { command: 'SHORTENED_SENTINEL_zzz…' }
+        )}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain('<pre class="tool-row__input-value">SHORTENED_SENTINEL_zzz…</pre>')
+  })
+
+  it('preserves the line breaks inside a value rather than collapsing them (AC3)', () => {
+    // The <pre> tag plus the surviving \n is what this tier can assert; `white-space: pre` itself is
+    // invisible to a server render. Never START a fixture with \n — an HTML parser eats a leading
+    // newline in <pre>, so renderToStaticMarkup emits a second one.
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { command: 'line one\nline two' }
+        )}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain('<pre class="tool-row__input-value">line one\nline two</pre>')
+  })
+
+  it('draws no field list at all for an empty input map (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' }, {})} defaultExpanded />
+    )
+    // Not an empty container either: there is no list-wrapper element to leave behind.
+    expect(markup).not.toContain('tool-row__input')
+    expect(markup).toContain('tool-row__body')
+    expect(markup).toContain('<pre class="tool-row__result">184 lines</pre>')
+  })
+
+  it('renders an absent input map identically to an empty one (AC4)', () => {
+    // Equality, not two independent not.toContain assertions: the AC asks for a body IDENTICAL to
+    // the one #696 draws, which is what keeps talking to a pre-pyrycode#1678 daemon from reading as
+    // a visible regression. The one-field render is the contrast that proves the assertion has teeth.
+    const RESULT = { isError: false, resultSummary: '184 lines' }
+    const absent = renderToStaticMarkup(<ToolRow item={toolItem(RESULT)} defaultExpanded />)
+    const empty = renderToStaticMarkup(<ToolRow item={toolItem(RESULT, {})} defaultExpanded />)
+    const oneField = renderToStaticMarkup(
+      <ToolRow item={toolItem(RESULT, { limit: 'LIMIT_SENTINEL_zzz' })} defaultExpanded />
+    )
+    expect(empty).toBe(absent)
+    expect(oneField).not.toBe(absent)
+  })
+
+  it('draws the input KEY in the expanded body, unlike the collapsed chip (AC1)', () => {
+    // The deliberate positive counterpart to ':596-603 never draws the input KEY'. That case is a
+    // PENDING row and pins the chip; this one is resolved and expanded and pins the body. Both are
+    // correct: the key is chip-forbidden and body-required.
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '184 lines' }, { KEY_SENTINEL_zzz: 'the value' })}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain(INPUT_NAME('KEY_SENTINEL_zzz'))
+  })
+
+  it('withholds the field list from a collapsed row carrying input (AC5)', () => {
+    // The mechanical half of the free regression baseline: the list lives INSIDE the body, so a
+    // collapsed row cannot draw it however many fields the item carries.
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '184 lines' }, { file_path: 'a.ts' })}
+      />
+    )
+    expect(markup).not.toContain('tool-row__input')
+    expect(markup).not.toContain('tool-row__body')
+  })
+
+  it('renders names and values alike as inert escaped children, never markup (AC5)', () => {
+    // Hostile in BOTH halves: an MCP tool can name a field anything, so a name is daemon-chosen
+    // display text under exactly the same constraint as the value beside it. No apostrophes in the
+    // fixture (renderToStaticMarkup escapes ' → &#x27;).
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { '<img src=x onerror=alert(1)>': '<i>v</i>' }
+        )}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(markup).toContain('&lt;i&gt;v&lt;/i&gt;')
+    expect(markup).not.toContain('<img')
+    expect(markup).not.toContain('<i>v</i>')
+    // The four sinks the SAFETY block declines, re-asserted for the newly drawn strings.
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('aria-label')
+    expect(markup).not.toContain('dangerously')
+  })
+
   it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {
     const items: ThreadItem[] = [{ kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }]
     let markup = ''

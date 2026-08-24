@@ -1505,7 +1505,7 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     return ctx
   }
 
-  it('decodes a rising-edge api_retry into exactly one apiRetry event (conversation_id dropped)', async () => {
+  it('decodes a rising-edge api_retry into exactly one apiRetry event, conversation id carried', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1520,9 +1520,13 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'apiRetry', active: true, current: 3, total: 10 }])
-    // conversation_id is dropped at the choke point (single active conversation).
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    expect(events).toEqual([
+      { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1' }
+    ])
+    // The frame's conversation_id reaches the emitted event VERBATIM (#737): per-conversation retry is
+    // daemon state, so the sidebar can say a chat is stuck retrying while the operator looks at another
+    // one (#674). The deliberate inverse of this arm's own pre-#737 leak guard.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('carries 0/0 through verbatim — "count unknown" is neither coerced nor dropped', async () => {
@@ -1540,7 +1544,7 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'apiRetry', active: true, current: 0, total: 0 }
+      { type: 'apiRetry', active: true, current: 0, total: 0, conversationId: 'conv-1' }
     ])
   })
 
@@ -1559,7 +1563,7 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'apiRetry', active: false, current: 4, total: 10 }
+      { type: 'apiRetry', active: false, current: 4, total: 10, conversationId: 'conv-1' }
     ])
   })
 
@@ -1582,13 +1586,13 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     // Three frames, three events, in wire order — no coalescing, no suppression of the repeat. This
     // pins the "no dedup" wire contract against a future optimiser adding edge-tracking state here.
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'apiRetry', active: true, current: 3, total: 10 },
-      { type: 'apiRetry', active: true, current: 4, total: 10 },
-      { type: 'apiRetry', active: true, current: 4, total: 10 }
+      { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1' },
+      { type: 'apiRetry', active: true, current: 4, total: 10, conversationId: 'conv-1' },
+      { type: 'apiRetry', active: true, current: 4, total: 10, conversationId: 'conv-1' }
     ])
   })
 
-  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the five modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1604,7 +1608,13 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(Object.keys(events[0]).sort()).toEqual(['active', 'current', 'total', 'type'])
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'active',
+      'conversationId',
+      'current',
+      'total',
+      'type'
+    ])
     expect(JSON.stringify(events)).not.toContain('must-not-cross')
   })
 
@@ -1867,7 +1877,7 @@ describe('createDaemonConnection — background_task_started stream (#564)', () 
     drivers[0].emit({ type: 'message', plaintext: backgroundTaskStartedPlaintext(STARTED) })
 
     const events = emitted(sink).slice(before) as Array<{ conversationId?: string }>
-    // The deliberate inverse of api_retry's `not.toContain('conv-1')`: #567 attributes tasks by id,
+    // Daemon state keyed by id, not a turn-stream item, so the id crosses: #567 attributes tasks by id,
     // the same model queue_state already uses, so dropping it here would make that slice unbuildable.
     expect(events[0].conversationId).toBe('conv-1')
   })
@@ -2020,7 +2030,7 @@ describe('createDaemonConnection — background_task_updated stream (#565)', () 
     drivers[0].emit({ type: 'message', plaintext: backgroundTaskUpdatedPlaintext(UPDATED) })
 
     const events = emitted(sink).slice(before) as Array<{ conversationId?: string }>
-    // The deliberate inverse of api_retry's `not.toContain('conv-1')`: #567 attributes tasks by id,
+    // Daemon state keyed by id, not a turn-stream item, so the id crosses: #567 attributes tasks by id,
     // the same model queue_state already uses, so dropping it here would make that slice unbuildable.
     expect(events[0].conversationId).toBe('conv-1')
   })
@@ -2207,7 +2217,7 @@ describe('createDaemonConnection — background_task_roster stream (#566)', () =
     drivers[0].emit({ type: 'message', plaintext: backgroundTaskRosterPlaintext(ROSTER) })
 
     const events = emitted(sink).slice(before) as Array<{ conversationId?: string }>
-    // The deliberate inverse of api_retry's `not.toContain('conv-1')`: #567 attributes tasks by id,
+    // Daemon state keyed by id, not a turn-stream item, so the id crosses: #567 attributes tasks by id,
     // the same model queue_state already uses, so dropping it here would make that slice unbuildable.
     expect(events[0].conversationId).toBe('conv-1')
   })

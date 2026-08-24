@@ -196,7 +196,13 @@ describe('translateTimelineEvent — the two owned arms', () => {
   })
 
   it('apiRetry → a ThreadEvent apiRetry with the same four fields, a fresh object (#493)', () => {
-    const event: DaemonEvent = { type: 'apiRetry', active: true, current: 3, total: 10 }
+    const event: DaemonEvent = {
+      type: 'apiRetry',
+      active: true,
+      current: 3,
+      total: 10,
+      conversationId: 'conv-1'
+    }
     const translated = translateTimelineEvent(event)
     expect(translated).toEqual({ type: 'apiRetry', active: true, current: 3, total: 10 })
     // A fresh literal, not a pass-through of the DaemonEvent object.
@@ -206,7 +212,13 @@ describe('translateTimelineEvent — the two owned arms', () => {
   it('apiRetry translates the falling edge verbatim — nothing normalized at the bridge (#493)', () => {
     // The wire repeats the last-known counter on the falling edge; discarding it is the reducer's job,
     // not the bridge's. This is a filter + fresh copy, never a remap.
-    const event: DaemonEvent = { type: 'apiRetry', active: false, current: 4, total: 10 }
+    const event: DaemonEvent = {
+      type: 'apiRetry',
+      active: false,
+      current: 4,
+      total: 10,
+      conversationId: 'conv-1'
+    }
     expect(translateTimelineEvent(event)).toEqual({
       type: 'apiRetry',
       active: false,
@@ -620,11 +632,11 @@ describe('subscribeTimeline', () => {
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
     expect(selectApiRetry(store.getState())).toBeNull()
-    bridge.emit({ type: 'apiRetry', active: true, current: 3, total: 10 })
+    bridge.emit({ type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-1' })
     expect(selectApiRetry(store.getState())).toEqual({ current: 3, total: 10 })
 
     // The falling edge repeats the last-known counter; the status still clears.
-    bridge.emit({ type: 'apiRetry', active: false, current: 3, total: 10 })
+    bridge.emit({ type: 'apiRetry', active: false, current: 3, total: 10, conversationId: 'conv-1' })
     expect(selectApiRetry(store.getState())).toBeNull()
   })
 

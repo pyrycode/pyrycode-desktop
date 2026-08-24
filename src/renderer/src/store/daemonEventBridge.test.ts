@@ -245,8 +245,24 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
   })
 
   it('apiRetry → null (consumed by the render slice #493, not the session store)', () => {
-    expect(translateDaemonEvent({ type: 'apiRetry', active: true, current: 3, total: 10 })).toBeNull()
-    expect(translateDaemonEvent({ type: 'apiRetry', active: false, current: 0, total: 0 })).toBeNull()
+    expect(
+      translateDaemonEvent({
+        type: 'apiRetry',
+        active: true,
+        current: 3,
+        total: 10,
+        conversationId: 'conv-1'
+      })
+    ).toBeNull()
+    expect(
+      translateDaemonEvent({
+        type: 'apiRetry',
+        active: false,
+        current: 0,
+        total: 0,
+        conversationId: 'conv-1'
+      })
+    ).toBeNull()
   })
 
   it('compacting → null (consumed by the render slice #496, not the session store)', () => {

@@ -637,19 +637,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'api-retry':
-            // The api-retry status data path (#492). Emit a fresh literal carrying the edge + the counter,
-            // copied BY NAME from the already-decoded, already-validated payload — never a spread of
-            // inbound.apiRetry (the assistant-delta idiom), so a decoder that later grows a field cannot
-            // smuggle it across IPC. `conversation_id` is DROPPED (never referenced — single active
-            // conversation). Deliberately stateless: no dedup, no coalescing, no
-            // timer, no last-value memo, which is what gives the wire's "re-fires as the count climbs"
-            // contract for free — adding edge tracking here would swallow a legitimate count change. Not
-            // compile-forced (this inner switch has no assertNever) — the round-trip test guards this emit.
+            // The api-retry status data path (#492, widened by #737). Emit a fresh literal carrying the
+            // edge + the counter + `conversationId`, all copied BY NAME from the already-decoded,
+            // already-validated payload — never a spread of inbound.apiRetry (the assistant-delta idiom),
+            // so a decoder that later grows a field cannot smuggle it across IPC. The decode stays
+            // fail-closed upstream: a missing or non-string `conversation_id` drops the whole line
+            // without emitting.
+            //
+            // The id is a daemon-asserted routing key, not rendered text, and it reaches no sink on this
+            // leg. It stops at the timeline bridge (#202), which rebuilds a four-field ThreadEvent and
+            // omits it; the consumers that route by conversation are #674. Deliberately stateless: no
+            // dedup, no coalescing, no timer, no last-value memo — and none keyed by the new id either,
+            // which is what gives the wire's "re-fires as the count climbs" contract for free; adding
+            // edge tracking here would swallow a legitimate count change. Not compile-forced (this inner
+            // switch has no assertNever) — the round-trip test guards this emit.
             emitDaemonEvent(sink, {
               type: 'apiRetry',
               active: inbound.apiRetry.active,
               current: inbound.apiRetry.current,
-              total: inbound.apiRetry.total
+              total: inbound.apiRetry.total,
+              conversationId: inbound.apiRetry.conversation_id
             })
             return
           case 'compacting':
@@ -696,7 +703,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // validated string[], so there is nothing left to strip — the `queued` precedent below), and
             // its `null` is preserved, never coerced to [].
             //
-            // `conversation_id` is KEPT — the deliberate divergence from api-retry / compacting above.
+            // `conversation_id` is KEPT — the deliberate divergence from compacting above.
             // This frame carries no turn_id and opens no turn: it is daemon STATE, not a turn-stream
             // item, so it follows the queue-state rule (#720) and #567 attributes tasks by id.
             //

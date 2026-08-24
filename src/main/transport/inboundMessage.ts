@@ -112,7 +112,9 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The `api-retry` kind (#492) carries the decoded ApiRetryPayload — the PTY-derived status peer of
  * `stall` the daemon fans out to interactive clients while claude retries against an API error. The render
  * slice #493 shows "attempt N/M", so the consumer carries the edge (`active`) and the counter (`current` /
- * `total`) onward, dropping only `conversation_id`. The fail-closed defence here is four required fields
+ * `total`) onward — and `conversation_id` with them, by name as `conversationId` (#737), because
+ * per-conversation retry is daemon state: the sidebar must show a chat is stuck retrying while the
+ * operator looks at a different one (#674). The fail-closed defence here is four required fields
  * — one string, one BOOLEAN (whose `false` is the falling edge, a value not an absence) and two NUMBERS
  * (whose `0` is the legitimate "count unknown" value, so nothing may consult truthiness). NOT onset-only
  * and NOT deduped: N frames narrow to N values. Ships dormant — the render slice (#493) is the first

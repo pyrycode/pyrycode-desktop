@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ConversationSummary } from '@shared/wire/types'
-import { ChannelListView } from './ChannelList'
+import { ChannelListView, CollapsibleWorkspaceGroup } from './ChannelList'
 import { UNKNOWN_WORKSPACE_LABEL } from './channelListViewModel'
 
 // The #218 idiom: server-render the pure view with injected props — no DOM harness, no store. The
@@ -76,6 +76,12 @@ const ROW_OPEN_MARKER = 'class="channel-list__row-open"'
 const WORKSPACE_ROW_MARKER = 'class="channel-list__workspace"'
 const WORKSPACE_LABEL_OPEN = 'class="channel-list__workspace-label">'
 
+// The disclosure state the workspace row carries once it becomes a collapse control (#704). React
+// serialises `aria-expanded={boolean}` to the literal strings "true" / "false", so these are exact
+// attribute-value substrings like every marker above.
+const EXPANDED_MARKER = 'aria-expanded="true"'
+const COLLAPSED_MARKER = 'aria-expanded="false"'
+
 const countOf = (markup: string, needle: string): number => markup.split(needle).length - 1
 
 // Reads the SHIPPED host labels back out of the render rather than restating the constant, so changing
@@ -94,6 +100,23 @@ const workspaceLabelsIn = (markup: string): string[] =>
     .split(WORKSPACE_LABEL_OPEN)
     .slice(1)
     .map((chunk) => chunk.slice(0, chunk.indexOf('<')))
+
+// Slices out each workspace row's OPENING TAG (#704) so its attribute set can be asserted WHOLE. The
+// assertion has to be tag-scoped rather than document-scoped: `aria-label` and `title` legitimately
+// appear elsewhere in the very same render (the FAB, the gear, Archive, Rename, Save-as), so a
+// document-wide `not.toContain('aria-label')` would be plain wrong rather than strict — and weakening it
+// back into vacuity is the failure mode this helper exists to prevent. Scanning to the next `>` is exact
+// rather than approximate: React escapes `<` and `>` inside attribute VALUES too, so no value — however
+// hostile the `cwd` behind it — can carry either delimiter into the slice.
+const workspaceRowTagsIn = (markup: string): string[] => {
+  const tags: string[] = []
+  for (let at = markup.indexOf(WORKSPACE_ROW_MARKER); at !== -1; ) {
+    const end = markup.indexOf('>', at)
+    tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
+    at = markup.indexOf(WORKSPACE_ROW_MARKER, end)
+  }
+  return tags
+}
 
 describe('ChannelListView', () => {
   it('not-yet-loaded (null): renders the wrapper but no header and no empty message (AC4)', () => {
@@ -366,5 +389,111 @@ describe('ChannelListView', () => {
       expect(workspaceLabelsIn(markup)).toEqual([UNKNOWN_WORKSPACE_LABEL])
       expect(markup).toContain('x')
     })
+  })
+
+  describe('the workspace row as a collapse control (#704)', () => {
+    // The #703 shape verbatim — one row per tree, both in the SAME workspace — so every count that
+    // describe pins is the count this one sees, plus the disclosure state this ticket adds.
+    const bothTrees = (): string =>
+      render([
+        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true, cwd: '/home/me/alpha' }),
+        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' })
+      ])
+
+    it('renders every workspace row as a real button, expanded, on a fresh render (AC4/AC5)', () => {
+      const markup = bothTrees()
+      const tags = workspaceRowTagsIn(markup)
+      expect(tags).toHaveLength(2)
+      for (const tag of tags) {
+        // A <div onClick> would fail here and nowhere else in this tier — the unit tier cannot click,
+        // so "focusable and operable by keyboard" is proven as the ELEMENT plus its state attribute
+        // here, and as an actual keypress in e2e/workspace-collapse.spec.ts.
+        expect(tag.startsWith('<button ')).toBe(true)
+        expect(tag).toContain('type="button"')
+        expect(tag).toContain(EXPANDED_MARKER)
+      }
+      // No group can start folded: the only collapse path is a click, and no store, no persisted value
+      // and no prop from `renderBody` can pre-seed one (AC4).
+      expect(markup).not.toContain(COLLAPSED_MARKER)
+    })
+
+    it('carries no attribute able to take the daemon-derived label (AC5)', () => {
+      for (const tag of workspaceRowTagsIn(bothTrees())) {
+        expect(tag).not.toContain('aria-label')
+        expect(tag).not.toContain('title=')
+        expect(tag).not.toContain('aria-controls')
+        expect(tag).not.toContain('id=')
+        expect(tag).not.toContain('data-')
+      }
+    })
+
+    it('keeps an untrusted cwd out of the control attributes, not merely escaped inside one', () => {
+      // The twin of #703's escaping test one describe up, and NOT a duplicate of it: that one proves the
+      // label is escaped TEXT; this one proves the element the row became never took the label into an
+      // attribute at all — the `aria-label={`Collapse ${label}`}` a disclosure control invites.
+      const markup = render([row({ id: 'd1', name: 'x', cwd: '/home/me/<img src=x onerror=boom>' })])
+      const tags = workspaceRowTagsIn(markup)
+      expect(tags).toHaveLength(1)
+      expect(tags[0]).not.toContain('img')
+      expect(tags[0]).not.toContain('onerror')
+      expect(tags[0]).not.toContain('boom')
+      // …while the label itself still renders, escaped, as the button's text child.
+      expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
+    })
+  })
+})
+
+describe('CollapsibleWorkspaceGroup (#704)', () => {
+  // The ToolRow seam: the component is exported PURELY so both disclosure states are reachable from
+  // `renderToStaticMarkup`, which never re-renders and therefore can never click. This tier pins the two
+  // rendered SHAPES; the click that moves between them is e2e/workspace-collapse.spec.ts's job.
+  const GROUP_LABEL = 'second-brain'
+  const PROBE = 'a-grouped-row'
+
+  // `defaultExpanded={undefined}` takes the same default-parameter path `renderBody` takes by omitting
+  // the prop, so the no-argument call really does render the production shape.
+  const renderGroup = (label: string, defaultExpanded?: boolean): string =>
+    renderToStaticMarkup(
+      <CollapsibleWorkspaceGroup label={label} defaultExpanded={defaultExpanded}>
+        <span>{PROBE}</span>
+      </CollapsibleWorkspaceGroup>
+    )
+
+  it('renders the row expanded with its rows when no default is given (AC4)', () => {
+    const markup = renderGroup(GROUP_LABEL)
+    expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+    expect(workspaceRowTagsIn(markup)[0]).toContain(EXPANDED_MARKER)
+    expect(workspaceLabelsIn(markup)).toEqual([GROUP_LABEL])
+    expect(markup).toContain(PROBE)
+  })
+
+  it('withdraws the group rows but KEEPS its workspace row when collapsed (AC1)', () => {
+    const markup = renderGroup(GROUP_LABEL, false)
+    // The half a naive implementation gets wrong: the row IS the control, so folding it away with its
+    // rows would leave nothing to click back — AC1 pins that the row stays visible in both states.
+    expect(countOf(markup, WORKSPACE_ROW_MARKER)).toBe(1)
+    expect(workspaceLabelsIn(markup)).toEqual([GROUP_LABEL])
+    expect(workspaceRowTagsIn(markup)[0]).toContain(COLLAPSED_MARKER)
+    // Genuinely gone from the markup, not hidden by a class — the tool-row body precedent.
+    expect(markup).not.toContain(PROBE)
+  })
+
+  it('changes nothing but the state attribute between the two shapes', () => {
+    // `WORKSPACE_ROW_MARKER` is an EXACT attribute-value substring, so a collapsed modifier class
+    // (`channel-list__workspace channel-list__workspace--collapsed`) would stop matching it and SILENTLY
+    // zero every count in the #703 describe rather than failing one. This equality is what keeps the
+    // class token sole; a collapsed appearance, if ever designed, styles off `[aria-expanded='false']`.
+    const expanded = workspaceRowTagsIn(renderGroup(GROUP_LABEL))[0]
+    const collapsed = workspaceRowTagsIn(renderGroup(GROUP_LABEL, false))[0]
+    expect(collapsed).toBe(expanded.replace(EXPANDED_MARKER, COLLAPSED_MARKER))
+  })
+
+  it('renders an untrusted label as escaped text in the collapsed state too', () => {
+    // Collapsing withdraws the ROWS, never the label — so the label's escaping is load-bearing in both
+    // states, not only the one #703 tested.
+    const markup = renderGroup('<b>x</b>', false)
+    expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
+    expect(markup).not.toContain('<b>x</b>')
+    expect(workspaceRowTagsIn(markup)[0]).not.toContain('title=')
   })
 })

@@ -1,5 +1,5 @@
 import './channels.css'
-import { Fragment, useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   useConversationListStore,
@@ -288,8 +288,9 @@ function HostRow(): JSX.Element {
 }
 
 // The workspace row heading each group under a host row (#703, Figma 106:3098) — which workspace the
-// group's conversations run in. Structurally HostRow one indent deeper: the same 28px rhythm and the same
-// type, differing only by the 8px deeper left inset that shows the nesting (channels.css).
+// group's conversations run in. Visually HostRow one indent deeper: the same 28px rhythm and the same
+// type, differing by the 8px deeper left inset that shows the nesting (channels.css) — and, since #704,
+// by being a control rather than a plain row.
 //
 // Unlike the host row's compile-time constant, `label` is DAEMON-derived — the last segment of an
 // untrusted `cwd`, derived by `workspaceLabelFor`. It goes in as an auto-escaped React CHILD and nowhere
@@ -305,16 +306,50 @@ function HostRow(): JSX.Element {
 // seeds `cwd: '/fake/workspace'`, so the default tier renders the literal "workspace", which equals none
 // of the suite's `exact: true` strings and carries none of the classes its `hasText` locators scope to.
 //
-// Not interactive in this slice: a plain <div>, no <button>, no onClick, no aria-label (collapse is #704,
-// which is also when the Figma's 6px radius and hover/focus rules become live). The visible label carries
-// the row's meaning, so the glyph is aria-hidden.
+// #704 made the row the DISCLOSURE CONTROL for its group — a real <button> rather than a <div onClick>,
+// so keyboard activation (Enter and Space) and screen-reader semantics come for free rather than being
+// re-implemented and half-missed (the ToolRow / UnrecognizedRow precedent). Its attribute set is complete
+// as written, and four sinks a disclosure control invites are declined ON PURPOSE, each a MUST FIX if it
+// ever appears here — the same four ConversationScreen.tsx:657-668 declines for the tool row, recurring
+// here sourced from the workspace label and from `group.key`:
+//   - NO aria-label. `Collapse ${label}` would interpolate daemon text into an ATTRIBUTE. The accessible
+//     name already comes from the text child plus aria-expanded — a screen reader announces
+//     "second-brain, button, expanded", with the glyph aria-hidden and adding nothing to it.
+//   - NO aria-controls / id pair. The APG disclosure pattern invites it and the obvious id source is
+//     `group.key` — which IS `row.cwd`, a daemon string, forbidden as an attribute value and as a lookup
+//     key both. aria-controls is optional in that pattern and both shipped disclosures ship without it.
+//     If a future ticket wants one, the id comes from React's useId(), never from the wire.
+//   - NO title. `.channel-list__workspace-label` ellipsizes, which makes `title={label}` ("hover for the
+//     rest") the natural next edit; it is the exact shape #696's review made a MUST FIX. The full `cwd`
+//     staying undiscoverable is #716's problem, not this row's.
+//   - NO log line for the toggle. Any useful one carries the label or the `cwd` — daemon content in a
+//     log, which ADR 0007's content-free rule and CLAUDE.md both forbid. This row emits none.
+//
+// The class token stays SOLE — no `--collapsed` modifier, in either state. `ChannelList.test.tsx:76` pins
+// `class="channel-list__workspace"` as an EXACT attribute-value substring, so a second token would stop
+// matching it and silently zero #703's counts rather than failing them. There is nothing to style
+// differently anyway: the Figma draws one state and no chevron. A collapsed appearance, if one is ever
+// designed, styles off `[aria-expanded='false']`.
 //
 // The glyph is a seventh inline Material path in this file's idiom — the `folder` shape, its `d` copied
 // from WorkspacePickerSheet's module-local FolderIcon but sized 12px to match the host row's level marker
 // rather than that file's 24px control.
-function WorkspaceRow({ label }: { label: string }): JSX.Element {
+function WorkspaceRow({
+  label,
+  expanded,
+  onToggle
+}: {
+  label: string
+  expanded: boolean
+  onToggle: () => void
+}): JSX.Element {
   return (
-    <div className="channel-list__workspace">
+    <button
+      type="button"
+      className="channel-list__workspace"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
       <svg
         className="channel-list__workspace-icon"
         viewBox="0 0 24 24"
@@ -326,7 +361,65 @@ function WorkspaceRow({ label }: { label: string }): JSX.Element {
         <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
       </svg>
       <span className="channel-list__workspace-label">{label}</span>
-    </div>
+    </button>
+  )
+}
+
+/**
+ * One workspace group: its row, and — while expanded — that group's conversation rows (#704).
+ *
+ * EXPORTED for the same reason `ToolRow` is: `renderToStaticMarkup` never re-renders, so this is the only
+ * seam through which the unit tier can reach the COLLAPSED shape at all. Production renders it from
+ * `renderBody` alone, and never passes `defaultExpanded`.
+ *
+ * `defaultExpanded` is a mount-time SEED, not a controlled prop — React's own `default*` convention
+ * (defaultValue, defaultChecked), and `ToolRow`'s contract for the same reason: a prop named `expanded`
+ * that a re-render could not change would be a quiet lie.
+ *
+ * STATE. One boolean, in the component that renders the group — no store, no reducer, no context, no
+ * lifted map. ADR 0006 picks the lowest scope that resets correctly, and both halves of "collapse is
+ * renderer-only and unpersisted" fall out of this scope for free: `PairedShell.tsx:124` renders
+ * ChannelList at the SAME element position on both routes on purpose, so React preserves this subtree
+ * across the list↔thread flip and a fold survives opening a conversation and coming back — while the
+ * whole thing dies with the renderer on app start. A store would need manual clearing to get the second
+ * half and would break the first. Nothing here touches disk, localStorage, IPC or the wire.
+ *
+ * PER-TREE INDEPENDENCE needs no key engineering: the two trees are two separate sibling lists in
+ * `renderBody`, and React scopes reconciliation per sibling list — so the same `cwd` appearing in both
+ * yields two distinct instances holding two distinct cells. There is nothing to implement for it; there
+ * is only something NOT to do, namely lift the state.
+ *
+ * Returns a shorthand fragment, emitting NO element of its own — exactly like the keyed <Fragment> it
+ * replaced. The rendered sequence under `.channel-list` stays flat (header, host, workspace, rows, …) and
+ * every `.channel-list__row` keeps the ancestry 28 e2e specs depend on. No wrapper <div>, no role="group",
+ * no <ul>/<li>: PR#717's review NIT proposing grouping semantics across this row, the host row AND the
+ * section headers is a separate concern spanning rows this ticket does not touch. If it is ever filed,
+ * this component is where the wrapper would go.
+ */
+export function CollapsibleWorkspaceGroup({
+  label,
+  defaultExpanded = true,
+  children
+}: {
+  label: string
+  defaultExpanded?: boolean
+  children: ReactNode
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  return (
+    <>
+      <WorkspaceRow
+        label={label}
+        expanded={expanded}
+        // Functional updater, never `setExpanded(!expanded)`: the latter reads a value captured at render
+        // and is a check-then-act race against React's batching (ToolRow:746 / UnrecognizedRow:858).
+        onToggle={() => setExpanded((open) => !open)}
+      />
+      {/* The whole of AC1 and AC2: the group's ROWS are withdrawn from the DOM, the row above is not, and
+          nothing else happens — no navigation, no command, no store dispatch, no active-conversation
+          change. The handler's entire body is the state flip. */}
+      {expanded && children}
+    </>
   )
 }
 
@@ -360,15 +453,21 @@ function renderBody(
               AC1) — the symmetric counterpart to Save-as-channel on Recent rows.
 
               #703 wraps the map one level: each workspace group's rows sit under their own workspace row.
-              The wrapper is a keyed <Fragment> (the shorthand <> cannot carry a key), so the rendered list
-              stays a FLAT sequence of siblings — header, host, workspace, rows, workspace, rows — and every
-              `.channel-list__row` keeps the exact ancestry it had. A per-group <div> would instead become a
-              flex item of the `.channel-list` column and move every existing locator's tree position. The
-              two key namespaces cannot collide: React scopes keys per sibling list, so the group keys (cwd
-              strings) and the row keys (c.id) never share one. */}
+              #704 turned that wrapper from a keyed <Fragment> into CollapsibleWorkspaceGroup, which emits
+              no element either — so the rendered list stays a FLAT sequence of siblings (header, host,
+              workspace, rows, workspace, rows) and every `.channel-list__row` keeps the exact ancestry it
+              had. A per-group <div> would instead become a flex item of the `.channel-list` column and
+              move every existing locator's tree position. The two key namespaces cannot collide: React
+              scopes keys per sibling list, so the group keys (cwd strings) and the row keys (c.id) never
+              share one.
+
+              `key={group.key}` carries the exact meaning it did on the Fragment, and now also pins the
+              fold's IDENTITY: a group whose rows change (renamed, added, archived) or whose position
+              moves keeps its instance and its fold, because React reconciles by key and not by index. A
+              group that leaves the list is unmounted and its fold is discarded — correct for ephemeral
+              disclosure state, and not worth defending against. */}
           {groupByWorkspace(channels).map((group) => (
-            <Fragment key={group.key}>
-              <WorkspaceRow label={group.label} />
+            <CollapsibleWorkspaceGroup key={group.key} label={group.label}>
               {group.rows.map((c) => (
                 <Row
                   key={c.id}
@@ -378,7 +477,7 @@ function renderBody(
                   onRename={() => onRename(c)}
                 />
               ))}
-            </Fragment>
+            </CollapsibleWorkspaceGroup>
           ))}
         </>
       )}
@@ -394,10 +493,12 @@ function renderBody(
               `discussions` — renaming that vocabulary was explicitly out of scope.
 
               The two trees group independently (operator, 2026-08-21): the workspace level repeats here
-              rather than being shared, so a workspace with rows in both trees appears in both. */}
+              rather than being shared, so a workspace with rows in both trees appears in both — and since
+              #704 their DISCLOSURE is independent too, for free: this map is a different sibling list from
+              the Channels one above, so the same `cwd` in both yields two CollapsibleWorkspaceGroup
+              instances holding two separate booleans. */}
           {groupByWorkspace(discussions).map((group) => (
-            <Fragment key={group.key}>
-              <WorkspaceRow label={group.label} />
+            <CollapsibleWorkspaceGroup key={group.key} label={group.label}>
               {group.rows.map((d) => (
                 <Row
                   key={d.id}
@@ -407,7 +508,7 @@ function renderBody(
                   onSaveAsChannel={() => onSaveAsChannel(d)}
                 />
               ))}
-            </Fragment>
+            </CollapsibleWorkspaceGroup>
           ))}
         </>
       )}

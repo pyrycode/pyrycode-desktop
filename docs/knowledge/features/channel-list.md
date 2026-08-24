@@ -251,11 +251,15 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   machine name (and will need the label's own ellipsis/overflow treatment, skipped here since a
   six-character constant cannot overflow the 400px sidebar); #672 adds the two connection-status
   dots at the row's right edge, with no pre-rendered slot shipped for them.
-- **Workspace groups render expanded, are not interactive, and two workspaces whose last path
-  segment matches render two identically-labelled groups** — all deliberately deferred: #704 turns
-  the workspace row into a disclosure control (`WorkspaceGroup.key` is already a stable per-group
-  identity to hold collapsed state against); #716 owns the same-last-segment display ambiguity —
-  a display question, not a trust one, since the groups keep distinct keys and are never merged.
+- **Two workspaces whose last path segment matches render two identically-labelled groups.**
+  Deliberately deferred to #716 — a display question, not a trust one, since the groups keep
+  distinct `cwd` keys and are never merged.
+- **Workspace groups are collapsible per tree, per group, and unpersisted.** [#704](../codebase/704.md)
+  turned each `WorkspaceRow` into a real `<button>` disclosure control (`aria-expanded`, click
+  withdraws that group's rows and nothing else); the fold survives opening a conversation and
+  coming back (component-local state under the sidebar's stable mount position, ADR 0006) but is
+  gone on every fresh app start — every group renders expanded by default, and there is no store,
+  disk, or wire involvement.
 
 ## Related
 
@@ -287,6 +291,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   `106:3094`), a client-owned `'Server'` placeholder label ahead of #688's operator-typed one.
 - [#703 codebase notes](../codebase/703.md) — added the workspace grouping level between each
   host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
+- [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree
+  disclosure control; renderer-only and unpersisted.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), #672 (host row connection dots), #688 (operator-typed host label), #704 (workspace
-  group collapse), #716 (same-last-segment workspace label ambiguity).
+  (per-row open), #672 (host row connection dots), #688 (operator-typed host label), #716
+  (same-last-segment workspace label ambiguity).

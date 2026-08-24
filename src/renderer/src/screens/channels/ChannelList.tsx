@@ -267,8 +267,10 @@ function renderBody(
       )}
       {discussions.length > 0 && (
         <>
-          <header className="channel-list__section-header">Recent discussions</header>
-          {/* Recent discussions pass the affordance so each row can be saved as a channel (AC1). */}
+          <header className="channel-list__section-header">Chats</header>
+          {/* Chats rows pass the affordance so each row can be saved as a channel (#274, AC1). The
+              header reads "Chats" (#709, Figma 106:3258); the code-level partition is still
+              `discussions` — renaming that vocabulary was explicitly out of scope. */}
           {discussions.map((d) => (
             <Row
               key={d.id}

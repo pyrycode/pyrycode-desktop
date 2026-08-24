@@ -28,7 +28,7 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 // EXACTLY ONE clickable seed: launchPairedApp reaches the thread by clicking a single strict
 // `.channel-list__row-open`, so a second seed would strict-violate at launch. Promoted + named so it
 // renders in the "Channels" section (mirroring the demonstrator) and its baseline assertion is crisp.
-// The FAB-created row is non-promoted → it lands in "Recent discussions", so the grown list exercises
+// The FAB-created row is non-promoted → it lands in "Chats", so the grown list exercises
 // both sections. Fixed literals only — deterministic, no Date.now()/randomness (the fakeDaemon convention).
 const SEED: ConversationSummary = {
   id: 'seed-conversation',
@@ -105,7 +105,7 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
   await page.locator('.conversation__back').click()
 
   // AC4 — multi-row render + rename reflection: BOTH rows render, scoped to `.channel-list`, exact text —
-  // SEED ("Channels" section) AND the created row under NEW_TITLE ("Recent discussions" section). The
+  // SEED ("Channels" section) AND the created row under NEW_TITLE ("Chats" section). The
   // created-row assertion carries the round-trip headroom (it auto-waits the full rename → broadcast →
   // re-list → re-render loop).
   await expect(

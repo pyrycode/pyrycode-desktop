@@ -38,7 +38,7 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 //     titleFor(null) = "Untitled" too. The fake twin's SEED was named ("Seeded channel"), title-unique; here
 //     the title COLLIDES, so the re-entry click and the post-delete survivor assertion are scoped by SECTION
 //     AFFORDANCE, not title: the promoted seed carries `.channel-list__rename` (Channels section); the
-//     non-promoted created row carries `.channel-list__save` (Recent discussions). Count-delta / affordance
+//     non-promoted created row carries `.channel-list__save` (Chats). Count-delta / affordance
 //     assertions throughout — never title text (both rows can read "Untitled").
 //
 // A timeout on any mutation assertion is a GENUINE #949-class daemon gap (a missing create_conversation /
@@ -159,7 +159,7 @@ test('real daemon archive → restore → delete lifecycle reflects through the 
   await expect(page.getByText('No archived discussions')).toBeVisible()
 
   // --- Re-enter the created thread for delete. Back to the list, which now holds TWO rows: the promoted
-  // seed (Channels) and the restored non-promoted created row (Recent discussions), BOTH titled "Untitled"
+  // seed (Channels) and the restored non-promoted created row (Chats), BOTH titled "Untitled"
   // (the seed is name-less on the real daemon). Scope the created row by its section affordance, not its
   // title: `.channel-list__save` is present only on the non-promoted row; the promoted seed carries
   // `.channel-list__rename` instead. onOpen re-records activeConversation = the created row (already so;

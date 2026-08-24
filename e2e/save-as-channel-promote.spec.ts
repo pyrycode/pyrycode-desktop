@@ -18,7 +18,7 @@ import type { ConversationSummary, WorkspaceFolderCreatedPayload } from '../src/
 //
 // The seeds are NON-promoted so each (a) launches — `.channel-list__row-open` renders on every row, so the
 // strict click reaches the thread — and (b) after one back-nav renders the `.channel-list__save` affordance
-// under "Recent discussions".
+// under "Chats".
 //
 // SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM text / visibility / counts
 // only; the seed names and DEDICATED_PATH are non-secret display literals; the pairing plumbing (synthetic
@@ -44,7 +44,7 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // returned path drove it.
 const DEDICATED_PATH = '/srv/pyry/workspaces/chan-7fa'
 
-// EXACTLY ONE clickable, NON-promoted seed per test. Non-promoted → renders under "Recent discussions" with the
+// EXACTLY ONE clickable, NON-promoted seed per test. Non-promoted → renders under "Chats" with the
 // `.channel-list__save` affordance, and is the only clickable row so launchPairedApp's strict row-open click
 // reaches its thread. Per-test names aid diagnostics; the tests are isolated (separate launch, separate fake
 // state) so no id/name collision matters. Fixed literals only (the fakeDaemon convention).
@@ -100,15 +100,16 @@ function promoteFake(seed: ConversationSummary): (inbound: Uint8Array) => Uint8A
 }
 
 // The two mutually-exclusive section-header proxies. With exactly one seeded row, a non-promoted row renders
-// ONLY the "Recent discussions" header and a promoted row renders ONLY the "Channels" header (a zero-row section
-// renders no header — ChannelList.tsx). So "Channels appears AND Recent disappears AND the row title stays
+// ONLY the "Chats" header and a promoted row renders ONLY the "Channels" header (a zero-row section
+// renders no header — ChannelList.tsx). So "Channels appears AND Chats disappears AND the row title stays
 // visible" fully captures "the row promoted in place" — the crispest available section-membership assertion, as
-// there is no per-section DOM wrapper to scope a row under a header. `hasText` is a substring match, but
-// "Recent discussions" does not contain "Channels" (nor vice versa), so each locator resolves only its header.
+// there is no per-section DOM wrapper to scope a row under a header. `hasText` with a string argument is a
+// CASE-INSENSITIVE substring match, but "Chats" and "Channels" share only the prefix "Cha" and neither is a
+// substring of the other (case-folded either way), so each locator still resolves only its own header.
 const channelsHeader = (page: Page) =>
   page.locator('.channel-list__section-header', { hasText: 'Channels' })
 const recentHeader = (page: Page) =>
-  page.locator('.channel-list__section-header', { hasText: 'Recent discussions' })
+  page.locator('.channel-list__section-header', { hasText: 'Chats' })
 
 test('scratch branch: Keep in scratch promotes the row in place', async ({ launchPairedApp }) => {
   const { page } = await launchPairedApp({ buildReplyFrames: promoteFake(SCRATCH_SEED) })
@@ -117,7 +118,7 @@ test('scratch branch: Keep in scratch promotes the row in place', async ({ launc
   // list, where the app-singleton conversation-list store already holds SCRATCH_SEED (listed on the connected edge).
   await page.locator('.conversation__back').click()
 
-  // AC1 — baseline: the seed renders under "Recent discussions"; no "Channels" header exists yet.
+  // AC1 — baseline: the seed renders under "Chats"; no "Channels" header exists yet.
   await expect(recentHeader(page)).toBeVisible()
   await expect(channelsHeader(page)).toHaveCount(0)
   await expect(
@@ -135,7 +136,7 @@ test('scratch branch: Keep in scratch promotes the row in place', async ({ launc
   await page.locator('.save-as-channel__save').click()
 
   // AC2 — assert the promotion: the row MOVED to "Channels" (header appears, with round-trip headroom), the
-  // "Recent discussions" header is gone, and the row title is still visible.
+  // "Chats" header is gone, and the row title is still visible.
   await expect(channelsHeader(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(recentHeader(page)).toHaveCount(0)
   await expect(
@@ -149,7 +150,7 @@ test('dedicated branch: create-folder → returned path promotes the row', async
   // Same launch + back-nav + baseline as the scratch test, with a fresh launch and single non-promoted seed.
   await page.locator('.conversation__back').click()
 
-  // AC1 — baseline: the seed renders under "Recent discussions"; no "Channels" header exists yet.
+  // AC1 — baseline: the seed renders under "Chats"; no "Channels" header exists yet.
   await expect(recentHeader(page)).toBeVisible()
   await expect(channelsHeader(page)).toHaveCount(0)
   await expect(

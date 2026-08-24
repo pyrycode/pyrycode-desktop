@@ -56,8 +56,9 @@ can pass vacuously if the daemon's reply content changes shape.
 
 [#443](../codebase/443.md), the marquee case, promotes the seed through `SaveAsChannelDialog`'s scratch
 ("Keep in scratch") arm — the one path that sends `promote_conversation` alone, with no
-`create_workspace_folder` prelude — and asserts the row moves from the "Recent discussions" section to
-"Channels" only after the daemon's `conversation_updated` reply drives a re-list; the dedicated
+`create_workspace_folder` prelude — and asserts the row moves from the "Chats" section (labelled
+"Recent discussions" until [#709](../codebase/709.md)) to "Channels" only after the daemon's
+`conversation_updated` reply drives a re-list; the dedicated
 ("Move to dedicated channel folder") branch was deliberately dropped from this tier since its
 `create_workspace_folder` prelude is already real-wire-proven by #441 and the daemon's #949 handler
 (Option B) ignores the promote payload's `cwd` entirely, leaving that branch's remaining contract a

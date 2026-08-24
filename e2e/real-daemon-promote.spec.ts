@@ -29,13 +29,13 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 // WHY IT IS PROVABLE ON THIS TIER. The claude-less real-daemon tier has one observable — the DOM. A verb is
 // provable here only if its daemon reply gates a VISIBLE DOM transition with NO optimistic pre-render. The
 // scratch `onSave` arm (SaveAsChannelDialog.tsx:287-295) dispatches `promote_conversation` and closes the
-// dialog — it NEVER touches the list store. The seeded row moves "Recent discussions" → "Channels" ONLY after
+// dialog — it NEVER touches the list store. The seeded row moves "Chats" → "Channels" ONLY after
 // the daemon's reply drives the re-list:
 //     promote_conversation → daemon conversation_updated { is_promoted: true }
 //       → daemonConnection decodes conversationUpdated → conversationListBridge.shouldRefreshList = true
 //       → re-list_conversations → partitionByPromotion re-buckets by is_promoted → it renders under "Channels"
 // Nothing moves the row optimistically. On a PRE-#949 binary the daemon answers `unsupported`: no
-// `conversation_updated` fires, no re-list happens, the row stays in "Recent discussions", and the assertion
+// `conversation_updated` fires, no re-list happens, the row stays in "Chats", and the assertion
 // TIMES OUT. That timeout IS the intended loud regression signal — never something to paper over with a
 // longer timeout or a softened assertion. (This is the same conversation_updated → re-list path #440's
 // archive/restore already live-passed against the real daemon.)
@@ -78,14 +78,15 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 const SPEC_TIMEOUT_MS = 120_000
 
 // The two mutually-exclusive section-header proxies (cloned from #423). With exactly one seeded row, a
-// non-promoted row renders ONLY the "Recent discussions" header and a promoted row renders ONLY the "Channels"
-// header (a zero-row section renders no header — ChannelList.tsx). So "Channels appears AND Recent disappears"
-// fully captures "the row promoted in place." `hasText` is a substring match, but "Recent discussions" does
-// not contain "Channels" (nor vice versa), so each locator resolves only its own header.
+// non-promoted row renders ONLY the "Chats" header and a promoted row renders ONLY the "Channels"
+// header (a zero-row section renders no header — ChannelList.tsx). So "Channels appears AND Chats disappears"
+// fully captures "the row promoted in place." `hasText` with a string argument is a CASE-INSENSITIVE substring
+// match, but "Chats" and "Channels" share only the prefix "Cha" and neither is a substring of the other
+// (case-folded either way), so each locator still resolves only its own header.
 const channelsHeader = (page: Page) =>
   page.locator('.channel-list__section-header', { hasText: 'Channels' })
 const recentHeader = (page: Page) =>
-  page.locator('.channel-list__section-header', { hasText: 'Recent discussions' })
+  page.locator('.channel-list__section-header', { hasText: 'Chats' })
 
 test('real daemon promotes a Recent discussion into a Channel over the real wire', async ({
   relay,
@@ -108,12 +109,12 @@ test('real daemon promotes a Recent discussion into a Channel over the real wire
 
   // --- Readiness gate: the non-promoted seed's "save as channel" affordance renders ONLY after the whole
   // chain — handshake complete → session `connected` → the auto-fired `list_conversations` returned the
-  // seeded discussion → it rendered in the "Recent discussions" section. The real-daemon path lands on
+  // seeded discussion → it rendered in the "Chats" section. The real-daemon path lands on
   // `route='list'` (no opening thread), and Save-as-channel lives on the list row, so this gate reaches the
   // affordance directly — no thread open needed. ---
   await expect(page.locator('.channel-list__save')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 
-  // --- Baseline (mirrors #423): the seed starts under "Recent discussions" with NO "Channels" section, so
+  // --- Baseline (mirrors #423): the seed starts under "Chats" with NO "Channels" section, so
   // the post-Save assertion proves a TRANSITION, not a pre-existing state. ---
   await expect(recentHeader(page)).toBeVisible()
   await expect(channelsHeader(page)).toHaveCount(0)
@@ -132,8 +133,8 @@ test('real daemon promotes a Recent discussion into a Channel over the real wire
   await page.getByRole('radio', { name: 'Keep in scratch' }).check()
   await page.locator('.save-as-channel__save').click()
 
-  // --- Assert the reply-gated promotion (AC3). The row moves "Recent discussions" → "Channels" ONLY after
-  // the daemon's conversation_updated drives the re-list: "Channels" header appears, "Recent discussions"
+  // --- Assert the reply-gated promotion (AC3). The row moves "Chats" → "Channels" ONLY after
+  // the daemon's conversation_updated drives the re-list: "Channels" header appears, "Chats"
   // header is gone. A pre-#949 binary answers `unsupported`, no re-list fires, the row stays put, and
   // `channelsHeader` never appears → this TIMES OUT (the intended #949-class regression signal). ---
   await expect(channelsHeader(page)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })

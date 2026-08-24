@@ -144,7 +144,7 @@ test('archive → restore → delete lifecycle reflects through the stateful fak
   await expect(page.getByText('No archived discussions')).toBeVisible()
 
   // --- Re-enter the created thread for delete. Back to the list, which now shows TWO rows: SEED
-  // ("Channels") and the restored created row ("Untitled", "Recent discussions"). Click the created row's
+  // ("Channels") and the restored created row ("Untitled", "Chats"). Click the created row's
   // open control, scoped by its title so it does not strict-violate against SEED's row-open. onOpen sets
   // activeConversation = the created row and routes `thread`. ---
   await page.locator('.archive__back').click()

@@ -23,7 +23,8 @@ or frames, so not security-sensitive.
 ## What it does
 
 - The paired region now enters at a **list** view — the [Channel List home screen](channel-list.md)
-  (two-tier Channels/Recent discussions, [#141](../codebase/141.md)) — instead of the single
+  (two-tier Channels/Chats, [#141](../codebase/141.md); the non-promoted tier read "Recent
+  discussions" until the desktop-design relabel, [#709](../codebase/709.md)) — instead of the single
   conversation thread.
 - Every row in the list view opens the active conversation into the **thread** view — the existing
   [conversation shell](conversation-shell.md), unchanged. (Per-row opening of a *specific* conversation

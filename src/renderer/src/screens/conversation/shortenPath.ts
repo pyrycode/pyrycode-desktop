@@ -2,16 +2,22 @@
 // screen like messageViewModel.ts / sendInterrupt.ts / threadScrollPosition.ts. It performs no effects,
 // so like threadScrollPosition it takes no injected deps: it is a total function of one string.
 //
-// Why it lives on its own, unreferenced: this is the one piece of the tool-row work (#606's split) with
-// no daemon dependency and no UI. #642 and #643 carry the daemon's `kind`/`subject` onto the timeline
-// item and #645 draws it; isolating the rule here gives the feature a tested core before any of it
-// touches a component, and it is the reason this piece could ship while its three siblings wait on the
-// daemon. It ships dormant BY DESIGN — #645 adds the caller; do not add one here to "prove it works",
-// the sibling test proves it.
+// Why it shipped on its own, unreferenced: this is the one piece of the tool-row work (#606's split)
+// with no daemon dependency and no UI, so isolating the rule here gave the feature a tested core while
+// its three siblings waited on the daemon. It stayed dormant until #705, which is its first and only
+// caller. (This paragraph and the next used to describe a `kind`/`subject` pair the daemon never sent;
+// #705 corrected them against the shape that actually shipped — #642 decodes the tool's INPUT MAP off
+// the wire, name → value, and #643 carries that onto the timeline item. `subject` exists nowhere in
+// src/; `kind` does exist, as ThreadItem's union discriminant, which is what made the old instruction
+// fail SILENTLY rather than erroring — it reads `'toolCall'` on every row, so a caller following it
+// would have shortened everything.)
 //
 // Display formatting only, never path resolution: it never touches the filesystem, never normalises `.`
-// or `..`, and never decides whether a string is a real path. Whether a subject is a path at all is the
-// caller's decision — #645 makes that call from the tool `kind`, and shortens only the file-acting ones.
+// or `..`, and never decides whether a string is a real path. Whether a value is a path at all is the
+// caller's decision — toolHeadline.ts makes it from the FIELD NAME the headline was taken from
+// (`file_path`, `path`, `notebook_path`), and shortens only those. A command line, a search pattern and
+// a URL are passed through untouched: splitting them on `/` would mangle them into something that reads
+// like a path and is not one.
 //
 // ZERO imports, deliberately: not React, not a store, and above all not `node:path`. A `node:path`
 // implementation would split on a backslash under Windows, so the result would vary with the host; a

@@ -46,6 +46,7 @@ import {
   CONNECTION_BANNER_COPY
 } from './composerSend'
 import { isAtBottom } from './threadScrollPosition'
+import { toolHeadline } from './toolHeadline'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { sendInterrupt } from './sendInterrupt'
@@ -665,6 +666,22 @@ function TimelineRow({
 //     edit; it is the same forbidden shape #696 already declined for `resultSummary`.
 //   - NO log line for the toggle. Any useful one would carry `name`, `inputSummary` or `toolUseId` —
 //     daemon content in a log, which ADR 0007's content-free rule and CLAUDE.md both forbid.
+//
+// #705 EXTENDS that posture to a NEWLY untrusted string in the SAME sink. The summary run no longer
+// draws `inputSummary` but a value picked out of `item.input` (toolHeadline.ts) — the daemon chooses
+// both the field names and the values, so the worst outcome is a misleading or ugly headline that is
+// inert text one click from the truth in the body. It reaches the DOM only as auto-escaped React
+// children of the same <span>, and three further sinks the pick makes newly tempting are declined,
+// each a MUST FIX if it ever appears:
+//   - NO title, again and for a new reason. Shortening a path VISIBLY discards information, which
+//     makes `title={fullPath}` ("hover for the rest") the natural next edit. Same forbidden shape.
+//   - NO linkification of a `url` headline. The picker promotes a field literally named `url` into
+//     this run, and AssistantMarkdown sits two arms up in this same file. Rendering the headline
+//     through it — or wrapping it in an <a href> — turns a daemon-chosen URL into an outbound request
+//     from a privileged renderer, the <img src> beacon shape above. A <span> with text children
+//     cannot emit one.
+//   - NO input KEY in the DOM. toolHeadline returns the VALUE only; keys are daemon display text too,
+//     and drawing them is #706's deliberate, separately reviewed decision.
 export function ToolRow({
   item,
   defaultExpanded = false
@@ -686,7 +703,12 @@ export function ToolRow({
   const chipRuns = (
     <>
       <span className="tool-row__name">{item.name}</span>
-      <span className="tool-row__summary">{item.inputSummary}</span>
+      {/* #705: the second run is now the picked INPUT FIELD (toolHeadline.ts), not `inputSummary` —
+          same element, same class, same single-line ellipsizing, different text. `inputSummary` is
+          the daemon's whole input compacted, so for an Edit that is mostly replacement text the file
+          path was buried in it and usually cut off; it survives as the picker's rule-4 fallback,
+          which is what keeps this row working against a pre-pyrycode#1678 daemon. */}
+      <span className="tool-row__summary">{toolHeadline(item)}</span>
     </>
   )
   return (

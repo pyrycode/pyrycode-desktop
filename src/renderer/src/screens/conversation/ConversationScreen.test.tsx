@@ -342,13 +342,22 @@ describe('Timeline — the streamed assistant text', () => {
   // this repo's server-render tier — nothing passes the flag yet (#697 owns the toggle, the state and
   // the e2e), so `<Timeline>` can only ever produce the collapsed form. Every case below is a pure
   // function of (item, expanded), rendered directly.
-  function toolItem(result: ToolResult | null): Extract<ThreadItem, { kind: 'toolCall' }> {
+  //
+  // #705 extended it with `input` rather than adding a second builder: this file has one builder and
+  // one idiom, and every existing caller omits the parameter, which is what makes them the free
+  // regression baseline below. The key is set unconditionally, mirroring #643's own reducer — an
+  // omitted argument is a property holding `undefined`, which the picker reads as absence.
+  function toolItem(
+    result: ToolResult | null,
+    input?: Readonly<Record<string, string>>
+  ): Extract<ThreadItem, { kind: 'toolCall' }> {
     return {
       kind: 'toolCall',
       turnId: 't1',
       toolUseId: 'u1',
       name: 'read_file',
       inputSummary: 'schema.ts',
+      input,
       result
     }
   }
@@ -506,6 +515,91 @@ describe('Timeline — the streamed assistant text', () => {
     )
     expect(markup).toContain('class="tool-row tool-row--resolved tool-row--error"')
     expect(markup).toContain('<button type="button" class="tool-row__chip tool-row__chip--toggle"')
+  })
+
+  // #705: the headline swap. The rules themselves are toolHeadline.test.ts's; what these cases pin is
+  // the MARKUP half — that the swap happened inside `chipRuns` (so it reaches the pending <div> as
+  // well as the resolved <button>), that nothing else about the chip moved, and that the newly
+  // untrusted string reaches the DOM under the same escaping posture `inputSummary` held.
+  //
+  // REGRESSION BASELINE, free of charge: every tool-row case above omits `input` and therefore falls
+  // through to rule 4, so all of them must stay green UNCHANGED. If one of them needs editing, the
+  // picker is wrong.
+  const DEEP_PATH = 'src/renderer/src/screens/conversation/ConversationScreen.tsx'
+  const SHORTENED_PATH = '.../src/screens/conversation/ConversationScreen.tsx'
+
+  it('draws the shortened file_path in the summary run instead of inputSummary (AC1, AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' }, { file_path: DEEP_PATH })} />
+    )
+    expect(markup).toContain(SHORTENED_PATH)
+    // The builder's `inputSummary` is the sentinel: rule 4 no longer fires, so it must not appear.
+    expect(markup).not.toContain('schema.ts')
+  })
+
+  it('leaves the chip element, classes and run order otherwise unchanged (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' }, { file_path: DEEP_PATH })} />
+    )
+    // Byte-level: same button, same two runs in the same order, no new element and no new class —
+    // only the TEXT of the second run changed. This is the AC that keeps the row on the Figma mock.
+    expect(markup).toContain(
+      '<button type="button" class="tool-row__chip tool-row__chip--toggle" data-thread-role="tool" aria-expanded="false">' +
+        '<span class="tool-row__name">read_file</span>' +
+        `<span class="tool-row__summary">${SHORTENED_PATH}</span>` +
+        '</button>'
+    )
+  })
+
+  it('draws the headline on a pending row too — the swap is inside the shared runs (AC1)', () => {
+    // `chipRuns` is declared once and consumed by both branches; this is the half a resolved-row test
+    // cannot reach.
+    const markup = renderToStaticMarkup(<ToolRow item={toolItem(null, { file_path: DEEP_PATH })} />)
+    expect(markup).toContain(
+      '<div class="tool-row__chip" data-thread-role="tool">' +
+        '<span class="tool-row__name">read_file</span>' +
+        `<span class="tool-row__summary">${SHORTENED_PATH}</span>` +
+        '</div>'
+    )
+  })
+
+  it('renders inputSummary unchanged when input is absent (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} />
+    )
+    expect(markup).toContain('<span class="tool-row__summary">schema.ts</span>')
+  })
+
+  it('renders inputSummary unchanged when input is an empty map (AC4)', () => {
+    // Reads identically to absent, by design — the distinction survives at the item, not in the row.
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' }, {})} />
+    )
+    expect(markup).toContain('<span class="tool-row__summary">schema.ts</span>')
+  })
+
+  it('renders the headline as inert escaped children, never markup or an attribute (AC5)', () => {
+    // No apostrophes in the fixture (renderToStaticMarkup escapes ' → &#x27;, see the note above).
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '184 lines' }, { pattern: '<i>path</i>' })}
+      />
+    )
+    expect(markup).toContain('&lt;i&gt;path&lt;/i&gt;')
+    expect(markup).not.toContain('<i>path</i>')
+    // Shortening visibly discards information, which makes `title={fullPath}` the natural next edit.
+    // It is untrusted daemon text in an attribute — declined here as it was for `resultSummary`.
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('aria-label')
+  })
+
+  it('never draws the input KEY, only its value (AC1)', () => {
+    // Keys are daemon-controlled display text too; drawing them is #706's separately reviewed call.
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem(null, { KEY_SENTINEL_zzz: 'the value' })} />
+    )
+    expect(markup).toContain('the value')
+    expect(markup).not.toContain('KEY_SENTINEL_zzz')
   })
 
   it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {

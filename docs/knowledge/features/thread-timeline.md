@@ -207,8 +207,15 @@ Nothing imports this module yet.
   filled, `tool-row--error` on top iff `isError`), lifting the pending 50% dimming and tinting the
   chip border with a newly-introduced `--color-error` token (M3 default dark error role, tone 80 —
   desktop's first error-family token). `reduceTimeline`'s `fillResult`/`ToolResult` shape is
-  unmodified; `result.resultSummary` is deliberately not surfaced (no result-text slot in the Figma
-  mock).
+  unmodified; `result.resultSummary` was deliberately not surfaced at the time (no result-text slot in
+  the Figma mock) — **[#696](../codebase/696.md) reversed that decision** (below).
+- **[#696](../codebase/696.md) (shipped)** drew `result.resultSummary` for the first time: the
+  `toolCall` arm was extracted into an exported `ToolRow({ item, expanded? })`, and with `expanded`
+  true and a result present a body stacks under the chip carrying the result text in a bounded,
+  scrolling `<pre>` (`.unrecognized-row__raw`'s treatment). `reduceTimeline`'s `ToolResult` shape is
+  unmodified — this is a render-only slice, pure view, no store/transport/wire change. Ships with
+  nothing passing `expanded` yet, so `<Timeline>` still only ever produces the collapsed form; the
+  toggle, the container state and the e2e are [#697](https://github.com/pyrycode/pyrycode-desktop/issues/697).
 - **[#245](../codebase/245.md) (shipped)** added the fourth `ThreadItem` kind, `userText` — a plain
   fresh-tail-append (the `toolUse`/`turnEnd` discipline, not `assistantDelta`'s coalescing), no
   `turnId`/`seq` (a renderer-sourced echo has neither). Shipped **dormant**: no producer dispatched a
@@ -391,6 +398,9 @@ Nothing imports this module yet.
   correlation its first real feed, resolving a `toolCall`'s `result` in place on `selectItems`.
 - [#230 codebase notes](../codebase/230.md) — extends #218's pending `toolCall` chip to resolve in
   place from `item.result`, and introduces desktop's first error-family design token, `--color-error`.
+- [#696 codebase notes](../codebase/696.md) — extracts the `toolCall` arm into an exported `ToolRow`
+  and reverses #230's decision not to surface `result.resultSummary`, drawing it in a bounded body
+  behind a still-unwired `expanded` flag.
 - [#245 codebase notes](../codebase/245.md) — added the fourth `ThreadItem` kind, `userText`, dormant
   with a placeholder render arm.
 - [#179 codebase notes](../codebase/179.md) — the vertical's final piece: flips `interactive`, wires

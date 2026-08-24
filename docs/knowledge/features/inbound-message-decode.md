@@ -275,10 +275,11 @@ scalar of the same v2 interactive stream `assistant_delta`/`turn_end` belong to 
 comparison** `parseMessagePayload` uses for `role` (`state !== 'thinking' && state !== 'responding' &&
 state !== 'idle'` → throw), *not* `requireString` — a `requireString` would accept any string and
 defeat the enum boundary this decode exists to defend. This is the idiom's second instance in the
-file; a future closed-enum wire field should reach for it by default. Unlike `assistant_delta`/
-`turn_end`, the consumer arm drops **only** `conversation_id` (single active conversation) and keeps
-`state` — there is no separate content-minimisation question here, since a 3-value enum has no field
-worth stripping either way.
+file; a future closed-enum wire field should reach for it by default. **[#724](../codebase/724.md)
+widened the consumer arm to carry `conversation_id` onward** (`conversationId`, copied by name) —
+until then it was dropped on a single-active-conversation assumption the desktop sidebar has since
+retired. `state` was always kept; there is no content-minimisation question for either field, since a
+3-value enum and a daemon-asserted routing key both reach no sink.
 
 **Extended a seventh time by [#217](../codebase/217.md), additively.** `tool_use` → `{ kind: 'tool-use',
 toolUse: ToolUsePayload }` via `parseToolUsePayload`, the tool-call enrichment of the same v2 interactive
@@ -484,9 +485,14 @@ case 'message': {
       })
       return
     case 'turn-state':
-      // #214: fresh named-field literal, mirrors 'assistant-delta'. conversation_id dropped (single
-      // active conversation); state carried onward — a 3-value enum, nothing left to minimise.
-      emitDaemonEvent(sink, { type: 'turnState', state: inbound.turnState.state })
+      // #214, widened by #724: fresh named-field literal, mirrors 'assistant-delta'. conversationId
+      // now crosses too — copied by name, never a spread — as the routing key #674's per-conversation
+      // phase needs. It stops at the renderer timeline bridge; ThreadEvent still doesn't carry it.
+      emitDaemonEvent(sink, {
+        type: 'turnState',
+        state: inbound.turnState.state,
+        conversationId: inbound.turnState.conversation_id
+      })
       return
     case 'stall':
       // #315: fresh NULLARY literal — the payload's only field (conversation_id) is dropped, the

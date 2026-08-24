@@ -89,7 +89,7 @@ test('real daemon workspace picker resolves recent-workspaces and completes crea
 
   // --- Readiness gate: the non-promoted seed's "save as channel" affordance renders ONLY after the whole
   // chain — handshake complete → session `connected` → the auto-fired `list_conversations` returned the
-  // seeded discussion row → it rendered in the "Recent discussions" section. The real-daemon path lands on
+  // seeded discussion row → it rendered in the "Chats" section. The real-daemon path lands on
   // `route='list'` (no opening thread), so this gate stands in for the fake twin's land-in-thread.
   await expect(page.locator('.channel-list__save')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 

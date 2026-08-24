@@ -61,14 +61,14 @@ describe('ChannelListView', () => {
     const markup = render(null)
     expect(markup).toContain('aria-label="Conversations"')
     expect(markup).not.toContain('Channels')
-    expect(markup).not.toContain('Recent discussions')
+    expect(markup).not.toContain('Chats')
     expect(markup).not.toContain('No conversations yet')
   })
 
   it('loaded-but-empty ([]): renders the empty state, no section headers (AC4)', () => {
     const markup = render([])
     expect(markup).toContain('No conversations yet')
-    expect(markup).not.toContain('Recent discussions')
+    expect(markup).not.toContain('Chats')
   })
 
   it('both sections present: both headers, a divider, rows in array order (AC2)', () => {
@@ -78,7 +78,7 @@ describe('ChannelListView', () => {
       row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false })
     ])
     expect(markup).toContain('Channels')
-    expect(markup).toContain('Recent discussions')
+    expect(markup).toContain('Chats')
     expect(markup).toContain('channel-list__divider')
     // Array order preserved within the channels section.
     expect(markup.indexOf('kitchenclaw refactor')).toBeLessThan(markup.indexOf('leaky-faucet'))
@@ -87,14 +87,18 @@ describe('ChannelListView', () => {
   it('channels only: the Channels header, no discussions header, no divider (AC2)', () => {
     const markup = render([row({ id: 'c1', name: 'only channel', is_promoted: true })])
     expect(markup).toContain('Channels')
-    expect(markup).not.toContain('Recent discussions')
+    expect(markup).not.toContain('Chats')
     expect(markup).not.toContain('channel-list__divider')
   })
 
   it('discussions only: the discussions header, no Channels header, no divider (AC2)', () => {
     const markup = render([row({ id: 'd1', name: 'only discussion', is_promoted: false })])
-    expect(markup).toContain('Recent discussions')
-    // The Channels header text must be absent — "Recent discussions" does not contain it.
+    // Anchored, not bare: `toContain('Chats')` would also pass against a header reading "Recent Chats",
+    // so it cannot fail in the direction AC1 cares about. `renderToStaticMarkup` emits no comment markers
+    // around a single static text child, so `>Chats<` pins the header's exact rendered text.
+    expect(markup).toContain('>Chats<')
+    // The Channels header text must be absent. Both are substring matches, and "Chats" and "Channels"
+    // share only the prefix "Cha" — neither contains the other — so each assertion sees only its header.
     expect(markup).not.toContain('>Channels<')
     expect(markup).not.toContain('channel-list__divider')
   })

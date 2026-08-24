@@ -1464,7 +1464,7 @@ describe('createDaemonConnection — stall stream (#315)', () => {
     return ctx
   }
 
-  it('decodes an inbound stall into exactly one nullary stallDetected (conversation_id dropped)', async () => {
+  it('decodes an inbound stall into exactly one stallDetected carrying the conversation id', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1474,9 +1474,11 @@ describe('createDaemonConnection — stall stream (#315)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'stallDetected' }])
-    // conversation_id is dropped at the choke point (single active conversation; #317 owns the clear).
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    expect(events).toEqual([{ type: 'stallDetected', conversationId: 'conv-1' }])
+    // #732: the frame's conversation_id reaches the emitted event VERBATIM — the routing key #674
+    // attributes a stall by. The toEqual above also pins the arm to exactly these two fields, so a
+    // spread of the decoded payload would fail it.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('drops a malformed stall without emitting or throwing (fail-closed)', async () => {

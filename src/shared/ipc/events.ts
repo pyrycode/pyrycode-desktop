@@ -123,19 +123,32 @@ export type DaemonEvent =
   // and omits it → `phase`, not the session store; ThreadEvent does not carry it, and the consumers that
   // key off the id are #674. No token, key, or raw frame.
   | { type: 'turnState'; state: WireTurnState; conversationId: string }
-  // The stall-liveness arm (#315). A NULLARY arm — the wire StallPayload's only field
-  // (`conversation_id`) is dropped at the emit (single active conversation), so the
-  // event carries no payload at all: no token, key, raw frame, or conversation content can ride it
-  // (AC3-by-construction — the wire frame carries none). Onset-only; the client self-clear on next turn
-  // activity is the render slice's concern (#317). Consumed by the render slice #317 (not yet built), so
-  // all three exhaustive bridges no-op it for now — the sessionSettingsRejected-was-a-no-op precedent.
-  | { type: 'stallDetected' }
-  // The api-retry arm (#492) — claude is retrying against an API error. Unlike stallDetected this arm is
-  // NOT nullary: it carries the edge (`active` — true is the rising edge, false the explicit falling one)
-  // and the attempt counter (`current` / `total`), because the render slice #493 shows "attempt N/M" and
-  // the wire gives it nowhere else. `conversation_id` is dropped at the emit (single active conversation,
-  // matching stallDetected), so what crosses IPC is one bool and two integers and nothing
-  // else — no token, key, raw frame, or conversation content can ride an arm with no string field on it.
+  // The stall-liveness arm (#315, widened by #732). Carries `conversationId` — the wire StallPayload's
+  // only field (`conversation_id`), copied BY NAME at the emit from an already-validated payload (the
+  // decode stays fail-closed: a missing or non-string id fails the whole line). It crosses for the reason
+  // turnState's and backgroundTaskStarted's do — the "turn-stream item, or daemon state?" test — and
+  // per-conversation liveness is daemon state: the sidebar must show that a chat has gone quiet while the
+  // operator looks at a different one (#674). REQUIRED, never optional: an optional routing key invites
+  // `?? activeConversation` fallbacks, which is the misattribution this work exists to remove.
+  //
+  // The id is a daemon-asserted ROUTING KEY, not rendered text — none of the untrusted-text warnings on
+  // `model` / `description` / `raw` attach to it. It is never markup, a filename, a cache key, a lookup
+  // path, an attribute or a URL, and it reaches no log sink (emitDaemonEvent is log-free by construction,
+  // and the decode-side stall log is pinned content-free independently). It STOPS at the renderer
+  // timeline bridge (#202), which rebuilds a fresh ThreadEvent and omits it; ThreadEvent stays nullary,
+  // and the consumers that key off the id are #674. No token, key, or raw frame.
+  //
+  // Onset-only; the client self-clear on next turn activity is the render slice's concern (#317), and the
+  // added field brings no dedup or timer state with it. Consumed by the render slice #317 (not yet
+  // built), so all three exhaustive bridges no-op it for now — the sessionSettingsRejected-was-a-no-op
+  // precedent.
+  | { type: 'stallDetected'; conversationId: string }
+  // The api-retry arm (#492) — claude is retrying against an API error. It carries the edge (`active` —
+  // true is the rising edge, false the explicit falling one) and the attempt counter (`current` /
+  // `total`), because the render slice #493 shows "attempt N/M" and the wire gives it nowhere else.
+  // `conversation_id` is dropped at the emit (single active conversation), so what crosses IPC is one
+  // bool and two integers and nothing else — no token, key, raw frame, or conversation content can ride
+  // an arm with no string field on it.
   // NOT onset-only and NOT deduped: the daemon re-fires the rising edge as the count climbs, and the
   // transport holds no state, so a consumer sees exactly one event per daemon frame (including a verbatim
   // repeat). `current: 0` with `total: 0` is the legitimate "retrying, count unknown" value — #493 must
@@ -147,7 +160,7 @@ export type DaemonEvent =
   // carries the edge (`active` — true is compaction starting, false the explicit falling edge), but
   // BANNER-ONLY: the wire streams no compaction progress, so there is no counter to carry and #496 must
   // not invent one. `conversation_id` is dropped at the emit (single active conversation, matching
-  // stallDetected / apiRetry), so what crosses IPC is one bool and nothing else — no token,
+  // apiRetry), so what crosses IPC is one bool and nothing else — no token,
   // key, raw frame, or conversation content can ride an arm with no string field on it. NOT onset-only
   // and NOT deduped: the transport holds no state, so a consumer sees exactly one event per daemon
   // frame (including a verbatim repeat), and #496 is idempotent on the repeat. Ships dormant: all three
@@ -185,7 +198,7 @@ export type DaemonEvent =
   // here for #588.
   //
   // `conversation_id` is dropped at the emit (single active conversation, matching
-  // stallDetected / apiRetry / compacting): #588 holds a SINGLE value replaced on each announcement, so
+  // apiRetry / compacting): #588 holds a SINGLE value replaced on each announcement, so
   // nothing downstream keys by conversation — the condition under which backgroundTaskStarted keeps it.
   // NOT deduped: the transport holds no state, so a consumer sees exactly one event per daemon frame,
   // including a verbatim repeat — which is what tells #588 the value is still current. Ships dormant:
@@ -493,7 +506,7 @@ export type DaemonEvent =
   // notification click handler (index.ts) when the user clicks a fired OS notification, so the
   // emitDaemonEvent "nothing else sends on the channel" nuance now has exactly one main-local sender,
   // noted here rather than editing that helper. NULLARY by construction (AC3): it carries NO payload,
-  // so no daemon-relayed content, conversation id, or wire field can ride it (mirroring stallDetected /
+  // so no daemon-relayed content, conversation id, or wire field can ride it (mirroring
   // workspaceFolderRejected). Consumed by the notificationActivatedBridge (#393), which drives the
   // paired `open` nav (focus the window + show the single active conversation's thread) — a consume-only
   // filter bridge, so all three exhaustive bridges (session / timeline / modal) no-op it.

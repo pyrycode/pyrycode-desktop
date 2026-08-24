@@ -619,12 +619,22 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'stall':
-            // The stall-liveness data path (#315). Emit a fresh NULLARY literal; `conversation_id` is
-            // DROPPED (never referenced — single active conversation), so zero
-            // untrusted daemon data crosses IPC. Onset-only: no de-dup / timer state here; the render
-            // slice (#317), not this leg, owns the self-clear on next turn activity. Not compile-forced
-            // (this inner switch has no assertNever) — the round-trip test guards this emit.
-            emitDaemonEvent(sink, { type: 'stallDetected' })
+            // The stall-liveness data path (#315, widened by #732). Emit a fresh literal carrying
+            // `conversationId`, copied BY NAME from the already-decoded, already-validated payload —
+            // never a spread of inbound.stall (the assistant-delta idiom), so a decoder that later grows
+            // a field cannot smuggle it across IPC. The decode stays fail-closed upstream: a missing or
+            // non-string `conversation_id` drops the whole line without emitting.
+            //
+            // The id is a daemon-asserted routing key, not rendered text, and it reaches no sink on this
+            // leg. It stops at the timeline bridge (#202), which rebuilds a nullary ThreadEvent and omits
+            // it; the consumers that route by conversation are #674. Onset-only: no de-dup / timer state
+            // here — the render slice (#317), not this leg, owns the self-clear on next turn activity,
+            // and the added field must not tempt anyone into memoising by id. Not compile-forced (this
+            // inner switch has no assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'stallDetected',
+              conversationId: inbound.stall.conversation_id
+            })
             return
           case 'api-retry':
             // The api-retry status data path (#492). Emit a fresh literal carrying the edge + the counter,

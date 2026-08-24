@@ -235,7 +235,7 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
   })
 
   it('stallDetected → null (consumed by the render slice #317, not the session store)', () => {
-    expect(translateDaemonEvent({ type: 'stallDetected' })).toBeNull()
+    expect(translateDaemonEvent({ type: 'stallDetected', conversationId: 'conv-1' })).toBeNull()
   })
 
   it('relayLinkChanged → null (consumed by the relay-link store #329, not the session store)', () => {

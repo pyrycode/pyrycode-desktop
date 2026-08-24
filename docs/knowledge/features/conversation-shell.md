@@ -271,9 +271,10 @@ leg from `relayLinkStore` and the daemon-session leg from [session store](sessio
 at-a-glance state.
 
 Two exported pure mapping functions turn each leg's raw status into a `{ category, label }` pair —
-`category: 'up' | 'in-progress' | 'down'` drives the dot's colour class; `label` is the full visible
-status word, baked in so the pure view stays dumb (a coloured dot + its label, nothing else) and
-status is legible without colour perception:
+`category: 'up' | 'in-progress' | 'down' | 'unknown'` (the fourth member added by
+[#719](../codebase/719.md)) drives the dot's colour class; `label` is the full visible status word,
+baked in so the pure view stays dumb (a coloured dot + its label, nothing else) and status is
+legible without colour perception:
 
 ```ts
 export function relayLeg(status: RelayLinkStatus | null): ConnectionLeg
@@ -285,7 +286,11 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg
 | `'connected'` | up | `Relay Connected` |
 | `'daemon-absent'` | up | `Relay Reachable` — distinct label; a missing daemon behind a reachable relay is the **daemon leg's** story, not a relay failure |
 | `'offline'` | down | `Relay Offline` |
-| `null` | down | `Relay Offline` — relay not yet up |
+| `null` | unknown | `Relay Unknown` — no status has arrived yet, distinct from `'offline'` since [#719](../codebase/719.md) (was `down`/`Relay Offline` under #330's original mapping) |
+
+`daemonLeg` never produces `unknown`: `ConnectionStatus` starts at `disconnected` and has no null,
+so the host leg has nothing to be not-yet-known about — the fourth category is the relay leg's
+alone.
 
 | `daemonLeg(status.type)` | category | label |
 | --- | --- | --- |
@@ -312,8 +317,11 @@ second live region here would double-announce. `ConnectionStatusIndicatorControl
 container, reads `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)` (the
 `QueuedBacklogControl` two-independent-store precedent — re-anchored here by [#618](../codebase/618.md)
 after the original, `ScreenSnapshotControl`, was removed) and passes the mapped legs down; no
-`window.pyry`, no IPC, no effects, so the server-rendered smoke test touches no bridge (initial state
-→ two "Offline" dots — the relay leg's `null` sentinel and the daemon leg's `disconnected`).
+`window.pyry`, no IPC, no effects, so the server-rendered smoke test touches no bridge. Initial state
+is one Unknown dot and one Offline dot — the relay leg's `null` sentinel reads `unknown`/`Relay
+Unknown` since [#719](../codebase/719.md) (previously collapsed into a second `down`/`Relay
+Offline`, #330's original choice), while the daemon leg's `disconnected` still reads `down`/`Pyrycode
+Offline`.
 
 Mounted inside `StatusRow`'s previously-empty `.status-row__summary` span, now a flex row
 (`gap: var(--space-3); min-width: 0`) so the dots and #181/#182's future run-config summary text
@@ -321,9 +329,12 @@ Mounted inside `StatusRow`'s previously-empty `.status-row__summary` span, now a
 exclusively. New theme token `--color-warning: #ffca45` (`tokens.css`, after `--color-error`) drives
 the in-progress dot — M3 has no warning role and the design-system file has no such variable (the
 two-dot line post-dates the 2026-05-08 Figma lock, a code-era addition like the dots themselves).
-`.conn-dot` is an 8px circle (structural component geometry, the `.run-config__context-bar`
-precedent, not a spacing token); `.conn-leg__label` is `body-small` on
-`--color-on-surface-variant`, `white-space: nowrap`.
+[#719](../codebase/719.md)'s `unknown` category reuses the existing `--color-outline` token (no new
+token added) — the same achromatic fill already used for the `.run-config__switch-knob`/
+`.settings__switch-knob` off-state chips, chosen because it is the only achromatic option among the
+four categories and carries no success/failure valence. `.conn-dot` is an 8px circle (structural
+component geometry, the `.run-config__context-bar` precedent, not a spacing token); `.conn-leg__label`
+is `body-small` on `--color-on-surface-variant`, `white-space: nowrap`.
 
 **Screen-reader note (accepted, not a gap):** the indicator sits inside `StatusRow`, a `<button
 aria-label="Run configuration">` — the button's `aria-label` overrides its inner text as the
@@ -341,10 +352,11 @@ code-review record.
 also imported into `channels/ChannelList.tsx`, whose `HostConnectionDots` renders the same two legs
 as a label-less dot pair on the sidebar's host row (host leg first, the reverse of this section's
 `ConnectionStatusIndicator(relay, daemon)` order). The TS mapping has one copy, imported across
-screens; the CSS category → colour binding (`.conn-dot--up/--in-progress/--down`, just above) also
-has one copy, worn by the sidebar dot without the `.conn-dot` 8px base it sits beside here — so
-removing this indicator would need to relocate those three rules rather than deleting them. See the
-[Channel List home screen](channel-list.md) doc and [#718 codebase notes](../codebase/718.md).
+screens; the CSS category → colour binding (`.conn-dot--up/--in-progress/--down/--unknown`, just
+above, four rules since [#719](../codebase/719.md)) also has one copy, worn by the sidebar dot
+without the `.conn-dot` 8px base it sits beside here — so removing this indicator would need to
+relocate those four rules rather than deleting them. See the [Channel List home
+screen](channel-list.md) doc and [#718 codebase notes](../codebase/718.md).
 
 ### Workspace chip (#278)
 

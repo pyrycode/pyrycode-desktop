@@ -311,11 +311,11 @@ function HostRow(): JSX.Element {
  * LEG ORDER is the design's and is the REVERSE of `ConnectionStatusIndicator(relay, daemon)`'s. Both props
  * are a `ConnectionLeg`, so a swap type-checks and renders silently — hence the ordering test.
  *
- * COLOUR comes from `.conn-dot--up` / `--in-progress` / `--down` in `conversation.css`, worn WITHOUT their
- * `.conn-dot` base (which bakes the status row's 8px box). #330 already split colour from geometry into
- * separate classes, and that split is the seam this slice reuses: re-declaring the three bindings in
- * `channels.css` would be a second copy of the contract one level below the mapping, which is the thing
- * AC2 forbids. `.channel-list__host-dot` therefore carries the 6px geometry and no `background`.
+ * COLOUR comes from `.conn-dot--up` / `--in-progress` / `--down` / `--unknown` in `conversation.css`, worn
+ * WITHOUT their `.conn-dot` base (which bakes the status row's 8px box). #330 already split colour from
+ * geometry into separate classes, and that split is the seam this slice reuses: re-declaring the four
+ * bindings in `channels.css` would be a second copy of the contract one level below the mapping, which is
+ * the thing AC2 forbids. `.channel-list__host-dot` therefore carries the 6px geometry and no `background`.
  *
  * `role="img"` is what makes `aria-label` land: on a bare <span> the accessible-name computation drops it,
  * so the dot would have no name at all (AC3 passing review while failing in a screen reader). Not
@@ -359,7 +359,8 @@ export function HostConnectionDots({
 // The honest cost: `ChannelListView` is no longer strictly pure — its subtree now reads two singletons,
 // which deviates from this file's own container-reads / pure-view doc comment. It is safe under the unit
 // harness for the same reason `ConnectionStatusIndicatorControl` is: a zustand `useStore` read
-// server-renders fine, yielding each store's initial value (relay `null` → "Relay Offline", session
+// server-renders fine, yielding each store's initial value (relay `null` → "Relay Unknown" since #719 —
+// not yet known rather than known-offline, since this row is the first frame of every launch; session
 // `{ type: 'disconnected' }` → "Pyrycode Offline" — no false green).
 //
 // The two legs are read INDEPENDENTLY and never cross-referenced (AC2): each mapping takes one status and

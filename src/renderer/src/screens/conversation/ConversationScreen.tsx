@@ -2112,9 +2112,10 @@ function ConnectionBannerControl(): JSX.Element | null {
 // ConnectionStatusLine (mobile #397/#398): each leg shows its own honest state so "relay up, daemon still
 // handshaking" is expressible rather than a single false "connected".
 
-// A leg's coarse display category. The dot colour is driven ONLY by this (success / warning / error); the
-// visible status word rides `label`, so status is legible without colour perception (AC2).
-export type LegCategory = 'up' | 'in-progress' | 'down'
+// A leg's coarse display category. The dot colour is driven ONLY by this (success / warning / error, plus
+// #719's neutral `unknown`); the visible status word rides `label`, so status is legible without colour
+// perception (AC2). `unknown` is the relay leg's alone — see relayLeg and daemonLeg below.
+export type LegCategory = 'up' | 'in-progress' | 'down' | 'unknown'
 
 // One rendered leg: its category (→ dot colour) and its full visible label (leg name + status word). The
 // leg name is baked into the label so the pure view stays dumb — a coloured dot plus the label, nothing
@@ -2126,12 +2127,18 @@ export interface ConnectionLeg {
 
 // The relay-link leg mapping (#329's RelayLinkStatus | null → a ConnectionLeg). `daemon-absent` reads
 // up/"Reachable" — the relay IS reachable; the missing daemon is the daemon leg's story, not a relay
-// failure (mobile's DaemonAbsent → green "Reachable", AC4). `null` is the initial "relay not yet up" state
-// and maps down (AC1) — the relay leg has NO in-progress arm (that category is the daemon leg's
-// `connecting`). Independent of daemonLeg — the two never cross-reference (AC4). Explicit return type +
-// no `default` so a future RelayLinkStatus member trips TS2366 (the exhaustive-switch guard).
+// failure (mobile's DaemonAbsent → green "Reachable", AC4). `null` is the "no status has arrived yet"
+// sentinel — definitionally none of the three the wire delivers — and since #719 it maps to its own
+// `unknown` category rather than being collapsed into `down` as #330's AC1 had it. "Not known yet" and
+// "known to be down" are different facts, and since #718 put these dots on the sidebar (on screen from the
+// first frame of every launch) the collapse made every cold start open by claiming an outage. Still NOT
+// in-progress: the relay leg has no in-progress arm (that category is the daemon leg's `connecting`), and
+// nothing is probing — this state is the absence of information, not an attempt to get it.
+// Independent of daemonLeg — the two never cross-reference (AC4). The `null` guard stays AHEAD of the
+// switch so the switch keeps operating on a plain RelayLinkStatus: explicit return type + no `default`
+// means a future RelayLinkStatus member still trips TS2366 (the exhaustive-switch guard, #719 AC4).
 export function relayLeg(status: RelayLinkStatus | null): ConnectionLeg {
-  if (status === null) return { category: 'down', label: 'Relay Offline' }
+  if (status === null) return { category: 'unknown', label: 'Relay Unknown' }
   switch (status) {
     case 'connected':
       return { category: 'up', label: 'Relay Connected' }
@@ -2147,6 +2154,8 @@ export function relayLeg(status: RelayLinkStatus | null): ConnectionLeg {
 // green). `error` maps to the same down/"Offline" as `disconnected`, rendering a fixed client-owned label
 // so no ConnectionError.message reaches this indicator (the banner #279 owns the error text). Independent
 // of relayLeg (AC4). Explicit return type + no `default` so a future ConnectionStatus member trips TS2366.
+// It never produces `unknown`: ConnectionStatus starts at `disconnected` and has no null, so it has no
+// not-yet-known state to report — that widened member is the relay leg's alone (#719 AC3).
 export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
   switch (status.type) {
     case 'connected':

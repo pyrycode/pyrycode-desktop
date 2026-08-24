@@ -1380,14 +1380,16 @@
 }
 
 /* The category → colour contract (mirrors mobile's ConnectionStatusLine): up = success green,
-   in-progress = warning amber (the daemon `connecting` state, AC3), down = error peach.
-   These three rules have a SECOND consumer since #718: the sidebar host row's dot pair wears them without
+   in-progress = warning amber (the daemon `connecting` state, AC3), down = error peach, and since #719
+   unknown = neutral outline grey.
+   These four rules have a SECOND consumer since #718: the sidebar host row's dot pair wears them without
    `.conn-dot` above (whose 8px box is this row's, not the sidebar's), so they are the renderer's single
    copy of the contract and not the status row's private detail. Removing this indicator — a live operator
    decision — must not take them with it: the sidebar's dots would then render at 6px with no background
    and go invisible SILENTLY, since the unit tier asserts markup in a node environment and never a computed
-   colour. Whoever deletes the rest of `.status-row__connection` moves these three rather than dropping
-   them. */
+   colour. Whoever deletes the rest of `.status-row__connection` moves these four rather than dropping
+   them. For the same reason a NEW category's binding belongs here, flat beside its siblings — nested under
+   `.conn-dot` it would be declared exactly once and still leave the 6px sidebar dot unpainted. */
 .conn-dot--up {
   background: var(--color-success);
 }
@@ -1398,6 +1400,18 @@
 
 .conn-dot--down {
   background: var(--color-error);
+}
+
+/* #719's not-yet-known relay state: outline grey, the achromatic neutral. Deliberately none of the three
+   above — no status has arrived, which is neither good news nor bad, and #560's not-yet-known line
+   (below, ~:2109) set the in-repo precedent that such a state declines --color-error rather than claiming
+   a failure. --color-outline already fills a small --radius-full off-state chip here (the run-config and
+   settings switch knobs) meaning "not on", the same shape and the same valence-free semantic; it is also
+   the only achromatic option, so this dot separates from green/amber/peach by chroma as well as hue and
+   stays tellable apart at 6px. NOT --color-on-surface-variant, which is `.conn-leg__label`'s own colour —
+   a dot in the colour of the text beside it reads as a bullet, not a status chip. */
+.conn-dot--unknown {
+  background: var(--color-outline);
 }
 
 /* The leg's status label — body-small, muted, matching the row's existing summary treatment. nowrap so a

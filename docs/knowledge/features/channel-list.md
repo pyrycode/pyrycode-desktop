@@ -170,8 +170,9 @@ promote-spec locators. See [#710 codebase notes](../codebase/710.md) for the ful
 
 ### The host row's connection dots (`ChannelList.tsx`, added by #718)
 
-Split from #672 (the not-yet-known relay state half is #719, out of scope
-here). Each host row ends with two label-less 6px dots at its trailing edge — the host (daemon)
+Split from #672 (the not-yet-known relay state half is [#719](../codebase/719.md), which shipped
+as a fourth `LegCategory` picked up here with no code change — see below). Each host row ends with
+two label-less 6px dots at its trailing edge — the host (daemon)
 leg first, the relay leg second — reusing [#330's shipped `relayLeg`/`daemonLeg`/`ConnectionLeg`
 mapping](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330) verbatim
 rather than growing a second copy of it. The exported pure view `HostConnectionDots({ host, relay
@@ -200,7 +201,8 @@ Two reuse decisions, at the two levels the contract exists on:
   on those three rules naming the sidebar as a second consumer — see
   [conversation-shell.md](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330).
 
-The accessible name is `leg.label` unchanged — "Pyrycode Connected"/"Relay Offline"/etc. — on a
+The accessible name is `leg.label` unchanged — "Pyrycode Connected"/"Relay Offline"/"Relay
+Unknown"/etc. — on a
 `role="img"` span (a bare `<span>`'s `aria-label` is dropped by the accessible-name computation,
 so this is load-bearing, not decorative). The wrapper carries no role or name of its own, unlike
 #330's `role="group" aria-label="Connection status"`: the host row renders twice, and #670's
@@ -294,9 +296,12 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   ellipsis/overflow treatment, skipped here since a six-character constant cannot overflow the
   400px sidebar. (The row's glyph carries no status either, but that gap closed with [#718](../codebase/718.md)'s
   connection dots — see § above.)
-- **The relay leg has no not-yet-known state.** #719, split from the same
-  #672 as #718, adds a fourth `LegCategory` for it; both #330's status row and #718's sidebar dots
-  pick it up with no further edit, since both render `relayLeg`'s output unchanged.
+- **The relay leg's not-yet-known state.** Closed by [#719](../codebase/719.md), split from the
+  same #672 as #718: `relayLeg(null)` now returns a fourth category, `unknown`/`Relay Unknown`,
+  instead of being collapsed into `down`/`Relay Offline`. Both #330's status row and this screen's
+  sidebar dots picked it up with no code change here, since both render `relayLeg`'s output
+  unchanged — only the shared mapping and its CSS colour binding
+  (`conversation-shell.md`) changed.
 - **Two workspaces whose last path segment matches render two identically-labelled groups.**
   Deliberately deferred to #716 — a display question, not a trust one, since the groups keep
   distinct `cwd` keys and are never merged.
@@ -342,6 +347,9 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [#718 codebase notes](../codebase/718.md) — added the host row's two trailing connection dots
   (Figma `110:3499`/`106:3114`), reusing [#330's two-leg mapping](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330)
   across screens rather than a second copy of it.
+- [#719 codebase notes](../codebase/719.md) — gave the relay leg's `null` sentinel its own
+  `unknown`/`Relay Unknown` category instead of collapsing it into `down`/`Relay Offline`; reaches
+  this screen's dots via the shared mapping with no edit here.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open), #688 (operator-typed host label), #716 (same-last-segment workspace label
-  ambiguity), #719 (the relay leg's not-yet-known state, a fourth `LegCategory`).
+  ambiguity).

@@ -970,6 +970,45 @@
   border-radius: var(--radius-sm);
 }
 
+/* #697 — the chip AS the disclosure control. A resolved chip renders as a real <button> (keyboard
+   activation and screen-reader semantics for free, .unrecognized-row__summary's precedent at :2576); a
+   pending one keeps the <div> above, so this rule can only ever reach a row that is actually openable.
+   ADDITIVE: .tool-row__chip is not edited, so the collapsed geometry is byte-identical and the pending
+   treatment is unchanged straight off the diff. Figma 16-28 models no disclosure control — at 33px
+   there is nowhere to put one — so this takes .unrecognized-row__summary's SEMANTICS inside the chip's
+   own pill box, never its full-width bordered box (which would fight #696's load-bearing
+   align-items: flex-start at :953).
+
+   It declares only what a UA <button> would otherwise inject or override. NOT `border` in any form:
+   `.tool-row--error .tool-row__chip` (:943) retints the border at specificity (0,2,0) against this
+   rule's (0,1,0) and keeps winning ONLY while this rule stays silent about it — a `border:` here would
+   silently kill the error accent on every failed tool row. NOT `outline` either: the UA focus ring is
+   inherited for free, which is exactly what .unrecognized-row__summary relies on. And no font-size /
+   line-height / letter-spacing / font-weight, because both child runs set all four explicitly and
+   every spacing and radius token in this file is px, so no box metric depends on the button's own
+   font. */
+.tool-row__chip--toggle {
+  /* Load-bearing, not cosmetic: .tool-row__summary (:1029) deliberately sets no font-family and
+     inherits --font-sans from .conversation (:15). A <button> sets its own via the UA `font`
+     shorthand, which would silently re-parent that inheritance to the UA font. (.tool-row__name sets
+     --font-mono explicitly and is unaffected.) */
+  font-family: var(--font-sans);
+  /* Parity with .unrecognized-row__summary:2586. Both runs set their own colour, so this is defensive
+     rather than observable — kept for the precedent's shape. */
+  color: var(--color-on-surface);
+  /* The UA's `center` would centre the summary run inside its ellipsized box. */
+  text-align: left;
+  /* The UA button is border-box; the <div> branch is content-box (index.css sets no global rule). Held
+     at content-box so max-width: 100% bounds the chip identically in both branches — a resolving row
+     must not shift. Normalising the pair to border-box is a separate concern. */
+  box-sizing: content-box;
+  cursor: pointer;
+}
+
+.tool-row__chip--toggle:hover {
+  background: var(--color-surface-container-highest);
+}
+
 /* The tool-name run (Figma 16-30): monospace tertiary — the tool's identity, never shrinks or
    truncates. Figma is a raw 13px (not a named M3 style) → --text-body-small-size (12px) per the ±2px
    convention: mono at 12px reads consistent beside the 12px sans summary and adds zero type literals. */

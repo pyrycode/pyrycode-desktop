@@ -366,7 +366,7 @@ describe('Timeline — the streamed assistant text', () => {
 
   it('draws the result body below an unchanged headline when expanded (AC2)', () => {
     const markup = renderToStaticMarkup(
-      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} expanded />
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} defaultExpanded />
     )
     // The headline keeps its own modifiers; the expanded modifier is appended last.
     expect(markup).toContain('class="tool-row tool-row--resolved tool-row--expanded"')
@@ -383,7 +383,7 @@ describe('Timeline — the streamed assistant text', () => {
 
   it('marks an error result body as distinguishable from a successful one (AC4)', () => {
     const markup = renderToStaticMarkup(
-      <ToolRow item={toolItem({ isError: true, resultSummary: 'ENOENT' })} expanded />
+      <ToolRow item={toolItem({ isError: true, resultSummary: 'ENOENT' })} defaultExpanded />
     )
     expect(markup).toContain('class="tool-row tool-row--resolved tool-row--error tool-row--expanded"')
     expect(markup).toContain('tool-row__body--error')
@@ -395,13 +395,16 @@ describe('Timeline — the streamed assistant text', () => {
   // `white-space: pre` declaration itself is invisible to a server render.
   it('preserves the newlines the daemon sent rather than collapsing them onto one line (AC2)', () => {
     const markup = renderToStaticMarkup(
-      <ToolRow item={toolItem({ isError: false, resultSummary: 'line one\nline two' })} expanded />
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: 'line one\nline two' })}
+        defaultExpanded
+      />
     )
     expect(markup).toContain('<pre class="tool-row__result">line one\nline two</pre>')
   })
 
   it('draws no body for a pending row (result: null) regardless of the flag (AC3)', () => {
-    const markup = renderToStaticMarkup(<ToolRow item={toolItem(null)} expanded />)
+    const markup = renderToStaticMarkup(<ToolRow item={toolItem(null)} defaultExpanded />)
     expect(markup).toContain('class="tool-row"')
     expect(markup).not.toContain('tool-row--expanded')
     expect(markup).not.toContain('tool-row__body')
@@ -411,7 +414,7 @@ describe('Timeline — the streamed assistant text', () => {
 
   it('renders an explicit empty state for an empty result, not a blank gap (AC4)', () => {
     const markup = renderToStaticMarkup(
-      <ToolRow item={toolItem({ isError: false, resultSummary: '' })} expanded />
+      <ToolRow item={toolItem({ isError: false, resultSummary: '' })} defaultExpanded />
     )
     expect(markup).toContain('tool-row__empty')
     expect(markup).toContain(TOOL_RESULT_EMPTY_COPY)
@@ -422,7 +425,7 @@ describe('Timeline — the streamed assistant text', () => {
   // actually sent, and trimming would relabel it as absent.
   it('treats a whitespace-only result as real output, not the empty state', () => {
     const markup = renderToStaticMarkup(
-      <ToolRow item={toolItem({ isError: false, resultSummary: '\n\n' })} expanded />
+      <ToolRow item={toolItem({ isError: false, resultSummary: '\n\n' })} defaultExpanded />
     )
     expect(markup).toContain('tool-row__result')
     expect(markup).not.toContain('tool-row__empty')
@@ -435,7 +438,7 @@ describe('Timeline — the streamed assistant text', () => {
     const markup = renderToStaticMarkup(
       <ToolRow
         item={toolItem({ isError: false, resultSummary: '<img src=x onerror=alert(1)>' })}
-        expanded
+        defaultExpanded
       />
     )
     expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
@@ -448,6 +451,61 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).toContain('tool-row__chip')
     expect(markup).not.toContain('tool-row--expanded')
     expect(markup).not.toContain('ROUTED_SENTINEL_zzz')
+  })
+
+  // #697: the toggle. The chip on a RESOLVED row becomes the control; the boolean behind it is
+  // component-local useState, so this tier can only ever observe its mount-time value. The click
+  // itself — and the collapse-again and the keyboard path — is e2e/tool-row-toggle.spec.ts; what
+  // these cases pin is the markup that click needs to exist and to be reachable.
+
+  it('renders a resolved chip as a real button, collapsed at rest (#697 AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} />
+    )
+    // A real <button>, not a div with a handler: keyboard activation and screen-reader semantics come
+    // for free (UnrecognizedRow's rationale, verbatim).
+    expect(markup).toContain(
+      '<button type="button" class="tool-row__chip tool-row__chip--toggle" data-thread-role="tool" aria-expanded="false">'
+    )
+    // No daemon string reaches an attribute: no aria-label, no title, no aria-controls/id pair.
+    expect(markup).not.toContain('aria-label')
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('aria-controls')
+    // Collapsed at rest — the body is withheld, not merely hidden.
+    expect(markup).not.toContain('tool-row--expanded')
+    expect(markup).not.toContain('tool-row__body')
+  })
+
+  it('takes defaultExpanded as the toggle mount-time value, not as a controlled one (#697 AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} defaultExpanded />
+    )
+    expect(markup).toContain('aria-expanded="true"')
+    expect(markup).toContain('tool-row__result')
+  })
+
+  // #697 AC2's unit half. A pending row offers NO affordance — not a disabled button, no element at
+  // all — so "activated while pending" is unreachable rather than guarded. The chip markup is pinned
+  // byte-for-byte because "the pending treatment is unchanged" is the acceptance criterion.
+  it('leaves a pending row (result: null) non-activatable, chip markup unchanged (#697 AC2)', () => {
+    const markup = renderToStaticMarkup(<ToolRow item={toolItem(null)} />)
+    expect(markup).toContain('<div class="tool-row__chip" data-thread-role="tool">')
+    expect(markup).not.toContain('<button')
+    expect(markup).not.toContain('aria-expanded')
+    expect(markup).not.toContain('tool-row__chip--toggle')
+  })
+
+  // Markup-level insurance for the CSS specificity argument: `.tool-row--error .tool-row__chip`
+  // (:943, specificity 0,2,0) out-ranks `.tool-row__chip--toggle` (0,1,0) and keeps retinting the
+  // border — but only while the wrapper still carries tool-row--error and the button still carries
+  // tool-row__chip. The cascade itself is invisible to a server render; these two class names are the
+  // half of the claim this tier CAN pin.
+  it('keeps the error-accent selector intact once the chip is a button (#697)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: true, resultSummary: 'ENOENT' })} />
+    )
+    expect(markup).toContain('class="tool-row tool-row--resolved tool-row--error"')
+    expect(markup).toContain('<button type="button" class="tool-row__chip tool-row__chip--toggle"')
   })
 
   it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {

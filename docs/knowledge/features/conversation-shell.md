@@ -1304,6 +1304,84 @@ Was dormant until [#179](../codebase/179.md) flipped `interactive`, the same pos
 structured-stream render slice; now live. See [#230 codebase notes](../codebase/230.md) for the full
 design, the token-provenance rationale, and patterns established.
 
+### Expandable tool-call result (#696, toggle #697)
+
+#230 shipped resolved/error chip styling but deliberately did not surface `result.resultSummary` — no
+result-text slot existed in the Figma mock. #696 reversed that: `ToolRow` was extracted out of
+`TimelineRow`'s `toolCall` arm (`case 'toolCall': return <ToolRow item={item} />`, both signatures
+otherwise untouched) and gained a body, a sibling of the chip rather than a child (the chip is a
+single-line `inline-flex; overflow: hidden` pill — nesting a stacked body inside it would force a new
+wrapper and break the collapsed markup):
+
+```html
+<div class="tool-row tool-row--resolved tool-row--expanded">
+  <button type="button" class="tool-row__chip tool-row__chip--toggle" data-thread-role="tool"
+          aria-expanded="true">
+    <span class="tool-row__name">{item.name}</span>
+    <span class="tool-row__summary">{item.inputSummary}</span>
+  </button>
+  <pre class="tool-row__result">{result.resultSummary}</pre>
+</div>
+```
+
+`const body = expanded ? result : null` drives both the wrapper's `tool-row--expanded` modifier and the
+body element, so a pending row (`result === null`) is structurally incapable of showing a body no matter
+what the flag says. The result text's only sink is `<pre>` text children (`white-space: pre`, so
+daemon-emitted newlines survive — the machine-output side of the same reflow-vs-preserve rule
+`.unrecognized-row__raw` established), bounded to `max-height: 240px` + `overflow: auto` (that literal
+copied from `.unrecognized-row__raw`, the file's only other `overflow: auto` result body — **neither has
+a `tabindex`**, a known pre-existing gap in both, not yet fixed). An empty result
+(`resultSummary === ''`, exact) renders the client-owned `TOOL_RESULT_EMPTY_COPY` ("No output") instead
+of a blank gap; an error result gets its own `tool-row__body--error` modifier on the body container,
+independent of the pre-existing `tool-row--error` on the chip's wrapper.
+
+**#696 shipped the body with no way to reach it** — the production call site passed no `expanded` flag,
+so the branch existed only for the DOM-less `renderToStaticMarkup` test tier to exercise directly (this
+repo's unit tier has no jsdom/happy-dom/@testing-library — see `e2e-harness.md` — so nothing there could
+ever click). **#697 supplied the control.** The chip on a *resolved* row becomes the disclosure control
+itself — the Figma pill (node `16-28`, chip `16-29`) has two runs and no third slot, so the whole pill
+forks between a `<div>` (pending) and a real `<button aria-expanded>` (resolved), gated on `result`, the
+same condition the wrapper's `--resolved` modifier already reads. A pending row keeps its original `<div
+className="tool-row__chip" data-thread-role="tool">` byte-for-byte and offers no affordance at all —
+"activated while pending" is unreachable rather than guarded. The prop that controls the body
+(`ToolRow`'s `expanded`) was renamed `defaultExpanded` at the same time: under #696 it was a controlled
+value; under #697 the toggle owns a component-local `useState(defaultExpanded)` and the prop is only the
+mount-time initial value, so the old name would have been a quiet lie about what a re-render could do.
+
+**Where the boolean lives is the interesting design call**, and it's the same shape
+the repo's other expand/collapse row, `UnrecognizedRow`, has shipped with since it landed —
+component-local `useState`, not a hoisted `toolUseId`-keyed set on the screen container,
+per [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)'s "lowest scope that
+resets correctly." It resets for free rather than by explicit teardown: `Timeline`'s array-index key
+strategy plus `fillResult`'s in-place `items.map` replacement (never insert, never reorder — [ADR
+0008](../decisions/0008-thread-timeline-model.md)) keep a row's component instance — and its boolean —
+bound to one logical tool call across its whole pending → resolved life, and a thread `reset` empties
+`items` to `[]`, unmounting every row (including across the in-thread `conversation_created` reset path
+that leaves the screen mounted, `activateConversation.ts:75`). No row can inherit another's expansion,
+and none survives a reset, with nothing to clear explicitly.
+
+One additive CSS rule, `.tool-row__chip--toggle` (appended after `.tool-row__chip`, which is not
+edited), supplies only what a UA `<button>` would otherwise inject or override — `font-family:
+var(--font-sans)` (load-bearing: `.tool-row__summary` inherits it from `.conversation` and a bare
+`<button>` would silently re-parent that to the UA font), `color`, `text-align: left`, `box-sizing:
+content-box` (a UA button defaults to border-box; holding content-box keeps both chip branches bounded
+identically so a resolving row doesn't shift width), `cursor: pointer` and a hover tint lifted from
+`.unrecognized-row__summary`. Deliberately silent on `border`, so `.tool-row--error .tool-row__chip`'s
+higher-specificity border retint keeps winning on failed rows.
+
+**Security posture (both tickets).** `name`, `inputSummary`, `toolUseId` and `resultSummary` are all
+daemon-supplied and untrusted; the only sanctioned sink is React text children, never
+`dangerouslySetInnerHTML`, never `AssistantMarkdown` (which would let a daemon-relayed result emit an
+`<img src>` beacon from a privileged renderer), never an attribute, a log line, or a lookup key. #697's
+control makes this posture load-bearing rather than belt-and-braces — it is the first ticket that makes
+the result text reachable in the shipped product — and declines five specific attribute/log sinks a
+disclosure control invites (`aria-label`, `aria-controls`/`id`, `title`, a toggle diagnostic, and
+enriching the body through markdown); see the `SAFETY` comment block in `ConversationScreen.tsx` and
+[#697 codebase notes](../codebase/697.md) for the full walk.
+
+See [#696 codebase notes](../codebase/696.md) and [#697 codebase notes](../codebase/697.md) for the full
+design, testing strategy, and patterns established.
+
 ### Permission modal (#224, answerable since #237, second-confirm since #226, rejection surface since #249, confirm marker scoped to its prompt since #511)
 
 The render half of the modal vertical (ADR [0009](../decisions/0009-modal-prompt-model.md)):

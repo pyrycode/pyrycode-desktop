@@ -45,15 +45,25 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // so this assigns with no cast and no import of TurnPhase (a rename, not a re-validation).
       return { type: 'turnState', state: event.state }
     case 'toolUse':
-      // The tool-call arm (#217). The DaemonEvent and ThreadEvent `toolUse` shapes are field-for-field
-      // identical, so this is a filter + fresh copy (arm selection), not a field remap. reduceTimeline
-      // folds it into a pending `toolCall` item (result: null) in arrival order (#121).
+      // The tool-call arm (#217, widened by #643). The DaemonEvent and ThreadEvent `toolUse` shapes are
+      // field-for-field identical, so this is a filter + fresh copy (arm selection), not a field remap.
+      // reduceTimeline folds it into a pending `toolCall` item (result: null) in arrival order (#121).
+      //
+      // `input` (#643) is assigned unconditionally and BY REFERENCE. Never `{ ...event.input }`, which
+      // on an absent map yields `{}` and silently converts absence into emptiness: ABSENT means the
+      // WIRE omitted it (a pre-pyrycode#1678 daemon), while an empty map is the different fact that
+      // this daemon sent no fields for this call. Structured clone has already handed the renderer its
+      // own copy, so there is nothing left to defend against. Nothing here filters, sorts or probes the
+      // map by key — both its keys and its values are untrusted daemon display text under the same
+      // plain-text-NEVER-HTML constraint as `name` / `inputSummary`, and the render slice (#645) owns
+      // that DOM sink.
       return {
         type: 'toolUse',
         turnId: event.turnId,
         toolUseId: event.toolUseId,
         name: event.name,
-        inputSummary: event.inputSummary
+        inputSummary: event.inputSummary,
+        input: event.input
       }
     case 'toolResult':
       // The tool-result arm (#229). Field-for-field identical to its ThreadEvent counterpart, so this is

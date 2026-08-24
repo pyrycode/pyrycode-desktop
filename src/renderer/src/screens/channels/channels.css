@@ -73,6 +73,49 @@
   font-weight: var(--text-label-large-weight);
 }
 
+/* The workspace row heading each group under a host row (#703, Figma 106:3098) — structurally the host
+   row one indent deeper. The 24px LEFT inset is the whole point of the rule: it is the 8px-deeper indent
+   (vs the host row's 16px) that shows the workspace nested under the host, and it is how the design draws
+   the nesting. The right inset stays 16px, so the row's trailing edge lines up with the host row's. The
+   design's 10px gap has no slot on the 4px scale — --space-2 (8px) and --space-3 (12px) are equally close,
+   so the tie breaks toward 12px, making the glyph→label rhythm identical to the host row directly above.
+   Centering the 12px glyph against the label's 20px line box reproduces the design's `Row icon` wrapper
+   frame (106:3110) without a wrapper element. Not interactive in this slice, so no radius, background,
+   hover or focus rule — those arrive with #704, which turns the row into a disclosure control. */
+.channel-list__workspace {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-4) var(--space-1) var(--space-6);
+}
+
+/* The folder glyph — the `.channel-list__host-icon` rule verbatim: `display: block` is the file's icon
+   convention, and the flex basis keeps it from shrinking when a long label competes for the row. Its 12px
+   box is structural component geometry set on the <svg>, matching the host row's level marker. */
+.channel-list__workspace-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* The label. Same type as the host label above it — the theme's label-large is an EXACT match for the
+   design's M3 title-small (14/20/0.1/500) — at full-strength on-surface with no opacity, so the two
+   nesting levels read as one family. The one place this rule is NOT a copy of `.channel-list__host-label`
+   is the ellipsize quartet, borrowed from `.channel-list__title`: the host's label is a six-character
+   compile-time constant, but this one is unbounded untrusted daemon text and must be bounded rather than
+   blowing out the 400px sidebar. */
+.channel-list__workspace-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
 /* One row (Figma 15:59) — a flex wrapper holding the open action and the optional Save-as-channel
    affordance as SIBLINGS (an interactive control cannot nest inside the open <button>, #274). It carries
    no padding/hover itself; those live on the open action so the two children highlight independently. */

@@ -1,5 +1,5 @@
 import './channels.css'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import {
   useConversationListStore,
@@ -12,7 +12,12 @@ import {
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
-import { titleFor, partitionActive, formatLastActivity } from './channelListViewModel'
+import {
+  titleFor,
+  partitionActive,
+  groupByWorkspace,
+  formatLastActivity
+} from './channelListViewModel'
 
 // The Channel List home screen (#141) — the paired shell's `list` view, replacing the throwaway
 // PlaceholderList (#140). A pure render slice over the already-shipped #208 conversationListStore: the
@@ -282,6 +287,49 @@ function HostRow(): JSX.Element {
   )
 }
 
+// The workspace row heading each group under a host row (#703, Figma 106:3098) — which workspace the
+// group's conversations run in. Structurally HostRow one indent deeper: the same 28px rhythm and the same
+// type, differing only by the 8px deeper left inset that shows the nesting (channels.css).
+//
+// Unlike the host row's compile-time constant, `label` is DAEMON-derived — the last segment of an
+// untrusted `cwd`, derived by `workspaceLabelFor`. It goes in as an auto-escaped React CHILD and nowhere
+// else: never `title=`, never any other attribute, never a URL, never a filename or a lookup path
+// (CLAUDE.md 2026-08-20; #696's security review rejected `title={daemonText}` as a MUST FIX). Being
+// unbounded untrusted text it also ellipsizes, which the host row's six-character constant does not need.
+//
+// The class names share no token — and no substring — with `channel-list__row`, `__row-open`,
+// `__section-header` or `__host`: Playwright locators run in strict mode, so an element JOINING an
+// existing locator's match set strict-violates rather than failing an assertion, and
+// `launchPairedApp.ts:224` clicks an unfiltered `.channel-list__row-open` that 28 specs ride. The text
+// guard is the other half and is fixture-decided here rather than constant-decided: every fake fixture
+// seeds `cwd: '/fake/workspace'`, so the default tier renders the literal "workspace", which equals none
+// of the suite's `exact: true` strings and carries none of the classes its `hasText` locators scope to.
+//
+// Not interactive in this slice: a plain <div>, no <button>, no onClick, no aria-label (collapse is #704,
+// which is also when the Figma's 6px radius and hover/focus rules become live). The visible label carries
+// the row's meaning, so the glyph is aria-hidden.
+//
+// The glyph is a seventh inline Material path in this file's idiom — the `folder` shape, its `d` copied
+// from WorkspacePickerSheet's module-local FolderIcon but sized 12px to match the host row's level marker
+// rather than that file's 24px control.
+function WorkspaceRow({ label }: { label: string }): JSX.Element {
+  return (
+    <div className="channel-list__workspace">
+      <svg
+        className="channel-list__workspace-icon"
+        viewBox="0 0 24 24"
+        width="12"
+        height="12"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+      </svg>
+      <span className="channel-list__workspace-label">{label}</span>
+    </div>
+  )
+}
+
 function renderBody(
   conversations: readonly ConversationSummary[] | null,
   now: number,
@@ -309,9 +357,28 @@ function renderBody(
           <HostRow />
           {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
               only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
-              AC1) — the symmetric counterpart to Save-as-channel on Recent rows. */}
-          {channels.map((c) => (
-            <Row key={c.id} row={c} now={now} onOpen={() => onOpen(c)} onRename={() => onRename(c)} />
+              AC1) — the symmetric counterpart to Save-as-channel on Recent rows.
+
+              #703 wraps the map one level: each workspace group's rows sit under their own workspace row.
+              The wrapper is a keyed <Fragment> (the shorthand <> cannot carry a key), so the rendered list
+              stays a FLAT sequence of siblings — header, host, workspace, rows, workspace, rows — and every
+              `.channel-list__row` keeps the exact ancestry it had. A per-group <div> would instead become a
+              flex item of the `.channel-list` column and move every existing locator's tree position. The
+              two key namespaces cannot collide: React scopes keys per sibling list, so the group keys (cwd
+              strings) and the row keys (c.id) never share one. */}
+          {groupByWorkspace(channels).map((group) => (
+            <Fragment key={group.key}>
+              <WorkspaceRow label={group.label} />
+              {group.rows.map((c) => (
+                <Row
+                  key={c.id}
+                  row={c}
+                  now={now}
+                  onOpen={() => onOpen(c)}
+                  onRename={() => onRename(c)}
+                />
+              ))}
+            </Fragment>
           ))}
         </>
       )}
@@ -324,15 +391,23 @@ function renderBody(
           <HostRow />
           {/* Chats rows pass the affordance so each row can be saved as a channel (#274, AC1). The
               header reads "Chats" (#709, Figma 106:3258); the code-level partition is still
-              `discussions` — renaming that vocabulary was explicitly out of scope. */}
-          {discussions.map((d) => (
-            <Row
-              key={d.id}
-              row={d}
-              now={now}
-              onOpen={() => onOpen(d)}
-              onSaveAsChannel={() => onSaveAsChannel(d)}
-            />
+              `discussions` — renaming that vocabulary was explicitly out of scope.
+
+              The two trees group independently (operator, 2026-08-21): the workspace level repeats here
+              rather than being shared, so a workspace with rows in both trees appears in both. */}
+          {groupByWorkspace(discussions).map((group) => (
+            <Fragment key={group.key}>
+              <WorkspaceRow label={group.label} />
+              {group.rows.map((d) => (
+                <Row
+                  key={d.id}
+                  row={d}
+                  now={now}
+                  onOpen={() => onOpen(d)}
+                  onSaveAsChannel={() => onSaveAsChannel(d)}
+                />
+              ))}
+            </Fragment>
           ))}
         </>
       )}

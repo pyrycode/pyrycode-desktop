@@ -46,6 +46,11 @@ transport, or new store/wire code, so not security-sensitive.
   deduplicated into a shared heading. It renders a 12px server-rack glyph beside a client-owned
   label, currently the constant `'Server'`; multi-host and the operator-typed label are deferred
   (§ below). Added by [#710](../codebase/710.md).
+- Below each host row, rows now group by **workspace** — one group per distinct `cwd`, each headed
+  by a 28px workspace row one indent deeper than the host row (Figma `106:3098`). A workspace is a
+  conversation's `cwd`; there is no separate wire concept for it. Both trees group independently,
+  so a workspace with rows in both appears in both. Groups render expanded (collapse is #704).
+  Added by [#703](../codebase/703.md).
 
 ## Why last-activity time, not a message preview
 
@@ -163,6 +168,37 @@ assertion failure — at fixture-launch scale for the unfiltered `.channel-list_
 specs ride (`launchPairedApp.ts:224`), not just the two `.channel-list__section-header` + `hasText`
 promote-spec locators. See [#710 codebase notes](../codebase/710.md) for the full hazard writeup.
 
+### Workspace grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by #703)
+
+Two pure exports, unit-tested without React: `workspaceLabelFor(cwd: string): string | null` —
+the last usable `/`-separated segment of `cwd`, found by walking segments from the end and
+returning the first non-blank one after trimming (survives a trailing separator, repeated
+separators, and a whitespace-only tail with one rule, not a case per shape); returns `null` only
+when every segment is blank. `\` is deliberately not treated as a separator — that would assume
+the daemon's host OS, an interpretation this client never makes. And `groupByWorkspace(rows):
+readonly WorkspaceGroup[]` — accumulates into a `Map` (never a plain object, since integer-like
+string keys on an object enumerate first in numeric order regardless of insertion order, the same
+trap `threadTimeline.ts` hit with `Object.entries`, #706), keyed by the *raw* `cwd` string for a
+usable label (normalised in no way — `/a/b` and `/a/b/` honestly surface as two groups, both
+labelled `b`) or by the module-local sentinel `''` for an unusable one. `''` is collision-proof by
+construction: a `cwd` of `''` has no usable segment, so any row that could collide with the
+sentinel is already in the fallback bucket by the same rule that assigned it. The fallback group is
+labelled `UNKNOWN_WORKSPACE_LABEL = 'Unknown workspace'` and ordered by first appearance like any
+other group — not pinned last.
+
+`renderBody` wraps each tree's existing `.map` one level, inside a keyed `Fragment` (the shorthand
+`<>` cannot carry a key), still inside the same `length > 0` gate that already decides the host
+row and section header — so the zero-row-renders-nothing invariant holds with no new condition.
+`Fragment` emits no DOM, so the rendered list stays a flat sibling sequence and every
+`.channel-list__row`'s ancestry is unchanged. `WorkspaceRow` is `HostRow`'s structural twin one
+indent deeper (28px, same type), differing only in the 8px deeper left inset that shows the
+nesting, and it's the file's first component whose visible label is untrusted daemon text rather
+than a client-owned constant — it ellipsizes (the `.channel-list__title` treatment) where the host
+label, a six-character constant, does not need to. The label reaches the DOM only as an
+auto-escaped React child, never an attribute (CLAUDE.md 2026-08-20, #696's MUST FIX). See
+[#703 codebase notes](../codebase/703.md) for the full fallback-key trap and selector-hazard
+writeup.
+
 ### CSS (`channels.css`)
 
 Token-only: every color/type/spacing value is a `var(--…)` token; opacity is the de-emphasis device
@@ -210,13 +246,16 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   reason — fidelity is scoped to the two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
-- **The host row's label is a placeholder, its glyph carries no status, and nothing under it is
-  indented yet** — all three deliberately deferred to sibling tickets, not gaps: #688 replaces
-  `HOST_ROW_LABEL` with the operator-typed machine name (and will need the label's own
-  ellipsis/overflow treatment, skipped here since a six-character constant cannot overflow the
-  400px sidebar); #672 adds the two connection-status dots at the row's right edge, with no
-  pre-rendered slot shipped for them; #703 adds the workspace grouping level between the host row
-  and the conversation rows, which is what will indent the rows under it.
+- **The host row's label is a placeholder and its glyph carries no status** — both deliberately
+  deferred to sibling tickets, not gaps: #688 replaces `HOST_ROW_LABEL` with the operator-typed
+  machine name (and will need the label's own ellipsis/overflow treatment, skipped here since a
+  six-character constant cannot overflow the 400px sidebar); #672 adds the two connection-status
+  dots at the row's right edge, with no pre-rendered slot shipped for them.
+- **Workspace groups render expanded, are not interactive, and two workspaces whose last path
+  segment matches render two identically-labelled groups** — all deliberately deferred: #704 turns
+  the workspace row into a disclosure control (`WorkspaceGroup.key` is already a stable per-group
+  identity to hold collapsed state against); #716 owns the same-last-segment display ambiguity —
+  a display question, not a trust one, since the groups keep distinct keys and are never merged.
 
 ## Related
 
@@ -246,6 +285,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   `discussions` partition, CSS classes and store fields kept their names.
 - [#710 codebase notes](../codebase/710.md) — added the host row heading each tree (Figma
   `106:3094`), a client-owned `'Server'` placeholder label ahead of #688's operator-typed one.
+- [#703 codebase notes](../codebase/703.md) — added the workspace grouping level between each
+  host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), #672 (host row connection dots), #688 (operator-typed host label), #703 (workspace
-  grouping level under the host row).
+  (per-row open), #672 (host row connection dots), #688 (operator-typed host label), #704 (workspace
+  group collapse), #716 (same-last-segment workspace label ambiguity).

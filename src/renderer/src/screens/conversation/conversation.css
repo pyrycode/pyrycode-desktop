@@ -1039,7 +1039,7 @@
 }
 
 /* #696 — the expanded body, a sibling of the chip (the chip is a single-line pill with overflow: hidden,
-   so it cannot hold this). A CONTAINER, not a lone text node: #645 lands its per-input-field list in
+   so it cannot hold this). A CONTAINER, not a lone text node: #706 landed its per-input-field list in
    here, above the result. max-width/min-width are what make a single 16000-character line scroll inside
    the body rather than widen the row. */
 .tool-row__body {
@@ -1063,8 +1063,16 @@
    other max-height in this file is a percentage, and a one-off bound shared with its own precedent does
    not earn one. It is not there to stop the composer being pushed off screen — :371 already records that
    .conversation__thread is its own scroll region and .composer its sibling, so that cannot happen. It is
-   there so one 64KB result cannot eat the whole thread viewport. */
-.tool-row__result {
+   there so one 64KB result cannot eat the whole thread viewport.
+
+   #706 JOINED .tool-row__input-value to this selector rather than copying the ten declarations into a
+   rule of its own. "The field list takes the result block's visual language rather than inventing a
+   third" is then a fact by construction instead of a claim that two declaration sets can drift out of.
+   The set already supplies everything a value needs: white-space: pre keeps the line breaks, overflow:
+   auto scrolls the long unwrapped line, and max-height caps a 4000-rune replacement string — ~200 short
+   lines — from eating the viewport on its own. The contents below are untouched. */
+.tool-row__result,
+.tool-row__input-value {
   margin: 0;
   max-height: 240px;
   overflow: auto;
@@ -1079,10 +1087,49 @@
 }
 
 /* The failed-tool body. The chip's own error device (:943) applied to the body, in the same descendant
-   shape. On the CONTAINER rather than the <pre> so it reaches the empty note too, and so #645's field
-   list inherits it without a fourth class. */
+   shape.
+
+   The modifier goes on the CONTAINER, but the selector below is a DESCENDANT one naming
+   .tool-row__result alone, so the accent reaches the result block and nothing else — not
+   .tool-row__empty, and not #706's field list. (An earlier version of this comment claimed both, which
+   was never true of the rule beneath it.) For the field list that scope is DELIBERATE: a failed tool's
+   INPUT is not itself an error, and tinting it would say otherwise. #706 joined .tool-row__input-value
+   to the BASE rule above, which by construction does not add it here. Do not extend this selector to
+   reach either one — that is a separate behaviour change with its own visual-fidelity question. */
 .tool-row__body--error .tool-row__result {
   border: 1px solid var(--color-error);
+}
+
+/* #706 — one input field: its name stacked above its value. --space-1 (4px) is TIGHTER than the body's
+   own --space-2 gap, which is what makes a name read as belonging to the value beneath it rather than
+   floating between two blocks — the grouping the list gets without a wrapper element. min-width: 0
+   because this is itself a flex container holding a potentially very wide <pre>. */
+.tool-row__input {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* The field name. Mono because a field name is an identifier (`file_path`, `command`) — .tool-row__name's
+   treatment — but --color-on-surface-variant, the muted LABEL colour .tool-row__summary and
+   .tool-row__empty take, never --color-tertiary: tertiary is reserved for the tool's own identity, and a
+   name is a label beside it.
+
+   word-break is load-bearing rather than cosmetic. The value's <pre> gets its width containment from
+   .tool-row__body's max-width plus its own overflow: auto, but a NAME has no spaces, so an absurd
+   4000-character one would not wrap and would push the row wider. This is the house value for an
+   unbounded string (.bubble:298 and the five rules citing it) and .tool-row is not a .bubble descendant,
+   so it inherits nothing and has to state it. Wrapping and not ellipsis: a name is short in every real
+   case, and truncating one would hide which field a value belongs to. */
+.tool-row__input-name {
+  word-break: break-word;
+  color: var(--color-on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
 }
 
 /* The empty-result note — client-owned copy, so it takes the sans note treatment

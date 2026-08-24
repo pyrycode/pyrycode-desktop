@@ -682,6 +682,21 @@ function TimelineRow({
 //     cannot emit one.
 //   - NO input KEY in the DOM. toolHeadline returns the VALUE only; keys are daemon display text too,
 //     and drawing them is #706's deliberate, separately reviewed decision.
+//
+// #706 IS that decision, and it changes the CLASSIFICATION of data the item already held: a field NAME
+// becomes rendered display text for the first time. A name is exactly as untrusted as the value beside
+// it — an MCP tool can name a field anything — so both reach the DOM only as auto-escaped React
+// children, the name as a <span>'s and the value as a <pre>'s. Four further sinks the full list makes
+// newly tempting are declined, each a MUST FIX if it ever appears:
+//   - NO AssistantMarkdown for a value. It is imported into this same file and renders two arms up,
+//     which makes routing a `content` or `new_string` field through it sound reasonable. It yields
+//     links and images, and an <img src> here is the daemon-chosen beacon described above.
+//   - NO title, a third time. The 240px bound clips a long value, and `title={value}` is the natural
+//     next edit; the answer to a clipped block is its scroll container, never an attribute.
+//   - NO linkified `url` field. The map routinely carries a field literally named `url`, now drawn in
+//     full rather than as a headline. An <a href> around it is the same beacon with an extra step.
+//   - NO log line for the list. Any useful one ("which fields did we draw?") carries daemon-chosen
+//     names and values into a log file, which ADR 0007 and CLAUDE.md both forbid.
 export function ToolRow({
   item,
   defaultExpanded = false
@@ -741,8 +756,42 @@ export function ToolRow({
         // A SIBLING of the chip, not a child: the chip is a single-line inline-flex pill with
         // overflow: hidden (conversation.css), so nesting a stacked body inside it would need a new
         // wrapper around the two headline spans and change the collapsed markup. A container rather
-        // than a lone text node because #645 lands its per-input-field list in here, above the result.
+        // than a lone text node because #706 landed its per-input-field list in here, above the result.
         <div className={`tool-row__body${body.isError ? ' tool-row__body--error' : ''}`}>
+          {/* #706: every entry of the map, name and value, in arrival order. Deliberately LITERAL
+              where #705's headline is selective — no shortenPath, no salience pick, no re-ordering,
+              and no skipping the field the headline already promoted. This list is what covers that
+              pick's misses, so a field silently missing from it is worse than a repeated one.
+
+              NO list-wrapper element and no `.length > 0` guard: an empty array renders literally
+              nothing, so "an absent or empty map draws no field list AND no empty container" is
+              structural rather than a second condition that could drift from this one. The `??` is
+              what collapses absent and `{}` into one expression — the distinction stays alive at the
+              item (#643's contract), and the DISPLAY decision that both draw nothing lives here, in
+              one place.
+
+              Object.entries, never `for...in` and never `input[key]`: own enumerable keys only, in
+              insertion order (threadTimeline.ts carries #642's rule — the map is an ordinary-
+              prototype object, so `input['toString']` would return an inherited function, and
+              `for...in` walks the chain). No .sort(), no .filter(): "never re-sorted" is the absence
+              of a transform, not an assertion about it.
+
+              Inline rather than a `const` beside `body`: consumed once, and inlining keeps "a
+              collapsed row never computes the list" structural. (`chipRuns` is a const because BOTH
+              chip branches consume it; that reason does not apply here.)
+
+              `key={name}` is a React reconciliation identity — it is never serialised to the DOM, so
+              it is not the "attribute / filename / cache key / lookup path" the SAFETY block above
+              forbids, and the same string is rendered as a text child beside it anyway. Object keys
+              are unique by construction, so a collision is impossible. The <pre> is load-bearing
+              and not a styled <div>: a div inherits white-space: normal and collapses the daemon's
+              newlines onto one line, the defect #607 fixed for assistant text. */}
+          {Object.entries(item.input ?? NO_INPUT_FIELDS).map(([name, value]) => (
+            <div className="tool-row__input" key={name}>
+              <span className="tool-row__input-name">{name}</span>
+              <pre className="tool-row__input-value">{value}</pre>
+            </div>
+          ))}
           {body.resultSummary === '' ? (
             // `=== ''` exactly — never `.trim()`, which would relabel whitespace-only output (real
             // output the daemon sent) as absent, and never a falsy check, which would read as if
@@ -765,6 +814,18 @@ export function ToolRow({
 
 /** Shown in place of an expanded body when the daemon's result carried no text. Client-owned copy. */
 export const TOOL_RESULT_EMPTY_COPY = 'No output'
+
+/**
+ * The `??` right-hand side for an absent `input` map, so absent and `{}` reach `Object.entries` as the
+ * same value.
+ *
+ * A NAMED constant and never a bare `{}` literal at the call site: `item.input ?? {}` has type
+ * `Readonly<Record<string, string>> | {}`, and TypeScript resolves `Object.entries` on that union to
+ * the `entries(o: {}): [string, any][]` overload — silently typing every VALUE as `any` on a
+ * security-sensitive render path. With both branches carrying the same type, `T` infers as `string`
+ * and no annotation or explicit type argument is needed.
+ */
+const NO_INPUT_FIELDS: Readonly<Record<string, string>> = {}
 
 // The collapsed/expanded diagnostic row. Built SPECIFIC, not generic: this is the first and only
 // expand-and-collapse in the repo, there is no <details> anywhere to reuse, and a reusable collapsible

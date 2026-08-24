@@ -80,13 +80,52 @@
    design's 10px gap has no slot on the 4px scale — --space-2 (8px) and --space-3 (12px) are equally close,
    so the tie breaks toward 12px, making the glyph→label rhythm identical to the host row directly above.
    Centering the 12px glyph against the label's 20px line box reproduces the design's `Row icon` wrapper
-   frame (106:3110) without a wrapper element. Not interactive in this slice, so no radius, background,
-   hover or focus rule — those arrive with #704, which turns the row into a disclosure control. */
+   frame (106:3110) without a wrapper element.
+
+   #704 made the row the group's disclosure control, so the block below is now a <button> and this rule
+   picks up the three things that costs. The reset (appearance / border / background / cursor / text-align)
+   is `.channel-list__row-open`'s verbatim. The next two are NOT cosmetic — they repair inheritance the
+   element swap breaks, which is why every other <button> in this file carries them too:
+     - `font-family`: a <button> does not inherit it, and `.channel-list__workspace-label` sets size, line,
+       tracking and weight but not family — without this the label renders in the UA button font.
+     - `color`: a <button> resets it to the UA `buttontext`, and the folder glyph is fill="currentColor",
+       so the glyph would mis-paint (visibly, in the dark scheme) where it used to inherit from
+       `.channel-list`. `__save`, `__rename`, `__archive`, `__settings` and `__fab` all set it for this.
+   The 6px radius is the Figma's `rounded-[6px]` (106:3098), an EXACT --radius-xs with no ±token mapping;
+   #703 skipped it because there was no fill for it to clip, and the hover below is that fill. No
+   `width: 100%`: `.channel-list` is a flex column at the default align-items:stretch, so the row already
+   fills the sidebar exactly as the <div> did, and a width would fight the padding (if it ever fails to
+   fill, the fix is `align-self: stretch`).
+
+   The row is styled IDENTICALLY in both disclosure states — the design draws one state and no chevron, so
+   there is nothing to differentiate. Should a collapsed appearance ever be designed, style it off
+   `.channel-list__workspace[aria-expanded='false']` and NEVER a second class token: the unit tests pin
+   `class="channel-list__workspace"` as an exact attribute-value substring, which a modifier would stop
+   matching silently. */
 .channel-list__workspace {
+  appearance: none;
   display: flex;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-1) var(--space-4) var(--space-1) var(--space-6);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+}
+
+/* The `.channel-list__row-open` interactive treatment, the file's precedent for a row-shaped control. The
+   design pins no hover or focus state for this row (`get_variable_defs` on 106:3098 returns only the
+   label's color and type), so the file's own convention decides them rather than an invention. */
+.channel-list__workspace:hover {
+  background: var(--color-surface-container);
+}
+
+.channel-list__workspace:focus-visible {
+  outline: 1px solid var(--color-outline);
 }
 
 /* The folder glyph — the `.channel-list__host-icon` rule verbatim: `display: block` is the file's icon

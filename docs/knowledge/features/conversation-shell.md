@@ -1401,8 +1401,8 @@ same `chipRuns` fragment, declared once in `ConversationScreen.tsx`), so this se
 
 `toolHeadline(source)` (`src/renderer/src/screens/conversation/toolHeadline.ts`) is one fallback chain,
 deliberately dumb — the expanded body ([#696/#697](#expandable-tool-call-result-696-toggle-697), and
-#706's per-field list once it lands) is one click away, so a wrong guess costs almost nothing, which is
-the argument against a smarter classifier here:
+[#706's per-field list](#full-input-field-list-706)) is one click away, so a wrong guess costs almost
+nothing, which is the argument against a smarter classifier here:
 
 1. `name === 'Bash'` exactly → `description`, else `command`. The fallback is load-bearing: measured
    over 6459 real `Bash` calls, 1397 (22%) carry no `description` at all.
@@ -1448,6 +1448,60 @@ ends in `…` and renders that way.
 See [#705 codebase notes](../codebase/705.md) for the full design, the `noUncheckedIndexedAccess` trap
 (off in `tsconfig.web.json`, so `input[key]` types `string` while being `undefined` at runtime for an
 absent key), and patterns established.
+
+### Full input field list (#706)
+
+The headline (#705) picks one field; this ticket lists all of them, literally, in the expanded body
+([#696/#697](#expandable-tool-call-result-696-toggle-697)) — the form that covers the headline's misses.
+Every entry of `item.input`, name above value, in arrival order, above the unchanged result block:
+
+```html
+<div class="tool-row__body">
+  <div class="tool-row__input">
+    <span class="tool-row__input-name">{name}</span>
+    <pre class="tool-row__input-value">{value}</pre>
+  </div>
+  <!-- … one per entry … -->
+  <pre class="tool-row__result">{result.resultSummary}</pre>
+</div>
+```
+
+`Object.entries(item.input ?? NO_INPUT_FIELDS)`, inline inside the existing `{body && (…)}` block — never
+hoisted to a `const` (consumed once, unlike `chipRuns`), never `for...in`, never indexed by key. No
+`.sort()`, no `.filter()`, no path shortening, no salience pick, and no skipping the field #705's headline
+already promoted — literal is the whole point, since a field silently missing from a "full input" list is
+worse than one repeated in both places. `NO_INPUT_FIELDS` is a named `Readonly<Record<string, string>> =
+{}` module constant, not a bare `{}` literal at the call site: the bare form widens the union `Object.entries`
+sees and silently resolves it to the `any`-valued overload (neither `noUncheckedIndexedAccess` nor
+`exactOptionalPropertyTypes` is on in this repo, so nothing else catches it).
+
+**No list-wrapper element, no `.length > 0` guard.** The per-field `<div class="tool-row__input">`s are
+direct children of the body; zero entries renders nothing. This is what makes "an absent `input` and an
+empty `input` both render no field list and no empty container" structural rather than a second condition
+that could drift from the render — #643's absent-vs-`{}` distinction survives only at the item, and this
+ticket's *display* decision (both draw nothing) is made once, in the `??`.
+
+**The value is a `<pre>`** (line breaks preserved, the `.tool-row__result` newline-handling precedent);
+**the name is a `<span>`**, mono but `--color-on-surface-variant` — the muted label colour
+`.tool-row__summary`/`.tool-row__empty` use, not `--color-tertiary` (reserved for the tool's own
+identity) — with `word-break: break-word` stated explicitly, since `.tool-row` is not a `.bubble`
+descendant and a field name (no spaces, unlike a value) would otherwise widen the row unbounded. CSS-wise,
+`.tool-row__input-value` **joins** the existing `.tool-row__result` selector rather than copying its ten
+declarations, so "the field list takes the result block's visual language rather than inventing a third"
+(the same answer #696 gave to the same "no expanded-state Figma frame" gap) is a fact by construction. The
+failed-tool accent (`.tool-row__body--error .tool-row__result`, a descendant selector naming
+`.tool-row__result` alone) gains nothing from that join — the field list stays untinted on a failed tool,
+deliberately: a failed tool's *input* is not itself an error.
+
+**Security posture**, extending #697's SAFETY block a second time: unlike #705, this ticket *does* draw
+the input **key**, for the first time — a name is exactly as daemon-controlled as the value beside it (an
+MCP tool can name a field anything), so both reach the DOM only as auto-escaped React children, never
+`AssistantMarkdown`, never `title=`, never a linkified `url` field, never a log line. `key={name}` on the
+wrapping `<div>` is a React reconciliation identity, never serialised to the DOM and not a new exposure —
+the same string is already rendered as a visible text child beside it.
+
+See [#706 codebase notes](../codebase/706.md) for the full design, the `Object.entries`-on-a-union
+TypeScript trap, the arrival-order test lesson, and patterns established.
 
 ### Permission modal (#224, answerable since #237, second-confirm since #226, rejection surface since #249, confirm marker scoped to its prompt since #511)
 

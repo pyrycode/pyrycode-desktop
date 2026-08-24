@@ -40,6 +40,12 @@ transport, or new store/wire code, so not security-sensitive.
 - Each saved (promoted) Channel row carries a trailing [Rename](rename-conversation-dialog.md)
   affordance; Recent rows carry none — the exact symmetric counterpart, so no row ever carries two
   trailing buttons. Added by [#360](../codebase/360.md).
+- Each present tree (Channels, Chats) is now headed by a **host row** directly below its section
+  label and above its conversation rows, naming the machine the tree's conversations live on
+  (Figma `106:3094`). The row repeats in both trees on purpose — the two trees are not
+  deduplicated into a shared heading. It renders a 12px server-rack glyph beside a client-owned
+  label, currently the constant `'Server'`; multi-host and the operator-typed label are deferred
+  (§ below). Added by [#710](../codebase/710.md).
 
 ## Why last-activity time, not a message preview
 
@@ -124,6 +130,39 @@ each dialog's open/name state as its own local `useState` pair, rendered as sibl
 [Rename dialog](rename-conversation-dialog.md) for the dialogs themselves, and
 [#274](../codebase/274.md)/[#360](../codebase/360.md) codebase notes for lessons learned.
 
+### The host row (`ChannelList.tsx`, added by #710)
+
+A module-local, nullary `HostRow(): JSX.Element` — the file's sixth inline-glyph idiom instance,
+alongside `SettingsButton`/`ArchiveButton`/`NewConversationFab`/the row's rename/save buttons. It
+renders a non-interactive `<div className="channel-list__host">` holding a 12px inline Material
+`dns` (server-rack) glyph and `<span className="channel-list__host-label">{HOST_ROW_LABEL}</span>`,
+where `HOST_ROW_LABEL = 'Server'` is a module-level client-owned constant — never
+`serverInfoStore`'s `serverId` (legitimate in Settings' `ServerRow.tsx:37`, since that's a details
+surface; an opaque identifier in this *name* slot would read as an invented machine name) and never
+the Figma node's own placeholder text ("Pyrybox").
+
+`renderBody` mounts one `<HostRow />` inside *each* of the two existing `channels.length > 0` /
+`discussions.length > 0` gates, directly after the `<header className="channel-list__section-header">`
+and before that tree's rows. Because the row lives inside the same gate that already decides
+whether the section header renders, "a tree with zero rows renders neither a header nor a host
+row" holds by construction — no new condition was added, and the promote specs' "a zero-row
+section renders no header" proxy still holds for a second element under it.
+
+The row repeats once per tree deliberately — the operator confirmed the repetition (2026-08-21);
+the two trees are not merged under one shared host heading. There is exactly one host row per tree
+this milestone, since the app pairs with exactly one daemon (`pairedServerStore.save` overwrites on
+re-pair) — the design already draws a `Host container` per tree in anticipation of a future
+multi-host case, not built here.
+
+**Selector-safety by construction.** `channel-list__host`/`__host-icon`/`__host-label` share no
+class token *and no substring* with any existing selector in the file (`channel-list__row`,
+`__row-open`, `__section-header`, …), and the shipped label contains neither "Channels" nor
+"Chats" case-folded either way. Both guard the same failure mode: Playwright's strict mode turns an
+added element that joins an *existing* locator's match set into a violation rather than an
+assertion failure — at fixture-launch scale for the unfiltered `.channel-list__row-open` click 28
+specs ride (`launchPairedApp.ts:224`), not just the two `.channel-list__section-header` + `hasText`
+promote-spec locators. See [#710 codebase notes](../codebase/710.md) for the full hazard writeup.
+
 ### CSS (`channels.css`)
 
 Token-only: every color/type/spacing value is a `var(--…)` token; opacity is the de-emphasis device
@@ -171,6 +210,13 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   reason — fidelity is scoped to the two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
+- **The host row's label is a placeholder, its glyph carries no status, and nothing under it is
+  indented yet** — all three deliberately deferred to sibling tickets, not gaps: #688 replaces
+  `HOST_ROW_LABEL` with the operator-typed machine name (and will need the label's own
+  ellipsis/overflow treatment, skipped here since a six-character constant cannot overflow the
+  400px sidebar); #672 adds the two connection-status dots at the row's right edge, with no
+  pre-rendered slot shipped for them; #703 adds the workspace grouping level between the host row
+  and the conversation rows, which is what will indent the rows under it.
 
 ## Related
 
@@ -198,5 +244,8 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [#709 codebase notes](../codebase/709.md) — relabelled the non-promoted section header from the
   mobile-era "Recent discussions" to the desktop design's "Chats" (Figma `106:3258`); the code-level
   `discussions` partition, CSS classes and store fields kept their names.
+- [#710 codebase notes](../codebase/710.md) — added the host row heading each tree (Figma
+  `106:3094`), a client-owned `'Server'` placeholder label ahead of #688's operator-typed one.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open).
+  (per-row open), #672 (host row connection dots), #688 (operator-typed host label), #703 (workspace
+  grouping level under the host row).

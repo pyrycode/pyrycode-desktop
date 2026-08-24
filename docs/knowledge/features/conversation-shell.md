@@ -337,6 +337,15 @@ guarantee) — no transport, crypto, or socket code touched. See [#330 codebase
 notes](../codebase/330.md) for the full design, the leg → category → label matrix tests, and the
 code-review record.
 
+**Second consumer since [#718](../codebase/718.md).** `relayLeg`/`daemonLeg`/`ConnectionLeg` are now
+also imported into `channels/ChannelList.tsx`, whose `HostConnectionDots` renders the same two legs
+as a label-less dot pair on the sidebar's host row (host leg first, the reverse of this section's
+`ConnectionStatusIndicator(relay, daemon)` order). The TS mapping has one copy, imported across
+screens; the CSS category → colour binding (`.conn-dot--up/--in-progress/--down`, just above) also
+has one copy, worn by the sidebar dot without the `.conn-dot` 8px base it sits beside here — so
+removing this indicator would need to relocate those three rules rather than deleting them. See the
+[Channel List home screen](channel-list.md) doc and [#718 codebase notes](../codebase/718.md).
+
 ### Workspace chip (#278)
 
 A pre-first-message pill at the top of the empty new-discussion thread, showing the workspace `cwd`

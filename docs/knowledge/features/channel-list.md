@@ -168,6 +168,49 @@ assertion failure — at fixture-launch scale for the unfiltered `.channel-list_
 specs ride (`launchPairedApp.ts:224`), not just the two `.channel-list__section-header` + `hasText`
 promote-spec locators. See [#710 codebase notes](../codebase/710.md) for the full hazard writeup.
 
+### The host row's connection dots (`ChannelList.tsx`, added by #718)
+
+Split from #672 (the not-yet-known relay state half is #719, out of scope
+here). Each host row ends with two label-less 6px dots at its trailing edge — the host (daemon)
+leg first, the relay leg second — reusing [#330's shipped `relayLeg`/`daemonLeg`/`ConnectionLeg`
+mapping](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330) verbatim
+rather than growing a second copy of it. The exported pure view `HostConnectionDots({ host, relay
+})` renders `<span className="channel-list__host-status">` holding two
+`<span className="channel-list__host-dot conn-dot--{category}" role="img" aria-label={leg.label}
+/>`; a module-local `HostConnectionDotsControl` reads `useSessionStore(selectStatus)` and
+`useRelayLinkStore(selectRelayLinkStatus)` through their shipped narrow selectors and mounts as
+`HostRow`'s last child, so a relay flap re-renders only the four dots, not the row or the
+conversation list beneath it.
+
+Two reuse decisions, at the two levels the contract exists on:
+
+- **TypeScript.** `relayLeg`/`daemonLeg`/`ConnectionLeg` are imported straight from
+  `conversation/ConversationScreen.tsx` — the established cross-screen-import idiom in this
+  codebase — rather than lifted into a shared module first. Order is the design's, and is the
+  *reverse* of `ConnectionStatusIndicator(relay, daemon)`'s call site: host/daemon first here,
+  relay first there. Both props share one type, so a copied call site would swap them silently;
+  a leg-order test pins it.
+- **CSS.** The colour contract lives one level below the TS mapping, in `.conn-dot--up` /
+  `--in-progress` / `--down` (`conversation.css`). The sidebar dot wears that modifier *without*
+  its `.conn-dot` 8px base — `.channel-list__host-dot` in `channels.css` supplies 6px geometry
+  only. This keeps the category → colour binding to one copy in the renderer
+  (`grep -rn "color-success" src/renderer --include='*.css'` proves it), at the cost of a
+  cross-file dependency the node-environment unit tier cannot see: if `.conn-dot--*` ever leaves
+  `conversation.css`, the sidebar dots go invisible with no test failure. Mitigated by a comment
+  on those three rules naming the sidebar as a second consumer — see
+  [conversation-shell.md](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330).
+
+The accessible name is `leg.label` unchanged — "Pyrycode Connected"/"Relay Offline"/etc. — on a
+`role="img"` span (a bare `<span>`'s `aria-label` is dropped by the accessible-name computation,
+so this is load-bearing, not decorative). The wrapper carries no role or name of its own, unlike
+#330's `role="group" aria-label="Connection status"`: the host row renders twice, and #670's
+two-pane layout shows the conversation status row at the same time, so a per-group name would
+put three identically-named groups in one window. The dots add no text node.
+
+"Pyrycode" — not the Figma's "Host" or #710's visible "Server" — was kept as the host leg's label
+word: any other word would re-derive the label half of #330's contract, and the dot reports the
+*daemon session*, not the machine — a machine can be up while `pyry` is not.
+
 ### Workspace grouping (`channelListViewModel.ts` / `ChannelList.tsx`, added by #703)
 
 Two pure exports, unit-tested without React: `workspaceLabelFor(cwd: string): string | null` —
@@ -246,11 +289,14 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   reason — fidelity is scoped to the two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
-- **The host row's label is a placeholder and its glyph carries no status** — both deliberately
-  deferred to sibling tickets, not gaps: #688 replaces `HOST_ROW_LABEL` with the operator-typed
-  machine name (and will need the label's own ellipsis/overflow treatment, skipped here since a
-  six-character constant cannot overflow the 400px sidebar); #672 adds the two connection-status
-  dots at the row's right edge, with no pre-rendered slot shipped for them.
+- **The host row's label is still a placeholder.** Deliberately deferred, not a gap: #688 replaces
+  `HOST_ROW_LABEL` with the operator-typed machine name, and will need the label's own
+  ellipsis/overflow treatment, skipped here since a six-character constant cannot overflow the
+  400px sidebar. (The row's glyph carries no status either, but that gap closed with [#718](../codebase/718.md)'s
+  connection dots — see § above.)
+- **The relay leg has no not-yet-known state.** #719, split from the same
+  #672 as #718, adds a fourth `LegCategory` for it; both #330's status row and #718's sidebar dots
+  pick it up with no further edit, since both render `relayLeg`'s output unchanged.
 - **Two workspaces whose last path segment matches render two identically-labelled groups.**
   Deliberately deferred to #716 — a display question, not a trust one, since the groups keep
   distinct `cwd` keys and are never merged.
@@ -293,6 +339,9 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
 - [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree
   disclosure control; renderer-only and unpersisted.
+- [#718 codebase notes](../codebase/718.md) — added the host row's two trailing connection dots
+  (Figma `110:3499`/`106:3114`), reusing [#330's two-leg mapping](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330)
+  across screens rather than a second copy of it.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), #672 (host row connection dots), #688 (operator-typed host label), #716
-  (same-last-segment workspace label ambiguity).
+  (per-row open), #688 (operator-typed host label), #716 (same-last-segment workspace label
+  ambiguity), #719 (the relay leg's not-yet-known state, a fourth `LegCategory`).

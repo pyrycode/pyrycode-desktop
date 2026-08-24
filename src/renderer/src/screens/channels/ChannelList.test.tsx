@@ -87,10 +87,12 @@ const COLLAPSED_MARKER = 'aria-expanded="false"'
 // one-class prefix: the dot wears the geometry class AND #330's shipped colour modifier, so
 // `class="channel-list__host-dot"` with its closing quote would silently match NOTHING — the quote follows
 // the LAST class. Pinning the whole value is the stronger assertion anyway, since one marker then fixes the
-// geometry class and the category → colour binding together.
+// geometry class and the category → colour binding together. Four markers since #719 added the neutral
+// not-yet-known category.
 const DOT_UP_MARKER = 'class="channel-list__host-dot conn-dot--up"'
 const DOT_IN_PROGRESS_MARKER = 'class="channel-list__host-dot conn-dot--in-progress"'
 const DOT_DOWN_MARKER = 'class="channel-list__host-dot conn-dot--down"'
+const DOT_UNKNOWN_MARKER = 'class="channel-list__host-dot conn-dot--unknown"'
 
 // The pair's layout wrapper carries a sole class, so the file's usual exact-substring form applies to it.
 const DOT_WRAPPER_MARKER = 'class="channel-list__host-status"'
@@ -496,15 +498,17 @@ describe('ChannelListView', () => {
 
     it('names both legs from the two stores it reads, with no false green (AC2/AC3)', () => {
       // The store-bound leaf hydrates to the two singletons' INITIAL values under `renderToStaticMarkup`
-      // — relay `null` and session `{ type: 'disconnected' }` — so this reads #330's shipped labels back
+      // — relay `null` and session `{ type: 'disconnected' }` — so this reads the shipped labels back
       // out of the render rather than restating them (the `hostLabelsIn` treatment). It doubles as the
-      // regression guard on the leaf being server-renderable at all.
+      // regression guard on the leaf being server-renderable at all. Since #719 the relay's initial cell
+      // is "Relay Unknown": on the sidebar this IS the first frame of every launch, which is why that
+      // state stopped claiming an outage. The host leg keeps #330's "Pyrycode Offline" (#719 AC3).
       const labels = hostDotTagsIn(bothTrees()).map(ariaLabelOf)
       expect(labels).toEqual([
         'Pyrycode Offline',
-        'Relay Offline',
+        'Relay Unknown',
         'Pyrycode Offline',
-        'Relay Offline'
+        'Relay Unknown'
       ])
     })
 
@@ -585,15 +589,21 @@ describe('HostConnectionDots (#718)', () => {
   const dots = (host: ConnectionLeg, relay: ConnectionLeg): string =>
     renderToStaticMarkup(<HostConnectionDots host={host} relay={relay} />)
 
-  it('binds each category to #330 shipped colour modifier (AC2)', () => {
+  it('binds each category to its shipped colour modifier (AC2)', () => {
     // One case per LegCategory, so the binding is pinned rather than sampled. A re-declared
     // `.channel-list__host-dot--up` family — the second copy of the contract AC2 forbids, one level below
-    // the mapping — fails all three here.
+    // the mapping — fails all four here.
     expect(dots(leg('up', 'Pyrycode Connected'), leg('up', 'Relay Connected'))).toContain(DOT_UP_MARKER)
     expect(dots(leg('in-progress', 'Pyrycode Connecting'), leg('up', 'Relay Reachable'))).toContain(
       DOT_IN_PROGRESS_MARKER
     )
     expect(dots(leg('down', 'Pyrycode Offline'), leg('down', 'Relay Offline'))).toContain(DOT_DOWN_MARKER)
+    // #719's fourth category on the 6px sidebar dot — the one that reaches `.conn-dot--unknown` WITHOUT
+    // the `.conn-dot` base, so a fourth binding nested under that base (or re-declared in channels.css)
+    // would leave this dot with no background and go invisible silently.
+    expect(dots(leg('down', 'Pyrycode Offline'), leg('unknown', 'Relay Unknown'))).toContain(
+      DOT_UNKNOWN_MARKER
+    )
   })
 
   it('puts the HOST leg first and the relay leg second, the design order', () => {

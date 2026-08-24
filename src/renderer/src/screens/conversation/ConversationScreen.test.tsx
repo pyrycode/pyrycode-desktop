@@ -1833,10 +1833,14 @@ describe('relayLeg — the relay-link leg mapping (#330)', () => {
     expect(relayLeg('offline')).toEqual({ category: 'down', label: 'Relay Offline' })
   })
 
-  // AC1: null is the initial "relay not yet up" state — down, NOT in-progress (the relay leg has no
-  // in-progress arm; that category is exercised only by the daemon leg's connecting).
-  it('null → down / "Relay Offline" — the initial not-connected state (AC1)', () => {
-    expect(relayLeg(null)).toEqual({ category: 'down', label: 'Relay Offline' })
+  // #719 AC1 (reversing #330's AC1): null is the initial "no status has arrived yet" sentinel, which is
+  // definitionally none of the three the wire delivers — so it reads unknown, distinct from both down
+  // ("known to be down") and up. NOT in-progress either: the relay leg still has no in-progress arm, and
+  // nothing is probing — this state is the ABSENCE of information, not an attempt to get it. Since #718
+  // put the dots on the sidebar, which is on screen from the first frame, collapsing this into down made
+  // every cold start claim an outage before anyone had asked.
+  it('null → unknown / "Relay Unknown" — not yet known, not known to be down (#719 AC1)', () => {
+    expect(relayLeg(null)).toEqual({ category: 'unknown', label: 'Relay Unknown' })
   })
 })
 
@@ -1875,7 +1879,7 @@ describe('daemonLeg — the daemon-session leg mapping (#330)', () => {
 })
 
 describe('ConnectionStatusIndicator — the two-dot pure view (#330)', () => {
-  it('maps each category to its dot modifier class (up, in-progress, down)', () => {
+  it('maps each category to its dot modifier class (up, in-progress, down, unknown)', () => {
     const up = renderToStaticMarkup(
       <ConnectionStatusIndicator
         relay={{ category: 'up', label: 'Relay Connected' }}
@@ -1893,6 +1897,17 @@ describe('ConnectionStatusIndicator — the two-dot pure view (#330)', () => {
       />
     )
     expect(down).toContain('conn-dot--down')
+
+    // #719's fourth category — the neutral not-yet-known dot, and its label rendering so the state reads
+    // without colour (AC2's legibility rule applies to it like the other three).
+    const unknown = renderToStaticMarkup(
+      <ConnectionStatusIndicator
+        relay={{ category: 'unknown', label: 'Relay Unknown' }}
+        daemon={{ category: 'down', label: 'Pyrycode Offline' }}
+      />
+    )
+    expect(unknown).toContain('conn-dot--unknown')
+    expect(unknown).toContain('Relay Unknown')
   })
 
   // AC2: status is legible without colour — each leg's label text renders alongside its dot.
@@ -2495,14 +2510,17 @@ describe('ConversationScreen — store binding', () => {
 
   // #330: the two-dot connection indicator mounts inside the status-row summary slot (beside — not
   // replacing — #181/#182's future run-config summary text). Under server render the initial store state
-  // is relay = null (→ "Relay Offline") and daemon = disconnected (→ "Pyrycode Offline"), so both legs
-  // render down — proving the container reads both stores with NO false green at rest (AC3).
-  it('renders the two-dot connection indicator (both offline) in the status-row summary (#330)', () => {
+  // is relay = null (→ "Relay Unknown" since #719 — not yet known rather than known-offline) and daemon =
+  // disconnected (→ "Pyrycode Offline", untouched by #719, which is AC3's cross-check at container level),
+  // proving the container reads both stores with NO false green at rest (#330 AC3).
+  it('renders the two-dot connection indicator (relay unknown, daemon offline) in the status-row summary (#330, #719)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).toContain('status-row__connection')
-    expect(markup).toContain('Relay Offline')
+    expect(markup).toContain('Relay Unknown')
     expect(markup).toContain('Pyrycode Offline')
-    // Two down dots at the initial state — never up/green before a connection exists.
+    // The assertion that proves the container actually renders #719's new category at rest.
+    expect(markup).toContain('conn-dot--unknown')
+    // Never up/green before a connection exists.
     expect(markup).not.toContain('conn-dot--up')
   })
 

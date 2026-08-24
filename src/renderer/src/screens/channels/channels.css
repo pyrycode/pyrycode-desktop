@@ -89,11 +89,11 @@
   flex: 0 0 auto;
 }
 
-/* One dot. GEOMETRY ONLY — the colour is `.conn-dot--up` / `--in-progress` / `--down` in conversation.css,
-   worn as a modifier WITHOUT its `.conn-dot` base (which bakes the status row's 8px box). That reads as a
-   mistake unless said out loud, so: it is deliberate, and the three category → token bindings must NOT be
-   re-declared here — #330's contract having exactly one copy in the renderer is what AC2 asks for, and the
-   split between colour and geometry classes is the seam #330 left for exactly this.
+/* One dot. GEOMETRY ONLY — the colour is `.conn-dot--up` / `--in-progress` / `--down` / `--unknown` in
+   conversation.css, worn as a modifier WITHOUT its `.conn-dot` base (which bakes the status row's 8px box).
+   That reads as a mistake unless said out loud, so: it is deliberate, and the four category → token
+   bindings must NOT be re-declared here — #330's contract having exactly one copy in the renderer is what
+   AC2 asks for, and the split between colour and geometry classes is the seam #330 left for exactly this.
 
    Both 6px values are literals rather than tokens, the `.conn-dot { width: 8px }` precedent for structural
    component geometry. For the gap that is load-bearing rather than stylistic: the design's 12px dot pitch

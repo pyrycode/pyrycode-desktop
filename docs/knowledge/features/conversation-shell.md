@@ -135,9 +135,11 @@ in-file `BackControl({ onBack })` returns `null` when the prop is absent. When p
 48px icon-only `<button aria-label="Back">` holding a 24px inline `arrow_back` SVG glyph
 (Figma node 16-11, `on-surface`) as the **first child** of `.conversation`, ahead of `UnpairControl`'s
 header row. The [paired shell](paired-shell.md)'s `PairedShellView` wires it to a nav dispatch
-(`{ type: 'back' }`) that unmounts the thread and remounts the list. The back arrow and the unpair
-header are two separate rows for now — a deliberate interim; a future top-app-bar ticket consolidates
-back + title + overflow + unpair into the one bar Figma 16-9 shows.
+(`{ type: 'back' }`) that unmounts this thread. Before [#670](../codebase/670.md) that also remounted
+the list screen (`list`/`thread` were mutually exclusive); since #670 the sidebar list is permanently
+mounted alongside the thread, so `back` now only empties the chat pane — "deselect," not "navigate away."
+The back arrow and the unpair header are two separate rows for now — a deliberate interim; a future
+top-app-bar ticket consolidates back + title + overflow + unpair into the one bar Figma 16-9 shows.
 
 ### Unpair control (#166)
 
@@ -676,7 +678,10 @@ not a replacement of them.
 Clicking it calls `onExpand`, which flips `sheetOpen` (a single `useState(false)` in
 `ConversationScreen` — the "trivial single-value local UI state" case carved out by
 [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md), not its `useReducer`
-phase-machine case). It resets to closed on remount for free.
+phase-machine case). It resets to closed on remount for free — a guarantee [#670](../codebase/670.md)
+had to restore explicitly via `ConversationScreen`'s `key` once a sidebar-driven conversation switch
+could otherwise leave the route on `thread` with no remount at all; see [the paired shell's `paneKey`
+fix](paired-shell.md#the-conversation-switch-remount-bug-and-the-panekey-fix).
 
 `StatusSheet` (Figma node `20-100`) renders as the screen's last child when `sheetOpen` is true:
 

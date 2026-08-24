@@ -1,6 +1,8 @@
 # Channel List home screen
 
-The paired region's [`list` route](paired-shell.md) — a pure render slice over the already-shipped
+The paired region's [`list` route](paired-shell.md) — since [#670](../codebase/670.md) also the
+always-mounted sidebar of the two-pane desktop shell, shown alongside `thread` rather than only on
+`list` — a pure render slice over the already-shipped
 [conversation list store](conversation-list-store.md), splitting the daemon's conversations into
 **Channels** (saved, `is_promoted === true`) above **Recent discussions** (ad-hoc,
 `is_promoted === false`), each row showing its title and a last-activity relative time. Mirrors the
@@ -129,16 +131,27 @@ Token-only: every color/type/spacing value is a `var(--…)` token; opacity is t
 the M3 scale had no `title-medium` slot before this.
 
 `.channel-list` deviates from the architecture spec's `flex: 1 1 auto`: it uses `height: 100%;
-box-sizing: border-box` instead, because `PairedShellView` mounts this `<section>` directly under the
-block-level `#root` with no flex wrapper in between — `flex: 1 1 auto` would be inert there (no fill,
-no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pattern; documented in a
-`channels.css` comment. Code-review-verified as a legitimate, well-reasoned spec deviation.
+box-sizing: border-box` instead. Originally because `PairedShellView` mounted this `<section>` directly
+under the block-level `#root` with no flex wrapper in between — `flex: 1 1 auto` would have been inert
+there (no fill, no internal scroll) — mirroring `.conversation`'s direct-child-of-`#root` pattern.
+Code-review-verified as a legitimate, well-reasoned spec deviation. **Since [#670](../codebase/670.md)**,
+`.channel-list` *is* the child of a flex item (`.paired-shell__sidebar`, a fixed 400px column), but the
+same rule still holds: it carries no width rule of its own, so `height: 100%` continues to fill whatever
+box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is decided. The
+`channels.css` header comment was updated at #670 to record the new parent rather than leave the old
+"not a flex item" claim standing.
 
 ## Edge cases and limitations
 
 - **Every row opens the single active conversation, not that row's conversation.** Per-row
   select-and-load needs a transport path that doesn't exist yet (a select-and-load ticket, not yet
   filed as of #141). The seam is already the row — a future ticket changes only what `onClick` passes.
+- **Since [#670](../codebase/670.md), a row click while a different conversation's thread is already
+  open is a real switch, not just an `open` nav.** Because the sidebar is now permanently mounted, this
+  click no longer necessarily passes through `list` — it's the interaction the two-pane shell exists to
+  enable, and it drives [the paired shell's `paneKey`
+  re-key](paired-shell.md#the-conversation-switch-remount-bug-and-the-panekey-fix) so
+  `ConversationScreen` remounts instead of carrying the old conversation's screen-local state over.
 - **Archived rows are filtered out.** `renderBody` partitions via `partitionActive`, which drops
   `is_archived` rows before the promotion split — archived conversations render only in the
   [Archive screen](archive-screen.md), never here. Fixed by [#469](../codebase/469.md); before that fix,
@@ -161,7 +174,7 @@ no internal scroll). Mirrors `.conversation`'s proven direct-child-of-`#root` pa
 ## Related
 
 - [Paired shell](paired-shell.md) / [#140](../codebase/140.md) — the `list ⇄ thread` router this screen
-  fills the `list` arm of.
+  fills the `list` arm of; since [#670](../codebase/670.md) also the two-pane shell's sidebar.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — the store slice
   this screen reads verbatim (snake_case `ConversationSummary` rows, `null` vs `[]` contract).
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the transport

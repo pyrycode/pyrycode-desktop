@@ -56,7 +56,7 @@ const PROGRESS_CAPTION = `Downloading… ${CHUNK_COUNT} chunks received`
 // production codec, deterministic id/ts.
 
 // The stall onset — a SERVER PUSH (daemon.pushFrame), not a reply arm. conversation_id is set to
-// SEEDED_ROW.id for realism; the decoder drops it (→ nullary stallDetected), so it does not gate rendering.
+// SEEDED_ROW.id for realism; the timeline bridge drops it (#732), so it does not gate rendering.
 function stallFrame(conversationId: string): Uint8Array {
   return encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
@@ -124,8 +124,8 @@ test('reliability affordances: stall push, debug-bundle download', async ({
     buildReplyFrames: capturingReliabilityFake(captured)
   })
 
-  // AC1 — STALL (server push). Push an unsolicited `stall` onto the live session; the transport decodes it
-  // to the nullary stallDetected event and the reducer flips `stalled` true → StallIndicator renders. Main
+  // AC1 — STALL (server push). Push an unsolicited `stall` onto the live session; the transport decodes
+  // it to a stallDetected event, the reducer flips `stalled` true → StallIndicator renders. Main
   // thread (no sheet). Nothing in this spec emits timeline turn-activity, and debug_bundle_* are not
   // timeline events, so the indicator persists through the later step.
   daemon.pushFrame(stallFrame(SEEDED_ROW.id))

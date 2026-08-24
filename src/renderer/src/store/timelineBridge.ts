@@ -94,10 +94,10 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
         occurredAt: event.occurredAt
       }
     case 'stallDetected':
-      // #317: the stall-onset arm (#315 decodes it nullary). Both the DaemonEvent and the ThreadEvent
-      // are `{ type: 'stallDetected' }` — no payload — so this is a filter + fresh literal (arm
-      // selection), never a pass-through of the DaemonEvent object. reduceTimeline sets the `stalled`
-      // scalar; the render slice's self-clear is derived there on the next turn activity.
+      // #317: the stall-onset arm. The DaemonEvent carries `conversationId` (#732); the ThreadEvent
+      // this returns is `{ type: 'stallDetected' }` and nothing else, so the id STOPS here — a
+      // filter + fresh literal (arm selection), never a pass-through of the DaemonEvent object.
+      // reduceTimeline sets the `stalled` scalar; the self-clear is derived there on next turn activity.
       return { type: 'stallDetected' }
     case 'apiRetry':
       // #493: the api-retry arm (#492 decodes it, this slice gives it a consumer). The DaemonEvent and

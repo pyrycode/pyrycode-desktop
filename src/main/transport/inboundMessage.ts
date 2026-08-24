@@ -110,8 +110,8 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * Ships dormant — the render slice (#317) is the first consumer.
  *
  * The `api-retry` kind (#492) carries the decoded ApiRetryPayload — the PTY-derived status peer of
- * `stall` the daemon fans out to interactive clients while claude retries against an API error. Unlike
- * `stall` this arm is NOT nullary: the consumer carries the edge (`active`) and the counter (`current` /
+ * `stall` the daemon fans out to interactive clients while claude retries against an API error. The render
+ * slice #493 shows "attempt N/M", so the consumer carries the edge (`active`) and the counter (`current` /
  * `total`) onward, dropping only `conversation_id`. The fail-closed defence here is four required fields
  * — one string, one BOOLEAN (whose `false` is the falling edge, a value not an absence) and two NUMBERS
  * (whose `0` is the legitimate "count unknown" value, so nothing may consult truthiness). NOT onset-only
@@ -145,8 +145,8 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The `background-task-started` kind (#564) carries the decoded BackgroundTaskStartedPayload — the daemon's
  * announcement that claude started work OUTLIVING the turn that spawned it (pyrycode#1240), fanned out to
  * interactive clients. Unlike its `stall` / `api-retry` / `compacting` neighbours it is not a claude
- * sub-state at all: it carries no `turn_id`, opens and closes no turn, and is daemon STATE keyed by id —
- * so the consumer carries ALL SIX fields onward, `conversation_id` INCLUDED (the queue-state rule, #720;
+ * sub-state at all: it carries no `turn_id` and opens and closes no turn. It is daemon STATE keyed by id,
+ * and THAT is why ALL SIX fields cross, `conversation_id` INCLUDED (the queue-state rule, #720;
  * the task store #567 attributes by id). The fail-closed defence is five required strings plus one
  * REQUIRED-PRESENT NULLABLE ARRAY (`truncated_fields`: a literal `null` is the value "nothing was cut", a
  * missing key is an absence and fails closed). `task_type` and the `truncated_fields` elements are

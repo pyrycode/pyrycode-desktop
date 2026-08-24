@@ -129,9 +129,9 @@ export type ThreadEvent =
   // bridge is a filter + fresh copy (not a remap); folded by a plain fresh tail-append (the `userText`
   // discipline), never coalesced.
   | { type: 'sessionBoundary'; reason: SessionBoundaryReason; workspaceCwd: string | null; occurredAt: string }
-  // #317: the daemon's one-shot stall onset (#315 decodes it to a nullary `stallDetected` daemon event).
-  // A NULLARY arm — the wire frame carries no field the renderer keeps, so this event has no payload
-  // either. That is what makes AC4 ("no daemon-supplied string is ever rendered") true by construction:
+  // #317: the daemon's one-shot stall onset (#315 decodes it; #732 widened that daemon event to carry
+  // `conversationId`, which the bridge drops). A NULLARY arm — the id stops there, so this event has
+  // no payload — what makes AC4 ("no daemon-supplied string is ever rendered") true by construction:
   // there is no field to render. Onset-only; the reducer derives the self-clear on the next turn activity.
   | { type: 'stallDetected' }
   // #493: the daemon's api-retry edge (#492 decodes it). Field-for-field identical to the `apiRetry`
@@ -160,8 +160,8 @@ export type ThreadEvent =
   // #528: return the whole timeline to its initial state on a context change (a conversation switch,
   // an unpair). The FIRST arm that is neither daemon- nor user-content-derived — a renderer lifecycle
   // control event, never translated from a wire frame, so `timelineBridge` never produces it. Nullary
-  // following `stallDetected` (:109): a reset carries no payload, so there is no field a caller can
-  // get wrong. `sessionStore`'s `reset` (#166) is the same arm for the session facet.
+  // following the ThreadEvent `stallDetected` (:136): a reset carries no payload, so there is no field
+  // a caller can get wrong. `sessionStore`'s `reset` (#166) is the same arm for the session facet.
   | { type: 'reset' }
   // #538: the connection came back — reconcile the transient chrome against the fresh handshake. The
   // SECOND non-content arm, and distinct from `reset` (:133) in where it comes from: `reset` is

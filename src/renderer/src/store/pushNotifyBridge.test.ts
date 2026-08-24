@@ -86,7 +86,7 @@ describe('notifyKindForEvent', () => {
   it('maps a sample of unrelated events → null', () => {
     expect(notifyKindForEvent({ type: 'connecting' })).toBeNull()
     expect(notifyKindForEvent({ type: 'messageReceived', message })).toBeNull()
-    expect(notifyKindForEvent({ type: 'turnState', state: 'thinking' })).toBeNull()
+    expect(notifyKindForEvent({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })).toBeNull()
     expect(notifyKindForEvent({ type: 'conversationCreated', conversation: created })).toBeNull()
     expect(notifyKindForEvent({ type: 'notificationActivated' })).toBeNull()
   })
@@ -162,7 +162,7 @@ describe('subscribePushNotify', () => {
 
     bridge.emit({ type: 'connecting' })
     bridge.emit({ type: 'messageReceived', message })
-    bridge.emit({ type: 'turnState', state: 'thinking' })
+    bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     bridge.emit({ type: 'conversationCreated', conversation: created })
     bridge.emit({ type: 'toolUse', turnId: 't', toolUseId: 'u', name: 'n', inputSummary: 's' })
     bridge.emit({ type: 'notificationActivated' })

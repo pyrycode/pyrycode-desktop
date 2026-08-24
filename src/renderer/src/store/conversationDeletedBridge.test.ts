@@ -54,7 +54,7 @@ describe('translateConversationDeleted', () => {
       { type: 'conversationUpdated', conversation: updated },
       { type: 'conversationsReceived', conversations: [] },
       { type: 'connecting' },
-      { type: 'turnState', state: 'thinking' }
+      { type: 'turnState', state: 'thinking', conversationId: 'conv-1' }
     ]
     for (const event of others) expect(translateConversationDeleted(event)).toBeNull()
   })
@@ -85,7 +85,7 @@ describe('subscribeConversationDeleted', () => {
     bridge.emit({ type: 'conversationCreated', conversation: created })
     bridge.emit({ type: 'conversationUpdated', conversation: updated })
     bridge.emit({ type: 'conversationsReceived', conversations: [] })
-    bridge.emit({ type: 'turnState', state: 'thinking' })
+    bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     expect(onDeleted).not.toHaveBeenCalled()
   })
 

@@ -417,7 +417,7 @@ export interface ModelAnnouncedPayload {
  * task's lifecycle is orthogonal to its turn's, which is the whole #1240 point. The daemon doc is
  * explicit that a client renders it "as its own thread of activity, not as part of the turn it appeared
  * in" — the same characterization `queue_state` got in #720, and the reason the emitted event KEEPS
- * `conversation_id` (daemon state keyed by id) rather than dropping it like `api_retry` / `turn_state`.
+ * `conversation_id` — daemon state keyed by id ("turn-stream item, or daemon state?", `events.ts`).
  *
  * `tool_call_id` IS THE WIRE NAME, not `tool_use_id` — the daemon's own prose reads "claude's
  * `tool_use_id`, under the name `tool_use` and `tool_result` already use for it", which invites the
@@ -464,8 +464,8 @@ export interface BackgroundTaskStartedPayload {
  *
  * NOT A TURN-STREAM ITEM, exactly like its sibling: no `turn_id`, and it opens, closes and alters no
  * turn — a background task's lifecycle is orthogonal to its turn's, which is the whole #1240 point. Hence
- * the emitted event KEEPS `conversation_id` (daemon state keyed by id) rather than dropping it like
- * `api_retry` / `turn_state`.
+ * the emitted event KEEPS `conversation_id` — daemon state keyed by id ("turn-stream item, or
+ * daemon state?", `events.ts`).
  *
  * `patch` IS AN OPAQUE STRING. Do not type it as JSON, do not parse it, do not enumerate its keys:
  *
@@ -585,8 +585,8 @@ export interface BackgroundTask {
  * since the key is always written and an absent key is a real defect rather than a valid zero.
  *
  * NOT A TURN-STREAM ITEM, exactly like both siblings: no `turn_id`, and it opens and closes no turn.
- * Hence the emitted event KEEPS `conversation_id` (daemon state keyed by id) rather than dropping it like
- * `api_retry` / `turn_state`.
+ * Hence the emitted event KEEPS `conversation_id` — daemon state keyed by id ("turn-stream item,
+ * or daemon state?", `events.ts`).
  *
  * NO TERMINAL / FINISH EVENT EXISTS IN THIS FAMILY, BY DESIGN. A task's disappearance from a later roster
  * is the available finish signal, but the daemon does not report a finish it cannot detect. "Finished" is

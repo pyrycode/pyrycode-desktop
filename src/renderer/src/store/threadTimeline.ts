@@ -134,8 +134,8 @@ export type ThreadEvent =
   // no payload — what makes AC4 ("no daemon-supplied string is ever rendered") true by construction:
   // there is no field to render. Onset-only; the reducer derives the self-clear on the next turn activity.
   | { type: 'stallDetected' }
-  // #493: the daemon's api-retry edge (#492 decodes it). Field-for-field identical to the `apiRetry`
-  // DaemonEvent, so the bridge is a filter + fresh copy (the `toolUse` / `sessionBoundary` discipline),
+  // #493: the daemon's api-retry edge (#492 decodes it; #737 widened that daemon event with a `conversationId`
+  // the bridge drops) — a filter + fresh copy (the `toolUse` / `sessionBoundary` discipline),
   // not a remap. The EVENT carries `active` — a faithful renderer-local re-declaration of the wire edge
   // (true rising, false the explicit falling one); the reducer is the single place that translates that
   // edge into the state's presence-or-absence. Two integers and a bool, no string field: AC1 ("no

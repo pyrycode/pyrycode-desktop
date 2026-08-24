@@ -124,7 +124,7 @@ export type DaemonEvent =
   // key off the id are #674. No token, key, or raw frame.
   | { type: 'turnState'; state: WireTurnState; conversationId: string }
   // The stall-liveness arm (#315). A NULLARY arm — the wire StallPayload's only field
-  // (`conversation_id`) is dropped at the emit (single active conversation, matching turnState), so the
+  // (`conversation_id`) is dropped at the emit (single active conversation), so the
   // event carries no payload at all: no token, key, raw frame, or conversation content can ride it
   // (AC3-by-construction — the wire frame carries none). Onset-only; the client self-clear on next turn
   // activity is the render slice's concern (#317). Consumed by the render slice #317 (not yet built), so
@@ -134,7 +134,7 @@ export type DaemonEvent =
   // NOT nullary: it carries the edge (`active` — true is the rising edge, false the explicit falling one)
   // and the attempt counter (`current` / `total`), because the render slice #493 shows "attempt N/M" and
   // the wire gives it nowhere else. `conversation_id` is dropped at the emit (single active conversation,
-  // matching turnState / stallDetected), so what crosses IPC is one bool and two integers and nothing
+  // matching stallDetected), so what crosses IPC is one bool and two integers and nothing
   // else — no token, key, raw frame, or conversation content can ride an arm with no string field on it.
   // NOT onset-only and NOT deduped: the daemon re-fires the rising edge as the count climbs, and the
   // transport holds no state, so a consumer sees exactly one event per daemon frame (including a verbatim
@@ -147,7 +147,7 @@ export type DaemonEvent =
   // carries the edge (`active` — true is compaction starting, false the explicit falling edge), but
   // BANNER-ONLY: the wire streams no compaction progress, so there is no counter to carry and #496 must
   // not invent one. `conversation_id` is dropped at the emit (single active conversation, matching
-  // turnState / stallDetected / apiRetry), so what crosses IPC is one bool and nothing else — no token,
+  // stallDetected / apiRetry), so what crosses IPC is one bool and nothing else — no token,
   // key, raw frame, or conversation content can ride an arm with no string field on it. NOT onset-only
   // and NOT deduped: the transport holds no state, so a consumer sees exactly one event per daemon
   // frame (including a verbatim repeat), and #496 is idempotent on the repeat. Ships dormant: all three
@@ -184,7 +184,7 @@ export type DaemonEvent =
   // cache key, a filename, or a lookup path. This slice has no DOM sink; the constraint is inherited
   // here for #588.
   //
-  // `conversation_id` is dropped at the emit (single active conversation, matching turnState /
+  // `conversation_id` is dropped at the emit (single active conversation, matching
   // stallDetected / apiRetry / compacting): #588 holds a SINGLE value replaced on each announcement, so
   // nothing downstream keys by conversation — the condition under which backgroundTaskStarted keeps it.
   // NOT deduped: the transport holds no state, so a consumer sees exactly one event per daemon frame,
@@ -194,7 +194,7 @@ export type DaemonEvent =
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //
-  // Carries `conversationId` — unlike turnState / toolUse / apiRetry / compacting, which drop it. The
+  // Carries `conversationId` — unlike toolUse / apiRetry / compacting, which drop it. The
   // test is "turn-stream item, or daemon state?", not "does the frame have the field": this one carries
   // NO turn_id, opens and closes no turn, and the daemon doc says a client renders it "as its own thread
   // of activity, not as part of the turn it appeared in" — the same characterization queue_state got in
@@ -325,7 +325,7 @@ export type DaemonEvent =
   //
   // `messageType` is deliberately allowed to be the empty string — the `undecodable` site means nothing
   // decoded, so no type was ever read. `conversation_id` is dropped at the emit (single active
-  // conversation, the turnState convention). Ships dormant: all three exhaustive bridges no-op it until
+  // conversation). Ships dormant: all three exhaustive bridges no-op it until
   // the render slice — the compacting-was-a-no-op-until-#496 precedent.
   | {
       type: 'unrecognizedMessage'
@@ -408,7 +408,7 @@ export type DaemonEvent =
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   // The queued-backlog arm (#292). Reuses the wire QueuedItem row type verbatim (the
   // conversationsReceived precedent) — snake_case, order preserved from the wire (enqueue order). Carries
-  // `conversationId` (unlike turnState / toolUse, which drop it) because the snapshot is REPLACEMENT-truth
+  // `conversationId` (unlike toolUse, which drops it) because the snapshot is REPLACEMENT-truth
   // and the #293 store keys its backlog by it. Consumed by the #293 queue store, NOT the session / timeline
   // / modal store — queue_state is daemon STATE, not a turn-stream item (#720), so all three exhaustive
   // bridges no-op it. `text` is UNTRUSTED daemon-relayed transit content the eventual render slice (#294)
@@ -442,7 +442,7 @@ export type DaemonEvent =
   // The conversation-deleted arm (#375). Carries the BARE routing `id` (a fresh literal, not the wire
   // payload object): the sibling conversationUpdated reuses ConversationUpdatedPayload by reference
   // because it has five fields with nothing to drop, but a delete reply has exactly one field, and the
-  // single-field emit idiom (turnState carrying `state`, sessionSettingsUpdated naming `sessionId`) is a
+  // single-field emit idiom (sessionSettingsUpdated naming `sessionId`) is a
   // fresh literal naming individual fields — so this flattens to `id: string`. The renderer removes a row
   // by id, a bare string is exactly what it needs, and events.ts stays free of a ConversationDeletedPayload
   // import (a primitive crosses IPC). Emitted from a CORRELATED reply (matched by in_reply_to, NOT a
@@ -463,8 +463,8 @@ export type DaemonEvent =
   // The workspace-folder-created arm (#381). Carries the BARE created `path` (a fresh literal, not the
   // wire payload object): the sibling conversationCreated reuses ConversationCreatedPayload by reference
   // because it has five fields with nothing to drop, but this reply has exactly one field, so it flattens
-  // to `path: string` — the single-field emit idiom (conversationDeleted naming `id`, turnState naming
-  // `state`, sessionSettingsUpdated naming `sessionId`): a fresh literal naming the one field, keeping
+  // to `path: string` — the single-field emit idiom (conversationDeleted naming `id`,
+  // sessionSettingsUpdated naming `sessionId`): a fresh literal naming the one field, keeping
   // events.ts free of a WorkspaceFolderCreatedPayload import (a primitive crosses IPC). Emitted from a
   // CORRELATED reply (matched by in_reply_to, NOT a broadcast), but the `path` is self-sufficient so no
   // correlation state is threaded. `path` is an UNTRUSTED daemon-supplied REMOTE filesystem path: the

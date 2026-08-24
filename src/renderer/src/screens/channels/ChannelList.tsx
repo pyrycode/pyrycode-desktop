@@ -10,6 +10,17 @@ import {
   selectDefaultWorkspace
 } from '../../store/defaultWorkspaceStore'
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
+import { useSessionStore, selectStatus } from '../../store/sessionStore'
+import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkStore'
+// #718 reuses #330's shipped two-leg mapping ACROSS SCREENS rather than growing a second copy of it —
+// two surfaces in the same window disagreeing about one leg is precisely the lie the dot pair exists to
+// prevent. Cross-screen import is this codebase's established idiom (ArchiveScreen and
+// WorkspacePickerSheet both import from `channels/channelListViewModel`; `settings/DefaultWorkspaceRow`
+// imports a component out of `conversation/`), and lifting the three symbols into a shared module first
+// would be adjacent refactoring for no behaviour change. No cycle: ConversationScreen reaches back into
+// this directory only for `channelListViewModel` and `RenameConversationDialog`, neither of which imports
+// this file.
+import { relayLeg, daemonLeg, type ConnectionLeg } from '../conversation/ConversationScreen'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
 import {
@@ -252,9 +263,10 @@ const HOST_ROW_LABEL = 'Server'
 //
 // The row repeats in BOTH trees on purpose (operator, 2026-08-21); the trees are not deduplicated.
 //
-// Not interactive in this slice: a plain <div>, no <button>, no onClick, no aria-label (collapse is #704,
-// the two connection dots are #672 and get no pre-rendered slot here). The label carries the row's meaning,
-// so the glyph is aria-hidden — a second accessible name would be noise.
+// Not interactive: a plain <div>, no <button>, no onClick, no aria-label. The label carries the row's
+// meaning, so the glyph is aria-hidden — a second accessible name would be noise. The two connection dots
+// #672 reserved this row's trailing edge for landed in #718, as the store-bound leaf below; the row itself
+// stays non-interactive, and the dots are named individually rather than through the row.
 //
 // The class names deliberately share no token — and no substring — with `channel-list__row`, `__row-open`
 // or `__section-header`, and the visible label contains neither "Channels" nor "Chats". Playwright locators
@@ -283,8 +295,82 @@ function HostRow(): JSX.Element {
         <path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
       </svg>
       <span className="channel-list__host-label">{HOST_ROW_LABEL}</span>
+      <HostConnectionDotsControl />
     </div>
   )
+}
+
+/**
+ * The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114) — the HOST leg first, the
+ * relay leg second. The pure view: props in, markup out, no store, no `window.pyry`, no effects.
+ *
+ * EXPORTED for the same reason `ConnectionStatusIndicator` and `CollapsibleWorkspaceGroup` are — it is the
+ * only seam through which the unit tier reaches the full category × label matrix; the container below can
+ * only ever render the two singletons' initial cell of it.
+ *
+ * LEG ORDER is the design's and is the REVERSE of `ConnectionStatusIndicator(relay, daemon)`'s. Both props
+ * are a `ConnectionLeg`, so a swap type-checks and renders silently — hence the ordering test.
+ *
+ * COLOUR comes from `.conn-dot--up` / `--in-progress` / `--down` in `conversation.css`, worn WITHOUT their
+ * `.conn-dot` base (which bakes the status row's 8px box). #330 already split colour from geometry into
+ * separate classes, and that split is the seam this slice reuses: re-declaring the three bindings in
+ * `channels.css` would be a second copy of the contract one level below the mapping, which is the thing
+ * AC2 forbids. `.channel-list__host-dot` therefore carries the 6px geometry and no `background`.
+ *
+ * `role="img"` is what makes `aria-label` land: on a bare <span> the accessible-name computation drops it,
+ * so the dot would have no name at all (AC3 passing review while failing in a screen reader). Not
+ * `role="status"` — that is a live region, and #330 deliberately declined one because the ConnectionBanner
+ * (#279) already politely announces disconnects. The wrapper carries no role and no name of its own: the
+ * host row renders twice and #670's two-pane layout shows the conversation status row at the same time, so
+ * #330's `role="group" aria-label="Connection status"` shape would put three identically-named groups in
+ * one window. AC3 asks for a name per dot, not per group.
+ *
+ * The dots carry NO text node (AC4) — the row shows the glyph, the machine name and the two dots only.
+ */
+export function HostConnectionDots({
+  host,
+  relay
+}: {
+  host: ConnectionLeg
+  relay: ConnectionLeg
+}): JSX.Element {
+  return (
+    <span className="channel-list__host-status">
+      <span
+        className={`channel-list__host-dot conn-dot--${host.category}`}
+        role="img"
+        aria-label={host.label}
+      />
+      <span
+        className={`channel-list__host-dot conn-dot--${relay.category}`}
+        role="img"
+        aria-label={relay.label}
+      />
+    </span>
+  )
+}
+
+// The store-bound container — `ConnectionStatusIndicatorControl`'s body with the two legs REORDERED. Reads
+// each leg through its own shipped narrow selector, so a relay flap re-renders these four dots and not a
+// single conversation row; lifting the reads to `ChannelList` would couple the whole sidebar to both legs'
+// state, and would also thread two more arguments through `renderBody`'s already-five-positional signature
+// for a value no intermediate uses.
+//
+// The honest cost: `ChannelListView` is no longer strictly pure — its subtree now reads two singletons,
+// which deviates from this file's own container-reads / pure-view doc comment. It is safe under the unit
+// harness for the same reason `ConnectionStatusIndicatorControl` is: a zustand `useStore` read
+// server-renders fine, yielding each store's initial value (relay `null` → "Relay Offline", session
+// `{ type: 'disconnected' }` → "Pyrycode Offline" — no false green).
+//
+// The two legs are read INDEPENDENTLY and never cross-referenced (AC2): each mapping takes one status and
+// returns one leg, so "relay up, host down" renders as exactly that. `daemonLeg`'s label says "Pyrycode"
+// rather than the design's "Host" or the visible row's "Server" — deliberately, since any other word would
+// re-derive the label half of #330's contract, and this dot reports the pyry DAEMON SESSION, not the
+// machine: a machine can be up while the daemon is not, and this dot goes red in that case.
+function HostConnectionDotsControl(): JSX.Element {
+  const daemonStatus = useSessionStore(selectStatus)
+  const relayStatus = useRelayLinkStore(selectRelayLinkStatus)
+  return <HostConnectionDots host={daemonLeg(daemonStatus)} relay={relayLeg(relayStatus)} />
 }
 
 // The workspace row heading each group under a host row (#703, Figma 106:3098) — which workspace the

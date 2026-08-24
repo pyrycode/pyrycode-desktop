@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ConversationSummary } from '@shared/wire/types'
-import { ChannelListView, CollapsibleWorkspaceGroup } from './ChannelList'
+import { ChannelListView, CollapsibleWorkspaceGroup, HostConnectionDots } from './ChannelList'
 import { UNKNOWN_WORKSPACE_LABEL } from './channelListViewModel'
+import type { ConnectionLeg } from '../conversation/ConversationScreen'
 
 // The #218 idiom: server-render the pure view with injected props — no DOM harness, no store. The
 // container's store read + Date.now() are the only impurities and are exercised by the shell tests.
@@ -82,6 +83,18 @@ const WORKSPACE_LABEL_OPEN = 'class="channel-list__workspace-label">'
 const EXPANDED_MARKER = 'aria-expanded="true"'
 const COLLAPSED_MARKER = 'aria-expanded="false"'
 
+// The two connection dots ending each host row (#718). These are the FULL attribute value, not the usual
+// one-class prefix: the dot wears the geometry class AND #330's shipped colour modifier, so
+// `class="channel-list__host-dot"` with its closing quote would silently match NOTHING — the quote follows
+// the LAST class. Pinning the whole value is the stronger assertion anyway, since one marker then fixes the
+// geometry class and the category → colour binding together.
+const DOT_UP_MARKER = 'class="channel-list__host-dot conn-dot--up"'
+const DOT_IN_PROGRESS_MARKER = 'class="channel-list__host-dot conn-dot--in-progress"'
+const DOT_DOWN_MARKER = 'class="channel-list__host-dot conn-dot--down"'
+
+// The pair's layout wrapper carries a sole class, so the file's usual exact-substring form applies to it.
+const DOT_WRAPPER_MARKER = 'class="channel-list__host-status"'
+
 const countOf = (markup: string, needle: string): number => markup.split(needle).length - 1
 
 // Reads the SHIPPED host labels back out of the render rather than restating the constant, so changing
@@ -116,6 +129,27 @@ const workspaceRowTagsIn = (markup: string): string[] => {
     at = markup.indexOf(WORKSPACE_ROW_MARKER, end)
   }
   return tags
+}
+
+// The same tag-slicing treatment for the connection dots (#718), so each dot's role and accessible name
+// are read back OUT of the render rather than restated. The prefix keeps its trailing SPACE on purpose:
+// the geometry class never appears alone, so this can match neither the pair's wrapper nor a label.
+const DOT_TAG_PREFIX = 'class="channel-list__host-dot '
+const hostDotTagsIn = (markup: string): string[] => {
+  const tags: string[] = []
+  for (let at = markup.indexOf(DOT_TAG_PREFIX); at !== -1; ) {
+    const end = markup.indexOf('>', at)
+    tags.push(markup.slice(markup.lastIndexOf('<', at), end + 1))
+    at = markup.indexOf(DOT_TAG_PREFIX, end)
+  }
+  return tags
+}
+
+// One dot tag's accessible name. Scanning to the next `"` is exact rather than approximate: React escapes
+// a quote inside an attribute VALUE as `&quot;`, so no label can carry the delimiter into the slice.
+const ariaLabelOf = (tag: string): string => {
+  const at = tag.indexOf('aria-label="') + 'aria-label="'.length
+  return tag.slice(at, tag.indexOf('"', at))
 }
 
 describe('ChannelListView', () => {
@@ -441,6 +475,50 @@ describe('ChannelListView', () => {
       expect(markup).toContain('&lt;img src=x onerror=boom&gt;')
     })
   })
+
+  describe('the connection dots ending each host row (#718)', () => {
+    // The #710 shape verbatim — one row per tree — so the dot counts below are exactly twice the host-row
+    // counts that describe pins.
+    const bothTrees = (): string =>
+      render([
+        row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true }),
+        row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false })
+      ])
+
+    it('ends every host row with one wrapper holding two dots (AC1)', () => {
+      const markup = bothTrees()
+      expect(countOf(markup, DOT_WRAPPER_MARKER)).toBe(2)
+      expect(hostDotTagsIn(markup)).toHaveLength(4)
+      const single = render([row({ id: 'c1', is_promoted: true })])
+      expect(countOf(single, DOT_WRAPPER_MARKER)).toBe(1)
+      expect(hostDotTagsIn(single)).toHaveLength(2)
+    })
+
+    it('names both legs from the two stores it reads, with no false green (AC2/AC3)', () => {
+      // The store-bound leaf hydrates to the two singletons' INITIAL values under `renderToStaticMarkup`
+      // — relay `null` and session `{ type: 'disconnected' }` — so this reads #330's shipped labels back
+      // out of the render rather than restating them (the `hostLabelsIn` treatment). It doubles as the
+      // regression guard on the leaf being server-renderable at all.
+      const labels = hostDotTagsIn(bothTrees()).map(ariaLabelOf)
+      expect(labels).toEqual([
+        'Pyrycode Offline',
+        'Relay Offline',
+        'Pyrycode Offline',
+        'Relay Offline'
+      ])
+    })
+
+    it('renders the dots INSIDE the host row, ahead of that tree conversation rows (AC1)', () => {
+      const markup = bothTrees()
+      expect(markup.indexOf(HOST_ROW_MARKER)).toBeLessThan(markup.indexOf(DOT_WRAPPER_MARKER))
+      expect(markup.indexOf(DOT_WRAPPER_MARKER)).toBeLessThan(markup.indexOf(ROW_MARKER))
+    })
+
+    it('renders no dots where there is no host row (AC1)', () => {
+      expect(countOf(render(null), DOT_WRAPPER_MARKER)).toBe(0)
+      expect(countOf(render([]), DOT_WRAPPER_MARKER)).toBe(0)
+    })
+  })
 })
 
 describe('CollapsibleWorkspaceGroup (#704)', () => {
@@ -495,5 +573,62 @@ describe('CollapsibleWorkspaceGroup (#704)', () => {
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
     expect(workspaceRowTagsIn(markup)[0]).not.toContain('title=')
+  })
+})
+
+describe('HostConnectionDots (#718)', () => {
+  // The `ConnectionStatusIndicator` seam: the component is exported PURELY so the full category × label
+  // matrix is reachable with injected legs — the container above can only ever render the two singletons'
+  // initial state, which is one cell of it.
+  const leg = (category: ConnectionLeg['category'], label: string): ConnectionLeg => ({ category, label })
+
+  const dots = (host: ConnectionLeg, relay: ConnectionLeg): string =>
+    renderToStaticMarkup(<HostConnectionDots host={host} relay={relay} />)
+
+  it('binds each category to #330 shipped colour modifier (AC2)', () => {
+    // One case per LegCategory, so the binding is pinned rather than sampled. A re-declared
+    // `.channel-list__host-dot--up` family — the second copy of the contract AC2 forbids, one level below
+    // the mapping — fails all three here.
+    expect(dots(leg('up', 'Pyrycode Connected'), leg('up', 'Relay Connected'))).toContain(DOT_UP_MARKER)
+    expect(dots(leg('in-progress', 'Pyrycode Connecting'), leg('up', 'Relay Reachable'))).toContain(
+      DOT_IN_PROGRESS_MARKER
+    )
+    expect(dots(leg('down', 'Pyrycode Offline'), leg('down', 'Relay Offline'))).toContain(DOT_DOWN_MARKER)
+  })
+
+  it('puts the HOST leg first and the relay leg second, the design order', () => {
+    // The assertion that catches a developer copying `ConnectionStatusIndicator(relay, daemon)`'s
+    // argument order, which is the REVERSE of this one: both props are a `ConnectionLeg`, so swapping
+    // them type-checks and renders silently.
+    const markup = dots(leg('up', 'Pyrycode Connected'), leg('down', 'Relay Offline'))
+    expect(markup.indexOf('Pyrycode Connected')).toBeLessThan(markup.indexOf('Relay Offline'))
+  })
+
+  it('renders the two legs independently, one category each (AC2)', () => {
+    // "Relay up, host down" renders as exactly that — neither leg is derived from the other.
+    const tags = hostDotTagsIn(dots(leg('down', 'Pyrycode Offline'), leg('up', 'Relay Connected')))
+    expect(tags).toHaveLength(2)
+    expect(tags[0]).toContain(DOT_DOWN_MARKER)
+    expect(tags[1]).toContain(DOT_UP_MARKER)
+  })
+
+  it('gives every dot an accessible name carrying its leg and its state (AC3)', () => {
+    const tags = hostDotTagsIn(
+      dots(leg('in-progress', 'Pyrycode Connecting'), leg('up', 'Relay Reachable'))
+    )
+    expect(tags.map(ariaLabelOf)).toEqual(['Pyrycode Connecting', 'Relay Reachable'])
+    for (const tag of tags) {
+      // `aria-label` on a bare <span> is DROPPED by the accessible-name computation — a name needs a role
+      // to land on, and `role="img"` is the ARIA-in-HTML-legal one for a non-interactive graphic. Without
+      // it AC3 would pass review and fail in a screen reader.
+      expect(tag).toContain('role="img"')
+    }
+  })
+
+  it('shows no visible text (AC4)', () => {
+    // Scoped to the pair's own render: the host row legitimately shows the glyph and the machine name, so
+    // a document-wide "no text" assertion would be plain wrong rather than strict.
+    const markup = dots(leg('up', 'Pyrycode Connected'), leg('up', 'Relay Connected'))
+    expect(markup.replace(/<[^>]*>/g, '')).toBe('')
   })
 })

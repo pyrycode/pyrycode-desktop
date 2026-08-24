@@ -73,6 +73,40 @@
   font-weight: var(--text-label-large-weight);
 }
 
+/* The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114). `margin-left: auto` is the
+   whole point of this rule: `.channel-list__host` had no trailing element before this slice, so riding its
+   `gap` alone would leave the pair sitting beside the label instead of at the row's trailing edge. The 16px
+   right inset comes from the row's own padding, which is where it must come from — the design's absolute
+   x coordinates (341 and 353) are measured in a 360-wide design row against a shipped 400px sidebar, and
+   read literally they would put the trailing dot 1px from the row's edge, contradicting the 16px inset
+   #703 deliberately aligned the workspace row to. Only the RELATIVE geometry transfers: 6px diameter, 6px
+   gap, host leg first. */
+.channel-list__host-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* One dot. GEOMETRY ONLY — the colour is `.conn-dot--up` / `--in-progress` / `--down` in conversation.css,
+   worn as a modifier WITHOUT its `.conn-dot` base (which bakes the status row's 8px box). That reads as a
+   mistake unless said out loud, so: it is deliberate, and the three category → token bindings must NOT be
+   re-declared here — #330's contract having exactly one copy in the renderer is what AC2 asks for, and the
+   split between colour and geometry classes is the seam #330 left for exactly this.
+
+   Both 6px values are literals rather than tokens, the `.conn-dot { width: 8px }` precedent for structural
+   component geometry. For the gap that is load-bearing rather than stylistic: the design's 12px dot pitch
+   is diameter + gap, so the gap must EQUAL the diameter, and 6px sits exactly between --space-1 (4px) and
+   --space-2 (8px) with no tie-break available. Centring the 6px dot against the label's 20px line box
+   reproduces the design's 6×14 instance frame without a wrapper element (the #703 `Row icon` treatment). */
+.channel-list__host-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+}
+
 /* The workspace row heading each group under a host row (#703, Figma 106:3098) — structurally the host
    row one indent deeper. The 24px LEFT inset is the whole point of the rule: it is the 8px-deeper indent
    (vs the host row's 16px) that shows the workspace nested under the host, and it is how the design draws

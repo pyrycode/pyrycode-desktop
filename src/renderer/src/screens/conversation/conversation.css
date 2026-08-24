@@ -1380,7 +1380,14 @@
 }
 
 /* The category → colour contract (mirrors mobile's ConnectionStatusLine): up = success green,
-   in-progress = warning amber (the daemon `connecting` state, AC3), down = error peach. */
+   in-progress = warning amber (the daemon `connecting` state, AC3), down = error peach.
+   These three rules have a SECOND consumer since #718: the sidebar host row's dot pair wears them without
+   `.conn-dot` above (whose 8px box is this row's, not the sidebar's), so they are the renderer's single
+   copy of the contract and not the status row's private detail. Removing this indicator — a live operator
+   decision — must not take them with it: the sidebar's dots would then render at 6px with no background
+   and go invisible SILENTLY, since the unit tier asserts markup in a node environment and never a computed
+   colour. Whoever deletes the rest of `.status-row__connection` moves these three rather than dropping
+   them. */
 .conn-dot--up {
   background: var(--color-success);
 }

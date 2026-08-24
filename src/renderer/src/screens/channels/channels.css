@@ -38,6 +38,41 @@
   font-weight: var(--text-label-large-weight);
 }
 
+/* The host row heading each tree (#710, Figma 106:3094) — the machine the tree's conversations live on,
+   sitting between the section label and that tree's rows. The 16px horizontal padding aligns it with both
+   (Figma px-16/py-4); centering the 12px glyph against the label's 20px line box reproduces the design's
+   20px-tall `Row icon` wrapper frame (106:3107) without needing a wrapper element. Not interactive in this
+   slice, so no radius, background, hover or focus rule — the Figma's 6px corner has nothing to clip. */
+.channel-list__host {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-4);
+}
+
+/* The server-rack glyph. `display: block` is the file's icon convention (__save-icon / __fab-icon); the
+   flex basis keeps it from shrinking. Its 12px box is set on the <svg> as structural component geometry
+   (the FAB's fixed 56px square precedent) — half the 24px of the interactive icon buttons, so it reads as
+   a level marker rather than a control. Color inherits via currentColor. */
+.channel-list__host-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* The label. Same type set as the section header above it — the theme's label-large is an EXACT match for
+   the design's M3 title-small (14/20/0.1/500) — but full-strength on-surface with NO opacity. That
+   contrast against the header's muted on-surface-variant at .85 is the point: the machine's name reads one
+   step stronger than the section label. #688 swaps the constant for an operator-typed label; the
+   ellipsizing treatment `.channel-list__title` carries belongs with that ticket, since a six-character
+   compile-time constant cannot overflow the 400px sidebar. */
+.channel-list__host-label {
+  color: var(--color-on-surface);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
 /* One row (Figma 15:59) — a flex wrapper holding the open action and the optional Save-as-channel
    affordance as SIBLINGS (an interactive control cannot nest inside the open <button>, #274). It carries
    no padding/hover itself; those live on the open action so the two children highlight independently. */

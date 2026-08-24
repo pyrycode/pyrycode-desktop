@@ -90,11 +90,15 @@ climbs** with no wire dedup, so the decoder (and everything downstream) must not
 `parseApiRetryPayload` scales `parseStallPayload` from one field to four, but invents no new check: all
 four map onto existing helpers (`requireString` / `requireBoolean` / two `requireNumber` calls), so
 `current: 0` / `total: 0` ("count unknown") and `active: false` (the falling edge) both decode as values,
-never coerced or treated as absent. The consumer arm drops only `conversation_id`, carrying `active` /
-`current` / `total` onward — the first payload since `turn_state` to survive the emit as more than a bare
-`conversation_id`-dropped scalar or a nullary literal. Shipped dormant; the render slice #493 is now the
-first consumer, feeding a new `apiRetry: ApiRetryStatus | null` timeline-store scalar — `stalled`'s peer
-with the clearing semantics inverted (an explicit falling edge, not a client-derived self-clear).
+never coerced or treated as absent. At ship time the consumer arm dropped only `conversation_id`,
+carrying `active` / `current` / `total` onward — the first payload since `turn_state` to survive the emit
+as more than a bare `conversation_id`-dropped scalar or a nullary literal. Shipped dormant; the render
+slice #493 is now the first consumer, feeding a new `apiRetry: ApiRetryStatus | null` timeline-store
+scalar — `stalled`'s peer with the clearing semantics inverted (an explicit falling edge, not a
+client-derived self-clear). [#737](../codebase/737.md) later carried `conversation_id` onward too, as
+`conversationId`, the same daemon-asserted-routing-key widening [#724](../codebase/724.md) and
+[#732](../codebase/732.md) gave `turn_state` and `stall`; it stops at the renderer timeline bridge, so
+`ThreadEvent.apiRetry` keeps its four fields.
 
 [#495](../codebase/495.md) added a fifteenth kind, `compacting` → `compacting` — the PTY-derived status
 peer of `stall`/`api_retry` the daemon fans out while claude auto-compacts the conversation (pyrycode

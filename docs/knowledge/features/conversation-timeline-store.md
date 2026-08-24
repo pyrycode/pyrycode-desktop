@@ -61,9 +61,13 @@ turn activity. `selectStalled` joins `selectItems`/`selectPhase` as the read sur
 
 [#493](../codebase/493.md) added a seventh owned arm, `apiRetry` — the daemon's api-retry status signal
 ([#492](../codebase/492.md)), also moved out of the inverse-filter `null` list it shipped dormant in.
-Unlike `stallDetected`, this arm carries data, so `DaemonEvent.apiRetry` and `ThreadEvent.apiRetry` are
-field-for-field identical (a filter-and-copy, the `toolUse`/`toolResult` shape) rather than
-arm-selection-only. `reduceTimeline`'s new arm sets a third scalar, `apiRetry: ApiRetryStatus | null`,
+At ship time, unlike `stallDetected`, this arm carried data, so `DaemonEvent.apiRetry` and
+`ThreadEvent.apiRetry` were field-for-field identical (a filter-and-copy, the `toolUse`/`toolResult`
+shape) rather than arm-selection-only. [#737](../codebase/737.md) later widened the `DaemonEvent` side
+with `conversationId` — the same routing-key widening [#724](../codebase/724.md) did for `turnState`
+and [#732](../codebase/732.md) did for `stallDetected` — so the bridge case is now a filter that also
+drops a field, not a plain copy; `ThreadEvent.apiRetry` is the side that stays four-field.
+`reduceTimeline`'s new arm sets a third scalar, `apiRetry: ApiRetryStatus | null`,
 beside `phase`/`stalled` — but with the **clear semantics inverted** from `stalled`: the four
 turn-activity arms carry it through unchanged (compile-forced, one line each) rather than clearing it,
 since `api_retry` has an explicit wire falling edge (`active: false`) and `stall` does not. The falling
@@ -165,7 +169,9 @@ translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
 // (#317) / apiRetry (#493) / compacting (#496) / connected->reconnected (#538), each rebuilt as a fresh
 // named-field literal (never `return event`, never a spread — for stallDetected and connected->
 // reconnected, both sides are nullary, so the "literal" is arm-selection only; apiRetry and compacting
-// carry data, so each is a filter-and-copy like toolUse/toolResult). Every other arm -> null via
+// carry data, so each is a filter-and-copy like toolUse/toolResult — apiRetry's DaemonEvent side also
+// carries conversationId since #737, which the bridge drops; compacting stays field-for-field until
+// #730). Every other arm -> null via
 // explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
@@ -207,11 +213,14 @@ the mapping were nullary — `DaemonEvent.stallDetected` and `ThreadEvent.stallD
 `{ type: 'stallDetected' }`, so the case was pure arm-selection with no field to filter or copy.
 [#732](../codebase/732.md) widened `DaemonEvent.stallDetected` with `conversationId`; the bridge case
 is now a filter (drops the id), and `ThreadEvent.stallDetected` is the only side still nullary.
-`apiRetry` ([#493](../codebase/493.md)) returns to the filter-and-copy shape — `DaemonEvent.apiRetry`
-and `ThreadEvent.apiRetry` are field-for-field identical (`active`/`current`/`total`) — but is the first
-status-liveness arm (after `stallDetected`) whose `reduceTimeline` handling translates an **edge into a
-presence**: the event always carries `active`, but the state holds `ApiRetryStatus | null`, collapsing
-the wire's rising/falling edges into one representation with no field left over to leak a stale counter.
+`apiRetry` ([#493](../codebase/493.md)) returned to the filter-and-copy shape at ship time —
+`DaemonEvent.apiRetry` and `ThreadEvent.apiRetry` were field-for-field identical (`active`/`current`/
+`total`) — and is the first status-liveness arm (after `stallDetected`) whose `reduceTimeline` handling
+translates an **edge into a presence**: the event always carries `active`, but the state holds
+`ApiRetryStatus | null`, collapsing the wire's rising/falling edges into one representation with no
+field left over to leak a stale counter. [#737](../codebase/737.md) later widened `DaemonEvent.apiRetry`
+with `conversationId`, the same routing-key widening `stallDetected` got from #732 above; the bridge
+case is now a filter, not a plain copy, and `ThreadEvent.apiRetry` is the side that stays four-field.
 `compacting` ([#496](../codebase/496.md)) is `apiRetry`'s structural twin minus the counter — also
 filter-and-copy (`active` only), but the state holds a plain `boolean` rather than `Status | null`, since
 there's no counter to discard on the falling edge. The reducer arm collapses to a single

@@ -378,6 +378,71 @@ function requireStringArrayOrNull(
   })
 }
 
+/** The three keys that reach Object.prototype's own members. Dropped from any daemon-keyed map, never
+ *  copied onto the fresh container — see optionalStringMap. */
+const RESERVED_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** Narrow one OPTIONAL string-map field off the payload — an object whose every own enumerable value is
+ *  a string — or fail closed with a category-only message. requireStringArrayOrNull's posture rotated
+ *  from a list to a map, for `tool_use.input` (#642, daemon-side pyrycode#1678):
+ *
+ *    undefined (key absent)         → undefined      a PRE-#1678 daemon; the one case that does not throw
+ *    null / array / string / number → throws         a post-#1678 daemon never writes any of these
+ *    {}                             → a fresh {}     an EMPTY MAP, never collapsed into undefined
+ *    every own value a string       → a fresh object minus the reserved keys
+ *    any own value a non-string     → throws         the WHOLE payload, never a partial map
+ *
+ *  This is the OPTIONAL-field parse the require* family deliberately is not — hence the name: an
+ *  omitted key returns `undefined` rather than failing closed, which is the whole difference
+ *  requireStringArrayOrNull's doc comment draws. Optional to the CLIENT, not on the wire: the Go field
+ *  has no `omitempty`, so absence means an older daemon (the conversation_updated.is_archived scar —
+ *  requiring it would fail-close every frame from a build predating the daemon change).
+ *
+ *  Taken from requireStringArrayOrNull: one bad entry throws the whole payload closed (never a partial
+ *  map with the bad entries skipped — the parseTurnStatePayload posture), an empty container is valid,
+ *  and the result is a FRESH container built from own enumerable keys only, so nothing inherited or
+ *  container-borne rides along. Deliberately NO cap on entry count or value length: the daemon owns
+ *  those bounds and MAX_PLAINTEXT_BYTES already gates the whole frame upstream — a client-invented
+ *  bound fail-closes a valid future frame (the parseQueuedItem no-cross-validate posture, ADR 0002).
+ *
+ *  This is the FIRST narrower in this file where the DAEMON chooses the object keys; every other one
+ *  copies a fixed set of known field names, which is why parseApiRetryPayload gets prototype-pollution
+ *  safety for free. Three reserved keys are therefore DROPPED rather than carried or thrown on:
+ *  throwing would let the model suppress its own tool row from the timeline by naming a parameter
+ *  `__proto__`, and carrying would buy inconsistency rather than fidelity, since a downstream
+ *  `Object.assign` / `target[k] = …` copy invokes the prototype setter and silently loses the entry
+ *  anyway. The value-type check runs for EVERY key, reserved ones included, BEFORE the skip — so
+ *  `{"__proto__": {…}}` throws (non-string value) rather than being quietly dropped.
+ *
+ *  The message is a NEW category — `missing required field:` would be actively misleading here, since
+ *  an absent key is exactly the case that does not throw. It names the client-owned `field` constant
+ *  only: a daemon-supplied key is model-authored text just like a value, and neither may reach a
+ *  message or a log (tool inputs are paths, command lines, URLs, and whatever an MCP tool takes). */
+function optionalStringMap(
+  payload: Record<string, unknown>,
+  field: string
+): Record<string, string> | undefined {
+  const value = payload[field]
+  if (value === undefined) {
+    return undefined
+  }
+  if (!isRecord(value)) {
+    throw new WireDecodeError(`malformed optional field: ${field}`)
+  }
+  const map: Record<string, string> = {}
+  for (const key of Object.keys(value)) {
+    const entry = value[key]
+    if (typeof entry !== 'string') {
+      throw new WireDecodeError(`malformed optional field: ${field}`)
+    }
+    if (RESERVED_MAP_KEYS.has(key)) {
+      continue
+    }
+    map[key] = entry
+  }
+  return map
+}
+
 /**
  * Narrow an opaque payload into a MessagePayload. Fail-closed: throws WireDecodeError (never a
  * partial value) on any structural or semantic mismatch. Returns only the four known fields; unknown
@@ -891,6 +956,14 @@ function parseSessionSettingsUpdatedPayload(payload: unknown): SessionSettingsUp
  * `input_summary` could echo tool content). Unlike parseTurnStatePayload there is NO enum: the
  * fail-closed defence is required-string presence, and requireString covers missing / non-string alike.
  * `name` / `input_summary` are carried through as opaque display text, never interpreted here.
+ *
+ * `input` (#642) is the first OPTIONAL field this file narrows off a payload, and the first daemon-KEYED
+ * map anywhere in it — both handled by optionalStringMap: an omitted key decodes as `undefined`
+ * (a pre-pyrycode#1678 daemon), `{}` as a
+ * distinct empty map, and anything else malformed throws the whole frame. The key is set on the
+ * returned literal unconditionally — `undefined` when the wire omitted it, which `toEqual` treats as
+ * absent and which JSON.stringify drops at the IPC boundary. The consumer contract is
+ * `payload.input === undefined`, never `'input' in payload`.
  */
 function parseToolUsePayload(payload: unknown): ToolUsePayload {
   if (!isRecord(payload)) {
@@ -901,7 +974,8 @@ function parseToolUsePayload(payload: unknown): ToolUsePayload {
   const tool_use_id = requireString(payload, 'tool_use_id')
   const name = requireString(payload, 'name')
   const input_summary = requireString(payload, 'input_summary')
-  return { conversation_id, turn_id, tool_use_id, name, input_summary }
+  const input = optionalStringMap(payload, 'input')
+  return { conversation_id, turn_id, tool_use_id, name, input_summary, input }
 }
 
 /**
@@ -1459,11 +1533,13 @@ export function parseInboundMessage(
       return { kind: 'session-settings-updated', sessionSettingsUpdated, inReplyTo: envelope.in_reply_to }
     }
     case 'tool_use': {
-      // Narrow BEFORE logging so a malformed frame (a missing / non-string field) throws first and
-      // leaves no record. No decoded field (name / input_summary / tool_use_id / turn_id /
-      // conversation_id) is logged — only the frame's byte length + one-way hash, reusing the existing
-      // content-free field set. `name` / `input_summary` are carried onward by the consumer (the render
-      // payload, #218), but they never enter the diagnostic log.
+      // Narrow BEFORE logging so a malformed frame (a missing / non-string field, or a malformed
+      // `input` map) throws first and leaves no record. No decoded field (name / input_summary /
+      // tool_use_id / turn_id / conversation_id / input) is logged — only the frame's byte length +
+      // one-way hash, reusing the existing content-free field set. Of `input` (#642) NEITHER ITS KEYS
+      // NOR ITS VALUES enter the log: a daemon-chosen field name is itself model-authored text, since
+      // an MCP tool can name a field anything. `name` / `input_summary` / `input` are carried onward by
+      // the consumer (the render payload, #218 / #645), but they never enter the diagnostic log.
       const toolUse = parseToolUsePayload(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',

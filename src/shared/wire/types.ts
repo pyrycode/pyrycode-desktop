@@ -688,6 +688,34 @@ export interface SessionTransitionPayload {
  * decoded, never interpreted. `input_summary` is the daemon's human-readable précis of the tool input,
  * NOT the raw input (pyrycode `internal/turnbridge`), carried verbatim and never re-summarized. The
  * render slice (#218) must render both as plain text, never HTML. See #217.
+ *
+ * `input` is a SIXTH field (pyrycode#1678, merged as pyrycode PR #1682): the tool's own input fields
+ * as name → value, so a client can list what a tool is acting on instead of only the `input_summary`
+ * précis. The contract this comment carries to the store slice (#643) and the render slice (#645):
+ *
+ * - The values are DISPLAY STRINGS, NOT CAPABILITIES — model-authored text that crossed the subprocess
+ *   trust boundary, which the daemon neither resolved nor validated. A `file_path` is not canonicalised
+ *   and may be relative or traversing; a `Bash` `command` is a literal shell command line. Never
+ *   resolve, open, fetch, or execute anything derived from a value, and never let one become a path, a
+ *   filename, a cache key, or a lookup path. The field NAMES are daemon-chosen too — an MCP tool can
+ *   name a field anything — so they are as untrusted as the values.
+ * - OPTIONAL TO THE CLIENT, not optional on the wire. The Go field carries no `omitempty` and a custom
+ *   MarshalJSON normalises a nil map to `{}`, so a post-#1678 daemon ALWAYS writes the key and never
+ *   `null`, emitting `{}` alike for an absent, empty, or non-object input. An absent key means a
+ *   PRE-#1678 daemon — the everyday case while daemon and client are built days apart. An empty map is
+ *   therefore distinguishable from an absent one and must never be collapsed into it.
+ * - KEY ORDER IS ALPHABETICAL AND MEANINGLESS (a Go map-marshalling artefact, not the tool's argument
+ *   order). Display order is the client's choice.
+ * - THE MAP MAY BE INCOMPLETE: the daemon's bounds (4000 runes per value; 8500 runes of keys plus
+ *   values across at most 16 fields) drop fields and name none of them. `input_summary` stays the
+ *   whole-input fallback. A value the daemon shortened ends in `…`, indistinguishable from one that
+ *   legitimately ends in `…` — carried verbatim, never stripped, never detected here.
+ * - The three reserved keys `__proto__`, `constructor` and `prototype` are DROPPED by the decoder and
+ *   can never appear in this map. Consumers must ITERATE (`Object.entries`), never probe by key: the
+ *   container has an ordinary prototype, so `map['toString']` returns an inherited function, not data.
+ * - Like `name` / `input_summary`, every key and value is plain text for the render slice — never HTML.
+ *
+ * See #642.
  */
 export interface ToolUsePayload {
   conversation_id: string
@@ -695,6 +723,7 @@ export interface ToolUsePayload {
   tool_use_id: string
   name: string
   input_summary: string
+  input?: Record<string, string>
 }
 
 /**

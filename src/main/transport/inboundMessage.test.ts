@@ -2,7 +2,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { parseInboundMessage } from './inboundMessage'
 import { encodeEnvelope, base64StdEncode, WireDecodeError } from './codec'
 import { createDiagnosticLog, type DiagnosticLog } from '../diagnosticLog'
-import { MAX_PLAINTEXT_BYTES, type MessagePayload } from '../../shared/wire/types'
+import {
+  MAX_PLAINTEXT_BYTES,
+  type MessagePayload,
+  type ToolUsePayload
+} from '../../shared/wire/types'
 
 // parseInboundMessage sits on the untrusted→trusted boundary, mirroring parseHelloAck: it is fed
 // bytes a malicious relay peer could shape. Inputs are built with the REAL codec (encodeEnvelope) so
@@ -339,6 +343,20 @@ const TOOL_USE = {
   tool_use_id: 'tu-1',
   name: 'Read',
   input_summary: 'reads /etc/hosts'
+}
+
+/** A tool_use payload carrying the `input` map (#642) — the post-pyrycode#1678 daemon's shape. The
+ *  values exercise the wire facts: every value is ALREADY a string daemon-side, so a stringified JSON
+ *  literal stays that literal STRING, and a value the daemon shortened keeps its trailing `…` verbatim. */
+const TOOL_USE_WITH_INPUT = {
+  ...TOOL_USE,
+  input: {
+    file_path: '/etc/hosts',
+    limit: 'null',
+    all: 'true',
+    lines: '[1,2]',
+    command: 'grep -rn needle /etc …'
+  }
 }
 
 /** A fully-populated, well-formed tool_result payload — a success (#229). */
@@ -2614,6 +2632,121 @@ describe('parseInboundMessage — tool_use fail-closed (#217)', () => {
   })
 })
 
+describe('parseInboundMessage — tool_use input (#642)', () => {
+  /** Decode a tool_use frame and hand back its narrowed payload — the union narrowing the field-level
+   *  assertions below need. Throws (failing the test) on any other kind. */
+  function decodeToolUse(payload: unknown): ToolUsePayload {
+    const result = parseInboundMessage(encodeToolUse(payload))
+    if (result?.kind !== 'tool-use') {
+      throw new Error(`expected a tool-use, got ${String(result?.kind)}`)
+    }
+    return result.toolUse
+  }
+
+  it('narrows a populated input map through with its entries unchanged', () => {
+    expect(parseInboundMessage(encodeToolUse(TOOL_USE_WITH_INPUT))).toEqual({
+      kind: 'tool-use',
+      toolUse: TOOL_USE_WITH_INPUT
+    })
+  })
+
+  it('decodes an empty input object as an EMPTY MAP, never as absent (AC1)', () => {
+    // "This daemon sent no fields for this call" and "this daemon cannot send fields at all" are
+    // different facts. A careless `if (!value) return undefined` collapses them; this is the pin.
+    const toolUse = decodeToolUse({ ...TOOL_USE, input: {} })
+    expect(toolUse.input).toEqual({})
+    expect(toolUse.input).toBeDefined()
+  })
+
+  it('decodes an OMITTED input key as undefined, the other five fields normal (pre-#1678 daemon)', () => {
+    const toolUse = decodeToolUse(TOOL_USE)
+    expect(toolUse.input).toBeUndefined()
+    expect(toolUse).toEqual(TOOL_USE)
+  })
+
+  it('throws on a literal null input — the value requireStringOrNull would have ACCEPTED', () => {
+    expect(() => parseInboundMessage(encodeToolUse({ ...TOOL_USE, input: null }))).toThrow(
+      WireDecodeError
+    )
+  })
+
+  it('throws when input is present but not an object (array, string, number, boolean)', () => {
+    for (const input of [['a'], 'nope', 42, true]) {
+      expect(() => parseInboundMessage(encodeToolUse({ ...TOOL_USE, input }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws the WHOLE frame when any input value is a non-string — never a partial map (AC2)', () => {
+    const bad: Record<string, unknown>[] = [
+      { a: 1 },
+      { a: null },
+      { a: {} },
+      { a: ['x'] },
+      { a: true }
+    ]
+    for (const input of bad) {
+      // Each carries a well-formed sibling: the frame must still throw rather than decode through
+      // with `{ good: 'kept' }` and the bad entry quietly skipped.
+      expect(() =>
+        parseInboundMessage(encodeToolUse({ ...TOOL_USE, input: { ...input, good: 'kept' } }))
+      ).toThrow(WireDecodeError)
+    }
+  })
+
+  it('drops the three reserved keys, leaving prototypes unmodified (AC3, carry path)', () => {
+    // Built through JSON.parse: an object LITERAL's `__proto__` sets the prototype instead of
+    // creating the own property the wire actually delivers.
+    const input = JSON.parse(
+      '{"__proto__":"x","constructor":"y","prototype":"z","path":"/etc/hosts"}'
+    )
+    const toolUse = decodeToolUse({ ...TOOL_USE, input })
+
+    expect(toolUse.input).toEqual({ path: '/etc/hosts' })
+    expect(Object.keys(toolUse.input ?? {})).toEqual(['path'])
+    expect(Object.getPrototypeOf(toolUse.input)).toBe(Object.prototype)
+    // Nothing landed on the shared prototype: a freshly-created object is untouched.
+    const probe = {} as Record<string, unknown>
+    expect(Object.getPrototypeOf(probe)).toBe(Object.prototype)
+    expect(probe.constructor).toBe(Object)
+    expect(Object.values(probe)).toEqual([])
+  })
+
+  it('throws on an object-valued reserved key — the type check runs BEFORE the skip (AC3, throw path)', () => {
+    const input = JSON.parse('{"__proto__":{"polluted":true}}')
+    expect(() => parseInboundMessage(encodeToolUse({ ...TOOL_USE, input }))).toThrow(WireDecodeError)
+    const probe = {} as Record<string, unknown>
+    expect(probe.polluted).toBeUndefined()
+  })
+
+  it('names the failure CATEGORY only — no daemon key and no value reaches the message (AC4)', () => {
+    const SECRET_KEY = 'secret-field-name'
+    const SECRET_VALUE = 'secret-field-value'
+    const cases: unknown[] = [
+      { [SECRET_KEY]: 42 },
+      { [SECRET_KEY]: { nested: SECRET_VALUE } },
+      [SECRET_VALUE],
+      SECRET_VALUE
+    ]
+    for (const input of cases) {
+      let caught: unknown
+      try {
+        parseInboundMessage(encodeToolUse({ ...TOOL_USE, input }))
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(WireDecodeError)
+      const { message } = caught as WireDecodeError
+      // A NEW category, not `missing required field:` — for an optional field that message is
+      // actively misleading, since an absent key is the one case that does NOT throw.
+      expect(message).toBe('malformed optional field: input')
+      expect(message).not.toContain(SECRET_KEY)
+      expect(message).not.toContain(SECRET_VALUE)
+    }
+  })
+})
+
 describe('parseInboundMessage — tool_result recognition (#229, additive)', () => {
   it('narrows a full tool_result into { kind: tool-result } carrying all five fields verbatim', () => {
     expect(parseInboundMessage(encodeToolResult(TOOL_RESULT))).toEqual({
@@ -3629,12 +3762,17 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const SECRET_TU = 'secret-tool-use-id'
     const SECRET_NAME = 'secret-tool-name'
     const SECRET_SUMMARY = 'secret-input-summary'
+    // The input map's KEYS are as sensitive as its values — a daemon-chosen field name is itself
+    // model-authored text, since an MCP tool can name a field anything (#642).
+    const SECRET_KEY = 'secret-input-field-name'
+    const SECRET_VALUE = 'secret-input-field-value'
     const plaintext = encodeToolUse({
       conversation_id: SECRET_CONV,
       turn_id: SECRET_TURN,
       tool_use_id: SECRET_TU,
       name: SECRET_NAME,
-      input_summary: SECRET_SUMMARY
+      input_summary: SECRET_SUMMARY,
+      input: { [SECRET_KEY]: SECRET_VALUE }
     })
 
     parseInboundMessage(plaintext, log)
@@ -3647,7 +3785,15 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(record.hash).toMatch(HEX64)
     // The exact content-free field set — no decoded field reaches the log.
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
-    for (const secret of [SECRET_CONV, SECRET_TURN, SECRET_TU, SECRET_NAME, SECRET_SUMMARY]) {
+    for (const secret of [
+      SECRET_CONV,
+      SECRET_TURN,
+      SECRET_TU,
+      SECRET_NAME,
+      SECRET_SUMMARY,
+      SECRET_KEY,
+      SECRET_VALUE
+    ]) {
       expect(lines[0]).not.toContain(secret)
     }
   })
@@ -3657,6 +3803,15 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() => parseInboundMessage(encodeToolUse({ ...TOOL_USE, name: 42 }), log)).toThrow(
       WireDecodeError
     )
+    expect(lines).toHaveLength(0)
+  })
+
+  it('does NOT log when the ONLY defect is a malformed tool_use input (#642)', () => {
+    const { log, lines } = captureLog()
+    // Every other field is well-formed: the new throw path must leave no record either.
+    expect(() =>
+      parseInboundMessage(encodeToolUse({ ...TOOL_USE, input: { path: 42 } }), log)
+    ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })
 

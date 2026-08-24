@@ -290,6 +290,23 @@ idiom scaled from three fields to five. The consumer arm drops only `conversatio
 onward to the render slice ([#218](https://github.com/pyrycode/pyrycode-desktop/issues/218)) verbatim,
 never interpreted here.
 
+**[#642](../codebase/642.md) widens the `tool_use` payload by a field, not a kind** — the ordinal count
+above tracks new members joining `InboundDaemonMessage`, and this ticket adds none. `ToolUsePayload`
+gains a sixth, **optional** field, `input?: Record<string, string>` (pyrycode#1678) — the tool's own
+input fields,
+name → value. Decoded by a new module-private helper, `optionalStringMap`, placed directly after
+`requireStringArrayOrNull` (whose posture it rotates from a list to a map): an omitted key decodes as
+`undefined` (a pre-#1678 daemon — optional *to the client*, not on the wire), `{}` decodes as a fresh,
+distinct empty map, and any present-but-wrong-typed container or any object with a non-string own value
+throws the **whole frame** closed, never a partial map. This is the first narrower in the file where the
+**daemon chooses the object keys**; the three keys that reach `Object.prototype`'s own members
+(`__proto__`, `constructor`, `prototype`) are dropped from the fresh container rather than carried or
+thrown on — throwing would let the model suppress its own tool row by naming a parameter `__proto__`,
+and the value-type check still runs before the skip, so `{"__proto__": {…}}` throws (non-string value)
+rather than being quietly dropped. The failure message is a new category, `malformed optional field:`,
+naming only the client-owned field constant — no daemon-supplied key or value is interpolated. Ships
+dormant; #643 carries it into the timeline store, #645 draws it.
+
 **Extended an eighth time by [#201](../codebase/201.md), additively.** `modal_shown` → `{ kind:
 'modal-shown', modalShown: ModalShownPayload }` via `parseModalShownPayload`, and `modal_dismissed` →
 `{ kind: 'modal-dismissed', modalDismissed: ModalDismissedPayload }` via `parseModalDismissedPayload` —
@@ -377,7 +394,7 @@ The module's header once declared *"This module performs no logging."* [#130](..
 | modeled `stall` ([#315](../codebase/315.md)) | `inbound-decoded` | `code: 'stall'`, `bytes`, `hash` — never `conversation_id` |
 | modeled `api_retry` ([#492](../codebase/492.md)) | `inbound-decoded` | `code: 'api_retry'`, `bytes`, `hash` — never `conversation_id`/`active`/`current`/`total` |
 | modeled `compacting` ([#495](../codebase/495.md)) | `inbound-decoded` | `code: 'compacting'`, `bytes`, `hash` — never `conversation_id`/`active` |
-| modeled `tool_use` ([#217](../codebase/217.md)) | `inbound-decoded` | `code: 'tool_use'`, `bytes`, `hash` — never `name`/`input_summary`/`tool_use_id`/`turn_id`/`conversation_id` |
+| modeled `tool_use` ([#217](../codebase/217.md), `input` added by [#642](../codebase/642.md)) | `inbound-decoded` | `code: 'tool_use'`, `bytes`, `hash` — never `name`/`input_summary`/`tool_use_id`/`turn_id`/`conversation_id`/`input` (neither its keys nor its values) |
 | modeled `modal_shown` / `modal_dismissed` ([#201](../codebase/201.md)) | `inbound-decoded` | `code: 'modal_shown' \| 'modal_dismissed'`, `bytes`, `hash` — never `modal_id`/`class`/`title`/`prompt`/any `options[].label`/`default_option_id`/`outcome`/`source` |
 | modeled `tool_result` ([#229](../codebase/229.md)) | `inbound-decoded` | `code: 'tool_result'`, `bytes`, `hash` — never `result_summary`/`is_error`/`tool_use_id`/`turn_id`/`conversation_id` |
 | modeled `session_settings_updated` ([#264](../codebase/264.md)) | `inbound-decoded` | `code: 'session_settings_updated'`, `bytes`, `hash` — never `session_id` |
@@ -479,12 +496,15 @@ case 'message': {
     case 'tool-use':
       // #217: fresh named-field literal, mirrors 'turn-state'. conversation_id dropped (single active
       // conversation); name/input_summary carried onward as opaque display text for the render slice.
+      // #642 added a sixth field, input — the already-narrowed fresh map, by reference, unconditional
+      // (undefined when the wire omitted it; a pre-pyrycode#1678 daemon).
       emitDaemonEvent(sink, {
         type: 'toolUse',
         turnId: inbound.toolUse.turn_id,
         toolUseId: inbound.toolUse.tool_use_id,
         name: inbound.toolUse.name,
-        inputSummary: inbound.toolUse.input_summary
+        inputSummary: inbound.toolUse.input_summary,
+        input: inbound.toolUse.input
       })
       return
     case 'modal-shown':
@@ -587,6 +607,7 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
 - [#493 codebase notes](../codebase/493.md) — the render slice: the first consumer of `api_retry`, feeding a new `apiRetry: ApiRetryStatus | null` timeline-store scalar cleared only by the decoded `active: false` falling edge.
 - [#495 codebase notes](../codebase/495.md) — the fifteenth additive extension: the `compacting` kind, `parseCompactingPayload` (`parseApiRetryPayload` minus its two `requireNumber` lines), the banner-only peer of `api_retry` with no counter to carry, and the `stall` content-drop shape (one field dropped, one field carried) rather than `api_retry`'s three-field carry. Ships dormant; the render slice #496 is the first consumer.
 - [Conversation timeline store](conversation-timeline-store.md) / [#217 codebase notes](../codebase/217.md) — the seventh additive extension: the `tool_use` kind, `parseToolUsePayload`, and the required-string-presence idiom scaled to five fields with no enum.
+- [#642 codebase notes](../codebase/642.md) — a field, not a kind, added to `ToolUsePayload`: the sixth, optional `input`, the new `optionalStringMap` helper (`requireStringArrayOrNull`'s posture rotated from a list to a map), and the reserved-key-drop prototype-pollution defence — the first narrower in this file where the daemon chooses the object keys.
 - [Modal-prompt model](modal-prompt-model.md) / [#201 codebase notes](../codebase/201.md) — the eighth additive extension: the `modal_shown`/`modal_dismissed` kinds, `parseModalShownPayload`/`parseModalDismissedPayload`/`parseModalOption`, the closed-enum idiom's third and fourth instances (`class`/`source`), and the array-of-structs narrower's second use (`options`).
 - [Conversation timeline store](conversation-timeline-store.md) / [#229 codebase notes](../codebase/229.md) — the ninth and last additive extension of the v2 interactive-stream family: the `tool_result` kind, `parseToolResultPayload`, and `requireBoolean`'s second use (`is_error`, after `yolo` #180) alongside four `requireString` calls.
 - [Conversation create](conversation-create.md) / [#241 codebase notes](../codebase/241.md) — the tenth additive extension, the write-side twin of #139: the `conversation_created` kind, `parseConversationCreatedPayload`, and `requireStringOrNull`'s second use (`name`) alongside `requireBoolean` (`is_promoted`) and four `requireString` calls.

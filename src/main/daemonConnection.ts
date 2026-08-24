@@ -819,15 +819,21 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           }
           case 'tool-use':
             // The tool-call data path (#217). snake→camel here; `conversation_id` is DROPPED (single
-            // active conversation; #202's bridge scopes identity). A fresh literal with the four named
+            // active conversation; #202's bridge scopes identity). A fresh literal with the five named
             // fields, never a spread of the decoded payload, so only the render fields cross IPC. The
             // timeline bridge (#202), not the session store, folds this into a pending `toolCall` item.
+            // `input` (#642) crosses BY REFERENCE to the already-narrowed fresh map (the `queued`
+            // precedent below): parseToolUsePayload built it from own string values with the reserved
+            // keys removed, so there is nothing left to drop and no second copy is warranted. Assigned
+            // unconditionally — `undefined` when the wire omitted it (a pre-pyrycode#1678 daemon), which
+            // structured clone and JSON.stringify both drop.
             emitDaemonEvent(sink, {
               type: 'toolUse',
               turnId: inbound.toolUse.turn_id,
               toolUseId: inbound.toolUse.tool_use_id,
               name: inbound.toolUse.name,
-              inputSummary: inbound.toolUse.input_summary
+              inputSummary: inbound.toolUse.input_summary,
+              input: inbound.toolUse.input
             })
             return
           case 'tool-result':

@@ -1519,7 +1519,7 @@ describe('createDaemonConnection — api_retry stream (#492)', () => {
 
     const events = emitted(sink).slice(before)
     expect(events).toEqual([{ type: 'apiRetry', active: true, current: 3, total: 10 }])
-    // conversation_id is dropped at the choke point (single active conversation, the turnState rule).
+    // conversation_id is dropped at the choke point (single active conversation).
     expect(JSON.stringify(events)).not.toContain('conv-1')
   })
 
@@ -1646,7 +1646,7 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
 
     const events = emitted(sink).slice(before)
     expect(events).toEqual([{ type: 'compacting', active: true }])
-    // conversation_id is dropped at the choke point (single active conversation, the turnState rule).
+    // conversation_id is dropped at the choke point (single active conversation).
     expect(JSON.stringify(events)).not.toContain('conv-1')
   })
 
@@ -2395,7 +2395,7 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
         truncated: false
       }
     ])
-    // conversation_id is dropped at the choke point (single active conversation, the turnState rule).
+    // conversation_id is dropped at the choke point (single active conversation).
     expect(JSON.stringify(events)).not.toContain('conv-1')
   })
 

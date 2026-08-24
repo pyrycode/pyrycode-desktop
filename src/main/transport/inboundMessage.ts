@@ -128,8 +128,8 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * the model it resolved for the turn, off its `system` / `init` line, fanned out to interactive clients.
  * Neither a claude sub-state like its `stall` / `api-retry` / `compacting` neighbours nor a daemon
  * mapping gap like `unrecognized-message`: an IDENTITY report, carrying no `turn_id` and opening and
- * closing no turn. The consumer carries `model` and `truncated` onward, dropping `conversation_id` (the
- * turnState convention — #588 holds a single value replaced per announcement, so nothing keys by
+ * closing no turn. The consumer carries `model` and `truncated` onward, dropping `conversation_id` (#588
+ * holds a single value replaced per announcement, so nothing keys by
  * conversation). The fail-closed defence is two required strings plus one required BOOLEAN whose `false`
  * is a VALUE (nothing was cut), not an absence — `truncated` is never optional and never defaults.
  *
@@ -182,8 +182,7 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The `unrecognized-message` kind carries the decoded UnrecognizedMessagePayload — the daemon's report
  * that its stream parser met claude output it has no mapping for. NOT a claude sub-state like its
  * `stall` / `api-retry` / `compacting` neighbours: it reports a gap in the daemon's own mapping. The
- * consumer carries `site`, `message_type`, `raw` and `truncated` onward, dropping `conversation_id` (the
- * turnState convention).
+ * consumer carries `site`, `message_type`, `raw` and `truncated` onward, dropping `conversation_id`.
  *
  * This is the ONE inbound kind whose whole point is to carry an unbounded, unstructured daemon string,
  * so the fail-closed defence matters more here than anywhere else on this file: a closed-enum `site`

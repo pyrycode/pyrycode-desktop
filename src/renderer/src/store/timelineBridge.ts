@@ -25,9 +25,9 @@ function assertNever(event: never): never {
  * `apiRetry` #493 / `compacting` #496 / `unrecognizedMessage` / `connected`→`reconnected` #538); each is reconstructed
  * as a fresh literal with named fields — not `return event`, not a spread
  * — so the translator stays immune to a `DaemonEvent` arm gaining an unrelated field later, matching
- * the transport emit's fresh-literal discipline (`daemonConnection.ts:289`). This is a filter, not a
- * rename: the owned arms are field-for-field identical to their `ThreadEvent` counterparts, so there
- * is no field-mapping — just arm selection + fresh copy.
+ * the transport emit's fresh-literal discipline (`daemonConnection.ts`). This is a filter, not a
+ * rename: an arm may carry fields its `ThreadEvent` deliberately drops, and rebuilding from named
+ * fields is what makes each drop explicit and stable as arms widen.
  *
  * Every other arm returns `null` via explicit fall-through cases, then `assertNever` — deliberately
  * NOT a catch-all `default: return null`, which would silently swallow a future arm. The guard is
@@ -100,11 +100,11 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // reduceTimeline sets the `stalled` scalar; the self-clear is derived there on next turn activity.
       return { type: 'stallDetected' }
     case 'apiRetry':
-      // #493: the api-retry arm (#492 decodes it, this slice gives it a consumer). The DaemonEvent and
-      // the ThreadEvent are field-for-field identical, so this is a filter + fresh literal (arm
-      // selection), never a pass-through of the DaemonEvent object. The falling edge's counter is copied
-      // verbatim — discarding it is reduceTimeline's job (it stores `null`), not the bridge's, so the
-      // translator stays a pure rename with no normalization of its own.
+      // #493: the api-retry arm (#492 decodes it, this slice gives it a consumer). The DaemonEvent
+      // carries `conversationId` (#737) beside the four render fields; the ThreadEvent this returns
+      // does not, so the id STOPS here — a filter + fresh literal (arm selection), never a pass-through
+      // of the DaemonEvent object. The falling edge's counter is copied verbatim — discarding it is
+      // reduceTimeline's job (it stores `null`), not the bridge's — the translator normalizes nothing.
       return {
         type: 'apiRetry',
         active: event.active,

@@ -31,7 +31,7 @@ Split from #669. Consumes #696 (`ToolRow` + the expanded body). Feeds #645 (per-
 | `e2e/thread-scroll-pin.spec.ts:105-117` | `toolUseFrame()` — the existing pending-tool-call frame helper, and the proof (`:275`, `:327`) that `daemon.pushFrame` delivers a `tool_use` unsolicited. |
 | `src/shared/wire/types.ts:720-747` | `ToolUsePayload` and `ToolResultPayload` field-for-field. You need both to build the two e2e frames. |
 | `docs/knowledge/decisions/0006-ephemeral-screen-state-usereducer-not-store.md` | The ADR this design cites. Read what it actually says about scope before writing the placement comment. |
-| `CLAUDE.md` § Conventions, the 2026-08-20 operator ruling | The daemon-text rule that § 6 enforces. Read the exact wording — it draws a line between *rendered children* and *attributes/logs*, and this ticket sits right on it. |
+| `CLAUDE.md` § Conventions, the 2026-08-20 operator ruling | The daemon-text rule that § Security review enforces. Read the exact wording — it draws a line between *rendered children* and *attributes/logs*, and this ticket sits right on it. |
 
 ---
 
@@ -241,17 +241,84 @@ forbid, for zero observed gain.
 
 ---
 
-## Security review (`security-sensitive`)
+## Security review
 
-Run against this spec per the architect security pass. The ticket carries the label because a disclosure
-control's *natural* attribute surface is exactly the sink CLAUDE.md's 2026-08-20 ruling closes.
+Run per `architect/security-review.md`. The label is on this ticket because a disclosure control's natural
+attribute surface is exactly the sink CLAUDE.md's 2026-08-20 ruling closes — and because of the category-9
+finding below, which is the real headline.
 
-**Trust boundaries.** Four daemon-supplied strings are in reach inside `ToolRow`: `item.name`,
-`item.inputSummary`, `item.toolUseId`, and `item.result.resultSummary`. The boundary is enforced at
-`ConversationScreen.tsx:616-626` (#696's SAFETY block) — they may be auto-escaped React children and
-nothing else. This slice adds an element to that component but no new source of untrusted text.
+### The headline (category 9 — hostile daemon)
 
-**Findings — four sinks this design must actively decline:**
+**This slice is the first time a hostile `resultSummary` reaches the DOM in the shipped product.** #696
+built the expanded branch but left it unreachable: the arm at `:550-556` passes no flag, so in the product
+the result text has always been decoded, stored, and then never rendered. This ticket supplies the click
+that renders it.
+
+`resultSummary` is the widest-provenance string on the timeline — whatever a tool returned, so file
+contents, a fetched page, or shell output, none of it authored by the daemon and all of it reachable by a
+model that chose the tool call. Everything therefore rests on #696's rendering posture (`<pre>` with text
+children, no markdown, no attributes), which was previously belt-and-braces and is now the only control in
+the path. That does not make the design exploitable — the posture is correct and this slice preserves it —
+but it reclassifies the four sink declines below from hygiene to load-bearing, and it is why they belong in
+the **code comment**, not only in this spec.
+
+### Category walk
+
+**1. Trust boundaries.** Four daemon-supplied strings are in reach inside `ToolRow`: `item.name`,
+`item.inputSummary`, `item.toolUseId`, `item.result.resultSummary`. The boundary is declared at
+`ConversationScreen.tsx:616-626` — they may be auto-escaped React children and nothing else. This slice
+adds an element inside that boundary and no new source of untrusted text. *Structural weakness, stated not
+fixed:* the boundary is a **comment, enforced by convention and review**, not a branded type or a
+discriminated union — a developer holding `item.name` gets no type-system signal that it is untrusted. That
+is pre-existing (it is how #218, #230 and #696 all shipped) and changing it is an unticketed architecture
+change, so it stays out of scope here; it is the reason the four declines must be written into the code.
+
+**2. Tokens, secrets, credentials.** Not applicable by process placement, not by absence of thought: the
+renderer never holds a token, a static key, or a Noise transcript — all of that lives in the main process
+per CLAUDE.md and ADR 0002, and this slice adds no IPC channel that could carry one in. Nothing in
+`ToolRow` reads or derives a secret.
+
+**3. File / storage operations.** No filesystem path, no `fs` call, no web storage, no cache. The only way
+a path could have appeared is finding 2 below — `toolUseId` as an element id / lookup key — which the
+design bars outright. No `localStorage` / IndexedDB write: the expansion state is deliberately in-memory
+and dies with the row (§ 2), so nothing about which tool results a user opened is ever persisted.
+
+**4. Inter-process / Electron attack surface.** No new `contextBridge` API, no `ipcMain` channel, no
+protocol handler, no `will-navigate` / `setWindowOpenHandler` change, no window. `webPreferences` untouched.
+The renderer is privileged, and the one plausible way this slice could extend its reach is a *confused
+developer* scenario worth naming: "the row is expandable now, let's make the body rich" → `AssistantMarkdown`
+(imported two arms up, `:542-543`) → links and images → an `<img src>` in daemon-relayed text is an outbound
+beacon whose URL the daemon chose, issued by a privileged renderer. #696 closed this; **this slice must not
+reopen it.** See finding 5.
+
+**5. Cryptographic primitives.** No RNG, no hash, no comparison against a secret, no key or nonce. Not
+applicable. (Noted for the future: if a later ticket needs an element id, the source is React's `useId()` —
+a client-derived value, not security randomness and not the wire.)
+
+**6. Network & I/O.** No socket, no frame, no URL, no timeout, no reconnect. The e2e adds two *test* frames
+that ride the existing fake-daemon path with no production change. Inbound size is already bounded upstream:
+`resultSummary` cannot exceed the Noise envelope ceiling (65519 B), and the rendered body is additionally
+bounded by `max-height: 240px` + `overflow: auto` (`:1028-1040`).
+
+**7. Error messages, logs, telemetry.** Nothing in this slice logs, and it must stay that way. A toggle is a
+natural place to reach for a diagnostic, and any useful one would carry `name`, `inputSummary` or
+`toolUseId` — daemon content in a log line, forbidden by ADR 0007's content-free rule and CLAUDE.md alike,
+for zero observed gain. No telemetry, no renderer-console output, no error path to leak from (there is no
+error path).
+
+**8. Concurrency.** One `useState`, no async, no timer, no listener, no subscription, so no
+`AbortController`, no cleanup, and nothing that can outlive its window. The one real concurrency decision is
+the updater form: **`setExpanded((open) => !open)`, never `setExpanded(!expanded)`** — the latter reads a
+captured value and is a check-then-act race against React's batching. `UnrecognizedRow:707` uses the
+functional form; match it. Teardown is unmount, which React handles.
+
+**9. Threat model alignment.** *Hostile daemon* — the headline above. *Malicious / compromised relay* —
+content-blind and unchanged; it can drop or reorder frames, which at worst means a row never resolves and
+stays non-activatable (a correct degrade, per AC2). *Token theft from disk* — no token in reach. *Renderer
+compromise reaching the transport* — process isolation unchanged; this slice adds no path from the renderer
+to keys or the socket.
+
+### Findings — five sinks this design actively declines
 
 1. **`aria-label` on the button.** The obvious "improvement" is
    `aria-label={\`Show result for ${item.name}\`}` — client copy interpolating daemon text into an
@@ -268,8 +335,17 @@ nothing else. This slice adds an element to that component but no new source of 
 3. **`title` on the chip.** `.tool-row__summary` ellipsizes (`:990-994`), which makes
    `title={item.inputSummary}` ("hover to see the rest") the natural next edit. Same forbidden shape #696
    already declined for `resultSummary`. **Add no `title`.**
-4. **A toggle log line.** Covered under Error handling — no diagnostic, on either the renderer or the main
-   side.
+4. **A toggle log line.** No diagnostic, on either the renderer or the main side — see category 7.
+5. **Enriching the newly-reachable body.** Rendering `resultSummary` through `AssistantMarkdown`, or adding
+   a link/image path to it, would turn a daemon-chosen string into an outbound request from a privileged
+   renderer (category 4). The body stays a `<pre>` with text children. **Change nothing about #696's body
+   rendering in this slice** — the only edit inside `ToolRow`'s return is the chip element fork.
+
+All five are **MUST FIX-grade constraints that the design already satisfies**: as specified — with the
+declines written into the code comment alongside the existing SAFETY block — none is exploitable. They are
+listed because each is a plausible *next edit* by a developer or a reviewer improving the control, not
+because the spec currently violates them. Code-review should treat any of the five appearing in the diff as
+a MUST FIX.
 
 **Integrity — result misattribution.** The one way this design could mislead rather than leak is a row
 rendering *another* call's result: the boolean and the item would have to disagree about which tool call a
@@ -291,6 +367,26 @@ boolean; no IPC channel, wire field, store write, markdown path or external-open
 privileged renderer gains no new reach; the e2e's fixture strings (`SEEDED_ROW.id`, the invented tool name
 and needle) are non-secret display/routing literals, matching `unrecognized-message.spec.ts:19-21`'s stated
 hygiene posture.
+
+### Verdict
+
+**PASS** — no MUST FIX outstanding.
+
+| Category | Classification |
+|---|---|
+| 1 Trust boundaries | SHOULD FIX (pre-existing) — the boundary is a comment, not a type. Out of scope to change here; it is why findings 1–5 go into the code comment, not only this spec. |
+| 2 Tokens / secrets | No findings — nothing secret is in renderer reach. |
+| 3 File / storage | No findings — no path, no web storage; expansion state is deliberately non-persisted. |
+| 4 Electron surface | No findings — no IPC/bridge/navigation change. Finding 5 guards the one plausible regression. |
+| 5 Crypto | No findings — no primitive in the design. |
+| 6 Network & I/O | No findings — no production transport change; inbound already bounded at 65519 B. |
+| 7 Logs / telemetry | No findings — nothing logs, and § Error handling says why it must not start. |
+| 8 Concurrency | No findings — one `useState`; the functional updater is specified, not left to chance. |
+| 9 Threat model | No findings, one reclassification — hostile `resultSummary` becomes reachable in the product for the first time, which raises findings 1–3 and 5 from hygiene to load-bearing. |
+| — | OUT OF SCOPE: `tabIndex` on the two `overflow: auto` bodies (follow-up ticket, see § Out of scope). |
+
+**Reviewer:** architect (self-review per `architect/security-review.md`)
+**Date:** 2026-08-24
 
 **No new attack surface** is introduced: no new IPC channel, no new wire field, no new store write, no
 markdown path, no URL, no filename, no cache key. The `<pre>`-with-text-children posture that keeps an

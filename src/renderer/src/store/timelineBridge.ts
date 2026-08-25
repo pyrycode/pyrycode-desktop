@@ -67,8 +67,9 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
         input: event.input
       }
     case 'toolResult':
-      // The tool-result arm (#229). Field-for-field identical to its ThreadEvent counterpart, so this is
-      // a filter + fresh copy (arm selection), not a field remap. reduceTimeline folds it through
+      // The tool-result arm (#229). The DaemonEvent carries `conversationId` (#766) beside the four render
+      // fields; the ThreadEvent this returns does not, so the id STOPS here — a filter + fresh copy (arm
+      // selection), never a pass-through of the DaemonEvent object. reduceTimeline folds it through
       // `fillResult`, RESOLVING the correlated `toolCall`'s result in place (by toolUseId); an orphan or
       // duplicate is a deterministic same-reference no-op (#121).
       return {

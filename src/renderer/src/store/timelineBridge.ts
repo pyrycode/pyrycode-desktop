@@ -112,11 +112,11 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
         total: event.total
       }
     case 'compacting':
-      // #496: the compaction arm (#495 decodes it, this slice gives it a consumer). The DaemonEvent and
-      // the ThreadEvent are field-for-field identical, so this is a filter + fresh literal (arm
-      // selection), never a pass-through of the DaemonEvent object. Both edges translate verbatim —
-      // deciding what `active: false` means is reduceTimeline's job, not the bridge's, so the translator
-      // stays a pure rename with no normalization of its own.
+      // #496: the compaction arm (#495 decodes it, this slice gives it a consumer). The DaemonEvent
+      // carries `conversationId` (#742) beside the one render field; the ThreadEvent this returns does
+      // not, so the id STOPS here — a filter + fresh literal (arm selection), never a pass-through of
+      // the DaemonEvent object. Both edges translate verbatim — deciding what `active: false` means is
+      // reduceTimeline's job, not the bridge's — the translator normalizes nothing.
       return { type: 'compacting', active: event.active }
     case 'unrecognizedMessage':
       // The parser-gap diagnostic. The DaemonEvent and the ThreadEvent are field-for-field identical,

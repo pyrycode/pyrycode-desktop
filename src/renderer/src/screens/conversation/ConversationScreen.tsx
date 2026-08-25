@@ -117,11 +117,11 @@ export function ConversationScreen({
   // repeated rising edge returns the same state, so a repeated frame produces zero re-renders under
   // zustand's Object.is comparison.
   const apiRetry = useTimelineStore(selectApiRetry)
-  // #496: the compaction scalar, read beside `apiRetry` (the selectApiRetry line above). A plain boolean
-  // the container passes straight down, so AC1 ("no daemon-supplied string is ever rendered") stays a
-  // type-level guarantee — the compacting frame carries no string field at all. `compacting` flips at most
-  // twice per compaction, and the reducer returns the same state reference on a verbatim repeated frame,
-  // so it adds no re-render churn beyond the items delta already here.
+  // #496: the compaction scalar, read beside `apiRetry` (the selectApiRetry line above). A plain boolean the
+  // container passes straight down, so AC1 ("no daemon-supplied string is ever rendered") stays a type-level
+  // guarantee — the bridge omits the daemon's `conversationId` (#742) when it rebuilds the `ThreadEvent`.
+  // `compacting` flips at most twice per compaction, and the reducer returns the same state reference on a
+  // verbatim repeated frame, so it adds no re-render churn beyond the items delta already here.
   const compacting = useTimelineStore(selectCompacting)
   // #650: the locally-opened working-indicator window, read beside `compacting` (the selectCompacting line
   // above). The FIRST renderer-sourced slice among these five — the operator's own send opened it, not the

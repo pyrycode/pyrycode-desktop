@@ -141,12 +141,12 @@ export type ThreadEvent =
   // edge into the state's presence-or-absence. Two integers and a bool, no string field: AC1 ("no
   // daemon-supplied string is ever rendered") stays true by construction, as with `stallDetected`.
   | { type: 'apiRetry'; active: boolean; current: number; total: number }
-  // #496: the daemon's compaction edge (#495 decodes it). Field-for-field identical to the `compacting`
-  // DaemonEvent, so the bridge is a filter + fresh copy (the `apiRetry` discipline), not a remap. The
-  // EVENT carries `active` (true rising, false the explicit falling one); the reducer is the single place
-  // that translates that edge into state. BANNER-ONLY: the wire streams no compaction progress, so there
-  // is no counter here and none may be invented (the one delta from `apiRetry`). One bool, no string
-  // field: AC1 ("no daemon-supplied string is ever rendered") stays true by construction.
+  // #496: the daemon's compaction edge (#495 decodes it; #742 widened that daemon event with a
+  // `conversationId` the bridge drops) — a filter + fresh copy (the `apiRetry` discipline), not a
+  // remap. The EVENT carries `active` (true rising, false the explicit falling one); the reducer is the
+  // single place that translates that edge into state. BANNER-ONLY: the wire streams no compaction
+  // progress, so there is no counter here and none may be invented (the one delta from `apiRetry`). One
+  // bool, no string field: AC1 ("no daemon-supplied string is ever rendered") stays true by construction.
   | { type: 'compacting'; active: boolean }
   // The parser-gap diagnostic. Field-for-field identical to the `unrecognizedMessage` ThreadItem, so
   // the bridge is a filter + fresh copy (the `sessionBoundary` discipline), not a remap.

@@ -1240,10 +1240,10 @@ describe('ApiRetryIndicator — the api-error retry affordance (#493)', () => {
 
 // #496: the compaction indicator bound to the `compacting` scalar. CompactingIndicator is the
 // StallIndicator twin — pure (isCompacting in, markup out) over a plain boolean, NOT the store type, so
-// the view structurally cannot receive, hence cannot render, a daemon-supplied string (AC1 — the
-// compacting frame carries no string field at all). Injected boolean: no store, no IPC — the container's
-// showing branch is unreachable under server render (zustand v5 reads getInitialState() → compacting:
-// false), so the "showing" assertions live here.
+// the view structurally cannot receive, hence cannot render, a daemon-supplied string (AC1 — #742
+// widened the arm with a `conversationId` the bridge omits when it rebuilds the `ThreadEvent`). Injected
+// boolean: no store, no IPC — the container's showing branch is unreachable under server render (zustand
+// v5 reads getInitialState() → compacting: false), so the "showing" assertions live here.
 describe('CompactingIndicator — the auto-compaction affordance (#496)', () => {
   it('is inert with no compaction in flight — renders nothing (zero layout footprint)', () => {
     expect(renderToStaticMarkup(<CompactingIndicator isCompacting={false} />)).toBe('')

@@ -12,6 +12,7 @@ import { QueueData } from './store/queueBridge'
 import { RelayLinkData } from './store/relayLinkBridge'
 import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
 import { AnnouncedModelData } from './store/announcedModelBridge'
+import { ConversationActivityData } from './store/conversationActivityBridge'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
@@ -139,6 +140,14 @@ function App(): JSX.Element {
   // roster neighbour above it has no `connected` branch, BECAUSE the announcement survives a
   // re-handshake to the same daemon — it still describes that daemon. Its store is pairing-scoped and
   // the pairing-change clear is clearPairingScopedState's (#593), not this leaf's.
+  // ConversationActivityData (#748) is the EIGHTH headless leaf: it lands the four activity arms
+  // (`turnState`, `stallDetected`, `apiRetry`, `compacting`) into the per-conversation activity store
+  // (#747) under each event's OWN conversationId, for the sidebar dot (#676). Same App-level
+  // always-listening rationale, sharpened here: the whole point is a chat the operator has NEVER
+  // OPENED, so a screen-scoped listener would miss exactly the case the store exists for. It is a
+  // SECOND subscriber on these four arms — timelineBridge keeps feeding the open conversation's chrome
+  // untouched. Reactive-only, no gate. Like AnnouncedModelData and unlike BackgroundTaskRosterData it
+  // has no `connected` branch: both of this store's clears are #749's.
   return (
     <>
       <ConversationListData />
@@ -148,6 +157,7 @@ function App(): JSX.Element {
       <RelayLinkData />
       <BackgroundTaskRosterData />
       <AnnouncedModelData />
+      <ConversationActivityData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

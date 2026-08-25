@@ -56,7 +56,7 @@
  * The full-window frame (Figma 103:2901). justify-content: space-between is the
  * frame's own: the field takes the free space, the CTA stack pins to the bottom.
  * height: 100% rides the html/body/#root chain in index.css:5-9 — both mount sites
- * (App.tsx:51 and PairedShell.tsx:123-129) render this screen as a bare child with
+ * (App.tsx:52 and PairedShell.tsx:123-129) render this screen as a bare child with
  * no wrapper element, so the chain resolves exactly as .welcome's does.
  *
  * The glow is DERIVED FROM THIS FRAME, not copied from welcome.css:42 — the two are

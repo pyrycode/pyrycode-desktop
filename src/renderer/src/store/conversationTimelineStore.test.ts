@@ -9,7 +9,7 @@ import type { ThreadEvent, TimelineState } from './threadTimeline'
 
 // Plain-function store tests over isolated createConversationTimelineStore() instances — the
 // conversationActivityStore.test idiom. No React, no DOM, no bridge: this store is pure renderer state
-// with two write paths and one selector, and `environment: 'node'` is already global at
+// with four write paths and one selector, and `environment: 'node'` is already global at
 // vitest.config.ts:27, so this file adds no environment pragma.
 //
 // Four properties here are invisible to `tsc` and break no other assertion in this file, which is why
@@ -378,6 +378,161 @@ describe('conversationTimelineStore', () => {
     expect(timelineFor(store, 'cNever')).toBeNull()
   })
 
+  it('clearAllTimelines drops every retained slice — each id reads null, not empty (#757 AC1)', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'one'))
+    store.getState().dispatchFor('c2', delta('t2', 'two'))
+    store.getState().markViewed('c3')
+
+    store.getState().clearAllTimelines()
+
+    // DELETE, not overwrite-with-empty: `set(id, initialTimelineState)` type-checks identically and
+    // passes any naive "is the thread empty?" assertion, while collapsing "nothing is held" into
+    // "observed; nothing in the thread". A viewed slice goes the same way as a written one.
+    expect(store.getState().timelines.size).toBe(0)
+    expect(timelineFor(store, 'c1')).toBeNull()
+    expect(timelineFor(store, 'c2')).toBeNull()
+    expect(timelineFor(store, 'c3')).toBeNull()
+  })
+
+  it('clearAllTimelines on an already-empty store churns no listener (#757 AC1)', () => {
+    const store = createConversationTimelineStore()
+    const stateBefore = store.getState()
+
+    let notifications = 0
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1
+    })
+    // The `size === 0` short-circuit is load-bearing, not an optimisation: clearPairingScopedState's
+    // docstring claims every one of its clears is idempotent by construction and its own test asserts it.
+    store.getState().clearAllTimelines()
+    unsubscribe()
+
+    expect(notifications).toBe(0)
+    expect(store.getState()).toBe(stateBefore)
+  })
+
+  it('clearAllTimelines on a NON-empty store does build a new state object (#757 AC1)', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'one'))
+    const stateBefore = store.getState()
+
+    // The negative control for the guard above: without it, "an already-clear clear churns nothing"
+    // would also pass for a method that never clears at all.
+    store.getState().clearAllTimelines()
+
+    expect(store.getState()).not.toBe(stateBefore)
+  })
+
+  it('clearAllTimelines hands back a FRESH map, never the exported initial constant (#757 AC1)', () => {
+    const one = createConversationTimelineStore()
+    const two = createConversationTimelineStore()
+    one.getState().dispatchFor('c1', delta('t1', 'one'))
+    two.getState().dispatchFor('c2', delta('t2', 'two'))
+
+    one.getState().clearAllTimelines()
+    two.getState().clearAllTimelines()
+
+    // `initialConversationTimelineState` holds a module-shared MUTABLE `Map`; returning it as live
+    // state would make every store instance that clears share one object (the twin's
+    // conversationActivityStore.ts:221-226 reason, copied deliberately).
+    expect(one.getState().timelines).not.toBe(initialConversationTimelineState.timelines)
+    expect(one.getState().timelines).not.toBe(two.getState().timelines)
+    one.getState().dispatchFor('c1', delta('t1', 'again'))
+    expect(timelineFor(two, 'c1')).toBeNull()
+    expect(initialConversationTimelineState.timelines.size).toBe(0)
+  })
+
+  it("clearTimelineFor removes exactly one key — every other slice is the SAME object (#757 AC2)", () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'one'))
+    store.getState().dispatchFor('c2', delta('t2', 'two'))
+    store.getState().dispatchFor('c3', delta('t3', 'three'))
+    const c2Before = timelineFor(store, 'c2')
+    const c3Before = timelineFor(store, 'c3')
+
+    store.getState().clearTimelineFor('c2')
+
+    // Not merely equal — the same held object, so a component watching c3 is not woken by c2's removal.
+    expect(timelineFor(store, 'c2')).toBeNull()
+    expect(timelineFor(store, 'c1')).not.toBeNull()
+    expect(timelineFor(store, 'c3')).toBe(c3Before)
+    expect(c2Before).not.toBeNull()
+    expect(store.getState().timelines.size).toBe(2)
+  })
+
+  it('clearTimelineFor leaves the cleared id ABSENT, not present-empty (#757 AC2)', () => {
+    const store = createConversationTimelineStore()
+    store.getState().markViewed('cOpened')
+    expect(timelineFor(store, 'cOpened')).toEqual(emptyTimeline)
+
+    store.getState().clearTimelineFor('cOpened')
+
+    // The delete-vs-overwrite property again, from the observed-empty direction: an overwrite would
+    // leave `toEqual(emptyTimeline)` passing and this assertion is the only one that fails.
+    expect(timelineFor(store, 'cOpened')).toBeNull()
+  })
+
+  it('clearTimelineFor on an ABSENT key churns no listener (#757 AC2)', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'one'))
+    const stateBefore = store.getState()
+    const sliceBefore = timelineFor(store, 'c1')
+
+    let notifications = 0
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1
+    })
+    // The common case rather than an edge one: most conversations the exit fires for hold no slice.
+    store.getState().clearTimelineFor('cNever')
+    unsubscribe()
+
+    expect(notifications).toBe(0)
+    expect(store.getState()).toBe(stateBefore)
+    expect(timelineFor(store, 'c1')).toBe(sliceBefore)
+  })
+
+  it('a removal re-orders nothing — the eviction victim is unchanged by it (#757 AC3)', () => {
+    const store = createConversationTimelineStore()
+    for (const id of ids(MAX_RETAINED_TIMELINES)) store.getState().markViewed(id)
+    // Viewed in order, so the map reads least-recently-viewed first: c1 is the standing victim.
+    expect([...store.getState().timelines.keys()]).toEqual([...ids(MAX_RETAINED_TIMELINES)])
+
+    store.getState().clearTimelineFor('c5')
+
+    // `Map.prototype.delete` preserves the position of every remaining entry, so THE EVICTION INVARIANT
+    // survives untouched: c1 is still the head and still the next to go.
+    expect([...store.getState().timelines.keys()]).toEqual([
+      'c1',
+      'c2',
+      'c3',
+      'c4',
+      'c6',
+      'c7',
+      'c8',
+      'c9',
+      'c10'
+    ])
+    store.getState().markViewed('cA')
+    store.getState().markViewed('cB')
+
+    expect(timelineFor(store, 'c1')).toBeNull()
+    expect(timelineFor(store, 'c2')).not.toBeNull()
+    expect(timelineFor(store, 'c6')).not.toBeNull()
+  })
+
+  it('THE EVICTION INVARIANT survives a full clear — head and tail rules unchanged (#757 AC1)', () => {
+    const store = createConversationTimelineStore()
+    for (const id of ids(MAX_RETAINED_TIMELINES)) store.getState().dispatchFor(id, delta('t1', 'x'))
+
+    store.getState().clearAllTimelines()
+    store.getState().markViewed('cViewed')
+    store.getState().dispatchFor('cWritten', delta('t1', 'x'))
+
+    // Exactly as on a fresh store: a fold creates at the HEAD, a view-stamp at the TAIL.
+    expect([...store.getState().timelines.keys()]).toEqual(['cWritten', 'cViewed'])
+  })
+
   for (const key of hostileKeys) {
     it(`treats ${JSON.stringify(key)} as an ordinary key — no prototype lookup, no aliasing (AC5)`, () => {
       const store = createConversationTimelineStore()
@@ -453,6 +608,34 @@ describe('conversationTimelineStore', () => {
 
     expect(timelineFor(store, '')).not.toBeNull()
     expect(timelineFor(store, `c${MAX_RETAINED_TIMELINES - 1}`)).toBeNull()
+  })
+
+  it('clearTimelineFor("__proto__") against a map without that key removes NOTHING (#757 AC3, AC5)', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('c1', delta('t1', 'real'))
+    const stateBefore = store.getState()
+
+    // On a `Record` the presence check walks the prototype chain and `'__proto__'` reads as present,
+    // so this would delete or churn. `Map.prototype.has` performs no such lookup.
+    store.getState().clearTimelineFor('__proto__')
+
+    expect(store.getState()).toBe(stateBefore)
+    expect(timelineFor(store, 'c1')).not.toBeNull()
+    expect(store.getState().timelines.size).toBe(1)
+  })
+
+  it('clearTimelineFor removes a hostile key itself and leaves its neighbour (#757 AC3, AC5)', () => {
+    const store = createConversationTimelineStore()
+    store.getState().dispatchFor('__proto__', delta('t1', 'hostile'))
+    store.getState().dispatchFor('', delta('t2', 'empty-key'))
+    const emptyKeyBefore = timelineFor(store, '')
+
+    store.getState().clearTimelineFor('__proto__')
+
+    expect(timelineFor(store, '__proto__')).toBeNull()
+    expect(timelineFor(store, '')).toBe(emptyKeyBefore)
+    expect(({} as Record<string, unknown>).items).toBeUndefined()
+    expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'items')).toBe(false)
   })
 
   it('the factory yields independent stores, and honours an injected initial state', () => {

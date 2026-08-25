@@ -23,6 +23,7 @@ import {
 } from './exitActiveConversation'
 import { activeConversationStore } from './store/activeConversationStore'
 import { announcedModelStore } from './store/announcedModelStore'
+import { conversationTimelineStore } from './store/conversationTimelineStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { timelineStore } from './store/timelineStore'
@@ -68,12 +69,14 @@ const activateDeps: ActivateConversationDeps = {
 const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> = {
   getActiveConversation: () => activeConversationStore.getState().activeConversation,
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearTimelineFor: (id) => conversationTimelineStore.getState().clearTimelineFor(id),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId()
 }
 
 const clearPairingDeps: ClearPairingScopedStateDeps = {
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearAllTimelines: () => conversationTimelineStore.getState().clearAllTimelines(),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   clearAnnouncedModel: () => announcedModelStore.getState().clearAnnouncedModel(),

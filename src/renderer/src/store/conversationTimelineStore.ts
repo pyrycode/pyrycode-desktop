@@ -11,11 +11,11 @@
 // arms route here; the other three (`sessionTransition`, `unrecognizedMessage`, `connected`) carry no
 // conversation id, so they reach the flat store only.
 //
-// #757 owns the clears (the pairing boundary and a conversation deletion; NOT the `connected` edge,
-// because a thread must survive a reconnect), and #758 cuts the reader over and wires `markViewed` at
-// the switch seam (activateConversation.ts:74-77). Both ship UNWIRED here and that is correct — until
-// #758 every slice is never-viewed, so eviction order is pure creation-recency and the ten-slice bound
-// is now genuinely reachable where before #756 it was theoretical.
+// #757 built the clears and WIRED them — `clearAllTimelines` at the pairing boundary and
+// `clearTimelineFor` on a conversation deletion — NOT the `connected` edge, because a thread must
+// survive a reconnect. `markViewed` is the one path still shipping unwired; #758 wires it at the
+// switch seam (activateConversation.ts:74-77) and cuts the reader over. Until then every slice is
+// never-viewed, so eviction order is pure creation-recency and the ten-slice bound is reachable.
 //
 // Keyed by `conversationId`, NOT a flat slot — the backgroundTaskRosterStore.ts:31-37 argument, reused
 // rather than re-derived: the daemon fans these frames out to every interactive connection and each
@@ -122,7 +122,7 @@ export interface ConversationTimelineState {
   timelines: ReadonlyMap<string, TimelineState>
 }
 
-/** Store shape = state + the two write paths.
+/** Store shape = state + the four write paths.
  *
  *  `dispatchFor`, NOT `dispatch`: the flat store's write path is `dispatch(event)` with one argument
  *  (timelineStore.ts:25), and a same-name-different-shape pair in one directory is the trap
@@ -133,13 +133,26 @@ export interface ConversationTimelineState {
  *  in, because a conversation working in the background is written constantly and viewed never;
  *  evicting on write order would throw away exactly the thread the operator stepped away from.
  *
- *  Two named write paths rather than a reducer over a keyed action union: a fold and a view-stamp are
- *  two independent operations, so a discriminated-union action set is ceremony without benefit (the
- *  twin's posture). There is deliberately NO generic `write(id, key, value)`, which would reintroduce a
- *  stringly-typed key beside the one hostile string this store exists to contain. */
+ *  The two clears (#757) are likewise distinct from each other, and the difference is which edge fired.
+ *  `clearAllTimelines` is the PAIRING BOUNDARY: conversation ids are scoped to the server that issued
+ *  them, so every retained thread is invalidated at once and a slice from server A must never be keyed
+ *  under an id server B later reuses. It is NULLARY BY DESIGN — "takes no conversation id at all" is a
+ *  property of this signature, so `tsc` enforces it rather than a test, and no daemon-supplied id can
+ *  craft a slice that survives the boundary. `clearTimelineFor` is ONE conversation being deleted or
+ *  archived out from under the operator, whose other threads are still live and still his. The naming
+ *  diverges from the twin's `dropConversation` (conversationActivityStore.ts:214) deliberately: this
+ *  file already has a `For` family whose suffix rationale is above, and `All` is kept from
+ *  `clearAllActivity` so the blast radius is legible at the call site rather than only in the docstring.
+ *
+ *  Four named write paths rather than a reducer over a keyed action union: a fold, a view-stamp and two
+ *  clears are independent operations, so a discriminated-union action set is ceremony without benefit
+ *  (the twin's posture). There is deliberately NO generic `write(id, key, value)`, which would
+ *  reintroduce a stringly-typed key beside the one hostile string this store exists to contain. */
 export type ConversationTimelineStore = ConversationTimelineState & {
   dispatchFor: (conversationId: string, event: ThreadEvent) => void
   markViewed: (conversationId: string) => void
+  clearAllTimelines: () => void
+  clearTimelineFor: (conversationId: string) => void
 }
 
 export const initialConversationTimelineState: ConversationTimelineState = { timelines: new Map() }
@@ -152,6 +165,9 @@ export const initialConversationTimelineState: ConversationTimelineState = { tim
  *      existing key preserves its position — that is what makes "written, not viewed" fail to protect).
  *   2. A fold that CREATES a key inserts it at the HEAD, ahead of every slice already held.
  *   3. `markViewed(id)` moves the key to the TAIL, creating it there if absent.
+ *
+ * Neither #757 clear is an exception. A removal re-orders nothing: `Map.prototype.delete` preserves
+ * the position of every remaining entry, and dropping the whole map leaves nothing left to order.
  *
  * The consequence is the whole policy: every never-viewed slice sits ahead of every viewed slice, and
  * the viewed ones are ordered least-recently-viewed first. So the victim is a never-viewed slice
@@ -271,7 +287,7 @@ function tailKey(timelines: ReadonlyMap<string, TimelineState>): string | undefi
  *
  * Every write is a synchronous `set` under zustand's own store lock with no `await` inside it, so there
  * is no check-then-act gap across a suspension point for a concurrent handler to interleave into.
- * Unidirectional is preserved: one read-only selector, two store-owned write paths, and neither is
+ * Unidirectional is preserved: one read-only selector, four store-owned write paths, and none is
  * two-way-bound from a component. The bound is enforced on writes, not at construction: an injected
  * `init` is trusted test input and is not re-checked.
  */
@@ -308,6 +324,37 @@ export function createConversationTimelineStore(
             s.timelines.get(conversationId) ?? initialTimelineState
           )
         }
+      }),
+    // The pairing boundary. Shaped after `clearAllActivity` (conversationActivityStore.ts:226), guard
+    // included, and it deliberately does NOT hand back `initialConversationTimelineState.timelines`:
+    // that exported constant holds a module-shared MUTABLE `Map`, so returning it as live state would
+    // make every store instance that clears share one object. The `size === 0` guard is what buys the
+    // idempotence returning a constant would have, and it is LOAD-BEARING rather than an optimisation:
+    // clearPairingScopedState.ts:65-70 claims every one of its clears is idempotent by construction, so
+    // a clear that always built a fresh `Map` would make that docstring false and churn a subscriber
+    // for nothing. DELETE, never overwrite: `set(id, initialTimelineState)` type-checks identically and
+    // would collapse "nothing is held" into "observed; nothing in the thread" — the exact distinction
+    // :115-120 and `selectTimelineFor` exist to preserve.
+    clearAllTimelines: () => set((s) => (s.timelines.size === 0 ? s : { timelines: new Map() })),
+    // One conversation deleted or archived out from under the operator; his other threads are still
+    // live and still his. Same clone-then-delete-on-the-clone shape as the twin's `dropConversation`
+    // (conversationActivityStore.ts:214-220) — never `s.timelines.delete(...)`, which would mutate the
+    // held map. `new Map(s.timelines)` copies references, so every survivor is `Object.is`-identical to
+    // the object held before and a component watching another conversation is not woken.
+    //
+    // `has` rather than `get(...) !== undefined`: both work and `has` states the intent. It is not a
+    // derivation from the id's SHAPE either — the same presence lookup `withSliceAtTail` performs at
+    // :218 — so `has`, `delete`, `size` and `new Map(...)` are this pair's whole vocabulary and the
+    // header's hostile-key property carries over untouched: `Map.prototype.has('__proto__')` and
+    // `.delete('__proto__')` perform no prototype-chain lookup. The absent-key guard returns the state
+    // OBJECT so zustand's `Object.is` short-circuit fires, and that is the COMMON case rather than an
+    // edge one — the exit fires for every deletion and most conversations hold no slice.
+    clearTimelineFor: (conversationId) =>
+      set((s) => {
+        if (!s.timelines.has(conversationId)) return s
+        const next = new Map(s.timelines)
+        next.delete(conversationId)
+        return { timelines: next }
       })
   }))
 }

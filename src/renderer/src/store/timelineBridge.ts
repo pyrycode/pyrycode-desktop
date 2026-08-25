@@ -45,8 +45,9 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // so this assigns with no cast and no import of TurnPhase (a rename, not a re-validation).
       return { type: 'turnState', state: event.state }
     case 'toolUse':
-      // The tool-call arm (#217, widened by #643). The DaemonEvent and ThreadEvent `toolUse` shapes are
-      // field-for-field identical, so this is a filter + fresh copy (arm selection), not a field remap.
+      // The tool-call arm (#217, widened by #643). The DaemonEvent carries `conversationId` (#763)
+      // beside the five render fields; the ThreadEvent this returns does not, so the id STOPS here — a
+      // filter + fresh copy (arm selection), never a pass-through of the DaemonEvent object.
       // reduceTimeline folds it into a pending `toolCall` item (result: null) in arrival order (#121).
       //
       // `input` (#643) is assigned unconditionally and BY REFERENCE. Never `{ ...event.input }`, which

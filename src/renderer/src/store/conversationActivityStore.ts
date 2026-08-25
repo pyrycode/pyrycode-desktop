@@ -2,11 +2,13 @@
 // is open (#747, split from #674) — so the sidebar can draw a dot on a row the user has never opened.
 // Pure renderer state: no IPC, no preload bridge, no transport, no async task, no timer, no teardown.
 //
-// This slice ships the HOLDER and nothing else — no writer and no reader. #748 wires the four daemon
-// arms (`turnState`, `stallDetected`, `apiRetry`, `compacting` — src/shared/ipc/events.ts:125,145,172,
-// 199) into it; #749 adds the clears. Nothing is registered in `clearPairingScopedState` here, and
-// there is deliberately no reset setter: that call, and the `connected`-edge vs pairing-scoped
-// discriminator announcedModelStore.ts:29-45 documents, belong to #749.
+// This slice shipped the HOLDER (#747); #748 wires the four daemon arms (`turnState`, `stallDetected`,
+// `apiRetry`, `compacting` — src/shared/ipc/events.ts:125,145,172,199) into it, and #749 added the two
+// eviction paths below. Nothing is registered in `clearPairingScopedState`, and that is the DECIDED
+// answer rather than a pending one: on the `connected`-edge vs pairing-scoped discriminator
+// announcedModelStore.ts:29-45 documents ("does a reconnect to the SAME daemon need to clear it?") all
+// four facts are liveness, so a reconnect must clear them ⇒ the `connected` edge, wired in
+// conversationActivityBridge.ts. There is still no reader — #676's sidebar dot is the first.
 //
 // Keyed by `conversationId`, NOT a flat slot — the backgroundTaskRosterStore.ts:31-37 argument, reused
 // rather than re-derived: the daemon fans these frames out to every interactive connection and each
@@ -90,12 +92,16 @@ export interface ConversationActivityState {
   entries: ReadonlyMap<string, ConversationActivityEntry>
 }
 
-/** Store shape = state + one named setter per fact. No reset: #749 owns both clears. */
+/** Store shape = state + one named setter per fact + the two eviction paths (#749). `dropConversation`
+ *  reads against the entry-per-conversation model; `clearAllActivity` carries `All` so its blast radius
+ *  is legible at the CALL SITE rather than only in this docstring. */
 export type ConversationActivityStore = ConversationActivityState & {
   setTurnRunning: (conversationId: string, turnRunning: boolean) => void
   setStalled: (conversationId: string, stalled: boolean) => void
   setApiRetrying: (conversationId: string, apiRetrying: boolean) => void
   setCompacting: (conversationId: string, compacting: boolean) => void
+  dropConversation: (conversationId: string) => void
+  clearAllActivity: () => void
 }
 
 export const initialConversationActivityState: ConversationActivityState = { entries: new Map() }
@@ -154,9 +160,11 @@ function writeEntry(
  * nullary arm: the store holds replacement truth and THE WRITER decides when a fact clears. A nullary
  * `markStalled(id)` would leave no way to clear the fact at all, and #748 needs one.
  *
- * Growth is bounded by the number of distinct `conversationId`s the daemon names since app start, at
- * four booleans plus one bounded id string per entry. In THIS slice it is exactly zero — the store has
- * no writer. #749 adds the eviction paths; the bound is stated so it is not silently inherited.
+ * Growth is bounded by the number of distinct `conversationId`s the daemon names SINCE THE LAST
+ * HANDSHAKE, at four booleans plus one bounded id string per entry: `clearAllActivity` empties the map
+ * on every `connected` edge and `dropConversation` removes a deleted conversation before then. The
+ * residue between handshakes — a long-lived pairing that names many conversations without deleting any
+ * — is deliberately not capped here; #676, the first reader, is where a real ceiling would go.
  *
  * Every write is a synchronous `set` under zustand's own store lock with no `await` inside it, so there
  * is no check-then-act gap across a suspension point for a concurrent handler to interleave into.
@@ -191,7 +199,31 @@ export function createConversationActivityStore(
         s.entries.get(conversationId)?.compacting === compacting
           ? s
           : writeEntry(s, conversationId, (held) => ({ ...held, compacting }))
-      )
+      ),
+    // Remove exactly one key, CLONING the outer map and deleting on the clone — never
+    // `s.entries.delete(...)`. `new Map(s.entries)` copies references, so every survivor is
+    // `Object.is`-identical to the object held before, the same property `writeEntry` documents at
+    // :124-127. `has` rather than `get(...) !== undefined`: an entry is never `undefined`, so both
+    // work and `has` states the intent. `writeEntry` is deliberately NOT reused — its contract is
+    // "seed-or-read, apply, set", and a removal is a different shape with one call site, so sharing
+    // would force a sentinel through it for no gain. The absent-key guard is the four setters'
+    // same-value doctrine applied to a key that is not there: it returns the state OBJECT, so
+    // zustand's `Object.is` short-circuit fires and no subscriber wakes. That is the common case
+    // rather than an edge one — the bridge fires for every deletion and most conversations have
+    // never produced an activity frame — and it is a no-op BY DESIGN, not a swallowed error.
+    dropConversation: (conversationId) =>
+      set((s) => {
+        if (!s.entries.has(conversationId)) return s
+        const next = new Map(s.entries)
+        next.delete(conversationId)
+        return { entries: next }
+      }),
+    // The pairing boundary, wired at the `connected` edge (conversationActivityBridge.ts). Shaped
+    // after backgroundTaskRosterStore.ts:382, guard included. It deliberately does NOT hand back
+    // `initialConversationActivityState`: that exported constant holds a module-shared MUTABLE
+    // `Map`, so returning it as live state would make every store instance that clears share one
+    // object. The `size === 0` guard buys the idempotence that returning a constant would.
+    clearAllActivity: () => set((s) => (s.entries.size === 0 ? s : { entries: new Map() }))
   }))
 }
 

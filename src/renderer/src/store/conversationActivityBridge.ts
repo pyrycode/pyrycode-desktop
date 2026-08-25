@@ -22,7 +22,7 @@
 // #648 defect verbatim — a gate written against one phase literal makes the signal vanish for the
 // tool-heavy bulk of a turn. Relocating the predicate was weighed and rejected: it refactors two of the
 // renderer's largest files for no behavioural gain and falsifies
-// conversationActivityStore.ts:26-27, which names the predicate's home by file AND line. The store's
+// conversationActivityStore.ts:28-29, which names the predicate's home by file AND line. The store's
 // own HARD IMPORT CONSTRAINT is untouched and still grep-checkable — it is scoped to THAT module ("a
 // store whose tests run with no React and no DOM") and in the same breath names this ticket as the
 // owner of the derivation with `isTurnRunning`. A bridge is not that module; the precedent already
@@ -34,7 +34,7 @@
 // or an attribute, and never compared against a secret. It is a VALUE on every write, never a key: the
 // write path uses NO computed object keys, so there is no `{ [x]: v }` whose provenance a reviewer
 // must trace. Log-free by construction — no `console.*` on any branch, matching the store
-// (conversationActivityStore.ts:47-49) and the four arms' decode-side content-free pins: the only
+// (conversationActivityStore.ts:49-51) and the four arms' decode-side content-free pins: the only
 // value a diagnostic here could carry is that id, and the renderer console is readable by anything
 // that can open DevTools (#126). Nothing is parsed, fetched or persisted.
 import { useEffect } from 'react'
@@ -100,7 +100,7 @@ function assertNever(write: never): never {
  * time, leaving the coupling invisible from both, or the stall clear moves into the subscriber, where
  * the precedent deliberately keeps only the `connected` reset. It is also the smaller surface — one
  * exported type against four, one switch against five. This does NOT contradict
- * conversationActivityStore.ts:15-18, which rejects a discriminated-union action set for the STORE's
+ * conversationActivityStore.ts:17-20, which rejects a discriminated-union action set for the STORE's
  * API: the store keeps its four named setters untouched, and this union is a return type on the way to
  * them, existing for the reason the store's would not — one arm fanning out to two setters.
  */
@@ -118,7 +118,7 @@ export function translateConversationActivity(
       // The stall clear is UNCONDITIONAL on any turn state, `idle` included — threadTimeline.ts:356-359
       // ("any state, including idle") adopted verbatim rather than re-invented as a running-only
       // variant. It is free as well as simpler: the store's per-field guard
-      // (conversationActivityStore.ts:140-151) makes a redundant clear churn no listener, and a first
+      // (conversationActivityStore.ts:146-157) makes a redundant clear churn no listener, and a first
       // write of `false` still creates the entry, which is the correct reading — this conversation has
       // been observed and is not stalled.
       return [
@@ -148,6 +148,31 @@ export function translateConversationActivity(
 }
 
 /**
+ * The store's whole effect surface, as ONE NAMED OBJECT rather than a positional list (#749). Every
+ * member here collapses to a signature another member's slot accepts: the four setters are all
+ * `(conversationId: string, value: boolean) => void`, and because a function of FEWER parameters is
+ * assignable to one of more, `dropConversation` and `clearAllActivity` fit any of those four slots too.
+ * A positional cross-wire would therefore compile AND pass every test in this file's suite — and it is
+ * structurally uncoverable, because vitest.config.ts:26-27 is `environment: 'node'` globally, so no
+ * test in this repo ever runs the effect in `ConversationActivityData` that does the wiring. It has to
+ * be a type error instead, and a named member makes each effect state its own name beside its own
+ * call. This closes #748's code-review SHOULD FIX, which assigned it forward to this ticket.
+ *
+ * Deliberately NOT pinned by an `Object.keys(deps).sort()` test like
+ * clearPairingScopedState.test.ts:84-91. That pin guards DIVERGENCE BETWEEN TWO independent call sites,
+ * which was the bug that motivated it; there is one call site here, and the failure this object closes
+ * is cross-wiring, which named members close completely.
+ */
+export interface ConversationActivityDeps {
+  setTurnRunning: (conversationId: string, turnRunning: boolean) => void
+  setStalled: (conversationId: string, stalled: boolean) => void
+  setApiRetrying: (conversationId: string, apiRetrying: boolean) => void
+  setCompacting: (conversationId: string, compacting: boolean) => void
+  dropConversation: (conversationId: string) => void
+  clearAllActivity: () => void
+}
+
+/**
  * Subscribe via the injected `onDaemonEvent`, translate, then apply EVERY write in the returned array
  * in order. There is deliberately NO early return after the first match — that is the precedent's
  * shape (backgroundTaskRosterBridge.ts:151-168), and here it would silently drop the second of
@@ -158,35 +183,65 @@ export function translateConversationActivity(
  * own id. The open conversation is never read here: `activeConversationStore` is not imported, so the
  * `?? activeConversation` fallback events.ts:116-117 bans is UNAVAILABLE rather than merely avoided.
  *
- * This subscriber has NO `connected` branch, and that absence is deliberate rather than an omission.
- * The precedent puts its reset inside this very function (backgroundTaskRosterBridge.ts:152-155),
- * which makes folding one in here the easy mistake — but both clears, the `connected` edge and the
- * pairing boundary, are #749's, and this ticket registers nothing in `clearPairingScopedState`.
+ * TWO EARLY-RETURN REMOVAL BRANCHES ahead of the translator (#749), the precedent's shape
+ * (backgroundTaskRosterBridge.ts:151-155):
  *
- * Injected `onDaemonEvent` + the four setters keep this React-free and unit-testable with plain spies.
+ *   - `connected` → `clearAllActivity()`. THE SOLE ENFORCEMENT of the pairing boundary for this store,
+ *     which is why it is registered nowhere in `clearPairingScopedState`: on that file's own
+ *     discriminator (:30-33, "does a reconnect to the SAME daemon need to clear it?") the answer here
+ *     is YES — all four facts are liveness, so a turn that was running when the socket dropped may
+ *     have finished while it was down and must not leave a working dot on an idle row. It reads only
+ *     the discriminant and ignores `event.ack`. Because it fires on EVERY completed handshake
+ *     (daemonConnection.ts:466-481 is the one emit site) and every new pairing re-handshakes, both
+ *     pairing-change paths are covered — the unpair route flip AND the pair-another-server transition
+ *     that never unmounts the shell, which this bridge's app-level mount also survives. Gating it or
+ *     folding it into the translator would kill that property silently.
+ *   - `conversationDeleted` → `dropConversation(event.id)`. NO truthiness guard: a degenerate `''` is
+ *     falsy but is a real value the daemon can emit and a real `Map` key, so the branch is
+ *     discriminant-driven (conversationDeletedBridge.ts:32-34 makes the same point about the same
+ *     arm). Deliberately NOT folded into `PairedShell`'s existing `useConversationDeletedExit`
+ *     subscription: that callback runs the `exitActiveConversation` decision, which GATES on the id
+ *     matching the OPEN conversation, and eviction must be UNGATED — the whole point is that a
+ *     background conversation loses its dot. A third listener on this arm is correct rather than a
+ *     duplicate; conversationDeletedBridge.ts:37-42 documents exactly this arrangement for listeners
+ *     touching disjoint state.
+ *
+ * Neither removal is a member of `ConversationActivityWrite` and the translator is unchanged: every
+ * member of that union names a store field and carries its value, and an eviction names neither.
+ * Folding one in would force the return type to describe two unrelated things and destroy the property
+ * that the translator is a pure arm→fact filter — the backgroundTaskRosterBridge.ts:128-133 argument,
+ * adopted rather than re-derived, and pinned by a test. The three discriminants are mutually exclusive,
+ * so branch ORDER is a readability choice rather than a correctness one.
+ *
+ * Injected `onDaemonEvent` + the deps object keep this React-free and unit-testable with plain spies.
  * The listener only translates + dispatches — it never throws into React.
  */
 export function subscribeConversationActivity(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  setTurnRunning: (conversationId: string, turnRunning: boolean) => void,
-  setStalled: (conversationId: string, stalled: boolean) => void,
-  setApiRetrying: (conversationId: string, apiRetrying: boolean) => void,
-  setCompacting: (conversationId: string, compacting: boolean) => void
+  deps: ConversationActivityDeps
 ): () => void {
   return onDaemonEvent((event) => {
+    if (event.type === 'connected') {
+      deps.clearAllActivity()
+      return
+    }
+    if (event.type === 'conversationDeleted') {
+      deps.dropConversation(event.id)
+      return
+    }
     for (const write of translateConversationActivity(event)) {
       switch (write.fact) {
         case 'turnRunning':
-          setTurnRunning(write.conversationId, write.turnRunning)
+          deps.setTurnRunning(write.conversationId, write.turnRunning)
           break
         case 'stalled':
-          setStalled(write.conversationId, write.stalled)
+          deps.setStalled(write.conversationId, write.stalled)
           break
         case 'apiRetrying':
-          setApiRetrying(write.conversationId, write.apiRetrying)
+          deps.setApiRetrying(write.conversationId, write.apiRetrying)
           break
         case 'compacting':
-          setCompacting(write.conversationId, write.compacting)
+          deps.setCompacting(write.conversationId, write.compacting)
           break
         default:
           assertNever(write)
@@ -210,21 +265,25 @@ export function subscribeConversationActivity(
 export function ConversationActivityData(): null {
   useEffect(() => {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode double-mount
-    // nets exactly one live listener (the queueBridge idiom). All four write paths ride this one
-    // listener, dispatched synchronously in daemon arrival order under zustand's own store lock, so
-    // there is no gap between reading and writing the store that a concurrent handler could interleave
-    // into. `turnState`'s two writes are two separate `set` calls, so the intermediate state where
-    // `turnRunning` has flipped and `stalled` has not is observable — harmless for #676, which draws
-    // one dot per row from a single entry and sees both writes in the same task. Recorded as a
-    // decision, not an oversight: batching them would add a fifth setter to a store whose
-    // four-named-setter shape is argued at conversationActivityStore.ts:15-18.
-    return subscribeConversationActivity(
-      window.pyry.onDaemonEvent,
-      (id, v) => conversationActivityStore.getState().setTurnRunning(id, v),
-      (id, v) => conversationActivityStore.getState().setStalled(id, v),
-      (id, v) => conversationActivityStore.getState().setApiRetrying(id, v),
-      (id, v) => conversationActivityStore.getState().setCompacting(id, v)
-    )
+    // nets exactly one live listener (the queueBridge idiom). All six paths ride this one listener,
+    // dispatched synchronously in daemon arrival order under zustand's own store lock, so there is no
+    // gap between reading and writing the store that a concurrent handler could interleave into.
+    // Ordering between the removals and the four feeds needs no reasoning for the same reason: a
+    // `conversationDeleted` arriving after a `turnState` for the same id evicts what the earlier event
+    // wrote, which is the correct reading — the conversation is gone. `turnState`'s two writes are two
+    // separate `set` calls, so the intermediate state where `turnRunning` has flipped and `stalled`
+    // has not is observable — harmless for #676, which draws one dot per row from a single entry and
+    // sees both writes in the same task. Recorded as a decision, not an oversight: batching them would
+    // add a fifth setter to a store whose four-named-setter shape is argued at
+    // conversationActivityStore.ts:17-20.
+    return subscribeConversationActivity(window.pyry.onDaemonEvent, {
+      setTurnRunning: (id, v) => conversationActivityStore.getState().setTurnRunning(id, v),
+      setStalled: (id, v) => conversationActivityStore.getState().setStalled(id, v),
+      setApiRetrying: (id, v) => conversationActivityStore.getState().setApiRetrying(id, v),
+      setCompacting: (id, v) => conversationActivityStore.getState().setCompacting(id, v),
+      dropConversation: (id) => conversationActivityStore.getState().dropConversation(id),
+      clearAllActivity: () => conversationActivityStore.getState().clearAllActivity()
+    })
   }, [])
 
   return null

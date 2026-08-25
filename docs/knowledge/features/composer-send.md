@@ -25,16 +25,27 @@ Framework-free and React-free, co-located with the screen and mirroring `pairing
 
 ```ts
 // src/renderer/src/screens/conversation/composerSend.ts — RENDERER ONLY
-export const MILESTONE_CONVERSATION_ID = 'default'
-
 export interface ComposerSendDeps {
   sendCommand: (command: RendererCommand) => void
-  dispatch: (action: SessionAction) => void
+  dispatch: (event: ThreadEvent) => void
+  dispatchFor: (conversationId: string, event: ThreadEvent) => void   // #756
   newMessageId: () => string
 }
 
-export function submitMessage(text: string, deps: ComposerSendDeps): boolean
+export function submitMessage(text: string, conversationId: string | null, deps: ComposerSendDeps): boolean
 ```
+
+Current signature — see [conversation timeline holder § Configuration and usage](conversation-timeline-holder.md)
+for `dispatchFor`'s target. `dispatch` writes the same `ThreadEvent` into the flat `timelineStore` this
+section originally described as `sessionStore`/`SessionAction`; that retarget happened in
+[#179](../codebase/179.md) and the active-conversation `conversationId` parameter was added in #448 (see
+[conversation timeline store](conversation-timeline-store.md) for the current bridge-side model). [#756](../codebase/756.md)
+added `dispatchFor`, **required** rather than an arity widening of `dispatch` — unlike
+`subscribeTimeline`'s 20 call sites, this deps object had only 6, so requiring the field cost six
+mechanical test edits and buys a compile error for "forgot to wire it." `submitMessage` builds the
+`userText` echo once and hands the same `ThreadEvent` reference to both `dispatch` and `dispatchFor(conversationId, echo)`,
+under the conversation the message was sent to — safe because `reduceTimeline` is pure and always builds
+fresh arrays.
 
 `submitMessage` contract:
 
@@ -194,7 +205,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone.
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
 - **DOM interaction is untested.** Only the pure `submitMessage` and `shouldSubmitOnKeyDown` are unit-tested (spies/plain values + a stub id). `onChange`, clear-on-success, and `handleKeyDown`'s own three-statement wiring have no test, because the render harness is `renderToStaticMarkup` (node env), not jsdom — the same deferral [#69](../codebase/69.md) carries, and the one carved out by [#512](../codebase/512.md) is that the IME-vs-plain-Enter *decision* no longer has to live in that untested surface.
-- **Single active conversation.** All sends use `MILESTONE_CONVERSATION_ID`; there is no conversation-selection surface. `auto-grow` on the textarea is unbuilt (cosmetic, no AC).
+- **`auto-grow` on the textarea is unbuilt** (cosmetic, no AC). *(The "single active conversation, `MILESTONE_CONVERSATION_ID`" limitation this bullet used to name was closed by #448, which added the `conversationId` parameter documented above; the rest of this page's narrative sections still describe the pre-#448/#179 shape and are due a fuller pass — flagged here rather than silently left contradicting the current signature.)*
 
 ## Related
 
@@ -209,3 +220,4 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the `Re-pair` affordance it gates.
 - [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell.md#connection-banner-279) it gates.
 - [#512 codebase notes](../codebase/512.md) — the `shouldSubmitOnKeyDown` keystroke-intent predicate: the Enter that commits an IME composition no longer submits or suppresses the commit.
+- [Conversation timeline holder](conversation-timeline-holder.md) / [#756 codebase notes](../codebase/756.md) — `dispatchFor`'s target: the keyed store the echo folds into, dual-write alongside the flat `dispatch`, still unread until #758.

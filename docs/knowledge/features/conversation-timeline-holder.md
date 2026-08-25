@@ -7,13 +7,17 @@ its thread away. Bounded at ten and evicted least-recently-**viewed**, the one d
 both of its keyed precedents.
 
 Introduced in [#755](../codebase/755.md), split from #675 alongside #751-#754 (the transport arms that
-widened four `DaemonEvent`s with `conversationId`, all shipped), #756 (the writer), #757 (the clears) and
+widened eight `DaemonEvent`s with `conversationId`, all shipped), #756 (the writer), #757 (the clears) and
 #758 (the reader cutover). #755 shipped the holder alone — no writer, no reader — the same "populated and
 unread" posture the [conversation activity store](conversation-activity-store.md) shipped for #747 before
-its own writer/reader landed. Not to be confused with the [conversation timeline
-store](conversation-timeline-store.md) (`timelineStore.ts`), the existing **flat**, single-conversation
-store this one runs alongside — that store keeps serving the open conversation unchanged; this one is an
-independent, currently-dormant holder for every conversation's thread at once.
+its own writer/reader landed. [#756](../codebase/756.md) gave it its first writer: both of the timeline's
+row-adding writers — the bridge fan-out and the composer's optimistic echo — now fold into this holder as
+well as into the flat store, dual-write (Strangler Fig, ADR 0008). Still no reader (#758) and no clears
+(#757), so the holder stays invisible from the operator's side despite now carrying live traffic. Not to
+be confused with the [conversation timeline store](conversation-timeline-store.md) (`timelineStore.ts`),
+the existing **flat**, single-conversation store this one runs alongside — that store keeps serving the
+open conversation unchanged; this one is an independent holder, written but not yet read, for every
+conversation's thread at once.
 
 ## What it does
 
@@ -116,14 +120,18 @@ exactly the thread the operator stepped away from.
 - File: `src/renderer/src/store/conversationTimelineStore.ts`.
 - Singleton: `conversationTimelineStore`. Hook: `useConversationTimelineStore(selector)`.
 - Read one conversation: `useConversationTimelineStore(selectTimelineFor(conversationId))`.
-- **Ships dormant as of #755.** Nothing calls `dispatchFor` or `markViewed`, and nothing reads
-  `selectTimelineFor`, anywhere in the repo — grepping for `conversationTimelineStore` /
-  `MAX_RETAINED_TIMELINES` / `selectTimelineFor` / `useConversationTimelineStore` outside this store's own
-  file and test returns nothing. It is not dead code: it is the third of a four-ticket chain that lands
-  as a verified no-op from the operator's side.
-- **Writer (not yet built):** #756 will wire the four turn-stream arms
-  (`assistantDelta`/`turnEnd`/`toolUse`/`toolResult` — the ones widened with `conversationId` by
-  #751-#754) into `dispatchFor`, keyed by each event's own `conversationId`, never the open conversation's.
+- **Writer, as of [#756](../codebase/756.md):** `useTimelineBridge`'s fan-out calls `dispatchFor` for
+  every one of the eight id-carrying owned arms (`assistantDelta`/`turnEnd`/`turnState`/`toolUse`/
+  `toolResult`/`stallDetected`/`apiRetry`/`compacting` — the whole #675 family), keyed by each event's own
+  `conversationId`, never the open conversation's; and the composer's optimistic echo
+  (`composerSend.ts`) calls it too, keyed by the conversation the message was sent to. Both writers also
+  keep writing the flat `timelineStore` unchanged (dual-write). `markViewed` still has no caller, so every
+  slice this creates today is never-viewed and enters at the head — see § Edge cases.
+- **Still no reader.** Nothing reads `selectTimelineFor` anywhere in the repo outside this store's own
+  test — grepping for `selectTimelineFor` / `useConversationTimelineStore` outside this file and test
+  still returns nothing. It is not dead code: it is the fourth of a five-ticket chain (#751-#754, #755,
+  #756, #757, #758) that lands as a verified no-op from the operator's side until #758 cuts the reader
+  over.
 - **Clears (not yet built):** #757 will own the pairing-boundary and conversation-deletion clears. This
   map has **no** `connected`-edge clear by design — unlike its two keyed siblings, a timeline must survive
   a reconnect, so growth between handshakes is bounded only by `MAX_RETAINED_TIMELINES`.
@@ -152,9 +160,15 @@ exactly the thread the operator stepped away from.
   their own copies of the same three facts as part of the full `TimelineState`. Decided, not pending — the
   two stores' per-fact clear semantics span 28 renderer references and are not being unpicked for this
   chain.
-- **Dormant until #758.** `markViewed` has no caller yet, so today every write to this store (once #756
-  ships) enters at the head and nothing is ever promoted — a real ceiling isn't exercised end to end until
-  the reader cutover wires the viewed signal.
+- **Reachable-in-fact, not just in principle, since [#756](../codebase/756.md).** Before #756, nothing
+  wrote this store, so `MAX_RETAINED_TIMELINES` was a theoretical ceiling. Now that both writers are live,
+  a noisy or hostile daemon can mint a slice per unknown conversation id for the first time. The mitigation
+  — head-insert eviction — holds unmodified: the bound's cost is still capped at "displaces at most one
+  viewed slice," per #755's own hostile-burst coverage; #756 added no new test for it, only the note that
+  the scenario is no longer hypothetical.
+- **Dormant until #758.** `markViewed` has no caller yet, so today every write to this store enters at the
+  head and nothing is ever promoted — every slice #756 creates is never-viewed by construction, and a real
+  ceiling isn't exercised end to end until the reader cutover wires the viewed signal.
 
 ## Related decisions
 
@@ -170,8 +184,12 @@ exactly the thread the operator stepped away from.
 - [Conversation timeline store](conversation-timeline-store.md) — the existing **flat**, single-
   conversation store and bridge this one runs alongside without replacing. Do not confuse the two: that
   page documents `timelineStore.ts`/`timelineBridge.ts`, which keep serving the open conversation
-  unchanged through this entire four-ticket chain.
+  unchanged through this entire five-ticket chain.
+- [Composer send](composer-send.md) — the second row-adding writer #756 folded into this holder, beside
+  the bridge fan-out documented on [conversation timeline store](conversation-timeline-store.md).
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md).
 - [ADR 0008 — Thread timeline model](../decisions/0008-thread-timeline-model.md).
 - [#755 codebase notes](../codebase/755.md) — the holder's implementation summary, code review, and
+  lessons learned.
+- [#756 codebase notes](../codebase/756.md) — the writer's implementation summary, code review, and
   lessons learned.

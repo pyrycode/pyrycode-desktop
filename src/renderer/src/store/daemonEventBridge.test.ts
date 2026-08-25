@@ -275,7 +275,8 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
       translateDaemonEvent({
         type: 'modelAnnounced',
         model: 'claude-haiku-4-5-20251001',
-        truncated: false
+        truncated: false,
+        conversationId: 'conv-1'
       })
     ).toBeNull()
     // A cut identifier is no more a session action than a complete one.
@@ -283,7 +284,8 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
       translateDaemonEvent({
         type: 'modelAnnounced',
         model: 'claude-haiku-4-5-2025',
-        truncated: true
+        truncated: true,
+        conversationId: 'conv-1'
       })
     ).toBeNull()
   })

@@ -26,7 +26,8 @@ describe('translateModelAnnounced', () => {
     const event: DaemonEvent = {
       type: 'modelAnnounced',
       model: 'claude-haiku-4-5-20251001',
-      truncated: false
+      truncated: false,
+      conversationId: 'conv-1'
     }
     expect(translateModelAnnounced(event)).toEqual({
       model: 'claude-haiku-4-5-20251001',
@@ -35,18 +36,33 @@ describe('translateModelAnnounced', () => {
   })
 
   it('carries truncated: true through unchanged (AC2)', () => {
-    const event: DaemonEvent = { type: 'modelAnnounced', model: 'claude-opus-4-5', truncated: true }
+    const event: DaemonEvent = {
+      type: 'modelAnnounced',
+      model: 'claude-opus-4-5',
+      truncated: true,
+      conversationId: 'conv-1'
+    }
     expect(translateModelAnnounced(event)).toEqual({ model: 'claude-opus-4-5', truncated: true })
   })
 
   it('maps an empty-model modelAnnounced to { model: "", truncated } — not null (AC4)', () => {
-    const event: DaemonEvent = { type: 'modelAnnounced', model: '', truncated: false }
+    const event: DaemonEvent = {
+      type: 'modelAnnounced',
+      model: '',
+      truncated: false,
+      conversationId: 'conv-1'
+    }
     expect(translateModelAnnounced(event)).not.toBeNull()
     expect(translateModelAnnounced(event)).toEqual({ model: '', truncated: false })
   })
 
   it('returns a FRESH literal, not the event — `type` never reaches the store', () => {
-    const event: DaemonEvent = { type: 'modelAnnounced', model: 'claude-opus-4-5', truncated: false }
+    const event: DaemonEvent = {
+      type: 'modelAnnounced',
+      model: 'claude-opus-4-5',
+      truncated: false,
+      conversationId: 'conv-1'
+    }
     const result = translateModelAnnounced(event)
     expect(result).not.toBeNull()
     expect(result === null || 'type' in result).toBe(false)
@@ -110,7 +126,12 @@ describe('subscribeAnnouncedModel', () => {
     const setAnnouncedModel = vi.fn()
     subscribeAnnouncedModel(bridge.onDaemonEvent, setAnnouncedModel)
 
-    bridge.emit({ type: 'modelAnnounced', model: 'claude-haiku-4-5', truncated: false })
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'claude-haiku-4-5',
+      truncated: false,
+      conversationId: 'conv-1'
+    })
     expect(setAnnouncedModel).toHaveBeenCalledTimes(1)
     expect(setAnnouncedModel).toHaveBeenCalledWith({
       model: 'claude-haiku-4-5',
@@ -123,8 +144,18 @@ describe('subscribeAnnouncedModel', () => {
     const setAnnouncedModel = vi.fn()
     subscribeAnnouncedModel(bridge.onDaemonEvent, setAnnouncedModel)
 
-    bridge.emit({ type: 'modelAnnounced', model: 'first-model', truncated: false })
-    bridge.emit({ type: 'modelAnnounced', model: 'second-model', truncated: true })
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'first-model',
+      truncated: false,
+      conversationId: 'conv-1'
+    })
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'second-model',
+      truncated: true,
+      conversationId: 'conv-1'
+    })
     expect(setAnnouncedModel).toHaveBeenCalledTimes(2)
     expect(setAnnouncedModel).toHaveBeenLastCalledWith({
       model: 'second-model',
@@ -137,7 +168,7 @@ describe('subscribeAnnouncedModel', () => {
     const setAnnouncedModel = vi.fn()
     subscribeAnnouncedModel(bridge.onDaemonEvent, setAnnouncedModel)
 
-    bridge.emit({ type: 'modelAnnounced', model: '', truncated: false })
+    bridge.emit({ type: 'modelAnnounced', model: '', truncated: false, conversationId: 'conv-1' })
     expect(setAnnouncedModel).toHaveBeenCalledTimes(1)
     // `truncated` survives too: an `if (announced?.model)` guard would have dropped both fields.
     expect(setAnnouncedModel).toHaveBeenCalledWith({ model: '', truncated: false })
@@ -165,7 +196,12 @@ describe('subscribeAnnouncedModel', () => {
     subscribeAnnouncedModel(bridge.onDaemonEvent, (a) => store.getState().setAnnouncedModel(a))
 
     expect(selectAnnouncedModel(store.getState())).toBeNull()
-    bridge.emit({ type: 'modelAnnounced', model: 'claude-haiku-4-5', truncated: true })
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'claude-haiku-4-5',
+      truncated: true,
+      conversationId: 'conv-1'
+    })
     expect(selectAnnouncedModel(store.getState())).toEqual({
       model: 'claude-haiku-4-5',
       truncated: true
@@ -177,8 +213,18 @@ describe('subscribeAnnouncedModel', () => {
     const store = createAnnouncedModelStore()
     subscribeAnnouncedModel(bridge.onDaemonEvent, (a) => store.getState().setAnnouncedModel(a))
 
-    bridge.emit({ type: 'modelAnnounced', model: 'old-model', truncated: true })
-    bridge.emit({ type: 'modelAnnounced', model: 'new-model', truncated: false })
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'old-model',
+      truncated: true,
+      conversationId: 'conv-1'
+    })
+    bridge.emit({
+      type: 'modelAnnounced',
+      model: 'new-model',
+      truncated: false,
+      conversationId: 'conv-1'
+    })
     expect(selectAnnouncedModel(store.getState())).toEqual({
       model: 'new-model',
       truncated: false

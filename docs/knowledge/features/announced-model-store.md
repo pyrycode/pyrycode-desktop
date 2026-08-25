@@ -135,9 +135,12 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 - **Import surface**, consumed by [#560](../codebase/560.md)'s `RunningModelSection`:
   `import { useAnnouncedModelStore, selectAnnouncedModel } from '@renderer/store/announcedModelStore'`.
 - **Mount point:** `src/renderer/src/App.tsx`, `<AnnouncedModelData />` after `<BackgroundTaskRosterData />`.
-- **Single current value, not a per-conversation map** — `conversation_id` is dropped at the #587 emit
-  (the `turnState`/`stallDetected`/`apiRetry`/`compacting` convention), so this holds one value replaced
-  on each announcement.
+- **Single current value, not a per-conversation map.** At ship time `conversation_id` was dropped at the
+  #587 emit; [#714](../codebase/714.md) later widened the emit to carry it onward as `conversationId` (the
+  last arm in the `turnState`/`stallDetected`/`apiRetry`/`compacting` widening family), but the id stops at
+  `translateModelAnnounced`, which still rebuilds a fresh `{ model, truncated }` literal — this store still
+  holds one value replaced on each announcement, unaffected. The per-conversation consumer is #588 / #674,
+  not yet built.
 
 ## Edge cases and limitations
 
@@ -187,3 +190,6 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 - [#593 codebase notes](../codebase/593.md) — `clearAnnouncedModel` and its join into
   [`clearPairingScopedState`](paired-shell.md)'s shared set, closing the deferral #588 flagged and #560
   made observable.
+- [#714 codebase notes](../codebase/714.md) — widened the `modelAnnounced` emit to carry `conversationId`,
+  the last arm in the transport-wide widening family; `translateModelAnnounced` still filters it out, so
+  this store and its bridge are unaffected — the per-conversation consumer is #588 / #674, not yet built.

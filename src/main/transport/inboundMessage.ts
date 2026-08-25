@@ -135,10 +135,10 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * the model it resolved for the turn, off its `system` / `init` line, fanned out to interactive clients.
  * Neither a claude sub-state like its `stall` / `api-retry` / `compacting` neighbours nor a daemon
  * mapping gap like `unrecognized-message`: an IDENTITY report, carrying no `turn_id` and opening and
- * closing no turn. The consumer carries `model` and `truncated` onward, dropping `conversation_id` (#588
- * holds a single value replaced per announcement, so nothing keys by
- * conversation). The fail-closed defence is two required strings plus one required BOOLEAN whose `false`
- * is a VALUE (nothing was cut), not an absence — `truncated` is never optional and never defaults.
+ * closing no turn. The consumer carries `model` and `truncated` onward, and `conversation_id` with it, by name
+ * as `conversationId` (#714), because per-conversation attribution is what lets #588 / #674 say WHICH chat
+ * announced WHICH model. The fail-closed defence is two required strings plus one required BOOLEAN whose
+ * `false` is a VALUE (nothing was cut), not an absence — `truncated` is never optional and never defaults.
  *
  * `model` is held VERBATIM: no normalising, no lowercasing, no allow-list, no family regex, and NO
  * LENGTH CHECK is duplicated here (the daemon caps it at 256 at construction — that is what `truncated`

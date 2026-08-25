@@ -185,11 +185,16 @@ check, no allow-list, no normalisation — the producer's own 256-byte cap
 (`internal/streamsup/parser.go:338`) and the frame-level `MAX_PLAINTEXT_BYTES` backstop already cover
 it, and a client-invented rule would silently drop identifiers claude legitimately announces (not
 reliably dated, need not appear in any published list). `truncated` goes through `requireBoolean` and is
-never optional or defaulted — a defaulting reader would present a cut identifier as a complete one. The
-consumer arm carries `model`/`truncated` onward and drops `conversation_id` (#588 holds a single value
-replaced per announcement). Ships dormant no longer: [the announced-model
-store (#588, shipped)](announced-model-store.md) is the first consumer, still dormant
-pending #560's render surface.
+never optional or defaulted — a defaulting reader would present a cut identifier as a complete one. At
+ship time the consumer arm carried `model`/`truncated` onward and dropped `conversation_id` (#588 held a
+single value replaced per announcement). [#714](../codebase/714.md) later carried `conversation_id`
+onward too, as `conversationId` — the same daemon-asserted-routing-key widening
+[#724](../codebase/724.md)/[#732](../codebase/732.md)/[#737](../codebase/737.md)/[#742](../codebase/742.md)
+gave the other four turn-stream-adjacent arms, and the last one in the family. It stops at the
+announced-model bridge (`translateModelAnnounced`), so [the announced-model
+store](announced-model-store.md) is unaffected — still holding one value, still not deduped. Ships dormant
+no longer: [the announced-model store (#588, shipped)](announced-model-store.md) is the first consumer,
+still dormant pending #560's render surface.
 
 ## Where it lives
 
@@ -654,6 +659,12 @@ A Noise transport message is ≤ 65535 bytes, so a single decrypted plaintext is
   allow-list); `truncated` is required and never defaulted. Ships dormant no longer: [the announced-model
   store (#588, shipped)](announced-model-store.md) is the first consumer, still dormant
   pending #560's render surface.
+- [#714 codebase notes](../codebase/714.md) — the last arm in the `conversationId`-widening family
+  (after #724/#732/#737/#742): carries `conversation_id` onward as `conversationId` on the
+  `model-announced` consumer emit, copied by name, `parseModelAnnouncedPayload` untouched. Retired the
+  arm's arithmetic security clause ("exactly one untrusted string … rather than two") by replacing it
+  rather than renumbering it. Stops at the announced-model bridge; [the announced-model
+  store](announced-model-store.md) is unaffected.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

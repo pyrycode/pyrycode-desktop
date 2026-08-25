@@ -395,12 +395,21 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   appear in any published model list, so a lookup miss on #588's side is ordinary, not an error.
   `truncated` is load-bearing: sharper here than on `unrecognizedMessage`, because a cut identifier
   always misses #588's exact lookup and so always renders verbatim, looking exactly like a legitimate
-  unrecognised model. `conversation_id` is dropped — the `turnState`/`stallDetected`/`apiRetry`/
-  `compacting` convention (#588 holds a single value replaced per announcement). Not deduped: the
-  transport holds no state, so N daemon frames (including a verbatim repeat) produce N events — that
-  repeat is what tells #588 the value is still current. Ships dormant no longer: [the announced-model
-  store (#588, shipped)](announced-model-store.md) is a fourth independent observer, alongside the three
-  exhaustive bridges, which keep their no-ops permanently.
+  unrecognised model. At ship time `conversation_id` was dropped — the `turnState`/`stallDetected`/
+  `apiRetry`/`compacting` convention (#588 held a single value replaced per announcement, so nothing
+  downstream keyed by conversation). **[#714](../codebase/714.md) widened the emit to carry it onward as
+  `conversationId`** — the last arm in the family (#724/#732/#737/#742 widened the other four) and the
+  only one with a live consumer already built: a daemon-asserted routing key, never rendered, never a
+  filename/cache key/lookup path, reaching no sink. It **stops at the announced-model bridge**
+  (`translateModelAnnounced`), which still rebuilds a fresh `{ model, truncated }` literal — `AnnouncedModel`
+  and [the announced-model store](announced-model-store.md) are unaffected, still holding one value. The
+  arm's own security clause used to be arithmetic ("exactly one untrusted string crosses IPC … rather than
+  two"); #714 replaced it rather than renumbering it, since counting to two would have asserted the id is
+  untrusted text of `model`'s kind, which it is not. The per-conversation consumer is #588 / #674, not yet
+  built. Not deduped: the transport holds no state, so N daemon frames (including a verbatim repeat)
+  produce N events — that repeat is what tells #588 the value is still current. Ships dormant no longer:
+  [the announced-model store (#588, shipped)](announced-model-store.md) is a fourth independent observer,
+  alongside the three exhaustive bridges, which keep their no-ops permanently.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

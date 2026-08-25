@@ -209,9 +209,13 @@ stay three-field and two-field respectively. `turnState` is the same shape of
 filter-not-rename: `event.state` (`WireTurnState`) assigns to the `ThreadEvent` arm's `state`
 (`TurnPhase`) with no cast, because the two are the same literal union declared on either side of the
 shared/renderer boundary (see [#214](../codebase/214.md)). `toolUse` ([#217](../codebase/217.md)) and
-`toolResult` ([#229](../codebase/229.md)) are likewise pure filter-and-copy — `DaemonEvent.toolUse`/
-`toolResult` and their `ThreadEvent` counterparts are field-for-field identical, a deliberate lockstep
-design from ADR 0008. `toolUse` is the first owned arm whose `ThreadEvent` counterpart `reduceTimeline`
+`toolResult` ([#229](../codebase/229.md)) were, at ship time, likewise pure filter-and-copy —
+`DaemonEvent.toolUse`/`toolResult` and their `ThreadEvent` counterparts field-for-field identical, a
+deliberate lockstep design from ADR 0008. [#763](../codebase/763.md) widened `DaemonEvent.toolUse` with
+`conversationId`, the same routing-key widening `assistantDelta`/`turnEnd` got from #751/#752 above; the
+bridge case is now a filter (drops the id), and `ThreadEvent.toolUse` is the side that stays five-field.
+`toolResult` still drops `conversation_id` at the transport until #754, so its bridge case stays a plain
+copy for now. `toolUse` is the first owned arm whose `ThreadEvent` counterpart `reduceTimeline`
 folds into an **appended `ThreadItem`** (a `toolCall`) rather than a text delta or a scalar; `toolResult`
 is the first to **resolve** one already appended — `reduceTimeline`'s `fillResult` (#121) correlates it to
 the pending `toolCall` by `toolUseId` and fills `result` in place, a same-reference no-op on an orphan or

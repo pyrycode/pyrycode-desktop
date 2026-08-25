@@ -383,6 +383,9 @@ Nothing imports this module yet.
   translator #202's `wire → ThreadEvent` bridge is modeled on.
 - [Conversation timeline store](conversation-timeline-store.md) — the store + bridge #202 built over
   this module.
+- [Conversation timeline holder](conversation-timeline-holder.md) — a second, per-conversation-keyed
+  store (#755) that imports `TimelineState`/`ThreadEvent`/`reduceTimeline` from this module unchanged,
+  reusing the reducer rather than writing a second one.
 - [#199 codebase notes](../codebase/199.md) — the transport slice: wire types, decode, and the
   `assistantDelta`/`turnEnd` `DaemonEvent` arms this module's `ThreadEvent` union targets.
 - [#202 codebase notes](../codebase/202.md) — the store + bridge slice built on this module.

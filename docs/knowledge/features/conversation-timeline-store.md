@@ -366,6 +366,11 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
 
 ## Related
 
+- [Conversation timeline holder](conversation-timeline-holder.md) — a separate, currently-dormant store
+  (#755, split from #675) keying a whole `TimelineState` per `conversationId` instead of holding one flat
+  slot for the open conversation. Not a replacement for this store: it runs alongside, importing
+  `TimelineState`/`ThreadEvent`/`reduceTimeline` from the same [thread timeline](thread-timeline.md)
+  module this store wraps. #758 is the ticket that will eventually cut `ConversationScreen` over to it.
 - [Thread timeline (conversation model)](thread-timeline.md) — the `ThreadItem`/`ThreadEvent`/
   `reduceTimeline` model this store wraps verbatim.
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the sibling bridge this one mirrors in

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { DaemonEvent } from '@shared/ipc/events'
+import type { HelloAckPayload } from '@shared/wire/types'
 import {
   translateConversationActivity,
   subscribeConversationActivity,
@@ -36,6 +37,17 @@ const compacting = (conversationId: string, active: boolean): DaemonEvent => ({
   active,
   conversationId
 })
+const conversationDeleted = (id: string): DaemonEvent => ({ type: 'conversationDeleted', id })
+
+/** The handshake edge. `ack` is present because the arm carries it, and deliberately never read by
+ *  the clear branch — the backgroundTaskRosterBridge.ts:125 posture. */
+const ack: HelloAckPayload = {
+  protocol_version: 'v2',
+  server_id: 'srv-1',
+  conn_id: 'conn-1',
+  capabilities: ['interactive']
+}
+const connected: DaemonEvent = { type: 'connected', ack }
 
 describe('translateConversationActivity', () => {
   it('maps turnState{thinking} to BOTH writes — running true, and the stall clear', () => {
@@ -141,18 +153,20 @@ describe('subscribeConversationActivity', () => {
 
   function wired() {
     const bridge = fakeBridge()
-    const setTurnRunning = vi.fn()
-    const setStalled = vi.fn()
-    const setApiRetrying = vi.fn()
-    const setCompacting = vi.fn()
-    const off = subscribeConversationActivity(
-      bridge.onDaemonEvent,
-      setTurnRunning,
-      setStalled,
-      setApiRetrying,
-      setCompacting
-    )
-    return { bridge, setTurnRunning, setStalled, setApiRetrying, setCompacting, off }
+    // A NAMED deps object, not a positional list: every one of these six collapses to a signature
+    // another slot accepts — the four setters are all `(string, boolean) => void`, and a function of
+    // fewer parameters is assignable to one of more, so `dropConversation` and `clearAllActivity`
+    // fit any of them too. A positional cross-wire would compile and pass every test in this file.
+    const deps = {
+      setTurnRunning: vi.fn(),
+      setStalled: vi.fn(),
+      setApiRetrying: vi.fn(),
+      setCompacting: vi.fn(),
+      dropConversation: vi.fn(),
+      clearAllActivity: vi.fn()
+    }
+    const off = subscribeConversationActivity(bridge.onDaemonEvent, deps)
+    return { bridge, ...deps, off }
   }
 
   it('dispatches BOTH of turnState’s writes, never stopping at the first', () => {
@@ -197,8 +211,10 @@ describe('subscribeConversationActivity', () => {
     expect(w.setApiRetrying).not.toHaveBeenCalled()
   })
 
-  it('calls no setter at all for an unowned arm', () => {
+  it('calls no setter and no removal at all for an unowned arm', () => {
     const w = wired()
+    // `disconnected` in particular: the socket dropping is NOT the clear edge — the re-handshake is,
+    // so a flap must not empty the store before it reconnects.
     w.bridge.emit({ type: 'disconnected' })
     w.bridge.emit({ type: 'assistantDelta', turnId: 't1', seq: 1, text: 'hi' })
 
@@ -206,6 +222,51 @@ describe('subscribeConversationActivity', () => {
     expect(w.setStalled).not.toHaveBeenCalled()
     expect(w.setApiRetrying).not.toHaveBeenCalled()
     expect(w.setCompacting).not.toHaveBeenCalled()
+    expect(w.dropConversation).not.toHaveBeenCalled()
+    expect(w.clearAllActivity).not.toHaveBeenCalled()
+  })
+
+  it('dispatches conversationDeleted to dropConversation with the event’s OWN id, alone', () => {
+    const w = wired()
+    w.bridge.emit(conversationDeleted('conv-gone'))
+
+    expect(w.dropConversation).toHaveBeenCalledWith('conv-gone')
+    expect(w.dropConversation).toHaveBeenCalledTimes(1)
+    expect(w.clearAllActivity).not.toHaveBeenCalled()
+    expect(w.setTurnRunning).not.toHaveBeenCalled()
+    expect(w.setStalled).not.toHaveBeenCalled()
+    expect(w.setApiRetrying).not.toHaveBeenCalled()
+    expect(w.setCompacting).not.toHaveBeenCalled()
+  })
+
+  it('drops a conversation whose id is the degenerate empty string', () => {
+    const w = wired()
+    w.bridge.emit(conversationDeleted(''))
+
+    // `''` is falsy but is a real value the daemon can emit and a real `Map` key
+    // (conversationDeletedBridge.ts:32-34 makes this point about the same arm), so the branch must
+    // be discriminant-driven rather than truthiness-guarded.
+    expect(w.dropConversation).toHaveBeenCalledWith('')
+  })
+
+  it('dispatches connected to clearAllActivity, alone', () => {
+    const w = wired()
+    w.bridge.emit(connected)
+
+    expect(w.clearAllActivity).toHaveBeenCalledTimes(1)
+    expect(w.dropConversation).not.toHaveBeenCalled()
+    expect(w.setTurnRunning).not.toHaveBeenCalled()
+    expect(w.setStalled).not.toHaveBeenCalled()
+    expect(w.setApiRetrying).not.toHaveBeenCalled()
+    expect(w.setCompacting).not.toHaveBeenCalled()
+  })
+
+  it('keeps both removals OUT of the translator — they are subscriber branches', () => {
+    // Pins the decision rather than restating the code: neither removal names a store field or
+    // carries a value, so neither is a member of `ConversationActivityWrite`. A later refactor that
+    // folds one in fails here instead of passing silently.
+    expect(translateConversationActivity(connected)).toEqual([])
+    expect(translateConversationActivity(conversationDeleted('conv-gone'))).toEqual([])
   })
 
   it('subscribes once and returns the bridge’s own off handle as the only teardown', () => {
@@ -222,13 +283,14 @@ describe('subscribeConversationActivity', () => {
     function seam() {
       const bridge = fakeBridge()
       const store = createConversationActivityStore()
-      subscribeConversationActivity(
-        bridge.onDaemonEvent,
-        (id, v) => store.getState().setTurnRunning(id, v),
-        (id, v) => store.getState().setStalled(id, v),
-        (id, v) => store.getState().setApiRetrying(id, v),
-        (id, v) => store.getState().setCompacting(id, v)
-      )
+      subscribeConversationActivity(bridge.onDaemonEvent, {
+        setTurnRunning: (id, v) => store.getState().setTurnRunning(id, v),
+        setStalled: (id, v) => store.getState().setStalled(id, v),
+        setApiRetrying: (id, v) => store.getState().setApiRetrying(id, v),
+        setCompacting: (id, v) => store.getState().setCompacting(id, v),
+        dropConversation: (id) => store.getState().dropConversation(id),
+        clearAllActivity: () => store.getState().clearAllActivity()
+      })
       return { bridge, store }
     }
 
@@ -304,6 +366,38 @@ describe('subscribeConversationActivity', () => {
         apiRetrying: false,
         compacting: false
       })
+    })
+
+    it('a delete evicts that conversation and leaves its neighbour Object.is-identical (AC1)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(compacting('conv-doomed', true))
+      bridge.emit(apiRetry('conv-survivor', true))
+      const survivorBefore = selectActivityFor('conv-survivor')(store.getState())
+
+      bridge.emit(conversationDeleted('conv-doomed'))
+
+      expect(selectActivityFor('conv-doomed')(store.getState())).toBeNull()
+      expect(selectActivityFor('conv-survivor')(store.getState())).toBe(survivorBefore)
+    })
+
+    it('a connected edge empties the store, and is RE-ARMABLE rather than one-shot (AC3)', () => {
+      const { bridge, store } = seam()
+      bridge.emit(turnState('conv-x', 'thinking'))
+      bridge.emit(compacting('conv-y', true))
+
+      bridge.emit(connected)
+      expect(store.getState().entries.size).toBe(0)
+
+      // Every completed Noise handshake emits `connected` (daemonConnection.ts:478 is its one emit
+      // site) and a new pairing always re-handshakes, so BOTH pairing-change paths reach this branch
+      // — the unpair route flip and the pair-another-server transition that never unmounts the
+      // shell. A one-shot clear would leave the second pairing showing the first one's dots.
+      bridge.emit(stallDetected('conv-z'))
+      expect(selectActivityFor('conv-z')(store.getState())?.stalled).toBe(true)
+
+      bridge.emit(connected)
+      expect(store.getState().entries.size).toBe(0)
+      expect(selectActivityFor('conv-z')(store.getState())).toBeNull()
     })
 
     it('treats __proto__, constructor and ’’ as three unremarkable keys — READ BEFORE WRITE', () => {

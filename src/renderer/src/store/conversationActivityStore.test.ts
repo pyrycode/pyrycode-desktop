@@ -240,6 +240,160 @@ describe('conversationActivityStore', () => {
     expect(activityFor(store, '__proto__')).toEqual({ ...idle, compacting: true })
   })
 
+  it('dropConversation removes only the named entry, leaving the rest Object.is-identical (AC1)', () => {
+    const store = createConversationActivityStore()
+    store.getState().setTurnRunning('c1', true)
+    store.getState().setStalled('c2', true)
+    store.getState().setCompacting('c3', true)
+    const c1Before = activityFor(store, 'c1')
+    const c3Before = activityFor(store, 'c3')
+
+    store.getState().dropConversation('c2')
+
+    expect(activityFor(store, 'c2')).toBeNull()
+    // `new Map(s.entries)` copies REFERENCES, so the survivors are the SAME objects rather than
+    // merely deep-equal ones, and a subscriber selecting either is not woken by the removal.
+    expect(activityFor(store, 'c1')).toBe(c1Before)
+    expect(activityFor(store, 'c3')).toBe(c3Before)
+    expect(store.getState().entries.size).toBe(2)
+  })
+
+  it('dropConversation clones the outer map rather than deleting in place (AC1)', () => {
+    const store = createConversationActivityStore()
+    store.getState().setApiRetrying('c1', true)
+    store.getState().setCompacting('c2', true)
+    const entriesBefore = store.getState().entries
+
+    store.getState().dropConversation('c1')
+
+    // THIS is the assertion that catches an in-place `s.entries.delete(id)`. The identity assertion
+    // above does not: an in-place delete leaves the survivors trivially identical, because there is
+    // only ever one map.
+    expect(entriesBefore.has('c1')).toBe(true)
+    expect(store.getState().entries).not.toBe(entriesBefore)
+    expect(store.getState().entries.has('c1')).toBe(false)
+  })
+
+  it('dropConversation for an id the store never held notifies nobody (AC2)', () => {
+    const store = createConversationActivityStore()
+    store.getState().setStalled('c1', true)
+    const stateBefore = store.getState()
+
+    let notifications = 0
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1
+    })
+    // The COMMON case, not an edge one: the bridge fires for every deletion and most conversations
+    // have never produced an activity frame. The guard returns the state object itself, so zustand's
+    // `Object.is` short-circuit fires before the merge.
+    store.getState().dropConversation('cNever')
+    unsubscribe()
+
+    expect(notifications).toBe(0)
+    expect(store.getState()).toBe(stateBefore)
+    expect(activityFor(store, 'c1')).toEqual({ ...idle, stalled: true })
+  })
+
+  it('dropConversation for a HELD id does notify — the negative control for the guard (AC2)', () => {
+    const store = createConversationActivityStore()
+    store.getState().setStalled('c1', true)
+
+    let notifications = 0
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1
+    })
+    // Without this, "an absent-key drop churns nothing" would also pass for a store whose drop path
+    // never writes at all.
+    store.getState().dropConversation('c1')
+    unsubscribe()
+
+    expect(notifications).toBe(1)
+    expect(activityFor(store, 'c1')).toBeNull()
+  })
+
+  it('dropConversation removes rather than zeroes, and does not latch the id', () => {
+    const store = createConversationActivityStore()
+    store.getState().setTurnRunning('c1', true)
+
+    store.getState().dropConversation('c1')
+
+    // Back to "no frame has ever arrived", NOT to a present all-false entry — the distinction
+    // `selectActivityFor` preserves.
+    expect(activityFor(store, 'c1')).toBeNull()
+
+    // And a later frame for that id — a recreated conversation reusing it, say — creates a fresh
+    // entry normally.
+    store.getState().setStalled('c1', false)
+    expect(activityFor(store, 'c1')).toEqual(idle)
+  })
+
+  for (const key of hostileKeys) {
+    it(`dropConversation treats ${JSON.stringify(key)} as an ordinary key (AC4)`, () => {
+      const store = createConversationActivityStore()
+
+      // READ BEFORE WRITE, the same ordering as the block above and for the same reason: on a
+      // `Record` this read walks the prototype chain and hands back `Object.prototype` / the
+      // `Object` function, neither nullish, so `?? null` never fires. A post-drop read alone could
+      // not distinguish the `Map` from a `Record`.
+      expect(activityFor(store, key)).toBeNull()
+
+      store.getState().setStalled(key, true)
+      store.getState().dropConversation(key)
+
+      // `Map.prototype.delete('__proto__')` removes an ordinary own entry rather than touching a
+      // prototype, so nothing here can have reached outside the store keyspace.
+      expect(activityFor(store, key)).toBeNull()
+      expect(store.getState().entries.size).toBe(0)
+      expect(({} as Record<string, unknown>).stalled).toBeUndefined()
+      expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'stalled')).toBe(false)
+    })
+  }
+
+  it('clearAllActivity drops every entry, hostile keys included (AC3)', () => {
+    const store = createConversationActivityStore()
+    store.getState().setTurnRunning('c1', true)
+    store.getState().setStalled('c2', true)
+    store.getState().setCompacting('__proto__', true)
+
+    store.getState().clearAllActivity()
+
+    expect(store.getState().entries.size).toBe(0)
+    for (const id of ['c1', 'c2', '__proto__']) {
+      expect(activityFor(store, id)).toBeNull()
+    }
+  })
+
+  it('clearAllActivity on an already-empty store notifies nobody (AC3)', () => {
+    const store = createConversationActivityStore()
+    const stateBefore = store.getState()
+
+    let notifications = 0
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1
+    })
+    store.getState().clearAllActivity()
+    unsubscribe()
+
+    expect(notifications).toBe(0)
+    expect(store.getState()).toBe(stateBefore)
+  })
+
+  it('clearAllActivity hands back a FRESH map and does not latch the store (AC3)', () => {
+    const store = createConversationActivityStore()
+    store.getState().setCompacting('c1', true)
+
+    store.getState().clearAllActivity()
+
+    // Never `initialConversationActivityState`: that exported constant holds a module-shared MUTABLE
+    // map, so returning it as live state would make every store instance that clears share one
+    // object. The `size === 0` guard buys the idempotence that returning the constant would.
+    expect(store.getState().entries).not.toBe(initialConversationActivityState.entries)
+
+    store.getState().setTurnRunning('c2', true)
+    expect(activityFor(store, 'c2')).toEqual({ ...idle, turnRunning: true })
+    expect(activityFor(store, 'c1')).toBeNull()
+  })
+
   it('the factory yields independent stores, and honours an injected initial state', () => {
     const one = createConversationActivityStore()
     const two = createConversationActivityStore()

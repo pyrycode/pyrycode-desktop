@@ -214,8 +214,9 @@ shared/renderer boundary (see [#214](../codebase/214.md)). `toolUse` ([#217](../
 deliberate lockstep design from ADR 0008. [#763](../codebase/763.md) widened `DaemonEvent.toolUse` with
 `conversationId`, the same routing-key widening `assistantDelta`/`turnEnd` got from #751/#752 above; the
 bridge case is now a filter (drops the id), and `ThreadEvent.toolUse` is the side that stays five-field.
-`toolResult` still drops `conversation_id` at the transport until #754, so its bridge case stays a plain
-copy for now. `toolUse` is the first owned arm whose `ThreadEvent` counterpart `reduceTimeline`
+[#766](../codebase/766.md) later widened `DaemonEvent.toolResult` the same way, completing the #675
+family (all eight arms now carry `conversationId`) — its bridge case is now a filter too, and
+`ThreadEvent.toolResult` is the side that stays four-field. `toolUse` is the first owned arm whose `ThreadEvent` counterpart `reduceTimeline`
 folds into an **appended `ThreadItem`** (a `toolCall`) rather than a text delta or a scalar; `toolResult`
 is the first to **resolve** one already appended — `reduceTimeline`'s `fillResult` (#121) correlates it to
 the pending `toolCall` by `toolUseId` and fills `result` in place, a same-reference no-op on an orphan or

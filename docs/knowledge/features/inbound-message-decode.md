@@ -363,10 +363,13 @@ slice ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)) must ren
 tool_use_id, is_error, result_summary}` is four strings plus one boolean, all always present — narrowed
 with **four `requireString` calls plus one `requireBoolean` call** on `is_error` (the `yolo` #180 idiom:
 the check is on the *type*, so `is_error: false` decodes as the value `false`, never treated as an
-absence — the one delta from `parseToolUsePayload`'s all-string shape). The consumer arm drops only
-`conversation_id`; `result_summary` is opaque daemon display text (the `input_summary` #217 posture)
-carried onward to the render slice ([#230](https://github.com/pyrycode/pyrycode-desktop/issues/230))
+absence — the one delta from `parseToolUsePayload`'s all-string shape). At ship time the consumer arm
+dropped `conversation_id`; `result_summary` is opaque daemon display text (the `input_summary` #217
+posture) carried onward to the render slice ([#230](https://github.com/pyrycode/pyrycode-desktop/issues/230))
 verbatim, never interpreted here. `is_error` is a decoded boolean, not attacker text.
+[#766](../codebase/766.md) later carried `conversation_id` onward too, as `conversationId` — the last
+arm in the #675 family to do so, completing it — copied by name, required, read bare because the decode
+already guarantees it; it stops at the renderer timeline bridge.
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 

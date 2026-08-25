@@ -94,6 +94,29 @@ Live-gate state lives in `docs/knowledge/features/live-e2e-runbook.md` § Curren
 - **The wire types match mobile.** Change them only alongside a daemon or mobile change.
 - **Daemon text may be rendered, escaped and length-bounded.** It is not forbidden content, and the tool rows already show it on purpose. What it may never reach is a raw-markup sink or a log. So no `innerHTML` and no `dangerouslySetInnerHTML`, never into an attribute or a URL, and never as a filename, a cache key or a lookup path. The rule that a string must be a client-owned constant is scoped to chrome that speaks in the app's own voice, such as notification copy, not to text the daemon is reporting. Operator ruling, 2026-08-20.
 
+## Memory index entries
+
+The Claude Code memory index is the discovery map every dispatched agent reads at
+startup. The dispatcher keeps it small on its own, but it is only allowed to drop
+an entry whose title starts with a ticket number. Every other entry is protected
+for good, and once the protected part grows past the watermark it forces a slow,
+expensive curation pass that blocks the next dispatch.
+
+So the title decides the entry's lifetime. Pick by what the note is:
+
+- **A note about one ticket's work.** Start the title with the ticket number, as
+  in `#784 unrecognized-message arm widening`. Stars, bold and status text go
+  after the number, never in front of it. The dispatcher retires these for free
+  once they age out, and the note file itself stays on disk either way.
+- **A lesson that outlives its ticket.** Start the title with a word, as in
+  `structured clone preserves an undefined property`. These stay indexed until a
+  curation pass relocates them by hand.
+
+A star or an emoji in front of the number is what breaks this, because it stops
+the title starting with a digit and the entry is read as a permanent lesson.
+Measured on 2026-08-25: six finished ticket notes were holding 11 KB of this
+index that way, and curation fired 30 times in a single day as a result.
+
 ## Driving a running session
 
 Some things are changed by sending an ordinary message rather than by a command on the wire, because claude intercepts a message whose text begins with a slash and runs it instead of passing it to the model. Measured against claude 2.1.220 on 2026-08-21: an unknown one comes back as a synthetic assistant reply reading "Unknown command", at zero turns and zero cost.

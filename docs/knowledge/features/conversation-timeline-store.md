@@ -76,9 +76,12 @@ edge sets the scalar to `null` unconditionally, discarding any counter on that e
 
 [#496](../codebase/496.md) added an eighth owned arm, `compacting` — the daemon's compaction-liveness
 signal ([#495](../codebase/495.md)), also moved out of the inverse-filter `null` list it shipped dormant
-in. Like `apiRetry`, this arm carries data (`active`), so `DaemonEvent.compacting` and
-`ThreadEvent.compacting` are field-for-field identical — a filter-and-copy, not `stallDetected`'s
-arm-selection-only shape. `reduceTimeline`'s new arm sets a fourth scalar, **`compacting: boolean`**,
+in. At ship time, like `apiRetry`, this arm carried data (`active`), so `DaemonEvent.compacting` and
+`ThreadEvent.compacting` were field-for-field identical (a filter-and-copy, not `stallDetected`'s
+arm-selection-only shape). [#742](../codebase/742.md) later widened the `DaemonEvent` side with
+`conversationId` — the same routing-key widening [#737](../codebase/737.md) gave `apiRetry` — so the
+bridge case is now a filter that also drops a field, not a plain copy; `ThreadEvent.compacting` is the
+side that stays one-field. `reduceTimeline`'s new arm sets a fourth scalar, **`compacting: boolean`**,
 beside `phase`/`stalled`/`apiRetry` — deliberately **not** `| null`: unlike `apiRetry` there is no
 counter to hide on clear, so a plain boolean is the honest representation and `boolean | null` would
 invent a state the wire cannot produce. The clear semantics match `apiRetry`'s inversion of `stalled`:
@@ -170,8 +173,8 @@ translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
 // named-field literal (never `return event`, never a spread — for stallDetected and connected->
 // reconnected, both sides are nullary, so the "literal" is arm-selection only; apiRetry and compacting
 // carry data, so each is a filter-and-copy like toolUse/toolResult — apiRetry's DaemonEvent side also
-// carries conversationId since #737, which the bridge drops; compacting stays field-for-field until
-// #730). Every other arm -> null via
+// carries conversationId since #737, which the bridge drops; compacting's DaemonEvent side carries it
+// too, since #742, likewise dropped here). Every other arm -> null via
 // explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void

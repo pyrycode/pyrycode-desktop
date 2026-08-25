@@ -107,9 +107,12 @@ conversation_id, active}` carries the explicit falling edge (`active: false`) bu
 or elapsed time — there is nothing on the wire to invent one from. `parseCompactingPayload` is
 `parseApiRetryPayload` minus its two `requireNumber` lines; both remaining fields map onto existing
 helpers (`requireString` / `requireBoolean`), so no new helper and no numeric-range question arises at
-all. The consumer arm drops `conversation_id`, carrying only `active` onward — a fresh two-field decode,
-one-field emit, `stall`'s content-drop shape rather than `api_retry`'s carry-three-fields one. Ships
-dormant; the render slice #496 is the first consumer.
+all. At ship time the consumer arm dropped `conversation_id`, carrying only `active` onward — a fresh
+two-field decode, one-field emit, `stall`'s content-drop shape rather than `api_retry`'s
+carry-three-fields one. Ships dormant; the render slice #496 is the first consumer.
+[#742](../codebase/742.md) later carried `conversation_id` onward too, as `conversationId`, the same
+daemon-asserted-routing-key widening [#737](../codebase/737.md) gave `api_retry`; it stops at the
+renderer timeline bridge, so `ThreadEvent.compacting` keeps its one field.
 
 [#564](../codebase/564.md) added a sixteenth kind, `background_task_started` → `background-task-started` —
 the first of three sibling frames (`background_task_updated` #565, `background_task_roster` #566) that
@@ -121,9 +124,13 @@ narrower, `requireStringArrayOrNull`, added directly after `requireStringOrNull`
 omitted key (`undefined`) is neither `null` nor an array, so fail-closed-on-absence falls out of the shape.
 Its element check is a bare `typeof === 'string'`, not a record narrower like `parseQueuedItem` — the only
 other array narrowing in this file maps elements through a record because its elements *are* records; this
-frame's elements are bare wire field names. Unlike `api_retry`/`compacting`, the consumer emit (see
-[daemon connection](daemon-connection.md)) **keeps** `conversation_id` — the frame carries no `turn_id`
-and opens/closes no turn, so it is daemon state (the `queue_state` #720 rule), not a turn-stream item.
+frame's elements are bare wire field names. At ship time, unlike `api_retry`/`compacting` — both of
+which still dropped `conversation_id` at the emit — this consumer emit (see [daemon
+connection](daemon-connection.md)) **kept** it: the frame carries no `turn_id` and opens/closes no
+turn, so it is daemon state (the `queue_state` #720 rule), not a turn-stream item. [#737](../codebase/737.md)
+and [#742](../codebase/742.md) later widened `api_retry` and `compacting` too, but for the different
+reason of being a daemon-asserted routing key rather than daemon state — the "turn-stream item, or
+daemon state?" test (`events.ts`) is what still tells the two families apart.
 Ships dormant — [the background-task-roster store (#573, shipped)](../codebase/573.md) consumes only the
 `background_task_roster` sibling below, not this arm, which stays dormant awaiting #574.
 

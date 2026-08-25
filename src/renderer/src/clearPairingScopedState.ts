@@ -7,8 +7,9 @@ import type { ThreadEvent } from './store/threadTimeline'
 import type { SessionAction } from './store/sessionStore'
 
 /**
- * The five effects clearPairingScopedState performs, injected to keep it pure:
+ * The six effects clearPairingScopedState performs, injected to keep it pure:
  *  - `dispatchTimeline`        — timelineStore's dispatch; carries #528's `reset` (a full wipe).
+ *  - `clearAllTimelines`       — conversationTimelineStore's #757 whole-map clear; takes NO id.
  *  - `clearActiveConversation` — activeConversationStore's #529 clear.
  *  - `clearSessionId`          — sessionIdStore's #529 clear.
  *  - `clearAnnouncedModel`     — announcedModelStore's #593 clear.
@@ -34,6 +35,7 @@ import type { SessionAction } from './store/sessionStore'
  */
 export interface ClearPairingScopedStateDeps {
   dispatchTimeline: (event: ThreadEvent) => void
+  clearAllTimelines: () => void
   clearActiveConversation: () => void
   clearSessionId: () => void
   clearAnnouncedModel: () => void
@@ -41,42 +43,46 @@ export interface ClearPairingScopedStateDeps {
 }
 
 /**
- * Drop every piece of renderer state scoped to the pairing that just ended — the thread rows, the
- * active conversation, the daemon session id, claude's announced running model, and the session store's
- * status + coarse message list.
+ * Drop every piece of renderer state scoped to the pairing that just ended — the thread rows, EVERY
+ * conversation's retained per-conversation thread, the active conversation, the daemon session id,
+ * claude's announced running model, and the session store's status + coarse message list.
  *
  * Called from BOTH paths that end a pairing, which is the whole design. Unpair flips the App route to
  * `pairing` and unmounts PairedShell; pair-another-server transitions `pairServer` → `list` INSIDE the
  * shell (pairedRoute.ts:62-65), so the shell never unmounts and nothing a remount would have cleared
- * gets cleared. Four of these five stores latch across either switch because nothing on a new pairing
- * re-asserts them: the timeline has no history backfill (its only production writers are the live
- * stream, timelineBridge.ts:206, and the composer's optimistic echo, composerSend.ts:67),
- * `activeConversation` is written only by a nav action, `sessionId` only by a `sessionTransition`
- * marker, and the announced model only by `subscribeAnnouncedModel` (announcedModelBridge.ts:60-70),
- * driven by a turn's init line — so on a fresh pairing nothing writes it until the new daemon's first
- * turn, and until then #560's sheet would show the previous server's identifier. The session store is
- * the fifth and is IN the set rather than beside it: it used to be reset by `runUnpair` alone, and
- * leaving it there would have degraded this into "four clears plus a special case" — exactly the
- * per-path divergence that let the bug exist.
+ * gets cleared. Five of these six stores latch across either switch because nothing on a new pairing
+ * re-asserts them: neither timeline has any history backfill (their only production writers are the
+ * live stream, timelineBridge.ts:347, and the composer's optimistic echo, composerSend.ts:82) — and
+ * the keyed one is worse than the flat one, because it holds EVERY conversation's thread rather than
+ * only the open one, and a conversation id is scoped to the server that issued it, so a slice from the
+ * old server could be keyed under an id the new one reuses. `activeConversation` is written only by a
+ * nav action, `sessionId` only by a `sessionTransition` marker, and the announced model only by
+ * `subscribeAnnouncedModel` (announcedModelBridge.ts:60-70), driven by a turn's init line — so on a
+ * fresh pairing nothing writes it until the new daemon's first turn, and until then #560's sheet would
+ * show the previous server's identifier. The session store is the sixth and is IN the set rather than
+ * beside it: it used to be reset by `runUnpair` alone, and leaving it there would have degraded this
+ * into "five clears plus a special case" — exactly the per-path divergence that let the bug exist.
  *
  * Unconditional, unlike activateConversation's id gate. That helper guards because clearing a thread
  * the user is still reading would destroy rows that never come back; here the pairing itself is over,
  * so there is no state in which the rows, the conversation id, the session id or the announced model
- * legitimately survive. All five clears are idempotent by construction — both `reset` arms return their
+ * legitimately survive. All six clears are idempotent by construction — both `reset` arms return their
  * shared `initialTimelineState` / `initialSessionState` BY REFERENCE and the three `clear*` setters
  * return their exported `initial*State` — so clearing an already-clear store is a no-op reference that
  * churns no subscriber (notably no `selectItems` re-render, which a fresh `[]` would cause; for the
  * announced model the cleared value is the `null` sentinel, so a selector's `Object.is` short-circuits
- * structurally). A guard would buy nothing and would be one more thing to get wrong.
+ * structurally; and `clearAllTimelines` hands its state object straight back on an empty map, which is
+ * what that guard exists for rather than to save a `Map` allocation). A guard would buy nothing and
+ * would be one more thing to get wrong.
  *
- * No ordering constraint among the five: they are independent whole-value writes and none reads
+ * No ordering constraint among the six: they are independent whole-value writes and none reads
  * another's state. Fully synchronous, so on the renderer's single thread no observer can see a
- * half-cleared set, and React batches all five into the commit that carries the route change. Total —
+ * half-cleared set, and React batches all six into the commit that carries the route change. Total —
  * no gate, no return value, no throw path.
  *
  * Nothing is logged, deliberately: a diagnostic here would want the conversation `id` / `name` / `cwd`
  * or the session id to be useful, which ADR 0007's content-free rule forbids, and there is no observed
- * failure to instrument. The announced model is worse than the other four on that axis — it is
+ * failure to instrument. The announced model is worse than the other five on that axis — it is
  * untrusted, model-influenced daemon-relayed text (announcedModelStore.ts:46-51) that a diagnostic
  * would land verbatim in a log file — so it MUST NOT be logged here either. The one seam that does
  * exist is pre-existing and content-free — the session store's #134 transition observer
@@ -90,6 +96,11 @@ export interface ClearPairingScopedStateDeps {
  */
 export function clearPairingScopedState(deps: ClearPairingScopedStateDeps): void {
   deps.dispatchTimeline({ type: 'reset' })
+  // Immediately after the flat reset, the dual-write idiom the two row-adding writers already use
+  // (composerSend.ts:82 then :88, timelineBridge.ts:347 then :349): one fact expressed against two
+  // stores. It also puts the keyed clear where the flat one stands, so retiring the flat store later
+  // is a deletion rather than a move.
+  deps.clearAllTimelines()
   deps.clearActiveConversation()
   deps.clearSessionId()
   deps.clearAnnouncedModel()

@@ -12,12 +12,14 @@ widened eight `DaemonEvent`s with `conversationId`, all shipped), #756 (the writ
 unread" posture the [conversation activity store](conversation-activity-store.md) shipped for #747 before
 its own writer/reader landed. [#756](../codebase/756.md) gave it its first writer: both of the timeline's
 row-adding writers — the bridge fan-out and the composer's optimistic echo — now fold into this holder as
-well as into the flat store, dual-write (Strangler Fig, ADR 0008). Still no reader (#758) and no clears
-(#757), so the holder stays invisible from the operator's side despite now carrying live traffic. Not to
-be confused with the [conversation timeline store](conversation-timeline-store.md) (`timelineStore.ts`),
-the existing **flat**, single-conversation store this one runs alongside — that store keeps serving the
-open conversation unchanged; this one is an independent holder, written but not yet read, for every
-conversation's thread at once.
+well as into the flat store, dual-write (Strangler Fig, ADR 0008). [#757](../codebase/757.md) gave it its
+first clears — the whole map dropped at the pairing boundary, one slice dropped when the operator's open
+conversation is deleted out from under them — wired at the same two edges that already reset the flat
+store. Still no reader (#758), so the holder stays invisible from the operator's side despite now carrying
+live traffic and being kept clean. Not to be confused with the [conversation timeline
+store](conversation-timeline-store.md) (`timelineStore.ts`), the existing **flat**, single-conversation
+store this one runs alongside — that store keeps serving the open conversation unchanged; this one is an
+independent holder, written and cleared but not yet read, for every conversation's thread at once.
 
 ## What it does
 
@@ -41,10 +43,10 @@ exactly the thread the operator stepped away from.
   hook → selector factory bound to one id), field-for-field the same shape as [conversation activity
   store](conversation-activity-store.md) and [background-task roster
   store](background-task-roster-store.md). State is `{ timelines: ReadonlyMap<string, TimelineState> }`.
-- **Two write paths, not a reducer over a keyed action union** — a fold and a view-stamp are independent
-  operations, so a discriminated-union action set would be ceremony without benefit, and a generic
-  `write(id, key, value)` would reintroduce a stringly-typed key beside the one hostile string this store
-  exists to contain:
+- **Four named write paths, not a reducer over a keyed action union** — a fold, a view-stamp and two
+  clears are independent operations, so a discriminated-union action set would be ceremony without
+  benefit, and a generic `write(id, key, value)` would reintroduce a stringly-typed key beside the one
+  hostile string this store exists to contain:
   - `dispatchFor(conversationId, event)` — folds one `ThreadEvent` into that id's slice via the existing
     `reduceTimeline`, creating the slice from `initialTimelineState` when the key is absent (even when the
     fold against that seed is itself a no-op — a fold for a never-opened id must create, not drop). A
@@ -55,12 +57,24 @@ exactly the thread the operator stepped away from.
     click, including a re-click of the already-open row). Present-not-tail moves it. Absent **creates** it
     at the tail, seeded with `initialTimelineState` — load-bearing, not a convenience: see § The eviction
     invariant.
+  - `clearAllTimelines()` — [#757](../codebase/757.md)'s pairing-boundary clear. Nullary by design, so
+    "takes no conversation id at all" is a `tsc` guarantee rather than a test. Drops every retained slice;
+    returns the state object unchanged when the map is already empty.
+  - `clearTimelineFor(conversationId)` — [#757](../codebase/757.md)'s single-conversation clear, fired
+    when that conversation is deleted or archived out from under the operator. Drops exactly that key,
+    by `delete` rather than by overwriting with an empty slice, so the id reads absent afterwards; every
+    other slice stays the same held object. Returns the state object unchanged when the key is already
+    absent.
 - **The eviction invariant — the map's iteration order *is* the eviction order; the head is always the
   next slice to go.** Three rules maintain it and nothing else re-orders:
   1. A fold into an already-present key replaces its value in place (`Map.set` on an existing key
      preserves position) — this is what makes "written constantly, viewed never" fail to protect a slice.
   2. A fold that **creates** a key inserts it at the **head**, ahead of every slice already held.
   3. `markViewed` moves the key to the **tail**, creating it there if absent.
+
+  Neither [#757](../codebase/757.md) clear is an exception: `Map.prototype.delete` preserves the position
+  of every remaining entry, so a removal re-orders nothing, and dropping the whole map leaves nothing left
+  to order.
 
   The consequence: every never-viewed slice sits ahead of every viewed slice, and viewed slices are
   ordered least-recently-viewed first. The victim is always a never-viewed slice when one exists,
@@ -132,9 +146,18 @@ exactly the thread the operator stepped away from.
   still returns nothing. It is not dead code: it is the fourth of a five-ticket chain (#751-#754, #755,
   #756, #757, #758) that lands as a verified no-op from the operator's side until #758 cuts the reader
   over.
-- **Clears (not yet built):** #757 will own the pairing-boundary and conversation-deletion clears. This
-  map has **no** `connected`-edge clear by design — unlike its two keyed siblings, a timeline must survive
-  a reconnect, so growth between handshakes is bounded only by `MAX_RETAINED_TIMELINES`.
+- **Clears, as of [#757](../codebase/757.md):** `clearAllTimelines()` — nullary, drops every retained
+  slice — is wired into `clearPairingScopedState`, the shared helper both pairing-ending paths (unpair,
+  pair-another-server) already call. `clearTimelineFor(conversationId)` — drops exactly one slice, every
+  other conversation's held object untouched — is wired into `exitActiveConversation`, fired when the
+  conversation on screen was deleted or archived out from under the operator. Both sit immediately after
+  each helper's pre-existing flat `dispatchTimeline({ type: 'reset' })` call, the same dual-write position
+  #756 established for the two writers. Both **delete** rather than overwrite with an empty slice, so a
+  cleared id reads absent through `selectTimelineFor`, not present-and-empty; both return the state object
+  unchanged on a no-op (already-empty map, already-absent key), which is what keeps
+  `clearPairingScopedState`'s idempotence claim true. This map still has **no** `connected`-edge clear by
+  design — unlike its two keyed siblings, a timeline must survive a reconnect, so growth between
+  handshakes is bounded only by `MAX_RETAINED_TIMELINES`.
 - **Reader cutover (not yet built):** #758 will migrate `ConversationScreen` off the flat
   `timelineStore` to this store and wire `markViewed` at the switch seam
   (`activateConversation.ts`, which already takes a timeline dependency).
@@ -187,9 +210,14 @@ exactly the thread the operator stepped away from.
   unchanged through this entire five-ticket chain.
 - [Composer send](composer-send.md) — the second row-adding writer #756 folded into this holder, beside
   the bridge fan-out documented on [conversation timeline store](conversation-timeline-store.md).
+- [Paired shell](paired-shell.md) — `clearPairingScopedState` and `exitActiveConversation`, the two pure
+  helpers [#757](../codebase/757.md) wires the new clears into, and where they run inside `PairedShell`'s
+  nav flow.
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md).
 - [ADR 0008 — Thread timeline model](../decisions/0008-thread-timeline-model.md).
 - [#755 codebase notes](../codebase/755.md) — the holder's implementation summary, code review, and
   lessons learned.
 - [#756 codebase notes](../codebase/756.md) — the writer's implementation summary, code review, and
+  lessons learned.
+- [#757 codebase notes](../codebase/757.md) — the clears' implementation summary, code review, and
   lessons learned.

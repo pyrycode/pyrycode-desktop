@@ -7,9 +7,10 @@ import type { ConversationCreatedPayload } from '@shared/wire/types'
 import type { ThreadEvent } from './store/threadTimeline'
 
 /**
- * The five effects exitActiveConversation performs, injected to keep it pure:
+ * The six effects exitActiveConversation performs, injected to keep it pure:
  *  - `getActiveConversation`   — reads the CURRENTLY active conversation (activeConversationStore).
  *  - `dispatchTimeline`        — timelineStore's dispatch; carries #528's `reset` (a full wipe).
+ *  - `clearTimelineFor`        — conversationTimelineStore's #757 single-key clear.
  *  - `clearActiveConversation` — activeConversationStore's #529 clear.
  *  - `clearSessionId`          — sessionIdStore's #529 clear.
  *  - `navigateToList`          — the container's return-to-the-Channel-List nav.
@@ -28,6 +29,7 @@ import type { ThreadEvent } from './store/threadTimeline'
 export interface ExitActiveConversationDeps {
   getActiveConversation: () => ConversationCreatedPayload | null
   dispatchTimeline: (event: ThreadEvent) => void
+  clearTimelineFor: (conversationId: string) => void
   clearActiveConversation: () => void
   clearSessionId: () => void
   navigateToList: () => void
@@ -50,8 +52,8 @@ export interface ExitActiveConversationDeps {
  * comparison, a late confirmation would evict a thread that is alive and rendering.
  *
  * Clear, THEN navigate — the ordering both existing clear helpers document: no observer may see the
- * Channel List rendered against the deleted discussion's thread state. The three clears are independent
- * whole-value writes with no ordering constraint among themselves; only the nav is pinned last. All four
+ * Channel List rendered against the deleted discussion's thread state. The four clears are independent
+ * whole-value writes with no ordering constraint among themselves; only the nav is pinned last. All five
  * are synchronous, so on the renderer's single thread the check-then-act cannot interleave and React
  * batches them into one commit.
  *
@@ -62,14 +64,18 @@ export interface ExitActiveConversationDeps {
  * conversation `id` to be useful, which ADR 0007's content-free rule forbids, and there is no observed
  * failure to instrument (the activateConversation.ts:60-61 posture).
  *
- * THREE clears, not clearPairingScopedState's five. That helper additionally resets the session store and
+ * FOUR clears, not clearPairingScopedState's six. That helper additionally resets the session store and
  * clears the announced running model, and neither belongs here: the pairing has NOT ended — the daemon
  * connection is alive and the operator lands on a working Channel List — so resetting the session store
  * would blank a live connection status into a false disconnected state, and the announced model is
  * daemon-scoped, not conversation-scoped (activateConversation clears neither on a conversation switch).
+ * The keyed clear splits the same way, and that difference is the whole of #757: the pairing ending
+ * invalidates EVERY conversation's thread, while a conversation being deleted invalidates that one and
+ * leaves the operator's others live and his — so this helper drops one key where that one drops the map.
  * The set here is activateConversation's clear branch (timeline `reset` + `clearSessionId`) PLUS
- * `clearActiveConversation`, which that helper excludes only because it immediately re-sets the value
- * (activateConversation.ts:25-27); here there is no successor conversation, so the clear is the point.
+ * `clearTimelineFor` and `clearActiveConversation`, the latter excluded there only because it
+ * immediately re-sets the value (activateConversation.ts:25-27); here there is no successor
+ * conversation, so the clear is the point.
  *
  * Stores deliberately left OUT, so the next ticket need not re-litigate them:
  *  - `queueStore` — the backlog is selected by matching the active conversation id, and a null active id
@@ -94,6 +100,11 @@ export function exitActiveConversation(
   if (deps.getActiveConversation()?.id !== conversationId) return
 
   deps.dispatchTimeline({ type: 'reset' })
+  // Immediately after the flat reset, the dual-write idiom the two row-adding writers already use
+  // (composerSend.ts:82 then :88, timelineBridge.ts:347 then :349): one fact expressed against two
+  // stores. The argument, not `getActiveConversation()!.id` — past the gate the two are the same
+  // string, so the getter is not called twice and the banned non-null assertion never arises.
+  deps.clearTimelineFor(conversationId)
   deps.clearActiveConversation()
   deps.clearSessionId()
   deps.navigateToList()

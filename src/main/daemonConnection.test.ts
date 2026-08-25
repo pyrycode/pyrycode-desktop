@@ -2476,7 +2476,7 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
     return ctx
   }
 
-  it('emits an unrecognizedMessage carrying the four display fields, dropping conversation_id', async () => {
+  it('emits an unrecognizedMessage carrying the four display fields plus conversationId', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -2486,14 +2486,15 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
     expect(events).toEqual([
       {
         type: 'unrecognizedMessage',
+        conversationId: 'conv-1',
         site: 'line_type',
         messageType: 'some_future_event',
         raw: '{"type":"some_future_event","detail":"something new"}',
         truncated: false
       }
     ])
-    // conversation_id is dropped at the choke point (single active conversation).
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    // conversation_id crosses as the routing key (#784), read BARE off the already-validated payload.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('carries an empty messageType through — the undecodable site read no type at all', async () => {
@@ -2513,6 +2514,7 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
     expect(emitted(sink).slice(before)).toEqual([
       {
         type: 'unrecognizedMessage',
+        conversationId: 'conv-1',
         site: 'undecodable',
         messageType: '',
         raw: '{"type":"assist',
@@ -2535,7 +2537,7 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
     expect(emitted(sink).slice(before)).toHaveLength(2)
   })
 
-  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the five modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -2546,6 +2548,7 @@ describe('createDaemonConnection — unrecognized_message stream', () => {
 
     const events = emitted(sink).slice(before)
     expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
       'messageType',
       'raw',
       'site',

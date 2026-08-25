@@ -165,6 +165,7 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       // waiting on an answer, so it is emphatically not a modal.
       {
         type: 'unrecognizedMessage',
+        conversationId: 'conv-1',
         site: 'line_type',
         messageType: 'some_future_event',
         raw: '{"type":"some_future_event"}',

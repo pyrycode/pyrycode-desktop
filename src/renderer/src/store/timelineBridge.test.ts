@@ -33,8 +33,14 @@ const message: MessagePayload = {
 }
 
 describe('translateTimelineEvent — the two owned arms', () => {
-  it('assistantDelta → a ThreadEvent assistantDelta with the same fields, a fresh object', () => {
-    const event: DaemonEvent = { type: 'assistantDelta', turnId: 'A', seq: 3, text: 'slice' }
+  it('assistantDelta → a ThreadEvent assistantDelta keeping turnId/seq/text, the id stopping here', () => {
+    const event: DaemonEvent = {
+      type: 'assistantDelta',
+      turnId: 'A',
+      seq: 3,
+      text: 'slice',
+      conversationId: 'conv-1'
+    }
     const translated = translateTimelineEvent(event)
     expect(translated).toEqual({ type: 'assistantDelta', turnId: 'A', seq: 3, text: 'slice' })
     // A fresh literal, not a pass-through of the DaemonEvent object.
@@ -453,7 +459,7 @@ describe('subscribeTimeline', () => {
     const dispatch = vi.fn()
     subscribeTimeline(bridge.onDaemonEvent, dispatch)
 
-    bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi' })
+    bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', conversationId: 'conv-1' })
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect(dispatch).toHaveBeenCalledWith({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi' })
   })
@@ -480,8 +486,8 @@ describe('subscribeTimeline', () => {
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
     const sequence: DaemonEvent[] = [
-      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'Hel' },
-      { type: 'assistantDelta', turnId: 'A', seq: 1, text: 'lo' }
+      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'Hel', conversationId: 'conv-1' },
+      { type: 'assistantDelta', turnId: 'A', seq: 1, text: 'lo', conversationId: 'conv-1' }
     ]
     for (const event of sequence) bridge.emit(event)
 
@@ -549,9 +555,9 @@ describe('subscribeTimeline', () => {
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
     const sequence: DaemonEvent[] = [
-      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'before ' },
+      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'before ', conversationId: 'conv-1' },
       { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' },
-      { type: 'assistantDelta', turnId: 'A', seq: 1, text: 'after' }
+      { type: 'assistantDelta', turnId: 'A', seq: 1, text: 'after', conversationId: 'conv-1' }
     ]
     for (const event of sequence) bridge.emit(event)
 

@@ -216,7 +216,13 @@ describe('subscribeConversationActivity', () => {
     // `disconnected` in particular: the socket dropping is NOT the clear edge — the re-handshake is,
     // so a flap must not empty the store before it reconnects.
     w.bridge.emit({ type: 'disconnected' })
-    w.bridge.emit({ type: 'assistantDelta', turnId: 't1', seq: 1, text: 'hi' })
+    w.bridge.emit({
+      type: 'assistantDelta',
+      turnId: 't1',
+      seq: 1,
+      text: 'hi',
+      conversationId: 'conv-unowned'
+    })
 
     expect(w.setTurnRunning).not.toHaveBeenCalled()
     expect(w.setStalled).not.toHaveBeenCalled()

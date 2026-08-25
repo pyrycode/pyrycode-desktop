@@ -583,16 +583,27 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'assistant-delta':
-            // The interactive-stream data path (#199). snake→camel here (wire is snake, IPC is camel);
-            // `conversation_id` is DROPPED (single active conversation; #202's bridge scopes identity).
-            // Unlike snapshot, `text` IS carried — it is the render payload (#203), not a secret. A
-            // fresh literal with named fields, never a spread of the decoded payload, so only the three
-            // known fields cross IPC.
+            // The interactive-stream data path (#199, widened by #751). snake→camel here (wire is snake,
+            // IPC is camel). A fresh literal with named fields carrying the turn id, the seq, the text and
+            // `conversationId` — never a spread of the decoded payload, so a decoder that later grows a
+            // field cannot smuggle it across IPC. This emit IS the idiom the arms below cite by name, so
+            // it must keep exemplifying it. The decode stays fail-closed upstream and needed no change
+            // here: parseAssistantDeltaPayload already requires `conversation_id`, so a missing or
+            // non-string one drops the whole line without emitting — which is why the id is read BARE.
+            // Reaching for `?? ''` would turn that fail-closed drop into a silent misattribution.
+            //
+            // Unlike snapshot, `text` IS carried — it is the render payload (#203), not a secret. The id
+            // beside it is a daemon-asserted routing key, not rendered text, and it reaches no sink on
+            // this leg. It stops at the timeline bridge (#202), which rebuilds a fresh ThreadEvent from
+            // named fields and omits it; the consumers that route by conversation are #756. Deliberately
+            // stateless: one event per frame in arrival order, coalescing is the reducer's job, and the
+            // added field brings no per-id buffer, dedup or last-seq memo with it.
             emitDaemonEvent(sink, {
               type: 'assistantDelta',
               turnId: inbound.delta.turn_id,
               seq: inbound.delta.seq,
-              text: inbound.delta.text
+              text: inbound.delta.text,
+              conversationId: inbound.delta.conversation_id
             })
             return
           case 'turn-end':

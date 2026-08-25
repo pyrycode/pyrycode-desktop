@@ -5,10 +5,12 @@ api-retrying, compacting — keyed by `conversationId` rather than scoped to whi
 open, so a future sidebar can draw a dot on a row the user has never opened.
 
 Introduced in [#747](../codebase/747.md), split from #674 alongside #748 (the bridge that writes it)
-and #749 (the clears). This slice ships the holder only: no writer and no reader yet. The store is
-populated by nobody and read by nobody — the same "populated and unread" posture the
-[background-task roster store](background-task-roster-store.md) shipped for #573 before its first
-reader (#568) landed. #748 is the first writer; the still-unbuilt sidebar is the first reader.
+and #749 (the clears). #747 shipped the holder alone — no writer, no reader — the same "populated and
+unread" posture the [background-task roster store](background-task-roster-store.md) shipped for #573
+before its first reader (#568) landed. [#748](../codebase/748.md) then shipped the first writer: a
+second, independent daemon-event subscriber, `conversationActivityBridge.ts`. The store is now
+populated for every conversation the daemon has reported activity for since app start; it is still read
+by nobody — the still-unbuilt sidebar (#676) is the first reader.
 
 ## What it does
 
@@ -67,12 +69,28 @@ here rather than re-derived.
 - File: `src/renderer/src/store/conversationActivityStore.ts`.
 - Singleton: `conversationActivityStore`. Hook: `useConversationActivityStore(selector)`.
 - Read one conversation: `useConversationActivityStore(selectActivityFor(conversationId))`.
-- No entry point yet — no writer subscribes to daemon events, and no screen or component imports this
-  store. #748 wires the four daemon arms (`turnState`, `stallDetected`, `apiRetry`, `compacting` —
-  `src/shared/ipc/events.ts:125,145,172,199`, each carrying a required `conversationId`) into the
-  setters, deriving `turnRunning` via `isTurnRunning`. #749 adds the two clears (per-conversation on
-  delete, all-conversations on pairing end) — there is no reset setter yet, and nothing here is
-  registered in `clearPairingScopedState`.
+- **Writer:** `src/renderer/src/store/conversationActivityBridge.ts` ([#748](../codebase/748.md)). A
+  second, independent subscriber on the daemon-event channel — reactive-only, no command sent, in the
+  `queueBridge` / `backgroundTaskRosterBridge` posture — that translates each of the four owned arms
+  (`turnState`, `stallDetected`, `apiRetry`, `compacting` — `src/shared/ipc/events.ts:125,145,172,199`,
+  each carrying a required `conversationId`) into one or more named-field writes and applies them to the
+  store's setters, keyed by **the event's own** `conversationId`, never the open conversation's.
+  `turnState` fans out to two writes: `turnRunning`, derived by reusing `isTurnRunning`
+  (`ConversationScreen.tsx:1343` — the store's own import ban is scoped to the store module, not to
+  this bridge), and an unconditional `stalled: false` clear on any phase including `idle`, reused
+  verbatim from `threadTimeline.ts:356-359`. `apiRetrying` and `compacting` clear only on the wire's own
+  `active: false` edge, mirroring `threadTimeline.ts:196-205` — turn activity does not clear them.
+  Mounted as `ConversationActivityData`, the eighth headless leaf in `App.tsx`, unconditional and
+  app-lifetime rather than screen-scoped. `timelineBridge.ts` keeps writing the open conversation's
+  existing chrome scalars unchanged; the two paths don't overlap.
+- **Known gap:** a stall in a conversation that isn't open can only clear on that conversation's next
+  `turnState`, not on the finer-grained `assistantDelta`/`toolUse`/`toolResult`/`userText` clears the
+  open conversation's chrome gets — those four arms carry no `conversationId` at the emit
+  (`events.ts:109-110`, `:459-466`, `:467-472`), so there's no id to key a write on. Bounded (every turn
+  ends with a `turnState`), not latched, but coarser than the open conversation. Closing it needs the
+  transport widening in #675, out of scope for #748.
+- #749 still owns the two clears (per-conversation on delete, all-conversations on pairing end) — there
+  is no reset setter yet, and nothing here is registered in `clearPairingScopedState`.
 
 ## Edge cases and limitations
 
@@ -84,8 +102,9 @@ here rather than re-derived.
   conversation's own composer send with no daemon involvement — it has no natural per-conversation
   reading and isn't held here.
 - **Unbounded until #749 lands.** Growth is bounded by the number of distinct conversation ids the
-  daemon has named since app start; in this slice it is exactly zero, since there is no writer yet. The
-  eviction paths (delete-scoped and pairing-scoped clears) are #749's job, not this store's.
+  daemon has named since app start, and since [#748](../codebase/748.md) that count is now non-zero in
+  practice. The eviction paths (delete-scoped and pairing-scoped clears) are #749's job, not this
+  store's.
 - **Log-free by construction.** No `console.*` on any path — the only value a diagnostic could carry is
   the untrusted `conversationId`, and the content-free diagnostics rule (#126) keeps it out. A read miss
   is silent by design, not a swallowed error.
@@ -100,4 +119,6 @@ here rather than re-derived.
   beside without migrating.
 - [Announced-model store](announced-model-store.md) — documents the same-name-different-shape trap this
   store's `apiRetrying` (vs. thread timeline's `apiRetry` counter record) deliberately avoids by naming.
-- [#747 codebase notes](../codebase/747.md) — this ticket's implementation summary and lessons learned.
+- [#747 codebase notes](../codebase/747.md) — the holder's implementation summary and lessons learned.
+- [#748 codebase notes](../codebase/748.md) — the writer's implementation summary, the
+  `store/` → `screens/` import argument, and lessons learned.

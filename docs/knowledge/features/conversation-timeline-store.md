@@ -132,6 +132,22 @@ facts at both hops, pinned by tests asserting `=== undefined` rather than `'inpu
 needed no change — its existing spread already preserves the field. Ships dormant: `selectItems`
 carries the field but nothing reads it yet — that's [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645).
 
+[#756](../codebase/756.md) adds no new owned arm and no new `DaemonEvent`/`ThreadEvent` field —
+`translateTimelineEvent`'s signature and body are byte-identical before and after. What it adds is a
+second production writer for the [keyed holder](conversation-timeline-holder.md) (#755), which had
+shipped with none: a new sibling pure function, `timelineTargetFor(event): string | null`, answers which
+conversation each owned arm belongs to (the eight id-carrying arms return their own `conversationId`;
+`sessionTransition`/`unrecognizedMessage`/`connected` return `null` — they carry nothing to attribute, not
+because they're dormant). `subscribeTimeline`'s injected `dispatch` widened by **arity**, not a new
+parameter — `(event) => void` to `(event, conversationId: string | null) => void` — so all 20 existing
+call sites kept compiling and running unedited. `useTimelineBridge` became the fan-out composition root:
+it still writes `timelineStore` unconditionally and first (nothing here changes), then additionally calls
+`conversationTimelineStore.getState().dispatchFor(conversationId, event)` when the id is non-null. Every
+rendered surface stays byte-identical — this ticket's own AC4 — because nothing reads the keyed holder yet
+([#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) is the reader cutover). The composer's
+optimistic echo (`composerSend.ts`, see [composer send](composer-send.md)) gained the same second write
+path in the same ticket, since it is the timeline's other row-adding writer.
+
 ## What it does
 
 Turns the nine owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
@@ -177,13 +193,29 @@ translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
 // too, since #742, likewise dropped here). Every other arm -> null via
 // explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
+timelineTargetFor(event: DaemonEvent): string | null   // #756
+// switch (event.type) { case 'assistantDelta': ... case 'compacting': return event.conversationId
+//   case 'sessionTransition': case 'unrecognizedMessage': case 'connected': return null
+//   default: return null }
+// The eight id-carrying owned arms share one `return event.conversationId` (non-nullable: a missing or
+// non-string conversation_id already fails the decode without emitting). The three id-less owned arms
+// share one `return null` — not dormant, just nothing to attribute. `default` is unreachable in
+// production: subscribeTimeline only calls this on translateTimelineEvent's non-null path.
+
 subscribeTimeline(onDaemonEvent, dispatch): () => void
-// onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te) })
-// returns the exact off handle (the subscribeRunConfig idiom) — pure, spy-testable, no React.
+// onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te, timelineTargetFor(event)) })
+// dispatch: (event: ThreadEvent, conversationId: string | null) => void   — widened by ARITY (#756),
+// not a new parameter, so all 20 existing call sites kept compiling and running unedited.
+// returns the exact off handle (the subscribeRunConfig idiom) — pure, spy-testable, no React, no store
+// import, no fan-out of its own.
 
 useTimelineBridge(): void
-// useEffect(() => subscribeTimeline(window.pyry.onDaemonEvent, e => timelineStore.getState().dispatch(e)), [])
-// StrictMode double-mount (mount -> cleanup -> mount) nets exactly one live listener.
+// useEffect(() => subscribeTimeline(window.pyry.onDaemonEvent, (e, conversationId) => {
+//   timelineStore.getState().dispatch(e)                                            // flat, unconditional, first
+//   if (conversationId !== null) conversationTimelineStore.getState().dispatchFor(conversationId, e)  // keyed, guarded (#756)
+// }), [])
+// StrictMode double-mount (mount -> cleanup -> mount) nets exactly one live listener. Flat-first is not
+// cosmetic — it is what keeps the flat store's AC4 guarantee true even if the keyed write were to throw.
 ```
 
 This is the deliberate mirror image of [`daemonEventBridge`](daemon-event-bridge.md): that bridge's
@@ -366,11 +398,15 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
 
 ## Related
 
-- [Conversation timeline holder](conversation-timeline-holder.md) — a separate, currently-dormant store
-  (#755, split from #675) keying a whole `TimelineState` per `conversationId` instead of holding one flat
-  slot for the open conversation. Not a replacement for this store: it runs alongside, importing
+- [Conversation timeline holder](conversation-timeline-holder.md) — a separate store (#755, split from
+  #675) keying a whole `TimelineState` per `conversationId` instead of holding one flat slot for the open
+  conversation. Not a replacement for this store: it runs alongside, importing
   `TimelineState`/`ThreadEvent`/`reduceTimeline` from the same [thread timeline](thread-timeline.md)
-  module this store wraps. #758 is the ticket that will eventually cut `ConversationScreen` over to it.
+  module this store wraps. [#756](../codebase/756.md) made `useTimelineBridge` and the composer's echo
+  write it too, dual-write, still unread; [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)
+  is the ticket that will eventually cut `ConversationScreen` over to it.
+- [#756 codebase notes](../codebase/756.md) — `timelineTargetFor`, the `subscribeTimeline` arity widen,
+  and the `useTimelineBridge` fan-out: implementation summary, code review, and lessons learned.
 - [Thread timeline (conversation model)](thread-timeline.md) — the `ThreadItem`/`ThreadEvent`/
   `reduceTimeline` model this store wraps verbatim.
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the sibling bridge this one mirrors in

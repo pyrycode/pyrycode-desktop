@@ -26,6 +26,7 @@ import {
   selectCompacting,
   selectLocalSendPending
 } from '../../store/timelineStore'
+import { useConversationTimelineStore } from '../../store/conversationTimelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
   useActiveConversationStore,
@@ -1940,6 +1941,10 @@ function Composer({ onMessageSent }: { onMessageSent: () => void }): JSX.Element
   // — content lives in one store. The send gate below still reads sessionStore's connection status;
   // two stores in one component is fine (status vs. content are orthogonal facets).
   const dispatch = useTimelineStore((s) => s.dispatch)
+  // #756: the echo's second write path — the same event folded into the keyed holder under the
+  // conversation it is sent to. `dispatchFor`'s identity is stable for the same reason `dispatch`'s is,
+  // so selecting it adds no re-render churn either.
+  const dispatchFor = useConversationTimelineStore((s) => s.dispatchFor)
   // #31: gate the send control on the live connection status. Selecting `status` re-renders the
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
@@ -1959,15 +1964,16 @@ function Composer({ onMessageSent }: { onMessageSent: () => void }): JSX.Element
     const sent = submitMessage(text, activeConversationId, {
       sendCommand: window.pyry.sendCommand,
       dispatch,
+      dispatchFor,
       newMessageId: () => crypto.randomUUID()
     })
     // #602: `sent === true` is exactly "a message entered the timeline", which is why the notify sits HERE
     // and not at the top of this function or just past the `!canSend` gate. Both of submitMessage's `false`
-    // returns (composerSend.ts:47-48 — whitespace-only, null conversation id) are above its echo dispatch,
+    // returns (composerSend.ts:56-57 — whitespace-only, null conversation id) are above its echo dispatch,
     // and the gate above returns before submitMessage is called at all, so a submit that sends nothing never
     // reaches this line: it leaves the scroll position as the operator's own scrolling set it and leaves NO
     // armed pin behind, so the next unrelated arriving item still cannot yank a scrolled-up operator. A send
-    // whose bridge call throws is caught (composerSend.ts:60-63), still posts the echo and still returns
+    // whose bridge call throws is caught (composerSend.ts:69-72), still posts the echo and still returns
     // `true`, so it follows — correctly, because the timeline did move.
     if (sent) {
       setText('')

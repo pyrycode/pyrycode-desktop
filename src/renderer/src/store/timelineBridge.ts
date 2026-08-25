@@ -11,6 +11,7 @@
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import { timelineStore } from './timelineStore'
+import { conversationTimelineStore } from './conversationTimelineStore'
 import type { ThreadEvent } from './threadTimeline'
 
 /** Compile-time exhaustiveness guard: a new DaemonEvent arm without a case is a type error. */
@@ -218,19 +219,102 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
 }
 
 /**
+ * The conversation an owned event belongs to, or `null` when its arm carries no routing key (#756).
+ *
+ * THE ROUTING CONTRACT, and it is stated here rather than in the module header on purpose: four other
+ * modules cite line numbers inside `translateTimelineEvent` above (`conversationActivityBridge.ts:7`
+ * and `:114`, `announcedModelBridge.ts:11`, `announcedModelStore.ts:12`), so a header paragraph would
+ * have shifted every one of them. Everything #756 adds sits BELOW the translator; only the one new
+ * import above it moves a line. Together with `subscribeTimeline`, which hands the key to its injected
+ * dispatch beside the translated event, and `useTimelineBridge`, which fans the pair out to the flat
+ * `timelineStore` AND the keyed `conversationTimelineStore` (#755): translation and attribution are two
+ * separate pure functions over the same event, never one.
+ *
+ * AC3 IS STRUCTURAL, checkable by grep and mirroring the holder's own constraint
+ * (conversationTimelineStore.ts:38-42): this module imports nothing from `activeConversationStore` and
+ * nothing from `src/renderer/src/screens/`. With no reference to the open conversation in scope, the
+ * `?? activeConversation` fallback that #751-#754's REQUIRED `conversationId` was designed to prevent
+ * is not something to remember to avoid — it is unavailable. There is no `??`, no `||`, no default
+ * parameter and no non-null assertion anywhere on the routing path.
+ *
+ * `translateTimelineEvent`'s companion, deliberately a SECOND pure function rather than a widening of
+ * that translator's return type to `{ event, conversationId } | null`: the translator is called at 19
+ * sites in `timelineBridge.test.ts`, and rewrapping every one of those expectations would destroy this
+ * ticket's own no-op evidence in the act of proving it — all 19 are untouched. One extra switch instead.
+ *
+ * The id is read BY NAME off a narrowed union, never probed for. `'conversationId' in event` is banned:
+ * structured clone PRESERVES an `undefined` property across the IPC bridge, so `in` would be true for a
+ * future `conversationId?: string` arm holding `undefined`, while
+ * `Extract<DaemonEvent, { conversationId: string }>` would exclude that arm — a guard whose return type
+ * lies, with `Map.get(undefined)` silently missing downstream.
+ *
+ * The `default` is NOT the catch-all `translateTimelineEvent`'s own docblock bans, and this is the
+ * reason. That prohibition
+ * protects `translateTimelineEvent`'s guarantee that a NEW `DaemonEvent` arm cannot be silently dropped
+ * from the timeline; that guarantee is untouched and still lives in its explicit fall-through group plus
+ * `assertNever`. This function answers a strictly narrower, downstream question — given an event the
+ * translator already owned, where does it go? — and the two groups below enumerate every owned arm, so
+ * `default`'s domain is exactly the arms this is never called with in production. Its failure direction
+ * is the safe one: an unattributed event still reaches the flat store unchanged (AC4) and is never
+ * routed onto a wrong slice (AC3). A second `assertNever` here would force the 28 no-op arms to be
+ * re-listed — the duplication this shape exists to avoid.
+ */
+export function timelineTargetFor(event: DaemonEvent): string | null {
+  switch (event.type) {
+    case 'assistantDelta':
+    case 'turnEnd':
+    case 'turnState':
+    case 'toolUse':
+    case 'toolResult':
+    case 'stallDetected':
+    case 'apiRetry':
+    case 'compacting':
+      // Eight of the eleven owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
+      // #766 / #732 / #737 / #742, the #675 family). It is REQUIRED on every one of them — a missing or
+      // non-string `conversation_id` fails the whole line at the decode without emitting — so the
+      // routing key is non-nullable here by construction. TypeScript narrows across grouped cases, so
+      // the field resolves with no cast and no probe.
+      return event.conversationId
+    case 'sessionTransition':
+    case 'unrecognizedMessage':
+    case 'connected':
+      // The other three owned arms carry no routing key, each for its own reason: `sessionTransition`
+      // carries `newSessionId` (the #259 holder's addressing key) and no conversation id;
+      // `unrecognizedMessage` has its `conversation_id` dropped at the emit; and a connection edge has
+      // no conversation by nature. They are NOT dormant — each still reaches the flat store, which is
+      // what AC4 keeps true — but there is nothing to attribute them to, and inventing one is exactly
+      // what AC3 bans.
+      return null
+    default:
+      return null
+  }
+}
+
+/**
  * Subscribe via the injected `onDaemonEvent`; each owned arm translates to a `ThreadEvent` and is
  * dispatched, every other arm no-ops. Returns the exact unsubscribe handle from `onDaemonEvent` (the
  * `subscribeRunConfig` idiom) so the React binding can use it as its effect cleanup. Injecting
  * `onDaemonEvent` + `dispatch` keeps it React-free and unit-testable with plain spies. The listener
- * only translates + dispatches — it never throws into React.
+ * only translates + dispatches — it never throws into React, imports no store, and performs no fan-out
+ * of its own.
+ *
+ * #756 widened the injected callback's ARITY rather than adding a third parameter. The parameter count
+ * is unchanged, and a function of arity 1 is assignable to a parameter typed at arity 2, so all 20
+ * existing call sites — 19 in `timelineBridge.test.ts`, one in `interactiveRoundtrip.test.tsx` — keep
+ * compiling and running unedited, which is what let the routing land in one slice and what leaves them
+ * standing as this ticket's no-op proof. Exactly ONE of their assertions had to move with the seam:
+ * `toHaveBeenCalledWith` pins the whole argument list, so the one spy-level test that asserted the
+ * dispatch's arguments now names the id too. A third parameter would have cascaded over all 20 instead.
+ * `timelineTargetFor` is called only on the non-null path, so its `default` group is unreachable in
+ * production.
  */
 export function subscribeTimeline(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  dispatch: (event: ThreadEvent) => void
+  dispatch: (event: ThreadEvent, conversationId: string | null) => void
 ): () => void {
   return onDaemonEvent((event) => {
     const threadEvent = translateTimelineEvent(event)
-    if (threadEvent) dispatch(threadEvent)
+    if (threadEvent) dispatch(threadEvent, timelineTargetFor(event))
   })
 }
 
@@ -240,13 +324,31 @@ export function subscribeTimeline(
  * handle as the effect cleanup, so a StrictMode double-mount runs mount → cleanup → mount and nets
  * exactly one live listener — mirroring `useDaemonEventBridge`. `window.pyry` is dereferenced only
  * inside the effect, never during render.
+ *
+ * #756 makes this the FAN-OUT composition root: the flat store is written unconditionally and FIRST,
+ * then the keyed holder, guarded on a non-null id. Flat-first is not cosmetic — it is what keeps AC4
+ * true even if the keyed write were to throw. Both writes are synchronous zustand `set`s with no
+ * `await` between them, so nothing can interleave. The dual write is deliberate and temporary
+ * (Strangler Fig, ADR 0008): nothing reads the holder yet, so this ships as a verified no-op, and
+ * retiring the flat store belongs to the ticket that removes its last reader.
+ *
+ * Importing `conversationTimelineStore` here is correct and breaches no constraint: the holder's HARD
+ * IMPORT CONSTRAINT binds what that STORE MODULE imports, not who may import it. This module's own
+ * constraint is the one stated on `timelineTargetFor` above.
+ *
+ * The argument order flips — this callback reads `(event, conversationId)` while `dispatchFor` takes
+ * `(conversationId, event)`. Not a hazard worth restructuring for: `ThreadEvent` and `string` are not
+ * interchangeable, so a swap is a compile error.
  */
 export function useTimelineBridge(): void {
   useEffect(
     () =>
-      subscribeTimeline(window.pyry.onDaemonEvent, (event) =>
+      subscribeTimeline(window.pyry.onDaemonEvent, (event, conversationId) => {
         timelineStore.getState().dispatch(event)
-      ),
+        if (conversationId !== null) {
+          conversationTimelineStore.getState().dispatchFor(conversationId, event)
+        }
+      }),
     []
   )
 }

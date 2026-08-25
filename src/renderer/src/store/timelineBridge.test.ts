@@ -161,9 +161,10 @@ describe('translateTimelineEvent — the two owned arms', () => {
     expect(translated.input).toEqual({})
   })
 
-  it('toolResult → a ThreadEvent toolResult with the same fields, a fresh object', () => {
+  it('toolResult → a ThreadEvent toolResult keeping the render fields, the id stopping here', () => {
     const event: DaemonEvent = {
       type: 'toolResult',
+      conversationId: 'conv-1',
       turnId: 'A',
       toolUseId: 'tu-1',
       isError: false,
@@ -596,7 +597,14 @@ describe('subscribeTimeline', () => {
         name: 'Read',
         inputSummary: 'reads /etc/hosts'
       },
-      { type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: false, resultSummary: 'read 12 lines' }
+      {
+        type: 'toolResult',
+        conversationId: 'conv-1',
+        turnId: 'A',
+        toolUseId: 'tu-1',
+        isError: false,
+        resultSummary: 'read 12 lines'
+      }
     ]
     for (const event of sequence) bridge.emit(event)
 
@@ -620,7 +628,14 @@ describe('subscribeTimeline', () => {
         name: 'Bash',
         inputSummary: 'rm -rf build/'
       },
-      { type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: true, resultSummary: 'permission denied' }
+      {
+        type: 'toolResult',
+        conversationId: 'conv-1',
+        turnId: 'A',
+        toolUseId: 'tu-1',
+        isError: true,
+        resultSummary: 'permission denied'
+      }
     ]
     for (const event of sequence) bridge.emit(event)
 
@@ -634,7 +649,14 @@ describe('subscribeTimeline', () => {
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
     const before = store.getState()
-    bridge.emit({ type: 'toolResult', turnId: 'A', toolUseId: 'nope', isError: false, resultSummary: 'x' })
+    bridge.emit({
+      type: 'toolResult',
+      conversationId: 'conv-1',
+      turnId: 'A',
+      toolUseId: 'nope',
+      isError: false,
+      resultSummary: 'x'
+    })
 
     // No pending toolCall → fillResult returns the same array → the reducer returns the same state.
     expect(store.getState()).toBe(before)
@@ -654,11 +676,25 @@ describe('subscribeTimeline', () => {
       name: 'Read',
       inputSummary: 'reads /etc/hosts'
     })
-    bridge.emit({ type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: false, resultSummary: 'read 12 lines' })
+    bridge.emit({
+      type: 'toolResult',
+      conversationId: 'conv-1',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      isError: false,
+      resultSummary: 'read 12 lines'
+    })
     const afterFirst = store.getState()
 
     // A second toolResult for the same toolUseId — the call is already resolved, so it is a no-op.
-    bridge.emit({ type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: true, resultSummary: 'overwrite attempt' })
+    bridge.emit({
+      type: 'toolResult',
+      conversationId: 'conv-1',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      isError: true,
+      resultSummary: 'overwrite attempt'
+    })
 
     expect(store.getState()).toBe(afterFirst)
     const item = selectItems(store.getState())[0] as Extract<ThreadItem, { kind: 'toolCall' }>

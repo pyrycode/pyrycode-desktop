@@ -53,7 +53,14 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
         name: 'read_file',
         inputSummary: 'schema.ts'
       },
-      { type: 'toolResult', turnId: 't1', toolUseId: 'tu-1', isError: false, resultSummary: '184 lines' },
+      {
+        type: 'toolResult',
+        conversationId: 'conv-1',
+        turnId: 't1',
+        toolUseId: 'tu-1',
+        isError: false,
+        resultSummary: '184 lines'
+      },
       { type: 'turnEnd', turnId: 't1', stopReason: 'end_turn', conversationId: 'conv-1' }
     ]
     for (const event of stream) bridge.emit(event)

@@ -909,13 +909,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'tool-result':
-            // The tool-result data path (#229). snake→camel here; `conversation_id` is DROPPED (single
-            // active conversation; #202's bridge scopes identity). A fresh literal with the four named
-            // fields, never a spread of the decoded payload, so only the render fields cross IPC. The
-            // timeline bridge (#202), not the session store, folds this through `fillResult` to resolve
-            // the correlated `toolCall`'s result in place. `isError` is a boolean; `false` is a value.
+            // The tool-result data path (#229, widened by #766). snake→camel here, following the
+            // tool-use idiom above: a fresh literal with the five named fields carrying the render fields
+            // and `conversationId` — never a spread of the decoded payload, so a decoder that later grows
+            // a field cannot smuggle it across IPC. The id is read BARE because the decode already
+            // guarantees it: parseToolResultPayload requires `conversation_id`, so a missing or non-string
+            // one drops the whole line upstream of this emit, and reaching for `?? ''` here would turn
+            // that fail-closed drop into a silent misattribution. It is a daemon-asserted routing key, not
+            // rendered text, and it reaches no sink on this leg. The timeline bridge (#202), not the
+            // session store, folds this through `fillResult` to resolve the correlated `toolCall`'s
+            // result in place — rebuilding a fresh ThreadEvent that omits the id, so it stops there until
+            // #756 routes by it. `isError` is a boolean; `false` is a value.
             emitDaemonEvent(sink, {
               type: 'toolResult',
+              conversationId: inbound.toolResult.conversation_id,
               turnId: inbound.toolResult.turn_id,
               toolUseId: inbound.toolResult.tool_use_id,
               isError: inbound.toolResult.is_error,
@@ -924,7 +931,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           case 'queue-state':
             // The queued-backlog data path (#292). Emit a fresh literal carrying `conversationId` (snake→
-            // camel) plus the already-narrowed backlog by reference — unlike toolResult this KEEPS
+            // camel) plus the already-narrowed backlog by reference — this daemon-STATE arm KEEPS
             // conversation_id, because the snapshot is REPLACEMENT-truth and #293 keys its backlog by it. The
             // `queued` array passes through verbatim (parseQueuedItem already stripped each item to the three
             // known fields, nothing to drop, no snake→camel on the row) — the `conversations` precedent. A

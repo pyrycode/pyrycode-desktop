@@ -118,6 +118,7 @@ describe('translateConversationActivity', () => {
     }
     const result: DaemonEvent = {
       type: 'toolResult',
+      conversationId: 'conv-unowned',
       turnId: 't1',
       toolUseId: 'tu-1',
       isError: false,

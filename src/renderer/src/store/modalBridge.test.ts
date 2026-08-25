@@ -128,6 +128,7 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
       },
       {
         type: 'toolResult',
+        conversationId: 'conv-1',
         turnId: 'A',
         toolUseId: 'tu-1',
         isError: false,

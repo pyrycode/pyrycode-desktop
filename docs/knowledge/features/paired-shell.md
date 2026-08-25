@@ -473,6 +473,7 @@ sibling of `activateConversation` and `clearPairingScopedState`, co-located with
 export interface ExitActiveConversationDeps {
   getActiveConversation: () => ConversationCreatedPayload | null
   dispatchTimeline: (event: ThreadEvent) => void
+  clearTimelineFor: (conversationId: string) => void  // #757 — the keyed holder's single-key clear
   clearActiveConversation: () => void
   clearSessionId: () => void
   navigateToList: () => void
@@ -481,6 +482,7 @@ export interface ExitActiveConversationDeps {
 export function exitActiveConversation(deps: ExitActiveConversationDeps, conversationId: string): void {
   if (deps.getActiveConversation()?.id !== conversationId) return
   deps.dispatchTimeline({ type: 'reset' })
+  deps.clearTimelineFor(conversationId)
   deps.clearActiveConversation()
   deps.clearSessionId()
   deps.navigateToList()
@@ -499,14 +501,16 @@ export function exitActiveConversation(deps: ExitActiveConversationDeps, convers
   `conversationDeleted` unconditionally on decode with no `in_reply_to` correlation state threaded
   (#375's deliberate decision — the bare `id` is self-sufficient). The fail-direction is safe: every
   move the gate triggers is a clear.
-- **Clear, then navigate — three stores, not `clearPairingScopedState`'s five.** `dispatchTimeline({
-  type: 'reset' })` → `clearActiveConversation()` → `clearSessionId()`, then `navigateToList()` last, so
-  no observer sees the Channel List rendered against the deleted discussion's thread state. The pairing
-  has **not** ended here — the daemon connection is alive and the operator lands on a working Channel
-  List — so `sessionStore`'s reset and `announcedModelStore`'s clear (both in
-  `clearPairingScopedState`'s five) are deliberately excluded: resetting the session store would blank a
-  live connection status into a false disconnected state, and the announced model is daemon-scoped, not
-  conversation-scoped. `queueStore` is excluded too — the queued backlog is selected by matching the
+- **Clear, then navigate — four stores, not `clearPairingScopedState`'s six.** `dispatchTimeline({
+  type: 'reset' })` → `clearTimelineFor(conversationId)` ([#757](../codebase/757.md)) →
+  `clearActiveConversation()` → `clearSessionId()`, then `navigateToList()` last, so no observer sees the
+  Channel List rendered against the deleted discussion's thread state. The pairing has **not** ended here
+  — the daemon connection is alive and the operator lands on a working Channel List — so `sessionStore`'s
+  reset and `announcedModelStore`'s clear (both in `clearPairingScopedState`'s six) are deliberately
+  excluded: resetting the session store would blank a live connection status into a false disconnected
+  state, and the announced model is daemon-scoped, not conversation-scoped. `clearAllTimelines` is
+  excluded the same way — it is the pairing-boundary clear, and this helper drops one conversation's slice
+  rather than every one. `queueStore` is excluded too — the queued backlog is selected by matching the
   active conversation id, and a `null` active id yields the stable empty backlog via the existing `''`
   sentinel, so no stale queued row can render regardless.
 - **Idempotent by construction.** After a successful exit `activeConversation` is `null`, so a second
@@ -723,6 +727,7 @@ AppView (route='conversation')
 
   clearPairingScopedState(clearPairingDeps):  ← #531 (src/renderer/src/clearPairingScopedState.ts)
     clearPairingDeps.dispatchTimeline({type:'reset'})        ← #528, clears timelineStore
+    clearPairingDeps.clearAllTimelines()                       ← #757, clears conversationTimelineStore (every slice)
     clearPairingDeps.clearActiveConversation()                 ← #529, clears activeConversationStore
     clearPairingDeps.clearSessionId()                          ← #529, clears sessionIdStore
     clearPairingDeps.clearAnnouncedModel()                     ← #593, clears announcedModelStore
@@ -746,8 +751,9 @@ ever leaving `thread`** — that path relies on `paneKey` changing to force the 
 `key`, rather than on the route itself cycling through `list`; see [the two-pane
 shell](#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) above for why that remount had to
 be added explicitly. `sessionStore` is, however, explicitly reset —
-along with the timeline, the active conversation, the session id, and (since #593) the announced
-running model — when the pairing itself ends; see [#531](../codebase/531.md) above.
+along with the flat timeline, (since [#757](../codebase/757.md)) every retained per-conversation
+timeline, the active conversation, the session id, and (since #593) the announced running model — when
+the pairing itself ends; see [#531](../codebase/531.md) above.
 
 ## Edge cases and limitations
 
@@ -803,11 +809,12 @@ running model — when the pairing itself ends; see [#531](../codebase/531.md) a
   helper in `activateConversation.test.ts` — see [#530 codebase notes](../codebase/530.md).
 - **`PairedShell.test.tsx` cannot exercise `clearPairingScopedState`'s wiring either, for the same
   reason** — its coverage is `nextPairedRoute` reducer assertions and the `:114` SSR test guarding the
-  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The five-clear logic
-  (four since #531, joined by `clearAnnouncedModel` at #593) is unit-tested directly on the pure helper
-  in `clearPairingScopedState.test.ts`. One residual: the "clear runs before the route flips" ordering
+  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The six-clear logic
+  (four since #531, joined by `clearAnnouncedModel` at #593 and `clearAllTimelines` at
+  [#757](../codebase/757.md)) is unit-tested directly on the pure helper in
+  `clearPairingScopedState.test.ts`. One residual: the "clear runs before the route flips" ordering
   has no executable assertion after [#531](../codebase/531.md) removed the one `unpairAction.test.ts`
-  case that pinned it — low-stakes today since all five writes are synchronous and batched into the
+  case that pinned it — low-stakes today since all six writes are synchronous and batched into the
   same commit as the route change, but worth restoring the moment a jsdom harness lands (see [#531
   codebase notes](../codebase/531.md)).
 
@@ -822,8 +829,12 @@ running model — when the pairing itself ends; see [#531](../codebase/531.md) a
 - [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
 - [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
-- [Session store](session-store.md) — its `reset` action is one of the five clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md)); the store-backed messages otherwise survive plain navigation untouched
+- [Session store](session-store.md) — its `reset` action is one of the six clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md) and [#757](../codebase/757.md)); the store-backed messages otherwise survive plain navigation untouched
 - [Announced-model store](announced-model-store.md) / [#593](../codebase/593.md) — `clearAnnouncedModel` is the fifth member of `clearPairingDeps`, added after the store shipped dormant at #588 and the deferred clear it flagged
+- [Conversation timeline holder](conversation-timeline-holder.md) / [#757](../codebase/757.md) —
+  `clearAllTimelines` (the sixth member of `clearPairingDeps`) and `clearTimelineFor` (the fourth clear in
+  `exitConversationDeps`), the keyed holder's first clears, both wired here immediately after each
+  helper's pre-existing flat-store `reset`
 - [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the IPC boundary `onUnpaired` ultimately calls; [#531](../codebase/531.md) moved the session reset that used to run inside its first caller (`runUnpair`) to this file
 - [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `timelineStore`'s `reset` arm ([#528](../codebase/528.md)) gets its first production dispatch site via `activateConversation` and its second via `clearPairingScopedState`
 - [Session-id store](session-id-store.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `clearSessionId` ([#529](../codebase/529.md)) gets its first production caller via `activateConversation` and its second via `clearPairingScopedState`
@@ -851,6 +862,10 @@ running model — when the pairing itself ends; see [#531](../codebase/531.md) a
   `exitActiveConversation` + `conversationDeletedBridge.ts`, a third id-gated clear-and-move helper
   beside `activateConversation` and `clearPairingScopedState`, driven by the daemon's `conversationDeleted`
   confirmation rather than a click.
+- [#757 codebase notes](../codebase/757.md) · Spec: `docs/specs/architecture/757-timeline-clears.md`
+  — widens `clearPairingScopedState` to a sixth store and `exitActiveConversation` to a fourth clear,
+  both wired to the [conversation timeline holder](conversation-timeline-holder.md)'s first two write
+  paths that remove rather than add.
 - [#670 codebase notes](../codebase/670.md) · Spec: `docs/specs/architecture/670-two-pane-desktop-shell.md`
   — merges the `list`/`thread` arms into the two-pane desktop shell, adds `pairedShell.css` and
   `minWidth: 800` on the `BrowserWindow`, and (in a rework after a round-1 code-review FAIL) adds the

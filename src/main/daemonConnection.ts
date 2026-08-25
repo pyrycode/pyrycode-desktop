@@ -931,8 +931,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           case 'queue-state':
             // The queued-backlog data path (#292). Emit a fresh literal carrying `conversationId` (snake→
-            // camel) plus the already-narrowed backlog by reference — this arm KEEPS conversation_id,
-            // because the snapshot is REPLACEMENT-truth and #293 keys its backlog by it. The
+            // camel) plus the already-narrowed backlog by reference — this daemon-STATE arm KEEPS
+            // conversation_id, because the snapshot is REPLACEMENT-truth and #293 keys its backlog by it. The
             // `queued` array passes through verbatim (parseQueuedItem already stripped each item to the three
             // known fields, nothing to drop, no snake→camel on the row) — the `conversations` precedent. A
             // fresh top-level literal, never a spread of the decoded payload. Consumed by the #293 queue

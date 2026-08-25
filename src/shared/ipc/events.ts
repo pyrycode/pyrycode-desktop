@@ -289,7 +289,7 @@ export type DaemonEvent =
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //
-  // Carries `conversationId`, as every arm whose frame supplies it now does (#675 finished with #766). The
+  // Carries `conversationId`, as every turn-stream arm now does (#675 finished with #766). The
   // test is "turn-stream item, or daemon state?", not "does the frame have the field": this one carries
   // NO turn_id, opens and closes no turn, and the daemon doc says a client renders it "as its own thread
   // of activity, not as part of the turn it appeared in" — the same characterization queue_state got in
@@ -527,8 +527,8 @@ export type DaemonEvent =
     }
   // The queued-backlog arm (#292). Reuses the wire QueuedItem row type verbatim (the
   // conversationsReceived precedent) — snake_case, order preserved from the wire (enqueue order). Carries
-  // `conversationId` (as every arm whose frame carries it now does) because the snapshot is REPLACEMENT-
-  // truth and the #293 store keys its backlog by it. Consumed by the #293 queue store, NOT the session / timeline
+  // `conversationId` (as every turn-stream arm now does) because the snapshot is REPLACEMENT-truth
+  // and the #293 store keys its backlog by it. Consumed by the #293 queue store, NOT the session / timeline
   // / modal store — queue_state is daemon STATE, not a turn-stream item (#720), so all three exhaustive
   // bridges no-op it. `text` is UNTRUSTED daemon-relayed transit content the eventual render slice (#294)
   // must render as plain text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML); this slice has no DOM

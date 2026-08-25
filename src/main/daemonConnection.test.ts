@@ -2993,7 +2993,7 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
     return ctx
   }
 
-  it('decodes an inbound tool_result into one toolResult carrying the five camelCase fields, conversation id and all', async () => {
+  it('decodes an inbound tool_result into one camelCase toolResult, conversation id and all', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 

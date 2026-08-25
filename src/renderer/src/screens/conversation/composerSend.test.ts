@@ -19,10 +19,15 @@ describe('submitMessage', () => {
     for (const blank of ['', '   ', '\n\t ']) {
       const sendCommand = vi.fn()
       const dispatch = vi.fn()
+      const dispatchFor = vi.fn()
       const newMessageId = vi.fn(() => 'unused')
-      expect(submitMessage(blank, 'conv-1', { sendCommand, dispatch, newMessageId })).toBe(false)
+      expect(
+        submitMessage(blank, 'conv-1', { sendCommand, dispatch, dispatchFor, newMessageId })
+      ).toBe(false)
       expect(sendCommand).not.toHaveBeenCalled()
       expect(dispatch).not.toHaveBeenCalled()
+      // #756: the keyed write sits beside the flat one, so it is gated by the same early return.
+      expect(dispatchFor).not.toHaveBeenCalled()
       expect(newMessageId).not.toHaveBeenCalled()
     }
   })
@@ -34,19 +39,30 @@ describe('submitMessage', () => {
   it('returns false and performs no effect when the active conversation id is null (#448)', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()
+    const dispatchFor = vi.fn()
     const newMessageId = vi.fn(() => 'unused')
-    expect(submitMessage('hello', null, { sendCommand, dispatch, newMessageId })).toBe(false)
+    expect(
+      submitMessage('hello', null, { sendCommand, dispatch, dispatchFor, newMessageId })
+    ).toBe(false)
     expect(sendCommand).not.toHaveBeenCalled()
     expect(dispatch).not.toHaveBeenCalled()
+    // #756: with no conversation to attribute the echo to, there is nothing to route it into either.
+    expect(dispatchFor).not.toHaveBeenCalled()
     expect(newMessageId).not.toHaveBeenCalled()
   })
 
   it('sends exactly one sendMessage command targeting the ACTIVE conversation id (#448)', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()
+    const dispatchFor = vi.fn()
     const newMessageId = vi.fn(() => 'mint-1')
 
-    const result = submitMessage('hello', '130648a8-real-id', { sendCommand, dispatch, newMessageId })
+    const result = submitMessage('hello', '130648a8-real-id', {
+      sendCommand,
+      dispatch,
+      dispatchFor,
+      newMessageId
+    })
 
     expect(result).toBe(true)
     expect(newMessageId).toHaveBeenCalledTimes(1)
@@ -68,6 +84,7 @@ describe('submitMessage', () => {
     submitMessage('  hey there  ', 'conv-1', {
       sendCommand: vi.fn(),
       dispatch,
+      dispatchFor: vi.fn(),
       newMessageId: () => 'echo-1'
     })
 
@@ -78,11 +95,37 @@ describe('submitMessage', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'hey there' })
   })
 
+  // #756: the echo is the timeline's second row-adding writer, so it routes into the conversation it
+  // was SENT TO — the id already handed to submitMessage, never a re-read of anything.
+  it('#756: routes the echo into the keyed holder under the conversation it was sent to', () => {
+    const dispatch = vi.fn()
+    const dispatchFor = vi.fn()
+
+    submitMessage('  hey there  ', 'conv-b', {
+      sendCommand: vi.fn(),
+      dispatch,
+      dispatchFor,
+      newMessageId: () => 'echo-2'
+    })
+
+    expect(dispatchFor).toHaveBeenCalledTimes(1)
+    expect(dispatchFor).toHaveBeenCalledWith('conv-b', { type: 'userText', text: 'hey there' })
+    // Built ONCE and handed to both write paths: the same reference, not two equal literals. Safe
+    // because reduceTimeline is pure (conversationTimelineStore.ts:268-270), and asserting identity
+    // is what keeps a future "build it again for the keyed store" edit from passing silently.
+    expect(dispatchFor.mock.calls[0][1]).toBe(dispatch.mock.calls[0][0])
+  })
+
   it('trims leading/trailing whitespace before both the send payload and the timeline echo', () => {
     const sendCommand = vi.fn()
     const dispatch = vi.fn()
 
-    submitMessage('\n  spaced  \t', 'conv-1', { sendCommand, dispatch, newMessageId: () => 't1' })
+    submitMessage('\n  spaced  \t', 'conv-1', {
+      sendCommand,
+      dispatch,
+      dispatchFor: vi.fn(),
+      newMessageId: () => 't1'
+    })
 
     const command = sendCommand.mock.calls[0][0] as RendererCommand
     const sentText = command.type === 'sendMessage' ? command.payload.text : undefined
@@ -97,16 +140,27 @@ describe('submitMessage', () => {
       throw new Error('bridge down')
     })
     const dispatch = vi.fn()
+    const dispatchFor = vi.fn()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
     let result: boolean | undefined
     expect(() => {
-      result = submitMessage('hello', 'conv-1', { sendCommand, dispatch, newMessageId: () => 'g1' })
+      result = submitMessage('hello', 'conv-1', {
+        sendCommand,
+        dispatch,
+        dispatchFor,
+        newMessageId: () => 'g1'
+      })
     }).not.toThrow()
 
     expect(result).toBe(true)
     // The optimistic echo is appended regardless of send outcome.
     expect(dispatch).toHaveBeenCalledTimes(1)
+    // #756: the guarded-send contract covers sendCommand only, so the keyed write is reached too.
+    expect(dispatchFor).toHaveBeenCalledTimes(1)
+    expect(dispatchFor).toHaveBeenCalledWith('conv-1', { type: 'userText', text: 'hello' })
+    // The swallowed error stays content-free — no conversation id and no message text (ADR 0007).
+    expect(errorSpy).toHaveBeenCalledWith('composer send failed', expect.anything())
     errorSpy.mockRestore()
   })
 })

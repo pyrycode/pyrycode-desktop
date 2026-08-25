@@ -2,13 +2,20 @@
 // not throw the thread away. Pure renderer state: no IPC, no preload bridge, no transport, no async
 // task, no timer, no teardown.
 //
-// This slice ships the HOLDER and nothing else: it has no writer and no reader. `timelineStore.ts` — the
-// single flat timeline belonging to whichever conversation is open — stays exactly as it is and keeps
-// serving the screens. #756 wires the four turn-stream arms into `dispatchFor`, #757 owns the clears
-// (the pairing boundary and a conversation deletion; NOT the `connected` edge, because a thread must
-// survive a reconnect), and #758 cuts the reader over and wires `markViewed` at the switch seam
-// (activateConversation.ts:74-77). The viewed path ships UNWIRED here and that is correct — the whole
-// slice ships dormant, the third of four merges that lands as a verified no-op from the operator's side.
+// Since #756 this slice has a WRITER and still no reader. `timelineStore.ts` — the single flat timeline
+// belonging to whichever conversation is open — stays exactly as it is and keeps serving the screens,
+// receiving every event it received before; the two writes run side by side (Strangler Fig, ADR 0008),
+// which is what lets the routing land and be verified as a no-op before anything the operator sees
+// moves. The writers are `timelineBridge.ts`'s fan-out and the composer's optimistic echo
+// (composerSend.ts) — the timeline's only two row-adding writers. Eight of the bridge's eleven owned
+// arms route here; the other three (`sessionTransition`, `unrecognizedMessage`, `connected`) carry no
+// conversation id, so they reach the flat store only.
+//
+// #757 owns the clears (the pairing boundary and a conversation deletion; NOT the `connected` edge,
+// because a thread must survive a reconnect), and #758 cuts the reader over and wires `markViewed` at
+// the switch seam (activateConversation.ts:74-77). Both ship UNWIRED here and that is correct — until
+// #758 every slice is never-viewed, so eviction order is pure creation-recency and the ten-slice bound
+// is now genuinely reachable where before #756 it was theoretical.
 //
 // Keyed by `conversationId`, NOT a flat slot — the backgroundTaskRosterStore.ts:31-37 argument, reused
 // rather than re-derived: the daemon fans these frames out to every interactive connection and each

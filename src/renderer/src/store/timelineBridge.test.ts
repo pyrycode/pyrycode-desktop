@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { HelloAckPayload, MessagePayload, ErrorPayload } from '@shared/wire/types'
-import { translateTimelineEvent, subscribeTimeline } from './timelineBridge'
+import { translateTimelineEvent, timelineTargetFor, subscribeTimeline } from './timelineBridge'
 import {
   createTimelineStore,
   selectItems,
@@ -9,7 +9,11 @@ import {
   selectStalled,
   selectApiRetry
 } from './timelineStore'
-import type { ThreadEvent, ThreadItem } from './threadTimeline'
+import {
+  createConversationTimelineStore,
+  selectTimelineFor
+} from './conversationTimelineStore'
+import type { ThreadEvent, ThreadItem, TimelineState } from './threadTimeline'
 
 // Fixtures — plain wire-shaped data, mirroring daemonEventBridge.test.ts. No transport involved.
 const ack: HelloAckPayload = {
@@ -435,6 +439,87 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
   })
 })
 
+// #756: attribution is a SECOND pure function beside the translator, never a widening of its return
+// type — all 19 `translateTimelineEvent` call sites above stay untouched, which is what makes them
+// this ticket's no-op evidence. Each row below uses a DISTINCT id, so a copy-paste that reads a
+// neighbour's field fails rather than passing on a shared `'conv-1'`.
+describe('timelineTargetFor', () => {
+  const idCarrying: readonly (readonly [string, DaemonEvent])[] = [
+    [
+      'conv-delta',
+      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', conversationId: 'conv-delta' }
+    ],
+    [
+      'conv-turn-end',
+      { type: 'turnEnd', turnId: 'A', stopReason: 'end_turn', conversationId: 'conv-turn-end' }
+    ],
+    ['conv-turn-state', { type: 'turnState', state: 'thinking', conversationId: 'conv-turn-state' }],
+    [
+      'conv-tool-use',
+      {
+        type: 'toolUse',
+        conversationId: 'conv-tool-use',
+        turnId: 'A',
+        toolUseId: 'tu-1',
+        name: 'Read',
+        inputSummary: 'reads /etc/hosts'
+      }
+    ],
+    [
+      'conv-tool-result',
+      {
+        type: 'toolResult',
+        conversationId: 'conv-tool-result',
+        turnId: 'A',
+        toolUseId: 'tu-1',
+        isError: false,
+        resultSummary: 'read 12 lines'
+      }
+    ],
+    ['conv-stall', { type: 'stallDetected', conversationId: 'conv-stall' }],
+    [
+      'conv-retry',
+      { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-retry' }
+    ],
+    ['conv-compacting', { type: 'compacting', active: true, conversationId: 'conv-compacting' }]
+  ]
+
+  it('returns each id-carrying owned arm its OWN conversation id (all eight)', () => {
+    expect(idCarrying).toHaveLength(8)
+    for (const [expected, event] of idCarrying) {
+      expect(timelineTargetFor(event)).toBe(expected)
+    }
+  })
+
+  // The three owned arms that carry no routing key. They are NOT dormant — each still reaches the
+  // flat store — but there is nothing to attribute them to, and inventing one is what AC3 bans.
+  it('returns null for sessionTransition — it carries newSessionId, not a conversation id', () => {
+    const event: DaemonEvent = {
+      type: 'sessionTransition',
+      newSessionId: 'sess-2',
+      reason: 'workspace_change',
+      occurredAt: '2026-07-10T00:00:00.000000000Z',
+      workspaceCwd: '/home/user/next'
+    }
+    expect(timelineTargetFor(event)).toBeNull()
+  })
+
+  it('returns null for unrecognizedMessage — conversation_id is dropped at the emit', () => {
+    const event: DaemonEvent = {
+      type: 'unrecognizedMessage',
+      site: 'line_type',
+      messageType: 'some_future_event',
+      raw: '{"type":"some_future_event"}',
+      truncated: false
+    }
+    expect(timelineTargetFor(event)).toBeNull()
+  })
+
+  it('returns null for connected — a connection edge has no conversation by nature', () => {
+    expect(timelineTargetFor({ type: 'connected', ack })).toBeNull()
+  })
+})
+
 describe('subscribeTimeline', () => {
   // A fake onDaemonEvent that captures the listener and hands back an off spy — the runConfigSnapshot
   // fakeBridge idiom.
@@ -464,14 +549,21 @@ describe('subscribeTimeline', () => {
     expect(bridge.subscribeCalls()).toBe(1)
   })
 
-  it('dispatches a translated event for an owned arm', () => {
+  // #756 added the second argument: `toHaveBeenCalledWith` pins the WHOLE argument list, so this is the
+  // one existing assertion the arity widening could not leave alone. The other nineteen call sites —
+  // eighteen here and one in interactiveRoundtrip.test.tsx — pass a 1-arity spy or callback and are
+  // untouched, because arity 1 is assignable to a parameter typed at arity 2.
+  it('dispatches a translated event, and its conversation id, for an owned arm', () => {
     const bridge = fakeBridge()
     const dispatch = vi.fn()
     subscribeTimeline(bridge.onDaemonEvent, dispatch)
 
     bridge.emit({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi', conversationId: 'conv-1' })
     expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(dispatch).toHaveBeenCalledWith({ type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi' })
+    expect(dispatch).toHaveBeenCalledWith(
+      { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi' },
+      'conv-1'
+    )
   })
 
   it('dispatches nothing for an unowned arm', () => {
@@ -481,6 +573,18 @@ describe('subscribeTimeline', () => {
 
     bridge.emit({ type: 'connecting' })
     expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  // #756: an owned arm with nothing to attribute passes `null` through the same second argument — the
+  // routing key is never omitted and never substituted for.
+  it('#756: an id-less owned arm passes null as the second argument, never a substitute id', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    subscribeTimeline(bridge.onDaemonEvent, dispatch)
+
+    bridge.emit({ type: 'connected', ack })
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(dispatch).toHaveBeenCalledWith({ type: 'reconnected' }, null)
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup (one-listener guarantee)', () => {
@@ -814,5 +918,168 @@ describe('subscribeTimeline', () => {
     // Both halves, as above: same state ref (nothing dispatched) AND no chat row.
     expect(store.getState()).toBe(before)
     expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  // #756: the fan-out, driven through TWO REAL stores by a callback IDENTICAL IN SHAPE to
+  // `useTimelineBridge`'s (timelineBridge.ts) — flat first and unconditional, keyed second and guarded
+  // on a non-null id. The hook body stays untested window glue; this local helper is what covers its
+  // logic, and keeping it a faithful copy is what lets review diff the two side by side.
+  describe('the dual write into both stores (#756)', () => {
+    function fanOut(
+      flat: ReturnType<typeof createTimelineStore>,
+      keyed: ReturnType<typeof createConversationTimelineStore>
+    ): (event: ThreadEvent, conversationId: string | null) => void {
+      return (event, conversationId) => {
+        flat.getState().dispatch(event)
+        if (conversationId !== null) keyed.getState().dispatchFor(conversationId, event)
+      }
+    }
+
+    function wired(): {
+      bridge: ReturnType<typeof fakeBridge>
+      flat: ReturnType<typeof createTimelineStore>
+      keyed: ReturnType<typeof createConversationTimelineStore>
+    } {
+      const bridge = fakeBridge()
+      const flat = createTimelineStore()
+      const keyed = createConversationTimelineStore()
+      subscribeTimeline(bridge.onDaemonEvent, fanOut(flat, keyed))
+      return { bridge, flat, keyed }
+    }
+
+    const sliceOf = (
+      keyed: ReturnType<typeof createConversationTimelineStore>,
+      conversationId: string
+    ): TimelineState | null => selectTimelineFor(conversationId)(keyed.getState())
+
+    const textOf = (items: readonly ThreadItem[] | undefined, at: number): string | undefined =>
+      (items?.[at] as Extract<ThreadItem, { kind: 'assistantText' }> | undefined)?.text
+
+    it('AC1: an id-carrying arm lands in BOTH the flat timeline and its own conversation slice', () => {
+      const { bridge, flat, keyed } = wired()
+
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'A',
+        seq: 0,
+        text: 'Hello',
+        conversationId: 'conv-a'
+      })
+
+      expect(selectItems(flat.getState())).toHaveLength(1)
+      expect(textOf(selectItems(flat.getState()), 0)).toBe('Hello')
+
+      const slice = sliceOf(keyed, 'conv-a')
+      expect(slice).not.toBeNull()
+      expect(slice?.items).toHaveLength(1)
+      expect(textOf(slice?.items, 0)).toBe('Hello')
+    })
+
+    // The failure this ticket exists to fix: interleaved frames for two conversations. Both slices are
+    // asserted by CONTENT — a map-size assertion alone would pass while one thread clobbered the other.
+    it('AC2: interleaved a → b → a events each land in their own slice, neither clobbering the other', () => {
+      const { bridge, keyed } = wired()
+
+      const sequence: DaemonEvent[] = [
+        { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'a1 ', conversationId: 'conv-a' },
+        { type: 'assistantDelta', turnId: 'B', seq: 0, text: 'b1', conversationId: 'conv-b' },
+        { type: 'assistantDelta', turnId: 'A', seq: 1, text: 'a2', conversationId: 'conv-a' }
+      ]
+      for (const event of sequence) bridge.emit(event)
+
+      const a = sliceOf(keyed, 'conv-a')
+      const b = sliceOf(keyed, 'conv-b')
+      expect(a?.items).toHaveLength(1)
+      expect(textOf(a?.items, 0)).toBe('a1 a2')
+      expect(b?.items).toHaveLength(1)
+      expect(textOf(b?.items, 0)).toBe('b1')
+    })
+
+    it('AC2: an event for a never-opened conversation creates ITS slice and touches no other', () => {
+      const { bridge, keyed } = wired()
+
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'A',
+        seq: 0,
+        text: 'open',
+        conversationId: 'conv-open'
+      })
+      const openBefore = sliceOf(keyed, 'conv-open')
+
+      // An id the holder has never seen and the operator has never viewed: folded, never discarded.
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'X',
+        seq: 0,
+        text: 'stray',
+        conversationId: 'conv-unowned'
+      })
+
+      const unowned = sliceOf(keyed, 'conv-unowned')
+      expect(unowned?.items).toHaveLength(1)
+      expect(textOf(unowned?.items, 0)).toBe('stray')
+      // The open conversation's slice is untouched BY REFERENCE — not merely equal.
+      expect(sliceOf(keyed, 'conv-open')).toBe(openBefore)
+    })
+
+    it('AC3/AC4: the three id-less owned arms reach the flat store and create NO slice', () => {
+      const { bridge, flat, keyed } = wired()
+
+      const idLess: DaemonEvent[] = [
+        {
+          type: 'sessionTransition',
+          newSessionId: 'sess-2',
+          reason: 'workspace_change',
+          occurredAt: '2026-07-10T00:00:00.000000000Z',
+          workspaceCwd: '/home/user/next'
+        },
+        {
+          type: 'unrecognizedMessage',
+          site: 'line_type',
+          messageType: 'some_future_event',
+          raw: '{"type":"some_future_event"}',
+          truncated: false
+        },
+        { type: 'connected', ack }
+      ]
+      for (const event of idLess) bridge.emit(event)
+
+      // AC4: exactly the flat rows these arms produce today — sessionBoundary and unrecognizedMessage
+      // tail-append; `connected` → `reconnected` reconciles chrome and adds no row.
+      expect(selectItems(flat.getState()).map((i) => i.kind)).toEqual([
+        'sessionBoundary',
+        'unrecognizedMessage'
+      ])
+      // AC3: nothing was attributed, so no slice was invented for the open conversation or any other.
+      expect(keyed.getState().timelines.size).toBe(0)
+    })
+
+    it('AC3: an id-less arm leaves an ALREADY-HELD slice untouched by reference (no fallback)', () => {
+      const { bridge, keyed } = wired()
+
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'A',
+        seq: 0,
+        text: 'held',
+        conversationId: 'conv-open'
+      })
+      const before = sliceOf(keyed, 'conv-open')
+      expect(before).not.toBeNull()
+
+      // Asserting no-fallback against an EMPTY map would pass for the wrong reason: a `?? active`
+      // fallback only misfiles when there is somewhere to misfile into.
+      bridge.emit({
+        type: 'unrecognizedMessage',
+        site: 'undecodable',
+        messageType: '',
+        raw: '{"type":"assist',
+        truncated: true
+      })
+
+      expect(sliceOf(keyed, 'conv-open')).toBe(before)
+      expect(keyed.getState().timelines.size).toBe(1)
+    })
   })
 })

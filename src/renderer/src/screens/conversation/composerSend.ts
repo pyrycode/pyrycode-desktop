@@ -8,14 +8,23 @@ import type { ConnectionStatus } from '../../store/sessionStore'
 import type { ThreadEvent } from '../../store/threadTimeline'
 
 /**
- * The three effects submitMessage performs, injected so the helper stays pure and deterministic in
+ * The four effects submitMessage performs, injected so the helper stays pure and deterministic in
  * tests. `newMessageId` is `crypto.randomUUID()` in the container; tests inject a stub. `dispatch`
  * writes a `ThreadEvent` into `timelineStore` (#179): the user's message and the daemon's structured
  * reply now share the one ordered timeline surface.
+ *
+ * `dispatchFor` (#756) is the same echo's write into the keyed holder — the timeline's second
+ * row-adding writer, folded into the conversation the message was SENT TO. REQUIRED, not optional, and
+ * not an arity widening of `dispatch`: the opposite call from `subscribeTimeline`'s, for the reason
+ * `ConversationScreen.tsx:1930-1934` already states — the cascade decides. This deps object had six
+ * call sites in `composerSend.test.ts` plus the one container, so requiring the field cost six
+ * mechanical test edits and buys a compile error for "forgot to wire it"; at `subscribeTimeline`'s
+ * twenty that trade is unavailable, which is why the bridge went the other way.
  */
 export interface ComposerSendDeps {
   sendCommand: (command: RendererCommand) => void
   dispatch: (event: ThreadEvent) => void
+  dispatchFor: (conversationId: string, event: ThreadEvent) => void
   newMessageId: () => string
 }
 
@@ -64,7 +73,19 @@ export function submitMessage(
 
   // Route the optimistic echo into the timeline as the `userText` item (#245). The timeline reducer
   // tail-appends it, so it renders in arrival order beside the daemon's structured reply.
-  deps.dispatch({ type: 'userText', text: trimmed })
+  //
+  // Built ONCE and handed to both write paths (#756). Sharing one `ThreadEvent` reference across two
+  // stores is safe for the reason `conversationTimelineStore.ts:268-270` already states:
+  // `reduceTimeline` is pure and always builds fresh arrays. Both writes sit outside the `try` above —
+  // the guarded-send contract covers `sendCommand` only and must not grow to cover a store write.
+  const echo: ThreadEvent = { type: 'userText', text: trimmed }
+  deps.dispatch(echo)
+  // The keyed fold, under the conversation this message was SENT TO — it rides the wire as
+  // `conversation_id` in the payload above. This is NOT the fallback AC3 bans: that ban is on inventing
+  // an id for an event that ARRIVED without one, not on knowing where you just sent something. The id
+  // is non-null here by control flow — the `conversationId === null` guard already returned `false`
+  // above — so there is no `?? ''`, no default and no non-null assertion.
+  deps.dispatchFor(conversationId, echo)
 
   return true
 }

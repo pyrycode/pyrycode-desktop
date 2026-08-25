@@ -266,8 +266,8 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
   })
 
   it('compacting → null (consumed by the render slice #496, not the session store)', () => {
-    expect(translateDaemonEvent({ type: 'compacting', active: true })).toBeNull()
-    expect(translateDaemonEvent({ type: 'compacting', active: false })).toBeNull()
+    expect(translateDaemonEvent({ type: 'compacting', active: true, conversationId: 'conv-1' })).toBeNull()
+    expect(translateDaemonEvent({ type: 'compacting', active: false, conversationId: 'conv-1' })).toBeNull()
   })
 
   it('modelAnnounced → null (consumed by the announced-model store #588, not the session store)', () => {

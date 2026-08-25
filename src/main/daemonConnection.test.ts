@@ -1647,7 +1647,7 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     return ctx
   }
 
-  it('decodes a rising-edge compacting into exactly one compacting event (conversation_id dropped)', async () => {
+  it('decodes a rising-edge compacting into exactly one compacting event (conversation_id carried)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1657,9 +1657,11 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'compacting', active: true }])
-    // conversation_id is dropped at the choke point (single active conversation).
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    expect(events).toEqual([{ type: 'compacting', active: true, conversationId: 'conv-1' }])
+    // The frame's conversation_id reaches the emitted event VERBATIM (#742) — the routing key #674
+    // keys by. The inverse of this assertion held while the arm dropped it; it is inverted, not
+    // deleted, so the leak guard keeps watching the same string.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('emits the falling edge with active false — the explicit clear, not a derived one', async () => {
@@ -1671,7 +1673,9 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
       plaintext: compactingPlaintext({ conversation_id: 'conv-1', active: false })
     })
 
-    expect(emitted(sink).slice(before)).toEqual([{ type: 'compacting', active: false }])
+    expect(emitted(sink).slice(before)).toEqual([
+      { type: 'compacting', active: false, conversationId: 'conv-1' }
+    ])
   })
 
   it('does NOT dedup: two consecutive identical rising edges each emit their own event', async () => {
@@ -1688,12 +1692,12 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     // Two frames, two events, in wire order — no coalescing, no suppression of the repeat. This pins
     // the "no dedup" contract against a future optimiser adding edge-tracking state to this leg.
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'compacting', active: true },
-      { type: 'compacting', active: true }
+      { type: 'compacting', active: true, conversationId: 'conv-1' },
+      { type: 'compacting', active: true, conversationId: 'conv-1' }
     ])
   })
 
-  it('emits exactly the two modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the three modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1707,7 +1711,7 @@ describe('createDaemonConnection — compacting stream (#495)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(Object.keys(events[0]).sort()).toEqual(['active', 'type'])
+    expect(Object.keys(events[0]).sort()).toEqual(['active', 'conversationId', 'type'])
     expect(JSON.stringify(events)).not.toContain('must-not-cross')
   })
 

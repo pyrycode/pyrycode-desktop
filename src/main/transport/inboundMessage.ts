@@ -122,8 +122,11 @@ function hashPlaintext(plaintext: Uint8Array): string {
  *
  * The `compacting` kind (#495) carries the decoded CompactingPayload — the PTY-derived status peer of
  * `stall` / `api-retry` the daemon fans out to interactive clients while claude auto-compacts the
- * conversation. BANNER-ONLY: the wire carries no progress at all, so the consumer carries just the edge
- * (`active`) onward, dropping `conversation_id`. The fail-closed defence here is two required fields —
+ * conversation. BANNER-ONLY: the wire carries no progress at all, so there is no counter to carry — the
+ * consumer carries the edge (`active`) onward, and `conversation_id` with it, by name as `conversationId`
+ * (#742), because per-conversation compaction is daemon state: the sidebar must show a chat is busy
+ * compacting while the operator looks at a different one (#674). The fail-closed defence here is two
+ * required fields —
  * one string and one BOOLEAN (whose `false` is the explicit falling edge, a value not an absence, so
  * nothing may consult truthiness). NOT onset-only and NOT deduped: N frames narrow to N values. Ships
  * dormant — the render slice (#496) is the first consumer.

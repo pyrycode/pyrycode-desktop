@@ -70,7 +70,7 @@ describe('translateModelAnnounced', () => {
         used_tokens: 0,
         window_tokens: 0
       },
-      { type: 'compacting', active: true },
+      { type: 'compacting', active: true, conversationId: 'conv-1' },
       { type: 'conversationsReceived', conversations: [] }
     ]
     for (const event of others) expect(translateModelAnnounced(event)).toBeNull()

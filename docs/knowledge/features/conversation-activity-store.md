@@ -130,6 +130,10 @@ here rather than re-derived.
 
 ## Related decisions
 
+- [Conversation timeline holder](conversation-timeline-holder.md) — the direct structural descendant
+  (#755): the same `ReadonlyMap` + copy-on-write + selector-factory shape applied to a whole
+  `TimelineState` per conversation instead of four booleans, adding a bound (`MAX_RETAINED_TIMELINES`)
+  and least-recently-viewed eviction that this store's own header explicitly declines.
 - [Background-task roster store](background-task-roster-store.md) — the direct precedent for the
   `ReadonlyMap` + copy-on-write + named-setters + `?? null` selector shape, reused rather than
   re-derived; also the earlier instance of shipping a store "populated and unread" ahead of its first

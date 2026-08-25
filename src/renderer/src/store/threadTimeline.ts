@@ -100,7 +100,7 @@ export type ThreadEvent =
   // `seq` is carried for wire fidelity (and a future monotonicity guard) but not consulted —
   // arrival order is authoritative, per ADR 0004's caller-owns-ordering stance.
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
-  // The tool-call arm. Field-for-field identical to the `toolUse` DaemonEvent (`events.ts:384-391`),
+  // The tool-call arm. #763 widened the `toolUse` DaemonEvent with a `conversationId` the bridge drops,
   // so the bridge stays a filter + fresh copy, not a remap.
   //
   // #643: `input` is the tool's own input fields, name → value. ABSENT means the WIRE omitted it (a

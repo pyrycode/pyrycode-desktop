@@ -215,9 +215,9 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * changeId, never the wire in_reply_to); its store consumer is #256, not yet built.
  *
  * The `tool-use` kind (#217) carries the decoded ToolUsePayload — the tool-call enrichment that drives
- * a durable `toolCall` timeline item (#202 / #121). The consumer carries the four render fields onward
- * (dropping `conversation_id`); the fail-closed required-string presence here (five strings, no enum)
- * is the boundary this slice defends. `name` / `input_summary` are opaque display text (like `stop_reason`).
+ * a durable `toolCall` timeline item (#202 / #121). The consumer carries the five render fields plus
+ * `conversation_id` onward (#763). The fail-closed required-string presence here (five strings, no enum) is
+ * the boundary this slice defends. `name` / `input_summary` are opaque display text (like `stop_reason`).
  *
  * The `tool-result` kind (#229) carries the decoded ToolResultPayload — the outcome half that RESOLVES an
  * existing `toolCall` in place (correlated by `tool_use_id`, #121's `fillResult`), NOT a new row. The

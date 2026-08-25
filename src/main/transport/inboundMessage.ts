@@ -221,7 +221,7 @@ function hashPlaintext(plaintext: Uint8Array): string {
  *
  * The `tool-result` kind (#229) carries the decoded ToolResultPayload — the outcome half that RESOLVES an
  * existing `toolCall` in place (correlated by `tool_use_id`, #121's `fillResult`), NOT a new row. The
- * consumer carries the four render fields onward (dropping `conversation_id`); the fail-closed defence is
+ * consumer carries the four render fields plus `conversation_id` onward (#766); the fail-closed defence is
  * four required strings PLUS one required boolean (`is_error`, whose `false` is a value, not an absence).
  * `result_summary` is opaque display text carried onward, its DOM sink being the render slice #230.
  *

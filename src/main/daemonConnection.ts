@@ -607,10 +607,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'turn-end':
+            // The turn-boundary data path (#199, widened by #752). snake→camel here, following the
+            // assistant-delta idiom above: a fresh literal with named fields carrying the turn id, the
+            // stop reason and `conversationId` — never a spread of the decoded payload, so a decoder
+            // that later grows a field cannot smuggle it across IPC. The decode stays fail-closed
+            // upstream and needed no change here: parseTurnEndPayload already requires
+            // `conversation_id`, so a missing or non-string one drops the whole line without emitting
+            // — which is why the id is read BARE. Reaching for `?? ''` would turn that fail-closed drop
+            // into a silent misattribution, closing the wrong thread's turn (#675).
+            //
+            // The id is a daemon-asserted routing key, not rendered text, and it reaches no sink on
+            // this leg. It stops at the timeline bridge (#202), which rebuilds a fresh ThreadEvent from
+            // named fields and omits it; the consumers that route by conversation are #756.
             emitDaemonEvent(sink, {
               type: 'turnEnd',
               turnId: inbound.turnEnd.turn_id,
-              stopReason: inbound.turnEnd.stop_reason
+              stopReason: inbound.turnEnd.stop_reason,
+              conversationId: inbound.turnEnd.conversation_id
             })
             return
           case 'turn-state':

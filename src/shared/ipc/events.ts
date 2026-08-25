@@ -128,8 +128,17 @@ export type DaemonEvent =
   // fidelity but is not consulted, and merging slices into one bubble is the reducer's job. The added
   // field brings no per-id buffer, dedup, last-seq memo or ordering check with it.
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string; conversationId: string }
-  // turnEnd closes the turn and carries turnId / stopReason — no token, key, or raw frame.
-  | { type: 'turnEnd'; turnId: string; stopReason: string }
+  // turnEnd closes the turn and carries turnId / stopReason plus `conversationId` (#752) — the frame's
+  // `conversation_id`, copied BY NAME at the emit from an already-validated payload, never by spreading
+  // the decoded payload. It crosses for the reason the delta arm above carries it, on the same terms:
+  // REQUIRED never optional (an optional routing key invites `?? activeConversation` fallbacks, which is
+  // the misattribution this work exists to remove), a daemon-asserted ROUTING KEY rather than rendered
+  // text, and a fail-closed decode — a missing or non-string id fails the whole line without emitting.
+  // A turn boundary that cannot be attributed closes the wrong thread's turn (#675). It STOPS at the
+  // renderer timeline bridge, which rebuilds a fresh ThreadEvent from named fields and omits it;
+  // ThreadEvent does not carry it, and the consumers that route by conversation are #756. No token,
+  // key, or raw frame.
+  | { type: 'turnEnd'; turnId: string; stopReason: string; conversationId: string }
   // The coarse turn-lifecycle arm (#214, widened by #724). Carries `state` (a closed 3-value wire enum)
   // and `conversationId` — the frame's `conversation_id`, copied BY NAME at the emit from an
   // already-validated payload (the decode stays fail-closed: a missing or non-string id fails the whole

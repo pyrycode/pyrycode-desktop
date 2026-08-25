@@ -307,10 +307,13 @@ toolUse: ToolUsePayload }` via `parseToolUsePayload`, the tool-call enrichment o
 stream (pyrycode #607, ADR 025, `protocol-mobile.md`). `ToolUsePayload{conversation_id, turn_id,
 tool_use_id, name, input_summary}` is five plain strings, all always present — narrowed with **five
 `requireString` calls, no enum check** (unlike `turn_state`'s `state`), cloning `parseTurnEndPayload`'s
-idiom scaled from three fields to five. The consumer arm drops only `conversation_id`; `name` and
-`input_summary` are opaque daemon display text (the `stop_reason` #199 / `cwd` #139 posture) carried
+idiom scaled from three fields to five. At ship time the consumer arm dropped `conversation_id`; `name`
+and `input_summary` are opaque daemon display text (the `stop_reason` #199 / `cwd` #139 posture) carried
 onward to the render slice ([#218](https://github.com/pyrycode/pyrycode-desktop/issues/218)) verbatim,
-never interpreted here.
+never interpreted here. [#763](../codebase/763.md) later carried `conversation_id` onward too, as
+`conversationId`, the same daemon-asserted-routing-key widening #751/#752/#724/#732/#737/#742 gave the
+other turn-stream and daemon-state arms — copied by name, required never optional, read bare because the
+decode's five `requireString` calls already guarantee it (no decode change was needed).
 
 **[#642](../codebase/642.md) widens the `tool_use` payload by a field, not a kind** — the ordinal count
 above tracks new members joining `InboundDaemonMessage`, and this ticket adds none. `ToolUsePayload`
@@ -532,12 +535,16 @@ case 'message': {
       })
       return
     case 'tool-use':
-      // #217: fresh named-field literal, mirrors 'turn-state'. conversation_id dropped (single active
-      // conversation); name/input_summary carried onward as opaque display text for the render slice.
-      // #642 added a sixth field, input — the already-narrowed fresh map, by reference, unconditional
-      // (undefined when the wire omitted it; a pre-pyrycode#1678 daemon).
+      // #217: fresh named-field literal, mirrors 'turn-state'. name/input_summary carried onward as
+      // opaque display text for the render slice. #642 added a sixth field, input — the already-narrowed
+      // fresh map, by reference, unconditional (undefined when the wire omitted it; a pre-pyrycode#1678
+      // daemon). #763 widened this arm with conversationId too, on the same terms as assistant-delta/
+      // turn-end/turn-state/stall above — copied by name, required never optional, read bare because the
+      // decode already guarantees it. It stops at the renderer timeline bridge; ThreadEvent still doesn't
+      // carry it.
       emitDaemonEvent(sink, {
         type: 'toolUse',
+        conversationId: inbound.toolUse.conversation_id,
         turnId: inbound.toolUse.turn_id,
         toolUseId: inbound.toolUse.tool_use_id,
         name: inbound.toolUse.name,

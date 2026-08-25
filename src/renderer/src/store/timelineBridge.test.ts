@@ -69,9 +69,10 @@ describe('translateTimelineEvent — the two owned arms', () => {
     }
   })
 
-  it('toolUse → a ThreadEvent toolUse with the same fields, a fresh object', () => {
+  it('toolUse → a ThreadEvent toolUse keeping the render fields, the id stopping here', () => {
     const event: DaemonEvent = {
       type: 'toolUse',
+      conversationId: 'conv-1',
       turnId: 'A',
       toolUseId: 'tu-1',
       name: 'Read',
@@ -96,6 +97,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
     const input = { pattern: 'TODO', path: '/src', output_mode: 'content' }
     const event: DaemonEvent = {
       type: 'toolUse',
+      conversationId: 'conv-1',
       turnId: 'A',
       toolUseId: 'tu-1',
       name: 'Grep',
@@ -124,6 +126,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
     // (structured clone preserves an `undefined`-valued own property, so `in` is true either way).
     const event: DaemonEvent = {
       type: 'toolUse',
+      conversationId: 'conv-1',
       turnId: 'A',
       toolUseId: 'tu-1',
       name: 'Read',
@@ -146,6 +149,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
     // and never collapsed into it.
     const event: DaemonEvent = {
       type: 'toolUse',
+      conversationId: 'conv-1',
       turnId: 'A',
       toolUseId: 'tu-1',
       name: 'Read',
@@ -535,6 +539,7 @@ describe('subscribeTimeline', () => {
 
     bridge.emit({
       type: 'toolUse',
+      conversationId: 'conv-1',
       turnId: 'A',
       toolUseId: 'tu-1',
       name: 'Read',
@@ -561,7 +566,14 @@ describe('subscribeTimeline', () => {
 
     const sequence: DaemonEvent[] = [
       { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'before ', conversationId: 'conv-1' },
-      { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' },
+      {
+        type: 'toolUse',
+        conversationId: 'conv-1',
+        turnId: 'A',
+        toolUseId: 'tu-1',
+        name: 'Read',
+        inputSummary: 'reads /etc/hosts'
+      },
       { type: 'assistantDelta', turnId: 'A', seq: 1, text: 'after', conversationId: 'conv-1' }
     ]
     for (const event of sequence) bridge.emit(event)
@@ -576,7 +588,14 @@ describe('subscribeTimeline', () => {
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
     const sequence: DaemonEvent[] = [
-      { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' },
+      {
+        type: 'toolUse',
+        conversationId: 'conv-1',
+        turnId: 'A',
+        toolUseId: 'tu-1',
+        name: 'Read',
+        inputSummary: 'reads /etc/hosts'
+      },
       { type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: false, resultSummary: 'read 12 lines' }
     ]
     for (const event of sequence) bridge.emit(event)
@@ -593,7 +612,14 @@ describe('subscribeTimeline', () => {
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
     const sequence: DaemonEvent[] = [
-      { type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Bash', inputSummary: 'rm -rf build/' },
+      {
+        type: 'toolUse',
+        conversationId: 'conv-1',
+        turnId: 'A',
+        toolUseId: 'tu-1',
+        name: 'Bash',
+        inputSummary: 'rm -rf build/'
+      },
       { type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: true, resultSummary: 'permission denied' }
     ]
     for (const event of sequence) bridge.emit(event)
@@ -620,7 +646,14 @@ describe('subscribeTimeline', () => {
     const store = createTimelineStore()
     subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
 
-    bridge.emit({ type: 'toolUse', turnId: 'A', toolUseId: 'tu-1', name: 'Read', inputSummary: 'reads /etc/hosts' })
+    bridge.emit({
+      type: 'toolUse',
+      conversationId: 'conv-1',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      name: 'Read',
+      inputSummary: 'reads /etc/hosts'
+    })
     bridge.emit({ type: 'toolResult', turnId: 'A', toolUseId: 'tu-1', isError: false, resultSummary: 'read 12 lines' })
     const afterFirst = store.getState()
 

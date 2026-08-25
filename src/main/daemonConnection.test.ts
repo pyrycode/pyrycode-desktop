@@ -2871,7 +2871,7 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
     return ctx
   }
 
-  it('decodes an inbound tool_use into one toolUse carrying the four camelCase fields (conversation_id dropped)', async () => {
+  it('decodes an inbound tool_use into one camelCase toolUse, conversation id and all', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -2890,14 +2890,16 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
     expect(events).toEqual([
       {
         type: 'toolUse',
+        conversationId: 'conv-1',
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         name: 'Read',
         inputSummary: 'reads /etc/hosts'
       }
     ])
-    // conversation_id is dropped at the choke point (single active conversation; #202 scopes it).
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    // The frame's conversation_id rides the arm as the routing key (#763): it must reach the renderer
+    // verbatim, never dropped and never defaulted to a placeholder.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('carries the tool input map across to the renderer with its entries unchanged (#642)', async () => {
@@ -2919,6 +2921,7 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
     expect(emitted(sink).slice(before)).toEqual([
       {
         type: 'toolUse',
+        conversationId: 'conv-1',
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         name: 'Read',
@@ -2947,6 +2950,7 @@ describe('createDaemonConnection — tool_use stream (#217)', () => {
     expect(events).toEqual([
       {
         type: 'toolUse',
+        conversationId: 'conv-1',
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         name: 'Read',

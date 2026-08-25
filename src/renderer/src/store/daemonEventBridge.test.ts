@@ -131,6 +131,7 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(
       translateDaemonEvent({
         type: 'toolUse',
+        conversationId: 'conv-1',
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         name: 'Read',

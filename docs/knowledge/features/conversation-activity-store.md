@@ -8,9 +8,10 @@ Introduced in [#747](../codebase/747.md), split from #674 alongside #748 (the br
 and #749 (the clears). #747 shipped the holder alone — no writer, no reader — the same "populated and
 unread" posture the [background-task roster store](background-task-roster-store.md) shipped for #573
 before its first reader (#568) landed. [#748](../codebase/748.md) then shipped the first writer: a
-second, independent daemon-event subscriber, `conversationActivityBridge.ts`. The store is now
-populated for every conversation the daemon has reported activity for since app start; it is still read
-by nobody — the still-unbuilt sidebar (#676) is the first reader.
+second, independent daemon-event subscriber, `conversationActivityBridge.ts`. [#749](../codebase/749.md)
+closed the store out — `dropConversation` on a `conversationDeleted` arm and `clearAllActivity` on the
+`connected` edge — so the map is now bounded across both a single deletion and a pairing change. It is
+still read by nobody — the still-unbuilt sidebar (#676) is the first reader.
 
 ## What it does
 
@@ -52,6 +53,13 @@ here rather than re-derived.
   a hook-bound accessor. Returns `entries.get(id) ?? null`. `null` is a stable reference, so no
   `EMPTY_*` constant is hoisted and no object is built per call. There is no whole-map selector; nothing
   in this store or its two sibling tickets reads the map wholesale.
+- **Eviction path** ([#749](../codebase/749.md)): two members beside the four setters.
+  `dropConversation(conversationId)` removes exactly one key — guards on `entries.has`, returning the
+  state object itself (waking no subscriber) when the key is absent, otherwise cloning the outer map and
+  deleting on the clone so every surviving entry stays `Object.is`-identical to what was held before.
+  `clearAllActivity()` drops every key, shaped after `backgroundTaskRosterStore.ts`'s `resetRosters`
+  (`size === 0` guard, else a fresh empty `Map` — never the module-shared `initialConversationActivityState`
+  constant, which would alias every cleared instance to one object).
 - **Hostile keys:** `ReadonlyMap` is mandated over `Record<string, …>` specifically so `'__proto__'`,
   `'constructor'` and `''` are ordinary keys by construction rather than by validation —
   `Map.prototype.get`/`.set` never touch the prototype chain. The write path uses no computed object
@@ -89,8 +97,18 @@ here rather than re-derived.
   (`events.ts:109-110`, `:459-466`, `:467-472`), so there's no id to key a write on. Bounded (every turn
   ends with a `turnState`), not latched, but coarser than the open conversation. Closing it needs the
   transport widening in #675, out of scope for #748.
-- #749 still owns the two clears (per-conversation on delete, all-conversations on pairing end) — there
-  is no reset setter yet, and nothing here is registered in `clearPairingScopedState`.
+- **Eviction wiring** ([#749](../codebase/749.md)): two early-return branches in
+  `subscribeConversationActivity`, ahead of the translator switch — `conversationDeleted` →
+  `dropConversation(event.id)` (no truthiness guard; `''` is a real id) and `connected` →
+  `clearAllActivity()`. Deliberately **not** registered in `clearPairingScopedState`: on that file's own
+  discriminator ("does a reconnect to the SAME daemon need to clear it?") the answer is yes, since a
+  turn running when the socket dropped may have finished while it was down — so the `connected` edge is
+  the enforcement instead, matching the `backgroundTaskRosterBridge.ts` precedent. Because the bridge is
+  mounted App-level (outside `PairedShell`) and every pairing change re-handshakes, one listener covers
+  both the unpair route flip and the pair-another-server transition that never unmounts the shell. The
+  delete seam is a third, independent listener on the `conversationDeleted` arm — deliberately not
+  folded into `PairedShell.tsx`'s existing `useConversationDeletedExit`, whose callback gates on the id
+  matching the *open* conversation, where eviction must be ungated.
 
 ## Edge cases and limitations
 
@@ -101,10 +119,11 @@ here rather than re-derived.
 - **No fifth fact for `localSendPending`.** That scalar is renderer-sourced, opened only by the open
   conversation's own composer send with no daemon involvement — it has no natural per-conversation
   reading and isn't held here.
-- **Unbounded until #749 lands.** Growth is bounded by the number of distinct conversation ids the
-  daemon has named since app start, and since [#748](../codebase/748.md) that count is now non-zero in
-  practice. The eviction paths (delete-scoped and pairing-scoped clears) are #749's job, not this
-  store's.
+- **Bounded across a delete and a pairing change, not within one.** [#749](../codebase/749.md) closed
+  the two eviction paths named above, so growth no longer survives a conversation delete or a pairing
+  change. The residue *between* handshakes — a long-lived pairing that names many conversations without
+  deleting any — is still uncapped by design; #676, the first reader, is the natural place to add a real
+  ceiling if one is ever wanted.
 - **Log-free by construction.** No `console.*` on any path — the only value a diagnostic could carry is
   the untrusted `conversationId`, and the content-free diagnostics rule (#126) keeps it out. A read miss
   is silent by design, not a swallowed error.
@@ -122,3 +141,6 @@ here rather than re-derived.
 - [#747 codebase notes](../codebase/747.md) — the holder's implementation summary and lessons learned.
 - [#748 codebase notes](../codebase/748.md) — the writer's implementation summary, the
   `store/` → `screens/` import argument, and lessons learned.
+- [#749 codebase notes](../codebase/749.md) — the eviction paths' implementation summary, the
+  positional-effects-list hazard that motivated the `ConversationActivityDeps` object, and lessons
+  learned.

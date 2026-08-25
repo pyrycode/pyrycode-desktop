@@ -27,7 +27,12 @@ const created: ConversationCreatedPayload = {
 
 // Distinctive daemon-supplied values on the two owned arms: the assertions below prove NONE of these
 // reach the sent payload (AC4 — only the closed `kind` literal, never daemon text).
-const turnEnd: DaemonEvent = { type: 'turnEnd', turnId: 'turn-XYZ', stopReason: 'end_turn-XYZ' }
+const turnEnd: DaemonEvent = {
+  type: 'turnEnd',
+  turnId: 'turn-XYZ',
+  stopReason: 'end_turn-XYZ',
+  conversationId: 'conv-XYZ'
+}
 const modalShown: DaemonEvent = {
   type: 'modalShown',
   modalId: 'modal-XYZ',
@@ -107,7 +112,7 @@ describe('subscribePushNotify', () => {
     bridge.emit(turnEnd)
     expect(sendCommand).toHaveBeenCalledTimes(1)
     expect(sendCommand).toHaveBeenCalledWith({ type: 'notify', payload: { kind: 'turn-complete' } })
-    // AC4: neither turnId nor stopReason may ride into the payload.
+    // AC4: none of turnId / stopReason / conversationId may ride into the payload.
     expect(JSON.stringify(sendCommand.mock.calls[0][0])).not.toContain('XYZ')
   })
 

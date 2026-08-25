@@ -47,7 +47,7 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
       { type: 'assistantDelta', turnId: 't1', seq: 1, text: 'reading now.', conversationId: 'conv-1' },
       { type: 'toolUse', turnId: 't1', toolUseId: 'tu-1', name: 'read_file', inputSummary: 'schema.ts' },
       { type: 'toolResult', turnId: 't1', toolUseId: 'tu-1', isError: false, resultSummary: '184 lines' },
-      { type: 'turnEnd', turnId: 't1', stopReason: 'end_turn' }
+      { type: 'turnEnd', turnId: 't1', stopReason: 'end_turn', conversationId: 'conv-1' }
     ]
     for (const event of stream) bridge.emit(event)
 

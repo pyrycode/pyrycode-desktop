@@ -47,8 +47,13 @@ describe('translateTimelineEvent — the two owned arms', () => {
     expect(translated).not.toBe(event)
   })
 
-  it('turnEnd → a ThreadEvent turnEnd with the same fields, a fresh object', () => {
-    const event: DaemonEvent = { type: 'turnEnd', turnId: 'A', stopReason: 'max_tokens' }
+  it('turnEnd → a ThreadEvent turnEnd keeping turnId/stopReason, the id stopping here', () => {
+    const event: DaemonEvent = {
+      type: 'turnEnd',
+      turnId: 'A',
+      stopReason: 'max_tokens',
+      conversationId: 'conv-1'
+    }
     const translated = translateTimelineEvent(event)
     expect(translated).toEqual({ type: 'turnEnd', turnId: 'A', stopReason: 'max_tokens' })
     expect(translated).not.toBe(event)

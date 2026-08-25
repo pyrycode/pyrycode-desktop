@@ -1378,15 +1378,19 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     ])
   })
 
-  it('decodes an inbound turn_end into one turnEnd carrying turnId/stopReason (camelCase)', async () => {
+  it('decodes an inbound turn_end into one camelCase turnEnd, conversation id and all', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
     drivers[0].emit({ type: 'message', plaintext: turnEndPlaintext(TURN_END) })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'turnEnd', turnId: 'turn-1', stopReason: 'end_turn' }])
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    expect(events).toEqual([
+      { type: 'turnEnd', turnId: 'turn-1', stopReason: 'end_turn', conversationId: 'conv-1' }
+    ])
+    // The frame's conversation_id rides the arm as the routing key (#752): it must reach the renderer
+    // verbatim, never dropped and never defaulted to a placeholder.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('drops a malformed assistant_delta without emitting or throwing (fail-closed)', async () => {
@@ -1418,6 +1422,30 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     ).not.toThrow()
     // Nothing crosses at all — never under a placeholder id and never under an empty one. The decode
     // requires the field, and the emit reads it bare so it cannot paper over the absence with `?? ''`.
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('drops a turn_end whose conversation_id is missing or non-string (fail-closed)', async () => {
+    // A GUARD, not a fix: parseTurnEndPayload already requires `conversation_id`, so this holds on the
+    // tree before #752 too. What it pins is the BARE read at the emit — a later `?? ''` there would turn
+    // this fail-closed drop into a silent misattribution, and nothing else in the suite would notice.
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    // Absent: the envelope encoding is JSON.stringify, which drops an undefined property, so this IS
+    // the missing case rather than a present-but-undefined one.
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: turnEndPlaintext({ ...TURN_END, conversation_id: undefined })
+      })
+    ).not.toThrow()
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: turnEndPlaintext({ ...TURN_END, conversation_id: 42 })
+      })
+    ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 

@@ -114,7 +114,12 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
 
   it('turnEnd → null (consumed by the renderer timeline bridge #202, not the session store)', () => {
     expect(
-      translateDaemonEvent({ type: 'turnEnd', turnId: 'turn-1', stopReason: 'end_turn' })
+      translateDaemonEvent({
+        type: 'turnEnd',
+        turnId: 'turn-1',
+        stopReason: 'end_turn',
+        conversationId: 'conv-1'
+      })
     ).toBeNull()
   })
 

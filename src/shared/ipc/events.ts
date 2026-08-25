@@ -419,11 +419,26 @@ export type DaemonEvent =
   // break that, and neither appears in the consumer.
   //
   // `messageType` is deliberately allowed to be the empty string — the `undecodable` site means nothing
-  // decoded, so no type was ever read. `conversation_id` is dropped at the emit (single active
-  // conversation). Ships dormant: all three exhaustive bridges no-op it until
-  // the render slice — the compacting-was-a-no-op-until-#496 precedent.
+  // decoded, so no type was ever read.
+  //
+  // It carries `conversationId` (#784) — the frame's `conversation_id`, copied BY NAME at the emit from
+  // an already-validated payload, never by spreading the decoded payload. The decode already required it
+  // and this ticket did not touch that: a missing or non-string `conversation_id` fails the whole line
+  // without emitting. REQUIRED, never optional: an optional routing key invites the `?? activeConversation`
+  // fallback #675 exists to remove. A parser-gap row that cannot be attributed lands in the wrong thread —
+  // and once the screen reads its own conversation's slice (#758), in no thread at all, which would make
+  // an otherwise-silent gap in the daemon's stream mapping silent again.
+  //
+  // The id is a daemon-asserted ROUTING KEY, not rendered text — none of the untrusted-text warnings that
+  // attach to `raw` and `messageType` above attach to it. It is never markup, a filename, a cache key, a
+  // lookup path, an attribute or a URL, and it reaches no log sink (emitDaemonEvent is log-free by
+  // construction, and the decoder's own messages name the failure CATEGORY only, never this id). It STOPS
+  // at the renderer timeline bridge (#202), which rebuilds a fresh ThreadEvent from named fields and omits
+  // it; ThreadEvent does not carry it, and the consumer that routes by it is the keyed holder (#755/#756).
+  // Not dormant: that bridge owns the arm and reduceTimeline tail-appends a real row for it.
   | {
       type: 'unrecognizedMessage'
+      conversationId: string
       site: WireUnrecognizedSite
       messageType: string
       raw: string

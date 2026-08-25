@@ -122,12 +122,14 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // reduceTimeline's job, not the bridge's — the translator normalizes nothing.
       return { type: 'compacting', active: event.active }
     case 'unrecognizedMessage':
-      // The parser-gap diagnostic. The DaemonEvent and the ThreadEvent are field-for-field identical,
-      // so this is a filter + fresh literal (arm selection), never a pass-through of the DaemonEvent
-      // object — the `compacting` discipline. No normalization: deciding what an unrecognized message
-      // means is reduceTimeline's job, and deciding how it looks is the row's, so the translator stays
-      // a pure rename. `site` assigns with no cast because UnrecognizedSite and WireUnrecognizedSite
-      // are the same literal union by construction.
+      // The parser-gap diagnostic. The DaemonEvent carries `conversationId` (#784) beside the four
+      // render fields; the ThreadEvent this returns does not, so the id STOPS here — a filter + fresh
+      // literal (arm selection), never a pass-through of the DaemonEvent object. The four render fields
+      // ARE field-for-field identical, and that is precisely why the drop has to stay explicit: this is
+      // the arm a "simplify it to a pass-through" edit looks safest on, and that edit would carry the id
+      // into the reducer silently. No normalization either: deciding what an unrecognized message means
+      // is reduceTimeline's job, and deciding how it looks is the row's. `site` assigns with no cast
+      // because UnrecognizedSite and WireUnrecognizedSite are the same literal union by construction.
       return {
         type: 'unrecognizedMessage',
         site: event.site,
@@ -269,21 +271,20 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
     case 'stallDetected':
     case 'apiRetry':
     case 'compacting':
-      // Eight of the eleven owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
-      // #766 / #732 / #737 / #742, the #675 family). It is REQUIRED on every one of them — a missing or
-      // non-string `conversation_id` fails the whole line at the decode without emitting — so the
-      // routing key is non-nullable here by construction. TypeScript narrows across grouped cases, so
-      // the field resolves with no cast and no probe.
+    case 'unrecognizedMessage':
+      // Nine of the eleven owned arms carry the frame's `conversation_id` (#751 / #752 / #724 / #763 /
+      // #766 / #732 / #737 / #742 / #784, the #675 family). It is REQUIRED on every one of them — a
+      // missing or non-string `conversation_id` fails the whole line at the decode without emitting — so
+      // the routing key is non-nullable here by construction. TypeScript narrows across grouped cases,
+      // so the field resolves with no cast and no probe.
       return event.conversationId
     case 'sessionTransition':
-    case 'unrecognizedMessage':
     case 'connected':
-      // The other three owned arms carry no routing key, each for its own reason: `sessionTransition`
-      // carries `newSessionId` (the #259 holder's addressing key) and no conversation id;
-      // `unrecognizedMessage` has its `conversation_id` dropped at the emit; and a connection edge has
-      // no conversation by nature. They are NOT dormant — each still reaches the flat store, which is
-      // what AC4 keeps true — but there is nothing to attribute them to, and inventing one is exactly
-      // what AC3 bans.
+      // The other two owned arms carry no routing key, each for its own reason: `sessionTransition`
+      // carries `newSessionId` (the #259 holder's addressing key) and its wire payload has no
+      // conversation id to widen; and a connection edge has no conversation by nature. They are NOT
+      // dormant — each still reaches the flat store, which is what AC4 keeps true — but there is nothing
+      // to attribute them to, and inventing one is exactly what AC3 bans.
       return null
     default:
       return null

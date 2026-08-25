@@ -387,6 +387,7 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(
       translateDaemonEvent({
         type: 'unrecognizedMessage',
+        conversationId: 'conv-1',
         site: 'line_type',
         messageType: 'some_future_event',
         raw: '{"type":"some_future_event"}',

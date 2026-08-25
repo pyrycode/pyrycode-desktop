@@ -258,6 +258,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
   it('unrecognizedMessage → a ThreadEvent carrying all four fields, a fresh object', () => {
     const event: DaemonEvent = {
       type: 'unrecognizedMessage',
+      conversationId: 'conv-1',
       site: 'line_type',
       messageType: 'some_future_event',
       raw: '{"type":"some_future_event"}',
@@ -278,6 +279,7 @@ describe('translateTimelineEvent — the two owned arms', () => {
   it('unrecognizedMessage translates an empty messageType and a truncated payload verbatim', () => {
     const event: DaemonEvent = {
       type: 'unrecognizedMessage',
+      conversationId: 'conv-1',
       site: 'undecodable',
       messageType: '',
       raw: '{"type":"assist',
@@ -481,17 +483,28 @@ describe('timelineTargetFor', () => {
       'conv-retry',
       { type: 'apiRetry', active: true, current: 3, total: 10, conversationId: 'conv-retry' }
     ],
-    ['conv-compacting', { type: 'compacting', active: true, conversationId: 'conv-compacting' }]
+    ['conv-compacting', { type: 'compacting', active: true, conversationId: 'conv-compacting' }],
+    [
+      'conv-unrecognized',
+      {
+        type: 'unrecognizedMessage',
+        conversationId: 'conv-unrecognized',
+        site: 'line_type',
+        messageType: 'some_future_event',
+        raw: '{"type":"some_future_event"}',
+        truncated: false
+      }
+    ]
   ]
 
-  it('returns each id-carrying owned arm its OWN conversation id (all eight)', () => {
-    expect(idCarrying).toHaveLength(8)
+  it('returns each id-carrying owned arm its OWN conversation id (all nine)', () => {
+    expect(idCarrying).toHaveLength(9)
     for (const [expected, event] of idCarrying) {
       expect(timelineTargetFor(event)).toBe(expected)
     }
   })
 
-  // The three owned arms that carry no routing key. They are NOT dormant — each still reaches the
+  // The two owned arms that carry no routing key. They are NOT dormant — each still reaches the
   // flat store — but there is nothing to attribute them to, and inventing one is what AC3 bans.
   it('returns null for sessionTransition — it carries newSessionId, not a conversation id', () => {
     const event: DaemonEvent = {
@@ -500,17 +513,6 @@ describe('timelineTargetFor', () => {
       reason: 'workspace_change',
       occurredAt: '2026-07-10T00:00:00.000000000Z',
       workspaceCwd: '/home/user/next'
-    }
-    expect(timelineTargetFor(event)).toBeNull()
-  })
-
-  it('returns null for unrecognizedMessage — conversation_id is dropped at the emit', () => {
-    const event: DaemonEvent = {
-      type: 'unrecognizedMessage',
-      site: 'line_type',
-      messageType: 'some_future_event',
-      raw: '{"type":"some_future_event"}',
-      truncated: false
     }
     expect(timelineTargetFor(event)).toBeNull()
   })
@@ -1023,7 +1025,7 @@ describe('subscribeTimeline', () => {
       expect(sliceOf(keyed, 'conv-open')).toBe(openBefore)
     })
 
-    it('AC3/AC4: the three id-less owned arms reach the flat store and create NO slice', () => {
+    it('AC3/AC4: the two id-less owned arms reach the flat store and create NO slice', () => {
       const { bridge, flat, keyed } = wired()
 
       const idLess: DaemonEvent[] = [
@@ -1034,23 +1036,13 @@ describe('subscribeTimeline', () => {
           occurredAt: '2026-07-10T00:00:00.000000000Z',
           workspaceCwd: '/home/user/next'
         },
-        {
-          type: 'unrecognizedMessage',
-          site: 'line_type',
-          messageType: 'some_future_event',
-          raw: '{"type":"some_future_event"}',
-          truncated: false
-        },
         { type: 'connected', ack }
       ]
       for (const event of idLess) bridge.emit(event)
 
-      // AC4: exactly the flat rows these arms produce today — sessionBoundary and unrecognizedMessage
-      // tail-append; `connected` → `reconnected` reconciles chrome and adds no row.
-      expect(selectItems(flat.getState()).map((i) => i.kind)).toEqual([
-        'sessionBoundary',
-        'unrecognizedMessage'
-      ])
+      // AC4: exactly the flat rows these arms produce today — sessionBoundary tail-appends;
+      // `connected` → `reconnected` reconciles chrome and adds no row.
+      expect(selectItems(flat.getState()).map((i) => i.kind)).toEqual(['sessionBoundary'])
       // AC3: nothing was attributed, so no slice was invented for the open conversation or any other.
       expect(keyed.getState().timelines.size).toBe(0)
     })
@@ -1069,17 +1061,56 @@ describe('subscribeTimeline', () => {
       expect(before).not.toBeNull()
 
       // Asserting no-fallback against an EMPTY map would pass for the wrong reason: a `?? active`
-      // fallback only misfiles when there is somewhere to misfile into.
+      // fallback only misfiles when there is somewhere to misfile into. The probe is
+      // `sessionTransition` (#784 moved `unrecognizedMessage` out of the id-less group): it
+      // tail-appends a real row, so a fallback would be visible in the held slice's items, not
+      // merely in a fresh reference.
+      bridge.emit({
+        type: 'sessionTransition',
+        newSessionId: 'sess-2',
+        reason: 'workspace_change',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: '/home/user/next'
+      })
+
+      expect(sliceOf(keyed, 'conv-open')).toBe(before)
+      expect(keyed.getState().timelines.size).toBe(1)
+    })
+
+    // #784: the parser-gap diagnostic is now an id-carrying arm, so it files into its own thread.
+    // AC3's end-to-end half — the table above covers `timelineTargetFor` in isolation, this covers
+    // the whole seam: emit → translate → attribute → both stores.
+    it('AC3/AC4: unrecognizedMessage lands in its OWN slice, no other, and still reaches flat', () => {
+      const { bridge, flat, keyed } = wired()
+
       bridge.emit({
         type: 'unrecognizedMessage',
+        conversationId: 'conv-a',
+        site: 'line_type',
+        messageType: 'some_future_event',
+        raw: '{"type":"some_future_event"}',
+        truncated: false
+      })
+      const aBefore = sliceOf(keyed, 'conv-a')
+      expect(aBefore?.items.map((i) => i.kind)).toEqual(['unrecognizedMessage'])
+
+      bridge.emit({
+        type: 'unrecognizedMessage',
+        conversationId: 'conv-b',
         site: 'undecodable',
         messageType: '',
         raw: '{"type":"assist',
         truncated: true
       })
 
-      expect(sliceOf(keyed, 'conv-open')).toBe(before)
-      expect(keyed.getState().timelines.size).toBe(1)
+      expect(sliceOf(keyed, 'conv-b')?.items.map((i) => i.kind)).toEqual(['unrecognizedMessage'])
+      // conv-a is untouched BY REFERENCE — not merely equal.
+      expect(sliceOf(keyed, 'conv-a')).toBe(aBefore)
+      // AC4: the flat store still receives the arm exactly as it does today — both rows.
+      expect(selectItems(flat.getState()).map((i) => i.kind)).toEqual([
+        'unrecognizedMessage',
+        'unrecognizedMessage'
+      ])
     })
   })
 })

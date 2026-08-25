@@ -824,18 +824,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'unrecognized-message':
-            // The parser-gap diagnostic data path. Emit a fresh literal carrying the four display
-            // fields, copied BY NAME from the already-decoded, already-validated payload — never a
-            // spread of inbound.unrecognized, so a decoder that later grows a field cannot smuggle it
-            // across IPC. That discipline earns its keep here more than anywhere: this is the arm whose
-            // payload is unbounded daemon-relayed JSON, so the field list must be the one an operator
-            // agreed to render, not whatever arrived. `conversation_id` is DROPPED (never referenced —
-            // single active conversation). Deliberately stateless: no dedup
-            // and no coalescing, because a repeat is a REAL repeat and how often this fires is the
-            // number that tells you to go fix something. Not compile-forced (this inner switch has no
-            // assertNever) — the round-trip test guards this emit.
+            // The parser-gap diagnostic data path (widened by #784). Emit a fresh literal carrying the
+            // four display fields plus `conversationId`, copied BY NAME from the already-decoded,
+            // already-validated payload — never a spread of inbound.unrecognized, so a decoder that
+            // later grows a field cannot smuggle it across IPC. That discipline earns its keep here more
+            // than anywhere: this is the arm whose payload is unbounded daemon-relayed JSON, so the
+            // field list must be the one an operator agreed to render, not whatever arrived. The id is
+            // read BARE because the decode already guarantees it: parseUnrecognizedMessagePayload
+            // requires `conversation_id`, so a missing or non-string one drops the whole line upstream
+            // of this emit, and reaching for `?? ''` here would turn that fail-closed drop into a silent
+            // misattribution — a parser-gap row filed against the wrong thread, on the one arm whose
+            // whole purpose is making a silent gap visible. It is a daemon-asserted routing key, not
+            // rendered text, and it reaches no sink on this leg. The timeline bridge (#202) rebuilds a
+            // fresh ThreadEvent that omits it, so the id stops there and instead routes the row into its
+            // own conversation's slice (#756). Deliberately stateless: no dedup and no coalescing — and
+            // none keyed by the new id either — because a repeat is a REAL repeat and how often this
+            // fires is the number that tells you to go fix something. Not compile-forced (this inner
+            // switch has no assertNever) — the round-trip test guards this emit.
             emitDaemonEvent(sink, {
               type: 'unrecognizedMessage',
+              conversationId: inbound.unrecognized.conversation_id,
               site: inbound.unrecognized.site,
               messageType: inbound.unrecognized.message_type,
               raw: inbound.unrecognized.raw,

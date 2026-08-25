@@ -681,26 +681,31 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'model-announced':
-            // The announced-model data path (#587). Emit a fresh literal carrying the identifier and
-            // the daemon's cut report, copied BY NAME from the already-decoded, already-validated
+            // The announced-model data path (#587, #714). Emit a fresh literal carrying the identifier, the
+            // cut report and the routing key, copied BY NAME from the already-decoded, already-validated
             // payload — never a spread of inbound.modelAnnounced (the assistant-delta idiom), so a
             // decoder that later grows a field cannot smuggle it across IPC. `model` crosses VERBATIM:
             // no normalising, no lowercasing, no allow-list, no family regex — an identifier claude
             // announces need not be dated or published, so anything narrower here would drop a valid
             // value. `truncated` crosses WITH it: dropping it would make #588 silently wrong, since a
             // cut identifier always misses an exact lookup and would render as a legitimate unknown
-            // model. `conversation_id` is DROPPED (never referenced — single active conversation;
-            // #588 holds a single value replaced per announcement), so exactly
-            // one untrusted string crosses IPC on this arm rather than two. Deliberately stateless: no
-            // dedup, no coalescing, no timer, no last-value memo — the same identifier repeats turn
-            // after turn and suppressing a repeat would invent wire semantics the daemon does not have,
-            // starving #588 of the re-announcement that says the value is still current. Not
-            // compile-forced (this inner switch has no assertNever) — the round-trip test guards this
-            // emit.
+            // model. `conversation_id` crosses WITH them as `conversationId` (#714): a daemon-asserted
+            // routing key, not rendered text, and it reaches no sink on this leg. The argument here used
+            // to be ARITHMETIC — that dropping it left exactly one untrusted string crossing rather than
+            // two — and it is REPLACED, not renumbered: the id is not untrusted text of `model`'s kind,
+            // and `model` keeps its warnings in full. It stops at the announced-model bridge (#588), which
+            // rebuilds a fresh two-field literal from named fields; the consumers that route by conversation
+            // are #588 / #674, where an unknown id must be an explicit no-match, never a fallback onto the
+            // open conversation. Deliberately stateless: no dedup, no coalescing, no timer, no last-value
+            // memo — and none keyed by the new id either — the same identifier repeats turn after turn and
+            // suppressing a repeat would invent wire semantics the daemon does not have, starving #588 of
+            // the re-announcement that says the value is still current. Not compile-forced (this inner
+            // switch has no assertNever) — the round-trip test guards this emit.
             emitDaemonEvent(sink, {
               type: 'modelAnnounced',
               model: inbound.modelAnnounced.model,
-              truncated: inbound.modelAnnounced.truncated
+              truncated: inbound.modelAnnounced.truncated,
+              conversationId: inbound.modelAnnounced.conversation_id
             })
             return
           case 'background-task-started':

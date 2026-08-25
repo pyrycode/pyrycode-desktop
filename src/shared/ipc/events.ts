@@ -228,13 +228,33 @@ export type DaemonEvent =
   // cache key, a filename, or a lookup path. This slice has no DOM sink; the constraint is inherited
   // here for #588.
   //
-  // `conversation_id` is dropped at the emit (single active conversation): #588 holds a SINGLE value
-  // replaced on each announcement, so nothing downstream keys by conversation — the condition under
-  // which backgroundTaskStarted keeps it.
+  // Carries `conversationId` alongside `model` and `truncated` (#714) — the frame's `conversation_id`,
+  // copied BY NAME at the emit from an already-validated payload (the decode stays fail-closed: a missing
+  // or non-string id fails the whole line, and parseModelAnnouncedPayload is untouched). It crosses by the
+  // RULE, not by comparison with a neighbour: this frame carries no `turn_id` and opens and closes no
+  // turn, so it is daemon STATE rather than a turn-stream item — the same test backgroundTaskStarted and
+  // queueState keep it under (#720). Per-conversation attribution is what #588 / #674 need in order to say
+  // WHICH chat announced WHICH model. REQUIRED, never optional: an optional routing key invites
+  // `?? activeConversation` fallbacks, which is the misattribution this work exists to remove.
+  //
+  // This arm's safety argument used to be ARITHMETIC — that dropping the id left exactly one untrusted
+  // string crossing here rather than two. That argument is REPLACED, not renumbered: counting the strings
+  // was never what made them safe, and re-counting to two would assert that `conversationId` is untrusted
+  // text of the same kind as `model`, which it is not. It now rests on the NATURE of each string, and the
+  // two are NOT of one kind. `model` keeps every warning above IN FULL. The id is a daemon-asserted
+  // ROUTING KEY, not rendered text and not model-influenced — it is never markup, a filename, a cache key,
+  // a lookup path, an attribute or a URL, and it reaches no log sink (emitDaemonEvent is log-free by
+  // construction, and the decode-side model_announced log is pinned content-free independently). It STOPS
+  // at the announced-model bridge (#588), which rebuilds a fresh two-field literal from named fields;
+  // AnnouncedModel keeps `model` + `truncated`, and the consumers that route by conversation are
+  // #588 / #674 — where an unknown id must be an explicit no-match, never a fallback onto the open
+  // conversation. No token, key, or raw frame.
+  //
   // NOT deduped: the transport holds no state, so a consumer sees exactly one event per daemon frame,
-  // including a verbatim repeat — which is what tells #588 the value is still current. Ships dormant:
-  // all three exhaustive bridges no-op it until #588 — the compacting-was-a-no-op-until-#496 precedent.
-  | { type: 'modelAnnounced'; model: string; truncated: boolean }
+  // including a verbatim repeat — which is what tells #588 the value is still current, and the added field
+  // brings no dedup, coalescing, timer or per-id memo with it. Ships dormant: all three exhaustive bridges
+  // no-op it until #588 — the compacting-was-a-no-op-until-#496 precedent.
+  | { type: 'modelAnnounced'; model: string; truncated: boolean; conversationId: string }
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //

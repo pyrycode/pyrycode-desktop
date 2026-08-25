@@ -364,7 +364,12 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       // the announced model ships dormant (#587); its consumer is the #588 announced-model store, not
       // the timeline store. Daemon STATE, not a turn-stream item: the frame carries no turn_id and
       // opens and closes no turn — an identity report ABOUT a turn is not an item IN one.
-      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false },
+      {
+        type: 'modelAnnounced',
+        model: 'claude-haiku-4-5-20251001',
+        truncated: false,
+        conversationId: 'conv-1'
+      },
       // background-task open ships dormant (#564); its consumer is the #567 background-task store, not
       // the timeline store. Daemon STATE, not a turn-stream item — the wire says so outright: no
       // turn_id, opens and closes no turn, "its own thread of activity, not part of the turn".
@@ -649,7 +654,8 @@ describe('subscribeTimeline', () => {
     bridge.emit({
       type: 'modelAnnounced',
       model: 'claude-haiku-4-5-20251001',
-      truncated: false
+      truncated: false,
+      conversationId: 'conv-1'
     })
 
     // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same

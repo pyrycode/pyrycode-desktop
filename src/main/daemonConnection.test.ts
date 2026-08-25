@@ -1746,19 +1746,27 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
     return ctx
   }
 
-  it('decodes a model_announced into exactly one modelAnnounced event (conversation_id dropped)', async () => {
+  it('decodes a model_announced into exactly one modelAnnounced event (conversation_id carried)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
     drivers[0].emit({ type: 'message', plaintext: modelAnnouncedPlaintext(ANNOUNCED) })
 
     const events = emitted(sink).slice(before)
-    // A strict toEqual on the whole event: `conversation_id` did not ride along, asserted POSITIVELY
-    // (the arm has exactly `type` / `model` / `truncated`), not by absence of a substring.
+    // A strict toEqual on the whole event, asserted POSITIVELY rather than by absence of a substring:
+    // the arm has exactly `type` / `model` / `truncated` / `conversationId`.
     expect(events).toEqual([
-      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false }
+      {
+        type: 'modelAnnounced',
+        model: 'claude-haiku-4-5-20251001',
+        truncated: false,
+        conversationId: 'conv-1'
+      }
     ])
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    // The frame's conversation_id reaches the emitted event VERBATIM (#714) — the routing key #674
+    // keys by. The inverse of this assertion held while the arm dropped it; it is inverted, not
+    // deleted, so the leak guard keeps watching the same string.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('carries the identifier to the sink BYTE-FOR-BYTE — no re-casing introduced at the emit', async () => {
@@ -1771,7 +1779,12 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'modelAnnounced', model: 'Claude-Opus-5_TEST.20260819', truncated: false }
+      {
+        type: 'modelAnnounced',
+        model: 'Claude-Opus-5_TEST.20260819',
+        truncated: false,
+        conversationId: 'conv-1'
+      }
     ])
   })
 
@@ -1785,7 +1798,12 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: true }
+      {
+        type: 'modelAnnounced',
+        model: 'claude-haiku-4-5-20251001',
+        truncated: true,
+        conversationId: 'conv-1'
+      }
     ])
   })
 
@@ -1801,12 +1819,22 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
     // dedup" contract against a future optimiser adding state to this leg: a re-announcement is what
     // tells a consumer the value is still current.
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false },
-      { type: 'modelAnnounced', model: 'claude-haiku-4-5-20251001', truncated: false }
+      {
+        type: 'modelAnnounced',
+        model: 'claude-haiku-4-5-20251001',
+        truncated: false,
+        conversationId: 'conv-1'
+      },
+      {
+        type: 'modelAnnounced',
+        model: 'claude-haiku-4-5-20251001',
+        truncated: false,
+        conversationId: 'conv-1'
+      }
     ])
   })
 
-  it('emits exactly the three modeled properties, never a spread of the decoded payload', async () => {
+  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -1816,7 +1844,7 @@ describe('createDaemonConnection — model_announced stream (#587)', () => {
     })
 
     const events = emitted(sink).slice(before)
-    expect(Object.keys(events[0]).sort()).toEqual(['model', 'truncated', 'type'])
+    expect(Object.keys(events[0]).sort()).toEqual(['conversationId', 'model', 'truncated', 'type'])
     expect(JSON.stringify(events)).not.toContain('must-not-cross')
   })
 

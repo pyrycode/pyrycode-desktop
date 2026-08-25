@@ -883,10 +883,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           }
           case 'tool-use':
-            // The tool-call data path (#217). snake→camel here; `conversation_id` is DROPPED (single
-            // active conversation; #202's bridge scopes identity). A fresh literal with the five named
-            // fields, never a spread of the decoded payload, so only the render fields cross IPC. The
-            // timeline bridge (#202), not the session store, folds this into a pending `toolCall` item.
+            // The tool-call data path (#217, widened by #763). snake→camel here, following the
+            // assistant-delta idiom above: a fresh literal with the six named fields carrying the render
+            // fields and `conversationId` — never a spread of the decoded payload, so a decoder that later
+            // grows a field cannot smuggle it across IPC. The id is read BARE because the decode already
+            // guarantees it: parseToolUsePayload requires `conversation_id`, so a missing or non-string one
+            // drops the whole line upstream of this emit, and reaching for `?? ''` here would turn that
+            // fail-closed drop into a silent misattribution. It is a daemon-asserted routing key, not
+            // rendered text, and it reaches no sink on this leg. The timeline bridge (#202), not the
+            // session store, folds this into a pending `toolCall` item —
+            // rebuilding a fresh ThreadEvent that omits the id, so it stops there until #756 routes by it.
             // `input` (#642) crosses BY REFERENCE to the already-narrowed fresh map (the `queued`
             // precedent below): parseToolUsePayload built it from own string values with the reserved
             // keys removed, so there is nothing left to drop and no second copy is warranted. Assigned
@@ -894,6 +900,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // structured clone and JSON.stringify both drop.
             emitDaemonEvent(sink, {
               type: 'toolUse',
+              conversationId: inbound.toolUse.conversation_id,
               turnId: inbound.toolUse.turn_id,
               toolUseId: inbound.toolUse.tool_use_id,
               name: inbound.toolUse.name,
@@ -917,7 +924,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           case 'queue-state':
             // The queued-backlog data path (#292). Emit a fresh literal carrying `conversationId` (snake→
-            // camel) plus the already-narrowed backlog by reference — unlike toolUse this KEEPS
+            // camel) plus the already-narrowed backlog by reference — unlike toolResult this KEEPS
             // conversation_id, because the snapshot is REPLACEMENT-truth and #293 keys its backlog by it. The
             // `queued` array passes through verbatim (parseQueuedItem already stripped each item to the three
             // known fields, nothing to drop, no snake→camel on the row) — the `conversations` precedent. A

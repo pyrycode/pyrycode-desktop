@@ -169,7 +169,14 @@ describe('subscribePushNotify', () => {
     bridge.emit({ type: 'messageReceived', message })
     bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     bridge.emit({ type: 'conversationCreated', conversation: created })
-    bridge.emit({ type: 'toolUse', turnId: 't', toolUseId: 'u', name: 'n', inputSummary: 's' })
+    bridge.emit({
+      type: 'toolUse',
+      conversationId: 'conv-1',
+      turnId: 't',
+      toolUseId: 'u',
+      name: 'n',
+      inputSummary: 's'
+    })
     bridge.emit({ type: 'notificationActivated' })
     expect(sendCommand).not.toHaveBeenCalled()
   })

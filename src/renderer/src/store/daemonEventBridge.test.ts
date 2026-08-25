@@ -102,7 +102,13 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
 
   it('assistantDelta → null (consumed by the renderer timeline bridge #202, not the session store)', () => {
     expect(
-      translateDaemonEvent({ type: 'assistantDelta', turnId: 'turn-1', seq: 0, text: 'slice' })
+      translateDaemonEvent({
+        type: 'assistantDelta',
+        turnId: 'turn-1',
+        seq: 0,
+        text: 'slice',
+        conversationId: 'conv-1'
+      })
     ).toBeNull()
   })
 

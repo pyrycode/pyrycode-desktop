@@ -104,9 +104,31 @@ export type DaemonEvent =
     }
   // The two v2 interactive-stream arms (#199). `text` IS the render payload (#203) and crosses IPC
   // deliberately — the boundary defended upstream is the fail-closed decode, not this internal
-  // channel. Consumed by the renderer timeline bridge (#202), not the session store. camelCase per
-  // AC3; carry only turnId / seq / text / stopReason — no token, key, or raw frame.
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
+  // channel. Consumed by the renderer timeline bridge (#202), not the session store. camelCase per AC3.
+  //
+  // assistantDelta carries `conversationId` (#751) — the frame's `conversation_id`, copied BY NAME at the
+  // emit from an already-validated payload, never by spreading the decoded payload. The decode already
+  // required it and this ticket did not touch that: a missing or non-string `conversation_id` fails the
+  // whole line without emitting. The "turn-stream item, or daemon state?" test that governs the status
+  // arms answers differently here and the id crosses anyway — a delta IS a turn-stream item, and it
+  // carries the id not to report per-conversation state but because a slice of assistant text has to be
+  // filed in the right thread, and a consumer cannot route what it cannot attribute (#675). REQUIRED,
+  // never optional: an optional routing key invites `?? activeConversation` fallbacks, which is the
+  // misattribution this work exists to remove.
+  //
+  // The id is a daemon-asserted ROUTING KEY, not rendered text — none of the untrusted-text warnings that
+  // attach to `text` on this same arm attach to it. It is never markup, a filename, a cache key, a lookup
+  // path, an attribute or a URL, and it reaches no log sink (emitDaemonEvent is log-free by construction,
+  // and the decode-side assistant_delta log is pinned content-free independently). It STOPS at the
+  // renderer timeline bridge (#202), which rebuilds a fresh ThreadEvent from named fields and omits it;
+  // ThreadEvent does not carry it, and the consumers that route by conversation are #756. No token, key,
+  // or raw frame.
+  //
+  // Stateless and un-coalesced: N frames produce N events in arrival order, `seq` rides along for wire
+  // fidelity but is not consulted, and merging slices into one bubble is the reducer's job. The added
+  // field brings no per-id buffer, dedup, last-seq memo or ordering check with it.
+  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; conversationId: string }
+  // turnEnd closes the turn and carries turnId / stopReason — no token, key, or raw frame.
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   // The coarse turn-lifecycle arm (#214, widened by #724). Carries `state` (a closed 3-value wire enum)
   // and `conversationId` — the frame's `conversation_id`, copied BY NAME at the emit from an

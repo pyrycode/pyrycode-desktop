@@ -1349,16 +1349,19 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     return ctx
   }
 
-  it('decodes an inbound assistant_delta into one assistantDelta carrying turnId/seq/text (camelCase)', async () => {
+  it('decodes an inbound assistant_delta into one camelCase assistantDelta, conversation id and all', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
     drivers[0].emit({ type: 'message', plaintext: assistantDeltaPlaintext(DELTA) })
 
     const events = emitted(sink).slice(before)
-    expect(events).toEqual([{ type: 'assistantDelta', turnId: 'turn-1', seq: 3, text: 'a reply slice' }])
-    // conversation_id is dropped at the choke point (single active conversation; #202 scopes it).
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    expect(events).toEqual([
+      { type: 'assistantDelta', turnId: 'turn-1', seq: 3, text: 'a reply slice', conversationId: 'conv-1' }
+    ])
+    // The frame's conversation_id rides the arm as the routing key (#751): it must reach the renderer
+    // verbatim, never dropped and never defaulted to a placeholder.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('carries seq:0 and empty text through as those values, not dropped/defaulted', async () => {
@@ -1371,7 +1374,7 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'assistantDelta', turnId: 'turn-1', seq: 0, text: '' }
+      { type: 'assistantDelta', turnId: 'turn-1', seq: 0, text: '', conversationId: 'conv-1' }
     ])
   })
 
@@ -1393,6 +1396,28 @@ describe('createDaemonConnection — structured stream (assistant_delta / turn_e
     expect(() =>
       drivers[0].emit({ type: 'message', plaintext: assistantDeltaPlaintext({ ...DELTA, seq: 'x' }) })
     ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('drops an assistant_delta whose conversation_id is missing or non-string (fail-closed)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    // Absent: the envelope encoding drops an undefined property, so this IS the missing case.
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: assistantDeltaPlaintext({ ...DELTA, conversation_id: undefined })
+      })
+    ).not.toThrow()
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: assistantDeltaPlaintext({ ...DELTA, conversation_id: 42 })
+      })
+    ).not.toThrow()
+    // Nothing crosses at all — never under a placeholder id and never under an empty one. The decode
+    // requires the field, and the emit reads it bare so it cannot paper over the absence with `?? ''`.
     expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 

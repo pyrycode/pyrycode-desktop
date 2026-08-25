@@ -43,8 +43,8 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
     // use + its correlated result, and the turn boundary.
     const stream: DaemonEvent[] = [
       { type: 'turnState', state: 'thinking', conversationId: 'conv-1' },
-      { type: 'assistantDelta', turnId: 't1', seq: 0, text: 'Sure, ' },
-      { type: 'assistantDelta', turnId: 't1', seq: 1, text: 'reading now.' },
+      { type: 'assistantDelta', turnId: 't1', seq: 0, text: 'Sure, ', conversationId: 'conv-1' },
+      { type: 'assistantDelta', turnId: 't1', seq: 1, text: 'reading now.', conversationId: 'conv-1' },
       { type: 'toolUse', turnId: 't1', toolUseId: 'tu-1', name: 'read_file', inputSummary: 'schema.ts' },
       { type: 'toolResult', turnId: 't1', toolUseId: 'tu-1', isError: false, resultSummary: '184 lines' },
       { type: 'turnEnd', turnId: 't1', stopReason: 'end_turn' }

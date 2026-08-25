@@ -199,9 +199,12 @@ ticket to pay that doubled cost: adding `turnState` forced a new case in both th
 then, so the touchpoint floor for any new arm is 3 bridges, not 2 (see [#229 codebase
 notes](../codebase/229.md) § Lessons learned).
 
-The `assistantDelta`/`turnEnd` arms are field-for-field identical between `DaemonEvent` and
-`ThreadEvent` (`turnId`/`seq`/`text`, `turnId`/`stopReason`), so mapping them is a **filter, not a
-rename** — arm selection plus a fresh copy, no field mapping. `turnState` is the same shape of
+The `turnEnd` arm is field-for-field identical between `DaemonEvent` and `ThreadEvent`
+(`turnId`/`stopReason`), so mapping it is a **filter, not a rename** — arm selection plus a fresh
+copy, no field mapping. `assistantDelta` was the same shape at ship time (`turnId`/`seq`/`text`)
+until [#751](../codebase/751.md) widened `DaemonEvent.assistantDelta` with `conversationId`, the
+same routing-key widening the four status arms below already had; the bridge case is now a filter
+(drops the id), and `ThreadEvent.assistantDelta` is the side that stays three-field. `turnState` is the same shape of
 filter-not-rename: `event.state` (`WireTurnState`) assigns to the `ThreadEvent` arm's `state`
 (`TurnPhase`) with no cast, because the two are the same literal union declared on either side of the
 shared/renderer boundary (see [#214](../codebase/214.md)). `toolUse` ([#217](../codebase/217.md)) and

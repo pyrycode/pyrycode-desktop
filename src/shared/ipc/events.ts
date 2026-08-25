@@ -289,7 +289,7 @@ export type DaemonEvent =
   // The background-task open arm (#564) — claude started work that OUTLIVES the turn that spawned it
   // (pyrycode#1240), the frame that separates that case from a genuine finish.
   //
-  // Carries `conversationId` — unlike toolResult, which still drops it until #754. The
+  // Carries `conversationId`, as every arm whose frame supplies it now does (#675 finished with #766). The
   // test is "turn-stream item, or daemon state?", not "does the frame have the field": this one carries
   // NO turn_id, opens and closes no turn, and the daemon doc says a client renders it "as its own thread
   // of activity, not as part of the turn it appeared in" — the same characterization queue_state got in
@@ -504,16 +504,31 @@ export type DaemonEvent =
       inputSummary: string
       input?: Readonly<Record<string, string>>
     }
-  // The tool-result arm (#229). Carries the four render fields (`conversation_id` dropped at the emit).
-  // Consumed by the renderer timeline bridge (#202), which folds it through `fillResult` to RESOLVE the
-  // correlated `toolCall`'s result in place — not the session store. `isError` is a boolean (`false` =
-  // success, a value); `resultSummary` is opaque daemon display text the render slice (#230) must render
-  // as plain text. No token, key, or raw frame.
-  | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
+  // The tool-result arm (#229, widened by #766). Carries the four render fields plus `conversationId` —
+  // the frame's `conversation_id`, copied BY NAME at the emit from an already-validated payload, never by
+  // spreading it. REQUIRED never optional (an optional routing key invites the `?? activeConversation`
+  // fallback #675 exists to remove), a daemon-asserted ROUTING KEY rather than rendered text on the terms
+  // the modelAnnounced arm above states in full, and fail-closed by a decode that needed no change: a
+  // missing or non-string id drops the whole line without emitting. A tool result that cannot be
+  // attributed resolves a tool call in the WRONG thread (#675). It STOPS at the renderer timeline bridge
+  // (#202), which rebuilds a fresh ThreadEvent from named fields and omits it; ThreadEvent does not carry
+  // it, and the consumers that route by conversation are #756.
+  // Consumed by that bridge, which folds it through `fillResult` to RESOLVE the correlated `toolCall`'s
+  // result in place — not the session store; that correlation stays on `toolUseId` alone. `isError` is a
+  // boolean (`false` = success, a value); `resultSummary` is opaque daemon display text the render slice
+  // (#230) must render as plain text. No token, key, or raw frame.
+  | {
+      type: 'toolResult'
+      conversationId: string
+      turnId: string
+      toolUseId: string
+      isError: boolean
+      resultSummary: string
+    }
   // The queued-backlog arm (#292). Reuses the wire QueuedItem row type verbatim (the
   // conversationsReceived precedent) — snake_case, order preserved from the wire (enqueue order). Carries
-  // `conversationId` (unlike toolResult, which still drops it) because the snapshot is REPLACEMENT-truth
-  // and the #293 store keys its backlog by it. Consumed by the #293 queue store, NOT the session / timeline
+  // `conversationId` (as every arm whose frame carries it now does) because the snapshot is REPLACEMENT-
+  // truth and the #293 store keys its backlog by it. Consumed by the #293 queue store, NOT the session / timeline
   // / modal store — queue_state is daemon STATE, not a turn-stream item (#720), so all three exhaustive
   // bridges no-op it. `text` is UNTRUSTED daemon-relayed transit content the eventual render slice (#294)
   // must render as plain text, NEVER HTML (no innerHTML / dangerouslySetInnerHTML); this slice has no DOM

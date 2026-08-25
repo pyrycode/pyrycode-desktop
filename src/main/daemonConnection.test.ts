@@ -2993,7 +2993,7 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
     return ctx
   }
 
-  it('decodes an inbound tool_result into one toolResult carrying the four camelCase fields (conversation_id dropped)', async () => {
+  it('decodes an inbound tool_result into one toolResult carrying the five camelCase fields, conversation id and all', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -3012,14 +3012,16 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
     expect(events).toEqual([
       {
         type: 'toolResult',
+        conversationId: 'conv-1',
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         isError: false,
         resultSummary: 'read 12 lines'
       }
     ])
-    // conversation_id is dropped at the choke point (single active conversation; #202 scopes it).
-    expect(JSON.stringify(events)).not.toContain('conv-1')
+    // The frame's conversation_id rides the arm as the routing key (#766): it must reach the renderer
+    // verbatim, never dropped and never defaulted to a placeholder.
+    expect(JSON.stringify(events)).toContain('conv-1')
   })
 
   it('carries isError:true through as that value (an errored tool)', async () => {
@@ -3040,6 +3042,7 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
     expect(emitted(sink).slice(before)).toEqual([
       {
         type: 'toolResult',
+        conversationId: 'conv-1',
         turnId: 'turn-1',
         toolUseId: 'tu-1',
         isError: true,

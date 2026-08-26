@@ -7,8 +7,8 @@
 // receiving every event it received before; the two writes run side by side (Strangler Fig, ADR 0008),
 // which is what lets the routing land and be verified as a no-op before anything the operator sees
 // moves. The writers are `timelineBridge.ts`'s fan-out and the composer's optimistic echo
-// (composerSend.ts) — the timeline's only two row-adding writers. Eight of the bridge's eleven owned
-// arms route here; the other three (`sessionTransition`, `unrecognizedMessage`, `connected`) carry no
+// (composerSend.ts) — the timeline's only two row-adding writers. Nine of the bridge's eleven owned
+// arms route here; the other two (`sessionTransition`, `connected`) carry no
 // conversation id, so they reach the flat store only.
 //
 // #757 built the clears and WIRED them — `clearAllTimelines` at the pairing boundary and

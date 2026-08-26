@@ -276,10 +276,21 @@ export interface ConversationLastReadState {
  *  precedents' posture). There is deliberately NO generic `write(id, key, value)`, which would
  *  reintroduce a stringly-typed key beside the one hostile string this store exists to contain.
  *
- *  There are deliberately NO clears here. #779 owns the pairing-boundary clear, mirroring the family:
- *  #747 shipped the holder and #749 added its eviction paths. */
+ *  ONE clear, added at #779 and mirroring the family (#747 shipped the holder, #749 added its eviction
+ *  paths): `clearAllLastRead`, the pairing boundary. `clearAll…` rather than `clearLastRead`, matching
+ *  `clearAllTimelines` (conversationTimelineStore.ts:156) and `clearAllActivity` — the `All` prefix puts
+ *  the blast radius at the CALL SITE rather than only in a docstring. There is deliberately no
+ *  `clearLastReadFor(id)` beside it: the twin's per-conversation clear exists because a deleted
+ *  conversation invalidates its own thread, whereas a mark for a conversation that no longer exists is
+ *  inert — nothing reads it — so a second clear would ship an unused write path.
+ *
+ *  NULLARY IS A SECURITY PROPERTY, not a signature detail — the same one conversationTimelineStore.ts:141-143
+ *  spells out for its own boundary clear. Taking no `conversationId` means no daemon-asserted id can steer
+ *  which marks survive the pairing boundary, and `tsc` enforces that rather than a test. An optional id
+ *  parameter would re-open exactly that. */
 export type ConversationLastReadStore = ConversationLastReadState & {
   recordLastRead: (conversationId: string, itemsSeen: LastReadMark) => void
+  clearAllLastRead: () => void
 }
 
 /** The named empty baseline. Its role NARROWED at #776 from "the factory's default" to just this: the
@@ -359,6 +370,36 @@ export function createConversationLastReadStore(
         next.set(conversationId, itemsSeen)
         storage.write(next)
         return { marks: next }
+      }),
+    // The pairing boundary (#779), built as `recordLastRead` above is: guard, persist and return are ONE
+    // expression inside the updater, so no later edit can hoist the write above the guard without
+    // deleting the guard. Three things here are invisible to `tsc` and each has a named test:
+    //
+    //   - THE GUARD IS `size === 0`, never `s.marks === initialConversationLastReadState.marks`. That
+    //     reference check compiles clean and is wrong on the COMMON path: after construction `s.marks` is
+    //     whatever `storage.read()` returned, and for an empty store that is a FRESH map, never this
+    //     module's constant. A reference guard therefore never fires on a clean install, and every unpair
+    //     fires a redundant synchronous `localStorage.setItem`. `size` is right in both states.
+    //   - THE ALREADY-CLEAR ARM RETURNS `s` ITSELF, so zustand's `Object.is` short-circuit fires and no
+    //     subscriber wakes — the family-wide idempotence clearPairingScopedState.ts's docstring rests on.
+    //     Returning the constant here instead would merge and notify.
+    //   - THE CLEARED ARM RETURNS THE NAMED BASELINE (the `clearActiveConversation` / `clearSessionId`
+    //     posture), which gives `marks` a stable reference across repeated clears. Safe where
+    //     conversationTimelineStore.ts:340-343 refuses the same move for its own constant, because that
+    //     map is `Map`-typed and mutable while this one is only ever REPLACED — every write clones.
+    //
+    // The persistence route is `write` of the empty map, NOT a port `clear()`: #776 declined that method
+    // (see `ConversationLastReadStorage`) because `encodeLastReadMarks(new Map())` is `'[]'`, which
+    // round-trips to empty, so adding one would ship an unused seam. The key stays present on disk holding
+    // `'[]'`; present-but-empty and absent both hydrate to empty, so no consumer can tell them apart.
+    // Passing `initialConversationLastReadState.marks` rather than a fresh `new Map()` names the same
+    // baseline in both halves — the port takes a `ReadonlyMap` and the encoder only reads it through
+    // `Array.from`, so the constant cannot be mutated through this call.
+    clearAllLastRead: () =>
+      set((s) => {
+        if (s.marks.size === 0) return s
+        storage.write(initialConversationLastReadState.marks)
+        return initialConversationLastReadState
       })
   }))
 }

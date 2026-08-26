@@ -28,6 +28,7 @@ import {
 } from './exitActiveConversation'
 import { activeConversationStore } from './store/activeConversationStore'
 import { announcedModelStore } from './store/announcedModelStore'
+import { conversationLastReadStore } from './store/conversationLastReadStore'
 import { conversationTimelineStore } from './store/conversationTimelineStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
@@ -71,8 +72,8 @@ const activateDeps: ActivateConversationDeps = {
  * so nothing is dereferenced at module load, nothing is read during render, and the object closes over
  * no per-render value. `sessionStore` and `announcedModelStore` appear here and nowhere else in this
  * file; PairedShell still subscribes to no store at all and stays server-renderable. #593 widened the
- * set with the announced running model, and because both call sites below pass this one object, that
- * was a single edit rather than two.
+ * set with the announced running model and #779 with the per-conversation read marks, and because both
+ * call sites below pass this one object, each was a single edit rather than two.
  */
 /**
  * #652: the store wiring for the deleted-conversation exit, module scope for the same reason as the two
@@ -96,7 +97,14 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   clearAnnouncedModel: () => announcedModelStore.getState().clearAnnouncedModel(),
-  dispatchSession: (action) => sessionStore.getState().dispatch(action)
+  dispatchSession: (action) => sessionStore.getState().dispatch(action),
+  // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
+  // #776 persists the marks. It reaches its store DIRECTLY rather than through
+  // `conversationLastReadDeps`, the `markViewed` argument above: the bridge's deps object exists so the
+  // SAMPLING branch lives in one tested place, and there is no sampling branch here — the store method
+  // takes nothing at all. Widening `ConversationLastReadDeps` with a member the stamp path never uses
+  // would put an unused effect on a tested interface.
+  clearAllLastRead: () => conversationLastReadStore.getState().clearAllLastRead()
 }
 
 /**

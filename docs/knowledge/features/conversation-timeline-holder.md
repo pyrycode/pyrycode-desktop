@@ -21,6 +21,13 @@ store](conversation-timeline-store.md) (`timelineStore.ts`), the existing **flat
 store this one runs alongside — that store keeps serving the open conversation unchanged; this one is an
 independent holder, written and cleared but not yet read, for every conversation's thread at once.
 
+[#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) gave `markViewed` — the one write path
+still shipping unwired — its first production caller, at the activation seam (`activateConversation.ts`,
+constructed once in `PairedShell.tsx`; see [Paired shell § The view
+stamp](paired-shell.md#the-view-stamp-activateconversationts-786)). This is what **arms** the ten-slice
+eviction bound in production: until then every slice was never-viewed and eviction silently degraded to
+first-write order. #758 remains the reader cutover, now depending on this rather than performing it.
+
 ## What it does
 
 Holds a whole `TimelineState` per conversation id: the ordered `items`, `phase`, and all four chrome
@@ -84,10 +91,23 @@ exactly the thread the operator stepped away from.
   ids the operator has never opened mints one entry per id. Entering new keys at the tail would let N
   unknown ids evict N of the operator's actually-open threads — the bound becoming the attack's mechanism.
   Entering at the head instead means an unbounded burst of unknown ids displaces **at most one** viewed
-  slice, then only evicts its own never-viewed predecessors. Reinforced structurally: `dispatchFor`
-  (daemon-driven) can only ever insert at the head; only `markViewed` (renderer-local, reachable only from
-  the operator's own activation) can promote to the tail. The protected region of the map is populated by
-  operator action alone.
+  slice, then only evicts its own never-viewed predecessors. The structural half of that is unchanged:
+  `dispatchFor` (daemon-driven) can only ever insert at the head and never promotes, so the head-insert
+  rule holds for the frame fan-out exactly as stated.
+
+  **What is not true, and was before [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786):**
+  that only the operator can move a key to the tail. `markViewed`'s one call site is the activation seam
+  (`activateConversation.ts`, see [Paired shell § The view
+  stamp](paired-shell.md#the-view-stamp-activateconversationts-786)), and of the three paths that reach it
+  two are the operator's own — a row click and a re-click of the row already open — while the third is the
+  daemon's own `conversationCreated` confirmation, which `useConversationCreatedNav` activates on
+  ungated. The tail is therefore **not** an operator-only region: a compromised paired daemon emitting N
+  `conversationCreated` frames mints N tail entries, each evicting the head, and can displace **every**
+  viewed slice rather than the at-most-one the head-insert rule bounds its own fan-out to. Accepted rather
+  than gated, on the actor: that is the paired daemon inside the Noise session, which on this same path
+  already resets the flat `timelineStore`, clears the session id and re-keys the pane, and already owns
+  the entire content stream. The relay is content-blind and outside the session, so it cannot mint a
+  `conversationCreated` at all.
 
   Ordering data comes **only** from write and view sequence — never from the id's own value. No sorting,
   comparing, normalizing, lowercasing, trimming or length-checking of keys anywhere; a lexicographic sort
@@ -139,8 +159,10 @@ exactly the thread the operator stepped away from.
   `toolResult`/`stallDetected`/`apiRetry`/`compacting` — the whole #675 family), keyed by each event's own
   `conversationId`, never the open conversation's; and the composer's optimistic echo
   (`composerSend.ts`) calls it too, keyed by the conversation the message was sent to. Both writers also
-  keep writing the flat `timelineStore` unchanged (dual-write). `markViewed` still has no caller, so every
-  slice this creates today is never-viewed and enters at the head — see § Edge cases.
+  keep writing the flat `timelineStore` unchanged (dual-write). **`markViewed` gained its first caller in
+  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786)** — wired at the activation seam — so
+  eviction ordering is now armed in production rather than degrading to first-write order; see § Edge
+  cases.
 - **Still no reader.** Nothing reads `selectTimelineFor` anywhere in the repo outside this store's own
   test — grepping for `selectTimelineFor` / `useConversationTimelineStore` outside this file and test
   still returns nothing. It is not dead code: it is the fourth of a five-ticket chain (#751-#754, #755,
@@ -158,9 +180,11 @@ exactly the thread the operator stepped away from.
   `clearPairingScopedState`'s idempotence claim true. This map still has **no** `connected`-edge clear by
   design — unlike its two keyed siblings, a timeline must survive a reconnect, so growth between
   handshakes is bounded only by `MAX_RETAINED_TIMELINES`.
-- **Reader cutover (not yet built):** #758 will migrate `ConversationScreen` off the flat
-  `timelineStore` to this store and wire `markViewed` at the switch seam
-  (`activateConversation.ts`, which already takes a timeline dependency).
+- **Reader cutover (not yet built):** [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)
+  will migrate `ConversationScreen` off the flat `timelineStore` to this store. `markViewed` is already
+  wired at the switch seam (`activateConversation.ts`) as of
+  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) — #758 now depends on this rather than
+  performing it.
 
 ## Edge cases and limitations
 
@@ -189,9 +213,13 @@ exactly the thread the operator stepped away from.
   — head-insert eviction — holds unmodified: the bound's cost is still capped at "displaces at most one
   viewed slice," per #755's own hostile-burst coverage; #756 added no new test for it, only the note that
   the scenario is no longer hypothetical.
-- **Dormant until #758.** `markViewed` has no caller yet, so today every write to this store enters at the
-  head and nothing is ever promoted — every slice #756 creates is never-viewed by construction, and a real
-  ceiling isn't exercised end to end until the reader cutover wires the viewed signal.
+- **Armed in production since [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786), not #758.**
+  `markViewed` gained its first caller at the activation seam; a slice is now promoted to the tail every
+  time the operator opens (or re-opens) its conversation, so the least-recently-viewed eviction policy
+  actually holds rather than degrading to first-write order.
+  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) remains the reader cutover — nothing
+  renders from this store yet — but the eviction ranking itself is live, including its widened trust
+  boundary (see § The eviction invariant, above).
 
 ## Related decisions
 
@@ -212,7 +240,10 @@ exactly the thread the operator stepped away from.
   the bridge fan-out documented on [conversation timeline store](conversation-timeline-store.md).
 - [Paired shell](paired-shell.md) — `clearPairingScopedState` and `exitActiveConversation`, the two pure
   helpers [#757](../codebase/757.md) wires the new clears into, and where they run inside `PairedShell`'s
-  nav flow.
+  nav flow; `activateConversation`, the pure helper
+  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) wires `markViewed` into — see
+  [§ The view stamp](paired-shell.md#the-view-stamp-activateconversationts-786) for the ordering rationale
+  (outside the id-change gate, after `setActiveConversation`).
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md).
 - [ADR 0008 — Thread timeline model](../decisions/0008-thread-timeline-model.md).
 - [#755 codebase notes](../codebase/755.md) — the holder's implementation summary, code review, and

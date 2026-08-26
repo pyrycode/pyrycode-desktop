@@ -7,12 +7,13 @@ import type { ConversationCreatedPayload } from '@shared/wire/types'
 import type { ThreadEvent } from './store/threadTimeline'
 
 /**
- * The five effects activateConversation performs, injected to keep it pure:
+ * The six effects activateConversation performs, injected to keep it pure:
  *  - `getActiveConversation` — reads the CURRENTLY active conversation (activeConversationStore).
  *  - `setActiveConversation` — records the newly activated one (the same store's setter).
  *  - `dispatchTimeline`      — timelineStore's dispatch; carries #528's `reset`.
  *  - `clearSessionId`        — sessionIdStore's #529 clear.
  *  - `stampLastRead`         — #777's last-read stamp for the conversation being opened.
+ *  - `markViewed`            — #786's view stamp, conversationTimelineStore's eviction ranking.
  *
  * `getActiveConversation` is a GETTER, not a value threaded in by the caller. The previous
  * conversation must be read at invocation time: PairedShell's created-event callback is held in a
@@ -48,6 +49,29 @@ export interface ActivateConversationDeps {
    * `ConversationCreatedPayload` nor `ThreadEvent` is assignable to `string`.
    */
   stampLastRead: (conversationId: string) => void
+  /**
+   * #786: stamp the conversation being opened as the MOST RECENTLY VIEWED one
+   * (conversationTimelineStore's `markViewed`), which is what ranks it last in that store's eviction
+   * order. REQUIRED, not optional, for `stampLastRead`'s reason and one more: `activateDeps` is
+   * module-private and `vitest.config.ts` is `environment: 'node'` globally, so no test in this repo ever
+   * runs a React effect and the wiring itself is structurally uncoverable. `tsc` is the whole safety net,
+   * and it only holds if the field is required.
+   *
+   * It is what ARMS the ten-slice bound in production: with no caller every slice was never-viewed, so
+   * eviction degraded to first-write order and discarded exactly the thread the operator stepped away
+   * from. `markViewed` also CREATES the slice when the key is absent, which is why opening a conversation
+   * before any event for it has arrived leaves one held rather than letting a later event mint one at the
+   * head (conversationTimelineStore.ts:284-294).
+   *
+   * CROSS-WIRE NOTE for a reviewer: this and `stampLastRead` now have IDENTICAL signatures, so swapping
+   * them at a deps site compiles AND every `toHaveBeenCalledWith(conversation.id)` assertion still passes
+   * for both. What catches a swap is that the two land in DIFFERENT stores: with the real stores wired,
+   * one ends up unmarked and the other unpromoted, so #777's mark tests and #786's order tests fail
+   * together (activateConversation.test.ts's `realDeps`). No branded type for a two-member wiring object;
+   * at the one production site the defence is that the arrow bodies are visibly different and each member
+   * name matches the store method it calls.
+   */
+  markViewed: (conversationId: string) => void
 }
 
 /**
@@ -101,4 +125,18 @@ export function activateConversation(
   // of the conversation the operator is already reading is exactly when a fresh mark is owed. AFTER the
   // set, so the store writes run in the order a reader expects: clear → activate → stamp.
   deps.stampLastRead(conversation.id)
+  // #786, OUTSIDE the gate for a reason that lives in the store rather than in symmetry with the line
+  // above: `markViewed`'s already-the-tail branch is documented as the COMMON case, justified by this very
+  // seam (conversationTimelineStore.ts:284-288). Inside the gate that branch would be unreachable — after
+  // a real switch the tail is always the PREVIOUS conversation, never the one being opened — leaving a
+  // shipped, tested branch dead and its docstring false. Outside is also free: the guard hands back the
+  // state object, so no map is cloned and no subscriber wakes.
+  //
+  // AFTER `setActiveConversation`, and that ordering IS load-bearing. Creating a slice notifies the
+  // timeline store's subscribers, among them #777's `useConversationLastRead`, which re-stamps whatever
+  // `getOpenConversationId()` reports. Run before the set, that listener would write an unrequested mark
+  // for the PREVIOUS conversation. Run after, it re-records the mark `stampLastRead` just wrote, so
+  // `recordLastRead`'s `===` guard returns the state object and the cascade terminates at depth 2 with no
+  // subscriber woken and no `localStorage` write.
+  deps.markViewed(conversation.id)
 }

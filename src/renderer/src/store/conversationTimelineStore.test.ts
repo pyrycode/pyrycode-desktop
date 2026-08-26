@@ -237,7 +237,7 @@ describe('conversationTimelineStore', () => {
     const store = createConversationTimelineStore()
     for (const id of ids(MAX_RETAINED_TIMELINES)) store.getState().dispatchFor(id, delta('t1', 'x'))
 
-    // The #758 seam: the operator opens a conversation BEFORE any event for it has arrived. A no-op
+    // The #786 seam: the operator opens a conversation BEFORE any event for it has arrived. A no-op
     // here would let a later fold create the slice at the HEAD, making the conversation currently on
     // screen the next eviction victim.
     store.getState().markViewed('cJustOpened')

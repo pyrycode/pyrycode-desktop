@@ -17,26 +17,27 @@ import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import type { RelayLinkStatus } from '@shared/ipc/events'
 import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
 import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkStore'
+// #758: only the store hook survives here — the composer's optimistic echo still writes the flat store
+// (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
+// itself is its own ticket.
+import { useTimelineStore } from '../../store/timelineStore'
 import {
-  useTimelineStore,
-  selectItems,
-  selectPhase,
-  selectStalled,
-  selectApiRetry,
-  selectCompacting,
-  selectLocalSendPending
-} from '../../store/timelineStore'
-import { useConversationTimelineStore } from '../../store/conversationTimelineStore'
+  useConversationTimelineStore,
+  selectTimelineFor,
+  type ConversationTimelineState
+} from '../../store/conversationTimelineStore'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
   useActiveConversationStore,
   selectActiveConversation
 } from '../../store/activeConversationStore'
-import type {
-  ThreadItem,
-  TurnPhase,
-  ApiRetryStatus,
-  UnrecognizedSite
+import {
+  initialTimelineState,
+  type ThreadItem,
+  type TimelineState,
+  type TurnPhase,
+  type ApiRetryStatus,
+  type UnrecognizedSite
 } from '../../store/threadTimeline'
 import {
   submitMessage,
@@ -75,6 +76,34 @@ import type { RendererCommand } from '@shared/ipc/commands'
 // an injected ThreadItem[] — the same container/view split PairingScreen uses. MessageThread /
 // MessageBubble are retained as pure, still-tested residue of the retired coarse path (a later
 // cleanup ticket removes them). Composer and UnpairControl stay in-file.
+
+// #758: "no conversation is open" as a SELECTOR rather than as a sentinel id. Module-level, so its
+// identity is stable and the memoised binding below does not churn its subscription.
+const selectNothingHeld = (): null => null
+
+/**
+ * #758: the selector that binds the chat pane to the OPEN conversation's own retained timeline — the
+ * whole of the reader cutover. `null` in, no map lookup at all; an id in, that id's held slice or `null`.
+ *
+ * DO NOT reintroduce `selectTimelineFor(openConversationId ?? '')` — BackgroundTaskPanel.tsx:342's
+ * idiom, which is safe THERE and not here. `''` is an ordinary key in the timeline holder (`dispatchFor`
+ * mints a slice for whatever `conversation_id` the daemon asserts), so the sentinel would render that
+ * slice as the open conversation's thread while nothing is open. Branching to `selectNothingHeld`
+ * performs no lookup on that path, which makes the misattribution unavailable rather than unlikely.
+ *
+ * Exported for its unit tests and for that guard, not for a second caller: zustand v5 reads
+ * `getInitialState()` under `renderToStaticMarkup`, so a seeded store is invisible to this repo's
+ * renderer tier and the container can only ever be server-rendered against empty stores. The pure
+ * derivation is therefore where the ticket's claim is testable at all — the `workingIndicatorState` /
+ * `openToolName` / `isTurnRunning` posture already established in this file. The end-to-end proof is
+ * e2e/conversation-switch-keeps-both-threads.spec.ts.
+ */
+export function selectOpenTimelineFor(
+  openConversationId: string | null
+): (s: ConversationTimelineState) => TimelineState | null {
+  return openConversationId === null ? selectNothingHeld : selectTimelineFor(openConversationId)
+}
+
 export interface ConversationScreenProps {
   // The App route flip back to pairing (#166), mirroring PairingScreen's onPaired. Optional so the
   // existing bare `<ConversationScreen />` server-render tests stay green; when absent, unpair still
@@ -91,50 +120,65 @@ export function ConversationScreen({
   onUnpaired,
   onBack
 }: ConversationScreenProps = {}): JSX.Element {
-  // #179: the structured-stream timeline slice is now the single thread surface — the coarse
-  // `MessageThread` is retired (its mount + the `selectMessages` read are gone), and the composer's
-  // optimistic echo routes here as a `userText` item beside the daemon's structured reply. `ThreadItem`
-  // is already the render model (ADR 0008, camelCase, conversation_id-free) so it flows straight to the
-  // pure Timeline view — no adapter. Selecting only the items slice keeps a stream delta from
-  // re-rendering unrelated facets.
-  const items = useTimelineStore(selectItems)
-  // #215: the coarse `phase` scalar, read beside the items slice (mirrors the selectItems → Timeline
-  // line above). The container derives the indicator state and passes only that down, so the LABEL CHOICE
-  // is a closed client-owned union rather than a daemon value. (#649 narrows the original claim here: the
-  // indicator now also takes one separately-named `toolName` prop derived from `items`, which IS a daemon
-  // string — deliberately, per the operator's 2026-08-20 decision. See ThinkingIndicator below.)
-  // Selecting only `phase` adds no meaningful churn — the container already re-renders per items delta.
-  // Inert in production until #179 flips `interactive` (phase stays `idle`), so the indicator is null.
-  const phase = useTimelineStore(selectPhase)
-  // #317: the coarse `stalled` scalar, read beside `phase` (the selectPhase line above). The container
-  // passes only the plain boolean down, so no daemon-supplied string reaches the view — AC4 is a
-  // type-level guarantee, and the stall frame carries no daemon content anyway. `stalled` flips at most
-  // twice per stall, so it adds no meaningful re-render churn beyond the items delta already here.
-  const stalled = useTimelineStore(selectStalled)
-  // #493: the api-retry status, read beside `stalled` (the selectStalled line above). A narrow single-slice
-  // read of a record the container passes straight down; the view's prop carries two integers and no string
-  // field, so AC1 stays a type-level guarantee. Re-render churn is bounded by the reducer's
-  // same-reference discipline: every carry-through arm passes the SAME status object and a verbatim
-  // repeated rising edge returns the same state, so a repeated frame produces zero re-renders under
-  // zustand's Object.is comparison.
-  const apiRetry = useTimelineStore(selectApiRetry)
-  // #496: the compaction scalar, read beside `apiRetry` (the selectApiRetry line above). A plain boolean the
-  // container passes straight down, so AC1 ("no daemon-supplied string is ever rendered") stays a type-level
-  // guarantee — the bridge omits the daemon's `conversationId` (#742) when it rebuilds the `ThreadEvent`.
-  // `compacting` flips at most twice per compaction, and the reducer returns the same state reference on a
-  // verbatim repeated frame, so it adds no re-render churn beyond the items delta already here.
-  const compacting = useTimelineStore(selectCompacting)
-  // #650: the locally-opened working-indicator window, read beside `compacting` (the selectCompacting line
-  // above). The FIRST renderer-sourced slice among these five — the operator's own send opened it, not the
-  // daemon — and the container passes only the plain boolean into the derivation, so no daemon-supplied
-  // string reaches the view through it. It flips at most twice per turn and every carry-through reducer arm
-  // preserves the state reference, so it adds no re-render churn beyond the items delta already here.
-  const localSendPending = useTimelineStore(selectLocalSendPending)
   // #278: the conversation the thread is showing, snapshotted when the new discussion was created
   // (PairedShell's conversation_created callback). The container derives it and passes it down; the
   // pure WorkspaceChip self-gates to null. A narrow single-slice read — activeConversation changes
   // once (on creation), so it adds no meaningful re-render churn beyond the items delta already here.
+  // #758 moved it ABOVE the timeline read, which now needs its id: same hook, same selector, same single
+  // subscription, only its position in the hook list changed (stable across renders).
   const activeConversation = useActiveConversationStore(selectActiveConversation)
+  // #758: the thread on screen is the OPEN conversation's own retained timeline, not the flat
+  // single-thread store — which `activateConversation` still resets on every switch, into a store nothing
+  // reads any more. That is the whole of "leaving a chat and coming back keeps both threads": the rows
+  // that arrived while the operator was elsewhere are still held under their own conversation's key.
+  //
+  // `??` and not `||`: an empty-string id must survive as an ordinary key rather than collapse into
+  // "nothing open" (the :281 / :1955 spelling this file already uses).
+  const openConversationId = activeConversation?.id ?? null
+  // A useMemo-stable selector per id (the BackgroundTaskPanel.tsx:342 idiom) so a fresh closure per render
+  // does not churn the subscription. NOTHING wraps, copies, maps or derives the result inside the
+  // subscription, which is what keeps the selector's return Object.is-stable: a write for ANOTHER
+  // conversation rebuilds the outer map but copies every survivor by reference
+  // (conversationTimelineStore.ts:214-217), so `get(openId)` hands back the same slice object and this
+  // screen does not re-render. That is what makes the switch cheap.
+  const selectOpenTimeline = useMemo(
+    () => selectOpenTimelineFor(openConversationId),
+    [openConversationId]
+  )
+  const openTimeline = useConversationTimelineStore(selectOpenTimeline)
+  // The absent-slice branch is WRITTEN OUT. `selectTimelineFor(id) ?? initialTimelineState` is banned at
+  // every read site (conversationTimelineStore.ts:44-49) because it collapses "nothing is held for this
+  // conversation" into "observed, nothing in the thread" with no type error and no failing test; the
+  // nullable return is what forces this branch to be written and reasoned about.
+  //
+  // What `null` means HERE is "no conversation is open" — not "the open one has no rows". #786 stamps the
+  // open conversation at the activation seam and `markViewed` CREATES its slice, so by the time this
+  // renders an open conversation always has one. The reachable cases are the nullary notification `open`
+  // before any conversation was activated (PairedShell.tsx:275) and a bare `<ConversationScreen />` in a
+  // test. Both readings put the SAME shipped empty thread on screen, and that resolution is a decision:
+  // with no conversation open there is no thread to be about, and an empty thread is the honest render —
+  // exactly today's behaviour against an empty flat store. No test can tell the two readings apart at this
+  // site, because both render identically; the test that CAN fail is the empty-string-key one in
+  // ConversationScreen.test.tsx's `selectOpenTimelineFor` describe.
+  const thread = openTimeline === null ? initialTimelineState : openTimeline
+  // The six names below are `TimelineState`'s own six fields, so every line of JSX under this container is
+  // untouched by the cutover. Subscribing to the whole slice rather than to six narrow selectors is
+  // re-render-neutral: each of the five scalars' own comments recorded that it "adds no meaningful
+  // re-render churn beyond the items delta already here", so these are the same renders from one
+  // subscription instead of six.
+  //
+  //   items            — #179: the structured-stream rows, the single thread surface since the coarse
+  //                      MessageThread was retired. `ThreadItem` is already the render model (ADR 0008,
+  //                      camelCase, conversation_id-free), so it flows straight to the pure Timeline view.
+  //   phase            — #215: the coarse lifecycle phase. The container derives the indicator state and
+  //                      passes only that down, so the LABEL CHOICE stays a closed client-owned union.
+  //   stalled          — #317: the onset-only stall scalar; a plain boolean, so no daemon string reaches
+  //                      the view.
+  //   apiRetry         — #493: the live api-retry status; two integers and no string field.
+  //   compacting       — #496: the auto-compaction liveness fact; a plain boolean.
+  //   localSendPending — #650: the locally-opened working-indicator window — the one renderer-sourced
+  //                      scalar of the five, opened by the operator's own send.
+  const { items, phase, stalled, apiRetry, compacting, localSendPending } = thread
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. The StatusRow trigger sits between the thread and
@@ -230,7 +274,7 @@ export function ConversationScreen({
       {/* #307: the running-turn interrupt control — a standalone block, right-aligned over the
           composer's send side, shown only while a turn is running (phase thinking or responding) and
           retracting on the daemon's turn_state{idle}. Renders nothing at idle. */}
-      <InterruptControl />
+      <InterruptControl phase={phase} />
       {/* #602: sending is the one act that overrides the conditional pin, so the Composer reports "a
           message entered the timeline" and this screen — which owns the flag — decides that means follow
           the bottom. The Composer learns nothing about scrolling. */}
@@ -1222,8 +1266,9 @@ export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorSta
 //
 // The synthetic `phase` NEVER escapes this function: it is not stored, not passed to a view, and not seen
 // by `isTurnRunning`. Its one job is gate reuse. That is also why the signal lives in a scalar beside
-// `phase` rather than in `phase` itself — the interrupt control reads `selectPhase` alone, so a locally
-// opened window structurally cannot arm a stop button for a turn the daemon has not started (AC4).
+// `phase` rather than in `phase` itself — the interrupt control is handed `phase` alone (#758 made it a
+// prop), so a locally opened window structurally cannot arm a stop button for a turn the daemon has not
+// started (AC4).
 export function workingIndicatorStateWithLocalSend(
   status: ThreadStatus,
   localSendPending: boolean
@@ -1399,16 +1444,21 @@ export function InterruptButton({
   )
 }
 
-// The store-bound container for the interrupt control (#307). Reads the existing `phase` slice (the same
-// selectPhase the ConversationScreen container already holds), derives the is-running boolean, and binds
-// the injected effect. window.pyry.sendCommand is dereferenced ONLY inside the click closure (interaction
-// time, never render — the Composer.handleSubmit / QueuedBacklogControl discipline), so the
-// server-rendered container smoke test never touches the bridge. No optimistic mutation: the helper only
-// sends (AC3); the control retracts when the daemon's next turn_state{idle} returns `phase` to idle, via
-// this subscription — no new client state, no "stopping" flag, no timers. In-file and not exported, like
-// QueuedBacklogControl.
-function InterruptControl(): JSX.Element | null {
-  const phase = useTimelineStore(selectPhase)
+// The container for the interrupt control (#307), derives the is-running boolean and binds the injected
+// effect. window.pyry.sendCommand is dereferenced ONLY inside the click closure (interaction time, never
+// render — the Composer.handleSubmit / QueuedBacklogControl discipline), so the server-rendered container
+// smoke test never touches the bridge. No optimistic mutation: the helper only sends (AC3); the control
+// retracts when the daemon's next turn_state{idle} returns `phase` to idle — no new client state, no
+// "stopping" flag, no timers. In-file and not exported, like QueuedBacklogControl.
+//
+// #758: `phase` is the OPEN conversation's, so it arrives as a required prop from the container that
+// already holds it, rather than from a seventh subscription to the flat store. Giving this its own
+// conversation-scoped subscription instead would duplicate the id derivation and the memoised selector
+// here for no gain. DO NOT collapse this into InterruptButton at the mount site now that it looks like a
+// pointless wrapper: it is the seam that keeps the `window.pyry` dereference inside the click closure,
+// and inlining it would move that dereference into the container's render path, where `window.pyry` does
+// not exist under renderToStaticMarkup.
+function InterruptControl({ phase }: { phase: TurnPhase }): JSX.Element | null {
   return (
     <InterruptButton
       isRunning={isTurnRunning(phase)}

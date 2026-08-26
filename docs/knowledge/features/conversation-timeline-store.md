@@ -374,42 +374,39 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
   in `App.tsx` that reads `activeConversationStore` via `selectActiveConversation`. Passing an inline
   arrow instead would resubscribe the listener on every `App` render — the constant is what keeps the
   hook's effect dependency array (`[getOpenConversationId]`) stable across the app's lifetime.
-- **`selectItems` is read in `ConversationScreen`** via `useTimelineStore(selectItems)`, feeding the
-  new `Timeline` pure view straight (no adapter — `ThreadItem` is already the render model). See
-  [Conversation shell § Structured-stream timeline render](conversation-shell.md#structured-stream-timeline-render-203).
-  `selectPhase` has a real source as of [#214](../codebase/214.md) (`turn_state`) and its first reader
-  as of [#215](../codebase/215.md) — `ConversationScreen`'s `ThinkingIndicator`, reading
-  `useTimelineStore(selectPhase)` to derive `isThinking`. See
-  [Conversation shell § Thinking indicator](conversation-shell.md#thinking-indicator-215).
-  `selectStalled` has a real source as of [#315](../codebase/315.md) (`stall`) and its first reader as
-  of [#317](../codebase/317.md) — `ConversationScreen`'s `StallIndicator`, reading
-  `useTimelineStore(selectStalled)` to derive `isStalled`. See
-  [Conversation shell § Stall indicator](conversation-shell.md#stall-indicator-317).
-  `selectApiRetry` has a real source as of [#492](../codebase/492.md) (`api_retry`) and its first reader
-  as of [#493](../codebase/493.md) — `ConversationScreen`'s `ApiRetryIndicator`, reading
-  `useTimelineStore(selectApiRetry)` directly, and the same screen's `shouldShowThinking` predicate,
-  which reads it alongside `phase` to narrow `ThinkingIndicator`'s gate. See
-  [Conversation shell § Api-retry indicator](conversation-shell.md#api-retry-indicator-493).
-  `selectCompacting` has a real source as of [#495](../codebase/495.md) (`compacting`) and its first
-  reader as of [#496](../codebase/496.md) — `ConversationScreen`'s `CompactingIndicator`, reading
-  `useTimelineStore(selectCompacting)` directly, and the same screen's `shouldShowThinking` predicate,
-  which reads it alongside `phase`/`apiRetry` to narrow `ThinkingIndicator`'s gate a second time. See
-  [Conversation shell § Compacting indicator](conversation-shell.md#compacting-indicator-496).
-- Import surface: `import { useTimelineStore, selectItems, selectPhase, selectStalled, selectApiRetry,
+- **`selectItems`/`selectPhase`/`selectStalled`/`selectApiRetry`/`selectCompacting`/`selectLocalSendPending`
+  were read in `ConversationScreen` from #203 (`selectItems`) through #650 (`selectLocalSendPending`), each
+  gaining its reader as it gained a real source — see the individual tickets linked below. As of
+  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758), none of the six is read there any more:
+  the container now subscribes once to the [keyed holder](conversation-timeline-holder.md)'s
+  `selectTimelineFor(openConversationId)` and destructures the same six `TimelineState` fields from that
+  slice. See [Conversation shell § The open-conversation reader
+  cutover](conversation-shell.md#the-open-conversation-reader-cutover-758). This store's own selectors stay
+  exported (unused re-exports of `threadTimeline`'s own, not dead code — see § Configuration below) and this
+  store stays dual-written; only the container's read side moved.
+- Import surface (still exported, no longer imported by `ConversationScreen`):
+  `import { useTimelineStore, selectItems, selectPhase, selectStalled, selectApiRetry,
   selectCompacting, selectLocalSendPending } from '@renderer/store/timelineStore'` and
-  `import { useTimelineBridge } from '@renderer/store/timelineBridge'`.
+  `import { useTimelineBridge } from '@renderer/store/timelineBridge'`. `ConversationScreen` still imports
+  `useTimelineStore` alone, for the composer's `dispatch` write.
 - No conversation-id scoping in this slice — `conversation_id` was already dropped at the #199
   transport (single active conversation); the bridge translates and dispatches unconditionally.
-- **`connected` → `reconnected` needs no reader wiring** ([#538](../codebase/538.md)) — it drives the
+- **`connected` → `reconnected` needed no reader wiring** ([#538](../codebase/538.md)) — it drove the
   same `selectStalled`/`selectApiRetry`/`selectCompacting`/`selectPhase` selectors
   [#317](../codebase/317.md)/[#493](../codebase/493.md)/[#496](../codebase/496.md)/[#215](../codebase/215.md)
-  already wired to `ConversationScreen`'s indicators; a reconnect just clears the value those existing
-  readers already subscribe to.
-- **`selectLocalSendPending` has a real source as of [#650](../codebase/650.md) (the composer's
-  `userText` dispatch) and its one reader as of the same ticket** — `ConversationScreen`'s
+  once wired to `ConversationScreen`'s indicators. Since [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)
+  moved that reader to the [keyed holder](conversation-timeline-holder.md), the reconnect-clears-chrome
+  behaviour the operator sees comes from [#785](https://github.com/pyrycode/pyrycode-desktop/issues/785)'s
+  `reconnected` write into the open conversation's slice instead — this store still clears the same fields
+  on the same event, but that clear is no longer the one rendered.
+- **`selectLocalSendPending` had a real source as of [#650](../codebase/650.md) (the composer's
+  `userText` dispatch) and its one reader from the same ticket through
+  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)** — `ConversationScreen`'s
   `workingIndicatorStateWithLocalSend(status, localSendPending)`, composed on top of (not folded
   into) #215's `workingIndicatorState` gate, so #493's/#496's supersede clauses are inherited rather
-  than restated. See [Conversation shell § Thinking / working
+  than restated. `localSendPending` now reaches that same function as one of the six
+  [keyed-holder](conversation-timeline-holder.md) fields the container destructures. See
+  [Conversation shell § Thinking / working
   indicator](conversation-shell.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649).
 
 ## Edge cases and limitations
@@ -482,8 +479,9 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
   conversation. Not a replacement for this store: it runs alongside, importing
   `TimelineState`/`ThreadEvent`/`reduceTimeline` from the same [thread timeline](thread-timeline.md)
   module this store wraps. [#756](../codebase/756.md) made `useTimelineBridge` and the composer's echo
-  write it too, dual-write, still unread; [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)
-  is the ticket that will eventually cut `ConversationScreen` over to it.
+  write it too, dual-write; [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) cut
+  `ConversationScreen` over to it as the sole render source — this store keeps being dual-written but is
+  no longer read by the screen.
 - [#756 codebase notes](../codebase/756.md) — `timelineTargetFor`, the `subscribeTimeline` arity widen,
   and the `useTimelineBridge` fan-out: implementation summary, code review, and lessons learned.
 - [#784 codebase notes](../codebase/784.md) — widens `DaemonEvent.unrecognizedMessage` with

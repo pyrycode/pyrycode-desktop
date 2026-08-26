@@ -8,18 +8,21 @@ both of its keyed precedents.
 
 Introduced in [#755](../codebase/755.md), split from #675 alongside #751-#754 (the transport arms that
 widened eight `DaemonEvent`s with `conversationId`, all shipped), #756 (the writer), #757 (the clears) and
-#758 (the reader cutover). #755 shipped the holder alone — no writer, no reader — the same "populated and
-unread" posture the [conversation activity store](conversation-activity-store.md) shipped for #747 before
-its own writer/reader landed. [#756](../codebase/756.md) gave it its first writer: both of the timeline's
-row-adding writers — the bridge fan-out and the composer's optimistic echo — now fold into this holder as
-well as into the flat store, dual-write (Strangler Fig, ADR 0008). [#757](../codebase/757.md) gave it its
-first clears — the whole map dropped at the pairing boundary, one slice dropped when the operator's open
-conversation is deleted out from under them — wired at the same two edges that already reset the flat
-store. Still no reader (#758), so the holder stays invisible from the operator's side despite now carrying
-live traffic and being kept clean. Not to be confused with the [conversation timeline
+#758 (the reader cutover, shipped). #755 shipped the holder alone — no writer, no reader — the same
+"populated and unread" posture the [conversation activity store](conversation-activity-store.md) shipped
+for #747 before its own writer/reader landed. [#756](../codebase/756.md) gave it its first writer: both of
+the timeline's row-adding writers — the bridge fan-out and the composer's optimistic echo — now fold into
+this holder as well as into the flat store, dual-write (Strangler Fig, ADR 0008). [#757](../codebase/757.md)
+gave it its first clears — the whole map dropped at the pairing boundary, one slice dropped when the
+operator's open conversation is deleted out from under them — wired at the same two edges that already
+reset the flat store. [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) gave it its first
+reader: `ConversationScreen` now renders the open conversation's own slice from this holder, so the holder
+is no longer invisible from the operator's side. Not to be confused with the [conversation timeline
 store](conversation-timeline-store.md) (`timelineStore.ts`), the existing **flat**, single-conversation
-store this one runs alongside — that store keeps serving the open conversation unchanged; this one is an
-independent holder, written and cleared but not yet read, for every conversation's thread at once.
+store this one runs alongside — that store is still dual-written (the bridge fan-out and the composer's
+echo both still fold into it) but is no longer read by `ConversationScreen`; this one is the independent
+holder that now carries every retained conversation's thread and is the sole render source for the chat
+pane.
 
 [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) gave `markViewed` — the one write path
 still shipping unwired — its first production caller, at the activation seam (`activateConversation.ts`,
@@ -163,11 +166,11 @@ exactly the thread the operator stepped away from.
   [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786)** — wired at the activation seam — so
   eviction ordering is now armed in production rather than degrading to first-write order; see § Edge
   cases.
-- **Still no reader.** Nothing reads `selectTimelineFor` anywhere in the repo outside this store's own
-  test — grepping for `selectTimelineFor` / `useConversationTimelineStore` outside this file and test
-  still returns nothing. It is not dead code: it is the fourth of a five-ticket chain (#751-#754, #755,
-  #756, #757, #758) that lands as a verified no-op from the operator's side until #758 cuts the reader
-  over.
+- **Reader, as of [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758):** `ConversationScreen`
+  binds `selectTimelineFor(openConversationId)` through a `useMemo`-stable selector factory
+  (`selectOpenTimelineFor`, exported from `ConversationScreen.tsx` for its own unit tests), keyed off
+  `activeConversationStore`'s id. See [Conversation shell § The open-conversation reader
+  cutover](conversation-shell.md#the-open-conversation-reader-cutover-758).
 - **Clears, as of [#757](../codebase/757.md):** `clearAllTimelines()` — nullary, drops every retained
   slice — is wired into `clearPairingScopedState`, the shared helper both pairing-ending paths (unpair,
   pair-another-server) already call. `clearTimelineFor(conversationId)` — drops exactly one slice, every
@@ -180,11 +183,14 @@ exactly the thread the operator stepped away from.
   `clearPairingScopedState`'s idempotence claim true. This map still has **no** `connected`-edge clear by
   design — unlike its two keyed siblings, a timeline must survive a reconnect, so growth between
   handshakes is bounded only by `MAX_RETAINED_TIMELINES`.
-- **Reader cutover (not yet built):** [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)
-  will migrate `ConversationScreen` off the flat `timelineStore` to this store. `markViewed` is already
-  wired at the switch seam (`activateConversation.ts`) as of
-  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) — #758 now depends on this rather than
-  performing it.
+- **Reader cutover, shipped in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758):**
+  `ConversationScreen`'s seven reads of the flat `timelineStore` (six selectors on the container plus
+  `InterruptControl`'s own `selectPhase`) collapsed into one subscription to this store's
+  `selectTimelineFor(openConversationId)`. `activateConversation`'s flat-store reset still fires on every
+  switch; it now fires into a store nothing renders from. `markViewed` was already wired at the switch
+  seam (`activateConversation.ts`) by
+  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786), so every open conversation already had
+  a slice by the time #758 needed one to read.
 
 ## Edge cases and limitations
 
@@ -213,13 +219,13 @@ exactly the thread the operator stepped away from.
   — head-insert eviction — holds unmodified: the bound's cost is still capped at "displaces at most one
   viewed slice," per #755's own hostile-burst coverage; #756 added no new test for it, only the note that
   the scenario is no longer hypothetical.
-- **Armed in production since [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786), not #758.**
+- **Eviction ranking armed in production since [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786); rendered since [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).**
   `markViewed` gained its first caller at the activation seam; a slice is now promoted to the tail every
   time the operator opens (or re-opens) its conversation, so the least-recently-viewed eviction policy
-  actually holds rather than degrading to first-write order.
-  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) remains the reader cutover — nothing
-  renders from this store yet — but the eviction ranking itself is live, including its widened trust
-  boundary (see § The eviction invariant, above).
+  actually holds rather than degrading to first-write order. #758 gave the holder its first reader, so a
+  slice surviving eviction is now the operative fact behind AC2 ("switching away and back shows the thread
+  as it now stands"), not just an internal ranking with no visible consequence — including the ranking's
+  widened trust boundary (see § The eviction invariant, above).
 
 ## Related decisions
 
@@ -234,8 +240,12 @@ exactly the thread the operator stepped away from.
   imported and reused unchanged; this store adds no field to the model and writes no second reducer.
 - [Conversation timeline store](conversation-timeline-store.md) — the existing **flat**, single-
   conversation store and bridge this one runs alongside without replacing. Do not confuse the two: that
-  page documents `timelineStore.ts`/`timelineBridge.ts`, which keep serving the open conversation
-  unchanged through this entire five-ticket chain.
+  page documents `timelineStore.ts`/`timelineBridge.ts`, which stayed dual-written but lost
+  `ConversationScreen` as a reader when [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)
+  cut the screen over to this store.
+- [Conversation shell](conversation-shell.md) — `ConversationScreen`, this store's first and (as of
+  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)) only reader. See
+  [§ The open-conversation reader cutover](conversation-shell.md#the-open-conversation-reader-cutover-758).
 - [Composer send](composer-send.md) — the second row-adding writer #756 folded into this holder, beside
   the bridge fan-out documented on [conversation timeline store](conversation-timeline-store.md).
 - [Paired shell](paired-shell.md) — `clearPairingScopedState` and `exitActiveConversation`, the two pure

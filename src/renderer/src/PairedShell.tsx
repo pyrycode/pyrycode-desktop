@@ -57,7 +57,12 @@ const activateDeps: ActivateConversationDeps = {
   // wiring object rather than a fourth `getState()` arrow here, so the sampling branch lives in one
   // tested place; `stampLastReadFor` never consults the open conversation, so the id below is the whole
   // input. Restore point 2 is `useConversationLastRead` in the container.
-  stampLastRead: (conversationId) => stampLastReadFor(conversationLastReadDeps, conversationId)
+  stampLastRead: (conversationId) => stampLastReadFor(conversationLastReadDeps, conversationId),
+  // #786: the view stamp that ranks the opened conversation last in the retained timelines' eviction
+  // order — the write path that arms the ten-slice bound. Unlike `stampLastRead` above it reaches its
+  // store DIRECTLY, the `clearTimelineFor` / `clearAllTimelines` shape below: there is no sampling branch
+  // to keep in one tested place, because the store method takes the id and nothing else.
+  markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId)
 }
 
 /**

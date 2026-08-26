@@ -13,9 +13,11 @@
 //
 // #757 built the clears and WIRED them — `clearAllTimelines` at the pairing boundary and
 // `clearTimelineFor` on a conversation deletion — NOT the `connected` edge, because a thread must
-// survive a reconnect. `markViewed` is the one path still shipping unwired; #758 wires it at the
-// switch seam (activateConversation.ts:74-77) and cuts the reader over. Until then every slice is
-// never-viewed, so eviction order is pure creation-recency and the ten-slice bound is reachable.
+// survive a reconnect. #786 wired the last write path, `markViewed`, at the activation seam
+// (activateConversation.ts's `markViewed` effect, the one production construction of it in
+// PairedShell.tsx), which is what ARMS the bound: until then every slice was never-viewed, so eviction
+// order was pure creation-recency and degraded to first-write order. #758 remains the READER cutover and
+// now depends on this rather than performing it.
 //
 // Keyed by `conversationId`, NOT a flat slot — the backgroundTaskRosterStore.ts:31-37 argument, reused
 // rather than re-derived: the daemon fans these frames out to every interactive connection and each
@@ -180,11 +182,21 @@ export const initialConversationTimelineState: ConversationTimelineState = { tim
  * newest never-viewed slice the standing eviction candidate, so an unbounded burst of unknown ids
  * displaces AT MOST ONE viewed slice and thereafter evicts only its own predecessors. The second reason
  * is that there is no backfill: discarding a never-viewed slice discards content the operator has never
- * seen, which is not symmetric with discarding a thread he was reading. The structural backbone: THE
- * DAEMON CAN ONLY EVER INSERT AT THE HEAD, AND ONLY THE OPERATOR CAN MOVE A KEY TO THE TAIL —
- * `dispatchFor` is the daemon-driven path and never promotes, while `markViewed` is renderer-local,
- * reachable only from the operator's own activation. The protected region is populated by operator
- * action alone.
+ * seen, which is not symmetric with discarding a thread he was reading. The structural half of that, and
+ * it is unchanged: THE DAEMON CAN ONLY EVER INSERT AT THE HEAD — `dispatchFor` is the daemon-driven path
+ * and never promotes — so everything above holds for the frame fan-out exactly as written.
+ *
+ * WHAT IS NOT TRUE, AND WAS BEFORE #786: that only the operator can move a key to the tail. `markViewed`'s
+ * one call site is the activation seam (activateConversation.ts), and of the three paths that reach it two
+ * are the operator's own — a row click and a re-click of the row already open — while the third is the
+ * daemon's own `conversationCreated` confirmation, which `useConversationCreatedNav`
+ * (conversationCreatedBridge.ts) activates on ungated. The tail is therefore NOT an operator-only region:
+ * a compromised paired daemon emitting N `conversationCreated` frames mints N tail entries, each evicting
+ * the head, and can displace EVERY viewed slice rather than the at-most-one the head-insert rule bounds
+ * its fan-out to. Accepted rather than gated, on the actor: that is the paired daemon inside the Noise
+ * session, which on the same path already resets the flat `timelineStore` the screen actually renders,
+ * clears the session id and re-keys the pane, and which already owns the entire content stream. The relay
+ * is content-blind and outside the session, so it cannot mint a `conversationCreated` at all.
  *
  * Ordering data comes ONLY from write and view sequence. The id's VALUE must never influence eviction:
  * no sorting of keys, no comparison, no normalisation, lowercasing, trimming or length check anywhere. A
@@ -276,7 +288,7 @@ function tailKey(timelines: ReadonlyMap<string, TimelineState>): string | undefi
  *     already-active row (activateConversation.ts:42).
  *   - PRESENT, NOT THE TAIL → moved to the tail; size unchanged, so nothing is evicted.
  *   - ABSENT → created at the tail seeded with `initialTimelineState`, evicting the head first when at
- *     the bound. Creating on an absent key is LOAD-BEARING rather than a convenience: at the #758 seam
+ *     the bound. Creating on an absent key is LOAD-BEARING rather than a convenience: at the #786 seam
  *     the operator opens a conversation BEFORE any event for it has arrived, so a no-op here would let a
  *     later fold create the slice AT THE HEAD, making the conversation currently on screen the next
  *     eviction victim — precisely the failure the word "viewed" exists to prevent.

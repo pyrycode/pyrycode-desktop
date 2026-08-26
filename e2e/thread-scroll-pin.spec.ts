@@ -296,8 +296,13 @@ test('an arriving item of every kind leaves a bottom-resting thread at the botto
 
   // `userText` — the only kind that reaches the store through the local optimistic dispatch instead of an
   // inbound frame. The fake answers this send with no frames, so the echo is the whole mutation.
+  //
+  // Sent by ENTER, not by clicking Send: the frame above left the turn RUNNING (deliberately — the mounted
+  // indicator is this criterion's whole setup, so returning the phase to idle here would undo it), and #678
+  // turns the send button into the stop button for exactly that phase, so no Send affordance is on screen.
+  // Enter deliberately keeps its send behaviour mid-turn (#678's AC4), so the optimistic echo is identical.
   await page.getByPlaceholder('Message…').fill(SECOND_TEXT)
-  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByPlaceholder('Message…').press('Enter')
   await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(2)
   await expectPinnedToBottom(page)
 

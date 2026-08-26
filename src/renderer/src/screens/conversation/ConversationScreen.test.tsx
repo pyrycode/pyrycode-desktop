@@ -28,7 +28,7 @@ import {
   ConnectionBanner,
   WorkspaceChip,
   isTurnRunning,
-  InterruptButton,
+  ComposerSendButton,
   ThreadOverflowMenuView,
   ChannelInfoSheetView,
   requestArchiveConversation,
@@ -1472,14 +1472,14 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     ).toBe(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false }))
   })
 
-  it('opens the window WITHOUT arming the interrupt control (AC4)', () => {
+  it('opens the window WITHOUT arming the stop variant (AC4)', () => {
     // The behavioural half: the indicator shows while `phase` is still the daemon-owned `idle`, and
-    // isTurnRunning — InterruptControl's only gate — is false for that same phase, so no stop button
-    // renders for a turn the daemon has not started.
+    // isTurnRunning — the composer send button's only stop-variant gate — is false for that same phase,
+    // so the button stays a Send affordance for a turn the daemon has not started.
     //
     // The structural half is type-level and no assertion here can reach it (renderer tests are
-    // server-render only, so no container render can drive store state): InterruptControl takes
-    // `phase` alone (#758 made it a prop), isTurnRunning admits only a TurnPhase, and InterruptButton takes
+    // server-render only, so no container render can drive store state): #678's Composer takes
+    // `phase` alone, isTurnRunning admits only a TurnPhase, and ComposerSendButton takes
     // `isRunning: boolean` — the new scalar has no path into any of the three.
     expect(
       workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, true)
@@ -1562,13 +1562,14 @@ describe('openToolName — which tool the running turn currently has open (#649)
   })
 })
 
-// #307: the running-turn interrupt control. isTurnRunning is the exported gate predicate; InterruptButton
-// the exported pure view (the ThinkingIndicator pattern) — call / server-render them directly with
-// injected values, no store. The gate is deliberately BROADER than ThinkingIndicator's (`phase ===
-// 'thinking'` only): a turn is "running" in BOTH thinking and responding, so the interrupt affordance
-// shows in either. The store-bound InterruptControl is untested glue (the QueuedBacklogControl posture);
-// the activation→command proof lives in sendInterrupt.test.ts (the `node` env fires no clicks).
-describe('isTurnRunning — the interrupt gate (broader than the thinking indicator)', () => {
+// #307/#678: the running-turn stop affordance. isTurnRunning is the exported gate predicate;
+// ComposerSendButton the exported pure view (the ThinkingIndicator pattern) — call / server-render them
+// directly with injected values, no store. The gate is deliberately BROADER than ThinkingIndicator's
+// (`phase === 'thinking'` only): a turn is "running" in BOTH thinking and responding, so the stop variant
+// shows in either. #678 folded the affordance into the composer's send button, so the store-bound glue is
+// Composer itself (untested, the QueuedBacklogControl posture); the activation→command proof lives in
+// sendInterrupt.test.ts (the `node` env fires no clicks).
+describe('isTurnRunning — the stop-variant gate (broader than the thinking indicator)', () => {
   it('is running while thinking (AC1)', () => {
     expect(isTurnRunning('thinking')).toBe(true)
   })
@@ -1582,22 +1583,76 @@ describe('isTurnRunning — the interrupt gate (broader than the thinking indica
   })
 })
 
-describe('InterruptButton — the running-turn interrupt affordance (#307)', () => {
+// #678: the composer's one control with two variants. Unlike #307's standalone InterruptButton it NEVER
+// returns null — that is what makes AC1's "exactly one stop affordance renders" structural rather than a
+// convention: the composer row holds exactly one button in every state, so a second stop cannot be stacked
+// above it. `isRunning` and `canSend` are separate booleans and only `canSend` gates, so the stop variant
+// is never disabled (#307's behaviour preserved verbatim).
+describe('ComposerSendButton — the composer send/stop control (#678)', () => {
   const noop = (): void => {}
 
-  it('is inert when not running — renders nothing (zero layout footprint, AC1)', () => {
-    expect(renderToStaticMarkup(<InterruptButton isRunning={false} onInterrupt={noop} />)).toBe('')
+  function buttonTags(markup: string): readonly string[] {
+    return markup.match(/<button[^>]*>/g) ?? []
+  }
+
+  it('is the send variant at idle, enabled while the session can send (AC1/AC5)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerSendButton isRunning={false} canSend={true} onSend={noop} onInterrupt={noop} />
+    )
+    expect(markup).toContain('aria-label="Send"')
+    expect(buttonTags(markup)[0]).not.toContain('disabled')
   })
 
-  it('shows an icon-only button with an accessible name conveying stop/interrupt while running (AC1/AC4)', () => {
-    const markup = renderToStaticMarkup(<InterruptButton isRunning={true} onInterrupt={noop} />)
-    expect(markup).toContain('conversation__interrupt')
-    // Match the exact button class (the closing quote excludes the .interrupt-button-icon svg class,
-    // which shares the prefix) — one icon-only control.
-    expect(markup).toContain('class="interrupt-button"')
-    // The client-owned accessible name (icon-only control), never a daemon string; conveys both
-    // "stop" and "interrupt" (AC4). Keyboard activation is free from the native <button> (AC4).
+  it('is the send variant at idle, disabled while the session cannot send (#31 preserved)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerSendButton isRunning={false} canSend={false} onSend={noop} onInterrupt={noop} />
+    )
+    expect(markup).toContain('aria-label="Send"')
+    expect(buttonTags(markup)[0]).toContain('disabled')
+  })
+
+  it('becomes the stop variant while a turn runs — and the send affordance is gone (AC1/AC5)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerSendButton isRunning={true} canSend={true} onSend={noop} onInterrupt={noop} />
+    )
+    // The client-owned accessible name, reused verbatim from #307's INTERRUPT_LABEL — a load-bearing
+    // e2e locator that may never be reworded. Keyboard activation is free from the native <button>.
     expect(markup).toContain('aria-label="Stop the running turn"')
+    // AC1: exactly one stop affordance renders, because the send one is not also on screen.
+    expect(markup).not.toContain('aria-label="Send"')
+  })
+
+  it('never disables the stop variant, even when the session cannot send', () => {
+    // The deliberate asymmetry: `canSend` gates the send variant only. A turn can be running while the
+    // session is disconnected, and hiding the only interrupt affordance there would be a new behaviour.
+    // Without this test a later tidy-up collapsing the two gates into one would pass silently.
+    const markup = renderToStaticMarkup(
+      <ComposerSendButton isRunning={true} canSend={false} onSend={noop} onInterrupt={noop} />
+    )
+    expect(markup).toContain('aria-label="Stop the running turn"')
+    expect(buttonTags(markup)[0]).not.toContain('disabled')
+  })
+
+  it('renders exactly one button in either state — never null (the one-control invariant, AC1)', () => {
+    for (const isRunning of [false, true]) {
+      const markup = renderToStaticMarkup(
+        <ComposerSendButton isRunning={isRunning} canSend={true} onSend={noop} onInterrupt={noop} />
+      )
+      expect(markup).not.toBe('')
+      expect(buttonTags(markup)).toHaveLength(1)
+    }
+  })
+
+  it('swaps the glyph with the variant (the Figma stop glyph, 28×28)', () => {
+    // Assert on a distinguishing substring of the stop glyph's own coordinate space, not the whole path.
+    const running = renderToStaticMarkup(
+      <ComposerSendButton isRunning={true} canSend={true} onSend={noop} onInterrupt={noop} />
+    )
+    const idle = renderToStaticMarkup(
+      <ComposerSendButton isRunning={false} canSend={true} onSend={noop} onInterrupt={noop} />
+    )
+    expect(running).toContain('viewBox="0 0 28 28"')
+    expect(idle).not.toContain('viewBox="0 0 28 28"')
   })
 })
 
@@ -2031,7 +2086,7 @@ describe('WorkspaceChip — the pre-first-message workspace pill (#278)', () => 
 })
 
 // #276: the thread top-bar overflow menu. ThreadOverflowMenuView is the pure, exported view (the
-// InterruptButton / ThinkingIndicator pattern) — server-render it with an injected `open` boolean to
+// ComposerSendButton / ThinkingIndicator pattern) — server-render it with an injected `open` boolean to
 // prove the collapsed trigger and the opened menu surface without a store or a DOM harness. The
 // interaction shell (open/close toggle, Escape / outside-click dismiss, focus-return) lives in the
 // in-file ThreadOverflowMenu container: it is untested reviewed glue, exactly like Composer.handleKeyDown
@@ -2489,16 +2544,16 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('conversation__queued')
   })
 
-  // #307: the interrupt control mounts against the idle timeline store (getInitialState phase: 'idle'),
-  // so isTurnRunning is false and InterruptButton returns null — no interrupt region renders. The inert
-  // render slice, layout unchanged until a turn runs (the ThinkingIndicator-smoke analog); the running
-  // path is proven on the pure InterruptButton describe above, and the dispatch in sendInterrupt.test.ts.
-  // Also keeps window.pyry out of the container render — the bridge is dereferenced only in the click
-  // closure, so the server render never touches it.
-  it('mounts the idle timeline with no interrupt control (the inert render slice)', () => {
+  // #307/#678: the composer mounts against the idle timeline store (getInitialState phase: 'idle'), so
+  // isTurnRunning is false and the send button renders its SEND variant — no stop affordance exists
+  // anywhere on the screen (AC1). Asserting on the accessible name rather than a class is what keeps this
+  // a real regression guard: #678 deleted the .conversation__interrupt / .interrupt-button classes, so a
+  // class-based assertion would now be vacuously true. The running path is proven on the pure
+  // ComposerSendButton describe above, and the dispatch in sendInterrupt.test.ts. This also keeps
+  // window.pyry out of the container render — the bridge is dereferenced only in the click closure.
+  it('mounts the idle timeline with no stop affordance (the inert render slice)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).not.toContain('conversation__interrupt')
-    expect(markup).not.toContain('interrupt-button')
+    expect(markup).not.toContain('Stop the running turn')
   })
 
   it('renders the composer with a text input and an accessible send control', () => {

@@ -242,7 +242,7 @@ export function ConversationScreen({
           #650: and the window now opens the moment the composer accepts the submit, rather than a network
           round-trip later — closing the blank window in FRONT of a turn, as #648 closed the one behind it.
           The local signal composes INSIDE the gate, so #493's and #496's supersede rules apply to it
-          unchanged; it stays out of `phase`, so the interrupt control below is untouched by it. */}
+          unchanged; it stays out of `phase`, so the composer's stop variant below is untouched by it. */}
       <ThinkingIndicator
         state={workingIndicatorStateWithLocalSend({ phase, apiRetry, compacting }, localSendPending)}
         toolName={openToolName(items)}
@@ -271,14 +271,13 @@ export function ConversationScreen({
           both non-populated panel readings unreachable through the UI. It carries no count badge — a badge
           would need its own roster subscription, which is the panel's job and #580's design call. */}
       <BackgroundTaskTrigger onOpen={() => setPanelOpen(true)} />
-      {/* #307: the running-turn interrupt control — a standalone block, right-aligned over the
-          composer's send side, shown only while a turn is running (phase thinking or responding) and
-          retracting on the daemon's turn_state{idle}. Renders nothing at idle. */}
-      <InterruptControl phase={phase} />
       {/* #602: sending is the one act that overrides the conditional pin, so the Composer reports "a
           message entered the timeline" and this screen — which owns the flag — decides that means follow
-          the bottom. The Composer learns nothing about scrolling. */}
-      <Composer onMessageSent={followBottom} />
+          the bottom. The Composer learns nothing about scrolling.
+          #678: `phase` goes down with it, because the running-turn stop affordance IS the send button now
+          (#307's standalone control above the composer is gone). The composer's own send gate is
+          orthogonal and unchanged: Enter still sends mid-turn, and the daemon still enqueues it. */}
+      <Composer phase={phase} onMessageSent={followBottom} />
       <RepairControl onUnpaired={onUnpaired} />
       {sheetOpen && (
         <StatusSheet onClose={() => setSheetOpen(false)}>
@@ -1266,8 +1265,9 @@ export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorSta
 //
 // The synthetic `phase` NEVER escapes this function: it is not stored, not passed to a view, and not seen
 // by `isTurnRunning`. Its one job is gate reuse. That is also why the signal lives in a scalar beside
-// `phase` rather than in `phase` itself — the interrupt control is handed `phase` alone (#758 made it a
-// prop), so a locally opened window structurally cannot arm a stop button for a turn the daemon has not
+// `phase` rather than in `phase` itself — the Composer is handed `phase` alone (#678 moved that referent
+// from #307's standalone interrupt control to the composer's send button, which now wears the stop
+// variant), so a locally opened window structurally cannot arm a stop button for a turn the daemon has not
 // started (AC4).
 export function workingIndicatorStateWithLocalSend(
   status: ThreadStatus,
@@ -1380,91 +1380,19 @@ export function CompactingIndicator({ isCompacting }: { isCompacting: boolean })
   )
 }
 
-// #307: whether a turn is currently running — the interrupt control's gate. This is the one subtle thing
-// in the ticket: the gate is BROADER than ThinkingIndicator's (`phase === 'thinking'` only) — a turn is
-// "running" in BOTH `thinking` and `responding`, so the interrupt affordance must be available in either.
-// Extracted as a named, exported predicate so AC1 (both running phases show, idle hides) is a
-// deterministic, store-free unit test rather than a store-mounted render. Takes the `phase` scalar; the
-// container derives the boolean and passes only that to the pure view (no daemon string reaches it).
+// #307: whether a turn is currently running. This is the one subtle thing in the ticket: the gate is
+// BROADER than ThinkingIndicator's (`phase === 'thinking'` only) — a turn is "running" in BOTH `thinking`
+// and `responding`, so the stop affordance must be available in either. Extracted as a named, exported
+// predicate so AC1 (both running phases show, idle hides) is a deterministic, store-free unit test rather
+// than a store-mounted render. Takes the `phase` scalar; the container derives the boolean and passes only
+// that to the pure view (no daemon string reaches it).
+//
+// #678 retargeted its primary consumer: the stop affordance is no longer a standalone control but the
+// composer send button's stop VARIANT (ComposerSendButton below), so this is that variant's gate. Three
+// further production consumers read it and are untouched: `shouldShowThinking` above, a cross-module
+// import in store/conversationActivityBridge.ts, and the tie documented at store/conversationActivityStore.ts.
 export function isTurnRunning(phase: TurnPhase): boolean {
   return phase === 'thinking' || phase === 'responding'
-}
-
-// #307: the client-owned accessible name for the icon-only interrupt button (the DROP_QUEUED_LABEL /
-// EMPTY_THREAD_COPY idiom). Icon-only buttons carry no visible text, so aria-label supplies the
-// accessible name (the .composer__send / .status-sheet__close pattern in this file). Conveys both "stop"
-// and "interrupt" (AC4). Never a daemon string.
-const INTERRUPT_LABEL = 'Stop the running turn'
-
-// #307: the interrupt control's pure view — the ThinkingIndicator twin (null-on-false) plus the
-// QueuedBacklog icon-button shape (aria-label from a client-owned constant, a required injected effect).
-// Pure props-in/markup-out and exported so tests server-render it with an injected boolean, no store.
-//
-// Takes `isRunning: boolean`, NOT `phase: TurnPhase` — the same type-level guarantee as ThinkingIndicator:
-// the view structurally cannot render a daemon-supplied string because it never receives one; the
-// container does the `isTurnRunning(phase)` derivation. `onInterrupt` is a REQUIRED injected effect (the
-// "a view that cannot answer is a bug" rule) — the container binds it to sendInterrupt; the view never
-// touches window.pyry.
-//
-// !isRunning → null (zero layout footprint, the ThinkingIndicator / QueuedBacklog posture — the
-// structural AC1 "absent at idle" guarantee). isRunning → an icon-only <button> carrying an inline M3
-// `stop` glyph (a filled square, the mobile-design gap's derived affordance per the spec's Design
-// source). Keyboard-activatable is free: a native <button> fires onClick on Enter/Space (AC4), so no
-// custom key handling. Not disabled after click and holding no "already interrupted" state — a second Esc
-// is harmless (the daemon owes no reply), and a disable-after-click flag would be new client state (AC3
-// forbids it); the control simply stays until `phase` leaves the running set.
-export function InterruptButton({
-  isRunning,
-  onInterrupt
-}: {
-  isRunning: boolean
-  onInterrupt: () => void
-}): JSX.Element | null {
-  if (!isRunning) return null
-  return (
-    <div className="conversation__interrupt">
-      <button
-        type="button"
-        className="interrupt-button"
-        aria-label={INTERRUPT_LABEL}
-        onClick={onInterrupt}
-      >
-        <svg
-          className="interrupt-button-icon"
-          viewBox="0 0 24 24"
-          width="22"
-          height="22"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M6 6h12v12H6z" />
-        </svg>
-      </button>
-    </div>
-  )
-}
-
-// The container for the interrupt control (#307), derives the is-running boolean and binds the injected
-// effect. window.pyry.sendCommand is dereferenced ONLY inside the click closure (interaction time, never
-// render — the Composer.handleSubmit / QueuedBacklogControl discipline), so the server-rendered container
-// smoke test never touches the bridge. No optimistic mutation: the helper only sends (AC3); the control
-// retracts when the daemon's next turn_state{idle} returns `phase` to idle — no new client state, no
-// "stopping" flag, no timers. In-file and not exported, like QueuedBacklogControl.
-//
-// #758: `phase` is the OPEN conversation's, so it arrives as a required prop from the container that
-// already holds it, rather than from a seventh subscription to the flat store. Giving this its own
-// conversation-scoped subscription instead would duplicate the id derivation and the memoised selector
-// here for no gain. DO NOT collapse this into InterruptButton at the mount site now that it looks like a
-// pointless wrapper: it is the seam that keeps the `window.pyry` dereference inside the click closure,
-// and inlining it would move that dereference into the container's render path, where `window.pyry` does
-// not exist under renderToStaticMarkup.
-function InterruptControl({ phase }: { phase: TurnPhase }): JSX.Element | null {
-  return (
-    <InterruptButton
-      isRunning={isTurnRunning(phase)}
-      onInterrupt={() => sendInterrupt({ sendCommand: window.pyry.sendCommand })}
-    />
-  )
 }
 
 // #296: the client-owned accessible name for the drop control (the EMPTY_THREAD_COPY / WORKSPACE_CHIP_LABEL
@@ -1977,12 +1905,124 @@ function ChannelInfoSheet({
   )
 }
 
+// The two client-owned accessible names the composer's one control wears, kept side by side because BOTH
+// ARE LOAD-BEARING e2e LOCATORS AND NEITHER MAY EVER BE REWORDED. `Send` is a getByRole locator at ~15
+// sites under e2e/ and the CONVERSATION_MARKER literal in App.test.tsx / PairedShell.test.tsx;
+// `Stop the running turn` is #307's INTERRUPT_LABEL verbatim, a getByRole locator in
+// queued-backlog-interrupt.spec.ts, real-claude-interrupt.spec.ts and real-claude-queue-drop.spec.ts (the
+// last two are real-claude tier, which SKIPS SILENTLY AND EXITS 0 without a credential — `npm run e2e`
+// cannot catch a break in them; use `npm run e2e:real:gate` and read the skip reasons). Icon-only buttons
+// carry no visible text, so aria-label supplies the accessible name (the .status-sheet__close pattern in
+// this file). Never daemon strings.
+const SEND_LABEL = 'Send'
+const INTERRUPT_LABEL = 'Stop the running turn'
+
+// #678: the composer's send control — ONE component with TWO VARIANTS, named for the .composer__send class
+// it owns (this file's component↔class habit) even though it also renders a stop. A running turn turns it
+// into the stop affordance, so interrupting is where the operator's hand already is; #307's standalone
+// InterruptButton / InterruptControl above the composer are deleted, not stacked on top of this.
+//
+// Pure props-in/markup-out and exported so tests server-render it with injected values, no store. Three
+// properties are load-bearing, each pinned by a named test:
+//
+//  1. It NEVER returns null — the deliberate departure from InterruptButton's null-on-false posture. The
+//     composer row holds exactly one button in every state, which is what makes AC1's "exactly one stop
+//     affordance renders" structural rather than a convention: a second one cannot be stacked above it.
+//  2. `isRunning` and `canSend` are SEPARATE booleans and only `canSend` gates. The stop variant is never
+//     disabled — #307's behaviour verbatim. A turn can be running while the session is disconnected, and
+//     disabling stop there would hide the only interrupt affordance at exactly the moment an operator most
+//     wants to try it (sendInterrupt already swallows a bridge failure). Do NOT collapse the two gates.
+//  3. It takes `isRunning: boolean`, NOT `phase: TurnPhase` — the ThinkingIndicator type-level guarantee:
+//     the view structurally cannot render a daemon-supplied string because it never receives one; the
+//     container does the `isTurnRunning(phase)` derivation.
+//
+// Both callbacks are REQUIRED injected effects (the "a view that cannot answer is a bug" rule) — the
+// container binds them; the view never touches window.pyry. Keyboard activation is free: a native <button>
+// fires onClick on Enter/Space. The stop variant is not disabled after a click and holds no "already
+// interrupted" state — a second click is harmless (the daemon owes no reply) and a disable-after-click flag
+// would be new client state (AC2 forbids it); it simply stays until `phase` leaves the running set.
+//
+// Both variants share the .composer__send chrome with no modifier class — the 48px round pill whose
+// :hover:not(:disabled) already behaves for a never-disabled button and whose :disabled never matches the
+// stop variant, so this ticket adds no CSS at all. The variants are distinguished in markup by aria-label
+// and glyph, which is exactly the seam the e2e locators already use. The stop glyph is Figma 114:3552's
+// `circle-stop-solid-full` exported verbatim at 28×28 (a disc with the square knocked out by the nonzero
+// fill rule — the two subpaths wind opposite ways, so do not "tidy" either one's direction). Its 28-unit
+// viewBox departs from this file's 24-unit habit deliberately: viewBox is only a coordinate space, the
+// rendered size comes from width/height, and rescaling the exported path by hand is transcription risk for
+// no gain. The send glyph is untouched at 24/22 — a filled disc needs more area than a thin arrow to read
+// at the same optical weight. Re-theming the send variant to circle-chevron-up-solid-full, and both glyphs
+// to --color-primary on an at-rest-invisible container as the Figma paints them, is one coherent follow-up.
+export function ComposerSendButton({
+  isRunning,
+  canSend,
+  onSend,
+  onInterrupt
+}: {
+  isRunning: boolean
+  canSend: boolean
+  onSend: () => void
+  onInterrupt: () => void
+}): JSX.Element {
+  if (isRunning) {
+    return (
+      <button
+        type="button"
+        className="composer__send"
+        aria-label={INTERRUPT_LABEL}
+        onClick={onInterrupt}
+      >
+        <svg
+          className="composer__send-icon"
+          viewBox="0 0 28 28"
+          width="28"
+          height="28"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M14 28C21.7328 28 28 21.7328 28 14C28 6.26719 21.7328 0 14 0C6.26719 0 0 6.26719 0 14C0 21.7328 6.26719 28 14 28ZM10.5 8.75H17.5C18.468 8.75 19.25 9.53203 19.25 10.5V17.5C19.25 18.468 18.468 19.25 17.5 19.25H10.5C9.53203 19.25 8.75 18.468 8.75 17.5V10.5C8.75 9.53203 9.53203 8.75 10.5 8.75Z" />
+        </svg>
+      </button>
+    )
+  }
+  return (
+    <button
+      type="button"
+      className="composer__send"
+      aria-label={SEND_LABEL}
+      onClick={onSend}
+      disabled={!canSend}
+    >
+      <svg
+        className="composer__send-icon"
+        viewBox="0 0 24 24"
+        width="22"
+        height="22"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8z" />
+      </svg>
+    </button>
+  )
+}
+
 // #602: `onMessageSent` fires exactly when the operator's message enters the timeline. REQUIRED, not
 // optional — `<Composer />` above is the only render site in the repo (Composer is not exported and no test
 // renders it), so requiring it costs no edit cascade and makes "forgot to wire it" a compile error. That is
 // the opposite call from Timeline's optional `scrollPin`, and for the opposite reason: there, 30 existing
 // render sites made optional the only non-cascading choice.
-function Composer({ onMessageSent }: { onMessageSent: () => void }): JSX.Element {
+//
+// #678: `phase` arrives on the same terms and for the same reason — the open conversation's phase, already
+// destructured by the container, handed down so the send button can derive its stop variant. A required
+// prop, not a subscription of its own.
+function Composer({
+  phase,
+  onMessageSent
+}: {
+  phase: TurnPhase
+  onMessageSent: () => void
+}): JSX.Element {
   // Thin controlled container over composerSend.submitMessage (the pairing container/pure-logic
   // split). Input text is ephemeral single-value screen-local state → useState, never the store
   // (ADR 0006). `dispatch` identity is stable, so selecting it adds no re-render churn.
@@ -2063,24 +2103,22 @@ function Composer({ onMessageSent }: { onMessageSent: () => void }): JSX.Element
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
         />
-        <button
-          type="button"
-          className="composer__send"
-          aria-label="Send"
-          onClick={handleSubmit}
-          disabled={!canSend}
-        >
-          <svg
-            className="composer__send-icon"
-            viewBox="0 0 24 24"
-            width="22"
-            height="22"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8z" />
-          </svg>
-        </button>
+        {/* #678: one control, two variants. `isRunning` is derived from `phase` on EVERY render and is
+            never a local flag set on click, so a turn that ends on its own returns the button to send with
+            no user action (AC3). It is gated on isTurnRunning(phase) ALONE: #650's `localSendPending`
+            opens the working-indicator window while `phase` is still the daemon-owned `idle`, and wiring
+            it in here would arm a stop button for a turn the daemon has not started. `onInterrupt` MUST
+            stay an arrow function so `window.pyry` is dereferenced at interaction time, never during
+            render — hoisting it (or the deps object) would move that dereference into the render path,
+            where `window.pyry` does not exist under renderToStaticMarkup, and every container smoke test
+            would throw. No optimistic state: the button returns to send on the daemon's next
+            turn_state{idle}, which the live store subscription renders. */}
+        <ComposerSendButton
+          isRunning={isTurnRunning(phase)}
+          canSend={canSend}
+          onSend={handleSubmit}
+          onInterrupt={() => sendInterrupt({ sendCommand: window.pyry.sendCommand })}
+        />
       </div>
     </div>
   )
@@ -2292,7 +2330,7 @@ function BackControl({ onBack }: { onBack?: () => void }): JSX.Element | null {
 // #276: the thread top app bar's trailing overflow menu's pure view (Figma node 16-16) — the
 // BackControl twin on the right edge, the single entry point to per-conversation actions. Props-in /
 // markup-out with NO state and NO effects, so renderToStaticMarkup renders both the collapsed and open
-// states directly (the entire tested contract, the InterruptButton / ThinkingIndicator posture). The
+// states directly (the entire tested contract, the ComposerSendButton / ThinkingIndicator posture). The
 // interaction shell (toggle, Escape / outside-click dismiss, focus-return) lives in the container below.
 //
 // The trigger is an icon-only <button> carrying the 24px more_vert glyph (Figma 16-17) in a 48px frame,

@@ -11,8 +11,10 @@ store](conversation-activity-store.md) shipped for #747 and the [conversation ti
 holder](conversation-timeline-holder.md) shipped for #755 before their own feeds landed. #776 then made it
 survive a restart. **#777 landed the writer** — see [Configuration and usage](#configuration-and-usage)
 below and [Paired shell § The last-read stamp](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777)
-for the write path itself. #778 derives the unread predicate from it, #779 clears it at the pairing
-boundary, and #676 draws the resulting dot — still open.
+for the write path itself. **[#778](conversation-unread.md) landed the reader** — a framework-free predicate
+over this store's `selectLastReadFor` and [conversation timeline holder](conversation-timeline-holder.md)'s
+`selectTimelineFor`, reading neither via a bound hook here. #779 clears it at the pairing boundary, and
+#676 draws the resulting dot — both still open.
 
 ## What it does
 
@@ -105,17 +107,18 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   stamp](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777) for the write path,
   including a reachable, deliberately unfixed edge case where the pairing- and conversation-teardown
   clears can persist a spurious `0` over a true mark (below).
-  **No reader, no clear yet** — #778 (reader), #779 (pairing-boundary clear, served by
-  `storage.write(new Map())` — no dedicated `clear()` method exists on the port) are still open.
+  **Reader landed in [#778](conversation-unread.md).** No clear yet — #779 (pairing-boundary clear, served
+  by `storage.write(new Map())` — no dedicated `clear()` method exists on the port) is still open.
 
 ## Edge cases and limitations
 
-- **A recreated timeline slice can restart below a stale mark.** [Conversation timeline
+- **A recreated timeline slice restarts below a stale mark, and reads as read — decided in
+  [#778](conversation-unread.md), not a bug.** [Conversation timeline
   holder](conversation-timeline-holder.md) evicts at ten slices; an evicted key reads absent, and if
   content later arrives the slice is recreated with `items.length` starting near zero. A held mark of, say,
-  `47` against a recreated count of `1` compares as "read," hiding the unread dot until #778 decides
-  otherwise. `selectTimelineFor(id) === null` is distinguishable from a present-but-recreated slice, so the
-  information needed to do better exists — left as an open question for #778, not solved here.
+  `47` against a recreated count of `1` compares as "read," hiding the unread dot. `isConversationUnread`
+  answers this the direction the ticket states: a missed mark beats a stuck one nobody can clear. Recovering
+  it would need a history backfill this app does not have.
 - **Unbounded, by design, including across restarts.** No cap on distinct conversation ids held, and
   #776's persistence didn't change that ruling — an entry is one bounded id string plus one small integer,
   on the order of 50 bytes, against a `localStorage` budget in the megabytes (roughly a hundred thousand
@@ -140,6 +143,9 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 
 ## Related decisions
 
+- [Conversation unread predicate](conversation-unread.md) — #778, the reader: a framework-free predicate
+  over `selectLastReadFor` and [conversation timeline holder](conversation-timeline-holder.md)'s
+  `selectTimelineFor`, and the resolution of the recreated-slice edge case above.
 - [Conversation activity store](conversation-activity-store.md) — the earliest direct structural precedent
   for this shape: `ReadonlyMap` + copy-on-write + selector-factory, applied to a different per-conversation
   payload.

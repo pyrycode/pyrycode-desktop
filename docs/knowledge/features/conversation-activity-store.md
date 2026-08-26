@@ -13,6 +13,11 @@ closed the store out — `dropConversation` on a `conversationDeleted` arm and `
 `connected` edge — so the map is now bounded across both a single deletion and a pairing change. It is
 still read by nobody — the still-unbuilt sidebar (#676) is the first reader.
 
+[Conversation status resolver](conversation-status.md) (#799) is the first module to consume
+`ConversationActivityEntry` as a type — the only symbol it imports, and only via `import type`, so this
+store's runtime singleton is never dragged into the resolver's test graph. It does not call
+`selectActivityFor` itself; that lookup is #801's, unbuilt.
+
 ## What it does
 
 Holds, per conversation id, the four booleans in `ConversationActivityEntry`:

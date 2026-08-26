@@ -10,6 +10,11 @@ by #777 (which stamps the open conversation's mark). [#676](https://github.com/p
 draws the green "New messages" dot from it and carries the Figma reference — still open, and owns the
 still-undecided question of where the two-store composition below lives.
 
+[Conversation status resolver](conversation-status.md) (#799) is the first module to consume this
+predicate's *output* rather than its inputs: it takes the resulting `boolean` as a parameter and joins it
+with the activity store's four facts. It does not call `isConversationUnread` itself and never touches
+this file's two source stores — that composition is still #801's, unbuilt.
+
 ## What it does
 
 Takes the two source stores' selector outputs — a `TimelineState | null` and a `LastReadMark | null` — and

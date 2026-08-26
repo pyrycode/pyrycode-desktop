@@ -12,6 +12,11 @@ import { useConversationDeletedExit } from './store/conversationDeletedBridge'
 import { useArchivedActiveConversationExit } from './store/conversationArchivedBridge'
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { usePushNotify } from './store/pushNotifyBridge'
+import {
+  conversationLastReadDeps,
+  stampLastReadFor,
+  useConversationLastRead
+} from './store/conversationLastReadBridge'
 import { activateConversation, type ActivateConversationDeps } from './activateConversation'
 import {
   clearPairingScopedState,
@@ -46,7 +51,13 @@ const activateDeps: ActivateConversationDeps = {
   setActiveConversation: (conversation) =>
     activeConversationStore.getState().setActiveConversation(conversation),
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
-  clearSessionId: () => sessionIdStore.getState().clearSessionId()
+  clearSessionId: () => sessionIdStore.getState().clearSessionId(),
+  // #777: restore point 1 of "the open conversation's mark equals its own held item count" — the stamp
+  // for the conversation being opened. It reaches its two singletons through the bridge's own production
+  // wiring object rather than a fourth `getState()` arrow here, so the sampling branch lives in one
+  // tested place; `stampLastReadFor` never consults the open conversation, so the id below is the whole
+  // input. Restore point 2 is `useConversationLastRead` in the container.
+  stampLastRead: (conversationId) => stampLastReadFor(conversationLastReadDeps, conversationId)
 }
 
 /**
@@ -261,6 +272,18 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // Settings push toggle (#408), ask main to raise an OS notification (#391 owns the unfocused-window
   // gate). A headless subscriber — no nav, no payload — that tears down with the shell on unpair.
   usePushNotify()
+  // #777: restore point 2 — keep the OPEN conversation's last-read mark level with its own held item
+  // count as content lands, so a chat the operator is looking at never accrues an unread mark against
+  // itself. It observes conversationTimelineStore rather than the daemon-event channel: the composer's
+  // optimistic echo writes that store with no IPC arm behind it, and a second `onDaemonEvent` listener
+  // would sample the count before or after the timeline fan-out depending on registration order.
+  // Deliberately mounted HERE and not app-level beside the eight headless leaves in App: those exist for
+  // conversations the operator has NEVER opened, whereas this one only ever writes the OPEN conversation
+  // — a concept that exists only inside the paired shell. Every path that unmounts this shell clears the
+  // active conversation first, so there is no state in which a conversation is open and this is not
+  // listening. It subscribes for its effect only, never for render, so this container still subscribes to
+  // no store and stays server-renderable.
+  useConversationLastRead()
   return (
     <PairedShellView
       route={route}

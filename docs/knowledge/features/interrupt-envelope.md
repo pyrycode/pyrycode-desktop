@@ -89,8 +89,13 @@ generic `sendCommand(command: RendererCommand)` pipe already carries the new mem
 ### The render affordance (#307)
 
 `InterruptControl`, in `src/renderer/src/screens/conversation/ConversationScreen.tsx`, mounted
-immediately before `<Composer />`. It reads the existing `useTimelineStore(selectPhase)` slice — no
-new subscription — and derives an exported gate predicate:
+immediately before `<Composer />`. It read the existing `useTimelineStore(selectPhase)` slice — no
+new subscription — through
+[#758](https://github.com/pyrycode/pyrycode-desktop/issues/758), which took `phase: TurnPhase` as a
+required prop from the container instead (`<InterruptControl phase={phase} />`) as one of the seven reads
+that ticket moved off the flat store — see [Conversation shell § The open-conversation reader
+cutover](conversation-shell.md#the-open-conversation-reader-cutover-758). Either way it derives the same
+exported gate predicate:
 
 ```ts
 export function isTurnRunning(phase: TurnPhase): boolean {
@@ -109,7 +114,8 @@ and swallow on failure, **no local dispatch**. `window.pyry` is dereferenced onl
 closure, never at render.
 
 No new client-side state represents "stopping": the control retracts when the daemon's next
-`turn_state{idle}` returns `phase` to idle through the existing store subscription. The mobile Figma
+`turn_state{idle}` returns `phase` to idle — through the container's own subscription since
+[#758](https://github.com/pyrycode/pyrycode-desktop/issues/758), previously this component's own. The mobile Figma
 file draws only the steady-send composer state (16-61) and has no stop/interrupt component in the
 design system, so the button is derived from `.composer__send` plus a generic M3 `stop` glyph, kept
 neutral-coloured on purpose (N/A + justification, per memory `ticket-146-interrupt-turn-split`; a
@@ -159,6 +165,11 @@ bespoke stop/error visual is a deferred follow-up flagged to Juhana).
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § interrupt; pyrycode #707 (bare
   `interrupt` → single claude Esc, `interactive`-gated, fire-and-forget,
   `TestV2Session_Interrupt_RoutesEscByCapability`).
+- [Conversation shell § The open-conversation reader
+  cutover](conversation-shell.md#the-open-conversation-reader-cutover-758) —
+  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) moved `phase` from
+  `InterruptControl`'s own `useTimelineStore(selectPhase)` read to a required prop from the container,
+  which now derives `phase` from the open conversation's own retained timeline slice.
 - [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#445 codebase notes](../codebase/445.md) —
   the tier-3 real-stack liveness net over this chain: `e2e/real-claude-interrupt.spec.ts` interrupts a
   genuinely running turn (real daemon + real claude), proving the retract-on-`turn_state{idle}` /

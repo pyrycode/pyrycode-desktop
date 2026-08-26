@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { HelloAckPayload, MessagePayload, ErrorPayload } from '@shared/wire/types'
-import { translateTimelineEvent, timelineTargetFor, subscribeTimeline } from './timelineBridge'
+import {
+  translateTimelineEvent,
+  timelineTargetFor,
+  timelineWriteTarget,
+  subscribeTimeline
+} from './timelineBridge'
 import {
   createTimelineStore,
   selectItems,
@@ -522,6 +527,68 @@ describe('timelineTargetFor', () => {
   })
 })
 
+// #785: the write-key half of the routing contract. `timelineTargetFor` above answers "what did the
+// event say"; this answers "which slice does the fan-out write into" — and the two are separate
+// functions precisely so the open conversation never becomes a property of the event.
+describe('timelineWriteTarget (#785)', () => {
+  it("returns the event's OWN id and never consults the open conversation", () => {
+    const getOpen = vi.fn((): string | null => 'conv-open')
+    const event: ThreadEvent = { type: 'assistantDelta', turnId: 'A', seq: 0, text: 'hi' }
+
+    expect(timelineWriteTarget(event, 'conv-own', getOpen)).toBe('conv-own')
+    // The strongest statement of "no misattribution": an attributed arm cannot be diverted by what
+    // happens to be on screen, because the open conversation is never even read for it.
+    expect(getOpen).not.toHaveBeenCalled()
+  })
+
+  it('files a sessionBoundary into the conversation on screen', () => {
+    const getOpen = vi.fn((): string | null => 'conv-open')
+    const event: ThreadEvent = {
+      type: 'sessionBoundary',
+      reason: 'workspace_change',
+      workspaceCwd: '/home/user/next',
+      occurredAt: '2026-07-10T00:00:00.000000000Z'
+    }
+
+    expect(timelineWriteTarget(event, null, getOpen)).toBe('conv-open')
+    expect(getOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('files a reconnect into the conversation on screen', () => {
+    expect(timelineWriteTarget({ type: 'reconnected' }, null, () => 'conv-open')).toBe('conv-open')
+  })
+
+  it('AC3: returns null when no conversation is open, inventing no key', () => {
+    expect(timelineWriteTarget({ type: 'reconnected' }, null, () => null)).toBeNull()
+  })
+
+  // Unreachable in production today — `sessionTransition`'s wire payload has no conversation id. It is
+  // pinned because it is what makes a future wire widening safe with no edit here: the event's own
+  // attribution wins, so the switch can never silently override a real id.
+  it('the precedence pin: an id on an id-less arm still wins over the open conversation', () => {
+    const getOpen = vi.fn((): string | null => 'conv-open')
+    const event: ThreadEvent = {
+      type: 'sessionBoundary',
+      reason: 'workspace_change',
+      workspaceCwd: null,
+      occurredAt: '2026-07-10T00:00:00.000000000Z'
+    }
+
+    expect(timelineWriteTarget(event, 'conv-own', getOpen)).toBe('conv-own')
+    expect(getOpen).not.toHaveBeenCalled()
+  })
+
+  // The fallback is ENUMERATED, never blanket: an unattributed arm outside the two named ones falls to
+  // `default` and is dropped from the keyed path — the same safe failure direction `timelineTargetFor`
+  // has. A blanket `conversationId ?? getOpen()` would file it onto the thread on screen instead.
+  it("the default's safe direction: any other unattributed arm resolves to null, getter untouched", () => {
+    const getOpen = vi.fn((): string | null => 'conv-open')
+
+    expect(timelineWriteTarget({ type: 'userText', text: 'x' }, null, getOpen)).toBeNull()
+    expect(getOpen).not.toHaveBeenCalled()
+  })
+})
+
 describe('subscribeTimeline', () => {
   // A fake onDaemonEvent that captures the listener and hands back an off spy — the runConfigSnapshot
   // fakeBridge idiom.
@@ -924,29 +991,44 @@ describe('subscribeTimeline', () => {
 
   // #756: the fan-out, driven through TWO REAL stores by a callback IDENTICAL IN SHAPE to
   // `useTimelineBridge`'s (timelineBridge.ts) — flat first and unconditional, keyed second and guarded
-  // on a non-null id. The hook body stays untested window glue; this local helper is what covers its
-  // logic, and keeping it a faithful copy is what lets review diff the two side by side.
+  // on the resolved write target. The hook body stays untested window glue; this local helper is what
+  // covers its logic, and keeping it a faithful copy is what lets review diff the two side by side.
+  // #785 moved the decision itself into `timelineWriteTarget`, so the copy shrank to three statements.
   describe('the dual write into both stores (#756)', () => {
     function fanOut(
       flat: ReturnType<typeof createTimelineStore>,
-      keyed: ReturnType<typeof createConversationTimelineStore>
+      keyed: ReturnType<typeof createConversationTimelineStore>,
+      getOpenConversationId: () => string | null
     ): (event: ThreadEvent, conversationId: string | null) => void {
       return (event, conversationId) => {
         flat.getState().dispatch(event)
-        if (conversationId !== null) keyed.getState().dispatchFor(conversationId, event)
+        const target = timelineWriteTarget(event, conversationId, getOpenConversationId)
+        if (target !== null) keyed.getState().dispatchFor(target, event)
       }
     }
 
+    // The open conversation is a MUTABLE local read through the injected getter, not a constructor
+    // argument: the operator switching chats between two events on one long-lived listener is a case
+    // these tests have to be able to express (#785). It starts `null` — no conversation open.
     function wired(): {
       bridge: ReturnType<typeof fakeBridge>
       flat: ReturnType<typeof createTimelineStore>
       keyed: ReturnType<typeof createConversationTimelineStore>
+      setOpen: (conversationId: string | null) => void
     } {
       const bridge = fakeBridge()
       const flat = createTimelineStore()
       const keyed = createConversationTimelineStore()
-      subscribeTimeline(bridge.onDaemonEvent, fanOut(flat, keyed))
-      return { bridge, flat, keyed }
+      let open: string | null = null
+      subscribeTimeline(bridge.onDaemonEvent, fanOut(flat, keyed, () => open))
+      return {
+        bridge,
+        flat,
+        keyed,
+        setOpen: (conversationId) => {
+          open = conversationId
+        }
+      }
     }
 
     const sliceOf = (
@@ -1025,7 +1107,10 @@ describe('subscribeTimeline', () => {
       expect(sliceOf(keyed, 'conv-open')).toBe(openBefore)
     })
 
-    it('AC3/AC4: the two id-less owned arms reach the flat store and create NO slice', () => {
+    // #785 made this test's AC3 half CONDITIONAL — with a conversation open both arms now file into it
+    // — so the name has to say which case it pins. Its AC4 half was always unconditional and is
+    // unchanged: the flat store receives both arms exactly as it does today.
+    it('AC3/AC4: with NO conversation open, the two id-less arms reach flat and create NO slice', () => {
       const { bridge, flat, keyed } = wired()
 
       const idLess: DaemonEvent[] = [
@@ -1047,24 +1132,27 @@ describe('subscribeTimeline', () => {
       expect(keyed.getState().timelines.size).toBe(0)
     })
 
-    it('AC3: an id-less arm leaves an ALREADY-HELD slice untouched by reference (no fallback)', () => {
-      const { bridge, keyed } = wired()
+    // The probe stays `sessionTransition` (#784 chose it, #785 keeps it) because it tail-appends a real
+    // row: a write landing on the wrong slice is visible in that slice's items, not merely in a fresh
+    // reference. Asserting against an EMPTY map would pass for the wrong reason — misfiling needs
+    // somewhere to misfile into — so both tests below hold a slice for a conversation that is NOT the
+    // one on screen.
+    it('AC1: a session boundary lands in the conversation ON SCREEN, not in another held slice', () => {
+      const { bridge, keyed, setOpen } = wired()
 
+      setOpen('conv-a')
       bridge.emit({
         type: 'assistantDelta',
         turnId: 'A',
         seq: 0,
         text: 'held',
-        conversationId: 'conv-open'
+        conversationId: 'conv-a'
       })
-      const before = sliceOf(keyed, 'conv-open')
-      expect(before).not.toBeNull()
+      const aBefore = sliceOf(keyed, 'conv-a')
+      expect(aBefore).not.toBeNull()
 
-      // Asserting no-fallback against an EMPTY map would pass for the wrong reason: a `?? active`
-      // fallback only misfiles when there is somewhere to misfile into. The probe is
-      // `sessionTransition` (#784 moved `unrecognizedMessage` out of the id-less group): it
-      // tail-appends a real row, so a fallback would be visible in the held slice's items, not
-      // merely in a fresh reference.
+      // The operator switches chats between the two events — the write follows the SCREEN, per event.
+      setOpen('conv-b')
       bridge.emit({
         type: 'sessionTransition',
         newSessionId: 'sess-2',
@@ -1073,7 +1161,93 @@ describe('subscribeTimeline', () => {
         workspaceCwd: '/home/user/next'
       })
 
-      expect(sliceOf(keyed, 'conv-open')).toBe(before)
+      expect(sliceOf(keyed, 'conv-b')?.items.map((i) => i.kind)).toEqual(['sessionBoundary'])
+      // conv-a is untouched BY REFERENCE — not merely equal.
+      expect(sliceOf(keyed, 'conv-a')).toBe(aBefore)
+    })
+
+    it('AC1: a session boundary tail-appends into the thread being read, in arrival order', () => {
+      const { bridge, keyed, setOpen } = wired()
+
+      setOpen('conv-a')
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'A',
+        seq: 0,
+        text: 'held',
+        conversationId: 'conv-a'
+      })
+      bridge.emit({
+        type: 'sessionTransition',
+        newSessionId: 'sess-2',
+        reason: 'workspace_change',
+        occurredAt: '2026-07-10T00:00:00.000000000Z',
+        workspaceCwd: '/home/user/next'
+      })
+
+      expect(sliceOf(keyed, 'conv-a')?.items.map((i) => i.kind)).toEqual([
+        'assistantText',
+        'sessionBoundary'
+      ])
+    })
+
+    // AC2, through both halves of the reducer's Mode A / Mode B split: the chrome scalars reset while
+    // `items` survives BY REFERENCE (threadTimeline.ts). The retry status is driven through the bridge
+    // by a real rising edge rather than hand-built, so the fixture cannot drift from the reducer.
+    it("AC2: a reconnect clears the open thread's chrome and leaves its rows by reference", () => {
+      const { bridge, keyed, setOpen } = wired()
+
+      setOpen('conv-a')
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'A',
+        seq: 0,
+        text: 'held',
+        conversationId: 'conv-a'
+      })
+      bridge.emit({
+        type: 'apiRetry',
+        active: true,
+        current: 3,
+        total: 10,
+        conversationId: 'conv-a'
+      })
+      const before = sliceOf(keyed, 'conv-a')
+      expect(before?.apiRetry).not.toBeNull()
+      const itemsBefore = before?.items
+
+      bridge.emit({ type: 'connected', ack })
+
+      const after = sliceOf(keyed, 'conv-a')
+      expect(after?.apiRetry).toBeNull()
+      expect(after?.items).toBe(itemsBefore)
+    })
+
+    it('AC3: a reconnect with no conversation open leaves a held slice untouched by reference', () => {
+      const { bridge, keyed } = wired()
+
+      bridge.emit({
+        type: 'assistantDelta',
+        turnId: 'A',
+        seq: 0,
+        text: 'held',
+        conversationId: 'conv-a'
+      })
+      bridge.emit({
+        type: 'apiRetry',
+        active: true,
+        current: 3,
+        total: 10,
+        conversationId: 'conv-a'
+      })
+      const before = sliceOf(keyed, 'conv-a')
+      expect(before?.apiRetry).not.toBeNull()
+
+      bridge.emit({ type: 'connected', ack })
+
+      // The whole slice by reference — the stuck banner stays stuck rather than being reconciled onto
+      // a conversation nobody is reading, and no key was invented.
+      expect(sliceOf(keyed, 'conv-a')).toBe(before)
       expect(keyed.getState().timelines.size).toBe(1)
     })
 

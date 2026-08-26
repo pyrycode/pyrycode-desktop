@@ -5,12 +5,12 @@ The renderer's held mark of how far the operator has read into **each** conversa
 something true to compare a chat's latest activity against. Client-side fiction: the daemon carries no
 read cursor at all.
 
-Introduced in [#775](../codebase/775.md), split from #677. Ships dormant — the holder and its read
+Introduced in [#775](../codebase/775.md), split from #677. Shipped dormant — the holder and its read
 surface only, no writer, no reader — the same "populated and unread" posture the [conversation activity
 store](conversation-activity-store.md) shipped for #747 and the [conversation timeline
-holder](conversation-timeline-holder.md) shipped for #755 before their own feeds landed. #776 persists it,
-#777 stamps it on open and on each arm arrival, #778 derives the unread predicate from it, #779 clears it
-at the pairing boundary, and #676 draws the resulting dot.
+holder](conversation-timeline-holder.md) shipped for #755 before their own feeds landed. #776 then made it
+survive a restart. #777 stamps it on open and on each arm arrival, #778 derives the unread predicate from
+it, #779 clears it at the pairing boundary, and #676 draws the resulting dot — all still open.
 
 ## What it does
 
@@ -58,18 +58,46 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   is one number plus one bounded id string, the cheapest in the family — below [conversation activity
   store](conversation-activity-store.md)'s four booleans and far below [background-task roster
   store](background-task-roster-store.md)'s ~5 KB, both of which already decline a cap. The map is emptied
-  wholesale at the pairing boundary by #779; persisted size becomes a real question once #776 lands.
+  wholesale at the pairing boundary by #779. #776's persistence ruled on the size question this raised —
+  see the Edge cases entry below — and the answer stayed no: no ceiling, no prune-on-load, no LRU.
+- **Persisted since #776**, through an injected `ConversationLastReadStorage` port — mirroring [default-workspace
+  store](default-workspace-store.md) (#403) and [push-notification preference
+  store](push-notification-preference-store.md) (#408) — defaulting to a real `localStorage`-backed port,
+  under the fixed key `pyry.conversationLastRead`. The whole map is encoded as a JSON array of `[id, mark]`
+  entries (`encodeLastReadMarks`/`decodeLastReadMarks`), never as an object: that is what keeps the
+  untrusted `conversationId` out of any object key space in *either* direction, on top of the `ReadonlyMap`
+  keeping it out of memory's key space. `JSON.stringify(map)` itself would silently lose the whole map — a
+  `Map`'s entries are not own enumerable properties — and `Object.fromEntries`/a map-into-object
+  spread/an `obj[id] = mark` loop would each put the untrusted id back into an object key; because a mark
+  is a number, the `__proto__` case of that mistake doesn't pollute anything, it just drops the entry
+  silently (the setter no-ops). Hydration happens once, at store construction (`storage.read()`), with no
+  explicit load step at any call site. A malformed, absent, or non-conforming blob decodes to an empty map
+  — **reject whole, never salvage per entry**, and silently, per the log-free rule below. The write-through
+  call sits *inside* `recordLastRead`'s updater, *behind* the same-value guard, not ahead of it as the two
+  scalar-preference precedents persist: `appendDelta` grows a streamed reply's tail item in place rather
+  than appending, so `items.length` is unchanged across most deltas, but #777 stamps the open conversation
+  on every delta — persisting ahead of the guard would fire one `localStorage.setItem` per delta.
+- **Testing a hostile key needs the right prototype probe.** `Object.prototype` owns a `__proto__`
+  accessor by spec, so `Object.prototype.hasOwnProperty.call(Object.prototype, '__proto__')` is already
+  `true` on a pristine realm — asserting it `false` fails on *correct* code. The assertion that actually
+  detects pollution is that the own descriptor still carries a `get`/`set` pair (pollution replaces the
+  accessor with a plain data property). `someKey`-shaped made-up probes don't have this problem.
 - **Log-free by construction.** No `console.*` on any path — a diagnostic here would carry the untrusted
-  conversation id. A read miss and a same-value write are both silent by design.
+  conversation id or the raw persisted blob. A read miss, a same-value write, and a rejected persisted blob
+  are all silent by design.
 
 ## Configuration and usage
 
 - File: `src/renderer/src/store/conversationLastReadStore.ts`.
-- Singleton: `conversationLastReadStore`. Hook: `useConversationLastReadStore(selector)`.
+- Singleton: `conversationLastReadStore`, wired over `localStorageConversationLastRead()`. Hook:
+  `useConversationLastReadStore(selector)`.
 - Read one conversation: `useConversationLastReadStore(selectLastReadFor(conversationId))`.
-- **No writer, no reader, no clear.** Nothing imports this module yet — grepping for
-  `recordLastRead`/`selectLastReadFor`/`useConversationLastReadStore` outside this store's own test
-  returns nothing. #777 (writer), #778 (reader), #779 (pairing-boundary clear) are still open.
+- Persistence key: `pyry.conversationLastRead` (the app's third `localStorage` key — a shared
+  key-namespacing helper was considered and declined; see Related decisions).
+- **No writer, no reader, no clear yet.** Nothing imports this module outside its own test — grepping for
+  `recordLastRead`/`selectLastReadFor`/`useConversationLastReadStore` outside the test file returns
+  nothing. #777 (writer), #778 (reader), #779 (pairing-boundary clear, served by `storage.write(new
+  Map())` — no dedicated `clear()` method exists on the port) are still open.
 
 ## Edge cases and limitations
 
@@ -79,8 +107,12 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   `47` against a recreated count of `1` compares as "read," hiding the unread dot until #778 decides
   otherwise. `selectTimelineFor(id) === null` is distinguishable from a present-but-recreated slice, so the
   information needed to do better exists — left as an open question for #778, not solved here.
-- **Unbounded in memory, by design, for now.** No cap on distinct conversation ids held. Justified today by
-  entry cost (see above); revisit once #776 makes the map survive a restart.
+- **Unbounded, by design, including across restarts.** No cap on distinct conversation ids held, and
+  #776's persistence didn't change that ruling — an entry is one bounded id string plus one small integer,
+  on the order of 50 bytes, against a `localStorage` budget in the megabytes (roughly a hundred thousand
+  conversations since the last pairing), and the keyspace is bounded by the operator's own opening of
+  conversations rather than by anything the daemon can mint. No bound, no prune-on-load, no LRU. #779's
+  pairing-boundary clear remains the only floor.
 - **`recordLastRead` is named to avoid a collision, not by convention.** [Conversation timeline
   holder](conversation-timeline-holder.md) already exports a nullary `markViewed`, which means something
   unrelated (eviction ranking). `record…` says a value is being written; `mark…` in this directory says it
@@ -96,6 +128,12 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   inherit.
 - [Thread timeline](thread-timeline.md) — `TimelineState.items`, the quantity a mark is a sample of; this
   store imports nothing from it directly (see the hard import constraint above).
-- [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md).
+- [Default-workspace store](default-workspace-store.md) and [push-notification preference
+  store](push-notification-preference-store.md) — the two scalar-preference precedents #776's persistence
+  copies the port/key/hydrate-then-read shape from, and diverges from on two axes: this store persists a
+  keyed map (an encode/decode step over untrusted input, absent from either precedent) and writes through
+  behind an existing same-value guard rather than unconditionally.
+- [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md)
+  — why the decode's reject path must stay silent rather than logging the untrusted blob.
 - [#775 codebase notes](../codebase/775.md) — the holder's implementation summary, code review, and
   lessons learned.

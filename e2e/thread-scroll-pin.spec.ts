@@ -6,6 +6,7 @@ import type {
   AssistantDeltaPayload,
   SendMessagePayload,
   SessionTransitionPayload,
+  StallPayload,
   ToolUsePayload,
   TurnEndPayload,
   TurnStatePayload,
@@ -133,16 +134,35 @@ const sessionTransitionFrame = (): Uint8Array =>
     } satisfies SessionTransitionPayload
   })
 
-/** The coarse turn-phase scalar. `thinking` mounts the working indicator (and the interrupt control) —
- *  chrome BETWEEN the thread and the composer, which is what the fourth criterion is about. `idle` closes
- *  both, and since #650 it is also what closes the window the composer's own accept opens locally, which is
- *  why the primer's reply stream ends with one. */
+/** The coarse turn-phase scalar. `thinking` mounts the working indicator's label (and the interrupt
+ *  control); `idle` closes both, and since #650 it is also what closes the window the composer's own accept
+ *  opens locally, which is why the primer's reply stream ends with one.
+ *
+ *  #796 NARROWED what this frame does to the LAYOUT. The working indicator's text is no longer a bubble in
+ *  the loose region between the thread and the composer — it is the label inside a fixed-height status row
+ *  that is mounted at all times, precisely so the composer stops moving when the text comes and goes. So
+ *  this frame no longer shrinks the thread's viewport, and it is no longer what the fourth criterion turns
+ *  on; `stallFrame` below is. It stays for the mount assertion and to leave the turn running for the
+ *  userText step after it. */
 const turnStateFrame = (state: WireTurnState): Uint8Array =>
   encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'turn_state',
     ts: FIXED_TS,
     payload: { conversation_id: SEEDED_ROW.id, state } satisfies TurnStatePayload
+  })
+
+/** The stall onset (#315/#317) — a server push a real daemon emits when claude goes quiet mid-turn, the
+ *  stall-bundle.spec.ts:60 builder's shape. It mounts `.conversation__stall`, one of the three indicators
+ *  #796 left in the loose region with their bubble treatment intact, so it is what still SHRINKS the
+ *  thread's viewport by tens of pixels — the fourth criterion's actual subject. conversation_id is set for
+ *  realism; the timeline bridge drops it (#732), so it does not gate rendering. */
+const stallFrame = (): Uint8Array =>
+  encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'stall',
+    ts: FIXED_TS,
+    payload: { conversation_id: SEEDED_ROW.id } satisfies StallPayload
   })
 
 /**
@@ -287,12 +307,26 @@ test('an arriving item of every kind leaves a bottom-resting thread at the botto
   // the tracked flag is untouched by construction, and the re-assert returns the view to the new bottom.
   // A raw re-measurement at arrival time would instead read "not at bottom" and silently un-pin here.
   //
-  // This frame MOUNTS the indicator rather than finding it already there — the primer's zero-count gate is
-  // what makes that true, and it is not optional (#650). The wait below cannot tell the two apart on its
-  // own: `toBeVisible` reads the element's current state, not which frame put it on screen.
+  // #796 MOVED THIS ONTO THE STALL INDICATOR, and that swap is the whole point of the criterion rather
+  // than a cosmetic one. The working indicator used to be this region's shrinking chrome; #796 made its
+  // text the label of a status row that holds a fixed height at all times, so `turn_state{thinking}` now
+  // mounts a label INSIDE an already-present row and shrinks nothing. Left pointing there, this criterion
+  // would still pass — against a viewport that never moved, testing nothing. The stall indicator kept its
+  // bubble treatment and its null-at-rest posture in that ticket, so it is what still shrinks the region.
+  daemon.pushFrame(stallFrame())
+  await expect(page.locator('.conversation__stall')).toBeVisible({ timeout: STREAM_TIMEOUT_MS })
+  await expectPinnedToBottom(page)
+
+  // The working indicator's label still MOUNTS on this frame rather than being found already there — the
+  // primer's zero-count gate is what makes that true, and it is not optional (#650). The wait cannot tell
+  // the two apart on its own: `toBeVisible` reads the element's current state, not which frame put it on
+  // screen. It no longer moves the viewport (above), so no pin assertion hangs off it; it is here because
+  // the userText step below needs the turn left RUNNING, and because it is the e2e regression proof that
+  // #796 kept `.conversation__thinking` as the working indicator's identity hook when the bubble went away.
+  // Turn activity also self-clears the stall flag, so the indicator above retracts on this same frame.
   daemon.pushFrame(turnStateFrame('thinking'))
   await expect(page.locator('.conversation__thinking')).toBeVisible({ timeout: STREAM_TIMEOUT_MS })
-  await expectPinnedToBottom(page)
+  await expect(page.locator('.conversation__stall')).toHaveCount(0)
 
   // `userText` — the only kind that reaches the store through the local optimistic dispatch instead of an
   // inbound frame. The fake answers this send with no frames, so the echo is the whole mutation.

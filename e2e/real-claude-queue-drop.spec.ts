@@ -157,8 +157,10 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   const conversation = page.locator('.conversation')
   const sendButton = page.getByRole('button', { name: 'Send' })
   const composer = page.getByPlaceholder('Message…')
-  // The interrupt affordance's accessible name (InterruptButton's aria-label), present ONLY while the turn
-  // runs (isTurnRunning === thinking || responding), null at idle — the "turn 1 still running" gate.
+  // The interrupt affordance's accessible name (#678: the composer send button's stop-variant aria-label),
+  // present ONLY while the turn runs (isTurnRunning === thinking || responding), and replaced by the Send
+  // variant at idle — the "turn 1 still running" gate. `sendButton` and this are the SAME element in two
+  // states, which is exactly why msg2 below goes in by Enter.
   const interruptButton = page.getByRole('button', { name: 'Stop the running turn' })
   // Queued-flow selectors (verbatim from the #427 fake twin): queued rows live in .conversation__queued and
   // carry data-thread-role="queued"; the drop control is an icon button named "Drop queued message". Scoping
@@ -195,13 +197,17 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // running until the spec releases it below.
   await expect(interruptButton).toBeVisible({ timeout: TURN_TIMEOUT_MS })
 
-  // --- Send msg2 mid-turn (AC2) — Send is enabled (canSend on `connected`, no turn-phase gate), so the frame
-  // goes to the daemon while turn 1 runs. submitMessage ALSO dispatches an unconditional optimistic userText
-  // echo, so msg2 renders a data-thread-role="user" timeline row TOO; that is expected and harmless — every
-  // queued-flow assertion below scopes to data-thread-role="queued" / .conversation__queued, distinct from
-  // the `user` echo, so there is no collision. ---
+  // --- Send msg2 mid-turn (AC2) — by ENTER, not by clicking Send. #678 turned the send button into the stop
+  // button while a turn runs, and the gate immediately above has just proven turn 1 IS running, so no Send
+  // affordance is on screen here at all; clicking it would hang until timeout. Enter deliberately keeps its
+  // send behaviour mid-turn (that asymmetry is #678's AC4) and the composer's own gate is unchanged (canSend
+  // on `connected`, no turn-phase gate), so the frame still goes to the daemon while turn 1 runs.
+  // submitMessage ALSO dispatches an unconditional optimistic userText echo, so msg2 renders a
+  // data-thread-role="user" timeline row TOO; that is expected and harmless — every queued-flow assertion
+  // below scopes to data-thread-role="queued" / .conversation__queued, distinct from the `user` echo, so
+  // there is no collision. ---
   await composer.fill(msg2)
-  await sendButton.click()
+  await composer.press('Enter')
 
   // --- Assert msg2 enqueues (AC2) — the ENQUEUE liveness proof: the real daemon held msg2 mid-turn and
   // pushed queue_state, rendering exactly one queued row. A timeout here means the "a mid-turn send enqueues"

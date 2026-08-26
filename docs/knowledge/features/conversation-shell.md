@@ -1028,8 +1028,11 @@ landed as a `userText` timeline item, but `phase` stayed `idle` until `turn_stat
 arrived, so a slow network round-trip looked identical to a dead app. #650 closes that window with
 a new [timeline-store](conversation-timeline-store.md) scalar, `localSendPending: boolean`, set by
 the same `userText` dispatch that posts the echo (no new event: that dispatch already *is* the
-composer's accept signal). `phase` itself stays daemon-only — a wire mirror, and the one field
-`InterruptControl` reads — so the local open cannot arm the interrupt affordance. The mount site
+composer's accept signal). `phase` itself stays daemon-only — a wire mirror, and the one field the
+composer's stop variant reads (`InterruptControl` read it here until [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678)
+folded the affordance into `Composer`'s own send button; see [Interrupt envelope § The render
+affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678)) — so the
+local open cannot arm the interrupt affordance. The mount site
 now calls a second exported derivation, `workingIndicatorStateWithLocalSend(status,
 localSendPending)`, composed *on top of* `workingIndicatorState` rather than folded into
 `ThreadStatus`: the daemon's answer wins when non-null, otherwise a pending local send re-calls the
@@ -1056,8 +1059,8 @@ repair it forced.
 **Gate narrowed in [#493](../codebase/493.md), narrowed again in [#496](../codebase/496.md), broadened
 in [#648](../codebase/648.md), composed on — not touched — by [#650](../codebase/650.md):**
 `shouldShowThinking(status)` is `isTurnRunning(status.phase) &&
-status.apiRetry === null && !status.compacting` — reusing the same `isTurnRunning` predicate
-`InterruptControl` already gated on (`thinking || responding`), rather than the bare `phase ===
+status.apiRetry === null && !status.compacting` — reusing the same `isTurnRunning` predicate the
+composer's stop variant gates on (`thinking || responding`), rather than the bare `phase ===
 'thinking'` comparison #215 shipped. A separate, new `workingIndicatorState(status)` composes **on top
 of** that gate rather than folding into it: `null` when `!shouldShowThinking(status)`, else `'thinking'`
 when `status.phase === 'thinking'`, else `'working'` (`'idle'` is unreachable in that second branch
@@ -1300,12 +1303,15 @@ shipped empty thread (`Timeline`'s existing zero-`items` render), which is AC3's
 from the next live event," not a new empty state.
 
 `InterruptControl` (see [Interrupt envelope § The render
-affordance](interrupt-envelope.md#the-render-affordance-307)) takes `phase: TurnPhase` as a required prop
-from the container instead of its own
+affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678)) took
+`phase: TurnPhase` as a required prop from the container instead of its own
 `useTimelineStore(selectPhase)` subscription — the seventh read this ticket enumerates, wired the same
 way rather than duplicating the id derivation and the memoised selector in a second component. Its one
-mount becomes `<InterruptControl phase={phase} />`; `window.pyry.sendCommand` stays dereferenced only
-inside its click closure, never during render.
+mount became `<InterruptControl phase={phase} />`; `window.pyry.sendCommand` stayed dereferenced only
+inside its click closure, never during render. **`InterruptControl` itself is gone as of
+[#678](https://github.com/pyrycode/pyrycode-desktop/issues/678)**, which folded the affordance into
+`Composer`'s own send button — the same `phase` prop this section describes now reaches `<Composer
+phase={phase} onMessageSent={followBottom} />` instead, one line below.
 
 **Nothing else changes.** The flat `timelineStore` stays imported (the composer's `dispatch` write at
 `composerSend.ts`) and stays dual-written by the bridge fan-out and the composer's echo; retiring it is
@@ -2028,7 +2034,8 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323), reader-less since [#618](../codebase/618.md) removed `ScreenSnapshotControl`, its former sole consumer (#324), then deleted outright by [#619](../codebase/619.md)
 - [Relay-link store](relay-link-store.md) — the dedicated store (#329) `<ConnectionStatusIndicatorControl/>` reads via `selectRelayLinkStatus`, its first real consumer; combined at render time with [session store](session-store.md)'s `ConnectionStatus` (#330)
 - [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the flat store and model this screen read through [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758): `<Timeline/>` via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx` (still mounted, still dual-writing); `<ThinkingIndicator/>` via `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` writes to this store's `dispatch` as the `userText` producer (unchanged — still the flat store, see below), and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` via `selectStalled` (#317, transport #315); `<ApiRetryIndicator/>` via `selectApiRetry`, and the exported `shouldShowThinking` predicate reading it alongside `selectPhase` to narrow `<ThinkingIndicator/>`'s gate (#493, transport #492); `<CompactingIndicator/>` via `selectCompacting`, and `shouldShowThinking` gaining a second clause reading it to narrow `<ThinkingIndicator/>`'s gate again (#496, transport #495)
-- [Conversation timeline holder](conversation-timeline-holder.md) — as of [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758), the store all six reads above and `InterruptControl`'s `phase` actually come from: one subscription to `selectTimelineFor(openConversationId)` on this screen, keyed by `activeConversationStore`'s open id. The flat store above stays mounted and dual-written (the bridge fan-out, `Composer`'s echo) but is read only by nothing in this screen any more. See [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
+- [Conversation timeline holder](conversation-timeline-holder.md) — as of [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758), the store all six reads above and (until [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678) retired `InterruptControl`) its `phase` actually come from: one subscription to `selectTimelineFor(openConversationId)` on this screen, keyed by `activeConversationStore`'s open id. The flat store above stays mounted and dual-written (the bridge fan-out, `Composer`'s echo) but is read only by nothing in this screen any more. See [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
+- [Interrupt envelope](interrupt-envelope.md) — since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), the stop-a-running-turn affordance this screen renders is a variant of `Composer`'s own send button (`ComposerSendButton`), not a standalone control; the `phase` prop plumbed through this screen feeds it directly.
 - [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224) and now also `dispatch` (#237); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, live since [#179](../codebase/179.md) flipped `interactive` (dormant #223–#178)
 - [Modal resolution envelope](modal-resolution-envelope.md) / [Command channel](command-channel.md) — the `answerModalCommand`/`cancelModalCommand` this screen's `PermissionModal` now dispatches through `modalResolution.ts` (#237), routed main-side by [Daemon connection](daemon-connection.md)'s `answerModal`/`cancelModal` (#236); gated behind a `selectOption` client-side second-confirm on `defaultOptionId` for any non-default answer (#226) — no wire/envelope change, the gate lives entirely in `modalResolution.ts`/`PermissionModal.tsx`
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — `class` is `permission | trust` only, no `destructive` wire class; the premise #226's second-confirm gate is a client-side stand-in for

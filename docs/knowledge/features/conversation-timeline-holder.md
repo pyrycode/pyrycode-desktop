@@ -190,7 +190,9 @@ exactly the thread the operator stepped away from.
   switch; it now fires into a store nothing renders from. `markViewed` was already wired at the switch
   seam (`activateConversation.ts`) by
   [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786), so every open conversation already had
-  a slice by the time #758 needed one to read.
+  a slice by the time #758 needed one to read. `InterruptControl` was later deleted outright by
+  [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678); the seventh read's descendant is now
+  `Composer`'s own `phase` prop, still sourced from this same container subscription.
 
 ## Edge cases and limitations
 

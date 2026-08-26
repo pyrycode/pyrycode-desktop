@@ -469,9 +469,11 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
   and returns the same reference, but `dispatchFor`'s key-absent branch still creates the slice
   unconditionally and inserts it at the head — the holder's existing, deliberate contract ("a fold for an
   id the client has never opened creates that id's slice rather than dropping it"), not new behavior this
-  ticket added. It only fires when the open conversation has nothing retained yet; once
-  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) wires `markViewed` at the screen-switch
-  seam this stops being the standing eviction candidate.
+  ticket added. It only fires when the open conversation has nothing retained yet; since
+  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) wired `markViewed` at the activation
+  seam, opening a conversation already creates and promotes its slice, so a later `reconnected` reconcile
+  finds an existing slice rather than minting a fresh one for any conversation that has actually been
+  opened.
 
 ## Related
 

@@ -334,7 +334,11 @@ const activateDeps: ActivateConversationDeps = {
   // #777 — restore point 1 of "the open conversation's mark equals its own held item count". Routed
   // through conversationLastReadBridge's own production wiring object rather than a fifth getState()
   // arrow here, so the sampling branch lives in one tested place. See below.
-  stampLastRead: (conversationId) => stampLastReadFor(conversationLastReadDeps, conversationId)
+  stampLastRead: (conversationId) => stampLastReadFor(conversationLastReadDeps, conversationId),
+  // #786 — the view stamp that arms conversationTimelineStore's ten-slice eviction bound. Unlike
+  // stampLastRead above it reaches its store DIRECTLY, the clearTimelineFor/clearAllTimelines shape below:
+  // there is no sampling branch to keep in one tested place. See below.
+  markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId)
 }
 
 // #531: the store wiring for the pairing-ended clear, module-scope for the same reason as
@@ -467,6 +471,12 @@ store](session-store.md) and [Unpair channel](unpair-channel.md)).
 owes a fresh mark, the same reason `setActiveConversation` itself already runs unconditionally there. See
 [The last-read stamp](#the-last-read-stamp-conversationlastreadbridgets-777) below for the write path
 this calls into.
+
+**[#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) widened `ActivateConversationDeps` with
+a sixth required member**, `markViewed: (conversationId: string) => void`, called **last** — after
+`stampLastRead` — also unconditionally and also **outside** the id-change gate. See
+[The view stamp](#the-view-stamp-activateconversationts-786) below for the write path this calls into and
+why the ordering relative to `stampLastRead` and `setActiveConversation` is the way it is.
 
 ### The delete exit (`exitActiveConversation.ts` + `conversationDeletedBridge.ts`, #652)
 
@@ -746,6 +756,65 @@ of the six through an observer neither docstring accounts for. Left as a follow-
 at both sites, or state the coupling explicitly and pin it with a test) rather than fixed on this ticket;
 whoever picks it up should start from the code review on PR #792 rather than re-deriving it.
 
+### The view stamp (`activateConversation.ts`, #786)
+
+[Conversation timeline holder](conversation-timeline-holder.md)'s `markViewed` — the store's only
+tail-writer, and the whole enforcement of "least recently **viewed**" eviction — shipped with no
+production caller (#755/#756/#757). Every retained slice was therefore never-viewed, and eviction silently
+degraded to first-write order: exactly the failure the word "viewed" exists to prevent. #786 is that
+caller, wired at the same seam as #777's last-read stamp — `ActivateConversationDeps` gains a sixth
+required member, called unconditionally at the end of `activateConversation`, **after**
+`stampLastRead` and **outside** the id-change gate:
+
+```
+previous = getActiveConversation()
+if (previous?.id !== conversation.id) { dispatchTimeline({type:'reset'}); clearSessionId() }
+setActiveConversation(conversation)
+stampLastRead(conversation.id)      // #777, unchanged
+markViewed(conversation.id)         // #786, new — outside the gate, last
+```
+
+**Outside the gate, not inside.** `markViewed`'s already-the-tail branch is documented on the holder as
+the *common* case, justified by this very seam: `onOpen` fires on every row click, including a re-click of
+the already-open row. Inside the gate that branch would be unreachable — after a real switch the tail is
+always the *previous* conversation, never the one being opened — leaving a shipped, tested branch dead.
+Outside the gate is also free: the store's no-churn guard hands back the state object unchanged, so no map
+is cloned and no subscriber wakes.
+
+**After `setActiveConversation`, and after `stampLastRead` — the ordering is load-bearing for the first,
+free for the second.** `markViewed` can *create* a slice, and creating one notifies
+`conversationTimelineStore`'s subscribers — among them #777's `useConversationLastRead`, which reads
+`getOpenConversationId()` and re-stamps whatever conversation that names. Run before the set, that
+listener would fire while the *previous* conversation is still open, writing an unrequested mark for it.
+Run after, it re-records the mark `stampLastRead` just wrote a line earlier, so `recordLastRead`'s `===`
+guard (see [Conversation last-read store](conversation-last-read-store.md)) returns the state object,
+wakes nobody, and performs no `localStorage` write — the cascade terminates at depth 2, synchronously,
+with no `await` anywhere. The order relative to `stampLastRead` itself is not forced by any of this: that
+function never reads the open conversation, so either order records the same mark. Appending after it
+was chosen because it leaves #777's line untouched.
+
+**Cross-wire hazard, named rather than defended by type.** `markViewed` and `stampLastRead` now have
+*identical* signatures — `(conversationId: string) => void` — so swapping them at a deps site compiles,
+and every `toHaveBeenCalledWith(conversation.id)` spy assertion still passes for both. What catches a swap
+is that the two land in *different* stores: with real stores wired, a swap leaves one store unmarked and
+the other unpromoted, so #777's and #786's own tests fail together
+(`activateConversation.test.ts`'s `realDeps` cases). At the one production site
+(`activateDeps` above) the defence is that the two arrow bodies are visibly different and each member
+name matches the store method it calls — no branded type for a two-member wiring object.
+
+**Security consequence: the tail is no longer an operator-only region.** `activateConversation` is also
+reached ungated from a daemon-confirmed create (`useConversationCreatedNav`, above) — the store's own
+docstring used to claim only the operator's activation could promote a key to the tail; #786 falsifies
+that claim, and the holder's docstring and package overview were corrected in the same change (see
+[Conversation timeline holder § The eviction invariant](conversation-timeline-holder.md#how-it-works) for
+the corrected reasoning and why it was accepted rather than gated — architect security review, PASS).
+
+See [Conversation timeline holder](conversation-timeline-holder.md) for `markViewed`'s own branches
+(already-tail no-churn, present-not-tail move, absent-creates-at-tail) and why creating on an absent key
+is load-bearing: the operator opens a conversation before any event for it has arrived, so a no-op there
+would let a later fold create the slice at the head, making the conversation on screen the next eviction
+victim.
+
 ### The app-shell seam (`App.tsx`)
 
 The `conversation` case in `AppView` swaps its direct `<ConversationScreen>` render for
@@ -802,6 +871,7 @@ AppView (route='conversation')
       activateDeps.clearSessionId()                    ← #529, clears sessionIdStore
     activateDeps.setActiveConversation(conversation)    ← unconditional, both branches
     activateDeps.stampLastRead(conversation.id)          ← #777, unconditional, OUTSIDE the gate too
+    activateDeps.markViewed(conversation.id)             ← #786, unconditional, OUTSIDE the gate, LAST
                             route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
                                                 PairAnotherServerRow → dispatch{openPairServer} (#152)
                             route='pairServer' → PairingScreen (window.pyry default) — (#152)
@@ -947,6 +1017,11 @@ the pairing itself ends; see [#531](../codebase/531.md) above.
   `activateDeps.stampLastRead` and `useConversationLastRead()` write; source of the "open conversation's
   mark equals its own held item count" invariant and its two restore points.
   Spec: `docs/specs/architecture/777-open-conversation-last-read-write-path.md`.
+- [Conversation timeline holder](conversation-timeline-holder.md) /
+  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) — the store this shell's
+  `activateDeps.markViewed` writes: the eviction-ranking write path that arms the ten-slice retained-
+  timelines bound. See [§ The view stamp](#the-view-stamp-activateconversationts-786) above for the
+  ordering rationale and the cross-wire hazard with `stampLastRead`.
 - [#652 codebase notes](../codebase/652.md) · Spec:
   `docs/specs/architecture/652-delete-open-conversation-returns-to-list.md` — adds
   `exitActiveConversation` + `conversationDeletedBridge.ts`, a third id-gated clear-and-move helper

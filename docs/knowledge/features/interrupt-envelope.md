@@ -1,17 +1,22 @@
 # Interrupt envelope (outbound)
 
 The stop-a-running-turn path, end to end: the wire type, the pure fail-closed transport builder, the
-full command pathway, and (as of #307) the on-thread render affordance the desktop user actually
-clicks — the desktop equivalent of pressing Esc at the local terminal.
+full command pathway, and the on-thread render affordance the desktop user actually clicks — the
+desktop equivalent of pressing Esc at the local terminal.
 
 Introduced in [#305](../codebase/305.md), the wire+builder base slice split from
 [#146](https://github.com/pyrycode/pyrycode-desktop/issues/146) (interrupt-running-turn), slice 1 of
 3 — that slice shipped **only** the wire contract and the builder, no command wiring, no
 `daemonConnection` method, no renderer UI. [#306](../codebase/306.md), slice 2 of 3, wired the
 **command pathway** on top of it: a bare `interrupt` `RendererCommand` member, `daemonConnection.interrupt()`,
-and the main-side dispatcher arm. [#307](../codebase/307.md), slice 3 of 3 and the chain's last piece,
-added the **render affordance**: a standalone icon-only stop button on the conversation thread, shown
-only while a turn is running, that calls `interruptCommand()`. The #146 split is now complete.
+and the main-side dispatcher arm. [#307](../codebase/307.md), slice 3 of 3, added the **render
+affordance**: a standalone icon-only stop button on the conversation thread, shown only while a turn
+is running, that called `interruptCommand()`. The #146 split completed there.
+
+**[#678](https://github.com/pyrycode/pyrycode-desktop/issues/678) then moved that affordance.** #307's
+standalone control is gone; the stop button is now a variant of the composer's own send button. The wire
+type, the builder, and the command pathway (#305/#306) are untouched — only where the click originates
+changed. See § The render affordance below for the current shape.
 
 ## What it does
 
@@ -86,16 +91,21 @@ liveness check of its own — `interrupt()` itself is the inert-when-disconnecte
 silently dropped rather than the connection ever asked to confirm liveness. No preload change: the
 generic `sendCommand(command: RendererCommand)` pipe already carries the new member.
 
-### The render affordance (#307)
+### The render affordance (#307, merged into the send button by #678)
 
-`InterruptControl`, in `src/renderer/src/screens/conversation/ConversationScreen.tsx`, mounted
-immediately before `<Composer />`. It read the existing `useTimelineStore(selectPhase)` slice — no
-new subscription — through
-[#758](https://github.com/pyrycode/pyrycode-desktop/issues/758), which took `phase: TurnPhase` as a
-required prop from the container instead (`<InterruptControl phase={phase} />`) as one of the seven reads
-that ticket moved off the flat store — see [Conversation shell § The open-conversation reader
-cutover](conversation-shell.md#the-open-conversation-reader-cutover-758). Either way it derives the same
-exported gate predicate:
+**Originally (#307)** a standalone `InterruptControl` mounted immediately before `<Composer />`, reading
+`phase` off `useTimelineStore(selectPhase)` and later (through
+[#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)) off a required prop from the container
+instead — see [Conversation shell § The open-conversation reader
+cutover](conversation-shell.md#the-open-conversation-reader-cutover-758) for that history.
+
+**As of [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678):** `InterruptControl` and
+`InterruptButton`, their mount, and all five `.conversation__interrupt` / `.interrupt-button*` CSS rules
+are deleted. The stop affordance is now a variant of the composer's own send button —
+`ComposerSendButton`, exported from `ConversationScreen.tsx` — one component rendering send at idle and
+stop while a turn is running, sharing the `.composer__send` chrome with **no** modifier class. `Composer`
+takes `phase: TurnPhase` as a required prop (unchanged plumbing since #758) and derives the boolean at
+render time from the same exported gate predicate #307 shipped:
 
 ```ts
 export function isTurnRunning(phase: TurnPhase): boolean {
@@ -103,23 +113,55 @@ export function isTurnRunning(phase: TurnPhase): boolean {
 }
 ```
 
-Deliberately **broader** than `ThinkingIndicator`'s gate (`phase === 'thinking'` only) — a turn is
-"running" in either phase, so the stop affordance must be available in both. `InterruptButton`
-(exported, pure) takes `isRunning: boolean`, never `phase`, and renders `null` at idle (zero layout
-footprint) or an icon-only `<button aria-label="Stop the running turn">` with an inline M3 `stop`
-glyph. Activation calls `sendInterrupt({ sendCommand: window.pyry.sendCommand })`
-(`src/renderer/src/screens/conversation/sendInterrupt.ts`, new) — a strict simplification of
-`dropQueuedMessage.ts`: guarded `sendCommand(interruptCommand())` in a `try/catch`, `console.error`
-and swallow on failure, **no local dispatch**. `window.pyry` is dereferenced only inside the click
-closure, never at render.
+Still deliberately **broader** than `ThinkingIndicator`'s gate (`phase === 'thinking'` only) — a turn is
+"running" in either phase, so the stop affordance must be available in both. This predicate now has three
+production consumers besides `ComposerSendButton`'s gate: `shouldShowThinking`, a cross-module import in
+`store/conversationActivityBridge.ts`, and the tie documented at `store/conversationActivityStore.ts`.
 
-No new client-side state represents "stopping": the control retracts when the daemon's next
-`turn_state{idle}` returns `phase` to idle — through the container's own subscription since
-[#758](https://github.com/pyrycode/pyrycode-desktop/issues/758), previously this component's own. The mobile Figma
-file draws only the steady-send composer state (16-61) and has no stop/interrupt component in the
-design system, so the button is derived from `.composer__send` plus a generic M3 `stop` glyph, kept
-neutral-coloured on purpose (N/A + justification, per memory `ticket-146-interrupt-turn-split`; a
-bespoke stop/error visual is a deferred follow-up flagged to Juhana).
+`ComposerSendButton` takes `isRunning: boolean`, never `phase` — the same type-level guarantee
+`InterruptButton` had: the view structurally cannot render a daemon-supplied string because it never
+receives one. Unlike `InterruptButton`, it **never returns `null`** — the composer row holds exactly one
+button in every state, which is what makes "exactly one stop affordance renders" structural rather than a
+convention; a second one cannot be stacked above it. `isRunning` and `canSend` are separate booleans and
+only `canSend` gates: the stop variant is never disabled, #307's behaviour preserved verbatim, because a
+turn can be running while the session is disconnected, and disabling stop there would hide the only
+interrupt affordance exactly when an operator most wants to try it.
+
+Activation still calls `sendInterrupt({ sendCommand: window.pyry.sendCommand })`
+(`src/renderer/src/screens/conversation/sendInterrupt.ts`, untouched by #678) — bound as an inline arrow
+at the `ComposerSendButton` call site so `window.pyry` is dereferenced only inside the click closure,
+never during render; hoisting it would break every container smoke test under `renderToStaticMarkup`.
+
+No new client-side state represents "stopping": the button reverts to send when the daemon's next
+`turn_state{idle}` returns `phase` to idle and the live subscription re-renders — the same retraction
+path #307 had, now read one level up in `Composer` rather than in a standalone control.
+
+**The glyph is now Figma-sourced.** The mobile Figma file used to draw only the steady-send composer
+state (16-61) with no stop/interrupt component in the design system, so #307 derived a generic M3 `stop`
+glyph (a bare filled square) kept neutral-coloured for lack of a design. That gap closed when Figma node
+`114:3549` shipped a "Stop" variant of the send button; #678 took its glyph — `114:3552`'s
+`circle-stop-solid-full`, exported verbatim at 28×28, `fill="currentColor"` — replacing the improvised
+square. The exported path is two subpaths (a disc, a rounded square wound the *opposite* way) relying on
+the nonzero fill rule to knock the square out into a hole; nothing in the markup declares this, and
+reversing either subpath's winding silently yields a solid disc that still renders and still passes every
+markup assertion, failing only visually. **Do not "tidy" either subpath's direction.**
+
+**Colour and container are still a deliberate deviation, not yet closed.** Figma paints both variants'
+glyphs `--color-primary` on an M3 standard icon button whose container is invisible at rest; both
+variants here keep `currentColor` (`--color-on-surface`) on the permanent `--color-surface-container-high`
+pill, because re-theming only the stop half would fork the two variants of the control #678 exists to
+merge, and the ticket froze the send variant's theming. The full re-theme — both glyphs to
+`--color-primary`, the send glyph to `circle-chevron-up-solid-full`, the pill dropped to a hover/focus-only
+container — is one coherent follow-up, open as of #678 and needing a design ruling on whether the
+always-visible container is a deliberate desktop divergence before it is filed.
+
+**One accepted behavioural consequence, not a defect** (code review, PR #804): because the stop variant is
+never disabled, a stray second activation now interrupts the turn the first one started, where under
+#307's separate standalone control it would have landed on a still-Send button and done nothing. The
+window is narrow — the daemon-owned phase gate means the stop variant doesn't arm until
+`turn_state{thinking}` lands, so [#650](conversation-shell.md)'s local send window is still a Send
+affordance — and `sendInterrupt` against an already-ended turn is a harmless no-op. No guard was added
+without an observed failure.
 
 ## Edge cases and limitations
 
@@ -137,6 +179,15 @@ bespoke stop/error visual is a deferred follow-up flagged to Juhana).
   PASS).
 - **Zero `EnvelopeType` consumer cascade.** Same as every other outbound-only member — no exhaustive
   `switch` over `EnvelopeType` exists, so the new member needed no companion `assertNever` fix-up.
+- **Auditing e2e `Send`-click sites for a running-turn hazard: check `phase` at that line, not send
+  cadence.** `#678`'s move made every `getByRole('button', { name: 'Send' })` click a potential hang if it
+  fires while `phase` is running (the button is the stop affordance then, and no `Send` locator exists on
+  screen). "Does this spec wait for the turn to quiesce between two sends" is the right question for a
+  spec that starts and finishes a turn via a click, but it misses a spec that pushes
+  `turn_state{thinking}` as pure fixture scaffolding (e.g. to mount a working indicator for an unrelated
+  assertion) without ever starting or ending that turn through the UI —
+  `e2e/thread-scroll-pin.spec.ts` did exactly this and was missed by #678's own architecture-spec audit,
+  caught only in code review (PR #804). The correct predicate is "what is `phase` at this line."
 
 ## Related
 
@@ -155,13 +206,15 @@ bespoke stop/error visual is a deferred follow-up flagged to Juhana).
 - [#306 codebase notes](../codebase/306.md) — the command-pathway implementation summary: the bare
   `interrupt` `RendererCommand` member, `daemonConnection.interrupt()`, and the `main/index.ts`
   dispatcher arm.
-- [#307 codebase notes](../codebase/307.md) — the render-affordance implementation summary:
-  `isTurnRunning`, `InterruptButton`, `InterruptControl`, and `sendInterrupt.ts`. The chain's last
-  slice; the #146 split is now complete.
+- [#307 codebase notes](../codebase/307.md) — the original render-affordance implementation summary:
+  `isTurnRunning`, `InterruptButton`, `InterruptControl`, and `sendInterrupt.ts`. `InterruptButton` /
+  `InterruptControl` were deleted by #678 (see § The render affordance above); `isTurnRunning` and
+  `sendInterrupt.ts` survive unchanged.
 - [Thread timeline](thread-timeline.md) — owns `TurnPhase`/`selectPhase` and the `turn_state{idle}`
   reducer arm the render affordance's retraction depends on.
-- [Composer send](composer-send.md) — the sibling guarded-send/container idiom (`dropQueuedMessage`,
-  `Composer.handleSubmit`) `sendInterrupt`/`InterruptControl` (#307) clone.
+- [Composer send](composer-send.md) — since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678),
+  no longer a sibling: `ComposerSendButton` lives inside `Composer` itself, one component rendering that
+  page's send affordance and this page's stop affordance as two variants of the same control.
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § interrupt; pyrycode #707 (bare
   `interrupt` → single claude Esc, `interactive`-gated, fire-and-forget,
   `TestV2Session_Interrupt_RoutesEscByCapability`).
@@ -169,7 +222,13 @@ bespoke stop/error visual is a deferred follow-up flagged to Juhana).
   cutover](conversation-shell.md#the-open-conversation-reader-cutover-758) —
   [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) moved `phase` from
   `InterruptControl`'s own `useTimelineStore(selectPhase)` read to a required prop from the container,
-  which now derives `phase` from the open conversation's own retained timeline slice.
+  which derives `phase` from the open conversation's own retained timeline slice; that same prop now
+  reaches `Composer` (`InterruptControl` itself is gone as of #678).
+- [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678) — moved the render affordance from
+  #307's standalone `InterruptControl` into a stop variant of `ComposerSendButton`, the composer's own
+  send button. Net-negative diff: deletes `InterruptButton`/`InterruptControl`, their mount, and five CSS
+  rules; adds one two-variant component. `sendInterrupt.ts`, the wire type, and the command pathway
+  (#305/#306) are untouched. See § The render affordance above.
 - [Real-claude liveness e2e](real-claude-liveness-e2e.md) / [#445 codebase notes](../codebase/445.md) —
   the tier-3 real-stack liveness net over this chain: `e2e/real-claude-interrupt.spec.ts` interrupts a
   genuinely running turn (real daemon + real claude), proving the retract-on-`turn_state{idle}` /

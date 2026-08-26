@@ -341,16 +341,27 @@ const activateDeps: ActivateConversationDeps = {
   markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId)
 }
 
-// #531: the store wiring for the pairing-ended clear, module-scope for the same reason as
-// activateDeps — nothing dereferenced at load, nothing read during render. sessionStore appears
-// here and nowhere else in this file. #593 widened the set with the announced running model;
-// because both call sites below pass this one shared object, that was a single edit.
+// #531: the store wiring for the pairing-ended clear, module scope for the same reason as
+// activateDeps above — each effect reaches its singleton through getState() inside the arrow body,
+// so nothing is dereferenced at module load, nothing is read during render, and the object closes over
+// no per-render value. sessionStore and announcedModelStore appear here and nowhere else in this
+// file; PairedShell still subscribes to no store at all and stays server-renderable. #593 widened the
+// set with the announced running model and #779 with the per-conversation read marks, and because both
+// call sites below pass this one object, each was a single edit rather than two.
 const clearPairingDeps: ClearPairingScopedStateDeps = {
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
+  clearAllTimelines: () => conversationTimelineStore.getState().clearAllTimelines(),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   clearAnnouncedModel: () => announcedModelStore.getState().clearAnnouncedModel(),
-  dispatchSession: (action) => sessionStore.getState().dispatch(action)
+  dispatchSession: (action) => sessionStore.getState().dispatch(action),
+  // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
+  // #776 persists the marks. It reaches its store DIRECTLY rather than through
+  // conversationLastReadDeps, the stampLastRead argument above: the bridge's deps object exists so the
+  // SAMPLING branch lives in one tested place, and there is no sampling branch here — the store method
+  // takes nothing at all. Widening ConversationLastReadDeps with a member the stamp path never uses
+  // would put an unused effect on a tested interface.
+  clearAllLastRead: () => conversationLastReadStore.getState().clearAllLastRead()
 }
 
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
@@ -452,6 +463,19 @@ it until the new daemon's first turn), so it belongs in this same shared set rat
 call site, and stays out of the transport's `connected` edge for the opposite reason
 `backgroundTaskRosterStore` is on it: a reconnect to the *same* daemon leaves the held announcement
 accurate.
+[#757](../codebase/757.md) added a sixth, [conversation timeline holder](conversation-timeline-holder.md)'s
+`clearAllTimelines` — every retained per-conversation thread, not just the flat store's.
+**[#779](conversation-last-read-store.md) added a seventh and last**,
+[`conversationLastReadStore`'s `clearAllLastRead`](conversation-last-read-store.md#how-it-works) — how far
+the operator had read into each conversation, persisted to `localStorage` since #776 and therefore the one
+member of this set that reaches disk. Its position is not interchangeable with the other six: it must run
+**after** `clearAllTimelines`, because that clear synchronously notifies [#777's open-conversation
+listener](#the-last-read-stamp-conversationlastreadbridgets-777), which at that instant still sees the ended
+pairing's conversation as open, finds its timeline slice already gone, and re-mints a persisted `0` mark for
+it — running the marks clear afterwards wipes that re-mint in memory and on disk before this function
+returns. It must also run **last** among all seven, because it is the only one with an external side effect
+(`localStorage.setItem`) and therefore the only one that can throw; placed earlier, a throw would abort
+`clearSessionId` and leave server A's session id live and addressable while the operator is on server B.
 The two paths are not symmetric and that's why both need their own wrap rather than one shared
 remount-driven reset: unpair flips the app-level route to `pairing`, unmounting `PairedShell`
 entirely, while pair-another-server transitions `pairServer` → `list` *inside* this shell
@@ -523,16 +547,19 @@ export function exitActiveConversation(deps: ExitActiveConversationDeps, convers
   `conversationDeleted` unconditionally on decode with no `in_reply_to` correlation state threaded
   (#375's deliberate decision — the bare `id` is self-sufficient). The fail-direction is safe: every
   move the gate triggers is a clear.
-- **Clear, then navigate — four stores, not `clearPairingScopedState`'s six.** `dispatchTimeline({
+- **Clear, then navigate — four stores, not `clearPairingScopedState`'s seven.** `dispatchTimeline({
   type: 'reset' })` → `clearTimelineFor(conversationId)` ([#757](../codebase/757.md)) →
   `clearActiveConversation()` → `clearSessionId()`, then `navigateToList()` last, so no observer sees the
   Channel List rendered against the deleted discussion's thread state. The pairing has **not** ended here
   — the daemon connection is alive and the operator lands on a working Channel List — so `sessionStore`'s
-  reset and `announcedModelStore`'s clear (both in `clearPairingScopedState`'s six) are deliberately
+  reset and `announcedModelStore`'s clear (both in `clearPairingScopedState`'s seven) are deliberately
   excluded: resetting the session store would blank a live connection status into a false disconnected
   state, and the announced model is daemon-scoped, not conversation-scoped. `clearAllTimelines` is
   excluded the same way — it is the pairing-boundary clear, and this helper drops one conversation's slice
-  rather than every one. `queueStore` is excluded too — the queued backlog is selected by matching the
+  rather than every one. [`conversationLastReadStore`'s `clearAllLastRead`](conversation-last-read-store.md)
+  (#779) is excluded for the identical reason: the marks are pairing-scoped, not conversation-scoped, so a
+  conversation being deleted or archived leaves the operator's other chats live and their marks meaningful.
+  `queueStore` is excluded too — the queued backlog is selected by matching the
   active conversation id, and a `null` active id yields the stable empty backlog via the existing `''`
   sentinel, so no stale queued row can render regardless.
 - **Idempotent by construction.** After a successful exit `activeConversation` is `null`, so a second
@@ -734,27 +761,39 @@ screen — the `?? activeConversation` fallback the #675 family removed. Here no
 event and no `conversationId` on the wire, so there is no attribution to get wrong. The open conversation
 is the subject of the quantity being written, not a fallback for a missing id.
 
-**Reachable edge case, not fixed — code review, PR #792.** Both teardown paths that end a pairing or an
-active conversation clear the timeline store **before** they clear the active conversation:
-`clearPairingScopedState` calls `clearAllTimelines()` at `clearPairingScopedState.ts:103`, one line ahead
-of `clearActiveConversation()` at `:104`; `exitActiveConversation` calls `clearTimelineFor(conversationId)`
-at `exitActiveConversation.ts:107`, one line ahead of `clearActiveConversation()` at `:108`. Either clear
-emits from `conversationTimelineStore`, which this bridge is subscribed to for as long as `PairedShell` is
-mounted — both teardown paths run *inside* that mounted window. The listener fires mid-teardown, reads
+**Reachable edge case, first found by code review on PR #792 — resolved for the pairing-end path by #779,
+still open for the delete/archive path.** Both teardown paths that end a pairing or an active conversation
+clear the timeline store **before** they clear the active conversation: `clearPairingScopedState` calls
+`clearAllTimelines()` ahead of `clearActiveConversation()`; `exitActiveConversation` calls
+`clearTimelineFor(conversationId)` ahead of `clearActiveConversation()`. Either clear emits from
+`conversationTimelineStore`, which this bridge is subscribed to for as long as `PairedShell` is mounted —
+both teardown paths run *inside* that mounted window. The listener fires mid-teardown, reads
 `getOpenConversationId()` (still the conversation being torn down — `activeConversationStore` hasn't
 cleared yet), reads its now-absent timeline slice, and writes a **spurious `0`** over what may have been a
 true, higher mark — persisted, since [#776](conversation-last-read-store.md). Concretely: archiving or
 deleting the conversation you have 20 rows read into, or ending the pairing while it's open, drops its
 last-read mark to `0` on the way out.
 
-No acceptance criterion is violated (the write still names only the open conversation, and `0` is its
-honest count at that instant) and #779's pairing-boundary clear floors the map regardless, which is why
-this shipped rather than blocking. It does falsify `clearPairingScopedState.ts:78`'s claim that its six
-clears are order-independent — `clearAllTimelines` now synchronously triggers a read of
-`activeConversationStore` and a write to `conversationLastReadStore` through this listener, coupling two
-of the six through an observer neither docstring accounts for. Left as a follow-up (swap the clear order
-at both sites, or state the coupling explicitly and pin it with a test) rather than fixed on this ticket;
-whoever picks it up should start from the code review on PR #792 rather than re-deriving it.
+This is what falsified `clearPairingScopedState.ts`'s former claim that its clears are order-independent —
+`clearAllTimelines` synchronously triggers a read of `activeConversationStore` and a write to
+`conversationLastReadStore` through this listener, coupling two of the helper's effects through an observer
+neither docstring used to account for. PR #792's own follow-up named two options: swap the clear order at
+both sites, or state the coupling explicitly and pin it with a test. **[#779](conversation-last-read-store.md)
+took the second option, for `clearPairingScopedState` only**: it added `clearAllLastRead()` as the helper's
+seventh effect, placed **last** — after `clearAllTimelines()` — specifically so this re-mint is wiped, in
+memory and on disk, before the helper returns, and the coupling is now pinned by a dedicated regression test
+that wires the real `subscribeConversationLastRead` against isolated stores (the only way the hazard is
+reachable under `environment: 'node'`). See [§ #779 above](#the-pairserver-route-152) for the ordering
+argument and why it must also run **last** overall, not merely after `clearAllTimelines`.
+
+**`exitActiveConversation` was out of #779's scope and still has the bare hazard.** Deleting or archiving
+the open conversation still writes and persists the spurious `0` with no floor to wipe it — that helper has
+no whole-map clear to place after `clearTimelineFor`, only per-conversation ones. No acceptance criterion of
+#779 is violated (its ACs are pairing-boundary-scoped), and no acceptance criterion of #652/#653 is violated
+either (the write still names only the open conversation, and `0` is its honest count at that instant), but
+the hazard PR #792 first flagged is only half closed. A future ticket picking this up should start from the
+code review on PR #792 and [#779's PR (#798)](https://github.com/pyrycode/pyrycode-desktop/pull/798) rather
+than re-deriving either half.
 
 ### The view stamp (`activateConversation.ts`, #786)
 
@@ -888,7 +927,12 @@ AppView (route='conversation')
     clearPairingDeps.clearSessionId()                          ← #529, clears sessionIdStore
     clearPairingDeps.clearAnnouncedModel()                     ← #593, clears announcedModelStore
     clearPairingDeps.dispatchSession({type:'reset'})           ← #166, clears sessionStore
-    (unconditional — no id gate, unlike activateConversation above)
+    clearPairingDeps.clearAllLastRead()                        ← #779, LAST — clears conversationLastReadStore
+                                                                   (in memory AND on disk), after clearAllTimelines
+                                                                   so #777's re-mint of the open conversation's
+                                                                   mark is wiped rather than persisted
+    (unconditional — no id gate, unlike activateConversation above; the one ordering constraint among the
+     seven is clearAllLastRead after clearAllTimelines and last overall — see #779 above)
 ```
 
 A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row
@@ -965,14 +1009,15 @@ the pairing itself ends; see [#531](../codebase/531.md) above.
   helper in `activateConversation.test.ts` — see [#530 codebase notes](../codebase/530.md).
 - **`PairedShell.test.tsx` cannot exercise `clearPairingScopedState`'s wiring either, for the same
   reason** — its coverage is `nextPairedRoute` reducer assertions and the `:114` SSR test guarding the
-  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The six-clear logic
-  (four since #531, joined by `clearAnnouncedModel` at #593 and `clearAllTimelines` at
-  [#757](../codebase/757.md)) is unit-tested directly on the pure helper in
-  `clearPairingScopedState.test.ts`. One residual: the "clear runs before the route flips" ordering
-  has no executable assertion after [#531](../codebase/531.md) removed the one `unpairAction.test.ts`
-  case that pinned it — low-stakes today since all six writes are synchronous and batched into the
-  same commit as the route change, but worth restoring the moment a jsdom harness lands (see [#531
-  codebase notes](../codebase/531.md)).
+  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The seven-clear logic
+  (four since #531, joined by `clearAnnouncedModel` at #593, `clearAllTimelines` at
+  [#757](../codebase/757.md), and `clearAllLastRead` at [#779](conversation-last-read-store.md)) is
+  unit-tested directly on the pure helper in `clearPairingScopedState.test.ts`, including a dedicated
+  regression case pinning #779's one ordering constraint (`clearAllLastRead` after `clearAllTimelines`).
+  One residual: the "clear runs before the route flips" ordering has no executable assertion after
+  [#531](../codebase/531.md) removed the one `unpairAction.test.ts` case that pinned it — low-stakes
+  today since all seven writes are synchronous and batched into the same commit as the route change,
+  but worth restoring the moment a jsdom harness lands (see [#531 codebase notes](../codebase/531.md)).
 
 ## Related
 
@@ -985,12 +1030,17 @@ the pairing itself ends; see [#531](../codebase/531.md) above.
 - [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
 - [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
-- [Session store](session-store.md) — its `reset` action is one of the six clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md) and [#757](../codebase/757.md)); the store-backed messages otherwise survive plain navigation untouched
+- [Session store](session-store.md) — its `reset` action is one of the seven clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md) and [#779](conversation-last-read-store.md)); the store-backed messages otherwise survive plain navigation untouched
 - [Announced-model store](announced-model-store.md) / [#593](../codebase/593.md) — `clearAnnouncedModel` is the fifth member of `clearPairingDeps`, added after the store shipped dormant at #588 and the deferred clear it flagged
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#757](../codebase/757.md) —
   `clearAllTimelines` (the sixth member of `clearPairingDeps`) and `clearTimelineFor` (the fourth clear in
   `exitConversationDeps`), the keyed holder's first clears, both wired here immediately after each
   helper's pre-existing flat-store `reset`
+- [Conversation last-read store](conversation-last-read-store.md) / [#779](https://github.com/pyrycode/pyrycode-desktop/pull/798) —
+  `clearAllLastRead` (the seventh and last member of `clearPairingDeps`), the only member that reaches
+  `localStorage` and the only one with an ordering constraint (after `clearAllTimelines`, last overall);
+  see [§ The pairServer route](#the-pairserver-route-152) and [§ The last-read
+  stamp](#the-last-read-stamp-conversationlastreadbridgets-777) above
 - [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the IPC boundary `onUnpaired` ultimately calls; [#531](../codebase/531.md) moved the session reset that used to run inside its first caller (`runUnpair`) to this file
 - [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `timelineStore`'s `reset` arm ([#528](../codebase/528.md)) gets its first production dispatch site via `activateConversation` and its second via `clearPairingScopedState`
 - [Session-id store](session-id-store.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `clearSessionId` ([#529](../codebase/529.md)) gets its first production caller via `activateConversation` and its second via `clearPairingScopedState`
@@ -1031,6 +1081,13 @@ the pairing itself ends; see [#531](../codebase/531.md) above.
   — widens `clearPairingScopedState` to a sixth store and `exitActiveConversation` to a fourth clear,
   both wired to the [conversation timeline holder](conversation-timeline-holder.md)'s first two write
   paths that remove rather than add.
+- [#779 PR #798](https://github.com/pyrycode/pyrycode-desktop/pull/798) · Spec:
+  `docs/specs/architecture/779-clear-last-read-marks-at-pairing-end.md` — widens `clearPairingScopedState`
+  to a seventh and last store, [`conversationLastReadStore`](conversation-last-read-store.md)'s
+  `clearAllLastRead`, the pairing-boundary counterweight to #776 persisting the marks; the ordering
+  constraint (after `clearAllTimelines`, last overall) resolves half of #792's re-mint follow-up — see
+  [§ The last-read stamp](#the-last-read-stamp-conversationlastreadbridgets-777) above for the half that
+  stays open (`exitActiveConversation`).
 - [#670 codebase notes](../codebase/670.md) · Spec: `docs/specs/architecture/670-two-pane-desktop-shell.md`
   — merges the `list`/`thread` arms into the two-pane desktop shell, adds `pairedShell.css` and
   `minWidth: 800` on the `BrowserWindow`, and (in a rework after a round-1 code-review FAIL) adds the

@@ -229,6 +229,10 @@ exactly the thread the operator stepped away from.
 
 ## Related decisions
 
+- [Conversation unread predicate](conversation-unread.md) — #778, a second consumer of `selectTimelineFor`
+  alongside [Conversation shell](conversation-shell.md#the-open-conversation-reader-cutover-758): a
+  framework-free predicate, not a render, reading this store's output against [conversation last-read
+  store](conversation-last-read-store.md)'s mark to answer whether a conversation is unread.
 - [Conversation activity store](conversation-activity-store.md) — the direct structural precedent this
   store's shape is copied from rather than re-derived: same `ReadonlyMap` + copy-on-write + selector-
   factory posture, applied to a different per-conversation payload, and the store that first named (and

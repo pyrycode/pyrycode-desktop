@@ -35,8 +35,10 @@ import {
   requestDeleteConversation,
   relayLeg,
   daemonLeg,
-  ConnectionStatusIndicator
+  ConnectionStatusIndicator,
+  selectOpenTimelineFor
 } from './ConversationScreen'
+import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import { composerAvailability, CONNECTION_BANNER_COPY } from './composerSend'
 import type { Message } from './messageViewModel'
 import type { ThreadItem, ToolResult } from '../../store/threadTimeline'
@@ -1476,8 +1478,8 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // renders for a turn the daemon has not started.
     //
     // The structural half is type-level and no assertion here can reach it (renderer tests are
-    // server-render only, so no container render can drive store state): InterruptControl reads
-    // `selectPhase` alone, isTurnRunning admits only a TurnPhase, and InterruptButton takes
+    // server-render only, so no container render can drive store state): InterruptControl takes
+    // `phase` alone (#758 made it a prop), isTurnRunning admits only a TurnPhase, and InterruptButton takes
     // `isRunning: boolean` — the new scalar has no path into any of the three.
     expect(
       workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, true)
@@ -2322,6 +2324,84 @@ describe('requestDeleteConversation', () => {
       type: 'deleteConversation',
       payload: { conversation_id: 'conv-d' }
     })
+  })
+})
+
+// #758: the chat pane's thread binding — the selector the container hands to
+// `useConversationTimelineStore`, so the thread on screen is the OPEN conversation's own retained
+// timeline rather than the flat, single-thread store `activateConversation` resets on every switch.
+//
+// Tested HERE, at the selector, rather than through the container below, because this repo's renderer
+// tier CANNOT see a seeded store: `vitest.config.ts` is `environment: 'node'` and zustand v5's `useStore`
+// reads `getInitialState()` under `renderToStaticMarkup` (the note at the head of this file, restated in
+// six sibling describes). A `setState` before a server render is invisible, so every container test in
+// this file renders the EMPTY stores — which is exactly this selector's `null` branch, and cannot
+// distinguish one conversation's rows from another's. The screen-level proof of that distinction is
+// `e2e/conversation-switch-keeps-both-threads.spec.ts`, the only tier in this repo that can click.
+//
+// The fixture drives the REAL store through its real write path (`dispatchFor`), so the copy-on-write
+// identity these assertions rest on is the shipped one and not a hand-built map's.
+describe('selectOpenTimelineFor', () => {
+  // Two conversations, each holding one row of its own. A FRESH `new Map()` per store, never
+  // `initialConversationTimelineState` — that exported constant holds a module-shared mutable map
+  // (conversationTimelineStore.ts:340-349).
+  function twoHeldThreads(): ReturnType<typeof createConversationTimelineStore> {
+    const store = createConversationTimelineStore({ timelines: new Map() })
+    store.getState().dispatchFor('conv-a', { type: 'userText', text: 'alpha' })
+    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta' })
+    return store
+  }
+
+  it("hands back the open conversation's own held slice, never a neighbour's (AC1)", () => {
+    const store = twoHeldThreads()
+    const thread = selectOpenTimelineFor('conv-a')(store.getState())
+    expect(thread?.items).toEqual([{ kind: 'userText', text: 'alpha' }])
+    // The chrome travels with the rows — the whole slice is one value, so the phase and the four
+    // scalars can no more come from another conversation than the rows can.
+    expect(thread?.localSendPending).toBe(true)
+    // The HELD slice itself, not a copy. That `Object.is` identity is what makes the switch cheap: a
+    // write for another conversation rebuilds the outer map but copies every survivor by reference, so
+    // this screen does not re-render (conversationTimelineStore.ts:214-217).
+    expect(thread).toBe(store.getState().timelines.get('conv-a'))
+  })
+
+  it("reads null for an open conversation with nothing retained — never a neighbour's rows (AC3)", () => {
+    const store = twoHeldThreads()
+    // `null` means "nothing is held", the reading the container renders as the shipped empty thread.
+    // It must not be an empty slice and must not resolve onto a neighbour.
+    expect(selectOpenTimelineFor('conv-c')(store.getState())).toBeNull()
+  })
+
+  it('reads null when nothing is open, even with a slice held under the empty-string id', () => {
+    const store = twoHeldThreads()
+    // The `?? ''` sentinel regression guard (BackgroundTaskPanel.tsx:342's idiom, rejected here): `''`
+    // is an ORDINARY key in this store — `dispatchFor` mints a slice for whatever id the daemon
+    // asserts — so substituting it for "no conversation open" would render that slice as the open
+    // conversation's thread while nothing is open. Branching performs no lookup at all.
+    store.getState().dispatchFor('', { type: 'userText', text: 'from an empty conversation id' })
+    expect(selectOpenTimelineFor(null)(store.getState())).toBeNull()
+  })
+
+  it('shows the thread as it now stands after a switch away and back (AC2)', () => {
+    const store = twoHeldThreads()
+    const away = selectOpenTimelineFor('conv-a')(store.getState())
+    // `conv-b` is on screen; a row arrives for `conv-a` while the operator is elsewhere.
+    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta again' })
+    store.getState().dispatchFor('conv-a', { type: 'userText', text: 'arrived while away' })
+    const back = selectOpenTimelineFor('conv-a')(store.getState())
+    expect(back?.items).toEqual([
+      { kind: 'userText', text: 'alpha' },
+      { kind: 'userText', text: 'arrived while away' }
+    ])
+    expect(back).not.toBe(away)
+  })
+
+  it("a write for another conversation leaves the open one's slice identical", () => {
+    const store = twoHeldThreads()
+    const before = selectOpenTimelineFor('conv-a')(store.getState())
+    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta again' })
+    // Same object → zustand's `Object.is` short-circuit → no re-render for the conversation on screen.
+    expect(selectOpenTimelineFor('conv-a')(store.getState())).toBe(before)
   })
 })
 

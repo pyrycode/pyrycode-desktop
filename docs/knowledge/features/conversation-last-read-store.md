@@ -9,8 +9,10 @@ Introduced in [#775](../codebase/775.md), split from #677. Shipped dormant — t
 surface only, no writer, no reader — the same "populated and unread" posture the [conversation activity
 store](conversation-activity-store.md) shipped for #747 and the [conversation timeline
 holder](conversation-timeline-holder.md) shipped for #755 before their own feeds landed. #776 then made it
-survive a restart. #777 stamps it on open and on each arm arrival, #778 derives the unread predicate from
-it, #779 clears it at the pairing boundary, and #676 draws the resulting dot — all still open.
+survive a restart. **#777 landed the writer** — see [Configuration and usage](#configuration-and-usage)
+below and [Paired shell § The last-read stamp](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777)
+for the write path itself. #778 derives the unread predicate from it, #779 clears it at the pairing
+boundary, and #676 draws the resulting dot — still open.
 
 ## What it does
 
@@ -94,10 +96,17 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 - Read one conversation: `useConversationLastReadStore(selectLastReadFor(conversationId))`.
 - Persistence key: `pyry.conversationLastRead` (the app's third `localStorage` key — a shared
   key-namespacing helper was considered and declined; see Related decisions).
-- **No writer, no reader, no clear yet.** Nothing imports this module outside its own test — grepping for
-  `recordLastRead`/`selectLastReadFor`/`useConversationLastReadStore` outside the test file returns
-  nothing. #777 (writer), #778 (reader), #779 (pairing-boundary clear, served by `storage.write(new
-  Map())` — no dedicated `clear()` method exists on the port) are still open.
+- **Writer since #777.** `conversationLastReadBridge.ts` (`src/renderer/src/store/`) is
+  `recordLastRead`'s one caller: `activateConversation` stamps the conversation being opened
+  (`stampLastReadFor`, called unconditionally, outside the id-change gate — a re-open re-stamps), and
+  `useConversationLastRead()`, mounted in `PairedShell`, re-stamps the **open** conversation on every
+  `conversationTimelineStore` emission so content landing while it stays open never pushes its count past
+  its own mark. See [Paired shell § The last-read
+  stamp](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777) for the write path,
+  including a reachable, deliberately unfixed edge case where the pairing- and conversation-teardown
+  clears can persist a spurious `0` over a true mark (below).
+  **No reader, no clear yet** — #778 (reader), #779 (pairing-boundary clear, served by
+  `storage.write(new Map())` — no dedicated `clear()` method exists on the port) are still open.
 
 ## Edge cases and limitations
 
@@ -113,6 +122,17 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   conversations since the last pairing), and the keyspace is bounded by the operator's own opening of
   conversations rather than by anything the daemon can mint. No bound, no prune-on-load, no LRU. #779's
   pairing-boundary clear remains the only floor.
+- **A teardown clear can persist a spurious `0` over a true mark — reachable, not fixed.** Both
+  `clearPairingScopedState` and `exitActiveConversation` clear `conversationTimelineStore` one line
+  before they clear `activeConversationStore` (code review, PR #792). #777's listener is subscribed to the
+  former for as long as `PairedShell` is mounted, so it fires mid-teardown, still sees the conversation
+  being torn down as "open," finds its timeline slice already gone, and records `0` — persisted, since
+  this is written through the same `recordLastRead` path #776 wraps. Archiving, deleting, or unpairing
+  while 20 rows into a conversation drops its mark to `0` on the way out. No AC is violated (the mark is
+  still that conversation's honest count at that instant, and #779's boundary clear floors the map
+  regardless), but it is worth knowing before reading a `0` mark as "never read." Full detail and the
+  proposed fix (swap the clear order) at [Paired shell § The last-read
+  stamp](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777).
 - **`recordLastRead` is named to avoid a collision, not by convention.** [Conversation timeline
   holder](conversation-timeline-holder.md) already exports a nullary `markViewed`, which means something
   unrelated (eviction ranking). `record…` says a value is being written; `mark…` in this directory says it
@@ -137,3 +157,6 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   — why the decode's reject path must stay silent rather than logging the untrusted blob.
 - [#775 codebase notes](../codebase/775.md) — the holder's implementation summary, code review, and
   lessons learned.
+- [Paired shell](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777) — #777's write
+  path (`conversationLastReadBridge.ts`), its two restore points, and the teardown-ordering edge case
+  above.

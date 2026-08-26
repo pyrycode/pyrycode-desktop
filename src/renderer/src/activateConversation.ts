@@ -7,11 +7,12 @@ import type { ConversationCreatedPayload } from '@shared/wire/types'
 import type { ThreadEvent } from './store/threadTimeline'
 
 /**
- * The four effects activateConversation performs, injected to keep it pure:
+ * The five effects activateConversation performs, injected to keep it pure:
  *  - `getActiveConversation` — reads the CURRENTLY active conversation (activeConversationStore).
  *  - `setActiveConversation` — records the newly activated one (the same store's setter).
  *  - `dispatchTimeline`      — timelineStore's dispatch; carries #528's `reset`.
  *  - `clearSessionId`        — sessionIdStore's #529 clear.
+ *  - `stampLastRead`         — #777's last-read stamp for the conversation being opened.
  *
  * `getActiveConversation` is a GETTER, not a value threaded in by the caller. The previous
  * conversation must be read at invocation time: PairedShell's created-event callback is held in a
@@ -30,6 +31,23 @@ export interface ActivateConversationDeps {
   setActiveConversation: (conversation: ConversationCreatedPayload) => void
   dispatchTimeline: (event: ThreadEvent) => void
   clearSessionId: () => void
+  /**
+   * #777: record how far the operator has read in the conversation being opened — its own held timeline
+   * item count, sampled at this moment (conversationLastReadBridge.ts's `stampLastReadFor`). REQUIRED,
+   * not optional: forgetting to wire it is the exact regression it exists to prevent, so it is a compile
+   * error at every deps site rather than a silent `undefined`.
+   *
+   * It takes the id EXPLICITLY rather than reading the open conversation back out of a store, which is
+   * what makes it independent of where in the function below it sits and of whether
+   * `setActiveConversation` has already run.
+   *
+   * CROSS-WIRE NOTE for a reviewer: `clearSessionId: () => void` is assignable to this slot, because
+   * TypeScript permits a function of fewer parameters. The assertion that catches a swap of the two is
+   * "`stampLastRead` was called WITH the conversation's `id`", never a bare `toHaveBeenCalled()`. The
+   * other three members are cross-wire-immune under `strictFunctionTypes` — neither
+   * `ConversationCreatedPayload` nor `ThreadEvent` is assignable to `string`.
+   */
+  stampLastRead: (conversationId: string) => void
 }
 
 /**
@@ -77,4 +95,10 @@ export function activateConversation(
   }
 
   deps.setActiveConversation(conversation)
+  // #777, OUTSIDE the gate on purpose — that placement IS the "re-opening the already-open conversation
+  // records a fresh mark" behaviour. `setActiveConversation` already runs unconditionally above because a
+  // re-click hands over a fresher payload; the stamp joins it for the same reason and because a re-open
+  // of the conversation the operator is already reading is exactly when a fresh mark is owed. AFTER the
+  // set, so the store writes run in the order a reader expects: clear → activate → stamp.
+  deps.stampLastRead(conversation.id)
 }

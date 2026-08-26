@@ -63,9 +63,14 @@
 // backgroundTaskRosterStore's ~5 KB, which also declines one (:282-289). "Not a plausible exhaustion
 // vector" is load-bearing for both those refusals and is MORE true here, and no speculative eviction
 // policy is built for a failure nobody has observed. The map is emptied wholesale at the pairing
-// boundary by #779. Persisted size is a real forward question once #776 lands — the map would then
-// survive restarts while only #779 floors it — and #776 is where a ceiling or a prune-on-load would be
-// measurable and justified.
+// boundary by #779. THE PERSISTED SIZE QUESTION THIS COMMENT LEFT OPEN IS NOW ANSWERED (#776), and the
+// answer is the same NO: no ceiling, no prune-on-load, no LRU, even though the map now survives restarts
+// with only #779 flooring it. Measured: an entry is one conversation id plus one small integer plus JSON
+// punctuation, on the order of 50 bytes, against a `localStorage` budget in the megabytes — roughly a
+// hundred thousand conversations since the last pairing. The keyspace is also bounded by the operator's
+// own opening of conversations rather than by anything the daemon can mint (#777 stamps the OPEN
+// conversation), and an id's length is capped transitively by MAX_FRAME_BYTES (types.ts:22), so this is
+// not a storage-exhaustion vector either. No growth failure has been observed.
 //
 // HARD IMPORT CONSTRAINT, checkable by grep: this module's only imports are the two below. It imports
 // nothing from `./threadTimeline`, nothing from `./conversationTimelineStore`, nothing from
@@ -83,9 +88,11 @@
 // here because none of them is a type error: nothing is keyed into an object literal; there are no
 // computed object keys anywhere on the write path; and `Object.fromEntries`, spreading the map into an
 // object, and `JSON.stringify` of the map are all out, each re-materialising the hazard the `Map`
-// removes. That last one constrains how #776 encodes the map for persistence, and #776 owns solving it
-// without reintroducing the hazard — one whole-map value under a single FIXED key keeps the untrusted
-// string out of the key space. A future swap of `Map` for `Record`, written consistently, is no type
+// removes. That last one constrained how #776 encodes the map for persistence, and #776 SOLVED IT
+// STRUCTURALLY: one whole-map value under a single FIXED key, encoded as an ARRAY OF ENTRIES, so the
+// untrusted string is a JSON array element on disk and a `Map` key in memory and an object key NOWHERE,
+// in either direction (see `encodeLastReadMarks`). Spreading the map into an ARRAY (`Array.from(marks)`)
+// is a different operation from spreading it into an object and is fine. A future swap of `Map` for `Record`, written consistently, is no type
 // error at all, and the assertions that catch the prototype-chain lookup it reintroduces are
 // conversationLastReadStore.test.ts's hostile-key reads BEFORE ANY WRITE — verified 2026-08-25: on a
 // `Record`, `'__proto__'` reads back `Object.prototype` and `'constructor'` the `Object` function,
@@ -93,11 +100,18 @@
 // the round-trip fails too. `''` is NOT diagnostic — it reads `undefined` either way.
 //
 // Log-free by construction — no `console.*` on any path. The only value a diagnostic here could carry is
-// the untrusted id, and the content-free diagnostics rule (ADR 0007, #126) keeps it out of a file. A
-// read miss and a same-value write are both silent BY DESIGN, not swallowed errors. Nothing is persisted
-// either, and must not be from HERE: `defaultWorkspaceStore` and `pushNotificationPrefStore` do use
-// `localStorage`, so the injected-port pattern is in the repo to copy — but persistence is #776's, and
-// adding its DI seam here would ship an unused seam.
+// the untrusted id or the raw blob containing it, and the content-free diagnostics rule (ADR 0007, #126)
+// keeps it out of a file. A read miss, a same-value write and a REJECTED PERSISTED BLOB are all silent BY
+// DESIGN, not swallowed errors.
+//
+// PERSISTED (#776), through an injected port, copying the `defaultWorkspaceStore` (#403) /
+// `pushNotificationPrefStore` (#408) shape: the marks hydrate at construction and write through as they
+// are recorded, so a restart no longer lights up every conversation the operator already read. Three
+// places this slice could not simply copy those two, each of which has its own paragraph below: it is a
+// keyed MAP rather than a scalar, so the round trip has a decode step over untrusted input
+// (`decodeLastReadMarks` — the blob is hand-editable on disk and its keys are daemon-asserted); a corrupt
+// blob is rejected WHOLE and silently; and the write-through sits BEHIND the same-value guard rather than
+// ahead of it, because unlike a scalar setter this write path HAS one and it fires on the common case.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 
@@ -109,6 +123,138 @@ import { useStore } from 'zustand'
  *  puts it. `0` is a REAL, producible mark — opening a conversation whose timeline is empty stamps it —
  *  which is what makes the absent-vs-recorded distinction below load-bearing rather than boilerplate. */
 export type LastReadMark = number
+
+/** The persistence backend the store depends on — the injected DI seam (#776), the reason being that the
+ *  dependency which varies between prod and test is the persistence backend. The vitest runtime is `node`
+ *  (no jsdom, no `localStorage`, no `window`), so a store reaching for `window.localStorage` directly
+ *  could not be unit-tested and would throw on import; the port makes the hydrate-then-read round trip
+ *  testable with an in-memory fake.
+ *
+ *  `read` returns a MAP, never `null` — the one deliberate deviation from `PushNotificationPrefStorage`,
+ *  whose `read(): boolean | null` keeps "never set" distinguishable from a stored `false` because a real
+ *  consumer needs that distinction. Nothing here does: absent, unparseable and non-conforming all hydrate
+ *  to the same empty map, so a nullable return would be a distinction with exactly one consumer that
+ *  immediately discards it. The port stays a faithful "what is persisted, decoded" reporter; it just has
+ *  nothing to be faithful about in the empty case.
+ *
+ *  There is deliberately NO `clear()`. #779's pairing-boundary clear is served by `write(new Map())` —
+ *  `encodeLastReadMarks(new Map())` is `'[]'`, which round-trips to empty — so shipping one would ship an
+ *  unused seam, the same refusal #775 made about the DI seam itself. Synchronous: backs onto
+ *  `localStorage`, whose access is synchronous. */
+export interface ConversationLastReadStorage {
+  read(): ReadonlyMap<string, LastReadMark>
+  write(marks: ReadonlyMap<string, LastReadMark>): void
+}
+
+/** The renderer-pref key; sibling to `pyry.defaultWorkspace` (#403) and `pyry.pushNotificationsEnabled`
+ *  (#408). ONE FIXED key holding the whole map, which is what keeps the untrusted `conversationId` out of
+ *  the key space entirely (the header's requirement).
+ *
+ *  THE THIRD-KEY RULING, which two comments deferred to exactly this moment
+ *  (`defaultWorkspaceStore.ts:34-35` "if a second is ever added", `pushNotificationPrefStore.ts:43-46`
+ *  "until a genuine third case"): NO shared key-namespacing helper. The deferral's own counter-argument
+ *  is the stronger one — "the const NAME is a preference, but the STRING is the contract" — and a
+ *  `pyry.${name}` helper turns three greppable literals into three derived values, costing the ability to
+ *  enumerate the app's whole persisted keyspace with one grep for `'pyry.`. The three keys share a
+ *  five-character prefix and nothing else: no shared serialization, no shared lifecycle, no shared clear.
+ *  No collision or drift has been observed. Recorded here so a fourth key finds it answered rather than
+ *  re-litigating it; the two older comments are left exactly as they are, because sweeping them would be
+ *  refactoring adjacent code (CLAUDE.md). */
+export const CONVERSATION_LAST_READ_KEY = 'pyry.conversationLastRead' as const
+
+/** Encode the whole map for persistence: a JSON ARRAY OF `[id, mark]` PAIRS, e.g. `[["c1",4],["c2",9]]`.
+ *
+ *  The array-of-entries shape is the STRUCTURAL answer to the header's constraint, not a stylistic
+ *  choice, and every tidier-looking alternative is a bug:
+ *
+ *    - `JSON.stringify(marks)` yields `'{}'` — a `Map`'s entries are not own enumerable properties, so
+ *      that is silent TOTAL data loss.
+ *    - `Object.fromEntries(marks)` / `{...marks}` / an `obj[id] = mark` loop each put the untrusted id
+ *      back into an object key space. Note the actual symptom, which is not the one usually assumed:
+ *      because a mark is a NUMBER, the `__proto__` setter ignores the assignment, so the entry VANISHES
+ *      SILENTLY and no prototype is altered. `constructor` survives as a shadowing own key; `''`
+ *      survives. One quietly dropped mark, not a polluted prototype.
+ *
+ *  `JSON.parse` itself is NOT the hazard and never was: `JSON.parse('{"__proto__":3}')` creates an
+ *  ordinary OWN property and alters nothing (verified 2026-08-25 under this repo's `node`). Assignment is.
+ *  `conversationLastReadStore.test.ts` pins the exact encoded string so a rewrite into any of the above
+ *  fails a test rather than compiling clean. */
+export function encodeLastReadMarks(marks: ReadonlyMap<string, LastReadMark>): string {
+  return JSON.stringify(Array.from(marks))
+}
+
+/** Decode a persisted blob back to the marks, or an EMPTY map for anything that is not exactly what
+ *  `encodeLastReadMarks` emits. This is the untrusted-input boundary: the blob is hand-editable on disk
+ *  and its keys are daemon-asserted conversation ids.
+ *
+ *  REJECT WHOLE, NEVER SALVAGE PER ENTRY. One malformed element costs every mark for that run, and that
+ *  is the intended trade: the marks are cheap to re-earn, and per-entry salvage is a second decode path
+ *  to get wrong. It is also what makes a torn blob safe — Chromium flushes `localStorage` asynchronously,
+ *  so a hard kill can in principle leave a truncated value, and rejecting whole costs the marks rather
+ *  than the app's start-up.
+ *
+ *  `Number.isInteger` is the load-bearing value check, not `typeof === 'number'`: it excludes `NaN`,
+ *  `Infinity` and fractions in one call. The `typeof` beside it is what narrows for `tsc`. And the
+ *  non-number case is reachable through this app's OWN encoder — `JSON.stringify` turns `NaN`/`Infinity`
+ *  into `null` — so it is not a hypothetical hand-edit.
+ *
+ *  THE REJECT PATH IS SILENT ON PURPOSE, and that is a design constraint rather than a swallowed error.
+ *  A `console.warn` here is the natural instinct and it would put the untrusted, daemon-asserted id (or
+ *  the raw blob containing it) into the renderer console and any capture of it, violating ADR 0007 and
+ *  this module's log-free rule. So: the `catch` does not rethrow, does not log, and does not build a
+ *  message out of `raw`. Note this `try`/`catch` is NOT in tension with the two precedents' deliberate
+ *  refusal to try/catch `localStorage` itself — they refuse a defence against an UNOBSERVED quota/disabled
+ *  failure, whereas this one implements a required behaviour over input the ticket states is hand-edited.
+ *  The codec catches; the port below does not.
+ *
+ *  Returns a fresh `new Map()` per reject rather than `initialConversationLastReadState.marks`: a codec
+ *  should not import a state object, and a fresh map costs nothing. */
+export function decodeLastReadMarks(raw: string | null): ReadonlyMap<string, LastReadMark> {
+  if (raw === null) return new Map()
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return new Map()
+  }
+  if (!Array.isArray(parsed)) return new Map()
+
+  const entries: [string, LastReadMark][] = []
+  for (const entry of parsed) {
+    if (!Array.isArray(entry) || entry.length !== 2) return new Map()
+    const [conversationId, mark] = entry
+    if (typeof conversationId !== 'string') return new Map()
+    if (typeof mark !== 'number' || !Number.isInteger(mark) || mark < 0) return new Map()
+    entries.push([conversationId, mark])
+  }
+  return new Map(entries)
+}
+
+/**
+ * The real `localStorage`-backed port, wired at the singleton composition root. The `typeof window` guard
+ * is the import-safety guard: it makes constructing the singleton safe under `node`/`renderToStaticMarkup`,
+ * where `read()` yields an empty map (so the store starts with nothing read) and `write()` is a no-op —
+ * and it is also what makes the real port safe as `createConversationLastReadStore`'s DEFAULT argument.
+ *
+ * There is no `removeItem` path, because there is no `clear()` (see the port interface). It is
+ * deliberately NOT a defensive try/catch — a `localStorage` quota/disabled failure is not an observed
+ * failure mode in the Electron renderer, and shipping a defence for an unobserved failure is
+ * Evidence-Based Fix Selection's anti-pattern; if it ever surfaces, the fix is localized here. The
+ * decode's catch is a different thing entirely: a required behaviour over untrusted input, not a defence.
+ */
+export function localStorageConversationLastRead(): ConversationLastReadStorage {
+  return {
+    read: () =>
+      typeof window === 'undefined'
+        ? new Map()
+        : decodeLastReadMarks(window.localStorage.getItem(CONVERSATION_LAST_READ_KEY)),
+    write: (marks) => {
+      if (typeof window === 'undefined') return
+      window.localStorage.setItem(CONVERSATION_LAST_READ_KEY, encodeLastReadMarks(marks))
+    }
+  }
+}
 
 /** The whole state. A key ABSENT from the map means "this conversation has never been read" and is a
  *  DISTINCT state from a present mark of `0` ("read, and there was nothing in it at the time") — see
@@ -136,6 +282,8 @@ export type ConversationLastReadStore = ConversationLastReadState & {
   recordLastRead: (conversationId: string, itemsSeen: LastReadMark) => void
 }
 
+/** The named empty baseline. Its role NARROWED at #776 from "the factory's default" to just this: the
+ *  port is now the store's single hydration source, and two hydration sources would be a genuine smell. */
 export const initialConversationLastReadState: ConversationLastReadState = { marks: new Map() }
 
 /**
@@ -170,26 +318,56 @@ export const initialConversationLastReadState: ConversationLastReadState = { mar
  *
  * Every write is a synchronous `set` under zustand's own store lock with no `await` inside it, so the
  * check-then-act in the guard has NO suspension point for a concurrent handler to interleave into.
- * Unidirectional is preserved: one read-only selector, one store-owned write path, never two-way-bound
- * from a component.
+ * `localStorage.setItem` is synchronous too, so persisting introduces none either. Unidirectional is
+ * preserved: one read-only selector, one store-owned write path, never two-way-bound from a component.
+ *
+ * PERSISTENCE (#776). Hydration is `storage.read()` at construction — there is no explicit load step at
+ * any call site, because constructing the store IS the load. Write-through is the ONE new line inside the
+ * updater, and BOTH its position and its placement are load-bearing:
+ *
+ *   - BEHIND THE GUARD, not ahead of it. Both scalar precedents persist unconditionally because their
+ *     setters have no guard to be behind; this one has one at the top of the updater, and it fires on the
+ *     COMMON case. `appendDelta` (threadTimeline.ts:239-250) grows the tail `assistantText` item in place
+ *     rather than appending, so `items.length` does not move across the deltas of a streamed assistant
+ *     message, while #777 stamps the open conversation on EVERY arriving delta. Persisting ahead of the
+ *     guard would fire one synchronous `localStorage.setItem` per delta for the length of every reply.
+ *   - INSIDE THE UPDATER rather than in the action body. Guard, clone, persist and return are then one
+ *     expression, so no future edit can hoist the write above the guard without deleting the guard.
+ *     Vanilla zustand invokes an updater exactly once, synchronously, per `set` — there is no React
+ *     StrictMode double-invocation for a vanilla store and no middleware in this store's stack that
+ *     re-runs it — and that is not taken on trust: the test file pins it with a `write` call count. The
+ *     rejected alternative, reading through `get()` in the action body to keep the updater pure, is
+ *     equally correct and equally race-free; it just moves the guard away from the write for no gain.
+ *
+ * The port DEFAULTS to the real one, where both precedents require theirs. That is a test-ergonomics
+ * affordance with no production cost: under `node` the real port's window guard makes `read()` empty and
+ * `write()` a no-op, so a zero-argument construction behaves exactly as the pre-#776 factory did, keeping
+ * the edit fan-out across this store's 19 existing tests at 2 rather than 19. The failure mode a default
+ * normally introduces — someone forgets to inject and silently loses persistence — does not exist here,
+ * because the default IS the production wiring. The singleton still names it explicitly anyway, matching
+ * the two sibling stores, so a reader of the composition root sees the dependency.
  */
 export function createConversationLastReadStore(
-  init: ConversationLastReadState = initialConversationLastReadState
+  storage: ConversationLastReadStorage = localStorageConversationLastRead()
 ) {
   return createStore<ConversationLastReadStore>((set) => ({
-    ...init,
+    marks: storage.read(),
     recordLastRead: (conversationId, itemsSeen) =>
       set((s) => {
         if (s.marks.get(conversationId) === itemsSeen) return s
         const next = new Map(s.marks)
         next.set(conversationId, itemsSeen)
+        storage.write(next)
         return { marks: next }
       })
   }))
 }
 
-/** App-wide singleton — the one source of truth #777 writes and #778 reads. */
-export const conversationLastReadStore = createConversationLastReadStore()
+/** App-wide singleton — the one source of truth #777 writes and #778 reads, backed by the real
+ *  `localStorage` port. */
+export const conversationLastReadStore = createConversationLastReadStore(
+  localStorageConversationLastRead()
+)
 
 /** Narrow-slice React binding for #778. Selecting a single conversation's mark avoids cross-facet
  *  re-renders. */

@@ -90,14 +90,25 @@ the renderer's CSP is `default-src 'self'` with no `img-src` (`index.html:6-9`) 
 DOM, not a fetch, so a bundled asset would be the repo's first, for no gain. **Never
 `dangerouslySetInnerHTML`** — both paths are built as real JSX elements; grepped clean at code review.
 
-- **The mark** (`PyrycodeMark`) ports the single `d` and `viewBox` from mobile's
-  `ic_pyry_logo.xml` verbatim (Android `pathData` *is* SVG path syntax) — never Figma's generated asset,
-  which uses a 2×-scaled viewport and silently crops if mixed with the mobile numbers. It renders with
-  `fill="currentColor"` tinted `--color-primary`, and carries a CSS `transform: scaleY(-1)`
-  (`welcome.css:80-86`) — **both** Figma frames (`103:749` desktop, `80:2` mobile's own welcome frame)
-  draw this mark vertically flipped relative to what the mobile *app* actually renders; the mobile app
-  is the side that diverges from its own design here. See "Lessons learned" in
-  [#657 notes](../codebase/657.md) for the measurement that confirmed this rather than guessed it.
+- **The mark**, ported from mobile's `ic_pyry_logo.xml` verbatim (Android `pathData` *is* SVG path
+  syntax) — never Figma's generated asset, which uses a 2×-scaled viewport and silently crops if mixed
+  with the mobile numbers. It renders with `fill="currentColor"` tinted `--color-primary`, and carries a
+  CSS `transform: scaleY(-1)` (`welcome.css:80-86`) — **both** Figma frames (`103:749` desktop, `80:2`
+  mobile's own welcome frame) draw this mark vertically flipped relative to what the mobile *app*
+  actually renders; the mobile app is the side that diverges from its own design here. See "Lessons
+  learned" in [#657 notes](../codebase/657.md) for the measurement that confirmed this rather than
+  guessed it.
+  **Moved out of this screen's module-private `PyrycodeMark` into the shared `PyryMark` in
+  `theme/PyryMark.tsx` by #796**, once the [conversation shell](conversation-shell.md#composer-status-row-796)'s
+  status row needed the same 12 KB path — one drifted copy of a brand mark being a real risk, not a
+  hypothetical one. `PyryMark({ className, width, height })` takes the path and viewBox as given and
+  renders one `<svg>` with `className` **first** in attribute order, load-bearing because
+  `WelcomeScreen.test.tsx:33` asserts the literal string `` `<svg class="welcome__mark"` ``; this
+  screen's call site (`<PyryMark className="welcome__mark" width={184} height={208} />`) reproduces the
+  prior markup byte-for-byte, and its `scaleY(-1)` stays exactly where it was — in `welcome.css`, on the
+  consuming class, not inside the shared component. #796 independently verified the composer status
+  row's own vector is this same glyph: its Figma node's coordinates and viewport both divide this one's
+  by exactly 6.5.
 - **The QR-frame icon** (`QrFrameIcon`) is five stroked paths inherited unchanged from mobile's camera-
   scanner CTA icon, even though desktop pairing is a paste-a-code form — the ticket pins it as drawn.
 
@@ -152,6 +163,10 @@ two comments that are now wrong.
   `onPair?` copied verbatim is, since #662, wired on both sides.
 - [App shell (router)](app-shell.md) — gained the launch-time route to this screen in
   [#662](../codebase/662.md); untouched by #657.
+- [Conversation shell](conversation-shell.md#composer-status-row-796) — the composer status row's second
+  consumer of the shared `PyryMark`, since
+  [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796); this screen's own call site and markup
+  are unchanged by that move.
 - [#657 codebase notes](../codebase/657.md) · [#662 codebase notes](../codebase/662.md) · Spec:
   `docs/specs/architecture/657-welcome-screen.md`,
   `docs/specs/architecture/662-welcome-as-unpaired-root.md`

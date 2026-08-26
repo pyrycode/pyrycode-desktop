@@ -148,8 +148,8 @@ export type ThreadEvent =
   // progress, so there is no counter here and none may be invented (the one delta from `apiRetry`). One
   // bool, no string field: AC1 ("no daemon-supplied string is ever rendered") stays true by construction.
   | { type: 'compacting'; active: boolean }
-  // The parser-gap diagnostic. Field-for-field identical to the `unrecognizedMessage` ThreadItem, so
-  // the bridge is a filter + fresh copy (the `sessionBoundary` discipline), not a remap.
+  // The parser-gap arm. #784 widened the DaemonEvent with a `conversationId` the bridge drops. Field-for-field
+  // identical to the `unrecognizedMessage` ThreadItem, so the bridge is a filter + fresh copy, not a remap.
   | {
       type: 'unrecognizedMessage'
       site: UnrecognizedSite

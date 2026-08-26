@@ -189,7 +189,7 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The `unrecognized-message` kind carries the decoded UnrecognizedMessagePayload — the daemon's report
  * that its stream parser met claude output it has no mapping for. NOT a claude sub-state like its
  * `stall` / `api-retry` / `compacting` neighbours: it reports a gap in the daemon's own mapping. The
- * consumer carries `site`, `message_type`, `raw` and `truncated` onward, dropping `conversation_id`.
+ * consumer carries `site`, `message_type`, `raw` and `truncated` plus `conversation_id` onward (#784).
  *
  * This is the ONE inbound kind whose whole point is to carry an unbounded, unstructured daemon string,
  * so the fail-closed defence matters more here than anywhere else on this file: a closed-enum `site`

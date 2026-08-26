@@ -330,7 +330,11 @@ const activateDeps: ActivateConversationDeps = {
   setActiveConversation: (conversation) =>
     activeConversationStore.getState().setActiveConversation(conversation),
   dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
-  clearSessionId: () => sessionIdStore.getState().clearSessionId()
+  clearSessionId: () => sessionIdStore.getState().clearSessionId(),
+  // #777 — restore point 1 of "the open conversation's mark equals its own held item count". Routed
+  // through conversationLastReadBridge's own production wiring object rather than a fifth getState()
+  // arrow here, so the sampling branch lives in one tested place. See below.
+  stampLastRead: (conversationId) => stampLastReadFor(conversationLastReadDeps, conversationId)
 }
 
 // #531: the store wiring for the pairing-ended clear, module-scope for the same reason as
@@ -455,6 +459,14 @@ two adjacent lines in one file and inherits `runUnpair`'s existing ok-only fail-
 — see [#531 codebase notes](../codebase/531.md) for the full rationale and the divergence trap it
 closes (`sessionStore`'s reset used to live in `unpairAction.ts` alone; see [Session
 store](session-store.md) and [Unpair channel](unpair-channel.md)).
+
+**#777 widened `ActivateConversationDeps` with a fifth required member**,
+`stampLastRead: (conversationId: string) => void`, called unconditionally at the end of
+`activateConversation` (`activateConversation.ts:103`), **after** `setActiveConversation` and
+**outside** the id-change gate. Outside the gate is deliberate: a re-click of the already-open row still
+owes a fresh mark, the same reason `setActiveConversation` itself already runs unconditionally there. See
+[The last-read stamp](#the-last-read-stamp-conversationlastreadbridgets-777) below for the write path
+this calls into.
 
 ### The delete exit (`exitActiveConversation.ts` + `conversationDeletedBridge.ts`, #652)
 
@@ -662,6 +674,78 @@ delete case is. Unobserved, every move is a clear, and this was explicitly left 
 `back` is its own ticket covering both halves. See [#653 codebase notes](../codebase/653.md) for the full
 design rationale, the security review, and code review.
 
+### The last-read stamp (`conversationLastReadBridge.ts`, #777)
+
+[Conversation last-read store](conversation-last-read-store.md) (#775) shipped with a write path and no
+caller. #777 is that write path: **the open conversation's mark equals its own held timeline item
+count**, restored at two points — opening (above) and, here, content landing while it stays open. Both
+are the same write of the same quantity (`stampLastReadFor`), which is why this is one write function
+called from two places rather than two.
+
+`useConversationLastRead()` is mounted in `PairedShell`, beside its other headless hooks — deliberately
+**not** app-level, the opposite of every other bridge under `store/`. Every existing app-level bridge
+exists because it must observe a conversation the operator has *never opened* (`conversationActivityBridge.ts`
+says so in as many words). This one only ever writes the **open** conversation, and "open" is a concept
+that exists only inside the paired shell:
+
+```ts
+useConversationLastRead()   // #777 — restore point 2, subscribes to conversationTimelineStore
+```
+
+It subscribes to **`conversationTimelineStore`**, not `window.pyry.onDaemonEvent` — the repo's first
+production store→store subscription. Two facts forced that: the composer's optimistic echo writes the
+keyed timeline slice directly (`composerSend.ts:88`) with no IPC arm behind it, so a daemon-event listener
+would miss the operator's own sent message and mark his own open chat unread; and a second
+`onDaemonEvent` listener would race `useTimelineBridge`'s fan-out (`timelineBridge.ts:432`) on listener
+registration order. Observing the store instead has no such race — zustand's `setState` reassigns state
+and only then calls listeners, so a read inside one always sees the value just written.
+
+The write itself is an **assignment of the sampled count, never an increment** — a fact about the
+`threadTimeline` reducer, not a preference. A continuing `assistantDelta` coalesces into the tail bubble
+and leaves `items.length` unchanged, `toolResult` fills a held row in place, and `turnState` /
+`stallDetected` / `apiRetry` / `compacting` / `reconnected` never touch `items` at all — a counter bumped
+on arrival would be wrong on most arms. The common case (an unchanged count) re-records an identical
+mark and `recordLastRead`'s own `===` guard hands back the state object, so zustand's `Object.is`
+short-circuit fires and nothing downstream wakes.
+
+AC4 ("a conversation that is not open never acquires a mark") is **available by construction, not by a
+guard**: the listener names exactly one id — `getOpenConversationId()`'s — on every path, so a
+conversation that is not open is never an argument to `recordLastRead`. There is no filter to forget
+because the wrong write is structurally unavailable, the same posture `conversationLastReadStore`'s hard
+import constraint takes (see that doc). It re-stamps on **every** timeline emission, including a fold
+into a background conversation's slice — filtering to "did the open conversation's slice change" would
+need the previous state, which the deliberately nullary listener seam (`() => void`, not zustand's
+`(state, prevState)`) rules out.
+
+This bridge imports `activeConversationStore`, which every other bridge under `store/` bans importing for
+itself (`timelineBridge.ts:236-240`, `conversationActivityBridge.ts:183-184`). That ban stops an
+*arriving event that carries its own `conversationId`* from being misattributed to the conversation on
+screen — the `?? activeConversation` fallback the #675 family removed. Here nothing arrives: there is no
+event and no `conversationId` on the wire, so there is no attribution to get wrong. The open conversation
+is the subject of the quantity being written, not a fallback for a missing id.
+
+**Reachable edge case, not fixed — code review, PR #792.** Both teardown paths that end a pairing or an
+active conversation clear the timeline store **before** they clear the active conversation:
+`clearPairingScopedState` calls `clearAllTimelines()` at `clearPairingScopedState.ts:103`, one line ahead
+of `clearActiveConversation()` at `:104`; `exitActiveConversation` calls `clearTimelineFor(conversationId)`
+at `exitActiveConversation.ts:107`, one line ahead of `clearActiveConversation()` at `:108`. Either clear
+emits from `conversationTimelineStore`, which this bridge is subscribed to for as long as `PairedShell` is
+mounted — both teardown paths run *inside* that mounted window. The listener fires mid-teardown, reads
+`getOpenConversationId()` (still the conversation being torn down — `activeConversationStore` hasn't
+cleared yet), reads its now-absent timeline slice, and writes a **spurious `0`** over what may have been a
+true, higher mark — persisted, since [#776](conversation-last-read-store.md). Concretely: archiving or
+deleting the conversation you have 20 rows read into, or ending the pairing while it's open, drops its
+last-read mark to `0` on the way out.
+
+No acceptance criterion is violated (the write still names only the open conversation, and `0` is its
+honest count at that instant) and #779's pairing-boundary clear floors the map regardless, which is why
+this shipped rather than blocking. It does falsify `clearPairingScopedState.ts:78`'s claim that its six
+clears are order-independent — `clearAllTimelines` now synchronously triggers a read of
+`activeConversationStore` and a write to `conversationLastReadStore` through this listener, coupling two
+of the six through an observer neither docstring accounts for. Left as a follow-up (swap the clear order
+at both sites, or state the coupling explicitly and pin it with a test) rather than fixed on this ticket;
+whoever picks it up should start from the code review on PR #792 rather than re-deriving it.
+
 ### The app-shell seam (`App.tsx`)
 
 The `conversation` case in `AppView` swaps its direct `<ConversationScreen>` render for
@@ -695,6 +779,7 @@ AppView (route='conversation')
        │                      dispatch({type:'open'})              ← #242
        │                    })
        │                    useNotificationActivatedNav(() => dispatch({type:'open'}))  ← #393, no activateConversation, no paneKey
+       │                    useConversationLastRead()  ← #777, subscribes to conversationTimelineStore, no render
        └─ PairedShellView   route='list'|'thread' → #670 two-pane shell, sidebar mounted on BOTH:
                                                 .paired-shell__sidebar → ChannelList (store-backed) — any row → onOpen(conversation):
                                                   activateConversation(activateDeps, conversation) ← #530
@@ -716,6 +801,7 @@ AppView (route='conversation')
       activateDeps.dispatchTimeline({type:'reset'})   ← #528, clears timelineStore
       activateDeps.clearSessionId()                    ← #529, clears sessionIdStore
     activateDeps.setActiveConversation(conversation)    ← unconditional, both branches
+    activateDeps.stampLastRead(conversation.id)          ← #777, unconditional, OUTSIDE the gate too
                             route='settings' → SettingsScreen (pure, no store) + BackControl — [←] → dispatch{back} (#333)
                                                 PairAnotherServerRow → dispatch{openPairServer} (#152)
                             route='pairServer' → PairingScreen (window.pyry default) — (#152)
@@ -857,6 +943,10 @@ the pairing itself ends; see [#531](../codebase/531.md) above.
 - [#593 codebase notes](../codebase/593.md) · Spec: `docs/specs/architecture/593-announced-model-pairing-clear.md`
   — widens `clearPairingScopedState` to a fifth store, `announcedModelStore`, closing the deferral
   #588 flagged and #560 made observable.
+- [Conversation last-read store](conversation-last-read-store.md) / #777 — the store this shell's
+  `activateDeps.stampLastRead` and `useConversationLastRead()` write; source of the "open conversation's
+  mark equals its own held item count" invariant and its two restore points.
+  Spec: `docs/specs/architecture/777-open-conversation-last-read-write-path.md`.
 - [#652 codebase notes](../codebase/652.md) · Spec:
   `docs/specs/architecture/652-delete-open-conversation-returns-to-list.md` — adds
   `exitActiveConversation` + `conversationDeletedBridge.ts`, a third id-gated clear-and-move helper

@@ -1386,7 +1386,7 @@ strategy plus `fillResult`'s in-place `items.map` replacement (never insert, nev
 0008](../decisions/0008-thread-timeline-model.md)) keep a row's component instance — and its boolean —
 bound to one logical tool call across its whole pending → resolved life, and a thread `reset` empties
 `items` to `[]`, unmounting every row (including across the in-thread `conversation_created` reset path
-that leaves the screen mounted, `activateConversation.ts:75`). No row can inherit another's expansion,
+that leaves the screen mounted, `activateConversation.ts:93`). No row can inherit another's expansion,
 and none survives a reset, with nothing to clear explicitly.
 
 One additive CSS rule, `.tool-row__chip--toggle` (appended after `.tool-row__chip`, which is not
@@ -1945,7 +1945,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   "open at the top of history" premise didn't survive refinement (no backfill exists — opening a
   *different* discussion always starts empty), so the only reachable case is re-opening the *same*
   discussion. That already worked, as an emergent product of the id-gated timeline reset
-  (`activateConversation.ts:74-77`), Back unmounting `ConversationScreen` via a different-component-type
+  (`activateConversation.ts:92-95`), Back unmounting `ConversationScreen` via a different-component-type
   swap (`PairedShell.tsx:88-97`), and `following`'s `true` initial value pinning before paint on the fresh
   mount — three independent facts, none added for this ticket, now locked by an e2e test rather than left
   as an untested accident.

@@ -64,7 +64,7 @@ export interface ExitActiveConversationDeps {
  * conversation `id` to be useful, which ADR 0007's content-free rule forbids, and there is no observed
  * failure to instrument (the activateConversation.ts:60-61 posture).
  *
- * FOUR clears, not clearPairingScopedState's six. That helper additionally resets the session store and
+ * FOUR clears, not clearPairingScopedState's seven. That helper additionally resets the session store and
  * clears the announced running model, and neither belongs here: the pairing has NOT ended — the daemon
  * connection is alive and the operator lands on a working Channel List — so resetting the session store
  * would blank a live connection status into a false disconnected state, and the announced model is
@@ -82,6 +82,9 @@ export interface ExitActiveConversationDeps {
  *    yields the stable empty backlog via the `''` sentinel (ConversationScreen.tsx:1294-1299). No stale
  *    queued row can render, so none can be dropped.
  *  - `announcedModelStore`, `sessionStore` — pairing-scoped, not conversation-scoped (see above).
+ *  - `conversationLastReadStore` — pairing-scoped too (#779 clears it there): a conversation being
+ *    deleted or archived leaves the operator's OTHER chats live and their marks meaningful, and the
+ *    departing conversation's own mark is inert once nothing can read it.
  *  - `conversationListStore` — #376's re-list already re-authors it off the same event.
  *
  * One intended consequence, the same one activateConversation and clearPairingScopedState document:

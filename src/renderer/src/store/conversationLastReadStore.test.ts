@@ -387,6 +387,160 @@ describe('conversationLastReadStore persistence (#776)', () => {
   })
 })
 
+describe('conversationLastReadStore pairing-boundary clear (#779)', () => {
+  // The clear is the counterweight to #776's persistence, not a tidy-up after it: clearing only the
+  // in-memory slice leaves the previous pairing's marks on disk to be re-hydrated at next launch, a
+  // failure that looks correct in memory and is silent. Two properties below are invisible to `tsc` and
+  // break no other assertion, so each gets a named test:
+  //
+  //   - The guard must be `s.marks.size === 0`, never a reference check against
+  //     `initialConversationLastReadState.marks`. After construction `s.marks` is whatever `storage.read()`
+  //     returned — for an empty store a FRESH map, never the module constant — so a reference guard never
+  //     fires on a clean install and every unpair performs a redundant persistence write.
+  //   - The already-clear path must return the state OBJECT, and the cleared path the named baseline.
+
+  it('clears every recorded mark, in memory (AC1)', () => {
+    const store = createConversationLastReadStore(
+      fakeStorage(
+        new Map([
+          ['c1', 4],
+          ['c2', 9]
+        ])
+      )
+    )
+
+    store.getState().clearAllLastRead()
+
+    // Each id reads as NEVER READ again — `null`, not a `0` a real mark could also produce.
+    expect(store.getState().marks.size).toBe(0)
+    expect(lastReadFor(store, 'c1')).toBeNull()
+    expect(lastReadFor(store, 'c2')).toBeNull()
+  })
+
+  it('the clear reaches the persisted bytes — nothing hydrates after a restart (AC2)', () => {
+    const storage = fakeStorage(new Map([['c1', 4]]))
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearAllLastRead()
+
+    // THE test of this ticket: a SECOND store over the same backend is the restart, and it is the only
+    // assertion that separates "cleared the in-memory slice" from "cleared what survives a launch".
+    const afterRestart = createConversationLastReadStore(storage)
+    expect(afterRestart.getState().marks.size).toBe(0)
+    expect(lastReadFor(afterRestart, 'c1')).toBeNull()
+  })
+
+  it('persists an EMPTY map exactly once, encoding to the blob the decoder accepts (AC2)', () => {
+    const storage = fakeStorage(new Map([['c1', 4]]))
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearAllLastRead()
+
+    expect(storage.write).toHaveBeenCalledTimes(1)
+    const persisted = storage.write.mock.calls[0][0]
+    expect(persisted.size).toBe(0)
+    // #776's port declines a `clear()` on the ground that `write(new Map())` already serves this: the
+    // encoded form is `'[]'`, which round-trips to empty. This pins that round trip rather than trusting it.
+    expect(encodeLastReadMarks(persisted)).toBe('[]')
+    expect(decodeLastReadMarks(encodeLastReadMarks(persisted)).size).toBe(0)
+  })
+
+  it('clearing an ALREADY-EMPTY store performs no persistence write (AC4)', () => {
+    // Over a fresh empty port, NOT over a cleared one — this is the only case that catches a reference
+    // guard, because here `s.marks` is the map `read()` handed back rather than the module constant.
+    const storage = fakeStorage()
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearAllLastRead()
+
+    expect(storage.write).not.toHaveBeenCalled()
+    expect(store.getState().marks.size).toBe(0)
+  })
+
+  it('clearing an already-clear set churns no subscriber (AC4)', () => {
+    const store = createConversationLastReadStore(fakeStorage())
+    const stateBefore = store.getState()
+
+    let notifications = 0
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1
+    })
+    store.getState().clearAllLastRead()
+    unsubscribe()
+
+    // Returning the state OBJECT makes zustand's `Object.is` short-circuit fire — the same construction
+    // `recordLastRead`'s verbatim-repeat arm and `clearAllTimelines` (#757) rest on.
+    expect(notifications).toBe(0)
+    expect(store.getState()).toBe(stateBefore)
+  })
+
+  it('a SECOND clear writes nothing further and rebuilds no state (AC4)', () => {
+    const storage = fakeStorage(new Map([['c1', 4]]))
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearAllLastRead()
+    const stateAfterFirst = store.getState()
+    store.getState().clearAllLastRead()
+
+    expect(storage.write).toHaveBeenCalledTimes(1)
+    expect(store.getState()).toBe(stateAfterFirst)
+  })
+
+  it('the cleared state holds the named empty baseline, which stays empty (AC1)', () => {
+    const store = createConversationLastReadStore(fakeStorage(new Map([['c1', 4]])))
+
+    store.getState().clearAllLastRead()
+
+    // The `clearActiveConversation` / `clearSessionId` posture: hand back the exported constant, so the
+    // reference is stable across repeated clears. Safe here where `clearAllTimelines` refuses it, because
+    // this map is never mutated in place — every write clones.
+    expect(store.getState().marks).toBe(initialConversationLastReadState.marks)
+    expect(initialConversationLastReadState.marks.size).toBe(0)
+  })
+
+  it('a record after a clear starts from empty rather than resurrecting a mark (AC1)', () => {
+    const storage = fakeStorage(new Map([['c1', 4]]))
+    const store = createConversationLastReadStore(storage)
+
+    store.getState().clearAllLastRead()
+    store.getState().recordLastRead('c2', 3)
+
+    // The clear cannot leave the constant polluted for the next write, and the cleared id stays gone.
+    expect(lastReadFor(store, 'c1')).toBeNull()
+    expect(lastReadFor(store, 'c2')).toBe(3)
+    expect(store.getState().marks.size).toBe(1)
+    expect(initialConversationLastReadState.marks.size).toBe(0)
+  })
+
+  it('the three hostile keys are cleared like any other entry (AC1)', () => {
+    const store = createConversationLastReadStore(
+      fakeStorage(new Map(hostileKeys.map((key) => [key, 6] as const)))
+    )
+
+    store.getState().clearAllLastRead()
+
+    // The `ReadonlyMap` property has to hold ACROSS the clear as it does across a write: a `Record` swap
+    // would read `'__proto__'` and `'constructor'` back off the prototype chain rather than as `null`.
+    for (const key of hostileKeys) {
+      expect(lastReadFor(store, key)).toBeNull()
+    }
+    expect(store.getState().marks.size).toBe(0)
+  })
+
+  it('the clear does not mutate the previously held map (AC1)', () => {
+    const store = createConversationLastReadStore(fakeStorage(new Map([['c1', 4]])))
+    const marksBefore = store.getState().marks
+
+    store.getState().clearAllLastRead()
+
+    // The load-bearing form for this store: the identity assertion the object-holding precedents use is
+    // degenerate over numbers, so what catches an in-place `s.marks.clear()` is the previously held map
+    // still reading as it did.
+    expect(marksBefore.get('c1')).toBe(4)
+    expect(marksBefore.size).toBe(1)
+  })
+})
+
 describe('encodeLastReadMarks / decodeLastReadMarks (#776)', () => {
   // The codec is unit-tested directly: the `node` runtime cannot reach it through the window-guarded real
   // port (pushNotificationPrefStore.test.ts:99-102). This is also the untrusted-input boundary — the blob

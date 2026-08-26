@@ -5,6 +5,7 @@ import {
   MessageThread,
   Timeline,
   ThinkingIndicator,
+  ComposerStatusArea,
   THINKING_COPY,
   WORKING_COPY,
   workingIndicatorState,
@@ -1053,10 +1054,17 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
 
   it('shows the daemon-styled Thinking affordance while thinking', () => {
     const markup = renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)
-    // The stable test seam (the bubble__cursor role), the muted daemon-bubble treatment, and the
-    // client-owned static label — the ellipsis glyph … (U+2026), no apostrophe to survive escaping.
+    // The stable test seam (the bubble__cursor role) — #796 RETAINED `conversation__thinking` when the
+    // bubble treatment became the status row's label, precisely so this assertion and the two e2e
+    // turn-liveness locators keep pointing at the same identity.
     expect(markup).toContain('conversation__thinking')
-    expect(markup).toContain('bubble--thinking')
+    // The WHOLE class attribute, not a bare toContain of the presentation class. Unlike #649's
+    // deliberately non-prefixed `bubble--tool-label`, BEM's `composer-status__label--tool` DOES contain
+    // `composer-status__label` as a substring, so a substring assertion would pass on markup that
+    // dropped the base class and kept only the modifier — the exact vacuity conversation.css:779-781
+    // was written to avoid. Pinning the attribute also pins that the tool modifier is absent here.
+    expect(markup).toContain('class="conversation__thinking composer-status__label"')
+    // The client-owned static label — the ellipsis glyph … (U+2026), no apostrophe to survive escaping.
     expect(markup).toContain(THINKING_COPY)
     // #648 hoisted this literal out of the JSX into an exported constant; its rendered text must not
     // change, so the value is pinned here rather than left to review.
@@ -1065,10 +1073,10 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
 
   it('shows the generic working affordance on the same surface while running but not thinking (#648, AC1)', () => {
     const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} />)
-    // The same wrapper and the same muted modifier — one surface, two labels, no CSS change (AC1's
+    // The same element and the same class attribute — one surface, two labels, no CSS change (AC1's
     // "the indicator is visible", not "a second indicator appears").
     expect(markup).toContain('conversation__thinking')
-    expect(markup).toContain('bubble--thinking')
+    expect(markup).toContain('class="conversation__thinking composer-status__label"')
     expect(markup).toContain(WORKING_COPY)
     // The label tracks the phase (AC2): the thinking copy is NOT what a tool-heavy stretch shows.
     expect(markup).not.toContain(THINKING_COPY)
@@ -1089,28 +1097,31 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
 
   it('names the open tool on the same surface, replacing the generic copy (#649, AC1)', () => {
     const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName="Bash" />)
-    // The same wrapper and the same muted modifier — one surface, now three labels (AC1 is "the
-    // indicator names the tool", not "a second indicator appears").
+    // The same element and the same base classes plus ONE modifier — one surface, now three labels
+    // (AC1 is "the indicator names the tool", not "a second indicator appears").
     expect(markup).toContain('conversation__thinking')
-    expect(markup).toContain('bubble--thinking')
+    expect(markup).toContain(
+      'class="conversation__thinking composer-status__label composer-status__label--tool"'
+    )
     expect(markup).toContain(toolWorkingCopy('Bash'))
     // The named label REPLACES the generic one rather than sitting beside it.
     expect(markup).not.toContain(WORKING_COPY)
     expect(markup).not.toContain(THINKING_COPY)
     // AC5's one-line bound rides on this modifier (see conversation.css). Asserted here because the
     // declarations themselves have no vitest detector — server render has no layout engine — so the
-    // class being ON the element is the part a test can hold.
-    expect(markup).toContain('bubble--tool-label')
+    // class being ON the element is the part a test can hold. #796 moved the bound off the deleted
+    // .bubble ancestry onto the row's own truncation chain; the modifier is still where it hangs.
+    expect(markup).toContain('composer-status__label--tool')
   })
 
   it('keeps the tool label off the two unnamed states — the modifier is the tool branch alone (AC3)', () => {
     // The #648 labels must render byte-identical markup, so their assertions above stay AC3's
     // regression evidence rather than being retyped against a moved target.
     expect(renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} />)).not.toContain(
-      'bubble--tool-label'
+      'composer-status__label--tool'
     )
     expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)).not.toContain(
-      'bubble--tool-label'
+      'composer-status__label--tool'
     )
   })
 
@@ -1133,6 +1144,62 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
     // fail on correct output — it is the unescaped `="` that only an HTML sink could produce.
     expect(markup).not.toMatch(/\son[a-z]+="/i)
     expect(markup).not.toContain('alert(1)"')
+  })
+})
+
+// #796: the fixed-height status row above the composer — the desktop layout's own status area (Figma
+// node 111-3525), replacing the loose region the working indicator used to float in. Pure
+// props-in/markup-out and exported so tests server-render it with injected values, no store: the
+// container's running arm is unreachable under server render (zustand v5 reads getInitialState() →
+// phase: 'idle'), so both spin arms are proven here, exactly like ThinkingIndicator's above.
+//
+// The turning-vs-still distinction is a CLASS, not a resolved style. A renderer spec is a static server
+// render with no layout engine and no CSSOM (CLAUDE.md), so a class on the icon is the only form of that
+// distinction a vitest assertion can hold — which is why the rotation is driven by a modifier rather
+// than an inline style. The reduced-motion half (AC4) is structurally out of reach here and lives in
+// e2e/composer-status-reduced-motion.spec.ts, this repo's first reduced-motion coverage anywhere.
+describe('ComposerStatusArea — the status row above the composer and its turning icon (#796)', () => {
+  it('turns the icon while a turn is running (AC3)', () => {
+    const markup = renderToStaticMarkup(<ComposerStatusArea isRunning={true} />)
+    expect(markup).toContain('composer-status__icon--spinning')
+  })
+
+  it('still renders the icon at rest, without the turning modifier (AC3)', () => {
+    const markup = renderToStaticMarkup(<ComposerStatusArea isRunning={false} />)
+    // BOTH halves. A lone not.toContain('--spinning') passes vacuously on markup with no icon at all,
+    // so the still arm has to prove the icon is THERE and STILL — AC3 is "renders but does not rotate",
+    // not "does not rotate". The whole class attribute, since the base class is a substring of the
+    // modifier (the vacuity conversation.css:779-781 legislates against).
+    expect(markup).toContain('class="composer-status__icon"')
+    expect(markup).not.toContain('composer-status__icon--spinning')
+  })
+
+  it('holds the row whether or not it has status text, so the composer never moves (AC1, AC2)', () => {
+    // The row NEVER returns null — the deliberate departure from the four indicators' null-at-rest
+    // posture. Its own height reserves the space, so a textless row is still a rendered row, and the
+    // composer does not jump when the label appears and disappears under it.
+    const markup = renderToStaticMarkup(<ComposerStatusArea isRunning={false} />)
+    expect(markup).toContain('class="composer-status"')
+    expect(markup).toContain('class="composer-status__activity"')
+  })
+
+  it('hosts its status text in the left activity group, after the icon (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerStatusArea isRunning={true}>
+        <span className="probe-label">Thinking…</span>
+      </ComposerStatusArea>
+    )
+    // Ordering by index — the WelcomeScreen.test.tsx:36-41 idiom, since a static markup string carries
+    // no tree to query. Group, then icon, then label: the Figma's 14x16 vector at x=0 with the label at
+    // x=22 (a --space-2 gap past it).
+    const groupAt = markup.indexOf('composer-status__activity')
+    const iconAt = markup.indexOf('composer-status__icon')
+    const labelAt = markup.indexOf('probe-label')
+    expect(groupAt).toBeGreaterThanOrEqual(0)
+    expect(iconAt).toBeGreaterThan(groupAt)
+    expect(labelAt).toBeGreaterThan(iconAt)
+    // The label lands INSIDE the group, not after it — the group's closing tag trails the label.
+    expect(markup.indexOf('</div></div>')).toBeGreaterThan(labelAt)
   })
 })
 
@@ -1187,8 +1254,11 @@ describe('StallIndicator — the stalled-turn problem-state affordance (#317)', 
     // The client-owned copy — apostrophe-free, U+2026 ellipsis (survives renderToStaticMarkup escaping),
     // never a daemon string.
     expect(markup).toContain('The turn seems to have stalled…')
-    // Visually distinct from the thinking indicator (AC4) — a problem state, not normal progress.
-    expect(markup).not.toContain('bubble--thinking')
+    // Visually distinct from the working indicator (AC4) — a problem state, not normal progress.
+    // #796 REPOINTED this from the retired `bubble--thinking`: once no component can emit that string
+    // the assertion passes against nothing and silently stops testing anything. `composer-status__label`
+    // is where the working indicator's treatment lives now, so this is the same claim, still falsifiable.
+    expect(markup).not.toContain('composer-status__label')
   })
 })
 
@@ -1216,8 +1286,9 @@ describe('ApiRetryIndicator — the api-error retry affordance (#493)', () => {
     expect(markup).toContain('3')
     expect(markup).toContain('10')
     expect(markup).toContain('api-retry__counter')
-    // Visually distinct from BOTH the thinking treatment and the stall treatment (AC1).
-    expect(markup).not.toContain('bubble--thinking')
+    // Visually distinct from BOTH the working treatment and the stall treatment (AC1). #796 repointed
+    // the first off the retired `bubble--thinking` — see the StallIndicator describe above.
+    expect(markup).not.toContain('composer-status__label')
     expect(markup).not.toContain('bubble--stall')
   })
 
@@ -1259,8 +1330,9 @@ describe('CompactingIndicator — the auto-compaction affordance (#496)', () => 
     expect(markup).toContain('bubble--compacting')
     // The client-owned copy — never a daemon string.
     expect(markup).toContain(COMPACTING_COPY)
-    // Visually distinct from all three sibling indicators (AC1).
-    expect(markup).not.toContain('bubble--thinking')
+    // Visually distinct from all three sibling indicators (AC1). #796 repointed the first off the
+    // retired `bubble--thinking` — see the StallIndicator describe above.
+    expect(markup).not.toContain('composer-status__label')
     expect(markup).not.toContain('bubble--stall')
     expect(markup).not.toContain('bubble--api-retry')
   })
@@ -2505,6 +2577,20 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('conversation__thinking')
     expect(markup).not.toContain(THINKING_COPY)
     expect(markup).not.toContain(WORKING_COPY)
+  })
+
+  // #796: the status row is the one thing in that region that mounts UNCONDITIONALLY — it holds its
+  // height with no label inside it, which is what keeps the composer from moving when the working
+  // indicator above appears and disappears (AC2). Its icon is still at idle (AC3); the container
+  // derives `isTurnRunning(phase)` from the same getInitialState() → phase: 'idle' the assertion above
+  // relies on, so this is the inert arm of the same read.
+  it('mounts the status row at idle — present, holding its height, icon not turning (AC2, AC3)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('class="composer-status"')
+    expect(markup).toContain('class="composer-status__icon"')
+    expect(markup).not.toContain('composer-status__icon--spinning')
+    // Present but textless: the row mounts, the label inside it does not.
+    expect(markup).not.toContain('composer-status__label')
   })
 
   // #317: the stall indicator mounts against the initial timeline store (getInitialState stalled:

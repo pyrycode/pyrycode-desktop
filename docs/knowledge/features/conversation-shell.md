@@ -75,11 +75,12 @@ ConversationScreen            .conversation        (flex column, full height, po
 ├── WorkspaceChip              .conversation__workspace-chip (null unless empty + unpromoted, #278; onChange opens WorkspacePickerSheet, #383)
 ├── Timeline                  .conversation__thread (null when empty; the single thread surface since #179, #203)
 │   └── TimelineRow × N       .message-row--user/.bubble--user (userText, #179) · .message-row--daemon/.bubble--daemon (assistantText) · .tool-row/.tool-row__chip (toolCall, #218; resolved modifiers #230)
-├── ThinkingIndicator          .conversation__thinking (null when idle; holds through responding since #648, #215)
-│   └── bubble--thinking       .bubble.bubble--daemon.bubble--thinking ("Thinking…"/"Working…"/"Running <tool>…", #648, #649)
+├── (ApiRetryIndicator / CompactingIndicator / StallIndicator — the three problem-state bubbles right after Timeline; unaffected by #796, see below)
 ├── StatusRow                 .status-row          (trigger, between thread and composer, #177)
 │   └── ConnectionStatusIndicatorControl .status-row__connection (two dots, inside .status-row__summary, #330)
 ├── BackgroundTaskTrigger      .background-task-trigger (StatusRow sibling, unconditional, #581)
+├── ComposerStatusArea         .composer-status     (fixed-height row above the composer; NEVER null, #796)
+│   └── ThinkingIndicator       .composer-status__label ("Thinking…"/"Working…"/"Running <tool>…", #648, #649; off the daemon-bubble surface since #796)
 ├── Composer                  .composer            (pinned)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
 ├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
@@ -981,26 +982,33 @@ dead region — `Timeline` is now the conversation's single thread surface. See
 ### Thinking / working indicator (#215, held for the whole running turn since #648, tool-named since #649, opens on send since #650)
 
 `Timeline`'s structural twin over the coarse `phase` scalar (`TurnPhase`, [ADR 0008](../decisions/0008-thread-timeline-model.md))
-rather than the `items` list, mounted immediately after it:
+rather than the `items` list. Through #796 it mounted immediately after `Timeline`; **since
+[#796](https://github.com/pyrycode/pyrycode-desktop/issues/796) it mounts as the sole child of
+`ComposerStatusArea`**, the fixed-height row directly above the composer — see [Composer status
+row](#composer-status-row-796) below for the row itself:
 
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-└── ThinkingIndicator           state={workingIndicatorStateWithLocalSend(
-                                          { phase, apiRetry, compacting }, localSendPending)}
-                                 toolName={openToolName(items)}
+└── ComposerStatusArea         isRunning={isTurnRunning(phase)}
+    └── ThinkingIndicator      state={workingIndicatorStateWithLocalSend(
+                                         { phase, apiRetry, compacting }, localSendPending)}
+                                toolName={openToolName(items)}
 ```
 
 The daemon opens a turn with `turn_state{thinking}` before any `assistant_delta` (pyrycode #632), so
 during that window `Timeline` is `null` (no items yet) and, before #215, the thread showed nothing — a
 slow turn was indistinguishable from a stalled one. `ThinkingIndicator({ state })` is `Timeline`'s twin:
 pure, exported, in-file, server-rendered from an injected value, never a store read of its own. `state
-=== null` → `null` (zero footprint, the `Timeline`-on-empty-`items` precedent); otherwise a `flex: 0 0
-auto` `.conversation__thinking` wrapper (deliberately not the thread's `flex: 1 1 auto`, so it never
-claims a competing region) holding `<div className="bubble bubble--daemon bubble--thinking">` with
-`THINKING_COPY` (`'Thinking…'`) when `state === 'thinking'` or `WORKING_COPY` (`'Working…'`) when `state
-=== 'working'` — the same daemon-bubble surface, text muted to `--color-on-surface-variant`, for both
-labels. Both labels are static, client-owned constants, never `phase` itself.
+=== null` → `null` (zero footprint, the `Timeline`-on-empty-`items` precedent) — **as of #796, "zero
+footprint" describes the label only, not the row**, since `ComposerStatusArea` always renders and holds
+its height regardless (AC2, see below); otherwise a single `<span
+className="conversation__thinking composer-status__label">` (a `<div className="bubble bubble--daemon
+bubble--thinking">` through #796; the bubble treatment retired when the label moved into the row — see
+[Composer status row](#composer-status-row-796)) with `THINKING_COPY` (`'Thinking…'`) when `state ===
+'thinking'` or `WORKING_COPY` (`'Working…'`) when `state === 'working'`. The label now inherits
+`--color-primary` from the row's `.composer-status__activity` group rather than carrying its own muted
+tint — both labels are still static, client-owned constants, never `phase` itself.
 
 **Union input, not `phase` and not a `string` — the label CHOICE stays a type-level guarantee; naming
 the tool is a deliberate, narrow exception to it, since [#649](../codebase/649.md).** The view's `state`
@@ -1018,9 +1026,12 @@ constant; and the name reaches the DOM only as an auto-escaped text child, never
 `state === null` is checked first, so #493's and #496's supersede rules still hide the indicator entirely
 in either phase — an open tool cannot resurrect it. The container does both derivations
 (`workingIndicatorState` and `openToolName`) over values it already holds, not the view. No animation
-shipped (an optional pulse was explicitly non-load-bearing per spec); the interim treatment is
-deliberately minimal, since the locked mobile design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no
-dedicated working-indicator node — the polished version rolls into the deferred desktop-design pass.
+shipped (an optional pulse was explicitly non-load-bearing per spec); through #796 the interim treatment
+stayed deliberately minimal, since the locked mobile design (`g2HIq2UyPhslEoHRokQmHG`, node `16-8`) has no
+dedicated working-indicator node. **#796 is the deferred desktop-design pass this paragraph used to await**
+— the desktop layout's own Figma node (`111:3525`) exists, and consuming it moved the label off the
+daemon-bubble surface into the fixed-height row above the composer and added the one genuinely new piece,
+a turning icon; see [Composer status row](#composer-status-row-796) below.
 
 **Opens locally on send since [#650](../codebase/650.md), closes robustly.** Through #649 the
 indicator stayed dark from Enter until the daemon's first event — the composer's optimistic echo
@@ -1047,9 +1058,11 @@ arm-by-arm classification and the e2e mount-timing repair it also required.
 
 Was dormant until [#179](../codebase/179.md) flipped `interactive` (`phase` stayed `idle` in
 production until then, the same posture as `Timeline`); now live. Code review flagged one non-gating
-NIT: `.conversation__thinking` has no live region (`role="status"`), so a screen reader won't announce
-it appearing, disappearing, **or its label changing mid-turn since #648, or naming a tool since #649** —
-still unaddressed, deferred to the desktop-design pass. See [#215 codebase notes](../codebase/215.md) for
+NIT: the label has no live region (`role="status"`), so a screen reader won't announce it appearing,
+disappearing, **or its label changing mid-turn since #648, or naming a tool since #649** — still
+unaddressed. #796's own spec logged this as an open question rather than a NIT and left it standing on
+the same reasoning: a live region beside a rotating icon is its own a11y decision, and no AC has ever
+covered it. See [#215 codebase notes](../codebase/215.md) for
 the full original design, [#648 codebase notes](../codebase/648.md) for the whole-turn broadening,
 [#649 codebase notes](../codebase/649.md) for the tool-naming reversal, patterns established, and the
 deferred stale-open-`toolCall` risk (cross-referenced against pyrycode #1243), and
@@ -1093,27 +1106,136 @@ are both facts already sitting in the store, not an inference over `phase`. `ope
 computed alongside `workingIndicatorState` at the same call site and passed as the indicator's second,
 required `toolName: string | null` prop; when it is non-null it replaces the phase-derived copy with
 `` `Running ${name}…` `` (`toolWorkingCopy`) rather than sitting beside it, and reverts to the generic copy
-the moment the tool's `toolResult` fills the item — no further `turn_state` needed. Renders through a new
-`.bubble--tool-label` CSS modifier (`.tool-row__summary`'s one-line-ellipsis bound, not `.tool-row__name`'s
-never-truncates one — see [#649 codebase notes](../codebase/649.md)) so a long tool name never wraps
-to a second line or moves the composer. One deliberately undefended edge: an interrupted turn can leave a
+the moment the tool's `toolResult` fills the item — no further `turn_state` needed. Renders through a
+`.tool-row__summary`-style one-line-ellipsis bound (not `.tool-row__name`'s never-truncates one — see
+[#649 codebase notes](../codebase/649.md)) so a long tool name never wraps to a second line or moves the
+composer — through #796 via `.bubble--tool-label`, backstopped by `.bubble`'s own `max-width: min(680px,
+75%)`; **since #796 via `.composer-status__label--tool`**, and the backstop changed with it: `.bubble` is
+gone from this label's ancestry, so the bound is now a three-link flex chain instead — see [Composer
+status row § the truncation bound](#composer-status-row-796) below for the replacement and why it had to
+be re-derived rather than copied. One deliberately undefended edge: an interrupted turn can leave a
 `toolCall` permanently `result: null`, so the *next* turn's indicator could name that stale tool — the
 timeline already shows that call as a permanently pending, dimmed row (#230), so the label would mirror
 what's already on screen rather than contradict it; the fix if ever observed is scoping the scan to stop
 at the current turn's `turnBoundary`.
 
+### Composer status row (#796)
+
+The desktop layout's own fixed-height status area directly above the message box (Figma `111:3525`,
+780×24), replacing the loose region the working indicator used to float in. `ComposerStatusArea({
+isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted as `StatusRow`/
+`BackgroundTaskTrigger`'s next sibling and `Composer`'s immediate predecessor:
+
+```
+.conversation
+├── StatusRow
+├── BackgroundTaskTrigger
+├── ComposerStatusArea         .composer-status
+│   └── .composer-status__activity
+│       ├── PyryMark            .composer-status__icon(--spinning)  (14×16, from theme/PyryMark.tsx)
+│       └── {children}          → <ThinkingIndicator/>
+└── Composer
+```
+
+**Never returns `null` — the one deliberate departure from every sibling indicator's zero-footprint
+posture (AC2).** `ApiRetryIndicator`/`CompactingIndicator`/`StallIndicator`/`ThinkingIndicator` itself all
+still return `null` at rest; this row's *height* is what must be reserved regardless, so the composer no
+longer moves under the operator's cursor each time the label appears or disappears — the same reasoning
+`ComposerSendButton` (#678) already applies to never returning `null` either. A turning icon beside no
+label is consequently a **legal, expected** render (a live api-retry or compaction still supersedes the
+label per #493/#496 while the raw phase reading keeps the icon turning) and the held height is what makes
+that read as intentional rather than broken.
+
+**`isRunning: boolean`, not `phase: TurnPhase` — the `ComposerSendButton` precedent, not a new one.** The
+view structurally cannot receive the store enum, so `'idle'` is not representable inside the spinning
+branch and no daemon string can reach this prop. The container supplies `isTurnRunning(phase)`, the same
+exported predicate the composer's stop-button variant already gates on — reused, not re-derived.
+
+**`children`, not a `label: string` prop — the `StatusSheet({ onClose, children })` precedent.** Keeps the
+row independent of where its text comes from. The row's only child today is `<ThinkingIndicator/>`; the
+right-hand error slot [#797](https://github.com/pyrycode/pyrycode-desktop/issues/797) will fill is empty
+here and gets **no placeholder element** — the row's own `height: 24px` is what reserves the space, and
+the Figma error frame is itself 24 tall, so a second flex child later grows nothing.
+
+**The turning state is a CSS class, never a resolved style.** `.composer-status__icon--spinning` drives a
+`composer-status-spin` keyframe (`1.6s linear infinite`, a client-owned constant — the Figma node is a
+static vector with no motion spec); a `@media (prefers-reduced-motion: reduce)` rule turns the animation
+off while leaving the class and the icon in place, `.bubble__cursor`'s existing shape verbatim. The class
+being static markup (rather than an inline style resolved at paint time) is what makes AC3's
+running-vs-still distinction visible to a `renderToStaticMarkup` renderer spec, and it is the repo's
+**first reduced-motion coverage anywhere** — no renderer spec can reach a media query, so
+`e2e/composer-status-reduced-motion.spec.ts` (Playwright fake tier) is the sole check, and it self-verifies
+the emulation took effect (`matchMedia('(prefers-reduced-motion: reduce)').matches` asserted before
+anything else) before asserting the icon's computed `animationName`. A control arm — the same class,
+`reducedMotion: 'no-preference'`, `animationName` asserted **not** `'none'` — is what makes the spec able
+to fail at all; without it, `'none'` on a stylesheet that never declared the keyframe would also pass.
+`page.emulateMedia` does reach an Electron window over CDP as shipped, so the `--force-prefers-reduced-motion`
+launch-arg fallback the architecture spec held in reserve was never needed.
+
+**The icon is `PyryMark`** (`theme/PyryMark.tsx`), the pyrycode snowflake mark **moved out of
+`WelcomeScreen.tsx`'s module-private `PyrycodeMark`** so the two screens share one 12 KB path instead of a
+second, driftable copy — see [Welcome screen § The two SVGs](welcome-screen.md#the-two-svgs--inline-jsx-no-svg-file).
+Confirmed to be the *same* glyph the welcome hero draws, numerically rather than assumed: this node's
+Figma coordinates and viewport both divide the welcome mark's by exactly 6.5. Rendered **unflipped** here,
+diverging from `.welcome__mark`'s own `transform: scaleY(-1)` — a glyph that spends its visible life
+rotating has no observable orientation, so the flip buys nothing and was left off; the architecture spec's
+stated reason for this ("the same orientation as the welcome hero") did not survive contact with
+`welcome.css:84` and the code comment now records the real relationship instead of repeating the
+now-false one.
+
+**The truncation bound is a re-derived three-link chain, not a copy of the retired one.** Through #796,
+`.bubble--tool-label`'s one-line-ellipsis bound leaned on `.bubble`'s own `max-width: min(680px, 75%)` as
+its backstop — measured: removing that max-width blew the label out to 3089px against a 396-char name.
+This move deletes `.bubble` from the label's ancestry entirely, so that backstop is gone. The replacement,
+verified by measurement rather than assumed (a 3000-char daemon tool name leaves `.composer-status` at
+640px with no horizontal overflow on `.conversation` or `document.body`): `.composer-status` is a
+block-level flex item of `.conversation` (a definite width) → `.composer-status__activity` is `flex: 1 1
+auto; min-width: 0` (without which a flex item's automatic content minimum floors at the label's full
+intrinsic width) → `.composer-status__label--tool` is `min-width: 0; overflow: hidden; text-overflow:
+ellipsis; white-space: nowrap` (`nowrap` also collapses an embedded newline, so a daemon name can't break
+the line either). All three links are required; dropping any one reopens the #649 hazard this bound
+exists to close. `text-overflow` needs a block container and the label is a `<span>` — it works because a
+flex item is blockified, the load-bearing detail nearest a future "make it a span again" refactor.
+
+**Scope boundary, held exactly as ticketed.** `ApiRetryIndicator`, `CompactingIndicator`, and
+`StallIndicator` keep their pre-#796 mount site (right after `Timeline`), their bubble treatments, and
+their mutual precedence rule — none of that was reopened. Only `ThinkingIndicator`'s markup moved. One
+second-order consequence: `.conversation__thinking` no longer changes the thread's viewport size when it
+mounts or unmounts, because it now lives inside a row that is *always* mounted — see the **Thread scroll
+pin** edge case below, where `thread-scroll-pin.spec.ts`'s fourth criterion had to be repointed onto the
+stall indicator for exactly this reason. `conversation__thinking` itself is **retained**
+as a class on the label purely as an identity hook (two Electron-launch e2e specs locate it as their
+turn-liveness gate) — it styles nothing any more; that is ordinary BEM, not drift.
+
+**Test-file vacuity repoint, the same hazard the row's own class-string rename created elsewhere.** Once
+`bubble--thinking` exists nowhere in production, the three pre-existing `ConversationScreen.test.tsx`
+assertions checking the stall/api-retry/compacting renders' `not.toContain('bubble--thinking')` — i.e.
+"this problem state is visually distinct from the working indicator" — would pass against a string no
+component can emit, silently testing nothing; #796 repointed all three onto `not.toContain('composer-status__label')`
+so the claim stays falsifiable, the same fix `.bubble--tool-label`'s own naming comment was written to
+avoid ([#649 codebase notes](../codebase/649.md)).
+
+Code review PASS, with one non-blocking SHOULD FIX left open: `ThinkingIndicator`'s own comment block still
+says "there is no Figma node for this state; the indicator is one muted run" — both clauses are now false
+(node `111:3525` is precisely what this ticket consumes, and the label inherits `--color-primary`, not a
+muted tint) even though the paragraph's conclusion (one text run, so overflow draws a single ellipsis) is
+still correct and still load-bearing. Left as prose upkeep rather than a gate. See [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796).
+
 ### Api-retry indicator (#493)
 
 `ThinkingIndicator`'s twin over a third timeline-store scalar (`apiRetry: ApiRetryStatus | null`),
-mounted immediately after it — its supersede peer — and before `StallIndicator`:
+`ThinkingIndicator`'s **supersede peer** — a relationship carried entirely by `workingIndicatorState`
+reading `apiRetry`/`compacting`, not by DOM adjacency, so it survived [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796)
+moving `ThinkingIndicator`'s own markup down into the composer status row unchanged. Mounted immediately
+after `Timeline` and before `StallIndicator`:
 
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-├── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })} — narrowed again by #496, broadened by #648
 ├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)}
 ├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)} — #496, see below
 └── StallIndicator              isStalled={useTimelineStore(selectStalled)}
+                                 (ThinkingIndicator itself moved to the composer status row by #796 — see above)
 ```
 
 The daemon emits `api_retry` when claude hits an API error and retries, carrying an explicit
@@ -1141,7 +1263,10 @@ this view — unlike `StallIndicator` — does render daemon-derived digits.
 **Visually distinct from both siblings.** `.bubble--api-retry` reuses `.bubble--daemon`'s fill/radius
 and diverges to `--color-error` text (the same error role as `.bubble--stall`) but **omits** the left
 accent bar that is `.bubble--stall`'s distinguishing mark — keeping the two problem states separable
-from each other, and both distinct from the muted `.bubble--thinking`. No new design token.
+from each other. Through #796 both were also distinct from the muted `.bubble--thinking`; since #796
+retired that class, the comparison point is the composer status row's label instead, which now reads in
+`--color-primary` rather than muted — still a distinct role from either problem state's `--color-error`.
+No new design token.
 
 May still co-render with `StallIndicator` (and, since #496, `CompactingIndicator`) — AC5 scopes mutual
 exclusion to `ThinkingIndicator` only, #317's "distinct facts, adjacent flex rows" posture for stall is
@@ -1152,14 +1277,15 @@ visual remains a Figma-side follow-up for Juhana. See
 ### Compacting indicator (#496)
 
 `ThinkingIndicator`'s **second** supersede peer, over a fourth timeline-store scalar (`compacting:
-boolean`), mounted immediately after `ApiRetryIndicator` and before `StallIndicator` — grouping the two
-thinking-superseders (#493, #496) contiguously below the indicator they occlude, and leaving
-`StallIndicator` (the non-superseding, co-rendering fact) last:
+boolean`), mounted immediately after `ApiRetryIndicator` and before `StallIndicator` — through #796 this
+grouped the two thinking-superseders (#493, #496) contiguously below the indicator they occlude; since
+[#796](https://github.com/pyrycode/pyrycode-desktop/issues/796) moved `ThinkingIndicator`'s markup into
+the composer status row, this trio is contiguous below `Timeline` instead, unaffected in every way that
+matters — the supersede relationship lives in `workingIndicatorState`, not DOM position:
 
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-├── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })}
 ├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)}
 ├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)}
 └── StallIndicator              isStalled={useTimelineStore(selectStalled)}
@@ -1184,13 +1310,19 @@ apostrophe-free, ends in U+2026, and is asserted distinct from `'Thinking…'`/`
 
 **Compaction is progress, not a problem — deliberately does not reuse the error role.**
 `.bubble--stall` and `.bubble--api-retry` both use `--color-error` because both signal a degrading
-session; compaction is claude working normally, so `.bubble--compacting` instead pairs the muted
-`.bubble--thinking` text treatment (`--color-on-surface-variant`) with a left accent bar in the
-**primary** role (`--color-primary`, `.bubble--stall`'s bar structure with the error role swapped out).
-That completes a four-way text-role × left-bar matrix with every cell distinct: thinking
-(muted/no-bar), stall (error/error-bar), api-retry (error/no-bar), compacting (muted/primary-bar). No
-new design token — the matrix is now saturated on both axes, so a fifth transient status would need a
-third visual axis to stay distinguishable.
+session; compaction is claude working normally, so `.bubble--compacting` instead uses the muted
+`--color-on-surface-variant` text treatment — through #796 this matched the daemon-bubble surface's own
+`.bubble--thinking` — with a left accent bar in the **primary** role (`--color-primary`,
+`.bubble--stall`'s bar structure with the error role swapped out). Through #796 this completed a four-way
+text-role × left-bar matrix with every cell distinct: thinking (muted/no-bar), stall (error/error-bar),
+api-retry (error/no-bar), compacting (muted/primary-bar). **Since [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796)
+retired `.bubble--thinking`** and moved the working label off the daemon-bubble surface entirely (see
+[Composer status row](#composer-status-row-796) above, where the label's own colour also changed, to
+`--color-primary`), this is now a three-way matrix among the indicators that stayed behind: stall
+(error/error-bar), api-retry (error/no-bar), compacting (muted/primary-bar) — `.bubble--compacting`'s own
+rule is untouched, and the muted register it picked still reads correctly on its own terms even though the
+class it was originally matched against is gone. No new design token — the matrix was already saturated
+on both axes with four cells; three leaves headroom for one more before a third visual axis is needed.
 
 May co-render with `ApiRetryIndicator` and `StallIndicator` — AC4 scopes exclusion to `ThinkingIndicator`
 only, the same #493 posture. No Figma node (same documented gap as #215/#277/#279/#305/#317/#493). See
@@ -1198,13 +1330,17 @@ only, the same #493 posture. No Figma node (same documented gap as #215/#277/#27
 
 ### Stall indicator (#317)
 
-`ThinkingIndicator`'s own twin, over a second timeline-store scalar (`stalled: boolean`), mounted
-immediately after it:
+`ThinkingIndicator`'s own twin, over a second timeline-store scalar (`stalled: boolean`); through #796
+mounted immediately after `ThinkingIndicator` in the DOM, now mounted last of the three problem-state
+indicators that stayed behind when [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796) moved
+`ThinkingIndicator`'s markup into the composer status row — kept its own bubble treatment and
+null-at-rest posture, which is exactly why `thread-scroll-pin.spec.ts`'s viewport-shrink criterion was
+repointed onto this indicator rather than the one it used to sit beside (see [Composer status
+row](#composer-status-row-796) above and the **Thread scroll pin** edge case below):
 
 ```
 .conversation
 ├── Timeline                   items={useTimelineStore(selectItems)}
-├── ThinkingIndicator           state={workingIndicatorState({ phase, apiRetry, compacting })} — narrowed by #493, #496, broadened by #648
 ├── ApiRetryIndicator           retry={useTimelineStore(selectApiRetry)} — #493, see above
 ├── CompactingIndicator         isCompacting={useTimelineStore(selectCompacting)} — #496, see above
 └── StallIndicator              isStalled={useTimelineStore(selectStalled)}
@@ -1231,7 +1367,9 @@ nullary emit) — there is no field to leak even if the type were looser.
 **Visually distinct by design (AC4).** `.bubble--stall` reuses `.bubble--daemon`'s fill/radius but
 diverges to `--color-error` — `color: var(--color-error)` plus a leading `border-left: 4px solid
 var(--color-error)` accent (the connection-banner/rejection-line precedents) — so a stall reads as a
-problem state, never confusable with the muted `.bubble--thinking`. No new design token; `--color-error`
+problem state. Through #796 that distinguished it from the muted `.bubble--thinking`; since #796 retired
+that class, the comparison point is the composer status row's own label, which now reads in
+`--color-primary` — still never confusable with `--color-error`. No new design token; `--color-error`
 is the only error-role token on desktop.
 
 Both indicators can show at once (a stall onset arriving mid-`thinking`) — accepted as correct, since
@@ -1946,9 +2084,10 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **`StatusRow({ onExpand })` / `StatusSheet({ onClose, children })`** — **shell landed in [#177](../codebase/177.md); the `children` seam bound its first section in [#72](../codebase/72.md); the headless data path in [#187](../codebase/187.md); the Model/Effort/YOLO render in [#188](../codebase/188.md); the Context window render in [#192](../codebase/192.md); the summary slot's first content in [#330](../codebase/330.md).** `StatusRow`'s summary region now holds the two-dot connection indicator (#330); the `model · effort · context%` run-config text itself is still unbuilt and lands as a sibling beside the dots. `StatusSheet`'s body now renders `<RunConfigData/>` (holds data, no markup), then `<RunConfigSections/>` (all four read-only sections, reading the store #187/#192 populate), then `<LogDataSection/>` — the full read-only surface the sheet needed is now built. See [Run configuration sheet](#run-configuration-sheet-177), [Run configuration data path](#run-configuration-data-path-187), [Run configuration Model/Effort/YOLO sections](#run-configuration-modeleffortyolo-sections-188), [Run configuration Context window section](#run-configuration-context-window-section-192), and [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
 - **`ConnectionStatusIndicator({ relay, daemon })` / `ConnectionStatusIndicatorControl`** — **bound in [#330](../codebase/330.md).** `ConnectionStatusIndicator` is the exported pure view (both legs as props, matrix proven by direct server-render); `ConnectionStatusIndicatorControl` is the in-file container reading `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)`, mounted inside `StatusRow`'s summary slot. See [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** Reads the [conversation timeline holder](conversation-timeline-holder.md)'s `selectTimelineFor(openConversationId)` (was the flat [conversation timeline store](conversation-timeline-store.md)'s `selectItems` through #758). Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply, for the conversation on screen. See [Structured-stream timeline render](#structured-stream-timeline-render-203), [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179), and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
-- **`ThinkingIndicator({ state, toolName })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md); prop widened and gate broadened to hold across the whole running turn in [#648](../codebase/648.md); gained the required `toolName` prop naming the open tool in [#649](../codebase/649.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `Timeline`'s twin over the open slice's `phase` (plus `apiRetry`/`compacting`) and, since #649, a second independent derivation `openToolName(items)` over the same `items` slice `Timeline` reads. See [Thinking / working indicator](#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
+- **`ThinkingIndicator({ state, toolName })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md); prop widened and gate broadened to hold across the whole running turn in [#648](../codebase/648.md); gained the required `toolName` prop naming the open tool in [#649](../codebase/649.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758); markup moved into the new `ComposerStatusArea` in [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796).** `Timeline`'s twin over the open slice's `phase` (plus `apiRetry`/`compacting`) and, since #649, a second independent derivation `openToolName(items)` over the same `items` slice `Timeline` reads; its props and their derivations are untouched by #796, only the returned markup (one `<span>` instead of a `.bubble` wrapper) and the mount site (inside `ComposerStatusArea`, not a sibling of `Timeline`) changed. See [Thinking / working indicator](#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649), [Composer status row](#composer-status-row-796), and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
+- **`ComposerStatusArea({ isRunning, children })`** — **bound in [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796).** New in-file `ConversationScreen.tsx` function; the container supplies `isRunning={isTurnRunning(phase)}` and mounts `<ThinkingIndicator/>` as its sole child. See [Composer status row](#composer-status-row-796) above.
 - **`StallIndicator({ isStalled })`** — **bound in [#317](../codebase/317.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s own twin over the open slice's `stalled` field, mounted as its sibling right after it. See [Stall indicator](#stall-indicator-317) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
-- **`ApiRetryIndicator({ retry })`** — **bound in [#493](../codebase/493.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s supersede peer over the open slice's `apiRetry` field, mounted right after `ThinkingIndicator` and before `StallIndicator`; also narrows `ThinkingIndicator`'s own gate via the new `shouldShowThinking` predicate. See [Api-retry indicator](#api-retry-indicator-493) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
+- **`ApiRetryIndicator({ retry })`** — **bound in [#493](../codebase/493.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s supersede peer over the open slice's `apiRetry` field, mounted right after `Timeline` and before `StallIndicator` (through #796, `ThinkingIndicator` itself sat between them in the DOM; #796 moved its markup into the composer status row, leaving this trio contiguous below `Timeline` — the mount order between `ApiRetryIndicator`/`CompactingIndicator`/`StallIndicator` is unchanged); also narrows `ThinkingIndicator`'s own gate via the new `shouldShowThinking` predicate. See [Api-retry indicator](#api-retry-indicator-493) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
 - **`CompactingIndicator({ isCompacting })`** — **bound in [#496](../codebase/496.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s second supersede peer over the open slice's `compacting` field, mounted right after `ApiRetryIndicator` and before `StallIndicator`; extends `shouldShowThinking` by one field and one clause. See [Compacting indicator](#compacting-indicator-496) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
 - **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md); gained a rejection surface in [#249](../codebase/249.md); its second-confirm marker was re-keyed from a bare option id to `{modalId, optionId}` in [#511](../codebase/511.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, `selectRejections`, and `dispatch`, mounted as the last child of `.conversation`. `null` only when both the outstanding prompt and the rejection list are empty; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first scoped to the prompt it was selected on, and a round-tripped rejection renders a dismissible banner independent of the prompt. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) above.
 - **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
@@ -2000,10 +2139,19 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
   container's own scroll events and re-asserted in a dependency-free layout effect, decides — never a
   measurement taken after the new content is already in the layout. `Timeline` gained one optional
   `scrollPin` prop bundling the ref and the scroll handler so the ~30 pre-existing render sites needed no
-  edits. Every chrome sibling below the thread (`.conversation__thinking`/`__stall`/`__api-retry`/
-  `__compacting`/`__queued`/`__interrupt`) can mount or unmount with no risk of
-  un-pinning a thread the operator never scrolled — a chrome mount only shrinks the thread's viewport, which
-  cannot fire a scroll event. `overflow-anchor` stays unset (closed as indifferent, confirmed on an observed
+  edits. Every chrome sibling below the thread (`__stall`/`__api-retry`/`__compacting`/`__queued`/
+  `__interrupt`) can mount or unmount with no risk of un-pinning a thread the operator never scrolled — a
+  chrome mount only shrinks the thread's viewport, which cannot fire a scroll event. **`.conversation__thinking`
+  left this list in [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796):** its markup now lives
+  inside the composer status row, a fixed-height element that is mounted at all times, so
+  `turn_state{thinking}` no longer shrinks anything — it only swaps a label inside an already-present row.
+  `thread-scroll-pin.spec.ts`'s fourth criterion existed specifically to prove a chrome mount shrinks the
+  thread without un-pinning it; left pointed at the working indicator it would have kept passing against a
+  viewport that had stopped moving, silently testing nothing. #796 repointed it onto the stall indicator
+  (`.conversation__stall`), which kept its own bubble treatment and still shrinks the region — the daemon's
+  `stall` frame drives it, with `conversationActivityBridge.ts`'s unconditional stall-clear-on-any-turn-state
+  independently confirmed to make the subsequent `toHaveCount(0)` assertion correct rather than incidental.
+  `overflow-anchor` stays unset (closed as indifferent, confirmed on an observed
   e2e run, not just reasoning). **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
   mechanism with no second one: `useThreadScrollPin` now also returns `followBottom`, a single
   `following.current = true` re-arm, wired as a required `onMessageSent` prop on `Composer` and invoked
@@ -2023,6 +2171,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 
 ## Related
 
+- [Welcome screen](welcome-screen.md) — the mark's original home; [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796) moved the shared `PyryMark` component into `theme/PyryMark.tsx` so the composer status row's icon and the welcome hero's mark are the same 12 KB path, not a drifted copy; the welcome screen's own call site and markup are unchanged.
 - [App shell](app-shell.md) — the router that mounts the `paired`/`conversation` route (#80); gains the `onUnpaired` reverse-flip seam this screen's unpair control fires (#166)
 - [Paired shell](paired-shell.md) — the second-level `list ⇄ thread` router now mounting this screen as its `thread` view (#140); source of the `onBack` seam this screen's back control fires; its `conversation_created` nav callback now also writes `activeConversationStore` (#278), routed since [#530](../codebase/530.md) through `activateConversation`, which clears the timeline and session id first when the active conversation's id actually changes; its `onUnpaired`/`onPairServerPaired` handlers clear `activeConversationStore` unconditionally since [#531](../codebase/531.md), via `clearPairingScopedState`, when the pairing itself ends
 - [Session store](session-store.md) — the state the coarse thread rendered through #69–#178; the `MessageThread`/status seams bound to it (#2, bound in #69); gains the `reset` action the unpair control dispatches (#166); its `messages` slice is unread residue since [#179](../codebase/179.md) (status/`selectStatus` is still live, read by the composer's send gate)

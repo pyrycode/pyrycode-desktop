@@ -740,46 +740,124 @@
   }
 }
 
-/* #215 — the thinking-indicator wrapper. flex: 0 0 auto (NOT the thread's 1 1 auto) so it never
-   claims a competing flex region beside the timeline/thread; the thread's horizontal padding keeps
-   the bubble left-aligned and thread-consistent. Interim treatment for the absent Figma node. */
-.conversation__thinking {
+/* #796 — the status area above the composer (Figma node 111:3525, 780x24). Replaces #215's
+   .conversation__thinking wrapper, #215's .bubble--thinking and #649's .bubble--tool-label: the working
+   indicator's text is no longer a bubble floating in the loose region between the thread and the
+   composer, it is the left half of this fixed-height row.
+
+   The height is the whole point (AC2). flex: 0 0 auto so it never claims a competing flex region beside
+   the timeline, and NO vertical padding, so 24px is the exact box under this repo's absent global
+   box-sizing reset. It is reserved whether or not there is a label inside, which is what stops the
+   composer moving under the operator's cursor each time the indicator comes and goes.
+
+   height: 24px as a literal rather than var(--space-6) (also 24px): a component's own height is
+   structural geometry, not spacing — the .conn-dot / .run-config__context-bar precedent in this file.
+
+   Horizontal padding --space-3 matches .composer's, so the icon aligns with the composer's left edge —
+   the load-bearing alignment. justify-content: space-between leaves the right-hand slot for #797's error
+   chip (Figma 112:3529, itself 24 tall, so appending it grows nothing). The Figma's status group carries
+   its own py-[4px] around a 16px line; centring a 16px line in a 24px row is the same geometry, one
+   declaration instead of two. */
+.composer-status {
   flex: 0 0 auto;
+  height: 24px;
   display: flex;
-  justify-content: flex-start;
-  padding: var(--space-2) var(--space-4);
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-3);
 }
 
-/* The transient "Thinking…" affordance reuses the daemon bubble's fill / radius / measure and mutes
-   only the text to --color-on-surface-variant, so it reads as a fleeting working state rather than a
-   settled reply. Token name only — no color literal. */
-.bubble--thinking {
-  color: var(--color-on-surface-variant);
+/* The left group (Figma 112:3530): the turning mark then the status label, --space-2 apart — the Figma's
+   8px gap, and the reason its label starts at x=22 past a 14px vector. --color-primary is the group's
+   colour and the icon inherits it through currentColor; the token NAME, never the export's #32628d
+   fallback, which is the LIGHT scheme's primary (desktop is dark-only, ADR 0003) — the standing rule in
+   .status-row's own comment below.
+
+   flex: 1 1 auto + min-width: 0 are LOAD-BEARING, and not for the reason the retired .bubble--tool-label
+   recorded: see the truncation chain on --tool below. */
+.composer-status__activity {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-primary);
 }
 
-/* #649 — the tool-naming variant of the label above. The daemon tool name is unbounded, so this is
-   .tool-row__summary's treatment (:951, also used for the untrusted cwd run at :186) — the one bound in
-   this file that holds a LONE unbounded untrusted string. Deliberately NOT .tool-row__name's `flex: 0 0
-   auto` + nowrap, the semantic match: that never truncates, which it can only afford because
-   .tool-row__summary sits beside it absorbing the overflow. The indicator has no such neighbour.
+/* The pyrycode snowflake at the Figma's 14x15.97 (theme/PyryMark supplies width/height; the default
+   preserveAspectRatio letterboxes it into a 16px box rather than stretching). display: block kills the
+   inline baseline gap; flex: 0 0 auto keeps it from shrinking when a long tool name fills the row. */
+.composer-status__icon {
+  flex: 0 0 auto;
+  display: block;
+}
 
-   white-space: nowrap is the job — .bubble's word-break: break-word wraps a long name to a second line,
-   which would move the composer. nowrap also collapses a newline inside a daemon name, so an embedded \n
-   cannot break the line either. overflow: hidden then does two things: it clips the run to the bubble
-   (nowrap text would otherwise paint outside it) and it is the precondition for text-overflow, which
-   applies only when overflow is not visible.
+/* AC3 — the icon turns while a turn is running and is still at idle. A modifier CLASS rather than an
+   inline style, because a renderer spec is a static server render with no CSSOM: the class is the only
+   form of this distinction a unit test can observe. Compositor-owned, so a running turn costs zero React
+   renders — the class is set once at the phase transition.
 
-   min-width: 0 is NOT load-bearing here, contrary to the spec's reasoning — measured, not assumed. The
-   flex item's content-based automatic minimum is itself clamped by a definite max main size, and .bubble
-   already sets max-width: min(680px, 75%), so the cap holds with or without this line (all four
-   min-width x overflow combinations measured 679px against a 396-char name; removing .bubble's max-width
-   as a control blew out to 3089px). It stays for exact parity with the two sibling rules above, which
-   carry the identical four-declaration block, and it keeps the bound honest if that cap is ever relaxed.
+   1.6s linear infinite is a CLIENT-OWNED constant: the Figma node is a static vector with no motion spec,
+   so there is no token to port. Chosen to read as "working" rather than as a loading spinner. */
+.composer-status__icon--spinning {
+  animation: composer-status-spin 1.6s linear infinite;
+}
 
-   Named --tool-label, not --thinking-tool, so it does not contain `bubble--thinking` as a substring: a
-   modifier that did would make every existing toContain('bubble--thinking') pass even if the base class
-   were dropped. No new token, no colour or type literal — it inherits the muted treatment above. */
-.bubble--tool-label {
+@keyframes composer-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* AC4 — the icon still RENDERS under reduced motion, it just does not turn, in either state. The
+   .bubble__cursor guard's shape verbatim (:737). No vitest detector reaches a media query, so this is
+   covered in the Playwright fake tier (e2e/composer-status-reduced-motion.spec.ts). */
+@media (prefers-reduced-motion: reduce) {
+  .composer-status__icon--spinning {
+    animation: none;
+  }
+}
+
+/* The status label (Figma 111:3523) — M3 body/small, colour inherited from the group above. This is the
+   element ThinkingIndicator returns; it also still carries the retained .conversation__thinking identity
+   hook, which styles nothing and exists for the two e2e turn-liveness locators. */
+.composer-status__label {
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* #649's tool-naming variant, moved. The daemon tool name is unbounded, and an oversized one must not
+   widen this row: that would overflow the conversation pane horizontally and break AC2's "the composer
+   does not move" — remotely triggered, by a hostile or merely buggy daemon.
+
+   DO NOT copy the retired .bubble--tool-label comment's reasoning across; it is no longer true. That
+   comment measured min-width: 0 as NOT load-bearing here, and it was right at the time, because .bubble
+   set max-width: min(680px, 75%) and a definite max main size already clamped the flex item's
+   content-based automatic minimum (all four combinations measured 679px against a 396-char name;
+   removing that max-width as a control blew out to 3089px). This move DELETES .bubble from the label's
+   ancestry, so that backstop is gone and every link below is required:
+
+     1. .composer-status is a block-level flex item of the .conversation column (align-items: stretch),
+        so it has a definite width. Do not give it width: max-content or float it.
+     2. .composer-status__activity — flex: 1 1 auto; min-width: 0. WITHOUT that min-width the group's
+        automatic minimum floors at the label's full intrinsic width and the row grows.
+     3. this rule — min-width: 0 plus overflow/ellipsis/nowrap. nowrap is the job (it also collapses an
+        embedded newline in a daemon name, so a \n cannot break the line); overflow: hidden both clips the
+        run and is the precondition for text-overflow, which applies only when overflow is not visible.
+
+   That is .status-row__summary's existing chain, not an invention. RE-MEASURED with the bubble gone, the
+   way the old comment's 679px/3089px control was — a 3000-char tool name in the running app leaves
+   .composer-status at 640px (the conversation pane's own width, unchanged), the label at 594px, which is
+   exactly the 640 less --space-3 twice, the 14px icon and the --space-2 gap, and BOTH .conversation and
+   document.body report a scrollWidth equal to their client width, i.e. no horizontal overflow anywhere.
+
+   The label is a SINGLE text run (ConversationScreen.tsx), which is load-bearing for the bound: one run
+   ellipsizes as one unit, so on overflow the client's trailing … is truncated away and replaced by the
+   ellipsis the truncation itself draws, rather than rendering two of them. No title tooltip — the daemon
+   string may never reach an attribute. No new token, no colour or type literal. */
+.composer-status__label--tool {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -12,6 +12,7 @@ import {
 } from 'react'
 import './conversation.css'
 import { AssistantMarkdown } from './AssistantMarkdown'
+import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import type { RelayLinkStatus } from '@shared/ipc/events'
@@ -232,23 +233,11 @@ export function ConversationScreen({
         onChange={() => setPickerOpen(true)}
       />
       <Timeline items={items} now={now} scrollPin={scrollPin} />
-      {/* #648: the gate now tracks the WHOLE running turn (thinking or responding), so a turn spent mostly
-          in tool calls no longer reads as a frozen screen; the label tracks the phase. #493/#496 still
-          narrow it — a live api-retry, or a live compaction, supersedes this indicator in either phase.
-          #649: and the label now NAMES the open tool, derived from the same `items` array Timeline is
-          mapping one line above (no second subscription) — so a long turn says what it is doing, not just
-          that it is busy. Two derivations, two props: the closed client-owned label choice, and the one
-          daemon string.
-          #650: and the window now opens the moment the composer accepts the submit, rather than a network
-          round-trip later — closing the blank window in FRONT of a turn, as #648 closed the one behind it.
-          The local signal composes INSIDE the gate, so #493's and #496's supersede rules apply to it
-          unchanged; it stays out of `phase`, so the composer's stop variant below is untouched by it. */}
-      <ThinkingIndicator
-        state={workingIndicatorStateWithLocalSend({ phase, apiRetry, compacting }, localSendPending)}
-        toolName={openToolName(items)}
-      />
-      {/* #493: the api-error retry status — mounted directly after its supersede peer, before the stall
-          indicator. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge (turn
+      {/* #493: the api-error retry status — mounted first of the three remaining indicators, before the
+          stall indicator. It no longer sits directly after its supersede peer: #796 moved the working
+          indicator's text down into the status row above the composer, and left these three where they
+          are. The supersede RULE is untouched by that move — it lives in workingIndicatorState, not in
+          DOM adjacency. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge (turn
           activity leaves it showing — the deliberate inverse of the stall indicator). Renders nothing at
           rest. It may still co-render with the stall indicator: AC5 scopes mutual exclusion to thinking. */}
       <ApiRetryIndicator retry={apiRetry} />
@@ -271,6 +260,31 @@ export function ConversationScreen({
           both non-populated panel readings unreachable through the UI. It carries no count badge — a badge
           would need its own roster subscription, which is the panel's job and #580's design call. */}
       <BackgroundTaskTrigger onOpen={() => setPanelOpen(true)} />
+      {/* #796: the desktop layout's status area (Figma 111:3525) — a fixed-height row directly above the
+          message box, so there is one line telling the operator what is happening and it never moves the
+          composer under their cursor. It hosts the working indicator's text and nothing else this slice:
+          #493's, #496's and #317's indicators keep their own mount sites above, and their precedence rule
+          is not reopened here.
+          The two derivations below move VERBATIM off the retired mount — no new subscription, no new store
+          read, nothing new across IPC; both come from `thread` fields already destructured above.
+          #648: the label gate tracks the WHOLE running turn (thinking or responding), so a turn spent
+          mostly in tool calls no longer reads as a frozen screen; the label tracks the phase. #493/#496
+          still narrow it — a live api-retry, or a live compaction, supersedes the LABEL in either phase.
+          #649: and the label NAMES the open tool, derived from the same `items` array Timeline is mapping
+          above (no second subscription). Two derivations, two props: the closed client-owned label choice,
+          and the one daemon string.
+          #650: the window opens the moment the composer accepts the submit rather than a network
+          round-trip later, closing the blank window in FRONT of a turn as #648 closed the one behind it.
+          The icon's gate is deliberately the RAW phase reading (`isTurnRunning`, the same predicate the
+          send button's stop variant uses) and is NOT narrowed by those supersede rules — so during a
+          retry or a compaction the icon keeps turning beside no text, which is a legal render the row's
+          held height makes look intentional rather than broken. */}
+      <ComposerStatusArea isRunning={isTurnRunning(phase)}>
+        <ThinkingIndicator
+          state={workingIndicatorStateWithLocalSend({ phase, apiRetry, compacting }, localSendPending)}
+          toolName={openToolName(items)}
+        />
+      </ComposerStatusArea>
       {/* #602: sending is the one act that overrides the conditional pin, so the Composer reports "a
           message entered the timeline" and this screen — which owns the flag — decides that means follow
           the bottom. The Composer learns nothing about scrolling.
@@ -1119,12 +1133,28 @@ export type WorkingIndicatorState = 'thinking' | 'working'
 // arise (the daemon flips to `responding` on the first tool step), so it is a defined edge, not a
 // defended one.
 //
-// null → null (zero layout footprint, AC3 — exactly like Timeline returning null on an empty list). All
-// three labels wear the SAME interim treatment: the daemon-bubble surface with muted text (a transient
-// affordance), pending the deferred desktop-design pass (the mobile Figma has no indicator node at all —
-// the gap already recorded for #215/#317/#493/#496). The tool branch adds ONE modifier, carrying the
-// one-line bound an unbounded daemon string needs (see .bubble--tool-label in conversation.css); the two
-// unnamed labels render byte-identical markup to #648's, so their assertions stand as regression evidence.
+// null → null (zero layout footprint, AC3 — exactly like Timeline returning null on an empty list). What
+// changes is only where that footprint sits: #796 IS the deferred desktop-design pass this comment used
+// to await. The mobile Figma had no indicator node; the desktop one does (111:3525), so all three labels
+// have left the daemon-bubble surface and are now the left half of the fixed-height status row above the
+// composer (ComposerStatusArea below). The row holds its own height, so this component returning null no
+// longer moves the composer — which is what makes the null-at-rest posture safe to keep. The tool branch
+// still adds ONE modifier, carrying the one-line bound an unbounded daemon string needs (see
+// .composer-status__label--tool in conversation.css, and its rewritten reasoning: the .bubble max-width
+// that used to backstop that bound went away with the bubble).
+//
+// `conversation__thinking` is RETAINED on the element deliberately. It styles nothing any more — it is
+// the shipped identity hook meaning "the working indicator is showing", and two Electron-launch e2e specs
+// use it as their turn-liveness gate (thread-scroll-pin.spec.ts and queued-backlog-interrupt.spec.ts —
+// unnumbered on purpose, both move). Renaming it would churn those for no reader benefit. An identity
+// class beside a presentation
+// class on one element is ordinary BEM, not drift — do not "clean it up".
+//
+// THE DAEMON TOOL NAME REACHES THE DOM AS A TEXT CHILD AND NOTHING ELSE. No title, no aria-label, no
+// data-*, no attribute of any kind carries `label` or `toolName`, and none of it is logged — CLAUDE.md is
+// flat that daemon text may be rendered escaped and length-bounded but never "into an attribute or a URL"
+// and never into a log. The `text-overflow: ellipsis` below is the specific temptation to add a title
+// tooltip; the shipped treatment deliberately had none and neither does this.
 //
 // The label is a SINGLE text child, not constant-plus-span like ApiRetryIndicator below. That is
 // load-bearing for the bound: one text run ellipsizes as one unit, so on overflow the client `…` is
@@ -1139,18 +1169,66 @@ export function ThinkingIndicator({
   toolName: string | null
 }): JSX.Element | null {
   if (state === null) return null
-  // One wrapper, one bubble, two varying pieces — the toolCall row's `rowClass` idiom above (:545), which
-  // likewise varies only a className and keeps a single return. Writing the tool case as its own early
-  // return would duplicate the wrapper markup, and a drifted copy is exactly what makes the two unnamed
-  // labels stop being byte-identical to #648's.
-  const bubbleClass = `bubble bubble--daemon bubble--thinking${
-    toolName !== null ? ' bubble--tool-label' : ''
+  // One element, two varying pieces — the toolCall row's `rowClass` idiom above (:545), which likewise
+  // varies only a className and keeps a single return. Writing the tool case as its own early return would
+  // duplicate the markup, and a drifted copy is exactly what makes the two unnamed labels stop being
+  // byte-identical to each other.
+  const labelClass = `conversation__thinking composer-status__label${
+    toolName !== null ? ' composer-status__label--tool' : ''
   }`
   const label =
     toolName !== null ? toolWorkingCopy(toolName) : state === 'thinking' ? THINKING_COPY : WORKING_COPY
+  return <span className={labelClass}>{label}</span>
+}
+
+// #796: the fixed-height status row above the composer (Figma node 111:3525) — the desktop layout's own
+// status area, replacing the loose region the working indicator used to float in. It ALWAYS returns an
+// element, never null: that is AC2. The height is unconditional, so the composer does not move when the
+// label above appears and disappears under it — the deliberate departure from the four indicators'
+// null-at-rest posture, and the same reason ComposerSendButton never returns null either.
+//
+// `isRunning: boolean`, NOT `phase: TurnPhase` — the ComposerSendButton precedent (:1935) for the same
+// reason: the view structurally cannot receive the store enum, so `'idle'` is not representable inside
+// the turning branch, and no daemon string can reach it. The container does the `isTurnRunning(phase)`
+// derivation, reusing the exported predicate rather than re-deriving the phase test.
+//
+// `children`, not a `label: string` prop — the StatusSheet({ onClose, children }) precedent. It keeps the
+// row independent of where its text comes from, which is exactly what #797 needs when it appends the
+// error chip to the row's other side. That right-hand slot is EMPTY here and gets no placeholder element:
+// the `height` declaration is what reserves the row, and the Figma error frame is itself 24 tall, so a
+// second flex child grows nothing. A spacer would be a defence for a failure nobody has observed.
+//
+// The turning modifier is a CLASS, not an inline style. Rotation is a CSS animation, and AC3 requires the
+// running-vs-still distinction to be visible in the static markup a renderer spec asserts on — nothing in
+// this repo can read a resolved style (CLAUDE.md: renderer specs are static server renders). The
+// reduced-motion guard (AC4) rides on the same class in conversation.css and is only observable in the
+// Playwright fake tier, where e2e/composer-status-reduced-motion.spec.ts covers it.
+//
+// The two gates are deliberately INDEPENDENT: `isRunning` is the raw phase reading, while the label above
+// is still superseded by a live api-retry or compaction (#493/#496). So a turning icon beside no text is
+// a legal, expected render — and AC2's held height is what makes it read as intentional.
+export function ComposerStatusArea({
+  isRunning,
+  children
+}: {
+  isRunning: boolean
+  children?: ReactNode
+}): JSX.Element {
+  const iconClass = `composer-status__icon${isRunning ? ' composer-status__icon--spinning' : ''}`
   return (
-    <div className="conversation__thinking">
-      <div className={bubbleClass}>{label}</div>
+    <div className="composer-status">
+      <div className="composer-status__activity">
+        {/* The shipped snowflake at the Figma's 14x16 (theme/PyryMark) — the SAME glyph the welcome hero
+            draws, verified numerically against this node rather than assumed, so the two read as one
+            brand mark. Rendered UNFLIPPED, and note that this diverges from BOTH neighbours rather than
+            matching either: Figma's export for this node wraps the vector in -scale-y-100, and
+            .welcome__mark applies its own transform: scaleY(-1) (welcome.css:84, itself matching the
+            welcome frame and diverging from the mobile app). Carried here that would be a transform on a
+            glyph that spends its visible life rotating, where a vertical flip is unobservable — so it
+            buys nothing and is left off. Confirmed against the node's own render at 14x16. */}
+        <PyryMark className={iconClass} width={14} height={16} />
+        {children}
+      </div>
     </div>
   )
 }

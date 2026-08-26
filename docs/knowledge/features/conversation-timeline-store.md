@@ -148,6 +148,36 @@ rendered surface stays byte-identical — this ticket's own AC4 — because noth
 optimistic echo (`composerSend.ts`, see [composer send](composer-send.md)) gained the same second write
 path in the same ticket, since it is the timeline's other row-adding writer.
 
+[#784](../codebase/784.md) widened `DaemonEvent.unrecognizedMessage` with `conversationId`, moving its
+`timelineTargetFor` case out of the id-less group — the arms `timelineTargetFor` returns `null` for and
+(since #785, below) `timelineWriteTarget` reads the open-conversation fallback for is `sessionTransition`
+and `connected` **only**, from #784 onward. `ThreadEvent.unrecognizedMessage` stays four-field; the id
+still stops at the bridge.
+
+[#785](https://github.com/pyrycode/pyrycode-desktop/issues/785) gives the keyed holder its first write for those remaining two id-less arms —
+`sessionTransition`→`sessionBoundary` and `connected`→`reconnected` — which `timelineTargetFor` still
+maps to `null` and always will (neither's wire payload carries a conversation id; widening either is a
+daemon protocol change, out of scope here). A new sibling pure function, `timelineWriteTarget(event,
+conversationId, getOpenConversationId)`, resolves the actual write key: the event's own attribution wins
+if present, and only for these two named `ThreadEvent` arms does it fall back to
+`getOpenConversationId()` — an injected getter, never an import, so `timelineBridge.ts`'s import list
+stays byte-identical and the AC3 "no reference to the open conversation in scope" ban narrows to "no
+reference inside `timelineTargetFor`" rather than disappearing. The fallback is enumerated, not blanket
+(`conversationId ?? getOpenConversationId()` is explicitly banned) — a future owned arm with no
+`timelineTargetFor` case still falls through `timelineWriteTarget`'s own `default` to `null`, the same
+safe direction, rather than silently inheriting the screen. `useTimelineBridge` gained one parameter,
+`getOpenConversationId: () => string | null`, threaded from a new module-level constant in `App.tsx`
+(`openConversationId`, reading `activeConversationStore` via `selectActiveConversation`) — its only
+production call site, so no cascade. `timelineTargetFor` and `subscribeTimeline` are both byte-identical
+before and after, including their tests: the two design oracles (`timelineTargetFor` returns `null` for
+both arms; `subscribeTimeline` passes that `null` through unchanged) are what keep the open-conversation
+read out of the pure translation/routing layer and confined to the fan-out. A session boundary or
+reconnect now lands in the retained slice of whichever conversation is open **when the event arrives**
+(read at dispatch time, not subscribe time, since one app-lifetime listener outlives any number of chat
+switches) and is dropped from the keyed path — with no key invented — when none is. The flat store keeps
+receiving both arms exactly as before: this ships as a verified no-op on what the operator sees, same as
+#756.
+
 ## What it does
 
 Turns the nine owned `DaemonEvent` arms into `ThreadEvent`s and folds them into `TimelineState` via
@@ -194,28 +224,51 @@ translateTimelineEvent(event: DaemonEvent): ThreadEvent | null
 // explicit fall-through, then default: assertNever(event) — a HARD guard, not a soft catch-all default.
 
 timelineTargetFor(event: DaemonEvent): string | null   // #756
-// switch (event.type) { case 'assistantDelta': ... case 'compacting': return event.conversationId
-//   case 'sessionTransition': case 'unrecognizedMessage': case 'connected': return null
+// switch (event.type) { case 'assistantDelta': ... case 'unrecognizedMessage': return event.conversationId
+//   case 'sessionTransition': case 'connected': return null
 //   default: return null }
-// The eight id-carrying owned arms share one `return event.conversationId` (non-nullable: a missing or
-// non-string conversation_id already fails the decode without emitting). The three id-less owned arms
-// share one `return null` — not dormant, just nothing to attribute. `default` is unreachable in
-// production: subscribeTimeline only calls this on translateTimelineEvent's non-null path.
+// The nine id-carrying owned arms (#784 moved `unrecognizedMessage` into this group) share one
+// `return event.conversationId` (non-nullable: a missing or non-string conversation_id already fails
+// the decode without emitting). The two id-less owned arms — `sessionTransition` and `connected`, and
+// neither will ever gain a wire conversation id — share one `return null`: not dormant, just nothing to
+// attribute. `default` is unreachable in production: subscribeTimeline only calls this on
+// translateTimelineEvent's non-null path. Unchanged in signature, body, and both design-oracle tests
+// since #756 — #785 resolves the open-conversation fallback downstream, in `timelineWriteTarget`, never
+// here.
+
+timelineWriteTarget(event: ThreadEvent, conversationId: string | null, getOpenConversationId): string | null   // #785
+// if (conversationId !== null) return conversationId                       // the event's own attribution always wins
+// switch (event.type) {
+//   case 'sessionBoundary': case 'reconnected': return getOpenConversationId()  // the two arms with no key of their own
+//   default: return null                                                   // enumerated fallback, never a blanket `??`
+// }
+// The write-key half of the routing contract, a second pure function beside `timelineTargetFor`:
+// that one answers "what did the event say", this one answers "where does the fan-out write it".
+// `getOpenConversationId` is a GETTER — read at dispatch time, not captured at subscribe time, since one
+// app-lifetime listener outlives any number of chat switches. Called AT MOST ONCE per event and never
+// for an id-carrying arm, pinned by a spy assertion — the strongest available statement of
+// "no misattribution". A future wire widening of `sessionTransition` is safe with no edit here: step 1
+// (the event's own id) is checked first, so it would win over the switch rather than being overridden by it.
 
 subscribeTimeline(onDaemonEvent, dispatch): () => void
 // onDaemonEvent(event => { const te = translateTimelineEvent(event); if (te) dispatch(te, timelineTargetFor(event)) })
 // dispatch: (event: ThreadEvent, conversationId: string | null) => void   — widened by ARITY (#756),
-// not a new parameter, so all 20 existing call sites kept compiling and running unedited.
+// not a new parameter, so all 20+ existing call sites kept compiling and running unedited. Byte-identical
+// since #756 — #785's resolution lives one layer up, inside the injected `dispatch` callback.
 // returns the exact off handle (the subscribeRunConfig idiom) — pure, spy-testable, no React, no store
 // import, no fan-out of its own.
 
-useTimelineBridge(): void
+useTimelineBridge(getOpenConversationId: () => string | null): void   // parameter added #785
 // useEffect(() => subscribeTimeline(window.pyry.onDaemonEvent, (e, conversationId) => {
 //   timelineStore.getState().dispatch(e)                                            // flat, unconditional, first
-//   if (conversationId !== null) conversationTimelineStore.getState().dispatchFor(conversationId, e)  // keyed, guarded (#756)
-// }), [])
+//   const target = timelineWriteTarget(e, conversationId, getOpenConversationId)     // #785
+//   if (target !== null) conversationTimelineStore.getState().dispatchFor(target, e) // keyed, guarded on the RESOLVED target
+// }), [getOpenConversationId])
 // StrictMode double-mount (mount -> cleanup -> mount) nets exactly one live listener. Flat-first is not
 // cosmetic — it is what keeps the flat store's AC4 guarantee true even if the keyed write were to throw.
+// The dependency array names `getOpenConversationId` rather than staying `[]` (honest about the one new
+// dependency) — the caller (`App.tsx`) supplies a module-level constant, so this still nets one subscribe
+// for the app's lifetime; an inline arrow at the call site would resubscribe every render.
 ```
 
 This is the deliberate mirror image of [`daemonEventBridge`](daemon-event-bridge.md): that bridge's
@@ -291,7 +344,19 @@ fresh handshake ─(daemonConnection.ts:483, handshake-complete)→ DaemonEvent{
    → window.pyry.onDaemonEvent → subscribeTimeline → translateTimelineEvent → { type: 'reconnected' }
    → timelineStore.dispatch → reduceTimeline → phase/stalled/apiRetry/compacting/localSendPending cleared,
                                                  items untouched
-   (#538 — a separate, connection-lifecycle path alongside the stream path above, not a stream arrival)
+   → timelineWriteTarget(event, null, getOpenConversationId) → the open conversation's id, or null if none
+   → if non-null: conversationTimelineStore.dispatchFor(id, event) → that slice's chrome reconciled the
+                                                 same way, its items untouched by reference (#785)
+   (#538 — a separate, connection-lifecycle path alongside the stream path above, not a stream arrival;
+    #785 gives it its first write into the keyed holder, addressed to the conversation on screen)
+
+session boundary ─(sessionTransition, #286)→ translateTimelineEvent → { type: 'sessionBoundary', ... }
+   → timelineStore.dispatch → reduceTimeline → a fresh sessionBoundary row tail-appended
+   → timelineWriteTarget(event, null, getOpenConversationId) → same resolution as reconnected above
+   → if non-null: conversationTimelineStore.dispatchFor(id, event) → the same row tail-appended into
+                                                 that conversation's retained slice (#785)
+   (the wire carries no conversation_id for this arm and never will — types.ts:664 — so this is the
+    OTHER arm `timelineWriteTarget`'s fallback names, alongside reconnected)
 
 operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ optimistic echo
    → timelineStore.dispatch({ type: 'userText', text }) → reduceTimeline → localSendPending: true
@@ -303,8 +368,12 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
 
 ## Configuration and usage
 
-- **`useTimelineBridge()` mounts in `App.tsx`**, right after `useDaemonEventBridge()` ([#203](../codebase/203.md),
-  shipped) — app-lifetime, unconditional, one stable listener.
+- **`useTimelineBridge(getOpenConversationId)` mounts in `App.tsx`**, right after `useDaemonEventBridge()`
+  ([#203](../codebase/203.md), shipped) — app-lifetime, unconditional, one stable listener. Since
+  [#785](https://github.com/pyrycode/pyrycode-desktop/issues/785) it takes one argument: `openConversationId`, a module-level constant defined
+  in `App.tsx` that reads `activeConversationStore` via `selectActiveConversation`. Passing an inline
+  arrow instead would resubscribe the listener on every `App` render — the constant is what keeps the
+  hook's effect dependency array (`[getOpenConversationId]`) stable across the app's lifetime.
 - **`selectItems` is read in `ConversationScreen`** via `useTimelineStore(selectItems)`, feeding the
   new `Timeline` pure view straight (no adapter — `ThreadItem` is already the render model). See
   [Conversation shell § Structured-stream timeline render](conversation-shell.md#structured-stream-timeline-render-203).
@@ -395,6 +464,14 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
   unconditional on any phase, so the indicator can go briefly dark before the daemon reports the new
   turn. Decided as the ticket-sanctioned reading rather than defended — the queued-message path
   (#293/#294) is where that case properly lives.
+- **A `reconnected` reconcile can now MINT an empty slice in the [keyed holder](conversation-timeline-holder.md)
+  ([#785](https://github.com/pyrycode/pyrycode-desktop/issues/785)).** `reduceTimeline` on a fresh `initialTimelineState` has nothing to clear
+  and returns the same reference, but `dispatchFor`'s key-absent branch still creates the slice
+  unconditionally and inserts it at the head — the holder's existing, deliberate contract ("a fold for an
+  id the client has never opened creates that id's slice rather than dropping it"), not new behavior this
+  ticket added. It only fires when the open conversation has nothing retained yet; once
+  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) wires `markViewed` at the screen-switch
+  seam this stops being the standing eviction candidate.
 
 ## Related
 
@@ -407,6 +484,15 @@ operator presses Enter ─(composerSend.ts, submitMessage, guard passed)→ opti
   is the ticket that will eventually cut `ConversationScreen` over to it.
 - [#756 codebase notes](../codebase/756.md) — `timelineTargetFor`, the `subscribeTimeline` arity widen,
   and the `useTimelineBridge` fan-out: implementation summary, code review, and lessons learned.
+- [#784 codebase notes](../codebase/784.md) — widens `DaemonEvent.unrecognizedMessage` with
+  `conversationId`, moving it into `timelineTargetFor`'s id-carrying group and leaving
+  `sessionTransition`/`connected` as the only two id-less owned arms — the group [#785](https://github.com/pyrycode/pyrycode-desktop/issues/785)
+  goes on to attribute.
+- [#785](https://github.com/pyrycode/pyrycode-desktop/issues/785) — `timelineWriteTarget`, the write-key
+  resolution downstream of `timelineTargetFor`: files `sessionBoundary`/`reconnected` into the retained
+  slice of the conversation on screen (or drops them, inventing no key, when none is open) via an
+  injected `getOpenConversationId` getter from `App.tsx`, keeping `timelineTargetFor` and
+  `subscribeTimeline` byte-identical. Spec: `docs/specs/architecture/785-open-conversation-timeline-arms.md`.
 - [Thread timeline (conversation model)](thread-timeline.md) — the `ThreadItem`/`ThreadEvent`/
   `reduceTimeline` model this store wraps verbatim.
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the sibling bridge this one mirrors in

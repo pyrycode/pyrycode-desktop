@@ -234,10 +234,28 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
  *
  * AC3 IS STRUCTURAL, checkable by grep and mirroring the holder's own constraint
  * (conversationTimelineStore.ts:38-42): this module imports nothing from `activeConversationStore` and
- * nothing from `src/renderer/src/screens/`. With no reference to the open conversation in scope, the
- * `?? activeConversation` fallback that #751-#754's REQUIRED `conversationId` was designed to prevent
- * is not something to remember to avoid — it is unavailable. There is no `??`, no `||`, no default
- * parameter and no non-null assertion anywhere on the routing path.
+ * nothing from `src/renderer/src/screens/`. That import ban is unchanged and literally true — the
+ * sibling bridge states the identical one (conversationActivityBridge.ts:183-184), so it is a
+ * family-wide convention across the store bridges, not a one-off. There is no `??`, no `||`, no default
+ * parameter and no non-null assertion anywhere on either function below.
+ *
+ * WHAT #785 CHANGED, stated here because the sentence it replaces claimed more than the ban gives.
+ * Until #785 the rationale was that the open conversation was UNAVAILABLE — no reference in scope, so
+ * the `?? activeConversation` fallback #751-#754's REQUIRED `conversationId` was designed to prevent
+ * could not be written. It is now reachable, but only under four conditions at once, and it is those
+ * that carry AC3 rather than unavailability:
+ *
+ *   - only through a getter INJECTED as a parameter (App.tsx passes it), never an import here;
+ *   - only at the FAN-OUT (`timelineWriteTarget` / `useTimelineBridge`), never in this function, which
+ *     stays a pure function OF THE EVENT — the open conversation is not a property of an event, and
+ *     making it one is the misattribution the whole #675 family exists to remove;
+ *   - only for the two `ThreadEvent` arms ENUMERATED there — `sessionBoundary` and `reconnected`, the
+ *     two whose wire payload carries no conversation id and never will (one reason each below);
+ *   - and only AFTER the event's own attribution has been found absent, so an attributed arm never
+ *     consults it at all.
+ *
+ * Two functions, two sentences: attribution (here) reads the event and nothing else; write-key
+ * resolution (below) reads attribution first and the screen only for those two arms.
  *
  * `translateTimelineEvent`'s companion, deliberately a SECOND pure function rather than a widening of
  * that translator's return type to `{ event, conversationId } | null`: the translator is called at 19
@@ -280,12 +298,69 @@ export function timelineTargetFor(event: DaemonEvent): string | null {
       return event.conversationId
     case 'sessionTransition':
     case 'connected':
-      // The other two owned arms carry no routing key, each for its own reason: `sessionTransition`
-      // carries `newSessionId` (the #259 holder's addressing key) and its wire payload has no
-      // conversation id to widen; and a connection edge has no conversation by nature. They are NOT
-      // dormant — each still reaches the flat store, which is what AC4 keeps true — but there is nothing
-      // to attribute them to, and inventing one is exactly what AC3 bans.
+      // The other two owned arms carry no routing key of their own and neither ever will:
+      // `sessionTransition` carries `newSessionId` (the #259 holder's addressing key) and its wire
+      // payload has no conversation id to widen (types.ts:664 — a session boundary is attributed by the
+      // connection it arrives on); and a connection edge has no conversation by nature. So `null` here
+      // is the honest answer, and returning it is what keeps the resolution OUT of this pure function.
+      //
+      // They are NOT dormant. Each still reaches the flat store, which is what AC4 keeps true, and since
+      // #785 the fan-out (`timelineWriteTarget`) files each into the conversation ON SCREEN — the
+      // conversation the flat store has always meant — or drops it from the keyed path when none is
+      // open. Inventing a key is still what AC3 bans; reading the screen for exactly these two is not
+      // inventing one.
       return null
+    default:
+      return null
+  }
+}
+
+/**
+ * The SLICE an owned event is written into, or `null` when it belongs in none (#785). The write-key
+ * half of the routing contract, deliberately a second pure function beside `timelineTargetFor` above:
+ * that one answers "what did the event say", this one answers "where does the fan-out put it".
+ *
+ * The event's OWN attribution always wins, and it is checked FIRST. Two consequences, both load-bearing:
+ * the nine id-carrying arms never consult the open conversation at all (the strongest available
+ * statement of "no misattribution", and directly assertable on a spy), and a future wire widening is
+ * safe by construction — if `session_transition` ever gained a `conversation_id` (a daemon + mobile
+ * change, out of scope for this repo), `timelineTargetFor` would return the real id and this function
+ * would honour it with no edit here. Ordering the switch first would silently override it. That branch
+ * is unreachable in production today and is pinned by a direct unit test anyway; being able to pin it is
+ * the point of this being pure.
+ *
+ * THE FALLBACK IS ENUMERATED, NEVER BLANKET. `conversationId ?? getOpenConversationId()` is the obvious
+ * one-liner and it is banned here: it would file ANY unattributed owned event onto the thread on screen,
+ * including a future arm whose author added a case to `translateTimelineEvent` and forgot one in
+ * `timelineTargetFor` — that arm would land silently on the wrong thread. With the enumeration it falls
+ * to `default` instead and is dropped from the keyed path, reaching the flat store only, which is the
+ * same safe failure direction `timelineTargetFor`'s own `default` has. The two named arms are the two
+ * whose wire payload carries no conversation id and never will (see that function's second group).
+ *
+ * `getOpenConversationId` is a GETTER, not a value, for two reasons. It must be read at DISPATCH time:
+ * one app-lifetime listener outlives any number of chat switches, so a value captured at subscribe time
+ * would file a boundary into the conversation the operator has already left — the staleness argument
+ * `activateConversation.ts:16-23` makes for its own `getActiveConversation`. And it kills the positional
+ * cross-wire: `string | null` and `() => string | null` are not interchangeable, so swapping arguments
+ * two and three is a compile error rather than a test-only failure (the hazard
+ * conversationActivityBridge.ts:150-165 documents for its own deps object).
+ *
+ * No `??`, no `||`, no default parameter, no non-null assertion: `conversationId !== null` is an
+ * explicit test and the switch enumerates its arms.
+ */
+export function timelineWriteTarget(
+  event: ThreadEvent,
+  conversationId: string | null,
+  getOpenConversationId: () => string | null
+): string | null {
+  if (conversationId !== null) return conversationId
+  switch (event.type) {
+    case 'sessionBoundary':
+    case 'reconnected':
+      // The conversation on screen IS what the flat store has always meant for these two, so filing
+      // them here preserves what the operator sees bit for bit (#785 AC1/AC2). `null` — nothing open —
+      // drops them from the keyed path without inventing a key (AC3).
+      return getOpenConversationId()
     default:
       return null
   }
@@ -340,16 +415,23 @@ export function subscribeTimeline(
  * The argument order flips — this callback reads `(event, conversationId)` while `dispatchFor` takes
  * `(conversationId, event)`. Not a hazard worth restructuring for: `ThreadEvent` and `string` are not
  * interchangeable, so a swap is a compile error.
+ *
+ * #785 makes the keyed write's guard the RESOLVED target rather than the event's own id, so the two
+ * arms that carry none reach the conversation on screen. `getOpenConversationId` MUST be a stable
+ * module-level constant: it is the effect's only dependency, so an inline arrow would resubscribe on
+ * every `App` render instead of holding one listener for the app's lifetime. The dependency array names
+ * it rather than staying `[]`, which is honest about that requirement rather than hiding it.
  */
-export function useTimelineBridge(): void {
+export function useTimelineBridge(getOpenConversationId: () => string | null): void {
   useEffect(
     () =>
       subscribeTimeline(window.pyry.onDaemonEvent, (event, conversationId) => {
         timelineStore.getState().dispatch(event)
-        if (conversationId !== null) {
-          conversationTimelineStore.getState().dispatchFor(conversationId, event)
+        const target = timelineWriteTarget(event, conversationId, getOpenConversationId)
+        if (target !== null) {
+          conversationTimelineStore.getState().dispatchFor(target, event)
         }
       }),
-    []
+    [getOpenConversationId]
   )
 }

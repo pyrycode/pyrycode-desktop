@@ -156,10 +156,14 @@ host-label-store.load() (main, at rest) → hostLabelHandler (#824) → HostLabe
 
 ## Edge cases and limitations
 
-- **The label outlives an unpair.** [Host-label store](host-label-store.md) § Edge cases: unpair clears
-  only `pairedServerStore`, so this store will faithfully hold the previous host's label until
-  [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) closes that gap — this store reports
-  what the channel reports, and adds no cross-store consistency check.
+- **The label outlives an unpair — only within one running app session.** [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)
+  now erases the at-rest label alongside the paired-server record (see [Unpair channel § the label
+  erase (#827)](unpair-channel.md)), so a relaunch after unpairing sees no stale label. But
+  `clearPairingScopedState` does not reset *this* renderer store, so unpairing and re-pairing to a
+  different host inside one running session leaves this store holding the previous label until the
+  next `hostLabel()` load overwrites it. Unobservable today — `hostLabelLoader` has no non-test
+  consumer yet — and named as a follow-up for whoever mounts the sidebar row ([#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)).
+  This store reports what the channel reports, and adds no cross-store consistency check.
 - **`error` and over-length both mean "no usable label"**, and the union does not distinguish them — the
   same non-distinction as the channel it consumes. Both call for the same recovery in #834's design.
 - **A write that resolves after unmount is dropped**, never applied — the `active`-flag cleanup in

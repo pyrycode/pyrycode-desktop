@@ -186,12 +186,15 @@ renderer window.pyry.hostLabel()  →  ipcRenderer.invoke(HOST_LABEL_CHANNEL)   
 
 ## Edge cases and limitations
 
-- **The label outlives an unpair.** [#173](../codebase/173.md)'s unpair clears only
-  `pairedServerStore`; after an unpair this channel still returns `{ status: 'stored', ... }` for the
-  previous host until a new label is saved or the store is cleared. Closing that gap is
-  [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) — this handler faithfully reports
-  what is on disk, and a cross-store consistency check here would couple two independent at-rest
-  values.
+- **The label used to outlive an unpair; [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) closed the normal case.**
+  [#173](../codebase/173.md)'s unpair used to clear only `pairedServerStore`; `unpairHandler.ts` now
+  also clears the label (via a `clear`-only handle over this same store), ordered after the record's
+  own erase and before the teardown trigger — see [Unpair channel § the label erase
+  (#827)](unpair-channel.md). After an unpair this channel returns `{ status: 'not-stored' }` for the
+  previous host. **One residual:** the two erases are not atomic, so a crash between them can still
+  leave an orphan label this channel would faithfully report as `stored` — a self-healing
+  interleaving (the next pairing that carries a label overwrites it; the next unpair erases it), not
+  a cross-store consistency check this handler is responsible for adding.
 - **`error` and over-length both mean "no usable label," and the union does not distinguish them.**
   Both call for the same recovery (re-enter the label) in #826's design; if a reason to split ever
   surfaces, the union extends additively then.

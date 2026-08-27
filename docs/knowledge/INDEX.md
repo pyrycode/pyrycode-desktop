@@ -300,6 +300,17 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   every real index) — pin presence before ordering. Code review PASS, two non-blocking NIT (`.conversation-status-dot`'s
   `flex: 0 0 auto` now inert at its only, out-of-flow call site; the idle dot's announced label ships open
   per spec, not a regression).
+- [Attachment path resolution](features/attachment-path-resolution.md) — `resolveAttachmentPath(baseDir, attachmentId)`
+  (#818), a pure main-process gate turning an untrusted attachment identifier into a path confined inside
+  a base directory, or refusing it. Written in the [pairing-payload gate](features/pairing-payload-gate.md)'s
+  register, reusing [save-debug-bundle](features/save-debug-bundle.md)'s injected-`dir` composition-root
+  seam. Containment is structural: the canonical shape `/^[0-9a-f-]{1,64}$/` makes traversal and absolute
+  paths unspellable, so there is no filesystem resolution and no symlink-equality check, unlike the
+  daemon's own attachment-directory design — the single-principal, nothing-created rationale is recorded
+  in the doc. No consumer wired yet; #814 (save-to-Downloads) and #691 (open-in-viewer) are the two
+  intended callers, and the shape this ships is now a contract they and #687 must honour. Architect
+  self-review PASS, one accepted SHOULD FIX (in-directory symlink redirect, bounded and revisit-conditions
+  named).
 
 ## Architecture
 

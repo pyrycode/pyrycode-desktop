@@ -328,3 +328,14 @@ contract, the three-state table, and the forgery-resistance property.
   `RunConfigLiveData` leaf, refreshed on the connected edge and each turn-end edge, so the figures
   are true whether or not the sheet has ever been opened; `RunConfigData` kept its per-open request
   unchanged. Security-sensitive, architect self-review PASS. See § Live outside the sheet above.
+- **#811** — gave this store's live figures a second reader: the [conversation shell](conversation-shell.md#composer-footer-row-811)'s
+  new composer footer row, a "Context: N%" reading beside the four blocked desktop-layout slots
+  (#680/#682/#683/#685). Added no store change here — `usedTokens`/`windowTokens` were already
+  required `number`s under this store's `snapshot`. What moved is the *consumer-side* percentage math:
+  `ContextWindowSection`'s inline clamp (§ Configuration and usage, [#192 codebase
+  notes](../codebase/192.md)) is now `contextUsagePercent(usedTokens, windowTokens)`, a shared
+  `number | null` function both the sheet's gauge and the new reading call, closing a `NaN`/`Infinity`
+  gap the old clamp had on an overflowing daemon value (`Number.isFinite(windowTokens)` added to the
+  guard). See [conversation shell § Run configuration Context window
+  section](conversation-shell.md#run-configuration-context-window-section-192) for the extraction and
+  [§ Composer footer row](conversation-shell.md#composer-footer-row-811) for the new consumer.

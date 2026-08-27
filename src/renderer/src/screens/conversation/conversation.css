@@ -1351,6 +1351,68 @@
   font-weight: var(--text-body-small-weight);
 }
 
+/* #811 — the input footer row (Figma node 110:3494, 780x20), the composer's third sub-row, beneath the
+   message box. Four more tickets fill it (#680 Actions, #682 permission mode, #683 model and effort,
+   #685 attach); today it carries the context reading alone and NOTHING stands in for the rest.
+
+   The height is the whole point (AC4). flex: 0 0 auto so it never claims a competing flex region, and
+   NO vertical padding, so 20px is the exact box under this repo's absent global box-sizing reset — the
+   .composer-status rule above, verbatim. The row is reserved whether or not a reading is inside it,
+   which is what stops the message box moving when the figure appears and disappears.
+
+   height: 20px as a literal rather than var(--space-5) (also 20px): a component's own height is
+   structural geometry, not spacing — the .composer-status / .conn-dot / .run-config__context-bar
+   precedent in this file.
+
+   Horizontal padding --space-4, NOT .composer-status's --space-3. The two rows are deliberately inset
+   differently in the design: this row's content starts at x=16, exactly where the message box's own text
+   starts, so it aligns with the INPUT'S TEXT (the .composer__hint treatment above) rather than with the
+   composer's box edge (which is what .composer-status aligns to, its own node starting at x=0). Do not
+   "fix" one to match the other.
+
+   margin-top: --space-1 completes the design's 8px gap between the message box and this row: .composer
+   is a column with gap: var(--space-1), so 4 + 4 = 8. A margin rather than widening the column's gap,
+   because that gap also separates .composer__hint from .composer__row and that spacing is settled.
+
+   align-items: center puts the 16px line 2/2 in the 20px row. The Figma's own inset is asymmetric
+   (pt-[4px], nothing below); centring is 2px off that and one declaration instead of two — the same
+   trade .composer-status took against its node's py-[4px].
+
+   gap: --space-5 is the design's measured 20px item rhythm (items at x=0/76/135/197/253). INERT today
+   with one child; recorded now so the four tickets above inherit the row's spacing instead of each
+   re-deriving it. */
+.composer__footer {
+  flex: 0 0 auto;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: 0 var(--space-4);
+  margin-top: var(--space-1);
+}
+
+/* The context reading (Figma 110:3497, "Context: 84%"): M3 body/small in the row's primary colour.
+   --color-primary by token NAME, never the export's #32628d fallback, which is the LIGHT scheme's
+   primary (desktop is dark-only, ADR 0003) — the standing rule in .composer-status and .status-row.
+
+   The colour sits on the reading rather than on the row: every item in the design's footer is
+   schemes/primary, but hoisting it would pre-decide the treatment for four controls that will each read
+   their own node. Whichever of them lands first is the natural place to hoist it, if it is right for all
+   five.
+
+   white-space: nowrap because the row has a hard height — a wrapped reading would overflow it rather
+   than grow it (the .composer-status__error ruling). It needs NO truncation chain, unlike
+   .composer-status__label--tool: the string is client-owned and at most 13 characters ("Context: 100%"),
+   so it cannot blow the row out however hostile the daemon's figures are. */
+.composer__context {
+  color: var(--color-primary);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  white-space: nowrap;
+}
+
 /* min-width: 0 lets the input shrink below its content width on narrow windows. */
 .composer__input {
   flex: 1 1 auto;

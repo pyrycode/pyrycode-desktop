@@ -1375,14 +1375,14 @@ box-edge alignment; the two rows are inset differently by design. `gap: var(--sp
 (the design's measured 20px item rhythm) though inert with one child today, so #680/#682/#683 inherit the
 row's spacing instead of each re-deriving it.
 
-### Composer options panel (#838)
+### Composer options panel (#838, placed since #839)
 
 The one panel surface that all four remaining footer slots and one message-box consumer will open
 rather than each building its own: Actions (#680), permission mode (#682), model and effort (#683),
-and #694's slash-command type-ahead. This ticket ships only the panel's **resting appearance** — its
-surface, its rows, its one new colour token — with no host anywhere in the app yet. #839 places it in
-the footer; #840 opens it and drives it from the keyboard. `ComposerOptionsPanel` mounts nowhere in
-production today, which is intended, not a gap.
+and #694's slash-command type-ahead. #838 shipped only the panel's **resting appearance** — its
+surface, its rows, its one new colour token — with no host anywhere in the app yet. #839 placed it in
+the footer; #840 still needs to open it and drive it from the keyboard. `ComposerOptionsPanel` mounts
+nowhere in production today, which is intended, not a gap.
 
 **New file, not `ConversationScreen.tsx`.** `ComposerOptionsPanel.tsx` follows the
 `PermissionModal.tsx` / `WorkspacePickerSheet.tsx` split: five named future consumers across two later
@@ -1446,12 +1446,15 @@ rows totals 144px — the Figma frame height exactly; keep the panel's vertical 
 height in different boxes. `width: max-content` is the content-driven-width AC3 asks for — not a fixed
 or minimum width — so the panel's resting size stays independent of whatever host #839 drops it into;
 the drawn 81px is that particular menu's longest label, not a size (#683's model menu will be much
-wider). No `position`, no offset, no `z-index` anywhere in the block (AC5) — for the same reason
-`.conversation__overflow`'s comment records at `conversation.css:2325-2334` (#276): a positioned
-element already paints above the non-positioned thread, and later-in-DOM overlays keep painting above
-it without a competing `z-index`. This is a **new surface**, not a variant of
-`.conversation__overflow-menu` — only its button reset and its no-`z-index` reasoning are copied; none
-of its light-surface-card visual treatment is.
+wider). #838 shipped no `position`, no offset and no `z-index` anywhere in the block (AC5) —
+deliberately: the panel cannot be an in-flow child of `.composer__footer`, which holds a hard
+`height: 20px`, and #839 (below) is the ticket that fills the gap in. The **no-`z-index`** half holds
+unchanged even once positioned, for the reason `.conversation__overflow`'s comment records at
+`conversation.css:2325-2334` (#276): a positioned element already paints above the non-positioned
+thread, and later-in-DOM overlays (the status sheets, the permission modal) keep painting above it by
+DOM order alone. This is a **new surface**, not a variant of `.conversation__overflow-menu` — only its
+button reset and its no-`z-index` reasoning are copied; none of its light-surface-card visual treatment
+is.
 
 **One shipped deviation from the architecture spec, confirmed correct in review.** The spec read the
 node as drawing no radius; `get_design_context` on `121:3879` returns `rounded-[6px]` on the frame
@@ -1489,6 +1492,70 @@ panel's full width for free, so the correct row rule declares no `width` at all.
 
 Code review PASS, two non-blocking NITs (the corner-clip magnitude's backdrop description, and the
 test's coupling to exact JSX attribute order) — see [PR #841](https://github.com/pyrycode/pyrycode-desktop/pull/841).
+
+**Placement (#839).** Three declarations appended to the `.composer-options` rule
+(`conversation.css:3158-3160`), resolving against a new sibling wrapper block,
+`.composer-options-anchor` (`conversation.css:3248-3251` — its own block rather than
+`.composer-options__anchor`, since it wraps a *trigger* the panel knows nothing about, and #694 will
+put it on the message box rather than on a button):
+
+- **`bottom: 100%`** puts the panel's bottom edge on the anchor's top edge — AC1, with no gap. This is
+  `.conversation__overflow-menu`'s `top: 100%` (`conversation.css:2405`) mirrored, the repo's one other
+  anchored overlay and the idiom copied here.
+- **`left: calc(-1 * var(--space-3) - var(--composer-options-shift, 0px))`** — written as the negation
+  of `--space-3`, never as `-12px`, because the alignment number *is*
+  `.composer-options__item`'s left padding: a footer button's label starts at the button's own left
+  edge (Figma `115:3688` — text at x=0, chevron at x=28), so pulling the panel 12px left of the button
+  puts an option's label horizontally flush with the button's label (AC2, the operator's instruction of
+  2026-08-22). Neither centred on the button nor left-aligned to it — both put the labels out of line.
+  If the row inset ever moves, this must move with it or the labels drift; writing the token rather
+  than the literal makes that automatic.
+- **`--composer-options-shift`** is AC3's right-edge clamp, defaulting to `0px` so the resting rule
+  stands with no consumer setting it. It is computed by `composerOptionsShiftPx()`, a new file,
+  `composerOptionsPlacement.ts`, built to the `threadScrollPosition.ts` shape: framework-free, DOM-free,
+  a total function over three named plain numbers (`anchorLeft`, `panelWidth`, `windowWidth` — named
+  rather than positional so `panelWidth`↔`windowWidth` can't transpose silently at the untested call
+  site). One expression and one `Math.max(0, …)`, no guards: the resting left edge is
+  `anchorLeft − COMPOSER_OPTIONS_LABEL_INSET_PX` (12, paired by comment with `--space-3` on both sides —
+  there is no detector for that coupling since #838 forbids reading `conversation.css` as text from a
+  test, so it is carried by comments plus a pinning test, exactly as `AT_BOTTOM_TOLERANCE_PX` is), and
+  the shift is that plus `panelWidth − windowWidth`, floored at zero. **`windowWidth` is the window's
+  own right edge, not the chat pane's** — a deliberate geometry call: at the 800px minimum the pane's
+  right edge is 780 while the window's is 800, so a clamped panel may overhang that 20px
+  `.paired-shell` gutter, which is empty backdrop with the sidebar on the other side. **There is no left
+  clamp**: the sidebar is `flex: 0 0 400px` and never shrinks, so the leftmost footer button's left edge
+  is `20 + 400 + 20 + 12 + 16 = 468` at every window width and the panel's leftmost resting edge is
+  456 — unreachable by construction, so a guard for it would be an untestable branch defending an
+  unobservable failure. Ships dormant, exactly like `threadScrollPosition.ts` ahead of #601: no footer
+  button exists yet to open the panel from, so no caller was added to "prove it works."
+- The custom property is set on the **anchor**, not the panel, so inheritance carries the shift down
+  without widening `ComposerOptionsPanel`'s four-prop surface or forwarding a ref into it — the value
+  must carry a unit, or the whole `left` declaration goes invalid at computed-value time and the panel
+  falls to `left: auto`.
+
+**Why the wrapper is `display: flex` with no padding and no border.** A block wrapper around an
+inline-block `<button>` establishes an inline formatting context, and the line box's strut leading
+makes the wrapper measurably taller than the button — breaking AC1's "the button's top edge" and
+overflowing `.composer__footer`'s hard `height: 20px`. Flex has no strut, so the anchor's box matches
+the button's on all four edges; any padding or border on the anchor would equally detune AC1/AC2, since
+`left`/`bottom` resolve against the element's *padding* box. `position: relative` on the anchor is what
+makes `left`/`bottom` resolve against the button at all — without it they'd resolve against
+`.conversation`, the next positioned ancestor (line 18), landing the panel somewhere in the chat pane.
+
+Verified out-of-band the same way #838 was (no vitest detector exists for stylesheet declarations, per
+the ruling at `ConversationScreen.test.tsx:1128-1132`): a throwaway Playwright harness loading the
+repo's real `tokens.css`/`pairedShell.css`/`conversation.css` at an 800px viewport. One trap worth
+keeping for the next ticket that reaches for this technique: **a `file://` stylesheet will not load
+into a page put up with Playwright's `setContent`** — that page stays on `about:blank`, so the links
+are cross-origin and silently dropped, and everything measures as though unstyled. `page.goto('file://…')`
+loads them; assert `document.styleSheets.length` before trusting any measurement taken this way, since
+an unstyled page measures fine, it just measures the wrong thing.
+
+Code review PASS on both — #838's two non-blocking NITs above, and #839's two NITs (a stale line
+reference in a coupling comment, and `window.innerWidth` vs. `document.documentElement.clientWidth` for
+a scrollbar edge case neither worth fixing without a live consumer) — see
+[PR #841](https://github.com/pyrycode/pyrycode-desktop/pull/841) and
+[PR #843](https://github.com/pyrycode/pyrycode-desktop/pull/843).
 
 ### Api-retry indicator (#493)
 

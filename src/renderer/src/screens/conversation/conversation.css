@@ -545,64 +545,92 @@
   margin-block-start: var(--space-2);
 }
 
-/* #623 — a fenced code block's chrome (Figma 16:45): surface fill (deliberately NOT the bubble's own
-   --color-surface-container-high — the block reads as a step darker than what it sits in), 1px
-   outline-variant border, 12px radius. Nothing else: no display (its two children are block-level and
-   stack in normal flow), no width (a stretched flex item of .bubble__markdown, and stretch sizes the
-   MARGIN box so the border is accounted for), and no margin (:361 already zeroes it). */
+/* #623 built a fenced code block's chrome from the mobile mock; #721 redrew it to the desktop design
+   (Figma 134:4809). Surface fill (deliberately NOT the bubble's own --color-surface-container-high — the
+   block reads as a step darker than what it sits in), 1px primary-container border, 6px radius. Nothing
+   else: no display (its two children are block-level and stack in normal flow), no width (a stretched flex
+   item of .bubble__markdown, and stretch sizes the MARGIN box so the border is accounted for), and no
+   margin (:361 already zeroes it). The design's Code node also sets overflow-clip, not adopted: neither
+   child carries a fill, so nothing inside paints into a corner.
+
+   THE FILL SURVIVES THE REDRAW, and that is a finding rather than an omission. The design's
+   Schemes/Background resolves to #101418, which is exactly --color-surface — the same value #623 already
+   declared. It also has to stay: #630's e2e reads THIS element's computed background to assert that inline
+   and fenced code are one code surface, so editing it would turn that assertion red for no design reason.
+
+   READ THE VARIABLE, NOT THE GENERATED FALLBACK, for both blues — this one and the divider's below.
+   get_design_context on this node prints --schemes/primary-container,#cfe4ff and
+   --schemes/on-primary-container,#134a74, the LIGHT scheme's resolutions and transposed against the dark
+   scheme this app ships (ADR 0003; tokens.css:25-33 records the same trap for --color-inverse-primary).
+   The divider is the BRIGHTER of the two lines and this outline the darker one, which is what the design
+   draws and is not a transposition to be "fixed". Its contrast against the bubble's
+   --color-surface-container-high is low, and so was the outgoing --color-outline-variant's: this outline
+   is decorative chrome rather than a state-bearing graphic, so the 3:1 floor :484 invokes for meaningful
+   non-text graphics does not reach it. */
 .code-block {
   background: var(--color-surface);
-  border: 1px solid var(--color-outline-variant);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-primary-container);
+  border-radius: var(--radius-xs);
 }
 
-/* The header bar and its label (Figma 16:46 + 16:47, collapsed into one box — the bar's only content is
-   the label, and the padding, type, nowrap and clip all coexist on one element). px 12 → --space-3;
-   Figma's py 6 is an exact MIDPOINT between --space-1 and --space-2, so "nearest" decides nothing and
-   this file's own precedent does: .run-config__effort-segment (:1323) already mapped the same 6 UP to
-   --space-2 (±2px). No font-family — --font-sans inherits from .conversation (.tool-row__summary:602).
+/* The header bar and its label (Figma 134:4809's Header node, one box — the bar's only content is the
+   label, and the padding, type, nowrap and clip all coexist on one element). 8/16 → --space-2/--space-4,
+   two EXACT scale steps: #623's rounding argument here, over the mobile mock's py 6 sitting midway between
+   --space-1 and --space-2, is gone with the value it was about. No font-family — --font-sans inherits from
+   .conversation (.tool-row__summary:602).
 
-   THE DIVIDER HANGS HERE, not on the body as Figma draws it (border-top on 16:48). With it on the body,
-   a fence with no language — which renders the body as the block's only child — would put a 1px line a
-   hair under the block's own top border: a doubled edge, exactly the "empty bar in its place" the
-   no-language criterion forbids. On the header it appears and disappears WITH the thing it divides.
+   LABEL MEDIUM EMPHASIZED, and the 12px size and 600 weight are what distinguish it from the outgoing
+   label small — the two steps share both a 16px line and 0.5px tracking, so half the quartet reads the
+   same either way. The ink lifts from the muted --color-on-surface-variant to full --color-on-surface: the
+   design says Schemes/On Background, and M3 gives background and surface one value (#e0e2e8 here), so the
+   surface pair is reused rather than a second name invented for one colour.
+
+   THE DIVIDER HANGS HERE, not on the body as Figma draws it (border-top on the Content node). With it on
+   the body, a fence with no language — which renders the body as the block's only child — would put a 1px
+   line a hair under the block's own top border: a doubled edge, exactly the "empty bar in its place" the
+   no-language criterion forbids. On the header it appears and disappears WITH the thing it divides. #721
+   took the design's COLOUR for it, --color-on-primary-container, and deliberately left its OWNER alone;
+   e2e/assistant-whitespace.spec.ts asserts the languageless body's border-top is 0px, so a later
+   "correction" to how the design draws the line goes red rather than shipping the doubled edge.
 
    nowrap + ellipsis bound an unbounded untrusted info string geometrically — the residual the TSX-side
    truncation cannot see, since 20 characters can still exceed the block in a narrow window. Cloned from
    .tool-row__summary (:605), which settled the same question for the tool chip. No min-width: 0 — that
    is a flex-item remedy and this is a block box. */
 .code-block__header {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-outline-variant);
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-label-small-size);
-  line-height: var(--text-label-small-line);
-  letter-spacing: var(--text-label-small-tracking);
-  font-weight: var(--text-label-small-weight);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-on-primary-container);
+  color: var(--color-on-surface);
+  font-size: var(--text-label-medium-size);
+  line-height: var(--text-label-medium-line);
+  letter-spacing: var(--text-label-medium-tracking);
+  font-weight: var(--text-label-medium-weight-emphasized);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* The code body (Figma 16:48 + 16:49). Figma's py 10 is the other exact midpoint (--space-2 vs
-   --space-3) and rounds UP on .log-data__download's precedent (:1191), which lands it on the same 12 as
-   the px — hence the single value. Rounding both paddings up also preserves the mock's relationship: its
-   header is 4px tighter than its body, and --space-2 is 4px tighter than --space-3. (The apparent
-   counter-case, .channel-info__action:1739, maps a py 10 DOWN — but its geometry lives in a
-   min-height: 40px, and this box has no height bound at all, per :369-371.)
+/* The code body (Figma 134:4809's Content node). 12/16 → --space-3/--space-4, two exact steps and
+   therefore two values, so #623's py-10 rounding argument is gone with the value it was about. The mock's
+   relationship survives the redraw: the header is still 4px tighter than the body on the block axis.
 
-   margin-block is NOT decoration. :361 is a DIRECT-CHILD selector and .code-block is now the direct
-   child, so this <pre> takes its UA margin-block: 1em back — 12px of dead space top and bottom inside a
-   box where Figma allows exactly 12, silently doubling the padding. margin-block, never `margin`
-   (:350-352). The four type tokens complete the quartet the way .tool-row__name:596 does; without them
-   the body would inherit .bubble's body-MEDIUM tracking. word-break: break-word still inherits from
-   .bubble (:298) — inheritance follows the DOM, not selectors — so it is not restated either. */
+   margin-block is NOT decoration. :361 is a DIRECT-CHILD selector and .code-block is the direct child, so
+   this <pre> takes its UA margin-block: 1em back — 12px of dead space top and bottom inside a box where
+   the design allows exactly 12, silently doubling the padding. margin-block, never `margin` (:350-352).
+
+   THREE OF THE FOUR TYPE TOKENS ARE BODY-SMALL'S AND THE FOURTH IS BESPOKE. The design pairs a 12px size
+   with a 20px line and the scale carries no such step, so the leading comes from --text-code-body-line;
+   tokens.css records why neither a bare 20px here nor a borrowed --text-body-medium-line was taken.
+   Tracking stays body-small's 0.4px although the design's code text carries none — the redraw's delta list
+   does not include it, and mono tracking is its own question. Without the quartet the body would inherit
+   .bubble's body-MEDIUM tracking. word-break: break-word still inherits from .bubble (:298) — inheritance
+   follows the DOM, not selectors — so it is not restated either. */
 .code-block__body {
   margin-block: 0;
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   color: var(--color-on-surface);
   font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
+  line-height: var(--text-code-body-line);
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
 }

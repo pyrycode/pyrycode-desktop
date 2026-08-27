@@ -133,4 +133,4 @@ This module *is* the secret-at-rest boundary — its correctness properties are 
 - [#42 codebase notes](../codebase/42.md) — implementation summary, patterns, and lessons.
 - [Relay connection](relay-connection.md) — the sibling main-side primitive whose injected-`onEvent` DI seam this mirrors.
 - [Secret-backend dev affordance](secret-backend-affordance.md) ([#99](../codebase/99.md)) — the deterministic, dev-only selection that swaps the injected `encryption` seam to a keychain-free backend so `set` stops failing closed in a headless run; inert in a packaged build.
-- Downstream consumers: [device static keypair](device-keypair.md) ([#43](../codebase/43.md)) and [paired-server store](paired-server-store.md) ([#44](../codebase/44.md)).
+- Downstream consumers: [device static keypair](device-keypair.md) ([#43](../codebase/43.md)), [paired-server store](paired-server-store.md) ([#44](../codebase/44.md)), and [host label store](host-label-store.md) ([#822](../codebase/822.md)) — the first non-secret consumer, riding the seam for integrity and uniform fail-closed/log-free discipline rather than confidentiality.

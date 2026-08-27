@@ -321,6 +321,18 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   the literal name `'___'` are indistinguishable once built. No length bound and no existence check by
   design — both deferred to #814, on [save-debug-bundle](features/save-debug-bundle.md)'s exclusive-create
   precedent. No consumer wired yet. Architect self-review PASS.
+- [Host label store](features/host-label-store.md) — `createHostLabelStore({ secureStore })`, the third
+  consumer of [secure store](features/secure-store.md) and the first that isn't a secret: the sidebar
+  nickname the operator types at pairing, persisted so it survives a restart. Can't live on
+  `PairedServerRecord` since that type aliases the wire's `QrPayload`, so it gets its own store name and
+  its own module. Fixed-blob encoding like [device static keypair](features/device-keypair.md) (bare
+  UTF-8 bytes, `fatal: true` + `ignoreBOM: true`, no JSON envelope) rather than the paired-server store's
+  JSON shape. `null` = never stored, `''` = stored empty and distinct end-to-end (`secureStore.get` tests
+  the ciphertext, not the plaintext, before decrypting), `MalformedHostLabelError` = present but not valid
+  UTF-8 — never coerced to `null`. Rides `safeStorage` for AEAD integrity and uniform fail-closed/log-free
+  discipline, not confidentiality; the returned string is untrusted, unbounded display text, and the
+  module doc hands the bounding/escaping obligation to #824/#825/#826 by name. No caller, no IPC, no
+  renderer surface — storage only. Architect self-review PASS.
 
 ## Architecture
 

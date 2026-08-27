@@ -144,5 +144,6 @@ This module persists the pairing `token` (a bearer credential the relay/daemon a
 - [Server-info channel](server-info-channel.md) / [#339 codebase notes](../codebase/339.md) — the renderer-triggered IPC channel that reads `record.server`/`record.relay` via `load()`, never `token`/`server_static_pubkey`.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — the security model (token/keys never reach the renderer; mirror mobile).
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — the ported wire types, including `QrPayload`, that `PairedServerRecord` aliases.
+- [Host label store](host-label-store.md) / [#822](../codebase/822.md) — the sidebar host nickname, deliberately **not** a field here: since `PairedServerRecord` aliases `QrPayload`, adding a label the daemon never sees would drift a wire type, so it persists through its own secure-store-backed module instead.
 - Downstream consumers: the pairing input flow (#9, which validates then calls `save`) and the Noise_IK transport (#7/#30, which `load`s the record at connect time).
 </content>

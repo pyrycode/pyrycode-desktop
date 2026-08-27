@@ -50,8 +50,8 @@ const STREAM_TIMEOUT_MS = 15_000
 const REPLY_ENVELOPE_ID = 1
 const FIXED_TS = '2026-07-07T12:00:00.000Z'
 
-// One send, answered with five TURNS. The first four each carry an `assistant_delta` plus its `turn_end`,
-// so each lands SETTLED in its own bubble; the fifth carries a delta only, so it is the in-progress tail.
+// One send, answered with six TURNS. The first five each carry an `assistant_delta` plus its `turn_end`,
+// so each lands SETTLED in its own bubble; the sixth carries a delta only, so it is the in-progress tail.
 // Three of the settled texts are read as COMPARISONS AGAINST THE FIRST, which is what keeps this spec free
 // of magic numbers: no expected pixel height, no expected width, no font metric. The one number it does
 // name — the 8px block rhythm — is read from the --space-2 token at runtime rather than written down.
@@ -77,17 +77,20 @@ const CODE_TEXT = ['```', LONG_TOKEN_TEXT, '```'].join('\n')
 // item` above yields `<li>Gamma item</li>` and no paragraph.) Its second item ends in a nested list, which
 // puts a depth-2 list in the DOM for the indent monotonicity check.
 //
-// EXTENDED IN PLACE rather than answered with a sixth turn: the reply stream is indexed positionally
-// (CONTROL / SPACE_RUN / CODE / RHYTHM / TAIL) and an added turn would shift every index above. No second
-// <h2> for the same reason in reverse — #628's readHeadingTypeMetrics resolves `.bubble__markdown h2` and
-// would go strict-mode ambiguous.
+// EXTENDED IN PLACE rather than answered with a turn INSERTED here: the reply stream is indexed
+// positionally (CONTROL / SPACE_RUN / CODE / RHYTHM / LANG_CODE / TAIL) and a turn added in the middle
+// would shift every index above it. #721 APPENDS one after this block, which is the case that rule does
+// not cover: appending shifts exactly one constant, TAIL, and TAIL is last by construction because the
+// open, `turn_end`-less delta has to remain the final frame. No second <h2> for the original reason in
+// reverse — #628's readHeadingTypeMetrics resolves `.bubble__markdown h2` and would go strict-mode
+// ambiguous.
 //
 // #630 THREADS INLINE CODE THROUGH THOSE SAME BLOCKS rather than adding any of its own, which is why
 // every count below still holds unchanged: a code span is INLINE content, so it lands inside a block that
 // already exists and moves no child count at any level. Its seven spans cover the container set that
 // ticket's single rule has to work in — a paragraph, this <h2>, a tight <li>, a blockquote, and nested
 // inside <em> and <strong> — plus LONG_TOKEN_TEXT a second time, in the paragraph, as the wrapping case.
-// Placing them in EXISTING lines is the paragraph above's "no sixth turn" argument applied one level down.
+// Placing them in EXISTING lines is the paragraph above's no-inserted-turn argument applied one level down.
 //
 // Assembled with join('\n') — an indented template literal would put four leading spaces on each line,
 // which CommonMark reads as an indented code block. The three leading spaces inside the ordered list are
@@ -136,13 +139,22 @@ const RHYTHM_INLINE_CODE_COUNT = 7
 // <p> CommonMark wraps the quote's content in, and one in a list item sits directly in the <li> when the
 // list is tight but inside a <p> when it is loose.
 const RHYTHM_INLINE_CODE_CONTEXTS = ['p', 'h2', 'li', 'blockquote', 'em', 'strong']
+// A fence WITH an info string, and #721's whole subject: the CODE turn above is deliberately languageless,
+// so `.code-block__header` exists nowhere else in this spec's DOM and every header assertion would be made
+// against nothing. Built the same way CODE_TEXT is, with the language concatenated onto the opening fence
+// marker. FENCE_LANGUAGE is a constant so the fixture and the header's text assertion share one source
+// rather than two spellings, and it is well inside fenceLanguage's 20-character truncation. LONG_TOKEN_TEXT
+// again on purpose: it keeps the wrap check on THIS block non-vacuous under the block's new, 4px-wider
+// inline padding, which is the one geometric regression a chrome restyle could introduce.
+const FENCE_LANGUAGE = 'typescript'
+const LANG_CODE_TEXT = ['```' + FENCE_LANGUAGE, LONG_TOKEN_TEXT, '```'].join('\n')
 // The still-streaming tail. SINGLE newlines, not blank lines, and that choice is what makes the height
 // comparison discriminating: `pre-wrap` renders three line boxes, while CommonMark reads a single newline
 // as a SOFT break and `normal` collapses it to a space, giving one. A blank-line fixture would not tell
 // the two apart — markdown would render two paragraphs and stand taller too.
 const TAIL_TEXT = ['First line.', 'Second line.', 'Third line.'].join('\n')
 
-const SETTLED_TEXTS = [CONTROL_TEXT, SPACE_RUN_TEXT, CODE_TEXT, RHYTHM_TEXT]
+const SETTLED_TEXTS = [CONTROL_TEXT, SPACE_RUN_TEXT, CODE_TEXT, RHYTHM_TEXT, LANG_CODE_TEXT]
 const REPLY_TEXTS = [...SETTLED_TEXTS, TAIL_TEXT]
 
 // The bubble indices the assertions read, named so a comparison says which text it is about.
@@ -150,7 +162,8 @@ const CONTROL = 0
 const SPACE_RUN = 1
 const CODE = 2
 const RHYTHM = 3
-const TAIL = 4
+const LANG_CODE = 4
+const TAIL = 5
 
 // A rendered box is a fractional CSS pixel; scrollWidth/clientWidth are rounded integers, so they can
 // disagree by 1 on a box that does not actually overflow. The same tolerance absorbs subpixel drift in the
@@ -162,6 +175,11 @@ const SUBPIXEL_TOLERANCE_PX = 1
 // and not a value taken from the scale — so no token can stand in for them.
 const TRANSPARENT = 'rgba(0, 0, 0, 0)'
 const NO_LENGTH = '0px'
+
+// A hairline rule. The one length literal #721's assertions carry, and it is not a scale value standing in
+// for a token: conversation.css writes every border WIDTH as a raw literal (:515 says so explicitly), so
+// there is no custom property for this side of the comparison to read.
+const HAIRLINE = '1px'
 
 // The width an `outside` list marker needs to the LEFT of the list's content box, at the bubble's
 // body-medium. THE ONLY LITERALS EITHER #629 TEST INTRODUCES, and they are unavoidable: these are font
@@ -598,6 +616,175 @@ const readFenceCodeMetrics = (page: Page, index: number): Promise<FenceCodeMetri
       }
     })
 
+interface CodeBlockChromeMetrics {
+  headerText: string
+  block: {
+    backgroundColor: string
+    borderTopLeftRadius: string
+    borderWidths: string[]
+    borderTopColor: string
+  }
+  header: {
+    paddingTop: string
+    paddingBottom: string
+    paddingLeft: string
+    paddingRight: string
+    color: string
+    borderBottomColor: string
+    borderBottomWidth: string
+    type: TypeQuartet
+  }
+  body: {
+    paddingTop: string
+    paddingBottom: string
+    paddingLeft: string
+    paddingRight: string
+    lineHeight: string
+    fontSize: string
+    whiteSpace: string
+    scrollWidth: number
+    clientWidth: number
+  }
+  token: {
+    radiusXs: string
+    colorPrimaryContainer: string
+    colorOnPrimaryContainer: string
+    colorOnSurface: string
+    colorSurface: string
+    space2: string
+    space3: string
+    space4: string
+    labelMedium: TypeQuartet
+    codeBodyLine: string
+    bodySmallSize: string
+  }
+}
+
+/**
+ * A LABELLED fence's whole chrome — the block, its header bar and its body — each measured value beside the
+ * token read off that same live element. readHeadingTypeMetrics' idiom (#628) and readInlineCodeMetrics'
+ * shape (#630), which is what keeps #721's half of the spec free of a colour, radius, spacing or type
+ * literal: the expected side is the theme, never a hex or a px written down.
+ *
+ * One evaluate, so every number comes off ONE layout, and the two `throw`s are the vacuity guards — an
+ * absent header is exactly the state under which every header assertion below would otherwise be made
+ * against nothing.
+ */
+const readCodeBlockChromeMetrics = (page: Page, index: number): Promise<CodeBlockChromeMetrics> =>
+  assistantBubble(page, index)
+    .locator('.code-block')
+    .evaluate((el) => {
+      // Blink serialises a computed letter-spacing of zero as the `normal` keyword while the tracking
+      // tokens are px. Both sides pass through this, so the comparison is over values, not spellings —
+      // readHeadingTypeMetrics:351's normaliser, cloned rather than shared because each evaluate is a
+      // separate serialised function.
+      const tracking = (value: string): string => {
+        const trimmed = value.trim()
+        return trimmed === 'normal' ? '0px' : trimmed
+      }
+      // The colour analogue, and the one normaliser this file did not already carry: a computed colour
+      // serialises as `rgb(19, 74, 116)` while its token reads `#134a74`. It THROWS on anything it cannot
+      // read as 6-digit hex rather than passing the value through — so a token later respelled as `rgb()`
+      // or `oklch()` fails loudly here instead of comparing two different spellings of one colour and
+      // passing by accident. The value in the message is a theme colour, never content.
+      const rgb = (value: string): string => {
+        const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(value.trim())
+        if (!match) throw new Error(`expected a 6-digit hex colour token, read ${JSON.stringify(value)}`)
+        const channels = match.slice(1).map((part) => parseInt(part, 16))
+        return `rgb(${channels.join(', ')})`
+      }
+      const style = getComputedStyle(el)
+      const token = (name: string): string => style.getPropertyValue(name).trim()
+      const header = el.querySelector('.code-block__header')
+      const body = el.querySelector('.code-block__body')
+      if (!header) throw new Error('the labelled fence rendered no .code-block__header')
+      if (!body) throw new Error('the labelled fence rendered no .code-block__body')
+      const headerStyle = getComputedStyle(header)
+      const bodyStyle = getComputedStyle(body)
+      return {
+        headerText: header.textContent ?? '',
+        block: {
+          backgroundColor: style.backgroundColor,
+          borderTopLeftRadius: style.borderTopLeftRadius,
+          borderWidths: [
+            style.borderTopWidth,
+            style.borderRightWidth,
+            style.borderBottomWidth,
+            style.borderLeftWidth
+          ],
+          borderTopColor: style.borderTopColor
+        },
+        header: {
+          paddingTop: headerStyle.paddingTop,
+          paddingBottom: headerStyle.paddingBottom,
+          paddingLeft: headerStyle.paddingLeft,
+          paddingRight: headerStyle.paddingRight,
+          color: headerStyle.color,
+          borderBottomColor: headerStyle.borderBottomColor,
+          borderBottomWidth: headerStyle.borderBottomWidth,
+          type: {
+            fontSize: headerStyle.fontSize,
+            lineHeight: headerStyle.lineHeight,
+            letterSpacing: tracking(headerStyle.letterSpacing),
+            fontWeight: headerStyle.fontWeight
+          }
+        },
+        body: {
+          paddingTop: bodyStyle.paddingTop,
+          paddingBottom: bodyStyle.paddingBottom,
+          paddingLeft: bodyStyle.paddingLeft,
+          paddingRight: bodyStyle.paddingRight,
+          lineHeight: bodyStyle.lineHeight,
+          fontSize: bodyStyle.fontSize,
+          whiteSpace: bodyStyle.whiteSpace,
+          scrollWidth: body.scrollWidth,
+          clientWidth: body.clientWidth
+        },
+        token: {
+          radiusXs: token('--radius-xs'),
+          colorPrimaryContainer: rgb(token('--color-primary-container')),
+          colorOnPrimaryContainer: rgb(token('--color-on-primary-container')),
+          colorOnSurface: rgb(token('--color-on-surface')),
+          colorSurface: rgb(token('--color-surface')),
+          space2: token('--space-2'),
+          space3: token('--space-3'),
+          space4: token('--space-4'),
+          labelMedium: {
+            fontSize: token('--text-label-medium-size'),
+            lineHeight: token('--text-label-medium-line'),
+            letterSpacing: tracking(token('--text-label-medium-tracking')),
+            fontWeight: token('--text-label-medium-weight-emphasized')
+          },
+          codeBodyLine: token('--text-code-body-line'),
+          bodySmallSize: token('--text-body-small-size')
+        }
+      }
+    })
+
+interface LanguagelessFenceMetrics {
+  headerCount: number
+  bodyBorderTopWidth: string
+  blockBorderTopWidth: string
+}
+
+/**
+ * The no-language fence's two absences and its one presence. Kept separate from the reader above rather
+ * than folded into it, because the whole point of this measurement is that the header ELEMENT is missing —
+ * the shape that reader treats as a fixture failure.
+ */
+const readLanguagelessFenceMetrics = (page: Page, index: number): Promise<LanguagelessFenceMetrics> =>
+  assistantBubble(page, index)
+    .locator('.code-block')
+    .evaluate((el) => {
+      const body = el.querySelector('.code-block__body')
+      if (!body) throw new Error('the languageless fence rendered no .code-block__body')
+      return {
+        headerCount: el.querySelectorAll('.code-block__header').length,
+        bodyBorderTopWidth: getComputedStyle(body).borderTopWidth,
+        blockBorderTopWidth: getComputedStyle(el).borderTopWidth
+      }
+    })
+
 /** The thread scroll container's horizontal extent — a horizontal scrollbar iff these differ. */
 const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidth: number }> =>
   page
@@ -605,14 +792,16 @@ const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidt
     .evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
 
 /**
- * Drive one send and settle the five-turn reply before anything is measured.
+ * Drive one send and settle the whole reply before anything is measured. Named for no count — #721 made
+ * the previous name wrong by appending a sixth turn, and every gate below already derives from
+ * REPLY_TEXTS rather than from a number written down.
  *
  * The gate is the SETTLED code bubble's exact text: its turn_end has landed, so an exact match proves the
  * stream reached at least that far and that the markdown path produced it. That text is deliberately the
  * whitespace-free one — the single text in this spec on which `toHaveText`'s normalisation cannot make a
  * wait silently vacuous. The bubble count then covers the open tail, which carries no turn_end to wait on.
  */
-async function streamTheFiveReplies(page: Page): Promise<void> {
+async function streamTheReplies(page: Page): Promise<void> {
   const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
 
   await page.getByPlaceholder('Message…').fill(PROMPT_TEXT)
@@ -626,7 +815,7 @@ test('#607s plain-text rule governs the in-progress tail, and markdown owns the 
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   const control = await readBubbleMetrics(page, CONTROL)
   const tail = await readBubbleMetrics(page, TAIL)
@@ -654,7 +843,7 @@ test('a settled reply takes its whitespace from markdown, not from the plain-tex
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   const control = await readBubbleMetrics(page, CONTROL)
   const spaceRun = await readBubbleMetrics(page, SPACE_RUN)
@@ -673,7 +862,7 @@ test('a fenced code block wraps inside the bubble measure rather than spilling o
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   // AC3's code half. <pre>'s UA `white-space: pre` is a declaration on the element and beats .bubble's
   // inherited value whatever its origin, so without .bubble__markdown pre re-declaring pre-wrap the token
@@ -694,7 +883,7 @@ test('consecutive markdown blocks sit one spacing token apart, flush at the bubb
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   const rhythm = await readRhythmMetrics(page, RHYTHM)
 
@@ -722,7 +911,7 @@ test('a markdown heading is typed from one step of the scale, not by the browser
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   const heading = await readHeadingTypeMetrics(page, RHYTHM)
 
@@ -745,7 +934,7 @@ test('consecutive blocks one level inside a list item or a blockquote sit that s
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   const nested = await readNestedRhythmMetrics(page, RHYTHM)
 
@@ -784,7 +973,7 @@ test('a list indents from the spacing scale and leaves its marker room to paint'
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   const indent = await readListIndentMetrics(page, RHYTHM)
 
@@ -836,7 +1025,7 @@ test('inline code reads as code in every container, at whatever step that contai
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   const inline = await readInlineCodeMetrics(page, RHYTHM)
 
@@ -905,7 +1094,7 @@ test('none of the inline-code treatment reaches the contents of a fenced block',
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
 
-  await streamTheFiveReplies(page)
+  await streamTheReplies(page)
 
   const fence = await readFenceCodeMetrics(page, CODE)
 
@@ -928,4 +1117,101 @@ test('none of the inline-code treatment reaches the contents of a fenced block',
   // have overridden) and the mono family from `.code-block__body code`.
   expect(fence.fontSize).toBe(fence.bodySmallSizeToken)
   expect(fence.fontFamily).toBe(fence.monoToken)
+})
+
+test('a fenced code block wears the desktop chrome, every value read from the token beside it', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheReplies(page)
+
+  const chrome = await readCodeBlockChromeMetrics(page, LANG_CODE)
+
+  // The vacuity guard. The reader already throws on a missing header; this is the other half — that the bar
+  // on screen is the one this fixture asked for, rather than an empty box the language pick failed into.
+  expect(chrome.headerText).toBe(FENCE_LANGUAGE)
+
+  // #721's AC1 — the block's own chrome. The radius moves 12 -> 6 and the outline from the neutral
+  // --color-outline-variant to the blue --color-primary-container, which the design draws as the DARKER of
+  // its two lines (the divider below is the brighter one). Read the Figma VARIABLE and not the generated
+  // fallback, which prints the pair transposed: that snippet's inline values are the LIGHT scheme's and
+  // this app is dark-only (ADR 0003, tokens.css:25-33).
+  expect(chrome.block.borderTopLeftRadius).toBe(chrome.token.radiusXs)
+  expect(chrome.block.borderWidths).toEqual([HAIRLINE, HAIRLINE, HAIRLINE, HAIRLINE])
+  expect(chrome.block.borderTopColor).toBe(chrome.token.colorPrimaryContainer)
+
+  // AC1's "the `background` declaration is unchanged", asserted POSITIVELY rather than by omission. The
+  // design's Schemes/Background resolves to exactly --color-surface, so the redraw changes nothing here —
+  // and readInlineCodeMetrics reads this same fill to claim inline and fenced code are one code surface,
+  // so a change would turn that assertion red for no design reason.
+  expect(chrome.block.backgroundColor).toBe(chrome.token.colorSurface)
+
+  // AC1's header padding: 8/16, two exact scale steps, where the mobile mock's 6/12 needed a rounding
+  // argument to reach the scale at all.
+  expect(chrome.header.paddingTop).toBe(chrome.token.space2)
+  expect(chrome.header.paddingBottom).toBe(chrome.token.space2)
+  expect(chrome.header.paddingLeft).toBe(chrome.token.space4)
+  expect(chrome.header.paddingRight).toBe(chrome.token.space4)
+
+  // AC2's ink half — the label lifts from the muted --color-on-surface-variant to full --color-on-surface
+  // (the design's Schemes/On Background; M3 gives background and surface one value).
+  expect(chrome.header.color).toBe(chrome.token.colorOnSurface)
+
+  // AC2's type half, the whole quartet in one compare so a failure names every property that drifted.
+  // WHICH HALF DISCRIMINATES: label-medium and label-small share both a 16px line and 0.5px tracking, so
+  // those two assertions would pass unchanged against the outgoing declaration. The size (12 vs 11) and the
+  // weight (600 vs 500) are what actually fail if the header is still typed from label-small — the quartet
+  // is asserted whole, but the claim rests on those two.
+  expect(chrome.header.type).toEqual(chrome.token.labelMedium)
+
+  // AC4's colour half: the divider takes --color-on-primary-container, the brighter of the design's two
+  // lines. Its OWNER is Test 2's subject.
+  expect(chrome.header.borderBottomColor).toBe(chrome.token.colorOnPrimaryContainer)
+  expect(chrome.header.borderBottomWidth).toBe(HAIRLINE)
+
+  // AC1's body padding: 12/16, two exact steps and therefore two values, where the mobile mock's 10/12
+  // rounded onto one.
+  expect(chrome.body.paddingTop).toBe(chrome.token.space3)
+  expect(chrome.body.paddingBottom).toBe(chrome.token.space3)
+  expect(chrome.body.paddingLeft).toBe(chrome.token.space4)
+  expect(chrome.body.paddingRight).toBe(chrome.token.space4)
+
+  // AC3 — the 20px leading, from the off-scale token rather than from a bare 20px in the stylesheet. The
+  // size beside it is the discriminator: the scale carries no 12/20 step, so a body that borrowed a 20px
+  // line from body-medium or label-large would have to have taken that step's 14px size too.
+  expect(chrome.body.lineHeight).toBe(chrome.token.codeBodyLine)
+  expect(chrome.body.fontSize).toBe(chrome.token.bodySmallSize)
+
+  // AC5 on THIS block — the wrap survives the 4px-wider inline padding, which is the one geometric
+  // regression a chrome restyle could introduce. Non-vacuous by fixture: the body holds LONG_TOKEN_TEXT,
+  // ~200 characters with no break opportunity of its own.
+  expect(chrome.body.whiteSpace).toBe('pre-wrap')
+  expect(chrome.body.scrollWidth).toBeLessThanOrEqual(chrome.body.clientWidth + SUBPIXEL_TOLERANCE_PX)
+
+  const thread = await readThreadWidths(page)
+  expect(thread.scrollWidth).toBeLessThanOrEqual(thread.clientWidth + SUBPIXEL_TOLERANCE_PX)
+})
+
+test('a fence with no language draws no bar and no line where the bar would be', async ({
+  launchPairedApp
+}) => {
+  const { page } = await launchPairedApp({ buildReplyFrames })
+
+  await streamTheReplies(page)
+
+  const fence = await readLanguagelessFenceMetrics(page, CODE)
+
+  // AC4's fail-closed half, unchanged since #623: no info string, no header element.
+  expect(fence.headerCount).toBe(0)
+
+  // ...and the deterministic proof the divider did NOT migrate to the body, which is how the design draws
+  // it. THIS IS THE ASSERTION THAT TURNS RED if a later ticket "corrects" the CSS to match the design
+  // there: with the line on the body, this fence — whose body is the block's only child — would draw a 1px
+  // rule a hair under the block's own top border, a doubled edge.
+  expect(fence.bodyBorderTopWidth).toBe(NO_LENGTH)
+
+  // "No line" is about that doubled edge and not about the block losing its outline: the box itself still
+  // carries its own hairline top border.
+  expect(fence.blockBorderTopWidth).toBe(HAIRLINE)
 })

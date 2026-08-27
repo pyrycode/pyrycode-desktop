@@ -78,7 +78,7 @@
   --font-sans: 'Roboto', system-ui, -apple-system, sans-serif;
   --font-mono: 'Roboto Mono', ui-monospace, SFMono-Regular, monospace;
 
-  /* Type scale — M3 Static/* text styles, four tokens each */
+  /* Type scale — M3 Static/* text styles, four tokens each, plus the two named exceptions below */
   --text-display-large-size: 57px;
   --text-display-large-line: 64px;
   --text-display-large-tracking: -0.25px;
@@ -119,10 +119,40 @@
   --text-label-large-tracking: 0.1px;
   --text-label-large-weight: 500;
 
+  --text-label-medium-size: 12px;
+  --text-label-medium-line: 16px;
+  --text-label-medium-tracking: 0.5px;
+  --text-label-medium-weight: 500; /* M3's base weight for the step. The design system exposes a variable
+                                      for the emphasized weight only, so this one is not read off Figma;
+                                      it has no consumer today, per the note at the top of this file, and
+                                      shipping three quarters of a quartet would surprise the next step's
+                                      consumer. */
+  --text-label-medium-weight-emphasized: 600; /* M3 Static/Label Medium/Weight-emphasized = SemiBold — the
+                                                 fenced code block's header label (#721, Figma node
+                                                 134:4809). The FIRST *-emphasized weight in this file, and
+                                                 a fifth token rather than a `font-weight: 600` at the call
+                                                 site, which would be exactly the type literal in a
+                                                 component stylesheet the note above forbids. Named for the
+                                                 Figma variable — step, then property — rather than
+                                                 invented; the same node already uses
+                                                 title-small-emphasized, so more are coming. */
+
   --text-label-small-size: 11px;
   --text-label-small-line: 16px;
   --text-label-small-tracking: 0.5px;
   --text-label-small-weight: 500;
+
+  --text-code-body-line: 20px; /* The fenced code body's leading (#721, Figma node 134:4809), and the one
+                                  value in that design with no scale step behind it: there is no 12/20
+                                  pairing here — body-small is 12/16 and both 20px lines belong to 14px
+                                  steps (body-medium, label-large). Deliberately NOT a fifth member of any
+                                  quartet, and there is no --text-code-body-size, because the size still
+                                  comes from body-small. --text-body-medium-line reads 20 by coincidence
+                                  and borrowing it would couple the code body to a step it shares nothing
+                                  else with; a bare 20px in conversation.css would be the literal the note
+                                  above forbids. --space-bubble-x below is the precedent for a
+                                  component-named off-grid value, --color-warning for one with no design
+                                  system variable behind it. */
 
   /* Spacing — 4px scale, plus named off-grid design values */
   --space-1: 4px;

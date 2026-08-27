@@ -20,11 +20,12 @@ multi-field JSON record.
 **#822 shipped storage only — no caller.** [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) is the pairing-path write
 (see [Pairing IPC channel § confirm carries an optional host label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823)),
 [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) is the IPC read path back to the
-window (see [Host-label channel](host-label-channel.md)), and [#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)
-is the field that collects the label (see [Pairing input screen § host name field](pairing-input-screen.md#host-name-field-825)) —
-all three now shipped. Still open: the sidebar
-row that renders it ([#826](https://github.com/pyrycode/pyrycode-desktop/issues/826)), and the
-erase-on-unpair ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)).
+window (see [Host-label channel](host-label-channel.md)), [#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)
+is the field that collects the label (see [Pairing input screen § host name field](pairing-input-screen.md#host-name-field-825)),
+and [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) is the renderer store the read path
+now fills (see [Host-label window store](host-label-window-store.md)) — all four now shipped. Still
+open: the sidebar row that renders it ([#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)),
+and the erase-on-unpair ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)).
 
 ## What it does
 
@@ -185,9 +186,11 @@ secure-store consumers — not a secret — so its review reads differently from
   now bounds the length again at the [IPC read boundary](host-label-channel.md), against the same
   constant, and [#825](https://github.com/pyrycode/pyrycode-desktop/issues/825) bounds it a third time at the
   [input field](pairing-input-screen.md#host-name-field-825) — the same imported constant at every layer, per its
-  own doc comment. Remaining owner: [#826](https://github.com/pyrycode/pyrycode-desktop/issues/826) must render
-  it as escaped text only — never `dangerouslySetInnerHTML`, an attribute, a URL, a filename, or a
-  lookup key (CLAUDE.md, operator ruling 2026-08-20).
+  own doc comment. [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) held the value
+  verbatim through the store with no fourth check. Remaining owner:
+  [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) must render it as escaped text only —
+  never `dangerouslySetInnerHTML`, an attribute, a URL, a filename, or a lookup key (CLAUDE.md, operator
+  ruling 2026-08-20).
 - **No new credential risk.** Adding a third name to a chain that already holds a bearer token
   (`pyrycode.paired_server`) and a static private key (`pyrycode.device_static`) is closed
   structurally: `HOST_LABEL_NAME` is a distinct constant, `clear()` deletes by the injected `name`
@@ -259,7 +262,10 @@ secure-store consumers — not a secret — so its review reads differently from
 - [Pairing input screen](pairing-input-screen.md#host-name-field-825) / [#825](https://github.com/pyrycode/pyrycode-desktop/issues/825) — the
   paste-phase field the operator types the label into; the renderer-side normalisation (trim,
   collapse whitespace-only to no label) that decides what actually reaches `save`.
-- Downstream, not yet built: the sidebar host row ([#826](https://github.com/pyrycode/pyrycode-desktop/issues/826)), and
+- [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
+  the renderer store the read path now fills. This module's main-process persistence and that module's
+  window-side state share a name-root, not a layer.
+- Downstream, not yet built: the sidebar host row ([#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)), and
   erase-on-unpair ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)) — the last of which must also clear the stale label
   left behind by an unpair, since [#173](../codebase/173.md)'s unpair clears only
   `pairedServerStore` (flagged in #823's spec, Open question 1).

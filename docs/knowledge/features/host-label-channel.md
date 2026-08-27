@@ -9,9 +9,10 @@ channel](unpair-channel.md) (#173) / [server-info channel](server-info-channel.m
 four-layer shape (shared contract, main handler, preload bridge, composition-root registration), same
 injected-target / stateless-handler / classify-don't-forward discipline. [#822](https://github.com/pyrycode/pyrycode-desktop/issues/822)
 built the store, [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) wired its write path
-into pairing confirm; this ticket is the read half. Ships with **no caller** — the renderer store and
-the sidebar host row that will call `window.pyry.hostLabel()` are
-[#826](https://github.com/pyrycode/pyrycode-desktop/issues/826).
+into pairing confirm; this ticket is the read half. Shipped with no caller;
+[#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) gave it one — see
+[Host-label window store](host-label-window-store.md) — and the sidebar host row that renders the value
+is still open as [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).
 
 ## Why a new channel, not `ServerInfo`
 
@@ -216,7 +217,8 @@ renderer window.pyry.hostLabel()  →  ipcRenderer.invoke(HOST_LABEL_CHANNEL)   
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — the fail-closed,
   classify-don't-forward discipline the `catch` implements, and the rule that an unreadable record must
   never be masked as never-stored.
-- Downstream, not yet built: the renderer store and sidebar host row
-  ([#826](https://github.com/pyrycode/pyrycode-desktop/issues/826)), which is also where the
-  never-stored/error fallback and the escaped-text-only rendering rule (CLAUDE.md, operator ruling
-  2026-08-20) get decided.
+- [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
+  the renderer store and one-shot loader that call this channel. **Read the full hand-off there.**
+- Downstream, not yet built: the sidebar host row that mounts the store's binding and renders the
+  value, including the never-stored/error fallback and the escaped-text-only rendering rule (CLAUDE.md,
+  operator ruling 2026-08-20) — [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).

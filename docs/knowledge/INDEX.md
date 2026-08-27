@@ -350,8 +350,25 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   boundary — over-length drops the value whole, no truncation — and is typed against
   `Pick<HostLabelStore, 'load'>`, structurally write/erase-proof. Classify-don't-forward on every
   throw, log-free on every branch. Reuses the same `hostLabelStore` [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)
-  already constructs — no second store. Ships with no caller; the renderer store and sidebar host row
-  are [#826](https://github.com/pyrycode/pyrycode-desktop/issues/826). Architect self-review PASS (#824).
+  already constructs — no second store. Shipped with no caller; [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833)
+  gave it one and the sidebar host row is still open as [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).
+  Architect self-review PASS (#824).
+- [Host-label window store](features/host-label-window-store.md) — the renderer counterpart of
+  [host-label store](features/host-label-store.md): a Zustand store + one-shot loader
+  (`hostLabelStore.ts` / `hostLabelLoader.ts`) filling from `window.pyry.hostLabel()`
+  ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)). Mirrors
+  [server-info store](features/server-info-store.md)'s DI-factory → singleton → hook → selector shape,
+  but the held value is a **four**-arm union (`loading` added ahead of `HostLabelResult`'s three),
+  nested under one field so zustand's shallow-merge `set` can't leak a stale `label` key across a
+  `stored → not-stored` transition (the [new-folder store](features/new-folder-store.md) precedent).
+  The map degrades any unrecognised response to `error` via an unconditional final `return`, never a
+  `not-stored` default, so ADR 0005 holds by construction; a rejected invoke settles to `error`, never
+  `not-stored`, and the loader's returned promise always resolves so nothing can surface as an
+  unhandled rejection. The one-shot guard is pulled out as `startHostLabelLoad` rather than inlined in
+  the effect (unlike `ServerInfoData`) so StrictMode's effect → cleanup → effect sequence is a
+  deterministic, DOM-free test proving AC4 rather than a comment asserting it. Ships dormant — no
+  screen mounts `HostLabelData` here; that is [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).
+  Architect self-review PASS.
 
 ## Architecture
 

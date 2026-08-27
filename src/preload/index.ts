@@ -10,6 +10,7 @@ import {
 import { PAIRING_STATUS_CHANNEL, type PairingStatus } from '../shared/ipc/pairingStatus'
 import { UNPAIR_CHANNEL, type UnpairResult } from '../shared/ipc/unpair'
 import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
+import { HOST_LABEL_CHANNEL, type HostLabelResult } from '../shared/ipc/hostLabel'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -98,6 +99,18 @@ const api = {
    * and ipcRenderer never crosses the bridge. No caller is wired yet — the renderer store is #340.
    */
   serverInfo: (): Promise<ServerInfo> => ipcRenderer.invoke(SERVER_INFO_CHANNEL),
+
+  /**
+   * Ask the background process for the host label the operator typed at pairing time (#822/#823), so
+   * a surface can render the host's own name instead of a generic word (#824). Reads AT-REST state,
+   * so it answers whether or not a connection is live. Request/response (ipcRenderer.invoke) called
+   * with NO second argument — no data leaves the renderer; only the three-outcome union comes back
+   * (stored / not-stored / error), never the token / server key / keychain path, and never a
+   * truncated label. HOST_LABEL_CHANNEL is fixed here so the renderer cannot address arbitrary
+   * channels, and ipcRenderer never crosses the bridge. No caller is wired yet — the renderer store
+   * and the sidebar host row are #826.
+   */
+  hostLabel: (): Promise<HostLabelResult> => ipcRenderer.invoke(HOST_LABEL_CHANNEL),
 
   /**
    * Subscribe to typed daemon events from the background process; returns an unsubscribe

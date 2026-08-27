@@ -2,7 +2,7 @@
 
 The desktop's paste-only pairing screen: the user pastes the payload printed by `pyry pair --print` on pyrybox, reviews the server-key **fingerprint** the background process derives, and explicitly **confirms** to persist the pairing — or **cancels**, discarding the paste. The paste phase renders as a full-window page on desktop's own Figma frame (`103-2901`, [#665](../codebase/665.md)); the fingerprint-review phase is still the renderer equivalent of mobile's "Paste pairing code" dialog (Figma node `19-54`), plus the desktop-specific human fingerprint-verify step mobile's paste path skipped ([#53](pairing-confirmation.md)).
 
-Introduced in [#55](../codebase/55.md); the paste phase restyled onto its own frame in [#665](../codebase/665.md). Lives entirely under `src/renderer/src/screens/pairing/` — it never touches the token, server key, socket, or Noise handshake; those stay in the background process (ADR [0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md "keep the transport out of the window"). It drives the existing [pairing IPC channel](pairing-ipc-channel.md) (#54) and holds only the paste string it collects and the fingerprint/reason it gets back.
+Introduced in [#55](../codebase/55.md); the paste phase restyled onto its own frame in [#665](../codebase/665.md). Lives entirely under `src/renderer/src/screens/pairing/` — it never touches the token, server key, socket, or Noise handshake; those stay in the background process (ADR [0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md "keep the transport out of the window"). It drives the existing [pairing IPC channel](pairing-ipc-channel.md) (#54) and holds the paste string, the optional host label (#825, below), and the fingerprint/reason it gets back.
 
 ## What it does
 
@@ -38,42 +38,116 @@ State and events are discriminated unions on a discriminant field (`phase` / `ty
 
 ```ts
 type PairingState =
-  | { phase: 'editing';    paste: string; error: PairingErrorReason | null }
-  | { phase: 'submitting'; paste: string }
-  | { phase: 'reviewing';  paste: string; fingerprint: string }
-  | { phase: 'confirming'; paste: string; fingerprint: string }
+  | { phase: 'editing';    paste: string; label?: string; error: PairingErrorReason | null }
+  | { phase: 'submitting'; paste: string; label?: string }
+  | { phase: 'reviewing';  paste: string; label?: string; fingerprint: string }
+  | { phase: 'confirming'; paste: string; label?: string; fingerprint: string }
   | { phase: 'paired' }
 ```
 
 `paste` is threaded through `editing → submitting → reviewing → confirming` so a confirm failure can return to `editing` with the paste intact for a one-click retry. It embeds the token, so it is the **only** field that transitively holds a secret — it never leaves this module except via the single `submitPairingPaste` call. `error` lives only on `editing` (the sole phase that renders an inline message); `fingerprint` only on `reviewing`/`confirming`. `paired` is terminal and carries **nothing** — no secret, no record.
 
+`label` (#825) rides the same four phases as `paste`, for the same structural reason: it is typed on the paste phase but sent two phases later, on confirm, so it can't live in a component-local `useState` without splitting AC4 ("cancel discards the label with the paste") across two mechanisms. It is **optional**, not `label: string` defaulting to `''` — it mirrors `PairingRequest`'s own `label?: string` exactly, so state and the wire contract agree that "no label" is an absent key. This keeps the change zero-cascade (every existing `PairingState` literal in both test files still typechecks, and `toEqual` ignores an absent property), and it is safe because exactly one place — `hostLabelToSend`, below — decides whether a label exists at all. `label` is **not** a secret — it is the operator's display name for the host, bound for the [host-label store](host-label-store.md) — but like `paste` it survives `submit-failed`/`confirm-failed` so a retry doesn't make the operator retype it, and dies with the paste on `cancel` via `initialPairingState`.
+
 `pairingReducer(state, event)` is a pure `switch (event.type)` with an `assertNever` exhaustiveness guard (same shape as `reduceSession`). Each arm guards on the current `phase` and returns `state` unchanged for an out-of-phase event (a stray event is a safe no-op).
 
 | Current phase | Event | → Next state |
 |---|---|---|
-| `editing` | `paste-changed{paste}` | `editing{paste, error: null}` (typing clears the prior error) |
-| `editing` | `submit` | `submitting{paste}` |
-| `submitting` | `submit-succeeded{fingerprint}` | `reviewing{paste, fingerprint}` |
-| `submitting` | `submit-failed{reason}` | `editing{paste, error: reason}` (paste preserved) |
-| `reviewing` | `confirm` | `confirming{paste, fingerprint}` |
+| `editing` | `paste-changed{paste}` | `editing{paste, label, error: null}` (typing the code clears the prior error; label carried forward) |
+| `editing` | `label-changed{label}` | `editing{paste, label, error}` (label set verbatim — **not** trimmed here, and **not** clearing `error`; see below) |
+| `editing` | `submit` | `submitting{paste, label}` |
+| `submitting` | `submit-succeeded{fingerprint}` | `reviewing{paste, label, fingerprint}` |
+| `submitting` | `submit-failed{reason}` | `editing{paste, label, error: reason}` (paste and label preserved) |
+| `reviewing` | `confirm` | `confirming{paste, label, fingerprint}` |
 | `confirming` | `confirm-succeeded` | `paired` |
-| `confirming` | `confirm-failed{reason}` | `editing{paste, error: reason}` (paste preserved) |
-| any | `cancel` | `initialPairingState` (paste **discarded**) |
+| `confirming` | `confirm-failed{reason}` | `editing{paste, label, error: reason}` (paste and label preserved) |
+| any | `cancel` | `initialPairingState` (paste **and label discarded**) |
 | any other (phase, event) | — | `state` unchanged |
 
+**`label-changed` is handled only in `editing`** (a stray event elsewhere, e.g. mid-submit, is a no-op) **and deliberately does not clear `error`**, unlike `paste-changed`: editing the pairing code invalidates the complaint about that code, but typing a host name says nothing about it, and wiping the operator's only feedback on an unrelated keystroke would be a regression. The stored value is the raw typed text, never trimmed on the way in — trimming per keystroke would fight the controlled input, since the trimmed value round-trips straight back into `value` and a trailing space could never be typed. Normalisation happens once, at the confirm boundary, below.
+
 **Why `confirm-failed → editing`, not `→ reviewing`:** the main handler consumes its pending record *before* awaiting the persist (#54, consume-before-await). After any confirm failure the pending record is already gone, so a retry must be a **fresh submit** (which re-prepares a new pending record on main). Returning to `editing` with the paste preserved makes that a single Pair click; routing to `reviewing` would offer a Confirm structurally guaranteed to fail with `no-pending-pairing`.
+
+### Host name field (#825)
+
+The paste phase (`EntryPage`) draws a second M3 filled field below the pairing-code field's
+supporting-text slot — the operator's display name for the host they are pairing with, so they are
+not hunting for a settings screen afterwards to name the machine. It reuses the same
+`.pairing-field*` CSS block the code field uses (two new declarations in `pairing.css`: a
+`margin-top` separating the two field groups, and a `padding-right` this field needs but the code
+field doesn't, since the code field's right inset comes from its 48px clear-button slot). It writes
+through the [pairing IPC channel](pairing-ipc-channel.md)'s existing `confirm` request
+(`PairingRequest`'s optional `label`, shipped by #823) to the [host-label store](host-label-store.md)
+(#822); #824 shipped the read path back. This ticket is the one place left in that chain the
+operator can actually type into — renderer-only, no `src/main/` or `src/preload/` change.
+
+**The Figma frame (`103-2901`) draws no such field** — it has exactly one text-field instance,
+re-verified against the file on 2026-08-27. The treatment here is provisional, derived from the code
+field above (the only in-repo reference for a field on this screen) until an updated frame ships;
+the label copy, field order, and the `(optional)` affordance are the three things most likely to
+move when it does.
+
+Two structural omissions from the code field, both intentional:
+
+- **No clear control.** A few hundred base64url characters aren't select-and-delete-able but a short
+  name is; a second control here would also mean a second accessible name to keep clear of the
+  `exact: true` matchers on `Pair`/`Clear pairing code`.
+- **No supporting-text line of its own.** The M3 supporting slot in this hero belongs to the code
+  field and its two keyed branches are untouched; `(optional)` baked into the field's name is the
+  field's only affordance that it may be skipped. The Pair button's enabled condition
+  (`busy || paste.trim() === ''`) stays exactly as it was — the label never gates pairing.
+
+**Attributes, all load-bearing:** `type="text"` (never `password` — the name isn't a secret);
+`aria-label="Host name (optional)"`, matching the visible `aria-hidden` span text (label-in-name),
+chosen to contain neither the substring `aria-label="Pairing code"` nor the exact names `Pair` /
+`Clear pairing code`, so it joins none of the six outside consumers' match sets that
+[#664](../codebase/664.md) swept onto the raw `aria-label` attribute; `maxLength={MAX_HOST_LABEL_LENGTH}`,
+**imported** from `@shared/ipc/pairing` and never restated as a literal, since a field bound
+disagreeing with the IPC guard's write bound would let a value pass one boundary and fail the
+other; `autoComplete="off"` and `spellCheck={false}`, matching the code field's secret-hygiene
+posture even though this field carries no secret, because the exposure this ticket introduces is
+structural, not content-based (see below); and — like the code field — **no `name`, no `id`, no
+`<form>` ancestor**. The two inputs stay siblings under the hero div.
+
+**Secret hygiene, restated for a second field.** `PairingScreen.tsx`'s header names the risk placing
+a second input beside a bearer-token field creates: a `<form>` ancestor, or a `name`/`id` on either
+input, can make a password manager read the pair as a credential form and capture the pairing code.
+Neither input carries any of the three; `PairingScreen.test.tsx` pins this with a regex over the
+rendered `<input` tags (a bare `' name="'` substring match would have been a trap, since the
+accessible name itself contains the word "name"). A mis-paste of the pairing payload into this field
+instead is accepted as a residual risk, not defended against: `maxLength` truncates it, it is only
+ever sent alongside a *successful* confirm (which requires the real payload in the code field too —
+a double mistake), and the sink is AEAD-encrypted at rest and log-free by construction. See the
+architecture spec's security review for the full ruling.
+
+### Normalisation at the confirm boundary
+
+`hostLabelToSend(label: string | undefined): string | undefined` is a **module-private** helper in
+`pairingState.ts` (not exported — `runConfirm` is the tested seam): returns the label trimmed of
+surrounding whitespace, or `undefined` when it is absent or trims to empty. Trimming can only
+shorten a value, so one that already passed the field's `maxLength` cannot exceed the IPC guard's
+bound. The empty-string collapse is load-bearing, not cosmetic: the preload omits the `label` key
+entirely for `undefined` and includes it for everything else, and main saves whatever is present
+verbatim (`''` included) — so without this collapse, clearing the field would store an empty name
+rather than no name at all.
 
 ### Effect-runners + injected bridge
 
 ```ts
 interface PairingBridge {
   submitPairingPaste(paste: string): Promise<PairingSubmitResponse>
-  confirmPairing(): Promise<PairingConfirmResponse>
+  confirmPairing(label?: string): Promise<PairingConfirmResponse>
 }
 
-runSubmit(bridge, paste): Promise<PairingEvent>   // ok → submit-succeeded{fingerprint}; !ok → submit-failed{reason}
-runConfirm(bridge):       Promise<PairingEvent>   // ok → confirm-succeeded;             !ok → confirm-failed{reason}
+runSubmit(bridge, paste):        Promise<PairingEvent>   // ok → submit-succeeded{fingerprint}; !ok → submit-failed{reason}
+runConfirm(bridge, label?):      Promise<PairingEvent>   // ok → confirm-succeeded;             !ok → confirm-failed{reason}
 ```
+
+`confirmPairing` and `runConfirm` both widened by one optional argument in #825, backward-compatibly:
+a zero-argument call site still typechecks, so no pre-#825 fake or call needed an edit. `runConfirm`
+calls `bridge.confirmPairing(hostLabelToSend(label))` — passing an explicit `undefined` is
+indistinguishable from passing nothing at the preload, which branches on `label === undefined` and
+omits the key entirely (#823). Everything else about the total-function contract below is unchanged.
 
 The two IPC calls are wrapped in pure async functions that map a typed response to the reducer event it produces — the tested seam that proves "submit invokes the IPC" and "confirm triggers persist" without a DOM. `PairingBridge` is the injected seam; **`window.pyry` is structurally assignable** to it (it has these two methods plus extras from #54), so the container defaults `bridge = window.pyry` and tests pass a `{ submitPairingPaste: vi.fn(), confirmPairing: vi.fn() }` fake. The preload methods resolve to a typed response for *every* domain outcome (they don't reject on a domain error) — that part maps outside any `try`.
 
@@ -100,8 +174,8 @@ The two IPC calls are wrapped in pure async functions that map a typed response 
   - a supporting-text slot below the field holding **either** the instruction (`Run pyry pair --print on your server and paste the output here.`) **or** the mapped error, never both — rendered as two `<p>` elements with **distinct `key`s** (`key="instruction"` / `key="error"`), not a single element whose `role` toggles. This is load-bearing, not stylistic: two same-tag JSX branches at the same position with no key reconcile to *one* DOM node in React, so an unkeyed version was mutating a live node's `role` to `alert` in the same commit that changed its text — an insert-vs-mutate distinction screen readers do not reliably announce. See [#665 codebase notes](../codebase/665.md) for the full reconciliation trace.
   - a three-row CTA stack: the `Pair` pill (full-width, disabled while `paste` is empty/whitespace or while `busy`, shows `Pairing…` in flight), a bare `Cancel` text row, and the `Open source · github.com/pyrycode/pyrycode-desktop` footer.
 
-  No heading — the frame draws none, and the renderer has no visually-hidden utility to compensate with; the screen is left navigable by its one named field and two named buttons.
-- **`PairingScreen`** — the thin container: `const [state, dispatch] = useReducer(pairingReducer, initialPairingState)`, plus handlers that dispatch the intent then dispatch the awaited runner result. Async is **handler-driven, not effect-driven** — there is no `useEffect`, so no StrictMode double-invoke concern (the deliberate divergence from `daemonEventBridge`, which subscribes for its display lifetime). `onConfirm` fires `onPaired?.()` on `confirm-succeeded`; `onCancel` fires `onCancel?.()`.
+  No heading — the frame draws none, and the renderer has no visually-hidden utility to compensate with; the screen is left navigable by its named fields (since #825, two: the pairing code and the optional host name) and two named buttons.
+- **`PairingScreen`** — the thin container: `const [state, dispatch] = useReducer(pairingReducer, initialPairingState)`, plus handlers that dispatch the intent then dispatch the awaited runner result. Async is **handler-driven, not effect-driven** — there is no `useEffect`, so no StrictMode double-invoke concern (the deliberate divergence from `daemonEventBridge`, which subscribes for its display lifetime). `onConfirm` fires `onPaired?.()` on `confirm-succeeded`; `onCancel` fires `onCancel?.()`. `handleLabelChange` (#825) dispatches `label-changed`; `handleConfirm` captures `const label = state.label` before its `dispatch({ type: 'confirm' })` — the same before-the-await discipline `handleSubmit` uses for `paste` — and calls `runConfirm(target, label)`.
 
 **Error-reason → inline copy** is a value-free `Record<PairingErrorReason, string>` in the view — the five coarse #54 categories mapped to fixed copy, no interpolation of any inbound value:
 
@@ -146,13 +220,19 @@ The field's keyboard-focus indicator is an **outset** `box-shadow` on `:focus-wi
 - **`paired` renders a success marker** ("Paired ✓"), but the [app shell](app-shell.md) unmounts this screen the moment `onPaired` fires ([#80](../codebase/80.md)) — `confirm-succeeded` both flips the reducer to `paired` and calls `onPaired`, and `App`'s `setRoute('conversation')` swaps the screen out — so the marker is effectively superseded by navigation rather than lingering.
 - **Container interaction is not click-simulated** — no DOM harness. The interaction is proven on the pure `runSubmit`/`runConfirm`/`pairingReducer` seams; only the thin container glue is untested (the precedented gap, mirroring `useDaemonEventBridge`). The clear control's click is likewise unexercised at the test tier for the same reason — a recorded gap, not an oversight ([#665](../codebase/665.md)).
 - **Dark scheme only.** As of [#665](../codebase/665.md) the paste phase (`editing`/`submitting`) is a full-window page on its own Figma frame (`103-2901`); the reviewing/confirming/paired phases are still the 420px dialog card. The flow is deliberately inconsistent between the two treatments until the confirm phase gets its own frame — recorded as an accepted, temporary state, not a bug. Its placement in the app is decided by the [app shell](app-shell.md): as of [#662](../codebase/662.md) it is reached by user action (no longer the unpaired app root, which is now [welcome](welcome-screen.md)), not a dialog over another screen.
+- **The host name field (#825) has no failure mode of its own.** It is a string that is either sent
+  or not; a `hostLabel.save` failure in main is deliberately not reported as a failed pairing
+  (`pairingHandler.ts`'s confirm arm), so there is no new `PairingErrorReason` and nothing new for
+  the supporting slot to show. Editing the label is #826/settings territory — this field writes
+  once, at confirm.
 - **Mutually exclusive same-tag JSX siblings need distinct `key`s if either carries insertion-only semantics** (e.g. `role="alert"`). Without a key, React reconciles both branches to one DOM node and mutates it instead of replacing it — see [#665 codebase notes](../codebase/665.md) for the full trace; the fix here is only complete because the reducer forces `error` to `null` between any two errors, so the slot provably alternates and two same-key errors in a row can't occur.
 
 ## Related
 
 - [App shell](app-shell.md) / [#80](../codebase/80.md), [#662](../codebase/662.md) — the router that mounts this screen on a user-initiated pair request (was: on any unpaired launch) and consumes both its `onPaired` and, since #662, `onCancel` seams.
 - [Welcome screen](welcome-screen.md) / [#662](../codebase/662.md) — the screen this one now follows in the app shell's routing; `onCancel` returns there.
-- [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — the typed request/response channel + preload methods this screen drives; the held-state model behind `confirm-failed → editing`.
+- [Pairing IPC channel](pairing-ipc-channel.md) / [#54](../codebase/54.md) — the typed request/response channel + preload methods this screen drives; the held-state model behind `confirm-failed → editing`. [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) added `confirm`'s optional `label`, which #825 (above) is the last leg of.
+- [Host-label store](host-label-store.md) / [#822](https://github.com/pyrycode/pyrycode-desktop/issues/822) — where the label typed here (#825) ends up, via the confirm write path (#823); [Host-label channel](host-label-channel.md) / [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) is the read path back.
 - [Pairing-confirmation](pairing-confirmation.md) / [#53](../codebase/53.md) — where the 23-char fingerprint is derived; the human-verify step this screen presents.
 - [Pairing-payload gate](pairing-payload-gate.md) / [#52](../codebase/52.md) — the parse + relay-allowlist stage behind the submit path.
 - [Session store](session-store.md) / [Daemon-event bridge](daemon-event-bridge.md) — the pure-reducer / untested-wiring precedent this screen mirrors.

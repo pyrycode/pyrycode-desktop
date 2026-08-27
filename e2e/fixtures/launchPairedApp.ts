@@ -104,6 +104,15 @@ export type LaunchControl = {
    *  teardown is registered here: the minting launch already registered one, so the dir is removed
    *  exactly once, after every launch on it is closed (the end-of-test LIFO drain). */
   reuseUserDataDir?: string
+  /** Type this operator host name into the pairing form's optional Host-name field before Pair (#834),
+   *  so the sidebar host row renders a real name instead of the fallback word. Absent = the default: no
+   *  label typed, so every other spec's sidebar keeps reading the fallback and is structurally
+   *  unaffected. INERT alongside `reuseUserDataDir`, which skips the pairing drive entirely — the label
+   *  would then come from whatever the reused dir already persisted. No runtime guard: the two options
+   *  have no reason to be combined, and a throw here would be a new failure mode for no observed
+   *  mistake. Lives on `LaunchControl` (launch lifecycle) rather than `LaunchPairedAppOptions`, which is
+   *  daemon-reply knobs only. */
+  hostLabel?: string
 }
 
 /** The handle a spec receives. On the default drive: the window on the connected conversation thread.
@@ -213,7 +222,9 @@ export const test = base.extend<PairedAppFixtures>({
         server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64')
       })
 
-      await pairFromUnpairedLaunch(page, payload)
+      // `control.hostLabel` is undefined for every caller but #834's spec, and the arrival step's third
+      // parameter is optional — so the default drive is byte-identical to what it was.
+      await pairFromUnpairedLaunch(page, payload, control.hostLabel)
 
       // #140: the paired route enters at the ChannelList — drive the one real list→thread step by
       // clicking the seeded row. This is a REAL product-UI navigation (`.channel-list__row-open`,

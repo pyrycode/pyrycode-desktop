@@ -26,9 +26,22 @@
 }
 
 /* Figma Sidebar 103:736 — w-[400px] shrink-0. Neither grows nor shrinks, so the column holds exactly
-   400px at every window width (AC2) and the pane below absorbs the whole delta. */
+   400px at every window width (AC2) and the pane below absorbs the whole delta.
+
+   `min-width: 0` is the SAME load-bearing declaration the pane below carries, and for the same reason
+   read in the other direction: `flex: 0 0 400px` fixes the basis but leaves `min-width: auto`, which
+   floors a flex item at its CONTENT's min-content width — so one unbreakable descendant grows the
+   sidebar PAST 400 no matter what the basis says. `.channel-list`'s `overflow-x` (computed `auto`, since
+   its `overflow-y: auto` forces the other axis off `visible`) does not save it: a scroll container's
+   automatic minimum size is 0 for ITSELF, but its min-content CONTRIBUTION to an ancestor is still
+   content-derived. #834 is where that became reachable in practice — the host row now carries an
+   operator-typed name up to MAX_HOST_LABEL_LENGTH (128) with `white-space: nowrap`, whose min-content
+   size is the whole string, which measured ~1063px and took the sidebar with it. `.channel-list__title`
+   and `.channel-list__workspace-label` are nowrap too and had the same latent reach; this pins all
+   three. With the floor lifted, the ellipsize rules inside the sidebar do what they say. */
 .paired-shell__sidebar {
   flex: 0 0 400px;
+  min-width: 0;
   height: 100%;
 }
 

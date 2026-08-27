@@ -12,6 +12,14 @@ import {
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 import { useSessionStore, selectStatus } from '../../store/sessionStore'
 import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkStore'
+// #834's read path, shipped dormant by #833 and mounted here. `HostLabelData` is the headless one-shot
+// invoke; the store binding + selector feed the row. Nothing else in this file touches either.
+import {
+  useHostLabelStore,
+  selectHostLabel,
+  type HostLabelValue
+} from '../../store/hostLabelStore'
+import { HostLabelData } from '../../store/hostLabelLoader'
 // #801's three per-row reads and the two pure modules that reduce them. All five are consumed EXACTLY as
 // shipped: none takes a `conversationId` except the three selector FACTORIES, which is what keeps the
 // untrusted daemon-asserted id a `Map` key and nothing else (conversationStatus.ts:26-31,
@@ -97,6 +105,20 @@ export function ChannelList({
   const [renameName, setRenameName] = useState('')
   return (
     <>
+      {/* #834: the headless one-shot that fills the host row's label, mounted HERE — the SettingsScreen
+          idiom (<ServerInfoData /> beside <ServerRowControl />) applied to the screen that actually
+          renders the row. It renders null, so DOM order is immaterial, and it dereferences `window.pyry`
+          only inside its effect, so this container stays server-renderable (the onNewConversation
+          discipline). The two alternatives both fail: an app-level mount fires once at launch, BEFORE
+          pairing, and never re-runs — leaving the row stale after a same-session pair — and mounting it
+          in SettingsScreen is exactly what AC5 forbids ("with no visit to the Settings screen first").
+          One read per sidebar mount: PairedShell renders ChannelList at the same element position on the
+          `list` and `thread` routes, so React preserves it across that flip and no read fires there; it
+          DOES remount on return from settings / archive / pairServer, which re-reads — correct, since
+          Settings → "Pair another server" is how the label changes mid-session. That remount is also
+          what keeps `hostLabelStore` out of `clearPairingScopedState`: it re-asserts itself on remount,
+          which is that file's stated exclusion (the `serverInfoStore` worked example). */}
+      <HostLabelData />
       <ChannelListView
         conversations={conversations}
         now={now}
@@ -265,15 +287,49 @@ function NewConversationFab({ onClick }: { onClick: () => void }): JSX.Element {
   )
 }
 
-// The host row's visible label (#710) — a client-owned module-level constant in the SERVER_ROW_LABEL /
-// SETTINGS_COPY idiom, never a daemon string. `serverInfoStore` exposes `{ serverId, relayUrl }` one
-// import away and `ServerRow.tsx:37` already renders `serverId`; that is legitimate THERE — Settings is a
-// details surface and the value sits beside a "Server" label — but forbidden here, because this row is a
-// NAME slot, so an opaque identifier in it would read as the machine's name. #688 replaces this constant
-// with the operator-typed label. The word is "Server" rather than the design's "Host" because it is
-// already the app's own user-facing word for this machine (SERVER_ROW_LABEL, "Pair another server"), so
-// the sidebar and Settings → Connection read as one concept rather than two.
-const HOST_ROW_LABEL = 'Server'
+// What the host row shows when there is NO usable operator label (#834) — a client-owned module-level
+// constant in the SERVER_ROW_LABEL / SETTINGS_COPY idiom, never a daemon string. #710 shipped it as the
+// row's only label; #834 demoted it to the fallback and put the operator-typed name in front of it.
+//
+// The word is "Server" rather than the design's "Host" because it is already the app's own user-facing
+// word for this machine (SERVER_ROW_LABEL, "Pair another server"), so the sidebar and Settings →
+// Connection read as one concept rather than two. NOT merged with `ServerRow.tsx`'s SERVER_ROW_LABEL:
+// two screens, two copy constants, deliberately — a shared one would couple two surfaces' copy through
+// a cross-screen import for a six-character string.
+//
+// What is still forbidden here is `serverId`. `serverInfoStore` exposes `{ serverId, relayUrl }` one
+// import away and `ServerRow.tsx:37` already renders `serverId`; that is legitimate THERE — Settings is
+// a details surface and the value sits beside a "Server" label — but not here, because this row is a
+// NAME slot, so an opaque identifier in it would read as the machine's name.
+const HOST_ROW_FALLBACK_LABEL = 'Server'
+
+/**
+ * The whole of AC2: four store arms and one stored VALUE collapse to the fallback word (#834).
+ *
+ * Returns the operator's label only when one was read AND it has non-whitespace content; `loading`,
+ * `not-stored`, `error` and a `stored` label that renders blank all yield `HOST_ROW_FALLBACK_LABEL`.
+ *
+ * Three decisions this function owns, none of them a type error if reversed:
+ *
+ *  - `loading` FALLS BACK TO THE SAME WORD, never to a 'Loading…' placeholder. This is the one place
+ *    `ServerRow`'s precedent must NOT be copied: Settings' server row shows a value in a details list,
+ *    where a placeholder reads as "not fetched yet"; this is a NAME slot, and a placeholder in it reads
+ *    as the machine's name. The pre-settle window is a tick, and showing the generic word for that tick
+ *    is indistinguishable from the not-stored steady state — correct, because both mean "no name yet."
+ *  - THE PREDICATE TRIMS; THE DISPLAYED LABEL IS VERBATIM. `''` is the case AC2 names, and a
+ *    whitespace-only label is the same case by the same argument — AC2 says the row must not render
+ *    blank, and `'   '` renders blank. The trim decides WHETHER to fall back and never touches WHAT is
+ *    shown, so the row never displays a value that differs from what is stored.
+ *  - NOTHING SLICES. A 128-character label is returned whole; the truncation AC4 asks for is CSS
+ *    (`.channel-list__host-label`), so the accessible text stays complete.
+ *
+ * No `console.*`, here or anywhere on this path: the label is operator-typed content, and a fallback is
+ * not an event — there is nothing to report that would not carry the value itself.
+ */
+export function hostRowLabel(value: HostLabelValue): string {
+  if (value.status === 'stored' && value.label.trim() !== '') return value.label
+  return HOST_ROW_FALLBACK_LABEL
+}
 
 // The host row heading each tree (Figma 106:3094) — which machine the tree's conversations live on. It is
 // rendered INSIDE each section's existing `length > 0` gate, so "a tree with zero rows renders neither a
@@ -294,13 +350,35 @@ const HOST_ROW_LABEL = 'Server'
 // `.channel-list__row-open` and 28 specs ride that fixture. The two guards are independent, and neither
 // requires touching a single file under `e2e/`.
 //
-// Deliberate asymmetry: the STRUCTURAL naming stays "host" (the design's word, and what #672/#688/#703
-// stack onto) — class names are selectors, not copy. The one word the user sees is "Server".
+// Deliberate asymmetry: the STRUCTURAL naming stays "host" (the design's word, and what #672/#703 stack
+// onto) — class names are selectors, not copy. The `label` prop's VALUE is the one thing the user sees.
+//
+// #834 made this the PURE VIEW and put `HostRowControl` below it, mirroring `HostConnectionDots` /
+// `HostConnectionDotsControl` twenty lines down. EXPORTED for that neighbour's stated reason: a zustand
+// singleton seeded before a `renderToStaticMarkup` call is invisible to it (the server renderer reads
+// `getServerSnapshot()`, wired to the state captured at store CREATION), so the container can only ever
+// render the initial `loading` cell and this is the only seam the unit tier reaches the four-arm matrix
+// through. "Pure" in the same qualified sense its neighbour already is: it takes its own data as props;
+// its dot subtree reads two singletons.
+//
+// `label` is UNTRUSTED text off disk (`hostLabelHandler.ts:69-71` hands the "escaped text only"
+// obligation here) and it goes in as an auto-escaped React CHILD and NOWHERE else. Four sinks are
+// declined on purpose, each a MUST FIX if it ever appears — the same four `WorkspaceRow` below declines
+// for the same reason, and the first is the live one here:
+//   - NO title. The label now ELLIPSIZES (channels.css), which makes `title={label}` ("hover for the
+//     rest") the natural next edit; it is the exact shape #696's security review made a MUST FIX. The
+//     full name staying undiscoverable on hover is accepted — Settings → Connection is where a machine's
+//     details belong.
+//   - NO aria-label. The row is not interactive and the text child already names it; an attribute built
+//     from the label would interpolate untrusted text into an attribute for no gain.
+//   - NO id / key / lookup path derived from it, and no CSS custom property fed from it.
+//   - NO log line. Any useful one carries the label — operator content in a log, which ADR 0007's
+//     content-free rule and CLAUDE.md both forbid. This row emits none.
 //
 // The glyph is a sixth inline Material path in this file's existing idiom — the `dns` server-rack, sized
 // 12px per the Figma node rather than the 24px the interactive buttons use, so it reads as a level marker
 // rather than a control.
-function HostRow(): JSX.Element {
+export function HostRow({ label }: { label: string }): JSX.Element {
   return (
     <div className="channel-list__host">
       <svg
@@ -313,10 +391,20 @@ function HostRow(): JSX.Element {
       >
         <path d="M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
       </svg>
-      <span className="channel-list__host-label">{HOST_ROW_LABEL}</span>
+      <span className="channel-list__host-label">{label}</span>
       <HostConnectionDotsControl />
     </div>
   )
+}
+
+// The store-bound container (#834) — `HostConnectionDotsControl`'s posture one component up: read the
+// single shipped slice, pass it through the pure collapse, render the pure view. Nothing else. The row
+// READS and never writes; `setHostLabel` keeps exactly one caller, the loader mounted in `ChannelList`.
+// Module-private like its neighbour: production renders it from `renderBody` alone, and the unit tier
+// reaches everything it can prove through `hostRowLabel` and `HostRow` instead.
+function HostRowControl(): JSX.Element {
+  const hostLabel = useHostLabelStore(selectHostLabel)
+  return <HostRow label={hostRowLabel(hostLabel)} />
 }
 
 /**
@@ -553,7 +641,7 @@ function renderBody(
       {channels.length > 0 && (
         <>
           <header className="channel-list__section-header">Channels</header>
-          <HostRow />
+          <HostRowControl />
           {/* Saved Channels are already promoted — they pass no onSaveAsChannel (that affordance is Recent-
               only), but they DO pass onRename, so each saved Channel row carries a Rename affordance (#360,
               AC1) — the symmetric counterpart to Save-as-channel on Recent rows.
@@ -593,7 +681,7 @@ function renderBody(
       {discussions.length > 0 && (
         <>
           <header className="channel-list__section-header">Chats</header>
-          <HostRow />
+          <HostRowControl />
           {/* Chats rows pass the affordance so each row can be saved as a channel (#274, AC1). The
               header reads "Chats" (#709, Figma 106:3258); the code-level partition is still
               `discussions` — renaming that vocabulary was explicitly out of scope.

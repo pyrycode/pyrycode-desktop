@@ -75,18 +75,42 @@ One-line summaries of the evergreen docs. The documentation phase appends here.
 - [Paired shell (list ⇄ thread ⇄ settings ⇄ archive router)](features/paired-shell.md) — the second-level router under the app shell's `conversation` route, mirroring the `appRoute.ts`/`AppView` split: a pure `PairedRoute = 'list' | 'thread' | 'settings' | 'pairServer' | 'archive'` model + `nextPairedRoute` transition (`pairedRoute.ts`) and a `PairedShellView`/`PairedShell` pure-view+`useReducer`-container pair (`PairedShell.tsx`, ADR 0006). The paired region enters at a `list` view (initially a throwaway placeholder; now the real [Channel List](features/channel-list.md), #141) instead of dropping straight into the thread; opening it mounts the existing [conversation shell](features/conversation-shell.md), which gained an optional `onBack?` back affordance (Figma 16-9 `arrow_back`, the `onUnpaired?` precedent). The `open` transition gained a second trigger — the [new-discussion FAB](features/new-discussion-fab.md)'s `useConversationCreatedNav` hook, mounted in the `PairedShell` container, dispatches it on a daemon-confirmed `conversationCreated` event (#242). That callback's `created` payload — previously received and discarded — is now also snapshotted into a new `activeConversationStore` before the `open` dispatch, feeding the [conversation shell](features/conversation-shell.md)'s workspace chip; no new subscription, no new nav arm (#278, see [codebase notes](codebase/278.md)). #333 added the third route, `settings` (reached via a new `openSettings` nav arm and a new Settings entry button on the Channel List), reusing the pre-existing absolute `back` arm unchanged for the return trip — see the [Settings screen](features/settings-screen.md) doc. Not security-sensitive. Code review PASS, no findings (#140, #333). [#152](codebase/152.md) added a fourth route, `pairServer`, reached from a new "Pair another server" row in Settings; it renders the pre-existing [pairing screen](features/pairing-input-screen.md) with its production `window.pyry` default, and — unlike every prior route — has **two** distinct exit arms rather than reusing `back`: `pairServerCancelled` returns to `settings` (non-destructive, current server stays paired) and `pairServerPaired` goes to `list` (the freshly-paired server's home), since the two exits' destinations only coincidentally match `back`'s today and would diverge under a future stack-aware `back`. Security-sensitive (architect self-review PASS): no new IPC/store/crypto, navigation only, over the already-vetted #54/#55 pairing surface. Code review PASS, no findings (#152). [#347](codebase/347.md) added a fifth route, `archive` — a chrome-only scaffold reached from a new entry button sharing the Channel List's top-right actions cluster with Settings — reusing the pre-existing absolute `back` arm unchanged for the return trip, the same #333-proven economy (adding a route needs no matching new `back` case when `back` never inspects `current`); both tab bodies shipped empty as [#348](codebase/348.md)'s mount point. Not security-sensitive, no new store/IPC/wire. Code review PASS, no findings (#347). [#348](codebase/348.md) then filled both tab bodies with live per-tab archived counts and restore rows, reading the already-live [conversation list store](features/conversation-list-store.md) and dispatching #346's previously-dormant `unarchiveConversation` command on restore, its first caller. See the [Archive screen](features/archive-screen.md) doc. Not security-sensitive. Code review PASS, no findings (#348). [#393](codebase/393.md) added a **third** `open` trigger, sibling to #242's: `useNotificationActivatedNav`, mounted beside `useConversationCreatedNav`, dispatches `open` on a clicked [push notification](features/push-notifications.md#clicking-the-notification-393) (a new, main-local, nullary `notificationActivated` `DaemonEvent`) — no new route or arm needed, since `open` was already absolute; unlike the FAB trigger, no `setActiveConversation` call (the click carries no payload). Not security-sensitive, not UI-visible. Code review PASS, no findings (#393). [#392](codebase/392.md) mounted a fourth, headless daemon-event subscriber alongside these three nav-dispatching ones — `usePushNotify` (see [Push notifications](features/push-notifications.md)) — which dispatches no nav and holds no route; it only sends a command, so `PairedRoute`/`nextPairedRoute`/`PairedShellView` are all untouched. Not security-sensitive, not UI-visible. Code review PASS, no findings (#392).
 - [Channel List home screen](features/channel-list.md) — the paired shell's real `list` view (mirror mobile #312), replacing the #140 `PlaceholderList`: a pure render slice over the already-shipped [conversation list store](features/conversation-list-store.md), splitting rows by `is_promoted` into **Channels** above **Chats** (labelled "Recent discussions"
 until the desktop-design relabel, [#709](codebase/709.md)), each showing a title (`'Untitled'` fallback for `null`/blank `name`) and a last-activity relative time bucketed from `last_message_ts` (the wire carries no message text, so both Figma row shapes collapse to one title+time row — flagged to @Juhana as needing a daemon+wire change to add previews). Pure `channelListViewModel.ts` (`titleFor`/`partitionByPromotion`/`formatLastActivity`, injected `now`) + a container/pure-view split (`ChannelList`/`ChannelListView`, the #203/#218 pattern) + token-only `channels.css`, adding a new `--text-title-medium-*` token. `.channel-list` uses `height: 100%` rather than the spec's `flex: 1 1 auto` — a documented, code-review-verified deviation, since it mounts directly under `#root` with no flex wrapper. Every row opens the shell's single active conversation (per-row select-and-load needs a transport path that doesn't exist yet). Not security-sensitive, no new transport/store/wire code. Code review PASS, one non-blocking a11y NIT (#141). Each Recent row gained a trailing [Save-as-channel](features/save-as-channel-dialog.md) affordance (absent on saved Channel rows); `Row` was restructured from a single `<button>` into a `.channel-list__row` flex wrapper around two sibling buttons (`.channel-list__row-open` + the optional `.channel-list__save`), since an interactive control can't nest inside a button (#274). A pinned top-right gear-glyph Settings entry button was added as a further sibling of the rows/FAB, present in all three list states (#333). [#347](codebase/347.md) added a second, leading Archive entry button (Material `archive`-box glyph, `aria-label="Archive"`) alongside it; since two independent sticky top-right children would have stacked awkwardly, both buttons now share one sticky flex-row `.channel-list__actions` cluster (Archive leading, Settings trailing — conventional gear-rightmost). See the [Archive screen](features/archive-screen.md) doc. Each saved Channel row gained a trailing [Rename](features/rename-conversation-dialog.md) affordance (`.channel-list__rename`, absent on Recent rows — the symmetric counterpart of Save-as-channel), a second optional sibling on the same `Row` (#360). [#469](codebase/469.md) fixed a latent #366 regression ("Gap B", first documented by [#440](codebase/440.md)/[#452](codebase/452.md)): `renderBody` never filtered `is_archived`, so archived conversations rendered in both this list and the [Archive screen](features/archive-screen.md) at once. New `partitionActive` (the dual of `archiveViewModel.partitionArchived`) drops archived rows before the promotion split; the empty-state guard moved to key off the post-filter partition, so an all-archived store shows "No conversations yet" instead of a blank body. Renderer-only, no store/transport/wire change. No code-review findings (#469). Each present tree
-now heads with a **host row** — a module-local, nullary `HostRow`, the file's sixth inline-glyph
-idiom instance — rendered once per tree *inside* the same `length > 0` gate that decides the
-section header, so a zero-row tree still renders neither; the row repeats in both trees on purpose
-(operator-confirmed, not deduplicated) and shows a client-owned `'Server'` placeholder label, never
-`serverInfoStore`'s `serverId` and never the Figma node's own placeholder machine name ("Pyrybox").
-Its class names (`channel-list__host`/`__host-icon`/`__host-label`) share no token or substring
-with `channel-list__row`/`__row-open`/`__section-header`, and the label contains neither "Channels"
+now heads with a **host row** — the file's sixth inline-glyph idiom instance — rendered once per
+tree *inside* the same `length > 0` gate that decides the section header, so a zero-row tree still
+renders neither; the row repeats in both trees on purpose (operator-confirmed, not deduplicated).
+Shipped in #710 showing a client-owned `'Server'` placeholder label, never `serverInfoStore`'s
+`serverId` and never the Figma node's own placeholder machine name ("Pyrybox"). Its class names
+(`channel-list__host`/`__host-icon`/`__host-label`) share no token or substring with
+`channel-list__row`/`__row-open`/`__section-header`, and the label contains neither "Channels"
 nor "Chats" — closing by construction the two Playwright strict-mode hazards the ticket exists to
 avoid (the unfiltered `.channel-list__row-open` click 28 specs ride at fixture launch, and the two
 promote specs' `.channel-list__section-header` + `hasText` locators). Zero `e2e/` files edited; the
 40/40 default-tier suite passing unchanged is the proof. Renderer-only, no store/IPC/wire. Code
-review PASS, one non-blocking NIT (#710, see [codebase notes](codebase/710.md)). Below each host
+review PASS, one non-blocking NIT (#710, see [codebase notes](codebase/710.md)).
+[#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) put the operator's stored label on
+the row in place of that placeholder: `HostRow` became an exported pure view (`{ label: string }`
+prop) with a thin `HostRowControl` container beside it (the `HostConnectionDots` split, reused for
+the reason that comment already states — a zustand singleton seeded before `renderToStaticMarkup`
+is invisible to it), and a new exported `hostRowLabel(value: HostLabelValue): string` collapses the
+[host-label window store](features/host-label-window-store.md)'s four arms — `loading`,
+`not-stored`, `error`, and a `stored` label with no non-whitespace content — onto the renamed
+`HOST_ROW_FALLBACK_LABEL = 'Server'`; a `loading` value falls back to that same word rather than a
+"Loading…" placeholder, since this is a name slot and a placeholder in it would read as the
+machine's name. `<HostLabelData />` (shipped dormant by #833) now mounts in the `ChannelList`
+container, giving one read per sidebar mount with a re-read on remount from
+`settings`/`archive`/`pairServer` — the mount-site question #833 left open, resolved here rather than
+app-level (would predate pairing, never re-run) or in Settings (which the AC forbids visiting
+first). `.channel-list__host-label` gained an ellipsize treatment (three of
+`.channel-list__workspace-label`'s four declarations, deliberately minus `flex-grow` so
+`.channel-list__host-status`'s `margin-left: auto` keeps pinning the connection dots), bounded at
+`MAX_HOST_LABEL_LENGTH` (128). A companion fix, landed as its own commit (d6fdc3a) touching
+`pairedShell.css` rather than this screen's own files: `.paired-shell__sidebar` was missing the
+`min-width: 0` its neighbour pane already carried, so a 128-character `nowrap` label's min-content
+width (measured ~1063px) grew the sidebar itself before the label ever got to ellipsize — see
+[Paired shell](features/paired-shell.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
+Not security-sensitive per se, but security-reviewed as the ticket carried `security-sensitive`:
+label reaches the DOM only as an escaped React text child, no `title`/`aria-label`/`id`/log built
+from it. Code review / PR #837, no MUST FIX. Below each host
 row, rows now group by **workspace** — one group per distinct `cwd` (a workspace *is* a
 conversation's cwd, the daemon has no separate concept), each headed by a `WorkspaceRow` one
 indent deeper than the host row (Figma `106:3098`); both trees group independently. Two new pure
@@ -366,9 +390,13 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `not-stored`, and the loader's returned promise always resolves so nothing can surface as an
   unhandled rejection. The one-shot guard is pulled out as `startHostLabelLoad` rather than inlined in
   the effect (unlike `ServerInfoData`) so StrictMode's effect → cleanup → effect sequence is a
-  deterministic, DOM-free test proving AC4 rather than a comment asserting it. Ships dormant — no
-  screen mounts `HostLabelData` here; that is [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).
-  Architect self-review PASS.
+  deterministic, DOM-free test proving AC4 rather than a comment asserting it. Shipped dormant — no
+  screen mounted `HostLabelData` in this ticket. Architect self-review PASS.
+  [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) mounted it, in `ChannelList`, and
+  gave it its first reader (`HostRowControl`, via `hostRowLabel`) — see the
+  [Channel List home screen](features/channel-list.md) entry above and
+  [host-label-window-store.md](features/host-label-window-store.md) for the resolved mount-site and
+  the remount-driven fix to the store's previously-open post-unpair staleness edge case.
 
 ## Architecture
 

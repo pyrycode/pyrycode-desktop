@@ -3058,3 +3058,108 @@
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
 }
+
+/* #838 — the composer footer's shared options panel (Figma node 121:3879, "Options overlay"). ONE surface
+   that #680 Actions, #682 permission mode, #683 model and effort, and #694's slash-command type-ahead all
+   open, so none of them builds its own. This slice is the resting appearance only: #839 places it (so NO
+   position and no offsets here — the panel cannot be an in-flow child of .composer__footer, which holds a
+   hard height: 20px) and #840 opens it.
+
+   NO explicit z-index, for the reason .conversation__overflow's comment records above (#276): once #839
+   positions it, the panel already paints above the non-positioned message thread, and the status-sheet /
+   permission-modal overlays — also positioned but later in the child list — keep painting above it by DOM
+   order. A competing z-index would lift it above those overlays, which is the stacking regression.
+
+   Not a variant of .conversation__overflow-menu, whose treatment is a LIGHT surface-container card with an
+   outline border, --radius-md corners and label-large rows. Only its button reset and its no-z-index
+   reasoning are copied here; none of its visual treatment is.
+
+   The fill nesting is the Figma's, collapsed: the node paints Schemes/On Primary on the frame and
+   Schemes/On Primary Fixed on four of its five rows, the fifth (the current value) left unfilled to let
+   the frame show through. Painting the DARK fill on the panel and the light one on the current row alone
+   is the same picture in two declarations instead of six, and it is what AC1 pins. The one visible
+   consequence is that the 2px bands top and bottom take --color-on-primary-fixed rather than
+   --color-on-primary; two near-identical navies, and a deliberate trade.
+
+   padding: 2px 0 is a LITERAL, not a new --space-* token: gap: 2px is already established in this
+   stylesheet (2031, 2102, 2598, 2959) and in settings.css. With no global box-sizing reset in this repo
+   (the .composer-status comment at 753) that padding sits on a content-box column of five 28px rows —
+   4 + 140 = 144px, the Figma frame height exactly. Keep the panel's vertical padding and the row height in
+   DIFFERENT boxes; do not "simplify" the 2px onto the rows.
+
+   width: max-content is AC3's "width follows the longest label" made independent of whatever formatting
+   context #839 drops the panel into — it is not a fixed or a minimum width, and without it the panel would
+   stretch in a block or stretch-aligned flex host and its resting appearance would depend on an
+   unspecified host. The drawn 81px is that particular menu's longest label, not a size; #683's model menu
+   is much wider. The bound a hostile #694 command name needs is #694's own, and a max-width can be added
+   here later without touching the markup.
+
+   border-radius --radius-xs (6px) is the node's own rounding — get_design_context on 121:3879 returns
+   `rounded-[6px]` on the frame. The architecture spec claims the node draws no radius; that is the one
+   place it is contradicted by the design, so the design wins. NOT paired with overflow: hidden: the only
+   thing that would clip is a ~1.5px corner sliver of the current row when it happens to be first or last,
+   between two near-identical navies, and clipping would eat #840's focus-visible outline on exactly those
+   end rows. No border and no box-shadow — the node draws neither, and the fill contrast is the treatment. */
+.composer-options {
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  padding: 2px 0;
+  background: var(--color-on-primary-fixed);
+  border-radius: var(--radius-xs);
+}
+
+/* One row — the .conversation__overflow-item button reset (border, background, cursor, text-align,
+   font-family) at this panel's own geometry and type: 28px tall, body-small in --color-primary, and the
+   label inset --space-3 (12px) from the row's left edge.
+
+   height: 28px as a LITERAL rather than var(--space-7) (also 28px), per the ruling at 753 above: a
+   component's own height is structural geometry, not spacing. No vertical padding, so 28px is the exact
+   box under this repo's absent box-sizing reset.
+
+   The right inset MIRRORS the left. AC2 pins one number, the 12px left inset; AC3's "no horizontal
+   padding" is scoped to the PANEL, and symmetric row padding does not stop a row running the panel's full
+   width. The design carries no authoritative right inset to port — every Option button instance shares one
+   fixed 65px text slot at x=12, so the drawn 81px is the component's default box rather than a measurement
+   of any label, and its 4px right gap is slack. Left-only padding would set the longest label flush
+   against the panel edge.
+
+   NO width: 100%, deliberately unlike .conversation__overflow-item: the panel's default align-items
+   stretch already runs each row its full width, and a content-box `width: 100%` would add these 24px of
+   padding ON TOP of the panel's width and overflow it. white-space: nowrap keeps a row on one line, which
+   is also what makes the panel's max-content width the longest label rather than a wrap point. */
+.composer-options__item {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The current value's row — a fill, not a hover state: the drawing highlights Max because the footer
+   button reads Max. A menu of commands (#680, #694) passes currentId: null and highlights nothing. */
+.composer-options__item--current {
+  background: var(--color-on-primary);
+}
+
+/* Hover is declared AFTER --current and the two have equal specificity (0,2,0), so source order decides
+   the hovered current row and hover wins. That is deliberate: a selection marker that swallows hover
+   feedback makes the current row look untargetable, and AC2 states the hover fill unconditionally
+   ("a hovered row"), not "a non-current hovered row". Do not reorder these two rules. */
+.composer-options__item:hover {
+  background: var(--color-primary-container);
+}
+
+.composer-options__item:focus-visible {
+  outline: 1px solid var(--color-outline);
+}

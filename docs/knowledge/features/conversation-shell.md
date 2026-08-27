@@ -1375,6 +1375,121 @@ box-edge alignment; the two rows are inset differently by design. `gap: var(--sp
 (the design's measured 20px item rhythm) though inert with one child today, so #680/#682/#683 inherit the
 row's spacing instead of each re-deriving it.
 
+### Composer options panel (#838)
+
+The one panel surface that all four remaining footer slots and one message-box consumer will open
+rather than each building its own: Actions (#680), permission mode (#682), model and effort (#683),
+and #694's slash-command type-ahead. This ticket ships only the panel's **resting appearance** — its
+surface, its rows, its one new colour token — with no host anywhere in the app yet. #839 places it in
+the footer; #840 opens it and drives it from the keyboard. `ComposerOptionsPanel` mounts nowhere in
+production today, which is intended, not a gap.
+
+**New file, not `ConversationScreen.tsx`.** `ComposerOptionsPanel.tsx` follows the
+`PermissionModal.tsx` / `WorkspacePickerSheet.tsx` split: five named future consumers across two later
+tickets want an addressable module, and `ConversationScreen.tsx`/`.test.tsx` (~2700/~3000 lines) are
+merge hot-spots for those same sibling tickets. It adds no CSS import of its own — styles live in
+`conversation.css`, and `ConversationScreen.tsx:13` stays that stylesheet's single importer, the
+`PermissionModal.tsx` precedent.
+
+```ts
+export interface ComposerOptionsPanelOption {
+  id: string      // stable identity — the wire/model value, not the display string
+  label: string   // the visible row text
+}
+
+export interface ComposerOptionsPanelProps {
+  options: readonly ComposerOptionsPanelOption[]
+  currentId: string | null   // the chosen option for a value menu; null for a command list
+  onSelect: (id: string) => void
+  ariaLabel: string
+}
+```
+
+A pure view — props in, markup out, no state, no effect, no store read, no `window.pyry` — the
+`ThreadOverflowMenuView`/`ComposerSendButton` posture, and every prop is required (`ConversationScreen.tsx:2033`'s
+"a view that cannot answer is a bug" rule). `id` is separate from `label` because #683's model menu
+shows `Opus 5` for `claude-opus-5` and #682's permission menu shows `Accept edits` for `acceptEdits`;
+matching on the label would force both to invent a lookup. `currentId: string | null`, not optional —
+`null` is "a menu of commands is a list of actions rather than a choice: same panel, no row
+highlighted," and a `currentId` matching no option takes the identical no-highlight branch, so a stale
+model id or a renamed effort level can't crash the panel. There is no `open` prop and no trigger: the
+trigger belongs to whichever control opens it, and mounting *is* opening — a consumer writes
+`{open && <ComposerOptionsPanel … />}`, the same seam `ThreadOverflowMenuView` uses.
+
+Markup is one `<button role="menuitem" type="button">` per option in array order (the panel never
+sorts), inside a `<div className="composer-options" role="menu" aria-label={ariaLabel}>`. The current
+row alone carries `composer-options__item--current` **and** `aria-current="true"`, base class kept
+(`conversation.css:779-781`'s modifier-without-base vacuity guard). `aria-current` was chosen over a
+`menuitemradio` role branch because it's a global ARIA attribute meaning exactly "the current item
+within a set" — branching the role on `currentId` would make one panel two different widgets, which
+#694 (a type-ahead, not a menu) would then have to fight. Labels render as ordinary React text
+children — escaped, no `dangerouslySetInnerHTML`, no attribute or URL sink — load-bearing once #694
+feeds it workspace-authored command names, per CLAUDE.md's daemon-text ruling.
+
+**The new token**, added to `tokens.css` between `--color-on-primary` and
+`--color-on-primary-container`: `--color-on-primary-fixed: #001d34` (M3 `Schemes/On Primary Fixed`,
+read from the Figma *variable*, not the generated export). It's the file's first `*-fixed` token, and
+the light/dark-transposition warnings on its neighbours don't apply to it — M3's `*Fixed` roles are
+defined to resolve identically in both schemes, so there's no transposed fallback to be trapped by.
+
+**CSS (`conversation.css`, appended).** The Figma nests two fills the other way — frame `On Primary`,
+four of five rows `On Primary Fixed`, the current row left unfilled so the frame shows through — but
+AC1/AC4 pin the collapsed shape this ships as: `.composer-options` paints the dark
+`--color-on-primary-fixed` panel fill, `.composer-options__item--current` alone paints the lighter
+`--color-on-primary`. Same picture, two declarations instead of six; the one visible trade is that the
+2px top/bottom bands read the dark fill rather than the frame's. Hover (`--color-primary-container`)
+is declared *after* the current-row rule; both are specificity (0,2,0), so source order — not the
+cascade rules — is what makes hover win over the selection fill on the current row, deliberately (AC2
+states the hover fill unconditionally). `padding: 2px 0` is a literal (this stylesheet's own `gap: 2px`
+precedent), and with no global `box-sizing` reset in this repo, that padding on a column of five 28px
+rows totals 144px — the Figma frame height exactly; keep the panel's vertical padding and the row
+height in different boxes. `width: max-content` is the content-driven-width AC3 asks for — not a fixed
+or minimum width — so the panel's resting size stays independent of whatever host #839 drops it into;
+the drawn 81px is that particular menu's longest label, not a size (#683's model menu will be much
+wider). No `position`, no offset, no `z-index` anywhere in the block (AC5) — for the same reason
+`.conversation__overflow`'s comment records at `conversation.css:2325-2334` (#276): a positioned
+element already paints above the non-positioned thread, and later-in-DOM overlays keep painting above
+it without a competing `z-index`. This is a **new surface**, not a variant of
+`.conversation__overflow-menu` — only its button reset and its no-`z-index` reasoning are copied; none
+of its light-surface-card visual treatment is.
+
+**One shipped deviation from the architecture spec, confirmed correct in review.** The spec read the
+node as drawing no radius; `get_design_context` on `121:3879` returns `rounded-[6px]` on the frame
+root, so the panel ships `border-radius: var(--radius-xs)` (6px, already established in this
+stylesheet) — the design tool refutes the spec's claim about the node, not the diff. Deliberately
+*not* paired with `overflow: hidden`: the only clip would be a ~1.5px corner sliver on an end row
+(`6 − √(6² − 4²) ≈ 1.53px`, code review's correction of the PR's own estimate of what that sliver sits
+against), and clipping would eat #840's future `:focus-visible` outline on exactly those rows. If a
+visual pass ever wants the corner clean, code review recorded the fix that costs neither the radius nor
+the outline: `overflow: hidden` paired with `outline-offset: -1px` on the focus ring, drawing it inside
+the row's box where clipping can't reach it — not applied, since nothing hosts the panel yet. The
+row's right inset (12px, mirroring the pinned 12px left inset) was the spec's own open call with no
+design authority cited; `get_design_context` returns `px-[12px]` on every Option button instance, so
+`padding: 0 var(--space-3)` is confirmed as the literal translation and that open question is closed
+rather than carried into #839.
+
+**Testing** is `renderToStaticMarkup` only (`ComposerOptionsPanel.test.tsx`) — no jsdom in this repo,
+so nothing here can click, focus or measure. AC4 (the current-value modifier) is the only criterion
+with a vitest detector; AC2/AC3/AC5 are stylesheet declarations, and per the ruling at
+`ConversationScreen.test.tsx:1128-1132` the tests pin that the class hooks are *on* the elements rather
+than inventing a DOM measurement path. To still get real evidence for the declaration-only ACs without
+adding a DOM environment to vitest (a separate, deliberate decision per CLAUDE.md) or an e2e spec for a
+component with no host, the PR rendered `conversation.css` in headless Chromium as a scratchpad
+harness (not part of the diff) and measured the real computed styles — 144×83px, five 28px rows, the
+12px inset, the exact fill/type values, hover resolving above the current row, `z-index: auto`
+throughout. A reusable technique for a future renderer ticket whose ACs are pure CSS and whose
+component has no live host yet.
+
+One lesson worth carrying to a future row-button component: `.conversation__overflow-item` (the reset
+this panel's rows clone) declares `width: 100%` alongside its horizontal padding. Copying that
+literally onto `.composer-options__item` would have overflowed the panel — with no global `box-sizing`
+reset, `width: 100%` plus `padding: 0 var(--space-3)` adds the row's 24px on *top of* the panel's
+`max-content` width. The flex column's default `align-items: stretch` already runs each row the
+panel's full width for free, so the correct row rule declares no `width` at all.
+
+Code review PASS, two non-blocking NITs (the corner-clip magnitude's backdrop description, and the
+test's coupling to exact JSX attribute order) — see [PR #841](https://github.com/pyrycode/pyrycode-desktop/pull/841).
+
 ### Api-retry indicator (#493)
 
 `ThinkingIndicator`'s twin over a third timeline-store scalar (`apiRetry: ApiRetryStatus | null`),

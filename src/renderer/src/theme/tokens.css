@@ -39,6 +39,19 @@
                                   in the comment explaining its --color-surface substitution. Retro-
                                   fitting that switch knob and conversation.css:1784-1786 is a separate
                                   ticket — both are visually settled. */
+  --color-on-primary-fixed: #001d34; /* M3 Schemes/On Primary Fixed — the composer options panel's surface
+                                        fill (#838, Figma node 121:3879), the one menu surface #680/#682/
+                                        #683/#694 all open. Read from the Figma VARIABLE
+                                        (get_variable_defs on that node, 2026-08-27). One consumer today,
+                                        per the note above.
+
+                                        The FIRST *-fixed token in this file, and the light/dark
+                                        transposition warnings on --color-inverse-primary above and
+                                        --color-error-container below do NOT apply to it: M3's *Fixed
+                                        roles are defined to resolve IDENTICALLY in the light and dark
+                                        schemes, so there is no transposed generated fallback to be
+                                        trapped by — that node's own generated export prints #001d34 too,
+                                        agreeing with the variable rather than contradicting it. */
   --color-on-primary-container: #cfe4ff;
   --color-secondary-container: #3a4857;
   --color-on-secondary-container: #d6e4f7;

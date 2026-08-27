@@ -1375,14 +1375,16 @@ box-edge alignment; the two rows are inset differently by design. `gap: var(--sp
 (the design's measured 20px item rhythm) though inert with one child today, so #680/#682/#683 inherit the
 row's spacing instead of each re-deriving it.
 
-### Composer options panel (#838, placed since #839)
+### Composer options panel (#838, placed #839, keyboard-driven since #840)
 
 The one panel surface that all four remaining footer slots and one message-box consumer will open
 rather than each building its own: Actions (#680), permission mode (#682), model and effort (#683),
 and #694's slash-command type-ahead. #838 shipped only the panel's **resting appearance** — its
 surface, its rows, its one new colour token — with no host anywhere in the app yet. #839 placed it in
-the footer; #840 still needs to open it and drive it from the keyboard. `ComposerOptionsPanel` mounts
-nowhere in production today, which is intended, not a gap.
+the footer; #840 completed the interaction — opening, dismissing and driving it from the keyboard.
+The panel is now feature-complete but still **ships dormant**: nothing mounts `ComposerOptionsPanel`
+or `ComposerOptionsMenu` in production today, and that stays true until #680 draws the first real
+footer button. Deliberate, not a gap.
 
 **New file, not `ConversationScreen.tsx`.** `ComposerOptionsPanel.tsx` follows the
 `PermissionModal.tsx` / `WorkspacePickerSheet.tsx` split: five named future consumers across two later
@@ -1402,18 +1404,23 @@ export interface ComposerOptionsPanelProps {
   currentId: string | null   // the chosen option for a value menu; null for a command list
   onSelect: (id: string) => void
   ariaLabel: string
+  focusedIndex: number       // #840: the roving-tabindex row — required, like every other prop
+  panelRef?: Ref<HTMLDivElement>  // #840: optional, `ThreadOverflowMenuView`'s `triggerRef` convention
 }
 ```
 
 A pure view — props in, markup out, no state, no effect, no store read, no `window.pyry` — the
 `ThreadOverflowMenuView`/`ComposerSendButton` posture, and every prop is required (`ConversationScreen.tsx:2033`'s
-"a view that cannot answer is a bug" rule). `id` is separate from `label` because #683's model menu
-shows `Opus 5` for `claude-opus-5` and #682's permission menu shows `Accept edits` for `acceptEdits`;
-matching on the label would force both to invent a lookup. `currentId: string | null`, not optional —
-`null` is "a menu of commands is a list of actions rather than a choice: same panel, no row
-highlighted," and a `currentId` matching no option takes the identical no-highlight branch, so a stale
-model id or a renamed effort level can't crash the panel. There is no `open` prop and no trigger: the
-trigger belongs to whichever control opens it, and mounting *is* opening — a consumer writes
+"a view that cannot answer is a bug" rule) except `panelRef`, added alongside `focusedIndex` in #840 and
+optional for the same reason `ThreadOverflowMenuView`'s `triggerRef` is: an ordinary prop rather than
+`forwardRef`, omitted in tests since a static render cannot exercise a ref anyway. `id` is separate from
+`label` because #683's model menu shows `Opus 5` for `claude-opus-5` and #682's permission menu shows
+`Accept edits` for `acceptEdits`; matching on the label would force both to invent a lookup.
+`currentId: string | null`, not optional — `null` is "a menu of commands is a list of actions rather
+than a choice: same panel, no row highlighted," and a `currentId` matching no option takes the
+identical no-highlight branch, so a stale model id or a renamed effort level can't crash the panel.
+There is still no `open` prop and no trigger on the view itself: the trigger's *behaviour* now belongs
+to `ComposerOptionsMenu` (below), and mounting the view *is* opening — the container writes
 `{open && <ComposerOptionsPanel … />}`, the same seam `ThreadOverflowMenuView` uses.
 
 Markup is one `<button role="menuitem" type="button">` per option in array order (the panel never
@@ -1425,6 +1432,21 @@ within a set" — branching the role on `currentId` would make one panel two dif
 #694 (a type-ahead, not a menu) would then have to fight. Labels render as ordinary React text
 children — escaped, no `dangerouslySetInnerHTML`, no attribute or URL sink — load-bearing once #694
 feeds it workspace-authored command names, per CLAUDE.md's daemon-text ruling.
+
+Since #840, each row also carries `tabIndex={index === focusedIndex ? 0 : -1}` — a **roving
+tabindex**: one row is in the tab order, the rest are reachable only programmatically, and the
+already-shipped `.composer-options__item:focus-visible` outline (`conversation.css:3239-3241`) paints
+on whichever row holds real DOM focus. It is declared *before* `className` in the JSX, not after —
+this file's tests match whole attribute runs, and inserting it later would have broken five of the
+eight pre-existing assertions (#838's code review flagged that coupling as a NIT; reorder only
+alongside those assertions). `aria-current` and `tabIndex` are independent axes and stay so: the
+current value is what the menu reads, the focused row is where the arrows are, and they coincide only
+on the frame the panel opens. An `aria-activedescendant` approach was rejected — it needs a generated
+unique id per row (four consumers can share one screen) and it leaves DOM focus on the panel, which
+would make the `:focus-visible` outline dead and "every close path returns focus to the trigger"
+unwritable. An out-of-range `focusedIndex` marks no row, the same no-special-case posture a stale
+`currentId` gets in the markup above; the container can never produce one, since
+`resolveComposerOptionsKey` (below) normalises every index it emits.
 
 **The new token**, added to `tokens.css` between `--color-on-primary` and
 `--color-on-primary-container`: `--color-on-primary-fixed: #001d34` (M3 `Schemes/On Primary Fixed`,
@@ -1556,6 +1578,88 @@ reference in a coupling comment, and `window.innerWidth` vs. `document.documentE
 a scrollbar edge case neither worth fixing without a live consumer) — see
 [PR #841](https://github.com/pyrycode/pyrycode-desktop/pull/841) and
 [PR #843](https://github.com/pyrycode/pyrycode-desktop/pull/843).
+
+**Interaction (#840).** Two pieces complete the panel: `composerOptionsKeyboard.ts`, a DOM-free total
+function holding the whole keyboard contract, and `ComposerOptionsMenu`, an exported container in
+`ComposerOptionsPanel.tsx` beside the view — the `ThreadOverflowMenuView`/`ThreadOverflowMenu` split
+(`ConversationScreen.tsx:2653-2710`) extended rather than reinvented. Unlike `ThreadOverflowMenu` it is
+exported: #680, #682 and #683 each import it from another file, so the ARIA contract lands once instead
+of three times. **The trigger's behaviour and ARIA are the container's — `aria-haspopup="menu"`,
+`aria-expanded`, the toggle `onClick` — its label and appearance stay the consumer's**, passed in as
+`triggerContent` and `triggerClassName`. No `aria-label` goes on the trigger: `triggerContent` is
+visible text ("Max", "Opus 5"), and an `aria-label` would override it and break WCAG 2.5.3's
+label-in-name. State is component-local `useState` (`open`, `focusedIndex`), never the session store —
+[ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)'s `sheetOpen` precedent —
+so it resets to closed on remount for free.
+
+`resolveComposerOptionsKey({ optionCount, focusedIndex, key })` returns a sealed
+`{ type: 'focus' | 'pick' | 'dismiss' | 'ignore' }` union and is total: it never throws, every `focus`
+index it emits is in `[0, optionCount)`, and `pick` is range-guarded so `options[index]` is always
+addressable. Four decisions were settled explicitly rather than left to the implementation:
+
+- **Focus opens on the current option, or the first when there is none** —
+  `initialFocusedOptionIndex(options, currentId)`, one `findIndex` with `-1` falling back to `0`. A value
+  menu (#682, #683) opens where the arrows should be relative to what it currently reads; a command list
+  (#680, #694 — `currentId: null`) opens on its first entry; a **stale** id lands on the first entry
+  through the identical branch, no special case, mirroring how the view already handles a stale
+  `currentId` in its markup.
+- **Arrows wrap.** `ArrowDown`/`ArrowUp` step by ±1 through `(((focusedIndex + delta) % optionCount) +
+  optionCount) % optionCount` — the doubled modulo is load-bearing twice: `-1 % n` is negative in
+  JavaScript, so the first `+ optionCount` is what keeps a wrap off the top addressing a real row, and
+  the second `%` runs on a non-negative number, which is what rules out `-0` (`Object.is(-0, 0)` is
+  `false`, so a negative zero passes every range check and only fails a later strict-equality
+  assertion). The totality property test asserts `Object.is(index, -0) === false` explicitly rather than
+  trusting the bounds — worth remembering for any future roving-index wrap.
+- **`Enter` is intercepted; `Space` is not.** Enter must be, or the focused row's native button
+  activation would fire `onSelect` a second time on top of the `pick`; Space returns `ignore`, runs no
+  `preventDefault`, and the row's own `onClick` picks it — two paths to the same outcome, on purpose.
+- **`Home`, `End`, `ArrowLeft`, `ArrowRight` and `Tab` fall through unhandled.** None is an acceptance
+  criterion; Left/Right belong to a menubar that doesn't exist here, and Tab moving focus off the panel
+  while it stays open is a deliberately open question for #680 to decide on a real user, not invented
+  glue here.
+
+**One keydown path, not two — a deliberate deviation from `ThreadOverflowMenu`.** That container
+dismisses on Escape through a *document* listener because it never moves focus into its menu, so a
+React handler on the wrapper would never see the key. `ComposerOptionsMenu` does move focus in via a
+plain `useEffect` (`querySelectorAll('.composer-options__item')[focusedIndex]?.focus()`, optional-chained
+throughout), so its own `onKeyDown` on the anchor `<div>` sees every keystroke — the trigger's and the
+rows' both — and `event.preventDefault()` runs for every outcome except `ignore`, which is what stops
+the arrows scrolling the thread and stops Enter double-firing. A document `mousedown` listener still
+handles outside click, kept verbatim from `ThreadOverflowMenu`'s shape (attached only while open, torn
+down on close and unmount, target narrowed with `instanceof Node`, read through
+`DocumentEventMap['mousedown']` for the same shadowing reason `ConversationScreen.tsx:2681-2683`
+records). One accepted deviation from a literal reading of "every close path returns focus to the
+trigger": `close()`'s `.focus()` runs before the browser's own mousedown focus action, so on the
+outside-click path focus lands where the user clicked rather than on the trigger. Code review
+considered and did not flag this — the alternative (`preventDefault` in that handler) would also
+suppress caret placement when the outside click is into the message box, the most likely outside click
+there is, and `ThreadOverflowMenu` has shipped the identical shape since its own AC.
+
+**Testing is split at the DOM boundary, deliberately.** `composerOptionsKeyboard.test.ts` executes the
+whole keyboard contract with no DOM, including a totality property (every `optionCount` 1–5, every
+`focusedIndex` from `-1` to `optionCount`, both arrow keys → a `focus` index always in range). The
+markup half extends `ComposerOptionsPanel.test.tsx` with a `focusedIndex` parameter on `renderPanel`
+(defaulted, so the eight pre-existing tests are untouched — the proof the change is additive), plus one
+static-render assertion of the container's *collapsed* markup (`aria-haspopup="menu"`,
+`aria-expanded="false"`, no `role="menu"` anywhere — reachable because `useState(false)` is what a
+static render sees). **What has no detector**: the container's `useState` transitions, the document
+listener and the focus calls are untested reviewed glue, the same ruling `ConversationScreen.test.tsx:2523-2528`
+gives #276's container — `environment: 'node'` fires no clicks and runs no effects, and adding jsdom to
+reach them is the separate, deliberate decision CLAUDE.md reserves. The in-app interaction proof rides
+#680, the first consumer with a real trigger in a real footer.
+
+Code review PASS with one deferred SHOULD FIX: the `switch (outcome.type)` in `handleKeyDown` has no
+`default: return assertNever(outcome)`, the exhaustiveness-guard convention this repo otherwise applies
+uniformly (`composerSend.ts`, `messageViewModel.ts`, `pairingState.ts`, and others). Its absence is
+silent today — every outcome is handled — but a fifth outcome added later (the module's own docblock
+names Home/End as a two-line follow-up) would be swallowed by the switch with no type error and no test
+catching it, since the container is untested-by-design. Folding the guard into #680's first live mount
+was the call recorded on the PR rather than a rework cycle here — worth doing at that point, not
+forgotten. Two accepted NITs alongside it: `Enter` on a Shift-Tabbed-back trigger resolves to `pick`
+rather than toggling the menu shut (unreachable without the still-open Tab question above, deferred to
+the same ticket), and the container's trigger assertions don't yet pin `type="button"` the way the
+panel's own row test pins it on each option — see
+[PR #845](https://github.com/pyrycode/pyrycode-desktop/pull/845).
 
 ### Api-retry indicator (#493)
 

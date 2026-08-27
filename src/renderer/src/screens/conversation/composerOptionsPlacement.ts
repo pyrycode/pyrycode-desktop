@@ -34,10 +34,12 @@
 // computed-value time, dropping the panel to `left: auto` and its static position. That is a CSS rule this
 // module cannot defend against, which is why it is stated here.
 //
-// Measuring `panelWidth` needs a handle on the panel element and `ComposerOptionsPanel` forwards no ref.
-// The first consumer should add ref forwarding — three lines, the React-idiomatic answer — rather than
-// reaching through the anchor with `querySelector`. Not done here: no consumer exists to shape the
-// signature, and a static render cannot exercise a ref, so it would ship both speculative and unproven.
+// Measuring `panelWidth` needs a handle on the panel element. #840 added one: `ComposerOptionsPanel` takes
+// an optional `panelRef`, and `ComposerOptionsMenu` already holds a ref on it to move focus with. So the
+// first consumer measures through that ref rather than reaching through the anchor with `querySelector` —
+// the wiring above is all that is left to write. The ref arrived for focus, not for measurement; sharing it
+// is a bonus, and #840 deliberately did not wire the clamp, since no anchor has a real x-position until a
+// real footer button gives it one.
 
 /**
  * The three measurements the clamp reads, as plain numbers — no DOM node, no React, no store. All in CSS

@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ComposerOptionsPanel, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
+import {
+  ComposerOptionsMenu,
+  ComposerOptionsPanel,
+  type ComposerOptionsPanelOption
+} from './ComposerOptionsPanel'
 
 // #838: no DOM harness — vitest.config.ts sets `environment: 'node'` and there is no jsdom and no
 // @testing-library, so nothing here can click, focus or measure. ComposerOptionsPanel is a pure view
@@ -20,10 +24,14 @@ import { ComposerOptionsPanel, type ComposerOptionsPanelOption } from './Compose
 
 const noop = (): void => {}
 
+// #840 added `focusedIndex`, defaulted here so the seven tests above it are untouched — which is the proof
+// the new prop is additive. `panelRef` is omitted throughout: a native <div> accepts ref={undefined}, and a
+// static render could not exercise a ref anyway (the ThreadOverflowMenuView `triggerRef` convention).
 function renderPanel(
   options: readonly ComposerOptionsPanelOption[],
   currentId: string | null,
-  ariaLabel = 'Effort level'
+  ariaLabel = 'Effort level',
+  focusedIndex = 0
 ): string {
   return renderToStaticMarkup(
     <ComposerOptionsPanel
@@ -31,6 +39,7 @@ function renderPanel(
       currentId={currentId}
       onSelect={noop}
       ariaLabel={ariaLabel}
+      focusedIndex={focusedIndex}
     />
   )
 }
@@ -53,6 +62,13 @@ function rowCount(markup: string): number {
 
 function countOf(markup: string, needle: string): number {
   return markup.split(needle).length - 1
+}
+
+// The text of the row that is in the tab order, or null when no row is. Read off the parsed <button> tag
+// rather than a literal attribute run, so these assertions do not couple to JSX prop order — the one
+// non-blocking NIT #838's code review left on this file.
+function focusableRowLabel(markup: string): string | null {
+  return markup.match(/<button[^>]*tabindex="0"[^>]*>([^<]*)</)?.[1] ?? null
 }
 
 describe('ComposerOptionsPanel', () => {
@@ -145,5 +161,90 @@ describe('ComposerOptionsPanel', () => {
     const markup = renderPanel([], null)
     expect(markup).toBe('<div class="composer-options" role="menu" aria-label="Effort level"></div>')
     expect(markup).not.toContain('<button')
+  })
+
+  // #840: a ROVING TABINDEX. Exactly one row is in the tab order and the rest are reachable only
+  // programmatically, which is what lets the container move real DOM focus between them — and real focus is
+  // what both the shipped `:focus-visible` outline and AC5's "returns focus to the trigger" are written in
+  // terms of. aria-activedescendant was rejected for exactly that: it leaves focus on the panel.
+  it('puts exactly the focused row in the tab order (AC2)', () => {
+    const markup = renderPanel(OPTIONS, null, 'Effort level', 1)
+    expect(countOf(markup, 'tabindex="0"')).toBe(1)
+    expect(countOf(markup, 'tabindex="-1"')).toBe(OPTIONS.length - 1)
+    // …and it is the row the index addresses, not merely some row.
+    expect(focusableRowLabel(markup)).toBe('Max')
+  })
+
+  it('opens the tab order on the first row when focus starts there', () => {
+    const markup = renderPanel(OPTIONS, null, 'Effort level', 0)
+    expect(countOf(markup, 'tabindex="0"')).toBe(1)
+    expect(focusableRowLabel(markup)).toBe('Low')
+  })
+
+  it('keeps the current value and the focused row as independent axes', () => {
+    // The assertion that stops a later ticket collapsing focus onto the current value. The current row is
+    // what the menu READS; the focused row is where the arrows ARE. They coincide only on the frame the
+    // panel opens, and after one ArrowDown they must not.
+    const markup = renderPanel(OPTIONS, 'max', 'Effort level', 2)
+    expect(focusableRowLabel(markup)).toBe('Ultracode')
+    expect(countOf(markup, 'aria-current="true"')).toBe(1)
+    expect(markup).toContain('composer-options__item--current" aria-current="true">Max<')
+  })
+
+  it('marks no row focusable when the focused index addresses no option', () => {
+    // Mirrors the stale-currentId test above: no special case, no throw and no invented fallback row. The
+    // container cannot produce this — resolveComposerOptionsKey normalises every index it emits — so the
+    // view simply does not pretend to have an answer.
+    const markup = renderPanel(OPTIONS, null, 'Effort level', 7)
+    expect(countOf(markup, 'tabindex="0"')).toBe(0)
+    expect(countOf(markup, 'tabindex="-1"')).toBe(OPTIONS.length)
+    expect(rowCount(markup)).toBe(OPTIONS.length)
+  })
+})
+
+// #840: the interaction container. Its open state is internal useState, so a static render sees only the
+// CLOSED shape — which is exactly AC1's ARIA half, and it is reachable because effects do not run under
+// renderToStaticMarkup. The opened markup is proved directly through ComposerOptionsPanel's own tests
+// above; the useState transitions, the document listeners, the preventDefault calls and the focus moves are
+// untested reviewed glue, per the ruling at ConversationScreen.test.tsx:2523-2528 for #276's container. The
+// in-app interaction proof rides #680, the first consumer with a real trigger in a real footer.
+describe('ComposerOptionsMenu — the interaction container, collapsed (#840)', () => {
+  function renderMenu(): string {
+    return renderToStaticMarkup(
+      <ComposerOptionsMenu
+        options={OPTIONS}
+        currentId="max"
+        onSelect={noop}
+        ariaLabel="Effort level"
+        triggerContent="Max"
+        triggerClassName="composer__effort-trigger"
+      />
+    )
+  }
+
+  it('renders the anchor and a trigger advertising a closed menu popup (AC1)', () => {
+    const markup = renderMenu()
+    // The #839 wrapper, with NO style prop: --composer-options-shift is the consumer's to set, and wiring
+    // the clamp belongs to #680 with the rest of the first live mount.
+    expect(markup).toContain('<div class="composer-options-anchor">')
+    expect(markup).toContain('aria-haspopup="menu"')
+    // React stringifies the aria boolean under server render → "false", directly assertable.
+    expect(markup).toContain('aria-expanded="false"')
+  })
+
+  it('wears the consumer label and appearance, and names itself with neither', () => {
+    const markup = renderMenu()
+    expect(markup).toContain('class="composer__effort-trigger"')
+    expect(markup).toContain('>Max</button>')
+    // NO aria-label on the trigger. `triggerContent` is visible text, so an aria-label would override it
+    // and break WCAG 2.5.3's label-in-name — the trigger's accessible name has to BE what it reads.
+    expect(markup).not.toContain('aria-label=')
+  })
+
+  it('renders no panel while closed', () => {
+    const markup = renderMenu()
+    expect(markup).not.toContain('role="menu"')
+    expect(markup).not.toContain('composer-options__item')
+    expect(countOf(markup, '<button')).toBe(1)
   })
 })

@@ -15,6 +15,7 @@ import { registerPairingHandler } from './pairingHandler'
 import { registerPairingStatusHandler } from './pairingStatusHandler'
 import { registerUnpairHandler } from './unpairHandler'
 import { registerServerInfoHandler } from './serverInfoHandler'
+import { registerHostLabelHandler } from './hostLabelHandler'
 import { createDeviceKeypairStore } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
@@ -145,8 +146,8 @@ app.whenReady().then(() => {
   // under the fixed HOST_LABEL_NAME, distinct from `pyrycode.paired_server` and
   // `pyrycode.device_static`. The label is only ever a VALUE handed to `save`, never a persistence
   // key, so no caller-supplied string can reach the store name. The pairing handler below receives
-  // only this store's `save`, so it can neither read the label back nor erase it (the read path is
-  // #824, erasing is #827).
+  // only this store's `save`, so it can neither read the label back nor erase it; the read path is
+  // the host-label handler registered below, which gets a `load`-only handle (erasing is #827).
   const hostLabelStore = createHostLabelStore({ secureStore })
 
   // The launch-time pairing-status query (#79): reuse the same pairedServerStore — do not construct
@@ -168,6 +169,17 @@ app.whenReady().then(() => {
   // `will-quit` removes the handler, symmetric with unregisterPairingStatus.
   const unregisterServerInfo = registerServerInfoHandler(ipcMain, { store: pairedServerStore })
   app.on('will-quit', () => unregisterServerInfo())
+
+  // The stored-host-label query (#824): reuse the SAME hostLabelStore constructed above — do not
+  // build a second store — so a surface can render the host's own name (#826) from at-rest state,
+  // including while disconnected. Grouped with the two registrations above (needs only a store — no
+  // `connection`, no did-finish-load gate). The handler gets a `load`-only handle, so this read
+  // channel structurally cannot overwrite or erase the label. Only the three-outcome union crosses
+  // back — never the token / server key / keychain path, and never a truncated label; never-stored
+  // and unreadable stay distinct. No caller races it — the consumer is #826. `will-quit` removes the
+  // handler, symmetric with unregisterServerInfo.
+  const unregisterHostLabel = registerHostLabelHandler(ipcMain, { store: hostLabelStore })
+  app.on('will-quit', () => unregisterHostLabel())
 
   // The transport consumer (#62): reuse the paired-server store, add a device-keypair store over
   // the same secret chain, and drive the Noise relay driver — emitting typed daemon events to the

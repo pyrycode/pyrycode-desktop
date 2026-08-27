@@ -10,17 +10,18 @@ field the daemon never sees would drift a wire type (CLAUDE.md "don't drift the 
 label therefore gets its own module and its own stored name rather than a field on the pairing
 record.
 
-Introduced in [#822](../codebase/822.md). It lives **entirely** in `src/main` (CLAUDE.md "Keep the
+Introduced in [#822](https://github.com/pyrycode/pyrycode-desktop/issues/822). It lives **entirely** in `src/main` (CLAUDE.md "Keep the
 transport out of the window"). It is the **third consumer** of the [secure store](secure-store.md)
 primitive ([#42](../codebase/42.md)) — closest in shape to the [device static
 keypair](device-keypair.md) ([#43](../codebase/43.md)): both store a single fixed-format blob under
 one name with no JSON envelope, rather than the [paired-server store](paired-server-store.md)'s
 multi-field JSON record.
 
-**This ticket ships storage only — no caller.** The pairing-path write is [#823](../codebase/823.md),
-the IPC read path to the window is [#824](../codebase/824.md), the field that collects the label is
-[#825](../codebase/825.md), the sidebar row that renders it is [#826](../codebase/826.md), and the
-erase-on-unpair is [#827](../codebase/827.md).
+**#822 shipped storage only — no caller.** [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) is now the pairing-path write
+(see [Pairing IPC channel § confirm carries an optional host label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823)).
+Still open: the IPC read path to the window ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)), the field that collects the
+label ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)), the sidebar row that renders it ([#826](https://github.com/pyrycode/pyrycode-desktop/issues/826)), and
+the erase-on-unpair ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)).
 
 ## What it does
 
@@ -28,9 +29,11 @@ Gives the background process **one factory** — `createHostLabelStore({ secureS
 returns a `{ save, load, clear }` handle over the label:
 
 - **`save(label)`** persists the label verbatim through the secure store. A second `save`
-  overwrites. No length bound and no validation — this store takes what it is given, exactly as
-  `pairedServerStore` does; bounding belongs at the IPC trust boundary ([#824](../codebase/824.md))
-  and the input field ([#825](../codebase/825.md)).
+  overwrites. No length bound and no validation in this module — this store takes what it is given,
+  exactly as `pairedServerStore` does. The write path's only bound now lives one layer up, at
+  [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)'s `isPairingRequest` guard (`MAX_HOST_LABEL_LENGTH`); the read path back
+  to the window must bring its own at the same boundary ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)), and the input
+  field bounds again for UX ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)).
 - **`load()`** retrieves the label with **three** distinct outcomes: `null` (never stored), `''`
   (stored empty — a real value, not absence), or a thrown `MalformedHostLabelError` (stored bytes
   are not valid UTF-8). A decrypt failure (tamper, keychain rotation) propagates unchanged.
@@ -72,7 +75,7 @@ export function createHostLabelStore(deps: {
 One flat interface — no `Clearable…` split. `pairedServerStore` splits `PairedServerStore` /
 `ClearablePairedServerStore` because three shipped consumers type against the base and would
 otherwise need a `clear` stub in their fakes; this module ships with **no consumers at all**, and
-[#827](../codebase/827.md) needs `clear`, so there is nothing a second interface would buy.
+[#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) needs `clear`, so there is nothing a second interface would buy.
 
 ### Encoding — bare UTF-8 bytes, not a JSON envelope
 
@@ -125,9 +128,9 @@ silently; see the comment at `hostLabelStore.ts:135-139` pointing at it.
 ### Data flow
 
 ```
- no caller yet (#823 will save, #824 will load)   createHostLabelStore(core)   injected seam
+ pairingHandler's confirm arm (#823)               createHostLabelStore(core)   injected seam
   store.save(label) ──► encodeLabel ─► set(name, bytes) ─► SecureStore (fail-closed encrypt-at-rest)
-  store.load() ───────► get(name) ─► SecureStore ─► blob?
+  store.load() ───────► get(name) ─► SecureStore ─► blob?     (no caller yet — #824 will load)
                           null    → null   (never stored — the only null path)
                           present → decodeLabel(blob) ─► label   ('' if stored empty;
                                                                    throws MalformedHostLabelError
@@ -135,8 +138,10 @@ silently; see the comment at `hostLabelStore.ts:135-139` pointing at it.
                                                                    a decrypt failure already propagated)
 ```
 
-Nothing in this flow reaches IPC, the preload, the renderer, or a `BrowserWindow` — this module has
-no consumer yet.
+`save` is reached from IPC as of #823 (renderer → preload `confirmPairing(label?)` → the `isPairingRequest`
+guard → `pairingHandler`'s confirm arm → this store). `load` and `clear` are still unreached — no code
+path calls them yet. See [Pairing IPC channel § confirm carries an optional host
+label](pairing-ipc-channel.md#confirm-carries-an-optional-host-label-823) for the full hand-off.
 
 ## Concurrency & lifecycle
 
@@ -147,7 +152,7 @@ no consumer yet.
   temp-then-rename.
 - **Deliberately no read-modify-write helper.** A `load`-then-`save` pair across an `await` would be
   a check-then-act race this module currently cannot have; a future "rename" affordance
-  ([#825](../codebase/825.md)) must not add an `update` method that reopens it.
+  ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)) must not add an `update` method that reopens it.
 
 ## Security properties
 
@@ -165,20 +170,25 @@ secure-store consumers — not a secret — so its review reads differently from
   secret — is correct and non-blocking: on a keychain-less machine, pairing itself already fails, so
   there is no state where the record persists but the label cannot.
 - **The value `load` returns is untrusted display text — hand off, do not lose it.** It comes off
-  disk, is unbounded (no length bound in this module by design), and this ticket applies no
-  validation beyond "is it valid UTF-8". Named owners for the obligations this creates:
-  [#824](../codebase/824.md) must bound the length at the IPC boundary, [#825](../codebase/825.md) at
-  the input field, and [#826](../codebase/826.md) must render it as escaped text only — never
-  `dangerouslySetInnerHTML`, an attribute, a URL, a filename, or a lookup key (CLAUDE.md, operator
-  ruling 2026-08-20).
+  disk, is unbounded (no length bound in this module by design), and this module applies no
+  validation beyond "is it valid UTF-8". [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) bounded the **write** path at the
+  `isPairingRequest` guard (`MAX_HOST_LABEL_LENGTH = 128`), but that bound does not retroactively
+  apply to whatever is already on disk (a longer value written before the bound existed, or by a
+  future second writer) — so `load`'s output is still unbounded in principle. Named owners for the
+  remaining obligations: [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) must bound the length again at the IPC read
+  boundary, [#825](https://github.com/pyrycode/pyrycode-desktop/issues/825) at the input field, and [#826](https://github.com/pyrycode/pyrycode-desktop/issues/826) must render
+  it as escaped text only — never `dangerouslySetInnerHTML`, an attribute, a URL, a filename, or a
+  lookup key (CLAUDE.md, operator ruling 2026-08-20).
 - **No new credential risk.** Adding a third name to a chain that already holds a bearer token
   (`pyrycode.paired_server`) and a static private key (`pyrycode.device_static`) is closed
   structurally: `HOST_LABEL_NAME` is a distinct constant, `clear()` deletes by the injected `name`
   rather than a literal, and a test asserts clearing the label leaves both neighbouring secrets
   intact.
-- **Zero renderer/IPC surface (this ticket).** No `contextBridge`, `ipcMain`, `BrowserWindow`, or
-  composition-root wiring — the spec forbids all four for #822 explicitly. The renderer cannot reach
-  this module until #823/#824 wire it.
+- **Zero renderer/IPC surface as shipped by #822.** No `contextBridge`, `ipcMain`, `BrowserWindow`, or
+  composition-root wiring in this module — the spec forbade all four for #822 explicitly. [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)
+  has since wired the **write** half (composition root + `pairingHandler`'s confirm arm); the
+  renderer still cannot reach this module directly — it only ever supplies a `string | undefined`
+  that crosses the IPC guard first. The **read** half back to the window is still open ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)).
 - **Log-free by construction** — no `console.*` anywhere; the label is an opaque local, never a named
   field of a logged struct. `MalformedHostLabelError`'s message is static and interpolates nothing —
   no bytes, no partial decode.
@@ -203,11 +213,13 @@ secure-store consumers — not a secret — so its review reads differently from
 - **Re-save** — `save` overwrites; last-writer-wins, exactly one blob kept.
 - **Clearing when never stored** — `clear()` resolves without throwing (`SecureStore.delete` is a
   documented no-op on an absent name).
-- **No length bound in this module** — by design; deferred to the IPC boundary
-  ([#824](../codebase/824.md)) and the input field ([#825](../codebase/825.md)).
-- **Not wired yet** — nothing constructs a live store and `src/main/index.ts` is untouched by this
-  ticket. Composition-root wiring, plus the pairing-path write, lands with
-  [#823](../codebase/823.md).
+- **No length bound in this module** — by design; the write path is bounded one layer up at
+  [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823)'s IPC guard, the read path back to the window must bound again
+  ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)), and so must the input field ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)).
+- **Write path wired, read path not.** [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) constructs the live store in
+  `src/main/index.ts` and gives `pairingHandler` a `save`-only handle. Nothing yet calls `load` or
+  `clear` — those callers are [#824](https://github.com/pyrycode/pyrycode-desktop/issues/824) (read) and [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)
+  (erase).
 - **Single pyrybox** — one label under `HOST_LABEL_NAME`. Per-server-id keying
   (`pyrycode.host_label.<server-id>`) is a deferred one-line change via the injectable `name`; the
   sidebar's host-grouping design will decide whether the key becomes `<name>.<server-id>` or the
@@ -228,6 +240,11 @@ secure-store consumers — not a secret — so its review reads differently from
   integrity rather than confidentiality.
 - [ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md) — "keys never reach the
   renderer" / "keep the transport out of the window", which this module's zero-IPC-surface honours.
-- Downstream, not yet built: the pairing-path write ([#823](../codebase/823.md)), the IPC read path
-  ([#824](../codebase/824.md)), the label input field ([#825](../codebase/825.md)), the sidebar host
-  row ([#826](../codebase/826.md)), and erase-on-unpair ([#827](../codebase/827.md)).
+- [Pairing IPC channel](pairing-ipc-channel.md) / [#823](https://github.com/pyrycode/pyrycode-desktop/issues/823) — the pairing-path write:
+  the operator-typed label rides the `confirm` request and reaches this store's `save`. **Read the
+  full hand-off there.**
+- Downstream, not yet built: the IPC read path ([#824](https://github.com/pyrycode/pyrycode-desktop/issues/824)), the label input field
+  ([#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)), the sidebar host row ([#826](https://github.com/pyrycode/pyrycode-desktop/issues/826)), and
+  erase-on-unpair ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)) — the last of which must also clear the stale label
+  left behind by an unpair, since [#173](../codebase/173.md)'s unpair clears only
+  `pairedServerStore` (flagged in #823's spec, Open question 1).

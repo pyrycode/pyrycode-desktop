@@ -1133,29 +1133,64 @@
 }
 
 /* #696 — the expanded row. Turns the row into a column so the result body stacks under the chip; placed
-   here (immediately after the other modifiers) for the same source-order reason. align-items: flex-start
-   is load-bearing — the flex default `stretch` would blow the hug-width pill out to the full row. The
-   gap is .unrecognized-row's own column gap (:2462), since this is the same stacked shape. */
+   here (immediately after the other modifiers) for the same source-order reason. The gap is
+   .unrecognized-row's own column gap (:2462), since this is the same stacked shape.
+
+   align-items: flex-start IS STILL LOAD-BEARING, FOR A DIFFERENT REASON SINCE #722. It was held because
+   the flex default `stretch` would have blown the hug-width pill out to the full row; #722 made the chip
+   full-width on purpose and carries its own `width: 100%`, so the chip is now unaffected either way.
+   What the declaration still holds is .tool-row__body, the column's OTHER child: under `stretch` the
+   body would go full width too, stretching .tool-row__result and the .code-block #780 puts inside it.
+   That is a change to the EXPANDED BODY, which #722 leaves alone and #774 owns. Under flex-start the
+   body stays content-sized inside its own max-width: 100%, exactly as .code-block's comment documents. */
 .tool-row--expanded {
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-2);
 }
 
-/* The chip (Figma node 16-29): surface-container fill, 1px outline-variant border, 12px radius. gap 8
-   → --space-2; py 8 / px 12 → --space-2 / --space-3. max-width/min-width/overflow bound the chip so an
-   arbitrarily long untrusted summary can't blow out the layout. */
+/* The chip. #218 drew it from the mobile mock (Figma 16-29) as a hug-width pill — surface-container
+   fill, 1px outline-variant border, 12px radius; #722 redrew it to the desktop design (Figma 134:4939)
+   as a FULL-WIDTH BORDERED BOX on the thread's own background. That box is the one .code-block (:562)
+   already ships from #721 — --color-surface fill, 1px --color-primary-container border, --radius-xs —
+   adopted here rather than invented, so the two read as one family. Same warning as there: the design's
+   generated fallback for primary-container is the LIGHT scheme's; this node's variable prints #134a74,
+   which agrees with the dark token, so there is nothing to "correct" on this one. The padding is
+   unchanged (py 8 / px 12 → --space-2 / --space-3); the gap widens 8 → 12, --space-2 → --space-3.
+
+   THE WIDTH MECHANIC, and it lives on THIS rule because this is the one that reaches both branches.
+   .tool-row is already a stretch item of .conversation__thread's flex column, so the row was always the
+   full measure — only the chip hugged. `max-width: 100%` was a CEILING on a hug-width box; it becomes
+   `width: 100%`, and box-sizing comes with it (index.css sets no global rule, .paired-shell:20-22 is the
+   file-family precedent for declaring it at the call site) so the 12px padding and 1px border are drawn
+   INSIDE the measure rather than added to it. Stating both here is what makes the <button> and <div>
+   branches identical by construction — same width, same box-sizing, same padding, same border, and
+   `chipRuns` is one shared fragment — which is what "a resolving row does not shift" means; the three
+   width assertions in e2e/tool-row-toggle.spec.ts pin it, since a rendered width is invisible to the
+   renderToStaticMarkup unit tier. NOT a flex remedy (`flex: 1` or `align-self: stretch`): this chip's
+   container flips its flex-direction between collapsed (row) and expanded (column), so a main-axis
+   remedy would fill the row collapsed and grow the chip VERTICALLY expanded, and a cross-axis one the
+   reverse. `width: 100%` is direction-agnostic, and is what .status-row (:1558) and
+   .unrecognized-row__summary already use for the same job.
+
+   min-width: 0 STAYS: it is the flex-item automatic-minimum-size remedy that lets the chip be narrower
+   than its own min-content, which is what keeps .tool-row__summary's ellipsis reachable in a narrow
+   window. overflow: hidden stays (the design's overflow-clip). display: inline-flex stays and is inert
+   either way — the chip is always a flex item of .tool-row and has therefore always been blockified;
+   `flex` would be the honest keyword now, but ToolRow's own comment names this one and #722 may not
+   touch TSX. */
 .tool-row__chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  max-width: 100%;
+  gap: var(--space-3);
+  width: 100%;
+  box-sizing: border-box;
   min-width: 0;
   overflow: hidden;
   padding: var(--space-2) var(--space-3);
-  background: var(--color-surface-container);
-  border: 1px solid var(--color-outline-variant);
-  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-primary-container);
+  border-radius: var(--radius-xs);
 }
 
 /* #697 — the chip AS the disclosure control. A resolved chip renders as a real <button> (keyboard
@@ -1163,9 +1198,10 @@
    pending one keeps the <div> above, so this rule can only ever reach a row that is actually openable.
    ADDITIVE: .tool-row__chip is not edited, so the collapsed geometry is byte-identical and the pending
    treatment is unchanged straight off the diff. Figma 16-28 models no disclosure control — at 33px
-   there is nowhere to put one — so this takes .unrecognized-row__summary's SEMANTICS inside the chip's
-   own pill box, never its full-width bordered box (which would fight #696's load-bearing
-   align-items: flex-start at :953).
+   there is nowhere to put one — so this takes .unrecognized-row__summary's SEMANTICS and none of its
+   geometry. It once read "inside the chip's own pill box, never its full-width bordered box", which #722
+   made false from the other direction: the chip ITSELF is now a full-width bordered box, declared on the
+   base rule that reaches both branches rather than adopted by this one.
 
    It declares only what a UA <button> would otherwise inject or override. NOT `border` in any form:
    `.tool-row--error .tool-row__chip` (:943) retints the border at specificity (0,2,0) against this
@@ -1186,44 +1222,68 @@
   color: var(--color-on-surface);
   /* The UA's `center` would centre the summary run inside its ellipsized box. */
   text-align: left;
-  /* The UA button is border-box; the <div> branch is content-box (index.css sets no global rule). Held
-     at content-box so max-width: 100% bounds the chip identically in both branches — a resolving row
-     must not shift. Normalising the pair to border-box is a separate concern. */
-  box-sizing: content-box;
+  /* No box-sizing. It was held at content-box here so that max-width: 100% bounded the hug-width chip
+     identically in both branches; #722's `width: 100%` makes content-box exactly backwards — this
+     branch would overflow its row by 2×12px of padding plus 2×1px of border — so the base rule states
+     border-box for both branches at once and this declaration is gone rather than flipped. */
   cursor: pointer;
 }
 
+/* The hover fill had to move with the resting one. Resting was --color-surface-container and this was
+   --color-surface-container-highest, one rung apart on the ladder; #722 dropped the resting fill to
+   --color-surface, so the old value would now be a three-rung jump. .status-row:hover (:1573) settles
+   it without a judgment call — a full-width <button> that rests on --color-surface and hovers to
+   --color-surface-container, this file's own shipped answer to this exact question. The design draws no
+   hover state at all, so the requirement is only that the step stay visible over the now-unfilled
+   resting background, which one rung is. */
 .tool-row__chip--toggle:hover {
-  background: var(--color-surface-container-highest);
+  background: var(--color-surface-container);
 }
 
-/* The tool-name run (Figma 16-30): monospace tertiary — the tool's identity, never shrinks or
-   truncates. Figma is a raw 13px (not a named M3 style) → --text-body-small-size (12px) per the ±2px
-   convention: mono at 12px reads consistent beside the 12px sans summary and adds zero type literals. */
+/* The tool-name run: monospace tertiary — the tool's identity, never shrinks or truncates. #218 sized it
+   from the mobile mock's raw 13px (Figma 16-30) down to body-small's 12px per the ±2px convention; #722
+   redraws it at the desktop design's 14/16 (Figma 134:4939), which is a raw pair bound to no type style
+   at all. THREE QUARTERS OF THE QUARTET COME FROM body-medium, the step its sans sibling below takes
+   whole, and the leading from --text-tool-name-line — .code-block__body's shape (:642) for exactly this
+   situation, and tokens.css records why borrowing --text-body-small-line's 16 instead would be wrong.
+
+   The design binds no tracking on this run, and taking body-medium's 0.25px anyway is deliberate: it is
+   sub-perceptual on a short mono identifier, it is inside the ±1px convention this file runs on, the
+   outgoing rule already applied a SANS tracking (0.4px) to this same mono run, and .code-block__body
+   does the same thing for the same reason. Dropping the declaration would also break the invariant
+   .tool-row__chip--toggle's comment states — that both child runs set all four explicitly. */
 .tool-row__name {
   flex: 0 0 auto;
   white-space: nowrap;
   font-family: var(--font-mono);
   color: var(--color-tertiary);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-tool-name-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
-/* The input-summary run (Figma 16-31): muted body-small, inheriting --font-sans from .conversation.
-   min-width: 0 + ellipsis so a long untrusted summary ellipsizes rather than overflowing (Figma models
-   a hard overflow-clip; ellipsis is the friendlier desktop degrade for an unbounded string). */
+/* The headline run (Figma 16-31, redrawn 134:4939), inheriting --font-sans from .conversation. #722
+   moves it from the mobile mock's muted body-small to the design's M3/body/medium in full — 14/20/0.25/
+   400 — and lifts the ink from --color-on-surface-variant to --color-on-surface: the design says
+   Schemes/On Background, and M3 gives background and surface one value (#e0e2e8), so the surface pair is
+   reused rather than a second name invented for one colour (.code-block__header's ruling, :592).
+
+   THE GEOMETRIC BOUND IS UNTOUCHED, and the wider box does not make it optional: min-width: 0 + ellipsis
+   is what keeps a long untrusted headline ellipsizing on ONE line rather than overflowing, and nowrap is
+   what collapses a newline inside it to a space so it cannot break the row. A full-width box gives that
+   string more room; it does not bound it. (Figma models a hard overflow-clip; ellipsis is the friendlier
+   desktop degrade for an unbounded string.) */
 .tool-row__summary {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
+  color: var(--color-on-surface);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
 /* #696 — the expanded body, a sibling of the chip (the chip is a single-line pill with overflow: hidden,
@@ -1240,8 +1300,11 @@
 }
 
 /* The result text. .unrecognized-row__raw's treatment (:2536) — the house style for a large untrusted
-   payload — with one deliberate deviation: the chip's --radius-sm instead of its --radius-md, since this
-   body sits under the chip and the two should read as one object.
+   payload — with one deliberate deviation: --radius-sm instead of its --radius-md, taken from the chip
+   because this body sits under the chip and the two should read as one object. #722's desktop redraw
+   moved the CHIP's corner to --radius-xs and deliberately left this one alone: the expanded body is not
+   drawn in that design and is #774's to redraw, so following the chip here would be a visual change to
+   a body this ticket held.
 
    white-space: pre, not pre-wrap: the rule stated on .code-block__body puts a payload whose exact shape IS
    the content on the keep-it-and-scroll side, and tool output is machine output (a listing, a diff, an

@@ -19,9 +19,14 @@ import type { ToolResultPayload, ToolUsePayload } from '../src/shared/wire/types
 // proven to arrive that way by thread-scroll-pin.spec.ts.
 //
 // SECRET HYGIENE (carried from the sibling specs): every assertion reads DOM text, attributes, class
-// locators and counts only. SEEDED_ROW.id, the tool ids and the invented tool name are non-secret
-// display/routing literals; the pairing plumbing lives in launchPairedApp and is never echoed. No
-// failure diagnostic serialises a token, key, or plaintext.
+// locators, bounding boxes and counts only. SEEDED_ROW.id, the tool ids and the invented tool name are
+// non-secret display/routing literals; the pairing plumbing lives in launchPairedApp and is never
+// echoed. No failure diagnostic serialises a token, key, or plaintext.
+//
+// #722 ADDED THE WIDTH ASSERTIONS, for the same reason: the desktop redraw makes the chip fill the
+// message column in both element branches, and a rendered width is a computed value the
+// renderToStaticMarkup tier structurally cannot observe. They ride the states this spec already
+// reaches rather than adding a spec, a frame or a fixture.
 
 // The renderer → preload → main → Noise → loopback round-trip is fast in-process, so a short headroom
 // over Playwright's 5s default suffices for a cold runner (the siblings' value).
@@ -39,6 +44,10 @@ const TOOL_USE_ID = 'tool-use-697'
 // collapsed — that absence is the assertion that the result is genuinely withheld rather than merely
 // hidden by CSS — and must appear once expanded.
 const RESULT_NEEDLE = 'needle-inside-the-tool-result'
+
+// Rendered widths are floats (device pixel ratio, sub-pixel layout), so the three equalities below are
+// compared with a sub-pixel tolerance rather than with toBe.
+const WIDTH_TOLERANCE_PX = 0.5
 
 const TOOL_USE: ToolUsePayload = {
   conversation_id: SEEDED_ROW.id,
@@ -89,6 +98,18 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   const toggle = row.locator('.tool-row__chip--toggle')
   const result = row.locator('.tool-row__result')
 
+  // #722 — the chip's rendered width beside its row's. The row is a stretch item of
+  // .conversation__thread's flex column and so IS the message column's measure by construction;
+  // comparing against it rather than against the thread's clientWidth minus its computed padding is the
+  // same coverage without the arithmetic. Both elements are visible at every call site below, so a null
+  // box is a genuine failure rather than a case to handle.
+  async function measureChip(): Promise<{ chip: number; row: number }> {
+    const chipBox = await chip.boundingBox()
+    const rowBox = await row.boundingBox()
+    if (chipBox === null || rowBox === null) throw new Error('the tool row is not laid out')
+    return { chip: chipBox.width, row: rowBox.width }
+  }
+
   // --- The call lands PENDING: a chip with no toggle affordance at all (AC2).
   daemon.pushFrame(toolUseFrame())
   await expect(row).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
@@ -102,6 +123,13 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   await expect(row.locator('[aria-expanded]')).toHaveCount(0)
   await expect(row).not.toContainText(RESULT_NEEDLE)
 
+  // #722 — the <div> branch fills the message column. Three states are measured, not four: pending +
+  // expanded is unreachable by construction, since the body renders only when the result does and the
+  // toggle exists only on a resolved row.
+  const pending = await measureChip()
+  expect(pending.chip).toBeGreaterThan(0)
+  expect(Math.abs(pending.chip - pending.row)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
   // --- The result resolves the SAME row in place (correlated by tool_use_id), and the chip becomes
   // the control — closed at rest.
   daemon.pushFrame(toolResultFrame())
@@ -113,12 +141,26 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   await expect(result).toHaveCount(0)
   await expect(row).not.toContainText(RESULT_NEEDLE)
 
+  // #722 — the <button> branch fills the same column AND measures the same as the <div> did: that
+  // second equality is "a resolving row does not shift", which is the whole reason the chip's
+  // box-sizing is stated once on the base rule reaching both branches.
+  const resolved = await measureChip()
+  expect(Math.abs(resolved.chip - resolved.row)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(Math.abs(resolved.chip - pending.chip)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
   // --- It expands in place on click, showing the result text.
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(row).toHaveClass(/tool-row--expanded/)
   await expect(result).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(result).toContainText(RESULT_NEEDLE)
+
+  // #722 — and it still fills the column once the row turns into a column flex, where the chip is a
+  // CROSS-axis item. This is the state that would go red if the chip leaned on the container's
+  // alignment instead of carrying its own width.
+  const expanded = await measureChip()
+  expect(Math.abs(expanded.chip - expanded.row)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  expect(Math.abs(expanded.chip - pending.chip)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
 
   // --- And collapses again on a second click, withdrawing the result from the DOM (AC5's second half).
   await toggle.click()

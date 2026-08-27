@@ -865,11 +865,13 @@ test('a fenced code block wraps inside the bubble measure rather than spilling o
   await streamTheReplies(page)
 
   // AC3's code half. <pre>'s UA `white-space: pre` is a declaration on the element and beats .bubble's
-  // inherited value whatever its origin, so without .bubble__markdown pre re-declaring pre-wrap the token
-  // does not wrap at all: its content overflows the <pre>, and that overflow propagates to the thread as a
-  // horizontal scrollbar. Both boxes fail there; both hold once it wraps, where .bubble's pre-existing
-  // `word-break: break-word` (conversation.css:298) — inherited, deliberately not restated — does the
-  // breaking. Keeping the thread check is the over-correction guard #607 carried.
+  // inherited value whatever its origin, so without .code-block__body re-declaring pre-wrap the token does
+  // not wrap at all: its content overflows the <pre>, and that overflow propagates to the thread as a
+  // horizontal scrollbar. Both boxes fail there; both hold once it wraps, where `word-break: break-word`
+  // does the breaking. #780 moved both declarations onto .code-block__body from a `.bubble__markdown pre`
+  // rule that no longer exists — break-word was inherited from .bubble until then, and both computed
+  // values are unchanged here, which is why this assertion held across that move untouched. Keeping the
+  // thread check is the over-correction guard #607 carried.
   const code = await readCodeMetrics(page, CODE)
   expect(code.whiteSpace).toBe('pre-wrap')
   expect(code.scrollWidth).toBeLessThanOrEqual(code.clientWidth + SUBPIXEL_TOLERANCE_PX)

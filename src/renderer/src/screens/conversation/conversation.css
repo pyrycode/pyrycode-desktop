@@ -362,23 +362,6 @@
   margin-block: 0;
 }
 
-/* <pre>'s UA `white-space: pre` is a DECLARATION on the element, and a declaration beats an inherited
-   value whatever its origin — so without this the code body would keep `pre` and a long line would spill
-   past the bubble's measure. Figma 16:49 settles it: the code body is pre-wrap + word-break: break-word,
-   so code wraps rather than scrolling. word-break is inherited from .bubble (:298) and is deliberately not
-   restated (#607's precedent). No max-height and no overflow either: .unrecognized-row__raw below is the
-   ANTI-precedent — it bounds and scrolls because a raw wire payload must keep its exact shape, whereas
-   source code in a chat bubble must reflow. Nor can a tall block push the composer anywhere;
-   .conversation__thread (:233) is its own scroll region and .composer is its sibling.
-
-   #623 nested that <pre> one level in, as .code-block__body inside the block wrapper. This is a
-   DESCENDANT selector (not `>`), which is why it still reaches it — and why white-space is deliberately
-   NOT restated on the new class: one subject, one rule, so a future reader looking at two rules that
-   both target this element knows which one owns the wrapping. */
-.bubble__markdown pre {
-  white-space: pre-wrap;
-}
-
 /* #628 — a markdown heading's type. Until now this was the ONE heading in the app the browser still typed:
    every other <h1>/<h2> in the renderer carries an explicit rule taking all four of size / line-height /
    letter-spacing / weight from a single scale step, and a heading in here fell through to the UA
@@ -410,7 +393,8 @@
    — the same discriminator .settings__section-header itself relies on.
 
    DESCENDANT selectors, not `>`, so a heading nested in a blockquote or a list item is sized too — the
-   .bubble__markdown pre precedent directly above. Such a nested heading is not a direct child of the
+   shape every .bubble__markdown rule below follows (#607's precedent, set here by the fenced block's own
+   wrapping rule until #780 moved that pair onto .code-block__body). Such a nested heading is not a direct child of the
    container and so keeps its UA margin-block; that leftover reset is #629's, shared with nested paragraphs
    and lists, and this ticket adds and removes no margin anywhere.
 
@@ -506,7 +490,7 @@
    appears nowhere in this codebase and would be introduced to protect a distinction this container flattens
    by intent.
 
-   DESCENDANT selectors for the indent and the bar (the .bubble__markdown pre precedent, :374-377), so a
+   DESCENDANT selectors for the indent and the bar (the .bubble__markdown h1…h6 precedent above), so a
    list in a blockquote and a blockquote in a list item are reached at every depth; `>` for the rhythm pair,
    just as deliberately, so it applies once per level instead of compounding down the tree. Logical
    properties where the UA declares them — margin-inline, padding-inline-start — so each override is
@@ -566,7 +550,15 @@
    draws and is not a transposition to be "fixed". Its contrast against the bubble's
    --color-surface-container-high is low, and so was the outgoing --color-outline-variant's: this outline
    is decorative chrome rather than a state-bearing graphic, so the 3:1 floor :484 invokes for meaningful
-   non-text graphics does not reach it. */
+   non-text graphics does not reach it.
+
+   AS OF #780 IT RENDERS IN TWO PLACES: a fenced block in a message, and a shell call's command at the head
+   of .tool-row__body. That is deliberate rather than incidental — the two must read as one code surface,
+   so the chrome stays here in CSS keyed on these classes and both call sites emit the same two elements.
+   A restyle therefore lands on both without touching either TSX, which is how #721 itself shipped. Neither
+   width nor height needs anything new for the second site: .tool-row--expanded is a column flex with
+   align-items: flex-start, so .tool-row__body is content-sized under its own max-width: 100%, this block
+   is a stretched item of that column, and the body's pre-wrap + break-word wrap inside it. */
 .code-block {
   background: var(--color-surface);
   border: 1px solid var(--color-primary-container);
@@ -623,8 +615,30 @@
    tokens.css records why neither a bare 20px here nor a borrowed --text-body-medium-line was taken.
    Tracking stays body-small's 0.4px although the design's code text carries none — the redraw's delta list
    does not include it, and mono tracking is its own question. Without the quartet the body would inherit
-   .bubble's body-MEDIUM tracking. word-break: break-word still inherits from .bubble (:298) — inheritance
-   follows the DOM, not selectors — so it is not restated either. */
+   .bubble's body-MEDIUM tracking.
+
+   THE WRAPPING PAIR MOVED HERE IN #780, from a `.bubble__markdown pre` rule that no longer exists, and the
+   argument for each survives the move. <pre>'s UA `white-space: pre` is a DECLARATION on the element, and a
+   declaration beats an inherited value whatever its origin — so without the override the code body would
+   keep `pre` and a long line would spill past its container's measure. Figma 16:49 settles the value: the
+   code body is pre-wrap + word-break: break-word, so code wraps rather than scrolling. break-word used to
+   INHERIT from .bubble (:298) and was deliberately not restated (#607's precedent).
+
+   BOTH ARE NOW STATED HERE because the block renders in a SECOND place: #780 draws it inside
+   .tool-row__body for a shell call's command, where the descendant selector does not match and .bubble is
+   not an ancestor to inherit from. The old rule's own comment forbade restating white-space on this class —
+   one subject, one rule — and that argument is not overruled, its CONDITION changed: it held while the
+   block rendered only under .bubble__markdown, and .code-block__body is now the one selector naming both
+   sites. Deleting the old rule is safe by construction rather than by inspection: AssistantMarkdown's `pre`
+   override is total over the element and always emits pre.code-block__body, and raw HTML is escaped rather
+   than parsed (no rehype-raw), so no other <pre> can exist under .bubble__markdown.
+
+   Still no max-height and no overflow, in either site: .unrecognized-row__raw below is the ANTI-precedent —
+   it bounds and scrolls because a raw wire payload must keep its exact shape, whereas source code must
+   reflow. This is also where the command block diverges from .tool-row__result's 240px cap: a result can
+   reach 64KB, a command is bounded by the daemon at 4000 runes, and the command is the very thing the
+   reader opened the row to see. Nor can a tall block push the composer anywhere; .conversation__thread
+   (:233) is its own scroll region and .composer is its sibling. */
 .code-block__body {
   margin-block: 0;
   padding: var(--space-3) var(--space-4);
@@ -633,12 +647,16 @@
   line-height: var(--text-code-body-line);
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Both elements, because the UA stylesheet carries `tt, code, kbd, samp { font-family: monospace }` and
-   a DECLARATION beats an inherited value whatever its origin (the same rule :365 invokes). The <code>
-   child holds every visible character, so --font-mono on the <pre> alone would be inert — invisible in
-   the server-render tier and in any screenshot taken where the two families resolve alike. */
+   a DECLARATION beats an inherited value whatever its origin (the same rule the white-space override
+   above invokes). The <code> child holds every visible character, so --font-mono on the <pre> alone would
+   be inert — invisible in the server-render tier and in any screenshot taken where the two families
+   resolve alike. It is also what lets #780's bare <pre> (no <code> child, since nothing supplies one
+   outside markdown) read identically to a fence's. */
 .code-block__body,
 .code-block__body code {
   font-family: var(--font-mono);
@@ -739,7 +757,7 @@
    inside link text: #630's rule is ancestry-scoped, so it still matches there, and the code span inherits
    this colour onto its own --color-surface fill at 10.9:1.
 
-   DESCENDANT selector, matching .bubble__markdown pre / h1…h6 / the code rule above, so an anchor nested
+   DESCENDANT selector, matching .bubble__markdown h1…h6 / the code rule above, so an anchor nested
    in a list item, a blockquote or a heading is reached. Its reach in the other direction is the whole of
    "and nothing else": .bubble__markdown has exactly one call site (ConversationScreen.tsx:522, the settled
    assistant reply) and no <a> is rendered anywhere else in the renderer. */
@@ -1210,8 +1228,9 @@
 
 /* #696 — the expanded body, a sibling of the chip (the chip is a single-line pill with overflow: hidden,
    so it cannot hold this). A CONTAINER, not a lone text node: #706 landed its per-input-field list in
-   here, above the result. max-width/min-width are what make a single 16000-character line scroll inside
-   the body rather than widen the row. */
+   here, above the result, and #780 put a shell call's .code-block at the head of the same column.
+   max-width/min-width are what make a single 16000-character line scroll inside the body rather than
+   widen the row — and what cap the code block, which wraps at that measure rather than scrolling. */
 .tool-row__body {
   display: flex;
   flex-direction: column;
@@ -1224,8 +1243,9 @@
    payload — with one deliberate deviation: the chip's --radius-sm instead of its --radius-md, since this
    body sits under the chip and the two should read as one object.
 
-   white-space: pre, not pre-wrap: the rule at :365 puts a payload whose exact shape IS the content on
-   the keep-it-and-scroll side, and tool output is machine output (a listing, a diff, an aligned table)
+   white-space: pre, not pre-wrap: the rule stated on .code-block__body puts a payload whose exact shape IS
+   the content on the keep-it-and-scroll side, and tool output is machine output (a listing, a diff, an
+   aligned table)
    where column position carries information — reflowing it at the row's measure mangles it. overflow:
    auto then supplies the x-axis for the long unwrapped line for free.
 

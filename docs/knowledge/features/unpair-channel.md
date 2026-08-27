@@ -37,7 +37,9 @@ One typed round trip, `window.pyry.unpair()` → `Promise<UnpairResult>`:
 
 - **`{ result: 'ok' }`** — [`pairedServerStore.clear()`](paired-server-store.md) completed. Covers
   both "a record was erased" and "there was nothing to erase" — `clear()` is idempotent, so unpairing
-  an already-clean state is still success.
+  an already-clean state is still success. As of [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827),
+  `ok` also means the [host label](host-label-store.md) was erased alongside the record — but a
+  failure to erase the label never downgrades this to `error`; see below.
 - **`{ result: 'error' }`** — `clear()` threw. The handler classifies-don't-forward: every throw maps
   to this value-free outcome, and the caught object is dropped — never logged, interpolated, or
   returned. `clear()` is itself fail-closed (a `secureStore.delete` failure propagates rather than
@@ -57,6 +59,10 @@ one even by mistake.
 | `registerUnpairHandler(target, deps)` + `UnpairHandleTarget` | `src/main/unpairHandler.ts` (new) | background handler |
 | `window.pyry.unpair()` | `src/preload/index.ts` (mod, +11) | preload bridge |
 | single `handle` registration + `will-quit` teardown | `src/main/index.ts` (mod, +11) | composition root |
+
+[#827](https://github.com/pyrycode/pyrycode-desktop/issues/827) added a fourth dep, `hostLabel?:
+Pick<HostLabelStore, 'clear'>`, and one `await`ed erase call inside the listener — no new file, no
+new shared type. See "The label erase (#827)" below.
 
 ### 1. The shared contract (`src/shared/ipc/unpair.ts`)
 
@@ -80,34 +86,79 @@ export interface UnpairHandleTarget {
 
 export function registerUnpairHandler(
   target: UnpairHandleTarget,
-  deps: { store: ClearablePairedServerStore }
+  deps: {
+    store: ClearablePairedServerStore
+    onUnpaired?: () => void
+    hostLabel?: Pick<HostLabelStore, 'clear'>   // #827
+  }
 ): () => void
 ```
 
-The listener is ~6 lines:
+The listener, record → label → teardown:
 
 ```ts
 const listener = async (): Promise<UnpairResult> => {
   try {
     await store.clear()
-    return { result: 'ok' }
   } catch {
     return { result: 'error' }   // classify-don't-forward: the caught object is DROPPED
   }
+  try {
+    await hostLabel?.clear()
+  } catch {
+    // dropped — see "The label erase (#827)" below
+  }
+  try {
+    onUnpaired?.()
+  } catch {
+    // dropped — #504
+  }
+  return { result: 'ok' }
 }
 ```
 
-- **Stateless, single store interaction.** The listener's *only* store call is `clear()` — never
-  `load`/`save`. It erases; it does not read. No state held between invokes.
+- **Stateless, single store interaction per dep.** The listener's *only* record-store call is
+  `clear()` — never `load`/`save`. It erases; it does not read. No state held between invokes.
 - **Store dep typed against the concrete `ClearablePairedServerStore`**, not base
   `PairedServerStore` — the base interface deliberately does not carry `clear()` (see [paired-server
   store](paired-server-store.md)), so this handler's fake stubs only `clear` and every other consumer's
   fake needs no edit.
+- **`hostLabel` is typed `Pick<HostLabelStore, 'clear'>`, not the full interface** (#827) — mirroring
+  [host-label channel](host-label-channel.md)'s `Pick<…, 'load'>` in the opposite direction. Without
+  `load` on the handle, the label string cannot be materialised in this module at all: "no label text
+  reaches the result or any log" is held by the type, not by a convention someone has to keep.
 - **Log-free by construction** — no `console.*` anywhere in the module. A propagated
-  `secureStore.delete` error can carry a keychain/filesystem path; logging it would leak that path to
-  the console. `handle` must resolve to a value, so the listener never rethrows.
+  `secureStore.delete` error (record or label) can carry a keychain/filesystem path; logging it would
+  leak that path to the console. `handle` must resolve to a value, so the listener never rethrows.
 - Nothing Electron-specific is imported — `ipcMain` satisfies `UnpairHandleTarget` structurally, so
   the unit test injects a fake `{ handle: vi.fn(), removeHandler: vi.fn() }`, no Electron harness.
+
+### The label erase (#827)
+
+The record erase alone gates `ok`; the label erase never does. `runUnpair` (the conversation
+screen's caller, see below) coerces both `error` **and** a rejected invoke to "stay on the
+conversation screen," so once `store.clear()` has resolved the record is gone — any later
+`error` would produce a paired-looking UI over an erased record, the exact inverse half-state the
+fail-closed catch above exists to prevent. A surviving label, by contrast, is stale display text:
+overwritten by the next pairing that carries one, erased by the next unpair, and recoverable by
+re-typing it. This is the third site under one rule already established at
+`pairingHandler.ts:121-127` (write) and this module's own `onUnpaired` block (teardown): **the result
+reports on the record.**
+
+Ordering — record → label → `onUnpaired` — is deliberate, not incidental:
+
+- **Record before label.** A label-first erase that threw would either abort (leaving a live
+  bearer token on an unpair request — the worst available outcome) or continue anyway, gaining
+  nothing from having gone first.
+- **A process kill between the two erases** leaves *no record + orphan label*, the benign,
+  self-healing interleaving (the next pairing that carries a label overwrites it; the next unpair
+  erases it). Label-first would risk the inverse — record present, label gone — a live credential
+  whose display name vanished, strictly worse.
+- **Label before `onUnpaired`.** All at-rest erasure completes before anything observable is
+  signalled, so the teardown trigger never fires over a half-erased at-rest state.
+
+The composition root wires the **same** `hostLabelStore` instance already threaded into the pairing
+and host-label handlers — no second store is constructed.
 
 ### 3. Preload bridge (`src/preload/index.ts`)
 
@@ -125,7 +176,8 @@ leaves the renderer. `PyryApi = typeof api` re-derives `window.pyry.unpair` auto
 ```ts
 const unregisterUnpair = registerUnpairHandler(ipcMain, {
   store: pairedServerStore,
-  onUnpaired: () => connection.reconnect()
+  onUnpaired: () => connection.reconnect(),
+  hostLabel: hostLabelStore   // #827 — the same instance, not a second store
 })
 app.on('will-quit', () => unregisterUnpair())
 ```
@@ -141,8 +193,10 @@ second store constructed. See [daemon connection](daemon-connection.md) § Teard
 ```
 renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body]
   →  ipcMain handler listener  →  ClearablePairedServerStore.clear()
-  →  secureStore.delete(PAIRED_SERVER_NAME)
-  →  resolves { result: 'ok' }  (or { result: 'error' } on any throw)   [value-free]
+  →  secureStore.delete(PAIRED_SERVER_NAME)  — throw ⇒ resolves { result: 'error' }, stop here
+  →  hostLabel?.clear()  →  secureStore.delete(HOST_LABEL_NAME)  — throw ⇒ dropped, continue (#827)
+  →  onUnpaired?.()  — throw ⇒ dropped, continue
+  →  resolves { result: 'ok' }   [value-free]
 ```
 
 ## Security posture
@@ -165,6 +219,13 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
 - **Destructive but recoverable, and device-identity-preserving.** `clear()` deletes only
   `PAIRED_SERVER_NAME`; the device static keypair (`pyrycode.device_static`) lives under a distinct
   name in a distinct store and is structurally untouched.
+- **The label erase cannot reach a credential ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827), security-sensitive, architect self-review PASS).**
+  `hostLabelStore.clear()` deletes by its own `HOST_LABEL_NAME` constant, explicitly distinct from
+  `PAIRED_SERVER_NAME` and `pyrycode.device_static` — no caller-supplied string reaches a persistence
+  key. The `Pick<HostLabelStore, 'clear'>` dep withholds `load`, so the label value is never
+  materialised in this module, closing the same class of leak the value-free response already closes
+  for the record. The dep is optional, so the two pre-existing call sites
+  (`daemonConnection.test.ts` and ten `unpairHandler.test.ts` registrations) compile unchanged.
 
 ## Edge cases and limitations
 
@@ -188,6 +249,19 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
   #166's caller synthesizes its own generic `ConnectionError` (`code: 'unpair'`) on that arm rather
   than threading a sub-reason through. A future recovery flow that needs to distinguish error
   sub-cases extends the union additively; it is not pre-built here.
+- **A failed label erase is invisible, by design ([#827](https://github.com/pyrycode/pyrycode-desktop/issues/827)).** No diagnostic counter, no
+  retry-at-next-launch. The module stays log-free by construction, no such failure has been observed,
+  and the recovery path already exists (the next pairing that carries a label overwrites the stale
+  one; the next unpair retries the erase).
+- **The two erases are not atomic** — they are two independent `SecureStore` names, not a
+  transaction. A crash between them leaves *no record + orphan label*, the argued-benign,
+  self-healing interleaving (see "The label erase (#827)" above). No journal, no two-phase commit.
+- **The renderer's [host-label window store](host-label-window-store.md) is not reset here.**
+  `clearPairingScopedState` resets the timeline, session, active conversation, and last-read state on
+  unpair, but not #833's renderer store — so an unpair-then-repair *inside one running app session*
+  can leave the window holding the previous label until the next `hostLabel()` load overwrites it.
+  Unobservable as of #827 (that loader has no non-test consumer yet); named as a follow-up for
+  whoever mounts the sidebar row (#834).
 
 ## Related
 
@@ -196,6 +270,11 @@ renderer window.pyry.unpair()  →  ipcRenderer.invoke(UNPAIR_CHANNEL)  [no body
   placement.
 - [Paired-server store](paired-server-store.md) / [#172 codebase notes](../codebase/172.md) — the
   `clear()` capability this channel calls.
+- [Host-label store](host-label-store.md) / [#822](https://github.com/pyrycode/pyrycode-desktop/issues/822) —
+  the second `clear()` this channel calls, as of [#827](https://github.com/pyrycode/pyrycode-desktop/issues/827),
+  via a `clear`-only handle over the same instance the pairing and host-label handlers already share.
+- [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
+  the renderer-side counterpart #827 does **not** reset; see the edge case above.
 - [Pairing-status signal](pairing-status-signal.md) / [#79 codebase notes](../codebase/79.md) — the
   literal source pattern this channel clones field-for-field.
 - [Diagnostics channel](diagnostics-channel.md) / [#131 codebase notes](../codebase/131.md) — the

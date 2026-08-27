@@ -3089,12 +3089,12 @@
 
 /* #838 — the composer footer's shared options panel (Figma node 121:3879, "Options overlay"). ONE surface
    that #680 Actions, #682 permission mode, #683 model and effort, and #694's slash-command type-ahead all
-   open, so none of them builds its own. This slice is the resting appearance only: #839 places it (so NO
-   position and no offsets here — the panel cannot be an in-flow child of .composer__footer, which holds a
-   hard height: 20px) and #840 opens it.
+   open, so none of them builds its own. #838 shipped the resting appearance; #839 added the three
+   positioning declarations below, against the .composer-options-anchor wrapper at the foot of this file —
+   the panel cannot be an in-flow child of .composer__footer, which holds a hard height: 20px. #840 opens it.
 
-   NO explicit z-index, for the reason .conversation__overflow's comment records above (#276): once #839
-   positions it, the panel already paints above the non-positioned message thread, and the status-sheet /
+   NO explicit z-index, for the reason .conversation__overflow's comment records above (#276): now that
+   #839 positions it, the panel already paints above the non-positioned message thread, and the status-sheet /
    permission-modal overlays — also positioned but later in the child list — keep painting above it by DOM
    order. A competing z-index would lift it above those overlays, which is the stacking regression.
 
@@ -3128,7 +3128,36 @@
    thing that would clip is a ~1.5px corner sliver of the current row when it happens to be first or last,
    between two near-identical navies, and clipping would eat #840's focus-visible outline on exactly those
    end rows. No border and no box-shadow — the node draws neither, and the fill contrast is the treatment. */
+/* #839 — the placement. Three declarations, resolving against .composer-options-anchor at the foot of this
+   file; every one of them load-bearing.
+
+   bottom: 100% puts the panel's bottom edge ON the anchor's top edge — AC1, with NO gap. The design draws
+   none and AC1 asks for none; do not invent one. This is .conversation__overflow-menu's top: 100% mirrored
+   (2405 above), which is this repo's one other anchored overlay and the idiom copied here.
+
+   left is written as the NEGATION of --space-3, never as -12px. The alignment number IS
+   .composer-options__item's left padding below: a footer button's label starts at the button's own left
+   edge (Figma 115:3688 — the text node sits at x=0, the chevron follows at x=28), so pulling the panel 12px
+   left of the button puts an option's label horizontally flush with the button's label (AC2, the operator's
+   instruction of 2026-08-22). The two are one quantity seen from two sides — if the row inset moves, the
+   panel must follow it or the labels drift. Writing the token makes that automatic; writing the literal
+   would make it a silent break. The 1329 comment above is this stylesheet's precedent for a coupled number.
+   NOT centred on the button and NOT left-aligned to it: both put the labels out of line, which is the thing
+   being asked for.
+
+   --composer-options-shift is AC3's right-edge clamp, inherited from the anchor and defaulting to 0px so
+   the resting rule stands with no consumer setting it. Its value is computed by composerOptionsShiftPx()
+   in composerOptionsPlacement.ts — see that module for the measuring recipe and for why the clamp boundary
+   is the window's right edge rather than the chat pane's. The value MUST carry a unit: a bare number makes
+   this whole declaration invalid at computed-value time, dropping the panel to left: auto and its static
+   position.
+
+   width: max-content survives unchanged: an absolutely-positioned box with left set and right auto is
+   shrink-to-fit anyway, and max-content keeps the width the longest label. Do not touch it. */
 .composer-options {
+  position: absolute;
+  bottom: 100%;
+  left: calc(-1 * var(--space-3) - var(--composer-options-shift, 0px));
   display: flex;
   flex-direction: column;
   width: max-content;
@@ -3190,4 +3219,33 @@
 
 .composer-options__item:focus-visible {
   outline: 1px solid var(--color-outline);
+}
+
+/* #839 — the wrapper that .composer-options positions against. Its own BLOCK, not .composer-options__anchor:
+   it is not a part of the panel, it wraps a TRIGGER, which the panel knows nothing about — and #694 will put
+   it on the message box rather than on a button. A sibling block name is the honest BEM reading and the one
+   that survives that consumer. Each of #680/#682/#683/#685 wraps its own footer control in one of these and
+   renders {open && <ComposerOptionsPanel …/>} as the trigger's SIBLING inside it; the panel is out of flow,
+   so it is not a flex item and cannot push the footer's 20px row around.
+
+   position: relative is what makes the panel's left/bottom resolve against the BUTTON. Without it they would
+   resolve against .conversation, the next positioned ancestor (line 18), and the panel would land somewhere
+   in the chat pane instead.
+
+   display: flex so the wrapper's box is EXACTLY the trigger's box. A block wrapper around an inline-block
+   <button> establishes an inline formatting context, and the line box's strut leading makes the wrapper
+   taller than the button — which both breaks AC1's "the button's top edge" as written and overflows
+   .composer__footer's hard height: 20px. Flex has no strut.
+
+   NO padding and NO border here, for the same reason: left and bottom resolve against this element's PADDING
+   box, so any inset would silently detune both AC1 and AC2. The consumer sets --composer-options-shift on
+   this element (inheritance carries it to the panel), which is what lets AC3 be applied without widening
+   #838's four-prop surface or forwarding a ref into the panel.
+
+   Its flex sizing is left at the inherited default deliberately: how .composer__footer behaves when five
+   controls overflow the row is #680/#682/#683's question, not the anchor's, and this ticket adds no control
+   to the row. */
+.composer-options-anchor {
+  position: relative;
+  display: flex;
 }

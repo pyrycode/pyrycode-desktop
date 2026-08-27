@@ -12,6 +12,24 @@ import {
 import { requestNewConversation } from '../../store/conversationCreatedBridge'
 import { useSessionStore, selectStatus } from '../../store/sessionStore'
 import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkStore'
+// #801's three per-row reads and the two pure modules that reduce them. All five are consumed EXACTLY as
+// shipped: none takes a `conversationId` except the three selector FACTORIES, which is what keeps the
+// untrusted daemon-asserted id a `Map` key and nothing else (conversationStatus.ts:26-31,
+// conversationUnread.ts:28-34).
+import {
+  useConversationActivityStore,
+  selectActivityFor
+} from '../../store/conversationActivityStore'
+import {
+  useConversationTimelineStore,
+  selectTimelineFor
+} from '../../store/conversationTimelineStore'
+import {
+  useConversationLastReadStore,
+  selectLastReadFor
+} from '../../store/conversationLastReadStore'
+import { resolveConversationStatus } from '../../store/conversationStatus'
+import { isConversationUnread } from '../../store/conversationUnread'
 // #718 reuses #330's shipped two-leg mapping ACROSS SCREENS rather than growing a second copy of it —
 // two surfaces in the same window disagreeing about one leg is precisely the lie the dot pair exists to
 // prevent. Cross-screen import is this codebase's established idiom (ArchiveScreen and
@@ -23,6 +41,7 @@ import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkS
 import { relayLeg, daemonLeg, type ConnectionLeg } from '../conversation/ConversationScreen'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
 import { RenameConversationDialogView, requestRenameConversation } from './RenameConversationDialog'
+import { ConversationStatusDot } from './ConversationStatusDot'
 import {
   titleFor,
   partitionActive,
@@ -603,6 +622,65 @@ function renderBody(
   )
 }
 
+/**
+ * One row's status dot (#801, Figma 103:2968) — the first consumer of both #800's leaf and #799's
+ * resolver, and the answer to the question `conversationUnread.ts:81` left open: WHERE the two-store
+ * unread composition lives. Here, per row, keyed by THE ROW'S OWN conversation id.
+ *
+ * Read the three narrow per-id slices, reduce them to one status, render the dot. That is the whole body.
+ * It is `HostConnectionDotsControl`'s shape one level down — a store-bound `*Control` beside a store-free
+ * leaf — and it lives HERE rather than in `ConversationStatusDot.tsx` because that file declares itself
+ * store-free in its own header.
+ *
+ * WHY PER-ROW AND NOT LIFTED. Hooks cannot be called from `renderBody`'s `.map()` callbacks (:558, :589),
+ * so a per-row component is the only place these subscriptions can go — and it is also where they belong:
+ * `conversationActivityStore`'s write path keeps every other conversation's held entry referentially
+ * identical (conversationActivityStore.ts:124-127) and all three selectors hand back the HELD reference or
+ * `null`, so a write for conversation A wakes A's dot and nothing else. Sitting here rather than in `Row`,
+ * a status flip re-renders one <span> and not the row's title, time or icon buttons. The blink is
+ * compositor-owned, so a working dot costs zero React renders.
+ *
+ * Five things this must not become, none of them a type error:
+ *
+ *   - THE THREE SUBSCRIPTIONS MERGED INTO ONE SELECTOR returning `{ activity, timeline, lastRead }`. Each
+ *     shipped selector returns a held reference or `null`, which is what keeps `useSyncExternalStore`
+ *     stable; a selector building an object returns a fresh one every call and loops.
+ *   - THE TWO PURE CALLS MOVED INSIDE A SELECTOR. Same reason, plus it would drag both runtime-free
+ *     modules into the stores' read path — the graph property both their headers are built around.
+ *   - A `useMemo`, A COMBINED SNAPSHOT OR A COMBINED STORE. `conversationUnread.ts:78-84` rules that
+ *     reading two stores back to back in a single-threaded renderer is not a torn read, and rules out a
+ *     merged snapshot by name. Two function calls per row per render is not a cost to design around. The
+ *     `useMemo`-stable selector idiom at ConversationScreen.tsx:147 does not transfer either: there the id
+ *     CHANGES over the component's life, whereas `Row` is keyed by `c.id` so a row instance's id is fixed
+ *     for its whole life — and a fresh selector closure costs one allocation and one `Object.is`
+ *     comparison, never a re-subscription (`api.subscribe` is what React watches) and never a re-render.
+ *   - THE `conversationId` ANYWHERE BUT THE THREE SELECTOR FACTORIES. It is daemon-asserted, so it stays a
+ *     `Map` key: never a class-name interpolation, never an attribute value, never a `title`, never an
+ *     object key, never a log line. Both upstream headers state this as a condition of their signatures.
+ *   - A `console.*` ON ANY PATH. Both source stores and both pure modules are log-free by construction,
+ *     and there is no read miss to report — `null` is a defined reading, not an error.
+ *
+ * The honest cost, the same one HostConnectionDotsControl (:353-364) already took and recorded:
+ * `ChannelListView` drifts further from its "pure view" docstring, since its subtree now reads three more
+ * singletons. Safe under `renderToStaticMarkup` in Node — the activity and timeline stores hydrate to
+ * empty maps and the last-read store's `localStorage` port short-circuits on `typeof window === 'undefined'`
+ * (conversationLastReadStore.ts:246-257) — so every unseeded row server-renders as `idle`.
+ */
+function ConversationStatusDotControl({
+  conversationId
+}: {
+  conversationId: string
+}): JSX.Element {
+  const activity = useConversationActivityStore(selectActivityFor(conversationId))
+  const timeline = useConversationTimelineStore(selectTimelineFor(conversationId))
+  const lastRead = useConversationLastReadStore(selectLastReadFor(conversationId))
+  return (
+    <ConversationStatusDot
+      status={resolveConversationStatus(activity, isConversationUnread(timeline, lastRead))}
+    />
+  )
+}
+
 // One row, identical in both sections. React key is `row.id` (a stable per-conversation identity — a
 // real key is available here, unlike the timeline's array-index keying). `name` and the time are
 // untrusted daemon-derived strings rendered as auto-escaped React children (never
@@ -635,6 +713,15 @@ function Row({
   const time = formatLastActivity(row.last_message_ts, now)
   return (
     <div className="channel-list__row">
+      {/* #801 — the status dot, LEADING the row and a SIBLING of the open button, not a child of it. The
+          dot ships a named `role="img"` for all three statuses, so nesting it would fold "Idle" — and,
+          as the daemon works, "Assistant working" — into the button's accessible name, mutating what
+          should say what activating it does. RunConfigSections.tsx:270-280 already declined exactly this
+          for the unselected radios. As a sibling the dot stays fully announced in reading order while the
+          button's name stays title + time. `channels.css` positions it absolutely at the design's 16px
+          inset so the button still spans the row and its hover/focus rectangles are unchanged; nothing
+          about `.channel-list__row` / `__row-open`'s class tokens or ancestry moves (AC4). */}
+      <ConversationStatusDotControl conversationId={row.id} />
       <button type="button" className="channel-list__row-open" onClick={onOpen}>
         <span className="channel-list__title">{titleFor(row.name)}</span>
         <span className="channel-list__time">{time}</span>

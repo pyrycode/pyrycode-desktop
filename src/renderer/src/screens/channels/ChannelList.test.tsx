@@ -1,9 +1,62 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ChannelListView, CollapsibleWorkspaceGroup, HostConnectionDots } from './ChannelList'
 import { UNKNOWN_WORKSPACE_LABEL } from './channelListViewModel'
 import type { ConnectionLeg } from '../conversation/ConversationScreen'
+import {
+  createConversationActivityStore,
+  type ConversationActivityStore
+} from '../../store/conversationActivityStore'
+import {
+  createConversationTimelineStore,
+  type ConversationTimelineStore
+} from '../../store/conversationTimelineStore'
+import {
+  createConversationLastReadStore,
+  type ConversationLastReadStore,
+  type ConversationLastReadStorage
+} from '../../store/conversationLastReadStore'
+
+// #801's per-row dot reads three app-wide SINGLETONS, and A WRITE TO ANY OF THEM IS INVISIBLE TO
+// `renderToStaticMarkup`. React's server renderer resolves `useSyncExternalStore` through its THIRD
+// argument (react-dom-server.node.development.js:5283 returns `getServerSnapshot()` and never subscribes),
+// and zustand v5 wires that argument to `api.getInitialState()` (zustand/esm/react.mjs) — the state
+// captured at store CREATION, which no setter ever moves. Seeding the singletons therefore renders three
+// idle dots and proves nothing; this is a property of the whole node-environment renderer tier, not of
+// this file.
+//
+// So the three React BINDINGS are redirected onto per-file isolated store instances, built by the same
+// shipped factories and driven through the same shipped setters. Only the binding is replaced: `...actual`
+// keeps the real `selectActivityFor` / `selectTimelineFor` / `selectLastReadFor`, so the row's id → entry
+// lookup runs for real, and `isConversationUnread` and `resolveConversationStatus` are untouched imports
+// in `ChannelList.tsx`. What the #801 cases below assert is exactly the wiring this ticket adds.
+//
+// Each factory's body is evaluated at import time and touches none of the three consts below; only the
+// returned hook reads them, and it is not called until a render inside a test.
+const activityStore = createConversationActivityStore()
+const timelineStore = createConversationTimelineStore()
+// An in-memory port, never `localStorage`: the real singleton's port short-circuits on
+// `typeof window === 'undefined'`, but an isolated instance has to be handed something, and a fake keeps
+// this file's stores off any shared surface (conversationLastReadStore.ts:246-257).
+const lastReadMemory: ConversationLastReadStorage = { read: () => new Map(), write: () => {} }
+const lastReadStore = createConversationLastReadStore(lastReadMemory)
+
+vi.mock('../../store/conversationActivityStore', async (importActual) => ({
+  ...(await importActual<typeof import('../../store/conversationActivityStore')>()),
+  useConversationActivityStore: <T,>(selector: (s: ConversationActivityStore) => T): T =>
+    selector(activityStore.getState())
+}))
+vi.mock('../../store/conversationTimelineStore', async (importActual) => ({
+  ...(await importActual<typeof import('../../store/conversationTimelineStore')>()),
+  useConversationTimelineStore: <T,>(selector: (s: ConversationTimelineStore) => T): T =>
+    selector(timelineStore.getState())
+}))
+vi.mock('../../store/conversationLastReadStore', async (importActual) => ({
+  ...(await importActual<typeof import('../../store/conversationLastReadStore')>()),
+  useConversationLastReadStore: <T,>(selector: (s: ConversationLastReadStore) => T): T =>
+    selector(lastReadStore.getState())
+}))
 
 // The #218 idiom: server-render the pure view with injected props — no DOM harness, no store. The
 // container's store read + Date.now() are the only impurities and are exercised by the shell tests.
@@ -97,6 +150,24 @@ const DOT_UNKNOWN_MARKER = 'class="channel-list__host-dot conn-dot--unknown"'
 // The pair's layout wrapper carries a sole class, so the file's usual exact-substring form applies to it.
 const DOT_WRAPPER_MARKER = 'class="channel-list__host-status"'
 
+// The row title, so "the dot LEADS the row" can be asserted as an ordering rather than as a presence.
+const TITLE_MARKER = 'class="channel-list__title"'
+
+// The per-row status dot (#801). FULL attribute values, for the host dots' reason one block up: #800's
+// component always wears its base class AND a status modifier — idle included, deliberately — so
+// `class="conversation-status-dot"` with its closing quote would silently match NOTHING. Pinning the whole
+// value is the stronger assertion anyway: one marker fixes the base class and the status → modifier
+// binding together, so a dot that resolves to the wrong status fails as a MISSING marker rather than
+// passing a laxer prefix check.
+const STATUS_DOT_WORKING = 'class="conversation-status-dot conversation-status-dot--working"'
+const STATUS_DOT_NEW_MESSAGES =
+  'class="conversation-status-dot conversation-status-dot--new-messages"'
+const STATUS_DOT_IDLE = 'class="conversation-status-dot conversation-status-dot--idle"'
+
+// Counting dots regardless of status. The trailing SPACE is on purpose and is the `DOT_TAG_PREFIX`
+// treatment: the base class never appears alone, so this matches every dot and no other element.
+const STATUS_DOT_PREFIX = 'class="conversation-status-dot '
+
 const countOf = (markup: string, needle: string): number => markup.split(needle).length - 1
 
 // Reads the SHIPPED host labels back out of the render rather than restating the constant, so changing
@@ -146,6 +217,14 @@ const hostDotTagsIn = (markup: string): string[] => {
   }
   return tags
 }
+
+// Slices the render into one chunk per conversation row (#801) — each chunk running from a row's own
+// class attribute to the next row's. Every #801 assertion is CHUNK-SCOPED rather than document-scoped,
+// and that is the whole point of the helper: with three rows in one render, a document-wide
+// `toContain(STATUS_DOT_WORKING)` passes no matter WHICH row carries the working dot, which is precisely
+// the misattribution AC2 exists to rule out. No chunk can borrow its neighbour's dot: the split boundary
+// is the NEXT row's class attribute, and that row's dot — its first child — comes after it.
+const rowChunksIn = (markup: string): string[] => markup.split(ROW_MARKER).slice(1)
 
 // One dot tag's accessible name. Scanning to the next `"` is exact rather than approximate: React escapes
 // a quote inside an attribute VALUE as `&quot;`, so no label can carry the delimiter into the slice.
@@ -521,6 +600,154 @@ describe('ChannelListView', () => {
     it('renders no dots where there is no host row (AC1)', () => {
       expect(countOf(render(null), DOT_WRAPPER_MARKER)).toBe(0)
       expect(countOf(render([]), DOT_WRAPPER_MARKER)).toBe(0)
+    })
+  })
+
+  describe('the status dot leading every conversation row (#801)', () => {
+    // THE ONE REAL TRAP IN THIS SUITE. The three stores are file-level instances shared by every case in
+    // this describe, so a seed left standing silently colours a LATER case's render — an `--idle` row
+    // quietly turning `--working`, which is a passing-looking wrong answer rather than a failure. Three
+    // clears, one per store, because no single boundary helper owns all three.
+    afterEach(() => {
+      activityStore.getState().clearAllActivity()
+      timelineStore.getState().clearAllTimelines()
+      lastReadStore.getState().clearAllLastRead()
+    })
+
+    // The seeds, named for the STATUS they produce rather than for the store they write, so each case
+    // below reads as the status it asserts.
+    const seedWorking = (id: string): void => activityStore.getState().setTurnRunning(id, true)
+
+    // `reconnected` is the cheapest honest unread seed: a zero-payload arm that MINTS A SLICE without
+    // appending an item (conversationTimelineStore.ts:279-282), landing on `isConversationUnread` branch 2
+    // — a slice held with no mark recorded reads as unread (conversationUnread.ts:59-60). No item append,
+    // no fabricated message, and no dependency on the timeline's content shape.
+    const seedUnread = (id: string): void =>
+      timelineStore.getState().dispatchFor(id, { type: 'reconnected' })
+
+    // The same slice, plus a mark that COVERS it: `0 > 0` is false, so branch 3 reads it as read.
+    const seedRead = (id: string): void => {
+      seedUnread(id)
+      lastReadStore.getState().recordLastRead(id, 0)
+    }
+
+    // Three rows spread across both trees and two workspaces, so every claim below is a claim about more
+    // than one row — a single-row fixture cannot tell "resolved per row" from "resolved once for all".
+    const threeRows = (): readonly ConversationSummary[] => [
+      row({ id: 'c1', name: 'kitchenclaw refactor', is_promoted: true, cwd: '/home/me/alpha' }),
+      row({ id: 'd1', name: 'Help me debug auth flow', is_promoted: false, cwd: '/home/me/alpha' }),
+      row({ id: 'd2', name: 'Third conversation', is_promoted: false, cwd: '/home/me/beta' })
+    ]
+
+    // The one chunk whose row shows `title`. Asserting the match count rather than taking `[0]` blind
+    // keeps a broken slicer failing HERE, as "the fixture no longer has one row called that", instead of
+    // silently handing every later assertion the wrong row's markup.
+    const chunkFor = (markup: string, title: string): string => {
+      const found = rowChunksIn(markup).filter((chunk) => chunk.includes(title))
+      expect(found).toHaveLength(1)
+      return found[0]
+    }
+
+    it('draws exactly one dot on every row of both trees, in every workspace group (AC1)', () => {
+      const markup = render(threeRows())
+      expect(countOf(markup, ROW_MARKER)).toBe(3)
+      expect(countOf(markup, STATUS_DOT_PREFIX)).toBe(3)
+      for (const chunk of rowChunksIn(markup)) {
+        expect(countOf(chunk, STATUS_DOT_PREFIX)).toBe(1)
+      }
+      // The dot is unconditional — an all-idle sidebar still draws one per row, and the `--idle` modifier
+      // ships explicitly so a DROPPED modifier fails here rather than rendering as a correct-looking dot.
+      expect(countOf(markup, STATUS_DOT_IDLE)).toBe(3)
+    })
+
+    it('leads the row: the dot precedes the title in document order (AC1)', () => {
+      for (const chunk of rowChunksIn(render(threeRows()))) {
+        // The presence check is NOT redundant with the ordering below it. `indexOf` yields -1 for an
+        // ABSENT needle, and -1 is less than every real index, so an ordering assertion alone passes
+        // vacuously on a row that draws no dot at all — the vacuity `workspaceRowTagsIn` was written to
+        // avoid one describe up. Both ordering cases in this describe pin presence first for that reason.
+        expect(chunk).toContain(STATUS_DOT_PREFIX)
+        expect(chunk.indexOf(STATUS_DOT_PREFIX)).toBeLessThan(chunk.indexOf(TITLE_MARKER))
+      }
+    })
+
+    it('sits OUTSIDE the open button, as a sibling under the row wrapper', () => {
+      // The ticket's named placement choice, pinned rather than left to the reader. #800's dot is a named
+      // `role="img"`, so nesting it inside `.channel-list__row-open` would fold "Assistant working" into
+      // that button's accessible name and make the name MUTATE as the daemon works — the noise
+      // RunConfigSections.tsx:270-280 already declines for the unselected radios. A later edit that nests
+      // it fails here instead of silently renaming every row button.
+      for (const chunk of rowChunksIn(render(threeRows()))) {
+        expect(chunk).toContain(STATUS_DOT_PREFIX)
+        expect(chunk.indexOf(STATUS_DOT_PREFIX)).toBeLessThan(chunk.indexOf(ROW_OPEN_MARKER))
+      }
+    })
+
+    it('resolves each row from its OWN conversation id, never a neighbour (AC2)', () => {
+      // The assertion this whole ticket exists for. One of three ids is seeded, and the other two rows
+      // must be untouched — a composition keyed by anything but the row's own id (the open conversation,
+      // the first row, a shared derivation) fails on the two `--idle` expectations, not the `--working`.
+      seedWorking('d1')
+      const markup = render(threeRows())
+      expect(chunkFor(markup, 'Help me debug auth flow')).toContain(STATUS_DOT_WORKING)
+      expect(chunkFor(markup, 'kitchenclaw refactor')).toContain(STATUS_DOT_IDLE)
+      expect(chunkFor(markup, 'Third conversation')).toContain(STATUS_DOT_IDLE)
+      expect(countOf(markup, STATUS_DOT_WORKING)).toBe(1)
+    })
+
+    it('shows working on a conversation the operator has never opened (AC2)', () => {
+      // The seeded id is absent from BOTH the timeline and the last-read stores — never opened, no slice
+      // held, no mark recorded — and the activity store is fed independently of which conversation is
+      // open, so the dot is correct with no "open conversation" concept involved anywhere.
+      seedWorking('d2')
+      expect(timelineStore.getState().timelines.has('d2')).toBe(false)
+      expect(lastReadStore.getState().marks.has('d2')).toBe(false)
+      expect(chunkFor(render(threeRows()), 'Third conversation')).toContain(STATUS_DOT_WORKING)
+    })
+
+    it('takes its unread input from the shipped predicate, over both stores (AC3)', () => {
+      // A slice held with no mark is unread; a mark covering that slice flips the SAME row to idle. Both
+      // readings come out of `isConversationUnread`, so a second, locally re-derived unread rule (a
+      // `last_message_ts` comparison being the tempting one) cannot produce this pair.
+      seedUnread('c1')
+      expect(chunkFor(render(threeRows()), 'kitchenclaw refactor')).toContain(
+        STATUS_DOT_NEW_MESSAGES
+      )
+      seedRead('c1')
+      expect(chunkFor(render(threeRows()), 'kitchenclaw refactor')).toContain(STATUS_DOT_IDLE)
+    })
+
+    it('keeps the resolver precedence at the call site: working beats new messages (AC3)', () => {
+      // A literal argument swap is a type error, so what this catches is the composition going wrong in a
+      // way `tsc` cannot see — a hand-rolled unread boolean, a locally re-derived status, or the two
+      // statuses traded by an over-clever branch. It is the resolver's own most-missed assertion
+      // (conversationStatus.ts:72-73), restated once where the two stores actually meet.
+      seedWorking('d1')
+      seedUnread('d1')
+      const chunk = chunkFor(render(threeRows()), 'Help me debug auth flow')
+      expect(chunk).toContain(STATUS_DOT_WORKING)
+      expect(chunk).not.toContain(STATUS_DOT_NEW_MESSAGES)
+    })
+
+    it('joins no existing row, host-row or affordance match set (AC4)', () => {
+      // The 28-spec fixture hazard again: `launchPairedApp.ts:224` clicks an UNFILTERED
+      // `.channel-list__row-open`, so a dot selectable as a row or a row button would strict-violate at
+      // launch rather than fail an assertion. Every count below is the count it had before this ticket,
+      // and the dot carries NO TEXT NODE, so `hasText`-filtered row locators are unaffected too.
+      seedWorking('c1')
+      const markup = render(threeRows())
+      expect(countOf(markup, ROW_MARKER)).toBe(3)
+      expect(countOf(markup, ROW_OPEN_MARKER)).toBe(3)
+      expect(countOf(markup, SAVE_MARKER)).toBe(2)
+      expect(countOf(markup, RENAME_MARKER)).toBe(1)
+      expect(countOf(markup, HOST_ROW_MARKER)).toBe(2)
+      expect(countOf(markup, SECTION_HEADER_MARKER)).toBe(2)
+      expect(hostDotTagsIn(markup)).toHaveLength(4)
+    })
+
+    it('renders no dot where there is no row', () => {
+      expect(countOf(render(null), STATUS_DOT_PREFIX)).toBe(0)
+      expect(countOf(render([]), STATUS_DOT_PREFIX)).toBe(0)
     })
   })
 })

@@ -191,14 +191,23 @@
 
 /* One row (Figma 15:59) — a flex wrapper holding the open action and the optional Save-as-channel
    affordance as SIBLINGS (an interactive control cannot nest inside the open <button>, #274). It carries
-   no padding/hover itself; those live on the open action so the two children highlight independently. */
+   no padding/hover itself; those live on the open action so the two children highlight independently.
+
+   `position: relative` is #801's only edit here — the containing block for the status dot below, the
+   `position: relative` parent + `position: absolute` child idiom this file already uses at :500. */
 .channel-list__row {
   display: flex;
   align-items: center;
+  position: relative;
 }
 
 /* The open action — the old full-width row button, reset then laid out as title · time. `flex: 1 1 auto`
-   + `min-width: 0` let it fill the row and let the title ellipsize (the min-width:0 flex-shrink idiom). */
+   + `min-width: 0` let it fill the row and let the title ellipsize (the min-width:0 flex-shrink idiom).
+
+   The LEFT padding is `--space-8` (32px) rather than the `--space-4` the other three sides keep: that is
+   the Figma's title inset (node 103:2968, title at x=32), and the space the status dot's absolute box no
+   longer reserves for itself. Sidebar-only — `channel-list__row*` appears in ChannelList.tsx alone, so the
+   archive screen's rows are untouched. */
 .channel-list__row-open {
   appearance: none;
   flex: 1 1 auto;
@@ -210,8 +219,36 @@
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-8);
   font-family: var(--font-sans);
+}
+
+/* #801 — where the status dot SITS. Its box, ring and blink are #800's and are declared at :808 with the
+   component; this rule is the call site's positioning only.
+
+   OUT OF FLOW, on purpose. In the row's flex flow the dot would push the <button>'s left edge to x≈22, so
+   the :hover / :focus-visible fill would stop short of the row's leading edge and leave a visible notch
+   around the dot. Absolutely positioned at the design's 16px inset, the dot reaches the Figma's x=16 while
+   the button keeps spanning the whole row, so both rectangles are exactly what they were.
+
+   `pointer-events: none` is what keeps a CLICK on the dot opening the conversation — the 6px box sits over
+   the button and would otherwise swallow it. It does not affect the accessibility tree, so the dot's
+   `role="img"` and its name are still announced.
+
+   VERTICALLY CENTRED ON THE ROW, and that is a measurement rather than an inheritance (#800's review handed
+   this forward). In the Figma frame the 14px dot instance occupies y=4…18 and its circle is at cy=11 inside
+   it, so the painted dot's centre is y=15 in a 24px row whose centre is y=12 — 3px BELOW centre, and 3px
+   below the title's centre. That offset does not port: the shipped row is not the design's 24px row (it
+   carries --space-3 vertical padding, a --text-title-medium title and a trailing .channel-list__time the
+   design node has no equivalent for), so an absolute 3px drop measured against a 24px frame lands somewhere
+   arbitrary in a ~44px one. Converging the row's full geometry on node 103:2968 — its height, its
+   body-small title, dropping the time — is a separate pass. */
+.channel-list__row > .conversation-status-dot {
+  position: absolute;
+  left: var(--space-4);
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
 .channel-list__row-open:hover {

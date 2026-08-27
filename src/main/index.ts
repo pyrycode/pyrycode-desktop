@@ -147,7 +147,9 @@ app.whenReady().then(() => {
   // `pyrycode.device_static`. The label is only ever a VALUE handed to `save`, never a persistence
   // key, so no caller-supplied string can reach the store name. The pairing handler below receives
   // only this store's `save`, so it can neither read the label back nor erase it; the read path is
-  // the host-label handler registered below, which gets a `load`-only handle (erasing is #827).
+  // the host-label handler registered below, which gets a `load`-only handle; and the unpair handler
+  // gets a `clear`-only one. Three seams over one store, three disjoint `Pick`s, none able to do
+  // another's job.
   const hostLabelStore = createHostLabelStore({ secureStore })
 
   // The launch-time pairing-status query (#79): reuse the same pairedServerStore — do not construct
@@ -176,7 +178,8 @@ app.whenReady().then(() => {
   // `connection`, no did-finish-load gate). The handler gets a `load`-only handle, so this read
   // channel structurally cannot overwrite or erase the label. Only the three-outcome union crosses
   // back — never the token / server key / keychain path, and never a truncated label; never-stored
-  // and unreadable stay distinct. No caller races it — the consumer is #826. `will-quit` removes the
+  // and unreadable stay distinct. The erase path is the unpair handler below (#827), holding the
+  // third, `clear`-only handle. No caller races it — the consumer is #826. `will-quit` removes the
   // handler, symmetric with unregisterServerInfo.
   const unregisterHostLabel = registerHostLabelHandler(ipcMain, { store: hostLabelStore })
   app.on('will-quit', () => unregisterHostLabel())
@@ -256,9 +259,16 @@ app.whenReady().then(() => {
   // whole whenReady callback runs to completion in one tick, and no caller races it — the visible
   // unpair UI is #166/#167, many ticks later, after first paint. `will-quit` removes the handler,
   // symmetric with unregisterPairing.
+  // #827 adds the label erase here: reuse the SAME hostLabelStore constructed above — do not build a
+  // second store — so unpairing takes the host's name with it rather than leaving it to describe a
+  // record that no longer exists. A `clear`-only handle, so this handler can neither read the label
+  // back nor overwrite it. The erase is ordered after the record's and outside the fail-closed catch,
+  // and a failure to erase it still resolves `ok`: the result reports on the RECORD, and by then the
+  // record is gone — see the listener's comment for the full argument.
   const unregisterUnpair = registerUnpairHandler(ipcMain, {
     store: pairedServerStore,
-    onUnpaired: () => connection.reconnect()
+    onUnpaired: () => connection.reconnect(),
+    hostLabel: hostLabelStore
   })
   app.on('will-quit', () => unregisterUnpair())
 

@@ -27,6 +27,7 @@ import {
   StatusSheet,
   RepairPrompt,
   ConnectionBanner,
+  ComposerErrorChip,
   WorkspaceChip,
   isTurnRunning,
   ComposerSendButton,
@@ -40,7 +41,12 @@ import {
   selectOpenTimelineFor
 } from './ConversationScreen'
 import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
-import { composerAvailability, CONNECTION_BANNER_COPY } from './composerSend'
+import {
+  composerAvailability,
+  CONNECTION_BANNER_COPY,
+  COMPOSER_ERROR_CHIP_COPY,
+  COMPOSER_ERROR_CHIP_PREFIX_COPY
+} from './composerSend'
 import type { Message } from './messageViewModel'
 import type { ThreadItem, ToolResult } from '../../store/threadTimeline'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
@@ -1201,6 +1207,29 @@ describe('ComposerStatusArea — the status row above the composer and its turni
     // The label lands INSIDE the group, not after it — the group's closing tag trails the label.
     expect(markup.indexOf('</div></div>')).toBeGreaterThan(labelAt)
   })
+
+  // #797: the right-hand slot #796 reserved. `trailing` is the ROW's slot, `children` is the activity
+  // group's — so the occupant lands as a SIBLING of the group, not a descendant of it. That is what
+  // space-between right-aligns; nested inside the group it would sit beside the label instead.
+  it('renders its trailing slot as a sibling of the activity group, not inside it (#797)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerStatusArea isRunning={false} trailing={<span className="probe-trailing" />} />
+    )
+    // The `</div>` immediately before it is the activity group's own close — the tight form of the
+    // ordering assertion, which a nested occupant could not satisfy.
+    expect(markup).toContain('</div><span class="probe-trailing"')
+  })
+
+  // AC1's "not an empty element", at the row level: with no occupant the slot contributes NOTHING to the
+  // markup — `trailing` is rendered bare, with no .composer-status__trailing wrapper, so the three
+  // non-error arms emit no empty div. Counted rather than substring-matched: a wrapper would be caught by
+  // the count and missed by a not.toContain on a class name it was never given.
+  it('contributes nothing to the markup when the trailing slot is empty (#797, AC1)', () => {
+    const markup = renderToStaticMarkup(<ComposerStatusArea isRunning={false} />)
+    expect(markup).toContain('class="composer-status"')
+    expect(markup).toContain('class="composer-status__activity"')
+    expect(markup.match(/<div/g)?.length).toBe(2)
+  })
 })
 
 // #649: the client-owned label that names the daemon's open tool. A function rather than a constant
@@ -1940,6 +1969,97 @@ describe('ConnectionBanner — the disconnected-only connection band', () => {
   })
 })
 
+// #797: the connection-error chip in the composer status row — the FOURTH read of the ConnectionStatus
+// slice (beside the composer gate, the re-pair prompt and the banner), and the narrowest: it reads the
+// discriminant to decide whether to show and nothing out of the `error` arm at all. ComposerErrorChip is
+// the pure, exported view (the ConnectionBanner pattern), so the whole four-arm matrix is proven by
+// server-rendering it with an injected `status` and no store. The mounted, store-bound path is proven in
+// the ConversationScreen container block below, which is the only place the `trailing` wiring is visible.
+describe('ComposerErrorChip — the connection-error chip in the status row (#797)', () => {
+  const ack = {
+    protocol_version: '1',
+    server_id: 's',
+    conn_id: 'c',
+    capabilities: []
+  }
+
+  it('renders the client-owned copy in the error arm (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerErrorChip
+        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+      />
+    )
+    expect(markup).toContain('composer-status__error')
+    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
+  })
+
+  // AC1's absent half, in the STRICT form: an exact-empty markup, not a not.toContain. That is what
+  // proves "nothing is rendered in that slot — not an empty element", which a substring assertion would
+  // pass on a rendered-but-empty wrapper.
+  it('renders nothing at all while disconnected — not an empty element (AC1)', () => {
+    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'disconnected' }} />)).toBe('')
+  })
+
+  it('renders nothing at all while connecting — not an empty element (AC1)', () => {
+    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'connecting' }} />)).toBe('')
+  })
+
+  it('renders nothing at all while connected — not an empty element (AC1)', () => {
+    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'connected', ack }} />)).toBe('')
+  })
+
+  // AC2: the chip's text is the client-owned constant only. TWO sentinels, not the banner test's one —
+  // the AC names `message` AND `code`, and neither may reach the DOM as text, in an attribute, or in a
+  // title. A structural guarantee, not a convention: the view narrows on `status.type` and never
+  // destructures `status.error`, so there is no rendering path for either field.
+  it('never renders ConnectionError.message or .code — only the client-owned copy (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerErrorChip
+        status={{
+          type: 'error',
+          error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
+        }}
+      />
+    )
+    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
+    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
+    expect(markup).not.toContain('DAEMON_SECRET_CODE')
+  })
+
+  // AC4: colour is not the only signal. The marking is hidden TEXT, not an aria-label — a bare <div>/
+  // <span> maps to role="generic", which ARIA 1.2 puts on the name-prohibited list, so an aria-label
+  // would assert green here and be dropped by a real screen reader. Ordering matters: the prefix run
+  // precedes the visible copy, so the two concatenate into "Error: Host connection down!".
+  it('marks the chip as an error with hidden text ahead of the copy (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerErrorChip
+        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+      />
+    )
+    expect(markup).toContain('composer-status__error-prefix')
+    expect(markup).toContain(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim())
+    // The index idiom (WelcomeScreen.test.tsx:36-41) — a static markup string carries no tree to query.
+    const prefixAt = markup.indexOf('composer-status__error-prefix')
+    const copyAt = markup.indexOf(COMPOSER_ERROR_CHIP_COPY)
+    expect(prefixAt).toBeGreaterThanOrEqual(0)
+    expect(copyAt).toBeGreaterThan(prefixAt)
+  })
+
+  // The chip is NOT a live region. shouldShowBanner is true on the `error` arm, so a connected → error
+  // transition mounts the banner and this chip in the same commit; a second polite region here would
+  // announce one fact twice — the ConnectionStatusIndicator ruling, restated one component over.
+  it('is not a live region — the banner already announces the disconnect', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerErrorChip
+        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+      />
+    )
+    expect(markup).not.toContain('aria-live')
+    expect(markup).not.toContain('role="status"')
+    expect(markup).not.toContain('role="alert"')
+  })
+})
+
 // #330: the two-dot Relay/Pyrycode connection-status indicator. relayLeg / daemonLeg are the exported
 // pure leg-mapping predicates (the isTurnRunning shape) — call them directly with each store value to
 // prove the full leg → category → label matrix with no store, no render. ConnectionStatusIndicator is
@@ -2591,6 +2711,44 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('composer-status__icon--spinning')
     // Present but textless: the row mounts, the label inside it does not.
     expect(markup).not.toContain('composer-status__label')
+  })
+
+  // #797: the chip's absent arm through the mounted container. The beforeEach leaves the session store
+  // `disconnected`, which is NOT the error arm, so the reserved slot stays empty in the shipped tree.
+  it('mounts the status row with no error chip while disconnected (AC1)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('class="composer-status"')
+    expect(markup).not.toContain('composer-status__error')
+    expect(markup).not.toContain(COMPOSER_ERROR_CHIP_COPY)
+  })
+
+  // #797: the chip's PRESENT arm through the mounted container — the only test that proves the
+  // `trailing` prop at the ComposerStatusArea mount actually reached the row. Without it an unwired prop
+  // passes every pure-view assertion above.
+  //
+  // A getInitialState SPY, not setState. This file's standing note applies here — zustand v5's useStore
+  // reads getInitialState() under renderToStaticMarkup, never getState() — so the block's beforeEach
+  // cannot stage a non-initial arm, and this branch would otherwise be as unreachable as RepairControl's
+  // (the spec assumed the beforeEach was enough; it is not, measured 2026-08-27). Spying the store's
+  // initial snapshot is the narrowest seam that reaches it: one store, one render, no production code
+  // touched, restored immediately since this config sets no restoreMocks.
+  it('mounts the error chip in the status row once the session is in the error arm (AC1)', () => {
+    const initial = sessionStore.getInitialState()
+    const spy = vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
+      ...initial,
+      status: { type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      expect(markup).toContain('composer-status__error')
+      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
+      // In the ROW, not loose in the region: the chip trails .composer-status in the shipped tree.
+      expect(markup.indexOf('composer-status__error')).toBeGreaterThan(
+        markup.indexOf('class="composer-status"')
+      )
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   // #317: the stall indicator mounts against the initial timeline store (getInitialState stalled:

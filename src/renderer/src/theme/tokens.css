@@ -154,6 +154,18 @@
                                   component-named off-grid value, --color-warning for one with no design
                                   system variable behind it. */
 
+  --text-tool-name-line: 16px; /* The tool row's monospace run (#722, Figma node 134:4939), and the same
+                                  situation as --text-code-body-line above, one row over in the same
+                                  stylesheet: the design binds that run to NO type style at all, so there
+                                  is no step to read a leading off. 14/16 is not a pairing here either —
+                                  both 14px steps (body-medium, label-large) carry a 20px line, and every
+                                  16px line in the scale belongs to a 12px or 11px step. There is no
+                                  --text-tool-name-size, because the size still comes from body-medium,
+                                  the step the run's sans sibling takes whole. --text-body-small-line
+                                  reads 16 for a *12px* step, so borrowing it would leave a 14px run
+                                  wearing half of the 12px quartet — coupling this run to a step it
+                                  shares nothing else with. */
+
   /* Spacing — 4px scale, plus named off-grid design values */
   --space-1: 4px;
   --space-2: 8px;

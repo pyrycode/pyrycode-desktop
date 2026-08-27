@@ -205,9 +205,10 @@ export function ConversationScreen({
   // and needs only the active conversation's id, derived from the `activeConversation` slice already held
   // above (no second subscription). One overlay at a time in normal use.
   const [panelOpen, setPanelOpen] = useState(false)
-  // #286: the render-time clock for the session-boundary delimiter's relative time (`2 hours ago`).
-  // A plain render-local value, not store state (the ChannelList precedent) — safe under
-  // renderToStaticMarkup, adds no subscription, and re-derives on each render so the label stays fresh.
+  // The render-time clock for the two detail sheets' relative times (#365's "Last activity", #383's
+  // "Last used …"). A plain render-local value, not store state (the ChannelList precedent) — safe under
+  // renderToStaticMarkup, adds no subscription, and re-derives on each render so the lines stay fresh.
+  // It reached Timeline too until #690 removed the session-boundary row's relative time; the sheets kept it.
   const now = Date.now()
   // #601: the follow-the-conversation pin. Screen-local, held beside the other screen-local values above —
   // nothing outside this screen reads it and it must not survive a remount (ADR 0006), so a re-entered
@@ -229,14 +230,14 @@ export function ConversationScreen({
           the composer's terse inline gate below. */}
       <ConnectionBannerControl />
       {/* #278: the pre-first-message workspace chip — a sibling above Timeline, not nested inside
-          EmptyThread, so Timeline's { items, now } contract stays untouched (no prop cascade). It
+          EmptyThread, so Timeline's { items } contract stays untouched (no prop cascade). It
           self-gates to null unless the thread is empty and shows an unpromoted (discussion) conversation. */}
       <WorkspaceChip
         conversation={activeConversation}
         isEmpty={items.length === 0}
         onChange={() => setPickerOpen(true)}
       />
-      <Timeline items={items} now={now} scrollPin={scrollPin} />
+      <Timeline items={items} scrollPin={scrollPin} />
       {/* #493: the api-error retry status — mounted first of the three remaining indicators, before the
           stall indicator. It no longer sits directly after its supersede peer: #796 moved the working
           indicator's text down into the status row above the composer, and left these three where they
@@ -506,23 +507,19 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 // Empty items → the pre-first-message empty state (#277), not null: a fresh thread now reads as a
 // purposeful invitation rather than a blank gap between the top bar and the composer. EmptyThread is a
 // distinct surface from the thread scroll region, so an empty timeline never renders a thread container.
-// #286: `now` (ms) is the render-time clock the sessionBoundary row uses to derive its relative time,
-// threaded from the container so the pure view stays deterministic under test. Defaulted to `Date.now()`
-// so the existing `<Timeline items={...} />` call sites (which render no sessionBoundary row, so `now` is
-// never consulted) stay green untouched — no edit cascade across the test suite.
 // #601: `scrollPin` carries the container's two DOM handles for the scroll region — the node ref and the
-// scroll handler. OPTIONAL for `now`'s reason, verbatim: the 30 existing `<Timeline` render sites pass
-// nothing, get `undefined` for both attributes (legal no-ops under renderToStaticMarkup) and stay green
-// untouched. Timeline itself stays pure props-in / markup-out — it holds no scroll state and reads no
-// layout; both handles are written out explicitly below rather than spread, so the both-or-neither wiring
-// is visible in the markup.
+// scroll handler. OPTIONAL so the 30 existing `<Timeline` render sites pass nothing, get `undefined` for
+// both attributes (legal no-ops under renderToStaticMarkup) and stay green untouched — the same
+// no-edit-cascade reason #286's since-removed `now` prop was optional. Timeline itself stays pure
+// props-in / markup-out — it holds no scroll state and reads no layout; both handles are written out
+// explicitly below rather than spread, so the both-or-neither wiring is visible in the markup.
+// #690 removed `now`: the sessionBoundary row was its only consumer and that row no longer draws a
+// relative time, so this subtree is once again a pure function of `items` with no clock in it at all.
 export function Timeline({
   items,
-  now = Date.now(),
   scrollPin
 }: {
   items: readonly ThreadItem[]
-  now?: number
   scrollPin?: ThreadScrollPin
 }): JSX.Element {
   if (items.length === 0) return <EmptyThread />
@@ -540,7 +537,6 @@ export function Timeline({
           key={index}
           item={item}
           inProgress={index === lastIndex && item.kind === 'assistantText'}
-          now={now}
         />
       ))}
     </div>
@@ -552,16 +548,12 @@ export function Timeline({
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
 // while a structural-only kind (turnBoundary) still degrades to nothing rather than throwing. That
 // guard did its job on the unrecognizedMessage row below: the arm arrived as a compile error here.
-// #286: `now` (ms, defaulted to Date.now()) is consulted only by the sessionBoundary case, to format its
-// relative time at render — kept out of the item so the label stays fresh (the channel-list precedent).
 function TimelineRow({
   item,
-  inProgress,
-  now = Date.now()
+  inProgress
 }: {
   item: ThreadItem
   inProgress: boolean
-  now?: number
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
@@ -626,19 +618,21 @@ function TimelineRow({
       // functional role, closing the cursor, is handled by Timeline's tail-check, not by any DOM here.
       return null
     case 'sessionBoundary':
-      // #286: the session-boundary delimiter (Figma node 16-35) — a monospace title above a full-width
-      // horizontal rule, marking where a /clear, an idle eviction, or a workspace change started a fresh
-      // session. Its own visually-distinct row: NO data-thread-role (AC4 — not attributed to
-      // assistant/user/tool), identified by class (the .conversation__empty / thinking-indicator idiom).
-      // `workspaceCwd` reaches the DOM only INSIDE the title string as auto-escaped React children — never
-      // dangerouslySetInnerHTML, no path/markup interpretation (the toolCall/userText posture; the
-      // events.ts constraint). The title is formatted at render from the raw `occurredAt` (kept fresh, the
-      // channel-list precedent). The rule is a decorative styled div (aria-hidden), not a semantic <hr> —
-      // it is purely visual. The explanatory sentence + Install affordance (Figma 16-38) are out of scope
-      // (deferred with the memory-plugin subsystem); this builds title + rule only.
+      // #286, redrawn #690: the session-boundary delimiter (Figma node 119-3843) — one 16px row, rule /
+      // centred label / rule, marking where a /clear, an idle eviction, or a workspace change started a
+      // fresh session. The desktop chat screen's inline separator, replacing #286's mobile-derived title
+      // stacked above a full-width rule. Its own visually-distinct row: NO data-thread-role (AC4 — not
+      // attributed to assistant/user/tool), identified by class (the .conversation__empty /
+      // thinking-indicator idiom). `workspaceCwd` reaches the DOM only INSIDE the label string as
+      // auto-escaped React children — never dangerouslySetInnerHTML, no path/markup interpretation (the
+      // toolCall/userText posture; the events.ts constraint). The two rules are decorative styled divs
+      // (aria-hidden), not semantic <hr>s — they are purely visual, and being two IDENTICALLY classed
+      // siblings is what makes their equal halves a CSS invariant rather than something to keep in sync.
+      // #690 also drops the relative time #286 appended: every message above and below carries its own.
       return (
         <div className="session-delimiter">
-          <p className="session-delimiter__title">{sessionBoundaryTitle(item, now)}</p>
+          <div className="session-delimiter__rule" aria-hidden="true" />
+          <p className="session-delimiter__title">{sessionBoundaryTitle(item)}</p>
           <div className="session-delimiter__rule" aria-hidden="true" />
         </div>
       )

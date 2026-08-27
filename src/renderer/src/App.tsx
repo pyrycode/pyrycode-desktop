@@ -13,6 +13,7 @@ import { RelayLinkData } from './store/relayLinkBridge'
 import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
 import { AnnouncedModelData } from './store/announcedModelBridge'
 import { ConversationActivityData } from './store/conversationActivityBridge'
+import { RunConfigLiveData } from './screens/conversation/runConfigLive'
 import { activeConversationStore, selectActiveConversation } from './store/activeConversationStore'
 import { routeForStatus, type AppRoute } from './appRoute'
 
@@ -181,6 +182,17 @@ function App(): JSX.Element {
   // SECOND subscriber on these four arms — timelineBridge keeps feeding the open conversation's chrome
   // untouched. Reactive-only, no gate. Like AnnouncedModelData and unlike BackgroundTaskRosterData it
   // has no `connected` branch: both of this store's clears are #749's.
+  // RunConfigLiveData (#810) is the NINTH headless leaf: it is now the only listener that lands
+  // `runConfigReceived` into the run-config and session-id stores, and it re-requests the reply on the two
+  // edges where the context-usage figures can have moved — each rising edge to `connected` and each
+  // running → not-running turn transition. App-level for the reason the others are, sharpened: the whole
+  // point is that the figures are current when the run-configuration sheet has NEVER been opened, and that
+  // they stay current after it closes. It is the one leaf here that lives under `screens/` rather than
+  // `store/` — its helpers are the conversation screen's, and it imports `isTurnRunning` from
+  // ConversationScreen, which is what keeps it out of runConfigSnapshot.ts (that would be a cycle).
+  // Unlike its neighbours it has a REQUEST half, because `session_settings` is reply-only: nothing pushes
+  // it unsolicited, so a subscription alone would never see a second value. `RunConfigData` keeps its
+  // per-open request inside the sheet and has lost its subscription to this leaf.
   return (
     <>
       <ConversationListData />
@@ -191,6 +203,7 @@ function App(): JSX.Element {
       <BackgroundTaskRosterData />
       <AnnouncedModelData />
       <ConversationActivityData />
+      <RunConfigLiveData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

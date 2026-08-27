@@ -202,15 +202,19 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
   // read-only markup and every click below is a no-op. This is desktop#491 exactly.
   await expect(modelRow(OPUS_ROW)).toHaveAttribute('role', 'button', { timeout: ROUNDTRIP_TIMEOUT_MS })
 
-  // Positive proof of the SOURCE of that id: exactly one bare read request went out, and its reply is
-  // the only thing the app could have learned a session id from. Combined with the unbound `daemon`
-  // handle above, this pins that the controls are operable because the DAEMON told them so, not
-  // because the spec did.
+  // Positive proof of the SOURCE of that id: a bare read request went out, and its reply is the only
+  // thing the app could have learned a session id from. Combined with the unbound `daemon` handle above,
+  // this pins that the controls are operable because the DAEMON told them so, not because the spec did.
+  //
+  // At-least-one rather than exactly-one since #810: the read now also fires on the connected edge and at
+  // each turn end, so the count is no longer fixed. The proof this assertion carries is unchanged — it
+  // rests on the unbound handle plus the capturing fake being the only source of a `session_settings`
+  // frame, not on the count being 1.
   await expect
     .poll(() => captured.filter((e) => e.type === 'request_session_settings').length, {
       timeout: ROUNDTRIP_TIMEOUT_MS
     })
-    .toBe(1)
+    .toBeGreaterThanOrEqual(1)
   await expect(selectedRadioIn(OPUS_ROW)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(effortSegment('low')).toHaveAttribute('aria-current', 'true')
   await expect(yoloSwitch).toHaveAttribute('aria-checked', 'false')

@@ -28,8 +28,9 @@ import type { SessionAction } from './store/sessionStore'
  * DOES re-assert itself does not belong here at all: as of #531 `conversationListStore` (a
  * `list_conversations` request on mount), `recentWorkspacesStore` (re-fetched by remounting the
  * picker), `serverInfoStore` (a one-shot mount invoke), `queueStore` and `modalStore` (both cleared by
- * the `connected` edge, then repopulated) and `runConfigStore` (re-requested by RunConfigData's
- * id-keyed effect) all self-heal, and adding them would be dead code. Nor does a store the `connected`
+ * the `connected` edge, then repopulated) and `runConfigStore` (re-requested on the `connected` edge
+ * itself, and on each turn-end edge, by `RunConfigLiveData`'s refresh trigger, #810) all self-heal,
+ * and adding them would be dead code. Nor does a store the `connected`
  * edge clears for its own reasons — `backgroundTaskRosterStore`, whose bridge branch is the sole
  * enforcement of #573's AC5 (backgroundTaskRosterBridge.ts:118-127). The discriminator between the two
  * mechanisms is "does a reconnect to the SAME daemon need to clear it?": yes ⇒ the `connected` edge,

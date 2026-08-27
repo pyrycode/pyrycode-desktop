@@ -1,8 +1,10 @@
 # Run configuration store
 
 The renderer's held copy of the active session's **Model / Effort / YOLO** settings — a dedicated,
-unidirectional Zustand store fed by an on-open fetch, so the [Run configuration
-sheet](conversation-shell.md#run-configuration-sheet-177) can display how the session is running.
+unidirectional Zustand store fed by an app-lifetime subscription and refreshed on two daemon-event
+edges, so the [Run configuration sheet](conversation-shell.md#run-configuration-sheet-177) can
+display how the session is running. The store is now live app-wide (#810, see § Live outside the
+sheet below) rather than fed only by the sheet's own open transition.
 
 Introduced in [#187](../codebase/187.md), split A (data path) of
 [#181](https://github.com/pyrycode/pyrycode-desktop/issues/181) — itself split from
@@ -49,11 +51,12 @@ render.
 
 ## What it does
 
-Requests the session settings fresh every time the Run configuration sheet opens
-(`requestSessionSettings`, bare — no conversation id), and holds the arriving `model` / `effort` /
-`yolo` (plus the two usage figures, #192) in a read-only store until the next one arrives.
-Deliberately **not** a [session store](session-store.md) facet: a settings arrival never touches
-connection/messages state and vice versa, so it re-renders only components selecting this slice.
+Requests the session settings on three occasions — every time the Run configuration sheet opens,
+every rising edge to `connected`, and every running → not-running turn transition (#810) — and
+holds the arriving `model` / `effort` / `yolo` (plus the two usage figures, #192) in a read-only
+store until the next one arrives. Deliberately **not** a [session store](session-store.md) facet: a
+settings arrival never touches connection/messages state and vice versa, so it re-renders only
+components selecting this slice.
 
 ## How it works
 
@@ -137,31 +140,89 @@ a now-stale id (the marker carries the genuinely newer one).
 A **headless container** (`RunConfigData(): null`) mounted as the first child of `<StatusSheet>` in
 `ConversationScreen.tsx`, ahead of `<LogDataSection />`. Because the sheet body is conditionally
 mounted (`{sheetOpen && <StatusSheet>…}`), the container's mount **is** the sheet's open transition
-— no separate `isOpen`-tracking is needed. `window.pyry` is dereferenced only inside its two mount
-effects, never during render, so it server-renders to empty markup without a bridge mock.
+— no separate `isOpen`-tracking is needed. `window.pyry` is dereferenced only inside its mount
+effect, never during render, so it server-renders to empty markup without a bridge mock.
 
-Two effects, each with its own StrictMode-correct idiom:
+Since #810 it owns **only** the request half — the subscription moved app-level (see § Live outside
+the sheet below):
 
-- **Subscription** — `subscribeRunConfig(window.pyry.onDaemonEvent, s => runConfigStore.getState().setSnapshot(s), id => sessionIdStore.getState().setSessionId(id))`
-  in a `useEffect(() => …, [])` returning the off handle as cleanup. Nets exactly one live listener
-  across a StrictMode double-mount (the `daemonEventBridge` idiom), declared *before* the request
-  effect so the listener is live before the request goes out.
 - **Request** — `requestRunConfigSnapshot(window.pyry.sendCommand)`, guarded by a `useRef(false)`
   one-shot flag so the effect (which has no symmetric "un-request" cleanup) fires the request
   exactly once even under the StrictMode dev double-invoke. A genuine close→reopen is a *new*
   component instance with a fresh ref, so it re-requests — exactly one request per open. #491 dropped
   the old active-conversation dependency, so a sheet opened before any conversation resolved no
-  longer fires nothing at all.
+  longer fires nothing at all. There is no "subscribe before request" ordering left to preserve here:
+  the app-level listener (#810) has been live since `App` mounted, well before any sheet opens.
 
-### Data flow
+### Live outside the sheet (#810)
+
+Before #810 the store's only feed was `RunConfigData`'s own subscribe effect, live only while the
+sheet was mounted: the figures did not exist before the first open and froze the instant the sheet
+closed. `session_settings` is **reply-only** — `requestRunConfigSnapshot` is its sole sender
+anywhere in the tree and nothing pushes the reply unsolicited — so keeping the figures true needed
+both an app-lifetime listener and a refresh trigger of its own; a subscription alone could never see
+a second value.
+
+**`src/renderer/src/screens/conversation/runConfigLive.ts`** (new module, the
+[`conversationListBridge`](conversation-list-store.md) shape: a `.ts` holding React-free injected
+helpers plus a headless leaf) supplies both:
+
+- **`RunConfigLiveData(): null`** — the ninth app-level headless leaf, mounted in `App.tsx`
+  alongside the other eight. It is now the **only** listener that lands `runConfigReceived` into
+  `runConfigStore` and `sessionIdStore` (`subscribeRunConfig`, reused verbatim, unedited). Two
+  effects, each returning its `onDaemonEvent` off handle as cleanup, net exactly one live listener
+  of each kind across a StrictMode double-mount.
+- **`createRunConfigRefreshTrigger()`** — a stateful factory returning a predicate over the
+  daemon-event stream, closing over one `Set<string>` of conversations whose turn is currently
+  running. `connected` clears the set and returns `true` (a genuine rising edge — the daemon emits
+  it once per completed handshake, and `liveWindow.ts` replays the held one into a reopened window,
+  which is correct to re-request into since that window's store starts empty). `turnState` adds the
+  conversation id while a turn is running and returns `false`; a non-running phase does
+  `set.delete(id)` and returns whatever `delete` returns — `true` only if the id had actually been
+  running, so a re-asserted `idle` (or an `idle` for a conversation never seen running) is not an
+  edge. The set is per-conversation specifically so two interleaved conversations cannot steal or
+  mask each other's edges, and it self-prunes (bounded by concurrently-running turns, not by
+  lifetime conversation count). It is a `Set`, never a plain object keyed by the daemon-supplied id —
+  `obj[id] = …` would hand a hostile `__proto__` to a prototype setter.
+- **`subscribeRunConfigRefresh(onDaemonEvent, refresh)`** — wraps one trigger instance around
+  `onDaemonEvent`, calling `refresh` (`() => requestRunConfigSnapshot(sendCommand)`) on each `true`
+  edge.
+
+The refresh request is **daemon-wide**, matching the read: `requestSessionSettings` carries no
+conversation id and its reply answers for the whole daemon (#491), so a turn ending in *any*
+conversation is a valid edge — filtering to the active conversation would leave the figures stale
+exactly when another conversation was the one spending the window.
+
+The trigger reads the edge off the **event stream**, not off `useSessionStore` + a `useRef` the way
+`conversationListBridge`'s connected-edge guard does. This repo's renderer specs are static server
+renders (`environment: 'node'`, CLAUDE.md) with no effects, so a ref-guarded edge would be
+structurally uncoverable; a plain predicate is callable directly from a test. `isTurnRunning` is
+imported from `ConversationScreen.tsx` rather than re-derived, for the same #648-defect reason
+[`conversationActivityBridge`](conversation-activity-store.md) already documents (a gate written
+against one phase literal loses the signal for the tool-heavy bulk of a turn). Importing it is also
+*why* this logic cannot live in `runConfigSnapshot.ts` or `RunConfigData.tsx`: `ConversationScreen`
+imports `RunConfigData`, which imports `runConfigSnapshot` — putting the trigger in either would
+close an import cycle. A separate module under `screens/conversation/` has none.
+
+A duplicate request — a sheet-open request landing alongside an edge-driven one — needs no
+deduplication: the reply is a whole-snapshot replace, so it is simply idempotent.
+
+## Data flow
 
 ```
-sheet opens → <RunConfigData/> mounts
-  → subscribeRunConfig(onDaemonEvent, setSnapshot, setSessionId)  [listener live before the request goes out]
-  → requestRunConfigSnapshot(sendCommand)                          [one bare requestSessionSettings, guarded by useRef]
+App mounts → <RunConfigLiveData/>  [app-lifetime, unconditional]
+  → subscribeRunConfig(onDaemonEvent, setSnapshot, setSessionId)         [the ONLY lander into the two stores]
+  → subscribeRunConfigRefresh(onDaemonEvent, () => requestRunConfigSnapshot(sendCommand))
+
+connected (handshake complete, or replayStatus into a reopened window)
+  → trigger: clear the running set, return true → requestSessionSettings
+turnState{id, thinking|responding} → trigger: add(id), return false
+turnState{id, idle}                → trigger: delete(id) — true (→ request) only if id was running
+
+sheet opens → <RunConfigData/> mounts → requestRunConfigSnapshot(sendCommand)   [one per open, unchanged]
 
 daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,used_tokens,window_tokens}
-  → onDaemonEvent → toRunConfigSnapshot → setSnapshot(s)  AND  toSnapshotSessionId → setSessionId(id)
+  → the one app-level listener → toRunConfigSnapshot → setSnapshot(s)  AND  toSnapshotSessionId → setSessionId(id)
   → runConfigStore                                          [most recent snapshot wins]
   → sessionIdStore                                          [id held verbatim, including '']
   → RunConfigSections (#188/#192): useRunConfigStore(selectSnapshot)
@@ -202,12 +263,18 @@ contract, the three-state table, and the forgery-resistance property.
 - **No reset on sheet close.** The store keeps its last snapshot across a close→reopen, so
   `RunConfigSections` shows the last-known values immediately on reopen while a fresh request is in
   flight. Revisit only if this surfaces a stale-value concern.
-- **A response landing after an instant close is simply dropped** — the listener unsubscribed with
-  the container; the store keeps its prior value and the next open re-requests. No app-level
-  always-on listener; the reply only arrives while a request is outstanding (sheet open).
+- **A response landing after an instant sheet close is still landed.** Since #810 the listener is
+  app-level and outlives the sheet, so a reply to the sheet's own request is not dropped just
+  because the sheet closed first — it lands in the store exactly as any edge-driven reply would.
 - **No correlation.** Any `session_settings` reply that arrives is decoded and emitted
-  unconditionally — safe today given a single in-flight fetch and no `conversation_id` to
-  disambiguate at all (the reply is daemon-wide, #491).
+  unconditionally — safe because the reply is daemon-wide and carries no `conversation_id` to
+  disambiguate at all (#491); a duplicate reply (sheet-open landing alongside an edge-driven request)
+  is simply idempotent, since `setSnapshot` always replaces the whole snapshot.
+- **A daemon that flaps `turn_state` costs one request per genuine transition, not per re-assertion**
+  — the per-conversation `Set` in `createRunConfigRefreshTrigger` absorbs re-asserted phases (#810).
+  If a real daemon is ever observed flapping transitions rapidly enough to matter, a debounce belongs
+  in `subscribeRunConfigRefresh`; none exists today because none has been observed (architect
+  self-review, 2026-08-27).
 - **Fire-and-forget request.** `sendCommand` is `void`; a bridge failure is swallowed upstream — no
   result to await, no error surface in this store.
 - **`sessionId: ''` is a real value, not an absence.** It means "the daemon has no session to
@@ -216,6 +283,12 @@ contract, the three-state table, and the forgery-resistance property.
 
 ## Related
 
+- [Conversation list store](conversation-list-store.md) — `conversationListBridge`, the shape
+  `runConfigLive.ts` clones (a `.ts` module of React-free injected helpers plus a headless leaf, and
+  the refresh-trigger-predicate idiom the ticket named as precedent).
+- [Conversation activity store](conversation-activity-store.md) — source of `isTurnRunning`'s
+  #648-defect rationale (import it, never re-derive) and of the `connected`-clears-stale-liveness
+  discriminator the refresh trigger's `Set` reuses.
 - [Session store](session-store.md) — the structural precedent this store's DI-factory → singleton
   → hook → selectors shape mirrors, contrasted on reducer-vs-single-setter.
 - [Session-id store](session-id-store.md) — the second write destination this data path feeds
@@ -251,3 +324,7 @@ contract, the three-state table, and the forgery-resistance property.
 - [Announced-model store](announced-model-store.md) / [#560 codebase notes](../codebase/560.md) —
   the sixth section, `RunningModelSection`, added ahead of `ModelSection`; sources its own store,
   not this one — see § Running model section above.
+- **#810** — split the store's feed by lifetime: the app-lifetime subscription moved to the new
+  `RunConfigLiveData` leaf, refreshed on the connected edge and each turn-end edge, so the figures
+  are true whether or not the sheet has ever been opened; `RunConfigData` kept its per-open request
+  unchanged. Security-sensitive, architect self-review PASS. See § Live outside the sheet above.

@@ -231,10 +231,14 @@ Nothing imports this module yet.
   `sessionTransition` `DaemonEvent` arm to carry. `timelineBridge.ts` moved that arm out of its no-op
   fall-through into a translating case (dropping `newSessionId`, which the sibling #259 session-id
   holder still owns unaffected); `reduceTimeline` fresh-tail-appends the item (the `userText`/`turnEnd`
-  discipline, never coalesced); `TimelineRow` draws it as a titled horizontal rule via a new pure
-  `sessionBoundaryViewModel.ts` (a long-form-relative-time sibling of `channelListViewModel.ts`'s
-  `formatLastActivity`). The fifth application of the "new timeline-item kind → bridge arm → render
-  row" pattern (#218/#230/#245).
+  discipline, never coalesced); `TimelineRow` drew it as a titled horizontal rule via a pure
+  `sessionBoundaryViewModel.ts` (at the time a long-form-relative-time sibling of
+  `channelListViewModel.ts`'s `formatLastActivity`) — restyled and re-copied by
+  [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690), which dropped the relative time
+  entirely; see [Conversation shell § Session-boundary
+  delimiter](conversation-shell.md#session-boundary-delimiter-286-redrawn-690). `item.occurredAt` stays
+  on `ThreadItem` unaffected — the store still owns it, only the render layer stopped reading it. The
+  fifth application of the "new timeline-item kind → bridge arm → render row" pattern (#218/#230/#245).
 - **[#317](../codebase/317.md) (shipped)** added the `stalled` scalar and the `stallDetected` arm —
   the render consumer of [#315](../codebase/315.md)'s dormant, at-ship-time-nullary `DaemonEvent`.
   `timelineBridge.ts` moved `stallDetected` from its inverse-filter `null` group to an owned arm (a

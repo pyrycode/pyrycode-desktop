@@ -1547,6 +1547,49 @@
   white-space: nowrap;
 }
 
+/* #680 — the Actions trigger (Figma 115:3677), the footer row's leftmost item. A bare inline row in the
+   design: the word in M3 body/small at schemes/primary, a 4px gap, then the up chevron. No border, no
+   fill, no padding of its own — so the <button> needs an explicit reset, because the UA stylesheet gives
+   form controls a border, a background, padding AND their own font.
+
+   THE --color-primary HOIST ONTO .composer__footer IS DECLINED, and this rule is where the question the
+   comment above left open is answered. A hoisted `color` would not reach a <button> at all (the UA sets
+   `color` on form controls), so every button-shaped consumer would still declare `color: inherit` plus a
+   font block — not fewer declarations than `color: var(--color-primary)` plus the same font block, and
+   it would split the row's treatment across two rules for nothing. .composer__context stays as it is.
+
+   The real extraction is a shared .composer__footer-button carrying the reset, the body-small type and
+   the primary colour for all four footer buttons. One consumer is not a pattern: #682 landing as the
+   SECOND button is the moment to lift the common declarations out of these two rules.
+
+   No `outline: none`. Every close path in ComposerOptionsMenu returns DOM focus to this button, so its
+   focus ring is load-bearing.
+
+   white-space: nowrap for .composer__context's reason verbatim — the row has a hard 20px height, so a
+   wrapped label would overflow it rather than grow it. The label is a client-owned constant. */
+.composer__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--color-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  white-space: nowrap;
+}
+
+/* The chevron's size comes from the svg's own width/height attributes (the .composer__send-icon idiom);
+   this only stops the flex row squeezing it, which is the Figma node's own shrink-0. */
+.composer__actions-icon {
+  flex: 0 0 auto;
+}
+
 /* min-width: 0 lets the input shrink below its content width on narrow windows. */
 .composer__input {
   flex: 1 1 auto;

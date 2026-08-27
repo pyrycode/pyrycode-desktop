@@ -22,6 +22,15 @@
   --color-on-surface: #e0e2e8;
   --color-on-surface-variant: #c2c7cf;
   --color-primary: #9dcbfc;
+  --color-inverse-primary: #32628d; /* M3 Schemes/Inverse Primary — the session-reset separator's two
+                                       hairlines (#690, Figma node 119:3843). Read from the Figma
+                                       VARIABLE (get_variable_defs on that node), never from that
+                                       frame's generated fallback, which prints Inverse Primary and
+                                       Primary transposed: the snippet's inline values are the LIGHT
+                                       scheme's resolution, and in an M3 dark scheme Inverse Primary IS
+                                       the light scheme's Primary, which is exactly why the pair looks
+                                       swapped. Desktop is dark-only (ADR 0003). The first inverse-*
+                                       token here, and one consumer today, per the note above. */
   --color-primary-container: #134a74;
   --color-on-primary: #003355; /* M3 Schemes/On Primary — the label/icon role on a --color-primary fill
                                   (#657's welcome CTA, the first text use). Confirmed three ways: the

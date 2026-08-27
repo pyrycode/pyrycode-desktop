@@ -414,7 +414,7 @@ the view. Mounted as a **sibling above `Timeline`**, below `ConnectionBannerCont
 ```tsx
 <ConnectionBannerControl />
 <WorkspaceChip conversation={activeConversation} isEmpty={items.length === 0} />
-<Timeline items={items} now={now} />
+<Timeline items={items} />
 ```
 
 ```ts
@@ -2053,31 +2053,54 @@ one continuous thread with no split-brain and no empty second region. See
 [#179 codebase notes](../codebase/179.md) for the full design, the security review, and lessons
 learned.
 
-### Session-boundary delimiter (#286)
+### Session-boundary delimiter (#286, redrawn #690)
 
-The fifth `ThreadItem` kind's render row (transport half was #285): a titled horizontal rule marking
-where a `/clear`, an idle eviction, or a workspace change started a fresh session (Figma node 16-35).
-`TimelineRow`'s new `sessionBoundary` case renders a `<div className="session-delimiter">` — deliberately
-**no `data-thread-role`** (AC4, keeping it out of the assistant/user/tool bubble count) — holding a
-monospace `<p className="session-delimiter__title">` and an `aria-hidden`
-`<div className="session-delimiter__rule">` decorative divider, not a semantic `<hr>`.
+The fifth `ThreadItem` kind's render row (transport half was #285): marks where a `/clear`, an idle
+eviction, or a workspace change started a fresh session. `TimelineRow`'s `sessionBoundary` case renders
+a `<div className="session-delimiter">` — deliberately **no `data-thread-role`** (AC4, keeping it out of
+the assistant/user/tool bubble count).
 
-The title comes from a new pure `sessionBoundaryTitle(item, now)` in `sessionBoundaryViewModel.ts`: an
-exhaustive switch on `reason` picks the label (`Workspace changed to ${workspaceCwd}` for
-`workspace_change`, degrading to the pathless `Workspace changed` if the daemon ever sends a `null`
-path there; provisional `New session` / `New session after idle` for `clear`/`idle_evict` — Figma
-draws only the `workspace_change` variant), joined to a **long-form** relative time
-(`formatSessionBoundaryTime`, `2 hours ago` — a deliberate sibling of `channelListViewModel.ts`'s
-short-form `formatLastActivity`, not a reuse, since the two designs diverge). `workspaceCwd` (an
-untrusted daemon filesystem path) reaches the DOM only inside this title string as auto-escaped React
-children — the `toolCall`/`userText` posture, inherited from the `events.ts` arm's warning.
+**#286 shipped it in mobile's shape** (Figma node 16-35): a monospace title stacked above a single
+full-width rule, the title joined to a **long-form** relative time (`formatSessionBoundaryTime`, `2
+hours ago` — a deliberate sibling of `channelListViewModel.ts`'s short-form `formatLastActivity`) via a
+`now` prop threaded from `ConversationScreen`'s `Date.now()` through `Timeline` → `TimelineRow`. Copy for
+`clear`/`idle_evict` was provisional (`New session` / `New session after idle`) since the Figma drew only
+the `workspace_change` variant.
 
-`now` is threaded from `ConversationScreen`'s `const now = Date.now()` through `Timeline` →
-`TimelineRow`, both defaulting the prop to `Date.now()` so every pre-existing `<Timeline items={...} />`
-test call site (none of which render a `sessionBoundary` row) needed no edit. The explanatory sentence
-and `Install` affordance (Figma 16-38) are out of scope, deferred with the memory-plugin subsystem this
-ticket has no dependency on — title + rule only. See [#286 codebase notes](../codebase/286.md) for the
-full design and patterns established.
+**#690 redrew it as the desktop chat screen's own shape** (Figma node 119-3843): one 16px-tall row —
+hairline rule, centred label, hairline rule — replacing the stacked layout. Two copy decisions the
+operator took 2026-08-22 drove the change: the reason still has to read differently in the words
+themselves, so the label is no longer provisional — `Session reset` for `clear`, `Session reset after
+idle` for `idle_evict`, narrower than the Figma's single "Session reset" node — and the relative time is
+gone entirely, since every message above and below the row already carries its own timestamp.
+`sessionBoundaryTitle(item)` in `sessionBoundaryViewModel.ts` collapsed from the two-function long-form
+module into a single exhaustive label switch (`workspace_change` unchanged: `Workspace changed to
+${workspaceCwd}`, degrading to the pathless `Workspace changed` on a `null` path); `formatSessionBoundaryTime`
+and the `now` prop threaded through `Timeline`/`TimelineRow` for its sake are both deleted —
+`ConversationScreen`'s own `now` stays, since the [Channel Info](#channel-info-sheet-365) and [Workspace
+Picker](#workspace-picker-sheet-383) sheets still read it for their own relative-time lines.
+
+The row is now two identically-classed `.session-delimiter__rule` siblings bracketing the centred label,
+each `flex: 1 0 0` inside a `nowrap` flex row — equal halves at every container width by construction,
+nothing kept in sync via a width or percentage. The label takes `--color-primary` and `--font-sans`
+body-small (no `font-family` declaration — `.conversation` already sets `--font-sans` and a `<p>` has no
+UA font-family to fight); the two hairlines take a new token, `--color-inverse-primary` (`#32628d`, M3
+Schemes/Inverse Primary, `tokens.css`), at the Figma's own 60% opacity. `workspaceCwd` (an untrusted
+daemon filesystem path) still reaches the DOM only inside the label string as auto-escaped React
+children — the `toolCall`/`userText` posture, unchanged since #286. Both rules stay decorative
+`aria-hidden` styled `div`s, not semantic `<hr>`s.
+
+Row clearance (16px above/below) is the *sum* of `.conversation__thread`'s `gap: var(--space-3)` (12px)
+and the row's own `--space-1` padding (4px) — not `--space-4`, which would double the container's
+existing gap into 28px. AC5 (equal halves under resize; a long unbroken workspace path wrapping inside
+the row rather than stranding a rule) was settled as review-by-inspection in the spec, since nothing
+under `renderToStaticMarkup` can measure layout — but the PR discovered that the Playwright Electron tier
+actually *can* resize the window (`app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]
+.setSize(w, h))`; `page.setViewportSize` still does not apply to an Electron page), so AC5 was verified
+by measuring real rects at 800px and 1600px rather than only inspected. The explanatory sentence and
+`Install` affordance (Figma 16-38, #286's mobile file) remain out of scope, deferred with the
+memory-plugin subsystem neither ticket depends on. See [#286 codebase notes](../codebase/286.md) for
+#286's original design and patterns established.
 
 ### Queued backlog + drop affordance (#294, drop since #296)
 
@@ -2245,7 +2268,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **`ApiRetryIndicator({ retry })`** — **bound in [#493](../codebase/493.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s supersede peer over the open slice's `apiRetry` field, mounted right after `Timeline` and before `StallIndicator` (through #796, `ThinkingIndicator` itself sat between them in the DOM; #796 moved its markup into the composer status row, leaving this trio contiguous below `Timeline` — the mount order between `ApiRetryIndicator`/`CompactingIndicator`/`StallIndicator` is unchanged); also narrows `ThinkingIndicator`'s own gate via the new `shouldShowThinking` predicate. See [Api-retry indicator](#api-retry-indicator-493) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
 - **`CompactingIndicator({ isCompacting })`** — **bound in [#496](../codebase/496.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s second supersede peer over the open slice's `compacting` field, mounted right after `ApiRetryIndicator` and before `StallIndicator`; extends `shouldShowThinking` by one field and one clause. See [Compacting indicator](#compacting-indicator-496) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
 - **`PermissionModal()`** — **bound in [#224](../codebase/224.md); made answerable in [#237](../codebase/237.md); gained a second-confirm gate in [#226](../codebase/226.md); gained a rejection surface in [#249](../codebase/249.md); its second-confirm marker was re-keyed from a bare option id to `{modalId, optionId}` in [#511](../codebase/511.md).** Reads the [modal store](modal-store-bridge.md)'s `selectOutstanding`, `selectRejections`, and `dispatch`, mounted as the last child of `.conversation`. `null` only when both the outstanding prompt and the rejection list are empty; the default option and Cancel dispatch a command and clear the prompt locally immediately, any other option holds pending a `Back`/`Confirm` sub-step first scoped to the prompt it was selected on, and a round-tripped rejection renders a dismissible banner independent of the prompt. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) above.
-- **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its title from the new pure `sessionBoundaryTitle` in `sessionBoundaryViewModel.ts` and the container's threaded `now`. See [Session-boundary delimiter](#session-boundary-delimiter-286) above.
+- **`TimelineRow`'s `case 'sessionBoundary'`** — **bound in [#286](../codebase/286.md); redrawn as one hairline/label/hairline row and re-copied in [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690).** Reads the fifth `ThreadItem` kind [thread timeline](thread-timeline.md) gained, deriving its label from the exhaustive `sessionBoundaryTitle(item)` in `sessionBoundaryViewModel.ts` — no `now` input since #690 dropped the row's relative time. See [Session-boundary delimiter](#session-boundary-delimiter-286-redrawn-690) above.
 - **`QueuedBacklog({ items, onDrop })` / `QueuedBacklogControl`** — **render bound in [#294](../codebase/294.md); `onDrop` (required) bound in [#296](../codebase/296.md).** `QueuedBacklogControl` reads the [queue store](queue-store.md)'s `selectBacklogFor(MILESTONE_CONVERSATION_ID)` and binds `onDrop` to the pure `dropQueuedMessage` (`dropQueuedMessage.ts`), which dispatches `dequeueMessageCommand` and nothing else — no local mutation. See [Queued backlog + drop affordance](#queued-backlog--drop-affordance-294-drop-since-296) above.
 - **`ScreenSnapshotView({ snapshot, canRequest, onRequest })` / `ScreenSnapshotControl`** — **bound in [#324](../codebase/324.md); removed in [#618](../codebase/618.md).** Read `useSessionStore(selectStatus)` and the [screen-snapshot store](screen-snapshot-store.md)'s `selectScreenSnapshot`, and mounted between `StatusRow` and `InterruptControl`, until #618 took the view, its container and `requestScreenSnapshot.ts` out; the store itself was then deleted outright by [#619](../codebase/619.md). See [Screen-snapshot action & display](#screen-snapshot-action--display-324-removed-618) above.
 - **`WorkspacePickerSheetView({ workspaces, activeCwd, now?, onClose, onChoose?, onCreateFolder? })` /
@@ -2266,7 +2289,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **Dark scheme only**; no responsive layout beyond flex reflow; no desktop-native layout (the plan defers that until the app is fully functioning).
 - **Connection banner** ([#279](../codebase/279.md)) — renders across the top of the thread whenever `selectStatus` is not `connected`, disappearing on reconnect with no reload; text is always the client-owned `CONNECTION_BANNER_COPY`, never `ConnectionError.message`. Coexists with the composer's own terse hint (#31) — both remain visible while disconnected, by design (distinct copy registers, not a duplicate).
 - No DOM interactivity is tested yet — the render test uses `renderToStaticMarkup`, not a DOM harness. Because zustand v5's `useStore` reads `getInitialState()` (not `getState()`) for its server snapshot, a *server*-rendered store-bound container always shows the store's **initial** state; #69 therefore proves ordering + role→type on the pure `MessageThread` view and smoke-tests the container against the empty store. Observing a *populated* container render needs a jsdom harness — still deferred. See [#69 codebase notes](../codebase/69.md).
-- **Session-boundary delimiter** ([#286](../codebase/286.md)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before (AC5). Its `clear`/`idle_evict` copy is provisional — no Figma variant exists for those two reasons yet.
+- **Session-boundary delimiter** ([#286](../codebase/286.md), redrawn [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before. Its `clear`/`idle_evict` copy is no longer provisional as of #690 — `Session reset` / `Session reset after idle` are the shipped labels, not a placeholder awaiting a Figma variant.
 - **Queued backlog + drop affordance** ([#294](../codebase/294.md)/[#296](../codebase/296.md)) — the region and its drop buttons render only when the milestone conversation's backlog is non-empty; dropping a row is fire-and-forget with no client-side validation of `queued_msg_id` and no error surface on a bridge failure (swallowed, `console.error` only) — the row simply remains, since the daemon never received the drop. The drop button inherits the region's 50% dimming; it cannot be rendered at full opacity without restructuring the region-level dim (a child opacity cannot escape a parent's opacity compositing group).
 - **Two-dot connection indicator** ([#330](../codebase/330.md)) — the two legs render independently and are never reconciled: a fatal session close leaves the relay dot at its last value (typically up) while the daemon dot shows down, and a retryable daemon-absent close leaves the daemon dot in-progress while the relay dot shows up/"Reachable" — both are intended, honest-per-hop renders, not bugs. The relay leg has no in-progress arm (that category is exercised only by the daemon leg's `connecting`), so the daemon dot never shows a false green.
 - **Channel Info sheet** ([#365](../codebase/365.md)) — a list-opened thread (never populates `activeConversationStore`) opens the sheet gracefully: chrome + a placeholder About line, no Channel ID footer, no crash. `sheetOpen` (run-config) and `channelInfoOpen` are independent booleans, so both overlays could in principle stack — not reachable through normal use (separate triggers) and no AC requires mutual exclusion, left as-is. Created / Total sessions / Total messages / Memory (Figma 20-48) have no desktop wire field and are deferred, not invented. Escape-dismiss and the overflow-select → open wiring are reviewed glue, not unit-tested (the `renderToStaticMarkup`-only suite constraint, same as #276/#177).

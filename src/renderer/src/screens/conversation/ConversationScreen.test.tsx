@@ -986,36 +986,46 @@ describe('Timeline — the streamed assistant text', () => {
   })
 })
 
-// #286: the session-boundary delimiter row (Figma node 16-35). Server-rendered with a FIXED `now` via
-// the Timeline prop so the relative time is deterministic (the deterministic-time unit tests live in
-// sessionBoundaryViewModel.test.ts; here we prove the row's structure and its untrusted-text posture).
-describe('Timeline — the session-boundary delimiter (#286)', () => {
-  // A fixed `now` two hours after occurredAt → the title's time reads `2 hours ago` (the Figma copy).
-  const now = Date.parse('2026-01-15T12:00:00.000Z')
-  const twoHoursAgo = new Date(now - 2 * 3_600_000).toISOString()
+// #286/#690: the session-boundary delimiter row, redrawn as the desktop inline separator (Figma node
+// 119-3843): rule / centred label / rule on one line, with no relative time and so no `now` prop.
+// The label's per-reason copy is asserted exactly in sessionBoundaryViewModel.test.ts; here we prove
+// the row's structure and its untrusted-text posture.
+describe('Timeline — the session-boundary delimiter (#286, redrawn #690)', () => {
+  // occurredAt still rides the ThreadItem (the store owns it), it just reaches no renderer any more.
+  const twoHoursAgo = new Date(Date.parse('2026-01-15T12:00:00.000Z') - 2 * 3_600_000).toISOString()
 
-  it('renders a titled horizontal rule row — no bubble, no cursor, no data-thread-role (AC1/AC4)', () => {
+  it('brackets the label with TWO rules — no bubble, no cursor, no data-thread-role (AC1/AC4/AC5)', () => {
     const items: ThreadItem[] = [
       { kind: 'sessionBoundary', reason: 'workspace_change', workspaceCwd: '~/Workspace/Projects/KitchenClaw', occurredAt: twoHoursAgo }
     ]
-    const markup = renderToStaticMarkup(<Timeline items={items} now={now} />)
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
     expect(markup).toContain('session-delimiter')
-    expect(markup).toContain('session-delimiter__rule')
-    // The full Figma title, path verbatim, over the long-form relative time.
-    expect(markup).toContain('Workspace changed to ~/Workspace/Projects/KitchenClaw — 2 hours ago')
+    // The unit tier cannot measure a width, but it CAN prove the two identically-classed siblings
+    // that make the equal halves structural are both there and bracket the label (AC5s pure-tier
+    // stand-in; the widths themselves are review-by-inspection, see the PR checklist).
+    expect(markup.match(/session-delimiter__rule/g)).toHaveLength(2)
+    expect(markup.indexOf('session-delimiter__rule')).toBeLessThan(
+      markup.indexOf('session-delimiter__title')
+    )
+    expect(markup.indexOf('session-delimiter__title')).toBeLessThan(
+      markup.lastIndexOf('session-delimiter__rule')
+    )
+    // The label, path verbatim — and no time appended to it.
+    expect(markup).toContain('>Workspace changed to ~/Workspace/Projects/KitchenClaw<')
+    expect(markup).not.toContain('ago')
     // A distinct row: not attributed to assistant/user/tool, and not a streaming tail.
     expect(markup).not.toContain('data-thread-role')
     expect(threadBubbleCount(markup)).toBe(0)
     expect(markup).not.toContain(CURSOR)
   })
 
-  it('renders the rule as an aria-hidden decorative element (purely visual, not semantic)', () => {
+  it('renders each rule as an aria-hidden decorative element (purely visual, not semantic)', () => {
     const items: ThreadItem[] = [
       { kind: 'sessionBoundary', reason: 'clear', workspaceCwd: null, occurredAt: twoHoursAgo }
     ]
-    const markup = renderToStaticMarkup(<Timeline items={items} now={now} />)
-    // The provisional pathless clear label, and the rule carrying aria-hidden.
-    expect(markup).toContain('New session — 2 hours ago')
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    // The clear label bounded by its tags, so a re-appended time fails this assertion too.
+    expect(markup).toContain('>Session reset<')
     expect(markup).toMatch(/session-delimiter__rule[^>]*aria-hidden="true"/)
   })
 
@@ -1024,7 +1034,7 @@ describe('Timeline — the session-boundary delimiter (#286)', () => {
     const items: ThreadItem[] = [
       { kind: 'sessionBoundary', reason: 'workspace_change', workspaceCwd: '<b>x</b>', occurredAt: twoHoursAgo }
     ]
-    const markup = renderToStaticMarkup(<Timeline items={items} now={now} />)
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
   })
@@ -1035,7 +1045,7 @@ describe('Timeline — the session-boundary delimiter (#286)', () => {
       { kind: 'sessionBoundary', reason: 'clear', workspaceCwd: null, occurredAt: twoHoursAgo },
       { kind: 'userText', text: 'after the break' }
     ]
-    const markup = renderToStaticMarkup(<Timeline items={items} now={now} />)
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
     expect(markup.indexOf('before the break')).toBeLessThan(markup.indexOf('session-delimiter'))
     expect(markup.indexOf('session-delimiter')).toBeLessThan(markup.indexOf('after the break'))
   })

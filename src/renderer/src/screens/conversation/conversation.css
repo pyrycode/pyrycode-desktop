@@ -1285,38 +1285,61 @@
   font-weight: var(--text-body-small-weight);
 }
 
-/* #286 — the session-boundary delimiter (Figma node 16-35): a monospace title above a full-width 1px
-   horizontal rule, marking where a /clear, an idle eviction, or a workspace change started a fresh
-   session. A child of .conversation__thread's flex column (inherits its horizontal padding), the
-   .tool-row posture — its own centered column, no flex/margin of its own beyond the stack below. Token
-   only — every value below exists in tokens.css. Figma: 12px gap, 20px top / 4px bottom padding. */
+/* #286, redrawn #690 — the session-boundary delimiter (Figma node 119-3843): ONE 16px-tall row, rule /
+   centred label / rule, marking where a /clear, an idle eviction or a workspace change started a fresh
+   session. The desktop chat screen's inline separator, replacing #286's mobile-derived (node 16-35)
+   title stacked above a full-width rule. A child of .conversation__thread's flex column (inherits its
+   horizontal padding). Token only — every value below exists in tokens.css.
+
+   flex-wrap is left at its nowrap default, and THAT IS THE WHOLE OF AC5. Two siblings carrying an
+   identical `flex: 1 0 0` split the leftover width into equal halves at every container width, with
+   nothing to keep in sync — no width, no percentage — and nowrap is what makes "a rule stranded on a
+   line of its own" unreachable rather than merely unobserved.
+
+   CLEARANCE ARITHMETIC: .conversation__thread (:233) is a flex column with gap: var(--space-3) = 12px,
+   which already separates this row from the messages above and below. 12 + this --space-1 = the 16px of
+   clearance the design asks for, while the row's own content box stays the Figma's exact 16px (the
+   label's line-height). Writing --space-4 here would yield 28px. Padding, not margin, as #286 used —
+   and if that container gap ever changes, this number is what silently breaks. */
 .session-delimiter {
   display: flex;
-  flex-direction: column;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-5) 0 var(--space-1);
+  padding: var(--space-1) 0;
 }
 
-/* The title run (Figma node 16-36): centered monospace body-small in on-surface-variant. An untrusted
-   long workspace path must wrap, not overflow — word-break: break-word (the Figma sets the same). */
+/* The centred label (Figma node 119:3844): M3 body/small in --color-primary. No font-family — the
+   Figma's body small is Roboto, and --font-sans already inherits from .conversation (:15); #286's
+   --font-mono declaration is DELETED rather than swapped, since restating a settled value is how it
+   gets lost (.tool-row__summary:602, the markdown-link rule :709). margin: 0 is a fix, not a
+   formality: there is no global <p> reset (index.css resets body only), so #286's row carried two
+   stray UA margins and the 16px row is unreachable without this. An untrusted long workspace path must
+   wrap INSIDE the row, not overflow it — min-width: 0 lifts the flex item's automatic minimum (its
+   min-content width) so the label can shrink, and word-break: break-word then breaks the unbroken
+   path; without the first, a long path squeezes both rules to their 1px floor instead. */
 .session-delimiter__title {
-  font-family: var(--font-mono);
+  min-width: 0;
+  margin: 0;
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
   letter-spacing: var(--text-body-small-tracking);
   font-weight: var(--text-body-small-weight);
-  color: var(--color-on-surface-variant);
+  color: var(--color-primary);
   text-align: center;
   word-break: break-word;
 }
 
-/* The horizontal rule (Figma node 16-37): a full-width 1px band in outline at 60% opacity. A purely
-   decorative styled div (aria-hidden in the markup), not a semantic <hr>. */
+/* The two hairlines (Figma nodes 119:3846 / 119:3841): 1px bands in inverse-primary at 60% opacity —
+   the opacity is the Figma's own (`opacity-60` on both rectangles), not a leftover. `flex: 1 0 0` on
+   both is the equal-halves invariant above; min-width: 1px mirrors the Figma's min-w-px and is what a
+   rule falls back to when a long label consumes the row. No border-radius: the Figma's rounding is a
+   0.5px radius on a 1px band, sub-pixel and invisible. Purely decorative styled divs (aria-hidden in
+   the markup), not semantic <hr>s. */
 .session-delimiter__rule {
-  width: 100%;
+  flex: 1 0 0;
+  min-width: 1px;
   height: 1px;
-  background: var(--color-outline);
+  background: var(--color-inverse-primary);
   opacity: 0.6;
 }
 

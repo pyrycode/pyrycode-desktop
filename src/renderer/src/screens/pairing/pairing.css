@@ -283,6 +283,27 @@
   color: var(--color-tertiary);
 }
 
+/*
+ * The optional host-name field (#825), which the frame does not draw at all — see
+ * PairingScreen.tsx on the design gap. It reuses the .pairing-field* block above
+ * verbatim; these are the only two declarations the second instance needs.
+ *
+ * The margin, not a `gap` on .pairing-page__hero: the hero is a column flex with no
+ * gap today, and adding one would ALSO widen the 4px between the code field and its
+ * supporting line, whose 20px M3 slot geometry must not move.
+ */
+.pairing-field--host {
+  margin-top: var(--space-6);
+}
+
+/* .pairing-field__row ships with NO right padding, because the code field's right
+   inset comes from its 48px trailing clear slot (see :163-168). This field has no
+   trailing control, so without this its value would touch the field's right edge.
+   Mirrors the row's own 16px left padding. */
+.pairing-field--host .pairing-field__row {
+  padding-right: var(--space-4);
+}
+
 /* Figma 103:2905 — the three rows pinned to the bottom. Geometrically identical to
    the welcome frame's CTA block (both are 1216x172: two 56px rows and a 24+8px
    footer, 12px gaps), minus the leading icon. */

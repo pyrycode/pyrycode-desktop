@@ -28,6 +28,7 @@ import {
   RepairPrompt,
   ConnectionBanner,
   ComposerErrorChip,
+  ContextUsageReading,
   WorkspaceChip,
   isTurnRunning,
   ComposerSendButton,
@@ -51,6 +52,7 @@ import type { Message } from './messageViewModel'
 import type { ThreadItem, ToolResult } from '../../store/threadTimeline'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import { sessionStore } from '../../store/sessionStore'
+import { runConfigStore } from '../../store/runConfigStore'
 
 // No DOM harness (jsdom/Testing Library) — mirrors PairingScreen.test.tsx. MessageThread
 // is pure (Message[] in, markup out), so a server-rendered string proves the render:
@@ -2060,6 +2062,61 @@ describe('ComposerErrorChip — the connection-error chip in the status row (#79
   })
 })
 
+// #811: the context-window reading, first occupant of the new composer footer row (Figma 110:3497).
+// ContextUsageReading is the pure, exported view (the ComposerErrorChip pattern), so the whole
+// present/absent matrix is proven by server-rendering it with injected figures and no store. The
+// arithmetic itself lives in contextUsage.test.ts; what these prove is the MARKUP — that the reading is
+// a reading and not a control, and that its absent arm renders nothing at all.
+describe('ContextUsageReading — the composer footer’s context percentage (#811)', () => {
+  // An EXACT markup assertion, not a toContain, and deliberately so: AC3 ("it is a reading, not a
+  // control: no click handler, not focusable") is structural in a string this short — no onclick, no
+  // tabindex, no role, no href, no <button> and nothing else can hide in it. Do not relax this to a
+  // substring check; the exactness IS the assertion.
+  it('renders the percentage as a single bare text run — no handler, no tabindex, no role (AC1, AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={146000} windowTokens={200000} />
+    )
+    expect(markup).toBe('<span class="composer__context">Context: 73%</span>')
+  })
+
+  // AC2's whole surface, in the STRICT form the ComposerErrorChip describe above uses: an exact-empty
+  // markup, not a not.toContain. That is what proves "not an empty element holding the slot either" —
+  // a substring assertion would pass on a rendered-but-empty <span>.
+  it('renders nothing at all when the window count is 0 — not an empty element (AC2)', () => {
+    expect(renderToStaticMarkup(<ContextUsageReading usedTokens={146000} windowTokens={0} />)).toBe('')
+  })
+
+  // The two absent states the store can produce collapse into one path: the container coalesces a
+  // not-yet-loaded `snapshot === null` to 0, which is the same value the daemon sends for "usage
+  // unavailable". Neither divides, and neither leaves a misleading reading behind.
+  it('renders no misleading 0% and no Infinity% on an absent window (AC2)', () => {
+    const markup = renderToStaticMarkup(<ContextUsageReading usedTokens={0} windowTokens={0} />)
+    expect(markup).not.toContain('Context:')
+    expect(markup).not.toContain('0%')
+    expect(markup).not.toContain('Infinity')
+    expect(markup).not.toContain('NaN')
+  })
+
+  it('clamps an over-full session to 100% rather than running past it', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={250000} windowTokens={200000} />
+    )
+    expect(markup).toContain('Context: 100%')
+    expect(markup).not.toContain('Infinity')
+  })
+
+  // The reading is NOT a live region. After #810 the figures refresh on every connect and every turn
+  // end, so a polite region here would announce a percentage after every single turn — the
+  // ComposerErrorChip ruling, and stronger here because the update cadence is the turn itself.
+  it('is not a live region — the figure re-renders on every turn end', () => {
+    const markup = renderToStaticMarkup(
+      <ContextUsageReading usedTokens={168000} windowTokens={200000} />
+    )
+    expect(markup).not.toContain('aria-live')
+    expect(markup).not.toContain('role="status"')
+  })
+})
+
 // #330: the two-dot Relay/Pyrycode connection-status indicator. relayLeg / daemonLeg are the exported
 // pure leg-mapping predicates (the isTurnRunning shape) — call them directly with each store value to
 // prove the full leg → category → label matrix with no store, no render. ConnectionStatusIndicator is
@@ -2745,6 +2802,53 @@ describe('ConversationScreen — store binding', () => {
       // In the ROW, not loose in the region: the chip trails .composer-status in the shipped tree.
       expect(markup.indexOf('composer-status__error')).toBeGreaterThan(
         markup.indexOf('class="composer-status"')
+      )
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // #811: the composer footer row is the second thing in this region that mounts UNCONDITIONALLY. It
+  // holds its own height with nothing inside it, which is what keeps the message box from moving when
+  // the reading appears and disappears (AC4) — the .composer-status guarantee, one row lower. Against
+  // the initial run-config store (snapshot: null → windowTokens: 0) there is no reading to hold.
+  it('mounts the composer footer row with no reading against the empty run-config store (AC2, AC4)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    expect(markup).toContain('class="composer__footer"')
+    expect(markup).not.toContain('composer__context')
+    expect(markup).not.toContain('Context:')
+  })
+
+  // The design's DOM order: the footer sits BELOW the message box, not above it. Cheap insurance
+  // against the row being dropped in at the wrong end of the composer column.
+  it('places the footer row after the message-box row (Figma 110:3494)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    const rowAt = markup.indexOf('class="composer__row"')
+    const footerAt = markup.indexOf('class="composer__footer"')
+    expect(rowAt).toBeGreaterThanOrEqual(0)
+    expect(footerAt).toBeGreaterThan(rowAt)
+  })
+
+  // #811: the reading's PRESENT arm through the mounted container — the only test that proves
+  // ContextUsageControl is actually wired into the row. An unwired control passes every pure-view
+  // assertion above.
+  //
+  // A getInitialState SPY, not setState — the standing note at the #797 test above applies verbatim:
+  // zustand v5's useStore reads getInitialState() under renderToStaticMarkup, never getState(), so a
+  // setState before the render is invisible (measured 2026-08-27, #797). Restored in a finally since
+  // this config sets no restoreMocks.
+  it('mounts the reading inside the footer row once the snapshot carries real figures (AC1)', () => {
+    const initial = runConfigStore.getInitialState()
+    const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
+      ...initial,
+      snapshot: { model: '', effort: '', yolo: false, usedTokens: 168000, windowTokens: 200000 }
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      expect(markup).toContain('Context: 84%')
+      // In the ROW, not loose in the composer: the reading follows .composer__footer's opening tag.
+      expect(markup.indexOf('composer__context')).toBeGreaterThan(
+        markup.indexOf('class="composer__footer"')
       )
     } finally {
       spy.mockRestore()

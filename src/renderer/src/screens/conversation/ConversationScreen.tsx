@@ -50,6 +50,8 @@ import {
   COMPOSER_ERROR_CHIP_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY
 } from './composerSend'
+import { contextUsagePercent } from './contextUsage'
+import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { isAtBottom } from './threadScrollPosition'
 import { toolHeadline } from './toolHeadline'
 import { runUnpair } from './unpairAction'
@@ -2218,6 +2220,20 @@ function Composer({
           onInterrupt={() => sendInterrupt({ sendCommand: window.pyry.sendCommand })}
         />
       </div>
+      {/* #811: the input footer row (Figma 110:3494), beneath the message box. An inline BEM child of
+          .composer like __hint and __row above it — not a component: ComposerStatusArea is one because it
+          is a SIBLING of .composer in the conversation column, with props and two slots, while this is
+          the composer's own third sub-row. It renders UNCONDITIONALLY and holds its height from the
+          stylesheet, which is what stops the message box moving when the reading comes and goes (AC4).
+
+          Exactly one child today, and NO wrapper element for the group Figma's `Info and buttons`
+          sub-frame draws: #680 Actions, #682 permission mode, #683 model and effort and #685 attach are
+          all blocked on daemon work that does not exist, and emitting an empty wrapper (or a spacer, or a
+          disabled control) for them is precisely the placeholder this ticket forbids. #680/#682/#683
+          prepend siblings here; #685 right-aligns with margin-left: auto. */}
+      <div className="composer__footer">
+        <ContextUsageControl />
+      </div>
     </div>
   )
 }
@@ -2344,6 +2360,68 @@ export function ComposerErrorChip({ status }: { status: ConnectionStatus }): JSX
 function ComposerErrorChipControl(): JSX.Element | null {
   const status = useSessionStore(selectStatus)
   return <ComposerErrorChip status={status} />
+}
+
+// #811: the context-window reading, first occupant of the composer footer row (Figma 110:3497,
+// "Context: 84%"). The percentage USED, not remaining. Its arithmetic is contextUsagePercent —
+// deliberately the SAME function the run-configuration sheet's gauge calls, so the two surfaces cannot
+// disagree about either the number or whether there is one to show.
+//
+// Returns null exactly when contextUsagePercent does, and returns NULL rather than an empty element: the
+// slot is not held by an empty node, the ROW's own height is what holds it (AC2/AC4). That is the
+// ComposerErrorChip posture one row lower.
+//
+// A <span>, not a <p>: the row sets a hard height and this repo ships no global box-sizing/margin reset,
+// so a <p>'s UA margin is a live layout hazard against AC4 for no semantic gain (the ComposerErrorChip
+// ruling above, verbatim).
+//
+// NOTHING beyond className — no onClick, no tabIndex, no role, no title, no href. That is AC3 ("a
+// reading, not a control"), and it is structural: the emitted markup is short enough that the test pins
+// it EXACTLY, so nothing can be added here without a failing assertion.
+//
+// NO LIVE REGION — no role="status", no aria-live. The ComposerErrorChip ruling applies and is stronger
+// here: since #810 these figures refresh on every connect and every turn end, so a polite region would
+// announce a percentage after every turn.
+//
+// A SINGLE text run, one template literal — not `Context: {pct}%` split across JSX children. The
+// .composer-status__label discipline: one run has one predictable serialisation, which is what makes the
+// exact-markup assertion stable. The prefix is a client-owned literal and the only interpolated value is
+// an integer in [0, 100], so no daemon-supplied STRING reaches this surface at all — there is nothing to
+// escape and nothing to length-bound. No copy constant for a 13-character string with one call site: the
+// module's copy constants exist for strings asserted across files or that must be provably free of
+// daemon text, and neither applies.
+export function ContextUsageReading({
+  usedTokens,
+  windowTokens
+}: {
+  usedTokens: number
+  windowTokens: number
+}): JSX.Element | null {
+  const pct = contextUsagePercent(usedTokens, windowTokens)
+  if (pct === null) return null
+  return <span className="composer__context">{`Context: ${pct}%`}</span>
+}
+
+// The store-bound container for the reading (#811) — the ComposerErrorChipControl shape. A container
+// rather than a prop threaded down from Composer or ConversationScreen: Composer already subscribes to
+// four stores, and adding a fifth read for a figure that now ticks on every turn end (#810) would
+// re-render the textarea and the send button on every tick; ConversationScreen would re-render the whole
+// screen, timeline included.
+//
+// ONE selectSnapshot read, not two narrow field selectors. Both figures come out of the same object in
+// the same render pass, so the numerator and denominator can never be read from different store ticks —
+// two selectors could tear across an update and produce a percentage of two unrelated snapshots. The
+// null coalescing is RunConfigSections' verbatim (`snapshot?.usedTokens ?? 0`), so a not-yet-loaded store
+// and the daemon's window_tokens: 0 "usage unavailable" signal collapse into one branch on both surfaces.
+// No window.pyry dereference and no effects — a pure read, server-renderable with no bridge mock.
+function ContextUsageControl(): JSX.Element | null {
+  const snapshot = useRunConfigStore(selectSnapshot)
+  return (
+    <ContextUsageReading
+      usedTokens={snapshot?.usedTokens ?? 0}
+      windowTokens={snapshot?.windowTokens ?? 0}
+    />
+  )
 }
 
 // #330: the two-dot Relay/Pyrycode connection-status indicator — the persistent at-a-glance state that

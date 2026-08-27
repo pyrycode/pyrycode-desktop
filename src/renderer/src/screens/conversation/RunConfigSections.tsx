@@ -13,6 +13,7 @@ import {
   type SettingsChange
 } from '../../store/runSettingsWriteStore'
 import { changeSetting, isAddressableSessionId } from './runSettingsControls'
+import { contextUsagePercent } from './contextUsage'
 
 // The Run configuration sheet's Model / Effort / YOLO sections (Figma node 20-100 subtree
 // 20:111/20:130/20:143). #188 rendered them read-only; #257 makes them INTERACTIVE — selecting a
@@ -390,12 +391,15 @@ function abbreviateTokens(n: number): string {
 // header and the explainer always render; the usage line + fill bar render only when a real window
 // size is known.
 //
-// `windowTokens > 0` is the single load-bearing branch: it collapses the daemon's "usage unavailable"
-// signal (window_tokens === 0, a foreground session or no transcript yet) and the not-yet-loaded
-// default (the container coalesces null → windowTokens: 0) into one path — the division only runs
-// inside it, so there is no NaN, no Infinity, no divide-by-zero (AC5). `<= 0` (via the `> 0` guard)
-// also absorbs a stray negative. The percentage is clamped to [0, 100] so an over-full session reads
-// "100% used" and the fill never overflows its track.
+// #811 EXTRACTED the guard and the arithmetic into contextUsagePercent — the composer footer's reading
+// is a second surface for the same number, and a second clamp beside this one is a drift waiting to
+// happen. `pct !== null` is the single load-bearing branch, exactly as `windowTokens > 0` was: it
+// collapses the daemon's "usage unavailable" signal (window_tokens === 0, a foreground session or no
+// transcript yet), the not-yet-loaded default (the container coalesces null → windowTokens: 0) and a
+// stray negative into one path, and the division only runs inside it — so there is no NaN, no Infinity,
+// no divide-by-zero (AC5). #811 also added a finiteness term, which closes this gauge's `width: NaN%`
+// on a daemon frame carrying an overflowing token count. The percentage is still clamped to [0, 100] so
+// an over-full session reads "100% used" and the fill never overflows its track. See contextUsage.ts.
 function ContextWindowSection({
   usedTokens,
   windowTokens
@@ -403,15 +407,12 @@ function ContextWindowSection({
   usedTokens: number
   windowTokens: number
 }): JSX.Element {
-  const available = windowTokens > 0
-  const pct = available
-    ? Math.min(100, Math.max(0, Math.round((usedTokens / windowTokens) * 100)))
-    : 0
+  const pct = contextUsagePercent(usedTokens, windowTokens)
   return (
     <>
       <p className="status-sheet__section-header">Context window</p>
       <div className="run-config__context">
-        {available ? (
+        {pct !== null ? (
           <>
             <p className="run-config__context-usage">
               {`${pct}% used (${abbreviateTokens(usedTokens)} of ${abbreviateTokens(windowTokens)} tokens)`}

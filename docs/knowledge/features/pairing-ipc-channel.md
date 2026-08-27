@@ -105,7 +105,7 @@ confirmPairing: (label?: string): Promise<PairingConfirmResponse> =>
 
 `ipcRenderer.invoke` returns `Promise<any>`, so the narrower declared return types are typed wrappers (no unsafe cast). `PyryApi = typeof api` flows both methods to `window.pyry`; `index.d.ts` (references `PyryApi`, not the literal method set) stays **untouched** — zero cascade.
 
-**`confirmPairing`'s optional `label` parameter ([#823](https://github.com/pyrycode/pyrycode-desktop/issues/823))** is the preload bridge's one exception to `submitPairingPaste`'s "fixed shape, no ipcRenderer crossing" pattern being otherwise identical: the omitted-label branch builds the exact same request as before, so the no-label pairing path is byte-identical. That branch is a **convenience, not a defence** — the renderer is untrusted and can invoke with any argument, so `isPairingRequest` bounds and type-checks the label on its own merits regardless of what preload sends. Because the added parameter is **optional**, a zero-argument caller (`bridge.confirmPairing()`) still typechecks, so `PairingBridge` (`src/renderer/src/screens/pairing/pairingState.ts`) and `PairingScreen.tsx:346`'s `window.pyry` assignment needed no edit — `npm run typecheck` is the gate on that claim. `PairingBridge` itself is **not** widened here; that is [#825](https://github.com/pyrycode/pyrycode-desktop/issues/825)'s edit, once a screen actually has a label to pass.
+**`confirmPairing`'s optional `label` parameter ([#823](https://github.com/pyrycode/pyrycode-desktop/issues/823))** is the preload bridge's one exception to `submitPairingPaste`'s "fixed shape, no ipcRenderer crossing" pattern being otherwise identical: the omitted-label branch builds the exact same request as before, so the no-label pairing path is byte-identical. That branch is a **convenience, not a defence** — the renderer is untrusted and can invoke with any argument, so `isPairingRequest` bounds and type-checks the label on its own merits regardless of what preload sends. Because the added parameter is **optional**, a zero-argument caller (`bridge.confirmPairing()`) still typechecks, so `PairingBridge` (`src/renderer/src/screens/pairing/pairingState.ts`) and `PairingScreen.tsx:346`'s `window.pyry` assignment needed no edit at the time — `npm run typecheck` was the gate on that claim. [#825](https://github.com/pyrycode/pyrycode-desktop/issues/825) has since widened `PairingBridge.confirmPairing` and `runConfirm` to take the optional label and normalise it at the confirm boundary; see the [pairing input screen](pairing-input-screen.md#host-name-field-825) doc for that half.
 
 ### 4. Composition root (`src/main/index.ts`)
 
@@ -144,7 +144,7 @@ Only the closure is held — never the record/token/key, which live inside #53's
 
 ### Confirm carries an optional host label (#823)
 
-The operator-typed nickname for a host — collected by a screen that does not exist yet (#825) — rides the same `confirm` request that triggers the record persist, and reaches the [host-label store](host-label-store.md)'s `save` as its one sink. Three design calls, each closing a specific gap:
+The operator-typed nickname for a host — collected by the [paste-phase field #825 added](pairing-input-screen.md#host-name-field-825) — rides the same `confirm` request that triggers the record persist, and reaches the [host-label store](host-label-store.md)'s `save` as its one sink. Three design calls, each closing a specific gap:
 
 - **Rides `confirm`, not `submit`.** `pairingConfirmation.prepare` snapshots the four record fields into a frozen object and binds the confirm closure to *that* snapshot — closing a TOCTOU gap between fingerprint display and persist. A label riding `confirm` never enters `prepare`, never enters the snapshot, and never reaches `pairedServerStore`; it arrives as an already-copied primitive (structured clone across `ipcRenderer.invoke` leaves no live renderer-side reference), so there is no window in which anything can swap it. Riding `submit` instead would have meant either polluting the fingerprint gate with display text or holding a second piece of pending state (`pendingLabel`) that would need clearing in lockstep with every `pendingConfirm = null` supersede — `confirm` needs none of that.
 - **Persisted after the record, before `onPaired`.** After, because a label for a pairing that did not persist is meaningless — a failed `confirm()` takes the `catch` and never reaches the label write. Before `onPaired()`, because `onPaired`'s `reconnect()` flips the renderer to the paired UI; persisting the label first means nothing can read back a host with no name in between. The extra `await` introduces no new class of stall — the record save one line earlier already went through the same `secureStore` seam, so any keychain prompt has already happened.
@@ -167,7 +167,8 @@ An absent `label` and a present `label: undefined` both mean "no label supplied"
 ### Data flow
 
 ```
-#825 screen (later)    pairing.ts          preload bridge          pairingHandler          #52 / #53 / host-label store
+pairing input screen   pairing.ts          preload bridge          pairingHandler          #52 / #53 / host-label store
+(#825)
 paste string ────────► { type:'submit',    submitPairingPaste ───► GUARD isPairingRequest ─► parse → prepare
                          paste }            ipcRenderer.invoke        supersede pendingConfirm  hold confirm handle
    ◄── fingerprint / error ────────────────  (resolves) ◄──────────  map → value-free response ◄── { fingerprint }

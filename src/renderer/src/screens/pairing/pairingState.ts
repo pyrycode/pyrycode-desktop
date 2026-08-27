@@ -23,12 +23,23 @@ import type {
  * a secret and never leaves this module except via the single submitPairingPaste call. `error`
  * lives only on `editing` (the sole phase that renders an inline message); `fingerprint` only on
  * reviewing/confirming. `paired` is terminal and carries nothing — no secret, no record.
+ *
+ * `label` (#825) rides the same four phases as `paste`, and for the same structural reason: it is
+ * typed on the paste phase but sent two phases later, on confirm. It is NOT a secret — it is the
+ * operator's display name for the host, bound for the host-label store (#822) — but it does have to
+ * survive `submit-failed` / `confirm-failed` so a retry does not make the operator retype it, and
+ * it has to die with the paste on `cancel` (AC4), which `initialPairingState` gives for free.
+ *
+ * OPTIONAL, not `label: string` defaulting to '': it mirrors PairingRequest's own `label?: string`
+ * exactly, so state and contract agree that "no label" is an ABSENT KEY. The two representations
+ * ('' vs undefined) never diverge because exactly one place decides whether a label exists —
+ * hostLabelToSend below, which has to collapse whitespace-only to nothing regardless.
  */
 export type PairingState =
-  | { phase: 'editing'; paste: string; error: PairingErrorReason | null }
-  | { phase: 'submitting'; paste: string }
-  | { phase: 'reviewing'; paste: string; fingerprint: string }
-  | { phase: 'confirming'; paste: string; fingerprint: string }
+  | { phase: 'editing'; paste: string; label?: string; error: PairingErrorReason | null }
+  | { phase: 'submitting'; paste: string; label?: string }
+  | { phase: 'reviewing'; paste: string; label?: string; fingerprint: string }
+  | { phase: 'confirming'; paste: string; label?: string; fingerprint: string }
   | { phase: 'paired' }
 
 /**
@@ -37,6 +48,7 @@ export type PairingState =
  */
 export type PairingEvent =
   | { type: 'paste-changed'; paste: string }
+  | { type: 'label-changed'; label: string }
   | { type: 'submit' }
   | { type: 'submit-succeeded'; fingerprint: string }
   | { type: 'submit-failed'; reason: PairingErrorReason }
@@ -66,27 +78,46 @@ export function pairingReducer(state: PairingState, event: PairingEvent): Pairin
   switch (event.type) {
     case 'paste-changed':
       return state.phase === 'editing'
-        ? { phase: 'editing', paste: event.paste, error: null }
+        ? { phase: 'editing', paste: event.paste, label: state.label, error: null }
         : state
+    // Deliberately does NOT clear `error`, unlike paste-changed above: editing the pairing code
+    // invalidates the complaint about that code, while typing a host name says nothing about it —
+    // wiping the operator's only feedback on an unrelated keystroke would be a regression. The raw
+    // typed text is stored verbatim; trimming here would fight the controlled input, since the
+    // trimmed value round-trips straight back into `value` and a space could never be typed.
+    case 'label-changed':
+      return state.phase === 'editing' ? { ...state, label: event.label } : state
     case 'submit':
-      return state.phase === 'editing' ? { phase: 'submitting', paste: state.paste } : state
+      return state.phase === 'editing'
+        ? { phase: 'submitting', paste: state.paste, label: state.label }
+        : state
     case 'submit-succeeded':
       return state.phase === 'submitting'
-        ? { phase: 'reviewing', paste: state.paste, fingerprint: event.fingerprint }
+        ? {
+            phase: 'reviewing',
+            paste: state.paste,
+            label: state.label,
+            fingerprint: event.fingerprint
+          }
         : state
     case 'submit-failed':
       return state.phase === 'submitting'
-        ? { phase: 'editing', paste: state.paste, error: event.reason }
+        ? { phase: 'editing', paste: state.paste, label: state.label, error: event.reason }
         : state
     case 'confirm':
       return state.phase === 'reviewing'
-        ? { phase: 'confirming', paste: state.paste, fingerprint: state.fingerprint }
+        ? {
+            phase: 'confirming',
+            paste: state.paste,
+            label: state.label,
+            fingerprint: state.fingerprint
+          }
         : state
     case 'confirm-succeeded':
       return state.phase === 'confirming' ? { phase: 'paired' } : state
     case 'confirm-failed':
       return state.phase === 'confirming'
-        ? { phase: 'editing', paste: state.paste, error: event.reason }
+        ? { phase: 'editing', paste: state.paste, label: state.label, error: event.reason }
         : state
     case 'cancel':
       return initialPairingState
@@ -103,7 +134,7 @@ export function pairingReducer(state: PairingState, event: PairingEvent): Pairin
  */
 export interface PairingBridge {
   submitPairingPaste(paste: string): Promise<PairingSubmitResponse>
-  confirmPairing(): Promise<PairingConfirmResponse>
+  confirmPairing(label?: string): Promise<PairingConfirmResponse>
 }
 
 /**
@@ -133,15 +164,38 @@ export async function runSubmit(bridge: PairingBridge, paste: string): Promise<P
 }
 
 /**
- * Send the bare confirm signal over the bridge and map the typed response. This is the tested
- * proof that "confirm triggers persist" (the persist itself runs entirely in main, #53/#54).
- * Total by contract, exactly as runSubmit: a rejected invoke resolves to `confirm-failed` /
- * `malformed-request` with the caught value discarded unbound (#513).
+ * The one place that decides whether a host label EXISTS (#825): the raw typed text trimmed of
+ * surrounding whitespace, or `undefined` when it is absent or trims away to nothing.
+ *
+ * The empty-string collapse is load-bearing, not cosmetic. The preload omits the `label` key
+ * entirely for `undefined` and includes it for everything else (preload/index.ts:67-71), and main
+ * saves whatever is present verbatim, `''` included (pairingHandler.ts:101-128) — so without this,
+ * clearing the field would store an empty name rather than no name. Trimming can only shorten, so a
+ * value that passed the input's MAX_HOST_LABEL_LENGTH bound cannot exceed the IPC guard's.
+ *
+ * Module-private: runConfirm is the tested seam, and a second exported entry point would invite a
+ * caller that normalises without sending.
  */
-export async function runConfirm(bridge: PairingBridge): Promise<PairingEvent> {
+function hostLabelToSend(label: string | undefined): string | undefined {
+  const trimmed = label?.trim()
+  return trimmed === undefined || trimmed === '' ? undefined : trimmed
+}
+
+/**
+ * Send the confirm signal over the bridge — carrying no record, at most the operator's display
+ * label for the host (#823/#825) — and map the typed response. This is the tested proof that
+ * "confirm triggers persist" (the persist itself runs entirely in main, #53/#54). Total by
+ * contract, exactly as runSubmit: a rejected invoke resolves to `confirm-failed` /
+ * `malformed-request` with the caught value discarded unbound (#513).
+ *
+ * `label` is optional, so the pre-#825 zero-argument call sites and fakes stay assignable and
+ * unchanged. Passing an explicit `undefined` is indistinguishable from passing nothing at the
+ * preload, which branches on `label === undefined`.
+ */
+export async function runConfirm(bridge: PairingBridge, label?: string): Promise<PairingEvent> {
   let response: PairingConfirmResponse
   try {
-    response = await bridge.confirmPairing()
+    response = await bridge.confirmPairing(hostLabelToSend(label))
   } catch {
     return { type: 'confirm-failed', reason: 'malformed-request' }
   }

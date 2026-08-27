@@ -9,7 +9,7 @@ import {
   type PairingBridge,
   type PairingState
 } from './pairingState'
-import type { PairingErrorReason } from '@shared/ipc/pairing'
+import { MAX_HOST_LABEL_LENGTH, type PairingErrorReason } from '@shared/ipc/pairing'
 
 // The desktop pairing screen: paste the payload printed by `pyry pair --print`, review the
 // server-key fingerprint the background process derives, and confirm. The PASTE phase is drawn from
@@ -23,6 +23,15 @@ import type { PairingErrorReason } from '@shared/ipc/pairing'
 // rule verbatim: it "must never reach Log.*"). It lives in reducer state, is handed opaquely to the
 // one submitPairingPaste call, and reaches no logger, no diagnostic channel, and no console. The
 // clear control below writes a CONSTANT empty string — it never reads the value it discards.
+//
+// Since #825 the hero holds a SECOND input — the optional host name — beside the token field, which
+// is the one new exposure that arrangement creates: a <form> ancestor, or a `name`/`id` on either
+// input, can make a password manager read the pair as a credential form and capture the pairing
+// code. So neither input carries a `name` or an `id`, the two stay siblings under the hero div with
+// no <form> anywhere, and both set autocomplete off and spellcheck off. PairingScreen.test.tsx pins
+// all of that as a regex over the rendered <input> tags. The host name is NOT a secret and needs no
+// handling of its own beyond that; the field's maxLength is a UX affordance, never the security
+// bound — isPairingRequest remains the sole enforcement point (shared/ipc/pairing.ts:115-116).
 //
 // PairingView is pure (props in, markup out — what the tests render); PairingScreen is the thin
 // container owning the reducer and the two handler-driven IPC calls, mirroring the tested
@@ -56,12 +65,20 @@ const ERROR_COPY: Record<PairingErrorReason, string> = {
  */
 const PAIRING_COPY = {
   instruction: 'Run pyry pair --print on your server and paste the output here.',
-  footer: 'Open source · github.com/pyrycode/pyrycode-desktop'
+  footer: 'Open source · github.com/pyrycode/pyrycode-desktop',
+  // One constant for the host field's visible span AND its aria-label: label-in-name requires the
+  // two to match, and a single source is the only way that stays true through a rename. "(optional)"
+  // is part of the name on purpose — it is the sole affordance saying the field may be skipped,
+  // since this field has no supporting line. The name must also stay clear of "Pairing code" (which
+  // PairingScreen.test.tsx counts) and of "Pair" / "Clear pairing code" (which pairingArrival and
+  // live-drive.mjs match with `exact: true`).
+  hostFieldLabel: 'Host name (optional)'
 } as const
 
 export interface PairingViewProps {
   state: PairingState
   onPasteChange: (paste: string) => void
+  onLabelChange: (label: string) => void
   onSubmit: () => void
   onConfirm: () => void
   onCancel: () => void
@@ -76,16 +93,21 @@ export interface PairingViewProps {
  * phase's root would fail the first outright and make the second pass for the wrong reason.
  */
 export function PairingView(props: PairingViewProps): JSX.Element {
-  const { state, onPasteChange, onSubmit, onConfirm, onCancel } = props
+  const { state, onPasteChange, onLabelChange, onSubmit, onConfirm, onCancel } = props
   const isPaste = state.phase === 'editing' || state.phase === 'submitting'
   return (
     <div className={`pairing ${isPaste ? 'pairing-page' : 'pairing-card'}`}>
       {isPaste && (
         <EntryPage
           paste={state.paste}
+          // The optionality is resolved HERE, once, so EntryPage takes a plain string and its input
+          // is unconditionally controlled. An absent key means "never typed" in state; at the field
+          // it is simply an empty value.
+          label={state.label ?? ''}
           error={state.phase === 'editing' ? state.error : null}
           busy={state.phase === 'submitting'}
           onPasteChange={onPasteChange}
+          onLabelChange={onLabelChange}
           onSubmit={onSubmit}
           onCancel={onCancel}
         />
@@ -105,22 +127,27 @@ export function PairingView(props: PairingViewProps): JSX.Element {
 
 /**
  * The paste phase as the full-window Pair Screen (Figma 103-2901): the M3 filled field centred in the
- * free space, the CTA stack pinned to the bottom. No heading — the frame draws none, and this renderer
- * has no visually-hidden utility to compensate with (adding one is unticketed); the screen is left
- * navigable by its one named field and two named buttons.
+ * free space — since #825 joined below by the optional host-name field, which the frame does not draw
+ * — and the CTA stack pinned to the bottom. No heading: the frame draws none, and this renderer has
+ * no visually-hidden utility to compensate with (adding one is unticketed); the screen is left
+ * navigable by its named fields and two named buttons.
  */
 function EntryPage({
   paste,
+  label,
   error,
   busy,
   onPasteChange,
+  onLabelChange,
   onSubmit,
   onCancel
 }: {
   paste: string
+  label: string
   error: PairingErrorReason | null
   busy: boolean
   onPasteChange: (paste: string) => void
+  onLabelChange: (label: string) => void
   onSubmit: () => void
   onCancel: () => void
 }): JSX.Element {
@@ -248,6 +275,57 @@ function EntryPage({
             {ERROR_COPY[error]}
           </p>
         )}
+        {/*
+          The optional host name (#825) — the operator's display label for the machine they are
+          pairing with, so they are not hunting for a settings screen afterwards. THE FIGMA FRAME
+          DRAWS NO SUCH FIELD (node 103:2901 holds exactly one text-field instance, re-verified
+          2026-08-27): this is a genuine design gap, and the treatment here is provisional, derived
+          from the M3 filled field above — the only in-repo reference for what a field on this
+          screen looks like. The label copy, the field order, and the `(optional)` affordance are the
+          three things most likely to move when the updated frame lands.
+
+          BELOW the code field, deliberately: the code is required and gates Pair, the name is
+          optional garnish, and the supporting slot above must stay adjacent to the field it
+          describes. This field gets no supporting line of its own — the slot in this hero belongs
+          to the code field, and `(optional)` in the name is the whole affordance telling the
+          operator they may skip it. The Pair button's enabled condition is untouched: an empty
+          label never blocks pairing.
+
+          Two omissions from the code field's structure, both intentional. No clear control: a few
+          hundred base64url characters are not select-and-delete-able but a short name is, and a
+          second control here would mean a second accessible name to keep clear of the `exact: true`
+          matchers. No wrapping <label>, for the same reason as above — an aria-hidden visual span
+          keeps exactly one element under this name in the accessibility tree.
+        */}
+        <div className="pairing-field pairing-field--host">
+          <div className="pairing-field__row">
+            <div className="pairing-field__content">
+              <span className="pairing-field__label" aria-hidden="true">
+                {PAIRING_COPY.hostFieldLabel}
+              </span>
+              {/* maxLength comes from the SHARED constant the IPC guard bounds against
+                  (shared/ipc/pairing.ts:41), never a restated 128 — a field bound disagreeing with
+                  the write bound would let a value pass one boundary and fail the other. It is a UX
+                  affordance only; the guard stays the enforcement point (see the header). It also
+                  truncates a mis-paste of the pairing payload into this field, which is the only
+                  thing bounding that mistake.
+
+                  type="text", and no `name`/`id`, autocomplete off, spellcheck off — the file
+                  header's secret-hygiene paragraph, restated as attributes. */}
+              <input
+                type="text"
+                className="pairing-field__input"
+                aria-label={PAIRING_COPY.hostFieldLabel}
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={MAX_HOST_LABEL_LENGTH}
+                value={label}
+                disabled={busy}
+                onChange={(e) => onLabelChange(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
       </div>
       <div className="pairing-page__ctas">
         <button
@@ -348,6 +426,8 @@ export function PairingScreen({ bridge, onPaired, onCancel }: PairingScreenProps
 
   const handlePasteChange = (paste: string): void => dispatch({ type: 'paste-changed', paste })
 
+  const handleLabelChange = (label: string): void => dispatch({ type: 'label-changed', label })
+
   const handleSubmit = (): void => {
     if (state.phase !== 'editing') return
     const paste = state.paste // captured before the await — no check-then-act race
@@ -357,8 +437,9 @@ export function PairingScreen({ bridge, onPaired, onCancel }: PairingScreenProps
 
   const handleConfirm = (): void => {
     if (state.phase !== 'reviewing') return
+    const label = state.label // captured before the await, as handleSubmit does with the paste
     dispatch({ type: 'confirm' })
-    void runConfirm(target).then((event) => {
+    void runConfirm(target, label).then((event) => {
       dispatch(event)
       if (event.type === 'confirm-succeeded') onPaired?.()
     })
@@ -373,6 +454,7 @@ export function PairingScreen({ bridge, onPaired, onCancel }: PairingScreenProps
     <PairingView
       state={state}
       onPasteChange={handlePasteChange}
+      onLabelChange={handleLabelChange}
       onSubmit={handleSubmit}
       onConfirm={handleConfirm}
       onCancel={handleCancel}

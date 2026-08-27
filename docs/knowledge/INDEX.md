@@ -311,6 +311,16 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   intended callers, and the shape this ships is now a contract they and #687 must honour. Architect
   self-review PASS, one accepted SHOULD FIX (in-directory symlink redirect, bounded and revisit-conditions
   named).
+- [Attachment filename sanitiser](features/attachment-filename-sanitiser.md) — `sanitizeAttachmentFilename(name)`
+  (#819), the rewriting sibling of the pair above: reduces an untrusted, model-chosen attachment file name
+  to exactly one safe path component and never refuses, since every input has a safe answer. The one
+  sanctioned crossing of the `CLAUDE.md`/`events.ts` never-a-filename rule, bought by the transform — the
+  doc records why a save path must never read the raw wire field instead. Four ordered steps (allowlist
+  map → fixed fallback when nothing survives → leading-dot prefix → Windows-reserved-name prefix), with
+  the fallback decided from the *input*'s survival flag rather than the built result, since `'///'` and
+  the literal name `'___'` are indistinguishable once built. No length bound and no existence check by
+  design — both deferred to #814, on [save-debug-bundle](features/save-debug-bundle.md)'s exclusive-create
+  precedent. No consumer wired yet. Architect self-review PASS.
 
 ## Architecture
 

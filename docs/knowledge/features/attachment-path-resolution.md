@@ -59,6 +59,8 @@ One failure mode, one category: `{ ok: false, reason: 'not-canonical-id' }`, wit
 
 `resolve(baseDir, attachmentId)` is a direct child of `baseDir` named by the identifier verbatim, **with no extension**. That is deliberate: an extension would be model-chosen (the assistant names the file it produced), and a model-chosen extension sitting in the store is exactly what makes `shell.openPath` dangerous — a `.command`, `.desktop`, `.app` or `.scpt` opens by *executing*. Keeping the on-disk name extension-less pushes the "what does the OS see" decision to #691, the only layer positioned to validate an image type before deciding. #814 is unaffected, since its Downloads-folder filename comes from the wire (sanitised elsewhere) rather than from the on-disk name. Whether #687 stores the attachment as a flat file at this path or as a per-attachment directory is #687's to choose either way — this module makes no filesystem claim about what is at the path it returns; it never looks.
 
+The wire file name itself is sanitised by a separate module, [`sanitizeAttachmentFilename`](attachment-filename-sanitiser.md) (#819) — rewritten rather than refused, since a display/Downloads-folder name has no addressing consequence the way an identifier does. #814 is unaffected by this module's extension-less on-disk shape, since its Downloads-folder filename comes from that sibling rather than from the on-disk name.
+
 ## Testing
 
 `src/main/attachmentPath.test.ts`, plain vitest under the repo's `environment: 'node'` config — no temp directories, no fixtures, no cleanup, since the module never touches the filesystem. The macOS `os.tmpdir()` → `/private/var/…` symlink trap that bites a resolved-path comparison doesn't apply here (nothing is resolved against a real directory), but its sibling rule still does and is the one to reuse on any future path-arithmetic test in this repo: **never build an expectation from the function's own return value** — assert independently instead (`isAbsolute`, `dirname(...) === resolve(baseDir)`, `basename(...) === id`), or a build that returns the base directory unchanged would still pass.
@@ -82,6 +84,7 @@ Architect self-review verdict: **PASS**, with one accepted **SHOULD FIX** residu
 
 ## Related
 
+- [Attachment filename sanitiser](attachment-filename-sanitiser.md) — the rewriting half of the pair (#819): a file name is rewritten, never refused, because every input has a safe answer.
 - [Pairing-payload gate](pairing-payload-gate.md) — the register this module borrows: pure/synchronous/total/log-free, a discriminated `{ok:true}/{ok:false,reason}` result, a value-free reason, a `reject()`-helper precedent.
 - [Save debug bundle](save-debug-bundle.md) § "The composition-root seam" — the injected-`dir`, no-`electron`-import pattern this module reuses; its test's "Electron-free module graph" claim is what this module's AC4 test pins mechanically instead.
 - [Secure store](secure-store.md) — hosts `fileSecretPersistence`, the base64url-encoding precedent for the *seam*, explicitly not for the *mechanism* here (see § Why refusal, not rewriting).

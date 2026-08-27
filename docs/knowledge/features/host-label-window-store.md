@@ -7,10 +7,11 @@ since the label is at-rest state.
 
 Introduced in [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833), split off
 [#826](https://github.com/pyrycode/pyrycode-desktop/issues/826) alongside
-[#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) (the sidebar row that will consume it).
-Ships **dormant** — no screen mounts the binding in this ticket, mirroring
+[#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) (the sidebar row that consumes it).
+Shipped **dormant** in #833 — no screen mounted the binding that ticket — mirroring
 [server-info store](server-info-store.md) / [#340](../codebase/340.md)'s split from its consumer
-([#334](../codebase/334.md)). This is the renderer-side counterpart of the main-process
+([#334](../codebase/334.md)). #834 gave it its mount site and its first reader; see § Configuration
+and usage below. This is the renderer-side counterpart of the main-process
 [host-label store](host-label-store.md); the two share a name-root but not a layer — one persists to
 disk, the other holds the read-back value in window state.
 
@@ -131,11 +132,13 @@ server-renders to `''` without a bridge mock — the `ServerInfoData` discipline
 is passed as a bare reference: the preload API is an arrow closing over `ipcRenderer`, so there is no
 `this` to bind.
 
-**Ships dormant.** Nothing mounts it in this ticket — not `App.tsx`, not any screen. Where it mounts is
-[#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)'s call. The `serverInfoLoader` mount-point
-argument transfers as guidance, not a constraint this ticket imposes: an app-level one-shot at launch
-runs before pairing and never re-runs, leaving the row stale after a same-session pair, so mounting it
-inside the paired-only tree that renders the row gives a fresh read per open.
+**Shipped dormant in #833; mounted by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).**
+`<HostLabelData />` now mounts in the `ChannelList` container (`ChannelList.tsx`), a sibling of
+`<ChannelListView />` — the `serverInfoLoader` mount-point argument this ticket's own note left as
+guidance: an app-level one-shot at launch runs before pairing and never re-runs, leaving the row stale
+after a same-session pair, so the paired-only tree that renders the row is where a fresh read per open
+comes from. See [Channel List § The host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834)
+for the consumer and the remount-triggers-reread argument in full.
 
 ### Data flow
 
@@ -151,8 +154,11 @@ host-label-store.load() (main, at rest) → hostLabelHandler (#824) → HostLabe
 
 - **Import surface:** `import { HostLabelData } from '@renderer/store/hostLabelLoader'` and
   `import { useHostLabelStore, selectHostLabel } from '@renderer/store/hostLabelStore'`.
-- **Mount point — not decided here.** Left open for [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834);
-  see the dormancy note above for the recommendation.
+- **Mount point:** `<HostLabelData />` in the `ChannelList` container
+  (`src/renderer/src/screens/channels/ChannelList.tsx`), decided by
+  [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834). One read per sidebar mount.
+- **Reader:** `HostRowControl` (`ChannelList.tsx`), through `selectHostLabel` and the pure collapse
+  `hostRowLabel` — see [Channel List § The host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834).
 
 ## Edge cases and limitations
 
@@ -161,9 +167,11 @@ host-label-store.load() (main, at rest) → hostLabelHandler (#824) → HostLabe
   erase (#827)](unpair-channel.md)), so a relaunch after unpairing sees no stale label. But
   `clearPairingScopedState` does not reset *this* renderer store, so unpairing and re-pairing to a
   different host inside one running session leaves this store holding the previous label until the
-  next `hostLabel()` load overwrites it. Unobservable today — `hostLabelLoader` has no non-test
-  consumer yet — and named as a follow-up for whoever mounts the sidebar row ([#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)).
-  This store reports what the channel reports, and adds no cross-store consistency check.
+  next `hostLabel()` load overwrites it. Resolved in practice by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834)'s
+  mount site: `ChannelList` (and therefore `<HostLabelData />`) remounts on the return leg of every
+  path that ends a pairing inside one session (`settings` → `pairServer` → `list`), so the next
+  `hostLabel()` load lands before the row is shown again. This store still reports what the channel
+  reports, and adds no cross-store consistency check.
 - **`error` and over-length both mean "no usable label"**, and the union does not distinguish them — the
   same non-distinction as the channel it consumes. Both call for the same recovery in #834's design.
 - **A write that resolves after unmount is dropped**, never applied — the `active`-flag cleanup in
@@ -171,7 +179,8 @@ host-label-store.load() (main, at rest) → hostLabelHandler (#824) → HostLabe
 - **Never holds a credential.** The value on this path is the operator-typed machine name only; `token`
   and `server_static_pubkey` are structurally absent upstream (#824's union has no field for them). The
   value is never written to `localStorage`, `sessionStorage`, or IndexedDB — it lives only in the zustand
-  cell, matching the security review's ruling that this is also a **MUST-NOT for #834**.
+  cell, matching #834's security review ruling that this was also a MUST-NOT for the row that consumes
+  it, and confirmed unbroken by the shipped implementation.
 
 ## Related
 
@@ -186,5 +195,7 @@ host-label-store.load() (main, at rest) → hostLabelHandler (#824) → HostLabe
   one store field rather than intersecting it flat, for the identical stale-key reason.
 - [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md) — the rule this store must not
   undo: an unreadable record is never masked as never-stored.
-- Downstream, not yet built: the sidebar host row that mounts `HostLabelData` and renders the value —
-  [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).
+- [Channel List § The host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834) /
+  [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) — the sidebar host row that mounts
+  `HostLabelData` and renders the value, resolving the mount-site question and the staleness edge case
+  this doc used to leave open.

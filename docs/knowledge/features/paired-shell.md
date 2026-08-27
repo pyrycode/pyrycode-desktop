@@ -208,7 +208,7 @@ Traced from Figma node 102-4: a 1280×1024 frame, one flex row, `Sidebar 103:736
   padding: var(--space-5);
   background: var(--color-surface);
 }
-.paired-shell__sidebar { flex: 0 0 400px; height: 100%; }  /* AC2 — fixed, never shrinks or grows */
+.paired-shell__sidebar { flex: 0 0 400px; min-width: 0; height: 100%; }  /* AC2 — fixed, never shrinks or grows */
 .paired-shell__pane    { flex: 1 1 0; min-width: 0; height: 100%; }  /* absorbs the remaining width */
 ```
 
@@ -217,6 +217,23 @@ floors it at its content width, so one unbreakable descendant (a long `<pre>`, a
 would otherwise grow the pane past its share and squeeze the sidebar below 400px. `box-sizing:
 border-box` is likewise load-bearing — `index.css` sets no global rule, so `content-box` would add the
 20px padding on top of `height: 100%` and overflow the window by 40px vertically.
+
+**The sidebar carries the symmetric `min-width: 0` too, added by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).**
+`flex: 0 0 400px` fixes the basis but, like the pane before this fix, leaves `min-width: auto` — which
+floors a flex item at its *content's* min-content width regardless of the basis. It went unnoticed until
+#834 gave the [sidebar's host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834)
+an operator-typed name up to `MAX_HOST_LABEL_LENGTH` (128) with `white-space: nowrap`: a nowrap string's
+min-content size is the whole string, measured at ~1063px, which took the sidebar with it and left the
+label unable to ellipsize no matter what `channels.css` said. `.channel-list`'s `overflow-x` (computed
+`auto`, a side effect of its `overflow-y: auto`) does not save it — a scroll container's automatic
+minimum size is 0 for *itself*, but its min-content *contribution* to an ancestor is still
+content-derived. `.channel-list__title` and `.channel-list__workspace-label` are nowrap too and had the
+same latent reach; this one declaration pins all three. Landed as its own commit (d6fdc3a) alongside
+#834's `ChannelList.tsx`/`channels.css` changes, kept separable for review since it touches a different
+file than the spec named. **Lesson for any future ellipsizing element:** `min-width: 0` on the
+ellipsizing element is only half the fix when it is not the flex item being squeezed — check with
+`getBoundingClientRect()` before trusting an ellipsize rule works, since the unit tier (no DOM) cannot
+see this at all and the failure looks identical to "the CSS did not load."
 
 **Neither screen stylesheet needed a layout edit.** `.channel-list` and `.conversation` were already
 `height: 100%` with no width rule, so each fits a flex child of any width; `channels.css`'s header
@@ -1023,6 +1040,10 @@ the pairing itself ends; see [#531](../codebase/531.md) above.
 
 - [App shell](app-shell.md) / [#80](../codebase/80.md) — the outer router; `PairedShell` mounts under its `conversation` route
 - [Channel List home screen](channel-list.md) / [#141](../codebase/141.md) — the real `list` view, replacing the placeholder described above; since [#670](../codebase/670.md) it is the shell's always-mounted sidebar rather than an alternative screen
+- [Channel List § The host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834) /
+  [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) — added the sidebar's `min-width: 0`
+  above, needed once the host row started carrying an operator-typed name long enough to reach the
+  sidebar's own min-content floor
 - [Settings screen](settings-screen.md) / [#333](../codebase/333.md) — the third route, `settings`, and its entry button on the Channel List
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the fourth route, `pairServer` (#152), reuses this screen as-is
 - [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the fifth route, `archive`, and its entry button sharing the Channel List's actions cluster

@@ -43,9 +43,11 @@ transport, or new store/wire code, so not security-sensitive.
 - Each present tree (Channels, Chats) is now headed by a **host row** directly below its section
   label and above its conversation rows, naming the machine the tree's conversations live on
   (Figma `106:3094`). The row repeats in both trees on purpose — the two trees are not
-  deduplicated into a shared heading. It renders a 12px server-rack glyph beside a client-owned
-  label, currently the constant `'Server'`; multi-host and the operator-typed label are deferred
-  (§ below). Added by [#710](../codebase/710.md).
+  deduplicated into a shared heading. It renders a 12px server-rack glyph beside the operator's
+  stored host label, falling back to the client-owned word `'Server'` with no usable label (never
+  stored, unreadable, or settling). Added by [#710](../codebase/710.md); the operator-typed label
+  shipped in [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) (§ below). Multi-host
+  is still deferred.
 - Below each host row, rows now group by **workspace** — one group per distinct `cwd`, each headed
   by a 28px workspace row one indent deeper than the host row (Figma `106:3098`). A workspace is a
   conversation's `cwd`; there is no separate wire concept for it. Both trees group independently,
@@ -139,18 +141,67 @@ each dialog's open/name state as its own local `useState` pair, rendered as sibl
 [Rename dialog](rename-conversation-dialog.md) for the dialogs themselves, and
 [#274](../codebase/274.md)/[#360](../codebase/360.md) codebase notes for lessons learned.
 
-### The host row (`ChannelList.tsx`, added by #710)
+### The host row (`ChannelList.tsx`, added by #710, the operator's label by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834))
 
-A module-local, nullary `HostRow(): JSX.Element` — the file's sixth inline-glyph idiom instance,
-alongside `SettingsButton`/`ArchiveButton`/`NewConversationFab`/the row's rename/save buttons. It
-renders a non-interactive `<div className="channel-list__host">` holding a 12px inline Material
-`dns` (server-rack) glyph and `<span className="channel-list__host-label">{HOST_ROW_LABEL}</span>`,
-where `HOST_ROW_LABEL = 'Server'` is a module-level client-owned constant — never
-`serverInfoStore`'s `serverId` (legitimate in Settings' `ServerRow.tsx:37`, since that's a details
-surface; an opaque identifier in this *name* slot would read as an invented machine name) and never
-the Figma node's own placeholder text ("Pyrybox").
+`HostRow({ label }): JSX.Element` — the file's sixth inline-glyph idiom instance, alongside
+`SettingsButton`/`ArchiveButton`/`NewConversationFab`/the row's rename/save buttons — is now an
+**exported pure view**, mirroring `HostConnectionDots`/`HostConnectionDotsControl` twenty lines
+below it (§ below). It renders a non-interactive `<div className="channel-list__host">` holding a
+12px inline Material `dns` (server-rack) glyph and `<span className="channel-list__host-label">{label}</span>`.
+A module-private `HostRowControl(): JSX.Element` reads `useHostLabelStore(selectHostLabel)`, passes
+it through `hostRowLabel` (below), and renders `<HostRow label={…} />`; `renderBody` mounts
+`HostRowControl`, not `HostRow`, at both call sites. The pure/container split exists for the same
+reason as its neighbour: a Zustand singleton seeded before a `renderToStaticMarkup` call is
+invisible to it — the server renderer reads `getServerSnapshot()`, wired to the state captured at
+store *creation* — so `HostRowControl` can only ever render the store's initial `loading` cell, and
+`hostRowLabel`/`HostRow` are the only seam the unit tier can reach the four-arm matrix through.
 
-`renderBody` mounts one `<HostRow />` inside *each* of the two existing `channels.length > 0` /
+**The collapse — `hostRowLabel(value: HostLabelValue): string`.** Returns the operator's label only
+when the [host-label window store](host-label-window-store.md)'s value is `stored` *and* that label
+has non-whitespace content; `loading`, `not-stored`, `error`, and a `stored` label that is blank or
+whitespace-only all yield `HOST_ROW_FALLBACK_LABEL = 'Server'` (renamed from `#710`'s
+`HOST_ROW_LABEL`, since it is no longer the whole label — just what's shown absent one). Three
+decisions worth keeping straight, none of them a type error if reversed:
+
+- **`loading` falls back to the same word, never a `'Loading…'` placeholder.** This is the one place
+  `ServerRow.tsx`'s precedent (a details-list value showing "Loading…" pre-settle) does *not*
+  transfer: this is a *name* slot, and a placeholder in it would read as the machine's name. The
+  pre-settle tick is indistinguishable from the not-stored steady state, which is the point — both
+  mean "no name to show yet."
+- **The predicate trims (`label.trim() === ''`); the displayed label is verbatim.** `''` is the case
+  AC2 names; a whitespace-only label renders equally blank, so the same rule covers both. Trimming
+  only ever decides *whether* to fall back, never *what* is shown — the row never displays a value
+  that differs from what is stored.
+- **Nothing slices.** A 128-character (`MAX_HOST_LABEL_LENGTH`, `shared/ipc/pairing.ts:41`) label
+  returns whole; the truncation AC4 asks for is CSS (`.channel-list__host-label`'s ellipsize rule,
+  § CSS), so the accessible text stays complete.
+
+**Mount site.** `<HostLabelData />` (the [host-label window store](host-label-window-store.md)'s
+headless one-shot loader, shipped dormant by #833) mounts in the `ChannelList` **container**, a
+sibling of `<ChannelListView />` — the `SettingsScreen` idiom (`<ServerInfoData />` beside
+`<ServerRowControl />`) applied to the screen that actually renders the row. It renders `null`, so
+DOM order is immaterial, and it dereferences `window.pyry` only inside its effect, so the container
+stays server-renderable. Two alternatives were rejected: an app-level mount fires once at launch,
+before pairing, and never re-runs, leaving the row stale after a same-session pair; mounting it in
+`SettingsScreen` is exactly what "populated with no Settings visit" forbids. Because `ChannelList` is
+rendered at the same element position on both the `list` and `thread` routes ([paired
+shell](paired-shell.md)), React preserves it across that flip and no re-read fires there — it *does*
+remount on return from `settings`/`archive`/`pairServer`, which re-reads, which is what keeps a
+mid-session re-pair (Settings → "Pair another server") from leaving a stale name on the row. This is
+also why the [host-label window store](host-label-window-store.md) stays out of
+`clearPairingScopedState`: the remount-driven re-read already resolves the staleness the store's own
+edge-case note flagged as unresolved before this ticket.
+
+**The untrusted-text sink.** `label` is untrusted, unbounded-in-content text off disk
+(`hostLabelHandler.ts:69-71` hands the "escaped text only" obligation to this row) and reaches the
+DOM only as an auto-escaped React child on `.channel-list__host-label`, never an attribute — no
+`title` (the reflex AC3 exists to guard: the standard companion to ellipsized text is `title={label}`,
+which is exactly CLAUDE.md's "never into an attribute" case), no `aria-label`, no `id`/`key`/lookup
+path, no log line. Same four declined sinks `WorkspaceRow`'s comment block already enumerates for
+daemon-derived text, applied here for the first client-side-stored (not per-message) string in this
+file.
+
+`renderBody` mounts one `<HostRowControl />` inside *each* of the two existing `channels.length > 0` /
 `discussions.length > 0` gates, directly after the `<header className="channel-list__section-header">`
 and before that tree's rows. Because the row lives inside the same gate that already decides
 whether the section header renders, "a tree with zero rows renders neither a header nor a host
@@ -336,6 +387,25 @@ Token-only: every color/type/spacing value is a `var(--…)` token; opacity is t
 `theme/tokens.css` (16px/24px/0.15px/500, the exact M3 values from Figma node 15-8) for the row title —
 the M3 scale had no `title-medium` slot before this.
 
+`.channel-list__host-label` gained an ellipsize treatment in [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834):
+`min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap` — expiring the rule's
+former exemption ("a six-character compile-time constant cannot overflow the sidebar"), now that the
+label is bounded only at `MAX_HOST_LABEL_LENGTH` (128). Three of `.channel-list__workspace-label`'s
+four ellipsize declarations are copied; the fourth, `flex: 1 1 auto`, is **deliberately not** — it
+would make the label absorb the row's free space and render `.channel-list__host-status`'s
+`margin-left: auto` inert, replacing a shipped mechanism for pinning the connection dots to the
+trailing edge with an implicit one. The workspace row has no trailing element and no such mechanism
+to preserve, which is the whole reason the two rules differ.
+
+Lifting `min-width` on the label alone was not sufficient — the *ancestor* flex item,
+`.paired-shell__sidebar`, still had `min-width: auto`, and a `white-space: nowrap` descendant's
+min-content size is the whole string: a 128-character label measured the sidebar to ~1063px before
+this fix, and `.channel-list`'s `overflow-x: auto` (a side effect of its `overflow-y: auto`) does not
+stop that propagation — a scroll container's automatic minimum size is 0 for *itself*, but its
+min-content *contribution* to an ancestor is still content-derived. See [Paired shell § the sidebar's
+`min-width: 0`](paired-shell.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
+fix, landed as its own commit so it stayed independently reviewable.
+
 `.channel-list` deviates from the architecture spec's `flex: 1 1 auto`: it uses `height: 100%;
 box-sizing: border-box` instead. Originally because `PairedShellView` mounted this `<section>` directly
 under the block-level `#root` with no flex wrapper in between — `flex: 1 1 auto` would have been inert
@@ -376,11 +446,12 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   reason — fidelity is scoped to the two-section list body only.
 - **Section headers are sibling `<header>` elements, not `<h2>`** — flagged in code review as a
   non-blocking future a11y improvement (real headings would give screen readers navigable landmarks).
-- **The host row's label is still a placeholder.** Deliberately deferred, not a gap: #688 replaces
-  `HOST_ROW_LABEL` with the operator-typed machine name, and will need the label's own
-  ellipsis/overflow treatment, skipped here since a six-character constant cannot overflow the
-  400px sidebar. (The row's glyph carries no status either, but that gap closed with [#718](../codebase/718.md)'s
-  connection dots — see § above.)
+- **The host row now shows the operator's stored label**, not a placeholder — closed by
+  [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834); see § The host row above. One
+  residual staleness: the label changing while the sidebar stays mounted (a mid-session re-pair to a
+  different host) only refreshes on the next `ChannelList` remount (a return from
+  `settings`/`archive`/`pairServer`), never live — bounded, since that remount is the only route by
+  which the label can change at all.
 - **The relay leg's not-yet-known state.** Closed by [#719](../codebase/719.md), split from the
   same #672 as #718: `relayLeg(null)` now returns a fourth category, `unknown`/`Relay Unknown`,
   instead of being collapsed into `down`/`Relay Offline`. Both #330's status row and this screen's
@@ -430,7 +501,15 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   mobile-era "Recent discussions" to the desktop design's "Chats" (Figma `106:3258`); the code-level
   `discussions` partition, CSS classes and store fields kept their names.
 - [#710 codebase notes](../codebase/710.md) — added the host row heading each tree (Figma
-  `106:3094`), a client-owned `'Server'` placeholder label ahead of #688's operator-typed one.
+  `106:3094`), a client-owned `'Server'` placeholder label ahead of the operator-typed one.
+- [Host-label window store](host-label-window-store.md) / [#833](https://github.com/pyrycode/pyrycode-desktop/issues/833) —
+  the store `HostRowControl` reads and the loader `<HostLabelData />` mounts; shipped dormant, given
+  its mount site and consumer by #834.
+- [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834) — put the operator's stored label on
+  the host row: the `hostRowLabel` four-arm collapse, the `HostRow`/`HostRowControl` split, the
+  `<HostLabelData />` mount site, and the label's ellipsize treatment. Also fixed a `min-width: auto`
+  gap on `.paired-shell__sidebar` the 128-character label made reachable — see [Paired
+  shell](paired-shell.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
 - [#703 codebase notes](../codebase/703.md) — added the workspace grouping level between each
   host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
 - [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree
@@ -456,5 +535,5 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   subscribes to through their shipped selector factories.
 - [#801 spec](../../specs/architecture/801-sidebar-row-status-dot.md) — the row's status dot.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
-  (per-row open), #688 (operator-typed host label), #716 (same-last-segment workspace label
+  (per-row open), multi-host (see § The host row), #716 (same-last-segment workspace label
   ambiguity), a possible follow-up to suppress the idle dot's announced label (see § Edge cases).

@@ -18,6 +18,7 @@ import {
 } from '../shared/ipc/pairing'
 import type { ParsePairingResult } from './pairingPayload'
 import type { PairingConfirmation } from './pairingConfirmation'
+import type { HostLabelStore } from './hostLabelStore'
 
 /**
  * The minimal main-process invoke surface the handler needs. Electron's `ipcMain` satisfies this
@@ -55,9 +56,17 @@ export function registerPairingHandler(
      * signal, so no record/token/key field crosses to its caller (AC5).
      */
     onPaired?: () => void
+    /**
+     * The write half of the host-label store (#822), used only when a confirm carries a label (#823).
+     * `Pick<…, 'save'>` follows PairingHandleTarget's minimal-structural-surface idiom: this handler
+     * therefore CANNOT load the label back or clear it — only append the operator's display text for
+     * the pairing it just persisted. Optional, mirroring onPaired above, so every existing call site
+     * compiles unchanged; the composition root always wires it.
+     */
+    hostLabel?: Pick<HostLabelStore, 'save'>
   }
 ): () => void {
-  const { parse, confirmation, onPaired } = deps
+  const { parse, confirmation, onPaired, hostLabel } = deps
 
   // At most one prepared pairing (AC4): the opaque confirm closure of the most-recently-fingerprinted
   // record, or null. Only the closure is held — the fingerprint was already returned, and the
@@ -89,7 +98,7 @@ export function registerPairingHandler(
       return { ok: true, fingerprint: prepared.fingerprint }
     }
 
-    // request.type === 'confirm' — a bare signal that carries no record.
+    // request.type === 'confirm' — carries no record; at most the operator's display label (#823).
     const confirm = pendingConfirm
     if (confirm === null) return { ok: false, reason: 'no-pending-pairing' }
     // Consume BEFORE awaiting so "persists exactly once" (AC3) is structural: a second/concurrent
@@ -97,7 +106,29 @@ export function registerPairingHandler(
     pendingConfirm = null
     try {
       await confirm()
-      // The record persisted: fire the connect-on-pair trigger (#82) before replying. Guarded — a
+      // The record persisted, so the label now describes something real: hand it to the host-label
+      // store (#823), its ONE sink. Ordered here on purpose — AFTER the record (a label for a pairing
+      // that did not persist is meaningless, and a failed persist takes the catch below without
+      // writing anything), and BEFORE onPaired, whose reconnect() flips the window to the paired UI:
+      // persisting first leaves no window in which the sidebar renders a host with no name. This adds
+      // no new class of stall — the record save one line above already went through the same
+      // secureStore seam, so any keychain prompt has happened by now. A present-but-undefined label is
+      // the no-label pairing (see the guard), so the check is against undefined, not truthiness: '' is
+      // a value the operator supplied and is saved as one.
+      if (request.label !== undefined) {
+        try {
+          await hostLabel?.save(request.label)
+        } catch {
+          // The response reports on the RECORD (AC5): the pairing succeeded, so a lost nickname must
+          // not be reported as a failed pairing — it is recoverable by re-entering the label. The
+          // caught object is DROPPED: secureStore.set's failures can carry an OS-keychain or
+          // filesystem path in their message, so it is never logged, interpolated, or returned
+          // (unpairHandler.ts:59-68 precedent). No console.* on any label branch, including this one —
+          // AC4 forbids a log line that names or echoes the label, and adding none is the cleanest way
+          // to hold that.
+        }
+      }
+      // Fire the connect-on-pair trigger (#82) before replying. Guarded — a
       // handler registered without it (every existing caller) is unaffected. A failed persist takes
       // the catch below instead, so this never fires on failure (AC4).
       onPaired?.()

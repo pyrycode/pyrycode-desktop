@@ -7,6 +7,7 @@ import { electronSecretEncryption } from './electronSecretEncryption'
 import { selectSecretEncryption } from './secretBackend'
 import { fileSecretPersistence } from './fileSecretPersistence'
 import { createPairedServerStore } from './pairedServerStore'
+import { createHostLabelStore } from './hostLabelStore'
 import { createPairingConfirmation } from './pairingConfirmation'
 import { parsePairingPayload } from './pairingPayload'
 import { selectRelayPolicy } from './relayPolicy'
@@ -139,6 +140,14 @@ app.whenReady().then(() => {
   })
   const pairedServerStore = createPairedServerStore({ secureStore })
   const confirmation = createPairingConfirmation({ store: pairedServerStore })
+  // The host label the operator types at pairing time (#822, wired here by #823): reuse the SAME
+  // secureStore — do not construct a second one — and pass NO `name` override, so the label stays
+  // under the fixed HOST_LABEL_NAME, distinct from `pyrycode.paired_server` and
+  // `pyrycode.device_static`. The label is only ever a VALUE handed to `save`, never a persistence
+  // key, so no caller-supplied string can reach the store name. The pairing handler below receives
+  // only this store's `save`, so it can neither read the label back nor erase it (the read path is
+  // #824, erasing is #827).
+  const hostLabelStore = createHostLabelStore({ secureStore })
 
   // The launch-time pairing-status query (#79): reuse the same pairedServerStore — do not construct
   // a second store — so the renderer can learn before first paint whether a pairing exists (#80),
@@ -216,7 +225,8 @@ app.whenReady().then(() => {
   const unregisterPairing = registerPairingHandler(ipcMain, {
     parse: (pasted) => parsePairingPayload(pasted, relayPolicy),
     confirmation,
-    onPaired: () => connection.reconnect()
+    onPaired: () => connection.reconnect(),
+    hostLabel: hostLabelStore
   })
   app.on('will-quit', () => unregisterPairing())
 

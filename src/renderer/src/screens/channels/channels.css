@@ -794,3 +794,74 @@
   opacity: 0.38;
   cursor: default;
 }
+
+/* #800 — the status dot leading each chat and channel row (Figma 106:3051), drawn from #799's resolved
+   `ConversationStatus`. The design's one drawn instance is a 6x14 frame holding a STROKED, UNFILLED circle
+   (cx=3 cy=11 r=2.5, stroke #9DCBFC — exactly --color-primary), so the dot is a 1px RING, which is what
+   separates it from the filled `.channel-list__host-dot` / `.conn-dot` family six pixels above it in the
+   same sidebar. The 6x14 is the INSTANCE frame, not the dot: centring a 6px dot against the row's line box
+   reproduces it with no wrapper element, the treatment `:92-107` and #703 already record.
+
+   GEOMETRY IS IDENTICAL IN ALL THREE STATES (AC4) — the horizontal advance is 6px whatever the status, so
+   a row's title never shifts as its status changes. Both 6px values are literals rather than tokens, the
+   `.conn-dot { width: 8px }` precedent for structural component geometry. */
+.conversation-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+}
+
+/* The ring is an INSET BOX-SHADOW, not a `border` — the load-bearing choice for AC4. This repo has no
+   global box-sizing reset (recorded at conversation.css:750), so a 1px border would grow the 6px box to
+   8px and shift the title by 2px in exactly the two states where the dot is visible. An inset shadow has
+   zero layout effect by construction, so "the same box in all three states" holds without depending on a
+   `box-sizing` declaration a later edit could drop. `background` stays unset: the design's circle is
+   unfilled.
+
+   These bindings are this component's OWN and must not be swapped for `.conn-dot--up` — that family is the
+   CONNECTION contract, deliberately kept to one copy in the renderer (conversation.css:1425-1435), and it
+   reports whether a machine is reachable. This dot reports what a conversation is DOING: a different
+   concept, a different box, and a class whose substring two other test files already assert on.
+
+   Token names only. --color-primary IS the Figma stroke (#9dcbfc); do not paste the hex, and do not reach
+   for a Figma export's #32628d, which is the light scheme's primary (desktop is dark-only, ADR 0003). */
+.conversation-status-dot--working {
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+  animation: conversation-status-dot-blink 2s ease-in-out infinite;
+}
+
+.conversation-status-dot--new-messages {
+  box-shadow: inset 0 0 0 1px var(--color-success);
+}
+
+/* `--idle` has NO RULE ON PURPOSE, and the missing rule is the design: an idle dot is the same 6px box
+   above with neither shadow nor background — present, holding its place in the row, unpainted. The class
+   still ships on the element so a dropped modifier fails a unit test rather than rendering as idle. */
+
+/* AC3 — the slow fading blink on the working dot. The `.bubble__cursor` three-part shape
+   (conversation.css:727-741): animation, keyframes, reduced-motion guard. Two deliberate departures from
+   that precedent. `ease-in-out` rather than `step-end`, because the design asks for a FADING blink — the
+   structure transfers, the timing function does not. And the opacity fades to a FLOOR, NOT TO ZERO: a
+   caret that vanishes still reads as a caret, but a status dot that vanishes reads as IDLE, which is the
+   one wrong reading available.
+
+   2s and 0.3 are CLIENT-OWNED constants, the #796 spinner's position (conversation.css:800-801): the Figma
+   node is a static vector with no motion spec, so there is nothing to port. Slow enough to read as
+   "working" rather than as a loading spinner. Compositor-owned, so it costs zero React renders. */
+@keyframes conversation-status-dot-blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* AC3's fallback — the working dot still RENDERS under reduced motion as a steady blue ring, it just does
+   not blink. The .bubble__cursor guard's shape verbatim (conversation.css:737). It touches the working
+   modifier ALONE: the base class and the other two modifiers have no animation to cancel. No vitest
+   detector reaches a media query (`environment: 'node'`, no CSSOM), so this is a CSS-level guarantee here;
+   the e2e coverage lands with #801's call site, cloning e2e/composer-status-reduced-motion.spec.ts. */
+@media (prefers-reduced-motion: reduce) {
+  .conversation-status-dot--working {
+    animation: none;
+  }
+}

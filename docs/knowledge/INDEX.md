@@ -247,10 +247,28 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   a `||` were each confirmed to fail at least one test; the last of these also took down the precedence
   test alongside its own single-fact test, a broader blast radius than the spec predicted, recorded as a
   lesson in the PR rather than fixed. The one AC no test here can defend — widening the return type to
-  `string` — is left for [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800)'s dot-component
-  prop type to catch. Code review PASS, one non-blocking NIT (a test-header comment's mutation-blast-radius
-  claim measured narrower than the PR's own mutation run showed). Shipped dormant — #800 and #801, both
-  still unbuilt, are its first consumers.
+  `string` — is caught by [the dot component](features/conversation-status-dot.md)'s (#800) prop type, not
+  by this module's own suite. Code review PASS, one non-blocking NIT (a test-header comment's
+  mutation-blast-radius claim measured narrower than the PR's own mutation run showed). Shipped dormant;
+  #800 is its first consumer (a type import only), #801 is still needed before anything calls it.
+- [Conversation status dot](features/conversation-status-dot.md) — #800, split from #676:
+  `ConversationStatusDot({ status })`, a single `<span role="img" aria-label>` drawing #799's resolved
+  `ConversationStatus` — idle an unpainted 6×6 box, new messages a green ring, working a blue ring with a
+  slow fading blink (`opacity` floors at 0.3, never reaches 0, so a blinked-out dot never misreads as idle)
+  stilled to a steady ring under `prefers-reduced-motion: reduce`. The ring is `box-shadow: inset` rather
+  than `border` — this repo has no global `box-sizing` reset, so a border would grow the 6px box and shift
+  the row title in exactly the two painted states this component must not shift it in. Its working-ring
+  colour deliberately declines the Figma node's own bound variable (`Schemes/Inverse Primary`, `#32628d`):
+  code review found the shipped comment mis-recorded that value as the node's literal stroke color when it
+  is actually a variable the design binds, and traced the real reason `--color-primary` ships instead to
+  [#719](codebase/719.md)'s prior, unrelated rejection of that same value at 2.90:1 contrast against
+  `--color-surface` for the sidebar's relay-leg dot — a documentary PASS, not a behavioural one; the
+  corrected rationale is written up in the feature doc rather than the CSS comment. No store, no call site
+  yet — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) wires it into
+  [Channel List](features/channel-list.md)'s rows. Code review PASS, one SHOULD FIX (the colour-comment
+  correction above, non-gating) / two NIT (idle ships labelled despite being unpainted, per the spec's own
+  Open Question 2; the directory's "no wrapper needed" centring claim doesn't hold for this node's own
+  Figma metadata — flagged for #801 to measure rather than inherit).
 
 ## Architecture
 

@@ -5,10 +5,11 @@ The join between [conversation activity store](conversation-activity-store.md)'s
 union and one total pure function that maps both onto exactly one status a sidebar row can draw. Renders
 nothing, reads no store, holds no state.
 
-Introduced in [#799](https://github.com/pyrycode/pyrycode-desktop/pull/805), split from #676. The dot
-component ([#800](https://github.com/pyrycode/pyrycode-desktop/issues/800)) draws it and the row wiring
-([#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)) feeds it from the two source stores'
-selectors; neither exists yet, so nothing imports this today.
+Introduced in [#799](https://github.com/pyrycode/pyrycode-desktop/pull/805), split from #676. The
+[dot component](conversation-status-dot.md) ([#800](https://github.com/pyrycode/pyrycode-desktop/issues/800))
+now draws it — its first consumer — but only as a type import; the row wiring
+([#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)) still needs to land before anything calls
+`resolveConversationStatus` in production.
 
 ## What it does
 
@@ -94,8 +95,8 @@ in two places, with two chances to get the precedence backwards. This module shi
 ## Edge cases and limitations
 
 - **The one AC no test in this file can defend:** widening the return annotation to `string` typechecks
-  and passes every test in `conversationStatus.test.ts` unchanged. #800's dot-component prop type is what
-  defends it, not this module's own suite.
+  and passes every test in `conversationStatus.test.ts` unchanged. [The dot component](conversation-status-dot.md)'s
+  (#800) prop type is what defends it, not this module's own suite.
 - **Mutation-checked, not just test-green**, following `conversationUnread.ts`'s discipline. Three checks
   confirmed to fail at least one test each: swapping the working/new-messages branch order (fails only the
   precedence test), dropping one disjunction clause (fails only that fact's single-fact test), and an
@@ -108,6 +109,8 @@ in two places, with two chances to get the precedence backwards. This module shi
 
 ## Related decisions
 
+- [Conversation status dot](conversation-status-dot.md) — the presentational leaf that draws this type's
+  three values (#800), and this module's first consumer.
 - [Conversation activity store](conversation-activity-store.md) — the four booleans this module reads
   through `ConversationActivityEntry`, the only symbol this module imports (as a type).
 - [Conversation unread predicate](conversation-unread.md) — the sibling pure-join module this one is

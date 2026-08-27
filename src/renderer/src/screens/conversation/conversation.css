@@ -864,6 +864,70 @@
   white-space: nowrap;
 }
 
+/* #797 — the connection-error chip, the row's right-hand slot the block above reserved (Figma 112:3529).
+   A content-sized pill: the Figma's own 148px is 132px of text plus its two 8px insets, not a fixed
+   width, so nothing here sets one.
+
+   NO height DECLARATION, deliberately. This repo has no global box-sizing reset (the .composer-status
+   comment above records it, and it is why that row carries zero vertical padding), so under content-box
+   a height: 24px PLUS padding: 4px 0 would render a 32px chip inside a 24px row. The height falls out of
+   16px of line plus 4px twice — exactly 24, and exactly the Figma's own py-[4px] around a 16px line.
+
+   flex: 0 0 auto is REQUIRED, not decorative. .composer-status__activity is flex: 1 1 auto; min-width: 0,
+   so without this the chip would be a shrink candidate too and an oversized daemon tool name in the label
+   would squeeze the CHIP instead of ellipsizing the label — inverting the truncation chain above, and
+   remotely triggerable by a hostile or merely buggy daemon. With it, the chain still terminates in the
+   label: the activity group simply gets the chip's width less room and ellipsizes sooner.
+
+   RE-MEASURED with the chip up, because the block above measured that chain with this slot EMPTY and its
+   numbers no longer cover the shipped configuration. This row's markup, these two stylesheets, headless
+   Chromium at the 800px minimum window width, 640px conversation pane: a 3000-char tool name leaves the
+   row at 640x24 and the chip at its full 155px content width (unshrunk — the group takes the whole squeeze,
+   616px down to 461px, which is exactly the chip's width), and both .conversation and document.body report
+   a scrollWidth equal to their client width. No horizontal overflow, and the row's height never moves.
+   155px against the Figma frame's 148 is the standing Roboto→system-ui substitution (tokens.css:48-49),
+   not a spacing drift: padding, radius, size, line and tracking all measure the node's values exactly.
+
+   white-space: nowrap is likewise REQUIRED: the row sets a hard height, so a wrapped chip would overflow
+   it rather than grow it. It is also what the Figma node declares.
+
+   position: relative is the containing block for the absolutely-positioned prefix below, so the hidden
+   text cannot escape into some ancestor's coordinate space. Colour is the error PAIR by token name —
+   never the export's #ffdad6/#ba1a1a, which are the light scheme (the standing rule in .composer-status
+   and .status-row above). No literal beyond that; 6px is --radius-xs. */
+.composer-status__error {
+  flex: 0 0 auto;
+  position: relative;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--color-error-container);
+  color: var(--color-error);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  white-space: nowrap;
+}
+
+/* The chip's assistive-technology marking (AC4): present for a screen reader, absent from the visual
+   design. Hidden TEXT rather than an aria-label — see ComposerErrorChip's comment; an aria-label on a
+   role="generic" element is dropped by the browser. The standard visually-hidden recipe, using clip-path
+   rather than the legacy clip: rect() (the renderer is one known Chromium, so the deprecated property
+   buys nothing). Kept a BEM element of the chip rather than promoted to a global .visually-hidden
+   utility: this repo has no utility layer and there is exactly one consumer — promote it when a second
+   one lands, not speculatively. */
+.composer-status__error-prefix {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* #317 — the stall-indicator wrapper. The .conversation__thinking shape (flex: 0 0 auto so it never
    claims a competing flex region beside the timeline; the thread's --space-4 inset keeps the bubble
    left-aligned and thread-consistent), since the stall indicator sits in the same message-list region.

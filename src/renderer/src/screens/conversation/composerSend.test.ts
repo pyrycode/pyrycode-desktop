@@ -4,7 +4,10 @@ import {
   shouldSubmitOnKeyDown,
   composerAvailability,
   shouldOfferRepair,
-  shouldShowBanner
+  shouldShowBanner,
+  CONNECTION_BANNER_COPY,
+  COMPOSER_ERROR_CHIP_COPY,
+  COMPOSER_ERROR_CHIP_PREFIX_COPY
 } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { ThreadEvent } from '../../store/threadTimeline'
@@ -344,5 +347,44 @@ describe('shouldShowBanner', () => {
         error: { code: 'transport', message: 'gave up', retryable: false }
       })
     ).toBe(true)
+  })
+})
+
+// #797: the error chip's two client-owned strings — the FOURTH and fifth strings this module owns about
+// the one ConnectionStatus fact. Their three-part contract is CONNECTION_BANNER_COPY's, and the pieces
+// that can break silently are pinned here: the apostrophe-free rule (renderToStaticMarkup escapes `'` →
+// `&#x27;`, so an apostrophe makes every toContain on these constants fail without a copy change being
+// suspected), the lexical distinctness from the four strings already on screen for this fact, and the
+// prefix's trailing space, which is what separates the two runs when a screen reader concatenates them.
+describe('the composer error chip copy (#797)', () => {
+  it('is apostrophe-free, so a server-rendered toContain matches it verbatim', () => {
+    expect(COMPOSER_ERROR_CHIP_COPY).not.toContain("'")
+    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY).not.toContain("'")
+  })
+
+  // Pinned against the actual composerAvailability outputs and the banner constant — not hardcoded
+  // strings — so a future tweak to any of them cannot silently collide with the chip.
+  it('is lexically distinct from the banner copy and the three composer hints', () => {
+    const others = [
+      CONNECTION_BANNER_COPY,
+      composerAvailability({ type: 'connecting' }).hint,
+      composerAvailability({ type: 'disconnected' }).hint,
+      composerAvailability({
+        type: 'error',
+        error: { code: 'x', message: 'm', retryable: false }
+      }).hint
+    ].filter((copy): copy is string => copy !== null)
+    expect(others).not.toContain(COMPOSER_ERROR_CHIP_COPY)
+    for (const other of others) {
+      expect(other).not.toContain(COMPOSER_ERROR_CHIP_COPY)
+      expect(COMPOSER_ERROR_CHIP_COPY).not.toContain(other)
+    }
+  })
+
+  // The trailing space is load-bearing, not incidental formatting: it is the whole separator in the
+  // announced "Error: Host connection down!". An editor's trim would silently degrade that.
+  it('keeps the prefix separated from the copy by its trailing space', () => {
+    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY).toMatch(/ $/)
+    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim()).not.toBe('')
   })
 })

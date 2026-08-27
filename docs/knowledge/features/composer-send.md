@@ -183,6 +183,35 @@ Plain Enter (no shift, no composition) → `true`; Shift+Enter, a non-Enter key,
 
 The predicate deliberately does **not** absorb the `canSend` gate (§4) — that stays authoritative in `handleSubmit`, preserving #31's contract that a disconnected Enter is *swallowed*, not turned into a newline. It also doesn't read the legacy `keyCode === 229`; `isComposing` is the one signal used, since Electron `^33.2.1` is Chromium-only and doesn't need a WebKit fallback.
 
+### 8. Error chip copy — `composerSend.ts` (#797)
+
+A fifth and sixth string this module owns about the single `ConnectionStatus` fact, but unlike §4–§7
+these are plain constants, not predicates — no `shouldShowErrorChip` was added beside them. The gate is
+already the discriminant of the one arm the [composer status row's error chip](conversation-shell.md#composer-error-chip-797)
+belongs to (`status.type === 'error'`), so a named predicate would only restate that in an export and a
+test matrix.
+
+```ts
+export const COMPOSER_ERROR_CHIP_COPY = 'Host connection down!'
+export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
+```
+
+Both carry `CONNECTION_BANNER_COPY`'s three-part contract: a client-owned constant, lexically distinct
+from the banner copy and the three `composerAvailability` hints (`COMPOSER_ERROR_CHIP_COPY` leads with
+"Host", sharing no leading word with any of them), and zero daemon-supplied substring — structural here,
+not conventional, since the chip view narrows on `status.type` and never destructures `status.error`.
+Apostrophe-free like every string in this module (`renderToStaticMarkup` escapes `'` → `&#x27;`, so a
+`toContain` only matches verbatim without one).
+
+`COMPOSER_ERROR_CHIP_PREFIX_COPY`'s **trailing space is load-bearing** — it is the separator between the
+hidden prefix and the visible copy when a screen reader concatenates them into `Error: Host connection
+down!`; an editor's trim would silently degrade the announcement. `composerSend.test.ts` pins it.
+
+These two live here, beside `CONNECTION_BANNER_COPY`, rather than as module-level constants in
+`ConversationScreen.tsx` (where `THINKING_COPY`/`STALL_COPY`/`EMPTY_THREAD_COPY` live): every string that
+speaks about `ConnectionStatus` lives in this one module, which is what makes the lexical-distinctness
+comparison between all four reviewable in one place.
+
 ## Data flow
 
 ```
@@ -221,5 +250,6 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the `Re-pair` affordance it gates.
 - [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell.md#connection-banner-279) it gates.
 - [#512 codebase notes](../codebase/512.md) — the `shouldSubmitOnKeyDown` keystroke-intent predicate: the Enter that commits an IME composition no longer submits or suppresses the commit.
+- [Conversation shell § Composer error chip](conversation-shell.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#756 codebase notes](../codebase/756.md) — `dispatchFor`'s target: the keyed store the echo folds into, dual-write alongside the flat `dispatch`, still unread until #758.
 - [Interrupt envelope](interrupt-envelope.md) — since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), the send button this page describes is one component with two variants: `ComposerSendButton` renders send at idle and the stop affordance (that page's subject) while a turn is running. `Composer` is the one render site for both.

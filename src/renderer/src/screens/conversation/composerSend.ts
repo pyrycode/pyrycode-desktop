@@ -222,3 +222,35 @@ export const CONNECTION_BANNER_COPY =
 export function shouldShowBanner(status: ConnectionStatus): boolean {
   return status.type !== 'connected'
 }
+
+/**
+ * The composer status row's error-chip copy (#797) — the chip's ENTIRE visible text, and the fourth
+ * string this module owns about the single `ConnectionStatus` fact. It lives here, beside
+ * CONNECTION_BANNER_COPY and the three `composerAvailability` hints, rather than as a module-level
+ * constant in ConversationScreen.tsx (where THINKING_COPY / STALL_COPY live), precisely so the lexical
+ * distinctness those four owe each other is reviewable in one place.
+ *
+ * It carries CONNECTION_BANNER_COPY's three-part contract verbatim: (a) one client-owned constant,
+ * (b) lexically distinct from the banner copy and the three composer hints — it leads with "Host" and
+ * shares no leading word with `Cannot reach pyrybox…` / `Connecting…` / `Not connected` /
+ * `Connection error` — and (c) zero daemon-supplied substring. (c) is structural rather than
+ * conventional here too: ComposerErrorChip narrows on `status.type` and never destructures
+ * `status.error`, so no ConnectionError field has a rendering path to escape, length-bound or
+ * newline-strip. Apostrophe-free by design (renderToStaticMarkup escapes `'` → `&#x27;`, the standing
+ * desktop lesson), so a server-rendered `toContain` matches it verbatim. PO/design may tune the wording
+ * — the contract is load-bearing, the exact words are not; the exclamation mark is the mock's.
+ */
+export const COMPOSER_ERROR_CHIP_COPY = 'Host connection down!'
+
+/**
+ * The error chip's assistive-technology marking (#797, AC4) — rendered as visually hidden TEXT inside
+ * the chip, ahead of COMPOSER_ERROR_CHIP_COPY, so the chip's error nature does not rest on its colour
+ * alone. Hidden text rather than an `aria-label`, because a bare <div>/<span> maps to role="generic",
+ * which ARIA 1.2 puts on the name-prohibited list — an aria-label there asserts green in a markup test
+ * and is dropped by a real screen reader. See ComposerErrorChip's own comment.
+ *
+ * THE TRAILING SPACE IS LOAD-BEARING. It is the entire separator between the two runs when a screen
+ * reader concatenates them into "Error: Host connection down!"; an editor's trim silently degrades the
+ * announcement. composerSend.test.ts pins it. Client-owned and apostrophe-free like its sibling above.
+ */
+export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '

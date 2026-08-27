@@ -46,7 +46,9 @@ import {
   composerAvailability,
   shouldOfferRepair,
   shouldShowBanner,
-  CONNECTION_BANNER_COPY
+  CONNECTION_BANNER_COPY,
+  COMPOSER_ERROR_CHIP_COPY,
+  COMPOSER_ERROR_CHIP_PREFIX_COPY
 } from './composerSend'
 import { isAtBottom } from './threadScrollPosition'
 import { toolHeadline } from './toolHeadline'
@@ -278,8 +280,12 @@ export function ConversationScreen({
           The icon's gate is deliberately the RAW phase reading (`isTurnRunning`, the same predicate the
           send button's stop variant uses) and is NOT narrowed by those supersede rules — so during a
           retry or a compaction the icon keeps turning beside no text, which is a legal render the row's
-          held height makes look intentional rather than broken. */}
-      <ComposerStatusArea isRunning={isTurnRunning(phase)}>
+          held height makes look intentional rather than broken.
+          #797: the row's right-hand slot, reserved empty by #796, now carries the connection-error chip.
+          It arrives as its own store-bound control rather than a status read hoisted into this screen —
+          ConversationScreen does not subscribe to sessionStore, and a read here would re-render the whole
+          screen, timeline included, on every connection-status change. */}
+      <ComposerStatusArea isRunning={isTurnRunning(phase)} trailing={<ComposerErrorChipControl />}>
         <ThinkingIndicator
           state={workingIndicatorStateWithLocalSend({ phase, apiRetry, compacting }, localSendPending)}
           toolName={openToolName(items)}
@@ -1198,6 +1204,17 @@ export function ThinkingIndicator({
 // the `height` declaration is what reserves the row, and the Figma error frame is itself 24 tall, so a
 // second flex child grows nothing. A spacer would be a defence for a failure nobody has observed.
 //
+// #797 FILLS that slot, through `trailing` — an added optional prop, so no existing call site or test
+// moved. `trailing`, not `error`: the row stays a layout primitive that knows a slot's POSITION and
+// nothing about its occupant, the same reason #796 chose `children` over `label: string`. The two slots
+// are distinct: `children` is the activity group's, `trailing` is the ROW's, so its occupant renders as
+// the group's SIBLING and space-between right-aligns it with no spacer.
+//
+// `{trailing}` renders BARE, with no .composer-status__trailing wrapper. #797's AC1 is explicit that in
+// every non-error arm NOTHING is rendered in that slot, not an empty element — a wrapper would emit an
+// empty <div> in all three of them. Rendered bare, a null occupant contributes nothing to the markup,
+// which is both what the AC asks for and what makes it assertable in a static render.
+//
 // The turning modifier is a CLASS, not an inline style. Rotation is a CSS animation, and AC3 requires the
 // running-vs-still distinction to be visible in the static markup a renderer spec asserts on — nothing in
 // this repo can read a resolved style (CLAUDE.md: renderer specs are static server renders). The
@@ -1209,10 +1226,12 @@ export function ThinkingIndicator({
 // a legal, expected render — and AC2's held height is what makes it read as intentional.
 export function ComposerStatusArea({
   isRunning,
-  children
+  children,
+  trailing
 }: {
   isRunning: boolean
   children?: ReactNode
+  trailing?: ReactNode
 }): JSX.Element {
   const iconClass = `composer-status__icon${isRunning ? ' composer-status__icon--spinning' : ''}`
   return (
@@ -1229,6 +1248,7 @@ export function ComposerStatusArea({
         <PyryMark className={iconClass} width={14} height={16} />
         {children}
       </div>
+      {trailing}
     </div>
   )
 }
@@ -2276,6 +2296,54 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
 function ConnectionBannerControl(): JSX.Element | null {
   const status = useSessionStore(selectStatus)
   return <ConnectionBanner status={status} />
+}
+
+// #797: the connection-error chip filling the right-hand slot #796 reserved in the composer status row
+// (Figma 112:3529). The FOURTH read of the ConnectionStatus slice and the narrowest of them: it reads the
+// discriminant to decide WHETHER to show, and reads nothing out of the arm it shows for.
+//
+// IT NEVER DESTRUCTURES `status.error`. That is the whole of AC2 and it is deliberately structural, not
+// conventional — the CONNECTION_BANNER_COPY guarantee one component over. Neither `message` nor `code`
+// reaches the DOM as text, in an attribute, in a title, or into a console.* while debugging; since there
+// is no rendering path for either, there is nothing to escape, length-bound or newline-strip, and nothing
+// that can be forgotten. The design carries this independently: the mock's text node is a single 132x16
+// line, which a relayed ErrorPayload.message would not fit.
+//
+// A <div>, not the banner's <p>. The banner is a paragraph in a band; this chip lives in a row with a
+// hard height: 24px and this repo ships no global box-sizing/margin reset, so a <p>'s UA margin would be
+// a live layout hazard against AC3 for no semantic gain.
+//
+// NO LIVE REGION — no role="status", no role="alert", no aria-live. The ConnectionStatusIndicator ruling
+// below applies verbatim ("a STATIC labelled group, not a live region"): the banner (#279) already
+// politely announces disconnects, and
+// shouldShowBanner is true on the `error` arm, so a connected → error transition mounts the banner and
+// this chip in the same commit. Two polite regions would queue two announcements of one fact.
+//
+// AC4's marking is HIDDEN TEXT, not an aria-label. An aria-label on a bare <div>/<span> is prohibited by
+// ARIA 1.2 — those elements map to role="generic", which is on the name-prohibited list, so browsers drop
+// the name: it would look right in the markup, assert green in a toContain, and do nothing for a real
+// screen reader. A real text node cannot be dropped. Do not "simplify" this back to an attribute.
+export function ComposerErrorChip({ status }: { status: ConnectionStatus }): JSX.Element | null {
+  if (status.type !== 'error') return null
+  return (
+    <div className="composer-status__error">
+      <span className="composer-status__error-prefix">{COMPOSER_ERROR_CHIP_PREFIX_COPY}</span>
+      {COMPOSER_ERROR_CHIP_COPY}
+    </div>
+  )
+}
+
+// The store-bound container for the error chip (#797) — the ConnectionBannerControl shape. Selects only
+// `status` (selectStatus) so it re-renders exactly on a connection-status change and never on a timeline
+// delta. A container rather than a `status` prop threaded down from ConversationScreen: that screen does
+// not subscribe to sessionStore at all today, and adding a read there would re-render the whole screen —
+// timeline included — on every connection-status change. No new store wiring, no window.pyry dereference,
+// no effects. Its showing branch is NOT reachable in a server render — zustand v5's useStore reads
+// getInitialState() there, which is `disconnected`, so a setState cannot stage it (RepairControl's
+// situation, not the banner's) — and the container test stages that initial snapshot to reach it.
+function ComposerErrorChipControl(): JSX.Element | null {
+  const status = useSessionStore(selectStatus)
+  return <ComposerErrorChip status={status} />
 }
 
 // #330: the two-dot Relay/Pyrycode connection-status indicator — the persistent at-a-glance state that

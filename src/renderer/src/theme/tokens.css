@@ -38,6 +38,12 @@
   --color-tertiary: #ffb59f;
   --color-success: #2fc038;
   --color-error: #ffb4ab; /* M3 default (dark) error role — error tone 80 (#230) */
+  --color-error-container: #93000a; /* M3 Schemes/Error Container of the default (dark) scheme — the
+                                       error chip's fill (#797, Figma node 112:3529), carrying
+                                       --color-error as its text role. Read from the Figma VARIABLE
+                                       (get_variable_defs on that node), never from its generated
+                                       fallback #ffdad6, which is the LIGHT scheme's container; desktop
+                                       is dark-only (ADR 0003). One consumer today, per the note above. */
   --color-warning: #ffca45; /* Amber for the in-progress connection category (#330). M3 has no warning
                                role and the design system has no such variable (the two-dot line
                                post-dates the 2026-05-08 file lock — a code-era addition, like the dots

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { PAIRING_CHANNEL, MAX_PASTE_LENGTH, isPairingRequest } from './pairing'
+import {
+  PAIRING_CHANNEL,
+  MAX_PASTE_LENGTH,
+  MAX_HOST_LABEL_LENGTH,
+  isPairingRequest
+} from './pairing'
 
 describe('pairing channel', () => {
   it('pins the IPC channel string both process sides depend on', () => {
@@ -42,5 +47,42 @@ describe('isPairingRequest', () => {
   it('bounds the paste length: accepts exactly MAX_PASTE_LENGTH, rejects one over', () => {
     expect(isPairingRequest({ type: 'submit', paste: 'a'.repeat(MAX_PASTE_LENGTH) })).toBe(true)
     expect(isPairingRequest({ type: 'submit', paste: 'a'.repeat(MAX_PASTE_LENGTH + 1) })).toBe(false)
+  })
+
+  it('accepts a confirm carrying an operator-typed host label (#823)', () => {
+    expect(isPairingRequest({ type: 'confirm', label: 'Pyrybox' })).toBe(true)
+  })
+
+  it('accepts a confirm whose label is the empty string (a supplied value, not absence)', () => {
+    // '' is a value the operator supplied; the host-label store keeps it distinct from never-stored,
+    // so the guard must not collapse it into "no label" (erasing the label is #827, not this).
+    expect(isPairingRequest({ type: 'confirm', label: '' })).toBe(true)
+  })
+
+  it('accepts BOTH an absent label and a PRESENT `label: undefined` (the no-label pairing)', () => {
+    // Deliberately asymmetric with submit's `paste: undefined` rejection above: `paste` is required,
+    // `label` is optional, and `label?: string` means exactly "absent or undefined". The
+    // present-undefined case is reachable, not hypothetical: Electron's IPC uses the structured clone
+    // algorithm, which PRESERVES an own property whose value is undefined (unlike JSON.stringify,
+    // which drops it), so a renderer building `{ type: 'confirm', label }` with an undefined label
+    // delivers a request where `'label' in request` is true.
+    expect(isPairingRequest({ type: 'confirm' })).toBe(true)
+    expect(isPairingRequest({ type: 'confirm', label: undefined })).toBe(true)
+  })
+
+  it('rejects a confirm whose label is not a string', () => {
+    expect(isPairingRequest({ type: 'confirm', label: 42 })).toBe(false)
+    expect(isPairingRequest({ type: 'confirm', label: null })).toBe(false)
+    expect(isPairingRequest({ type: 'confirm', label: { toString: () => 'Pyrybox' } })).toBe(false)
+    expect(isPairingRequest({ type: 'confirm', label: ['Pyrybox'] })).toBe(false)
+  })
+
+  it('bounds the label length: accepts exactly MAX_HOST_LABEL_LENGTH, rejects one over', () => {
+    expect(isPairingRequest({ type: 'confirm', label: 'a'.repeat(MAX_HOST_LABEL_LENGTH) })).toBe(
+      true
+    )
+    expect(
+      isPairingRequest({ type: 'confirm', label: 'a'.repeat(MAX_HOST_LABEL_LENGTH + 1) })
+    ).toBe(false)
   })
 })

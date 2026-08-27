@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { registerPairingHandler, type PairingHandleTarget } from './pairingHandler'
-import { PAIRING_CHANNEL } from '../shared/ipc/pairing'
+import { PAIRING_CHANNEL, MAX_HOST_LABEL_LENGTH } from '../shared/ipc/pairing'
 import type { ParsePairingResult } from './pairingPayload'
 import type { PairingConfirmation, PreparedPairing } from './pairingConfirmation'
 import type { QrPayload } from '../shared/wire/types'
@@ -35,6 +35,12 @@ const PAYLOAD: QrPayload = {
 
 const parseOk = (): ParsePairingResult => ({ ok: true, payload: PAYLOAD })
 const confirmationOf = (prepare: PairingConfirmation['prepare']): PairingConfirmation => ({ prepare })
+
+// The minimal host-label surface the handler declares — only `save` (#823). A spy, so "the label
+// reaches the store and nothing else" is asserted on the call, not on a keychain or the filesystem.
+function fakeHostLabel(save = vi.fn(async () => {})): { save: ReturnType<typeof vi.fn> } {
+  return { save }
+}
 
 describe('registerPairingHandler', () => {
   it('registers exactly one handler on the pairing channel and unregisters that exact channel', () => {
@@ -261,6 +267,213 @@ describe('registerPairingHandler', () => {
       expect(serialized).not.toContain(SECRET_KEY)
       expect(serialized).not.toContain(PAYLOAD.server)
       expect(serialized).not.toContain(PAYLOAD.relay)
+    }
+  })
+})
+
+// The operator-typed host label riding the confirm (#823). It reaches exactly one sink —
+// hostLabel.save — and only after the RECORD itself has persisted; it never enters prepare's frozen
+// snapshot, never crosses back in a response, and never reaches a log.
+describe('registerPairingHandler — host label on confirm (#823)', () => {
+  const LABEL = 'Pyrybox'
+
+  // A registered handler driven through a successful submit, with the spies the label tests assert on.
+  function paired(
+    overrides: {
+      confirm?: ReturnType<typeof vi.fn>
+      hostLabel?: { save: ReturnType<typeof vi.fn> }
+      onPaired?: ReturnType<typeof vi.fn>
+    } = {}
+  ): {
+    listener: (event: unknown, request: unknown) => Promise<unknown>
+    confirm: ReturnType<typeof vi.fn>
+    hostLabel: { save: ReturnType<typeof vi.fn> }
+    onPaired: ReturnType<typeof vi.fn>
+  } {
+    const target = fakeTarget()
+    const confirm = overrides.confirm ?? vi.fn(async () => {})
+    const hostLabel = overrides.hostLabel ?? fakeHostLabel()
+    const onPaired = overrides.onPaired ?? vi.fn()
+    const prepare = vi.fn((): PreparedPairing => ({ ok: true, fingerprint: 'aa:bb', confirm }))
+    registerPairingHandler(target, {
+      parse: vi.fn(parseOk),
+      confirmation: confirmationOf(prepare),
+      hostLabel,
+      onPaired
+    })
+    return { listener: listenerOf(target), confirm, hostLabel, onPaired }
+  }
+
+  it('persists the label through the store exactly once, verbatim (AC1)', async () => {
+    const { listener, hostLabel } = paired()
+
+    await listener({}, { type: 'submit', paste: 'good' })
+
+    expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({ ok: true })
+    expect(hostLabel.save).toHaveBeenCalledTimes(1)
+    expect(hostLabel.save).toHaveBeenCalledWith(LABEL)
+  })
+
+  it('writes nothing to the label store when no label is supplied (AC2)', async () => {
+    const { listener, hostLabel } = paired()
+
+    await listener({}, { type: 'submit', paste: 'good' })
+
+    expect(await listener({}, { type: 'confirm' })).toEqual({ ok: true })
+    expect(hostLabel.save).not.toHaveBeenCalled()
+  })
+
+  it('saves an empty label — a supplied value, not absence', async () => {
+    const { listener, hostLabel } = paired()
+
+    await listener({}, { type: 'submit', paste: 'good' })
+
+    expect(await listener({}, { type: 'confirm', label: '' })).toEqual({ ok: true })
+    expect(hostLabel.save).toHaveBeenCalledWith('')
+  })
+
+  it('rejects a non-string label at the guard; the pairing does not proceed (AC3)', async () => {
+    const { listener, confirm, hostLabel } = paired()
+
+    await listener({}, { type: 'submit', paste: 'good' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(await listener({}, { type: 'confirm', label: 42 })).toEqual({
+      ok: false,
+      reason: 'malformed-request'
+    })
+    expect(hostLabel.save).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled() // the record was not persisted either
+
+    // The rejection leaves the prepared pairing intact: a malformed request must not burn a
+    // fingerprint the operator already verified, so retrying with a valid label still works.
+    expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({ ok: true })
+    expect(confirm).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('rejects a label one over MAX_HOST_LABEL_LENGTH identically (AC3)', async () => {
+    const { listener, confirm, hostLabel } = paired()
+
+    await listener({}, { type: 'submit', paste: 'good' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(
+      await listener({}, { type: 'confirm', label: 'a'.repeat(MAX_HOST_LABEL_LENGTH + 1) })
+    ).toEqual({ ok: false, reason: 'malformed-request' })
+    expect(hostLabel.save).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('a labelled confirm with nothing pending saves no label', async () => {
+    const { listener, hostLabel } = paired()
+
+    expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({
+      ok: false,
+      reason: 'no-pending-pairing'
+    })
+    expect(hostLabel.save).not.toHaveBeenCalled()
+  })
+
+  it('saves no label when the RECORD persist fails (a label for an unpersisted pairing)', async () => {
+    const { listener, hostLabel } = paired({
+      confirm: vi.fn(async () => {
+        throw new Error('secret encryption is not available')
+      })
+    })
+
+    await listener({}, { type: 'submit', paste: 'good' })
+
+    expect(await listener({}, { type: 'confirm', label: LABEL })).toEqual({
+      ok: false,
+      reason: 'persist-failed'
+    })
+    expect(hostLabel.save).not.toHaveBeenCalled()
+  })
+
+  it('a failed LABEL persist still reports the pairing as succeeded, and still connects (AC5)', async () => {
+    const { listener, hostLabel, onPaired } = paired({
+      hostLabel: fakeHostLabel(
+        vi.fn(async () => {
+          throw new Error('/Users/someone/Library/Application Support/pyry: keychain unavailable')
+        })
+      )
+    })
+
+    await listener({}, { type: 'submit', paste: 'good' })
+
+    // The response reports on the RECORD, which persisted. A lost nickname is not a failed pairing.
+    await expect(listener({}, { type: 'confirm', label: LABEL })).resolves.toEqual({ ok: true })
+    expect(hostLabel.save).toHaveBeenCalledTimes(1)
+    expect(onPaired).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists the label BEFORE firing onPaired', async () => {
+    // onPaired dials the relay and flips the renderer to the paired UI; persisting first means the
+    // label is already durable when the read path (#824/#826) first asks for it.
+    const order: string[] = []
+    const { listener } = paired({
+      hostLabel: fakeHostLabel(
+        vi.fn(async () => {
+          order.push('save')
+        })
+      ),
+      onPaired: vi.fn(() => {
+        order.push('paired')
+      })
+    })
+
+    await listener({}, { type: 'submit', paste: 'good' })
+    await listener({}, { type: 'confirm', label: LABEL })
+
+    expect(order).toEqual(['save', 'paired'])
+  })
+
+  it('works without the hostLabel dep: a labelled confirm resolves and does not throw', async () => {
+    const target = fakeTarget()
+    const confirm = vi.fn(async () => {})
+    const prepare = vi.fn((): PreparedPairing => ({ ok: true, fingerprint: 'aa', confirm }))
+    registerPairingHandler(target, { parse: vi.fn(parseOk), confirmation: confirmationOf(prepare) })
+    const listener = listenerOf(target)
+
+    await listener({}, { type: 'submit', paste: 'good' })
+    await expect(listener({}, { type: 'confirm', label: LABEL })).resolves.toEqual({ ok: true })
+  })
+
+  it('never logs on the label path — not on success, not on a failed save (AC4)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    const ok = paired()
+    await ok.listener({}, { type: 'submit', paste: 'good' })
+    await ok.listener({}, { type: 'confirm', label: LABEL })
+
+    const failing = paired({
+      hostLabel: fakeHostLabel(
+        vi.fn(async () => {
+          throw new Error('keychain unavailable')
+        })
+      )
+    })
+    await failing.listener({}, { type: 'submit', paste: 'good' })
+    await failing.listener({}, { type: 'confirm', label: LABEL })
+
+    for (const spy of [warn, error, log]) {
+      expect(spy).not.toHaveBeenCalled()
+      spy.mockRestore()
+    }
+  })
+
+  it('never echoes the label back in any response (AC4)', async () => {
+    const { listener } = paired()
+
+    const submitRes = await listener({}, { type: 'submit', paste: 'good' })
+    const confirmRes = await listener({}, { type: 'confirm', label: LABEL })
+
+    for (const res of [submitRes, confirmRes]) {
+      expect(JSON.stringify(res)).not.toContain(LABEL)
     }
   })
 })

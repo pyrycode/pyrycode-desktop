@@ -52,12 +52,22 @@ const api = {
     ipcRenderer.invoke(PAIRING_CHANNEL, { type: 'submit', paste }),
 
   /**
-   * Confirm the currently-prepared pairing — a bare signal carrying no record (the fingerprinted
-   * record stays in the background process, #53). Resolves to success or a typed error. Mirrors
+   * Confirm the currently-prepared pairing — a signal carrying no record (the fingerprinted record
+   * stays in the background process, #53), at most the operator's display label for the host (#823).
+   * The label is the ONE exception to the bare-signal shape, and it is not the record: it is local
+   * text about a host, bound for the host-label store, with no wire field and no route to the daemon.
+   * Resolves to success or a typed error — nothing about the label crosses back. Mirrors
    * submitPairingPaste's fixed-channel, no-ipcRenderer-crossing discipline.
+   *
+   * The omitted-label request is built without the key at all, so the no-label path stays exactly
+   * what it was. That is a convenience, NOT a defence: the renderer is untrusted and can invoke with
+   * anything, so isPairingRequest bounds and type-checks the label on its own merits regardless.
    */
-  confirmPairing: (): Promise<PairingConfirmResponse> =>
-    ipcRenderer.invoke(PAIRING_CHANNEL, { type: 'confirm' }),
+  confirmPairing: (label?: string): Promise<PairingConfirmResponse> =>
+    ipcRenderer.invoke(
+      PAIRING_CHANNEL,
+      label === undefined ? { type: 'confirm' } : { type: 'confirm', label }
+    ),
 
   /**
    * Ask the background process, at launch, whether a stored pairing exists — so the renderer can

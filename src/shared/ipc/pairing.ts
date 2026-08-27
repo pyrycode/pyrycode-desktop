@@ -2,8 +2,8 @@
 // one channel, a sealed discriminated REQUEST union, a runtime boundary guard, and the typed
 // RESPONSE shapes. Unlike the fire-and-forget command channel (#17, commands.ts) and event channel
 // (#18, events.ts), pairing needs a request/response round-trip — the renderer submits a pasted
-// payload and gets back a fingerprint to confirm, then sends a bare confirm and gets back
-// success/failure. This module is the shared contract for that channel (Electron
+// payload and gets back a fingerprint to confirm, then sends a confirm (carrying no record, at most
+// a display label for the host) and gets back success/failure. This module is the shared contract for that channel (Electron
 // ipcRenderer.invoke / ipcMain.handle); the main-process handler is #54's pairingHandler.ts.
 //
 // The producer is the UNTRUSTED renderer (as with commands), so this ships isPairingRequest — the
@@ -28,13 +28,34 @@ export const PAIRING_CHANNEL = 'pyry:pairing' as const
 export const MAX_PASTE_LENGTH = 8192
 
 /**
+ * Upper bound on an accepted host label, in UTF-16 code units, enforced at the guard (#823). Generous
+ * for a human-typed display name on a sidebar host row ("Pyrybox", "pyrybox — office") including
+ * non-Latin scripts, while keeping what crosses the boundary small. The unit matches
+ * MAX_PASTE_LENGTH's — so ~64 astral characters — deliberately, rather than a grapheme-aware count
+ * for a bound this loose.
+ *
+ * Exported because the IPC read path (#824) and the input field (#825) must bound against the SAME
+ * constant: a read bound disagreeing with this write bound would let a value pass one boundary and
+ * fail the other. Change it here, once, and both move together.
+ */
+export const MAX_HOST_LABEL_LENGTH = 128
+
+/**
  * A single typed pairing request from the renderer window to the background process. Sealed
  * discriminated union on `type`: a `submit` carrying the untrusted paste to parse + fingerprint,
- * and a bare `confirm` that carries NO record (the #53 hand-off — the renderer sends only a confirm
- * signal, never the fingerprinted record). Extend additively, and grow isPairingRequest's switch in
+ * and a `confirm` that carries NO record (the #53 hand-off — the renderer sends a confirm signal,
+ * never the fingerprinted record). Extend additively, and grow isPairingRequest's switch in
  * lockstep, or a new member is silently rejected at the boundary.
+ *
+ * `confirm`'s optional `label` (#823) is the one relaxation of "bare confirm", and it does not
+ * weaken the property the bareness protects: a display string is not the record, and the record goes
+ * on being assembled in main from the paste main itself parsed. The label never enters #53's frozen
+ * snapshot, never reaches PairedServerRecord, and has no wire field — it is local display text about
+ * a host, bound for the host-label store alone.
  */
-export type PairingRequest = { type: 'submit'; paste: string } | { type: 'confirm' }
+export type PairingRequest =
+  | { type: 'submit'; paste: string }
+  | { type: 'confirm'; label?: string }
 
 /**
  * The self-contained response error vocabulary. Value-free category strings — safe to surface to
@@ -66,9 +87,11 @@ export type PairingConfirmResponse = { ok: true } | { ok: false; reason: Pairing
  * iff `value` is a structurally valid PairingRequest: a non-null object with a known `type`; for
  * `submit`, `paste` must be a string within MAX_PASTE_LENGTH (the mandated non-string-paste
  * rejection from the #52/#53 hand-off, plus a length bound validated HERE — the IPC trust boundary
- * — so main never runs regex / base64-decode / JSON.parse over an absurd input); for `confirm`,
- * nothing more. Accepts extra/unknown fields (structural minimum). Pure; never throws. Grow the
- * switch in lockstep with the union.
+ * — so main never runs regex / base64-decode / JSON.parse over an absurd input); for `confirm`, an
+ * optional `label` must, when supplied, be a string within MAX_HOST_LABEL_LENGTH (#823 — this is the
+ * ONLY bound on the label's write path; the host-label store deliberately has none of its own).
+ * Accepts extra/unknown fields (structural minimum). Pure; never throws. Grow the switch in lockstep
+ * with the union.
  */
 export function isPairingRequest(value: unknown): value is PairingRequest {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false
@@ -80,7 +103,17 @@ export function isPairingRequest(value: unknown): value is PairingRequest {
         value.paste.length <= MAX_PASTE_LENGTH
       )
     case 'confirm':
-      return true
+      // DO NOT tidy this into symmetry with `submit` above: `paste` is REQUIRED, so a present
+      // `paste: undefined` is rejected, while `label?: string` means exactly "absent or undefined"
+      // and a present `label: undefined` must be ACCEPTED. That case is reachable, not hypothetical —
+      // Electron's IPC uses the structured clone algorithm, which PRESERVES an own property whose
+      // value is undefined (unlike JSON.stringify, which drops it), so a renderer building
+      // `{ type: 'confirm', label }` with an undefined label delivers a request where
+      // `'label' in request` is true. Rejecting it would break the no-label pairing, and no type
+      // error would catch the regression. The `in` check itself is still required: `value` is
+      // narrowed only to a non-null object with a `type`, so a bare property read does not typecheck.
+      if (!('label' in value) || value.label === undefined) return true
+      return typeof value.label === 'string' && value.label.length <= MAX_HOST_LABEL_LENGTH
     default:
       return false
   }

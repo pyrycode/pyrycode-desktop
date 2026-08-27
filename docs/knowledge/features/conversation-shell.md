@@ -80,7 +80,8 @@ ConversationScreen            .conversation        (flex column, full height, po
 │   └── ConnectionStatusIndicatorControl .status-row__connection (two dots, inside .status-row__summary, #330)
 ├── BackgroundTaskTrigger      .background-task-trigger (StatusRow sibling, unconditional, #581)
 ├── ComposerStatusArea         .composer-status     (fixed-height row above the composer; NEVER null, #796)
-│   └── ThinkingIndicator       .composer-status__label ("Thinking…"/"Working…"/"Running <tool>…", #648, #649; off the daemon-bubble surface since #796)
+│   ├── ThinkingIndicator       .composer-status__label ("Thinking…"/"Working…"/"Running <tool>…", #648, #649; off the daemon-bubble surface since #796)
+│   └── ComposerErrorChipControl .composer-status__error (row's trailing slot, right-aligned; null unless the `error` connection arm, #797)
 ├── Composer                  .composer            (pinned)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
 ├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
@@ -1131,9 +1132,10 @@ isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted
 ├── StatusRow
 ├── BackgroundTaskTrigger
 ├── ComposerStatusArea         .composer-status
-│   └── .composer-status__activity
-│       ├── PyryMark            .composer-status__icon(--spinning)  (14×16, from theme/PyryMark.tsx)
-│       └── {children}          → <ThinkingIndicator/>
+│   ├── .composer-status__activity
+│   │   ├── PyryMark            .composer-status__icon(--spinning)  (14×16, from theme/PyryMark.tsx)
+│   │   └── {children}          → <ThinkingIndicator/>
+│   └── {trailing}              → <ComposerErrorChipControl/>       (row's own slot, #797, see below)
 └── Composer
 ```
 
@@ -1152,10 +1154,13 @@ branch and no daemon string can reach this prop. The container supplies `isTurnR
 exported predicate the composer's stop-button variant already gates on — reused, not re-derived.
 
 **`children`, not a `label: string` prop — the `StatusSheet({ onClose, children })` precedent.** Keeps the
-row independent of where its text comes from. The row's only child today is `<ThinkingIndicator/>`; the
-right-hand error slot [#797](https://github.com/pyrycode/pyrycode-desktop/issues/797) will fill is empty
-here and gets **no placeholder element** — the row's own `height: 24px` is what reserves the space, and
-the Figma error frame is itself 24 tall, so a second flex child later grows nothing.
+row independent of where its text comes from. `children` is the activity group's slot (`<ThinkingIndicator/>`);
+the row gained a second, sibling slot of its own, `trailing`, in
+[#797](https://github.com/pyrycode/pyrycode-desktop/issues/797) — see [Composer error chip](#composer-error-chip-797)
+below. Through #796 that right-hand slot was empty and got **no placeholder element**, relying on the
+row's own `height: 24px` to reserve the space (the Figma error frame is itself 24 tall, so a second flex
+child was never going to grow it); #797 kept that posture when filling it — `trailing` still renders bare,
+with no wrapper div, so the three non-error arms emit nothing there today either.
 
 **The turning state is a CSS class, never a resolved style.** `.composer-status__icon--spinning` drives a
 `composer-status-spin` keyframe (`1.6s linear infinite`, a client-owned constant — the Figma node is a
@@ -1220,6 +1225,75 @@ says "there is no Figma node for this state; the indicator is one muted run" —
 (node `111:3525` is precisely what this ticket consumes, and the label inherits `--color-primary`, not a
 muted tint) even though the paragraph's conclusion (one text run, so overflow draws a single ellipsis) is
 still correct and still load-bearing. Left as prose upkeep rather than a gate. See [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796).
+
+### Composer error chip (#797)
+
+Fills the composer status row's `trailing` slot (Figma error frame `112:3529`) with a red pill reading
+`COMPOSER_ERROR_CHIP_COPY` (`'Host connection down!'`, [composer send § 8](composer-send.md#8-error-chip-copy-composersendts-797)),
+shown in the `error` connection arm and in no other — the **fourth** read of `sessionStore`'s
+`ConnectionStatus`, beside `composerAvailability`'s terse hint, `shouldOfferRepair`'s re-pair gate, and
+`shouldShowBanner`'s prominent band (all in [composer send](composer-send.md)).
+
+`ComposerErrorChip({ status })` is the pure, exported view (the `ConnectionBanner` pattern):
+`status.type !== 'error'` → `null`; otherwise one `<div className="composer-status__error">` holding a
+hidden `<span className="composer-status__error-prefix">Error: </span>` ahead of the visible copy.
+`ComposerErrorChipControl` is the module-private, store-bound container — `useSessionStore(selectStatus)`,
+the same narrow slice `ConnectionBannerControl` already reads — mounted as `ComposerStatusArea`'s
+`trailing` prop.
+
+**It never destructures `status.error`.** The whole of AC2 is that structural fact, restated one component
+over from `CONNECTION_BANNER_COPY`'s own guarantee: neither `message` nor `code` has a rendering path to
+the DOM, an attribute, a `title`, or a log, so there is nothing to escape, length-bound, or strip a
+newline from. The design carries this independently too — the mock's text node is a single 132×16 line, a
+relayed `ErrorPayload.message` would not fit it.
+
+**A `<div>`, not the banner's `<p>`.** The chip lives in `.composer-status`'s hard `height: 24px` row, and
+this repo ships no global `box-sizing`/margin reset (the row's own comment records that), so a `<p>`'s UA
+margin would be a live layout hazard for no semantic gain.
+
+**No live region.** No `role="status"`, no `role="alert"`, no `aria-live` — the `ConnectionStatusIndicator`
+ruling applies verbatim: the banner already politely announces disconnects, and `shouldShowBanner` is true
+on the same `error` arm, so a `connected → error` transition mounts the banner and this chip in the same
+commit. A second polite region would announce one fact twice.
+
+**AC4's marking is hidden text, not an `aria-label`.** A bare `<div>`/`<span>` maps to `role="generic"`,
+which ARIA 1.2 puts on the name-prohibited list — an `aria-label` there asserts green in a markup test and
+is silently dropped by a real screen reader. The hidden prefix's trailing space is load-bearing: it is the
+separator a screen reader needs to concatenate the two runs into "Error: Host connection down!"; an
+editor's trim would silently degrade the announcement, which is why `composerSend.test.ts` pins it.
+
+**CSS (`conversation.css`, after `.composer-status__label--tool`):** `.composer-status__error` is
+`flex: 0 0 auto` (required, not decorative — without it the chip would be a shrink candidate alongside
+`.composer-status__activity`'s `flex: 1 1 auto; min-width: 0`, and an oversized daemon tool name would
+squeeze the chip instead of ellipsizing the label, inverting the truncation chain above and making it
+remotely triggerable); `white-space: nowrap` (the row's hard height means a wrapped chip would overflow
+rather than grow it); no `height` declaration — under this repo's content-box default, `line-height: 16px`
+plus `padding: 4px 0` already sums to the Figma's own 24px construction, and an explicit `height: 24px`
+alongside that padding would render a 32px chip. `.composer-status__error`'s truncation-chain interaction
+was **re-measured with the chip up** (not assumed from #796's empty-slot numbers): a 3000-char tool name
+still leaves `.composer-status` at 640×24 with no horizontal overflow, the chip unshrunk at its full
+content width and the activity group absorbing the whole squeeze.
+
+**New token:** `--color-error-container: #93000a` (`tokens.css`, beside `--color-error`) — the M3 dark
+`Schemes/Error Container`, read from `get_variable_defs` on Figma node `112:3529`, never from the export's
+light-scheme fallback `#ffdad6` (the same trap `.status-row` and this row's own comment already record).
+One consumer today; the next slot needing an error container should reuse it rather than re-derive the hex.
+
+**Testing gotcha: the container's showing branch needed a `getInitialState` spy, not `setState`.** The
+architecture spec assumed the container `describe`'s existing `beforeEach` (which `setState`s the session
+store) would make the `error` arm reachable through the mounted `ConversationScreen`, the same way it does
+for `ConnectionBannerControl`. It doesn't: zustand v5's `useStore` reads `getInitialState()` under
+`renderToStaticMarkup`, never `getState()`, so a `setState` in `beforeEach` never surfaces there —
+`ComposerErrorChipControl` turned out to share `RepairControl`'s situation (see [Re-pair
+control](#re-pair-control-167) above and [#69 codebase notes](../codebase/69.md)), not the banner's. The
+shipped test spies `sessionStore.getInitialState` directly, mocks its return once, and restores it in a
+`finally`. Worth remembering for the next container test whose visible branch is not the store's initial
+`disconnected` snapshot — check which read path the mount actually uses before trusting a `beforeEach`
+`setState` to reach it.
+
+Code review PASS (architect self-review) — see the ticket's own security review for the trust-boundary and
+attribute-sink analysis; both concluded no findings, on the strength of the "never destructures
+`status.error`" structural guarantee above.
 
 ### Api-retry indicator (#493)
 
@@ -2085,7 +2159,8 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - **`ConnectionStatusIndicator({ relay, daemon })` / `ConnectionStatusIndicatorControl`** — **bound in [#330](../codebase/330.md).** `ConnectionStatusIndicator` is the exported pure view (both legs as props, matrix proven by direct server-render); `ConnectionStatusIndicatorControl` is the in-file container reading `useRelayLinkStore(selectRelayLinkStatus)` and `useSessionStore(selectStatus)`, mounted inside `StatusRow`'s summary slot. See [Two-dot Relay/Pyrycode connection-status indicator](#two-dot-relaypyrycode-connection-status-indicator-330) above.
 - **`Timeline({ items })`** — **bound in [#203](../codebase/203.md); became the sole thread surface in [#179](../codebase/179.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** Reads the [conversation timeline holder](conversation-timeline-holder.md)'s `selectTimelineFor(openConversationId)` (was the flat [conversation timeline store](conversation-timeline-store.md)'s `selectItems` through #758). Was inert (empty, `null`) in production until #179 flipped `interactive`; now carries both the `userText` echo and the daemon's structured reply, for the conversation on screen. See [Structured-stream timeline render](#structured-stream-timeline-render-203), [The interactive flip + thread cutover](#the-interactive-flip--thread-cutover-179), and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above. `TimelineRow`'s `toolCall` arm gained its pending render in [#218](../codebase/218.md) — see [Pending tool-call row](#pending-tool-call-row-218) above — and its resolved render in [#230](../codebase/230.md) — see [Resolved tool-call row](#resolved-tool-call-row-230) above.
 - **`ThinkingIndicator({ state, toolName })`** — **bound in [#215](../codebase/215.md); went live in [#179](../codebase/179.md); prop widened and gate broadened to hold across the whole running turn in [#648](../codebase/648.md); gained the required `toolName` prop naming the open tool in [#649](../codebase/649.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758); markup moved into the new `ComposerStatusArea` in [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796).** `Timeline`'s twin over the open slice's `phase` (plus `apiRetry`/`compacting`) and, since #649, a second independent derivation `openToolName(items)` over the same `items` slice `Timeline` reads; its props and their derivations are untouched by #796, only the returned markup (one `<span>` instead of a `.bubble` wrapper) and the mount site (inside `ComposerStatusArea`, not a sibling of `Timeline`) changed. See [Thinking / working indicator](#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649), [Composer status row](#composer-status-row-796), and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
-- **`ComposerStatusArea({ isRunning, children })`** — **bound in [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796).** New in-file `ConversationScreen.tsx` function; the container supplies `isRunning={isTurnRunning(phase)}` and mounts `<ThinkingIndicator/>` as its sole child. See [Composer status row](#composer-status-row-796) above.
+- **`ComposerStatusArea({ isRunning, children, trailing })`** — **bound in [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796); gained the optional `trailing` slot in [#797](https://github.com/pyrycode/pyrycode-desktop/issues/797).** In-file `ConversationScreen.tsx` function; the container supplies `isRunning={isTurnRunning(phase)}`, mounts `<ThinkingIndicator/>` as `children`, and — since #797 — `<ComposerErrorChipControl/>` as `trailing`, the row's own sibling slot rendered bare. See [Composer status row](#composer-status-row-796) and [Composer error chip](#composer-error-chip-797) above.
+- **`ComposerErrorChip({ status })` / `ComposerErrorChipControl`** — **bound in [#797](https://github.com/pyrycode/pyrycode-desktop/issues/797).** `ComposerErrorChip` is the exported pure view (`status` as a prop, gated on `status.type === 'error'`, never destructuring `status.error`); `ComposerErrorChipControl` is the module-private, store-bound container reading only `selectStatus`, mounted as `ComposerStatusArea`'s `trailing`. See [Composer error chip](#composer-error-chip-797) above.
 - **`StallIndicator({ isStalled })`** — **bound in [#317](../codebase/317.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s own twin over the open slice's `stalled` field, mounted as its sibling right after it. See [Stall indicator](#stall-indicator-317) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
 - **`ApiRetryIndicator({ retry })`** — **bound in [#493](../codebase/493.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s supersede peer over the open slice's `apiRetry` field, mounted right after `Timeline` and before `StallIndicator` (through #796, `ThinkingIndicator` itself sat between them in the DOM; #796 moved its markup into the composer status row, leaving this trio contiguous below `Timeline` — the mount order between `ApiRetryIndicator`/`CompactingIndicator`/`StallIndicator` is unchanged); also narrows `ThinkingIndicator`'s own gate via the new `shouldShowThinking` predicate. See [Api-retry indicator](#api-retry-indicator-493) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.
 - **`CompactingIndicator({ isCompacting })`** — **bound in [#496](../codebase/496.md); source moved to the open conversation's own slice in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).** `ThinkingIndicator`'s second supersede peer over the open slice's `compacting` field, mounted right after `ApiRetryIndicator` and before `StallIndicator`; extends `shouldShowThinking` by one field and one clause. See [Compacting indicator](#compacting-indicator-496) and [The open-conversation reader cutover](#the-open-conversation-reader-cutover-758) above.

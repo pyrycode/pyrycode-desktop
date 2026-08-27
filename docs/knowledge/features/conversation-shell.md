@@ -83,6 +83,7 @@ ConversationScreen            .conversation        (flex column, full height, po
 │   ├── ThinkingIndicator       .composer-status__label ("Thinking…"/"Working…"/"Running <tool>…", #648, #649; off the daemon-bubble surface since #796)
 │   └── ComposerErrorChipControl .composer-status__error (row's trailing slot, right-aligned; null unless the `error` connection arm, #797)
 ├── Composer                  .composer            (pinned)
+│   └── ContextUsageControl     .composer__footer    (third row, below `.composer__row`; holds one reading today — the other four desktop-layout slots (#680/#682/#683/#685) stay empty, #811)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
 ├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
 ├── ChannelInfoSheet (if open) .status-sheet-overlay (absolute overlay, #365)
@@ -862,6 +863,24 @@ count) stays an in-file, unexported one-liner; zero new public exports, zero new
 `--color-success` and #188's `--color-surface-container-highest`). See
 [#192 codebase notes](../codebase/192.md) for the full design and patterns established.
 
+**The percentage itself moved out to a shared function, `contextUsagePercent` (#811).** This section's
+own inline expression — `Math.min(100, Math.max(0, Math.round((usedTokens / windowTokens) * 100)))`
+behind `windowTokens > 0` — is now `contextUsagePercent(usedTokens, windowTokens)`, in the new
+`src/renderer/src/screens/conversation/contextUsage.ts`, so this gauge and the
+[composer footer row](#composer-footer-row-811)'s "Context: N%" reading share one guard and one clamp
+rather than two that could drift apart. `ContextWindowSection` calls it and derives nothing itself —
+`pct !== null` replaces the old `available` ternary — and every other line in the section (the usage
+string, the `role="progressbar"` triple, the inline fill width, the unavailable line) is byte-identical
+to before the extraction; `RunConfigSections.test.tsx`'s existing assertions pass unedited, which is the
+extraction's own behaviour-preservation proof. **The guard also gained `Number.isFinite(windowTokens)`**,
+closing a real hole the old clamp had: `used_tokens`/`window_tokens` cross the wire through a bare
+`typeof === 'number'` check with no range test (`inboundMessage.ts:611-622` rules that deliberately —
+a client-invented bound would drop valid future frames, so *"the render slice formats the counter
+defensively instead"*), so a daemon frame carrying `used_tokens: 1e999, window_tokens: 1e999` parsed to
+`Infinity`/`Infinity` and the pre-#811 clamp rendered `NaN% used` with a `width: NaN%` fill. `windowTokens
+<= 0` and non-finite now collapse into the identical unavailable branch — an architect self-review
+security finding (MUST FIX), closed in the same extraction rather than as a follow-up.
+
 ### Log data section (#72)
 
 The sheet's **first populated section** — the sole user-facing entry point for the client debug-bundle
@@ -1294,6 +1313,67 @@ shipped test spies `sessionStore.getInitialState` directly, mocks its return onc
 Code review PASS (architect self-review) — see the ticket's own security review for the trust-boundary and
 attribute-sink analysis; both concluded no findings, on the strength of the "never destructures
 `status.error`" structural guarantee above.
+
+### Composer footer row (#811)
+
+The desktop layout's fixed-height row **below** the message box (Figma `110:3494`, 780×20, the third
+child of the `Input area` symbol after `Status area`/`ComposerStatusArea` and `Message input`) — not to
+be confused with [Composer status row](#composer-status-row-796), which sits *above* the message box.
+The desktop layout puts five affordances in this row — Actions (#680), permission mode (#682), model and
+effort (#683), this ticket's context-usage reading, and attach (#685) — and four of them are blocked on
+daemon work that doesn't exist yet. #811 builds the row itself and lands the one occupant that isn't
+blocked; **the other four slots stay genuinely empty, no placeholder element, no disabled control**:
+
+```
+Composer
+├── .composer__hint             (unchanged, #31)
+├── .composer__row              (unchanged — textarea + ComposerSendButton)
+└── .composer__footer           (new, third child)
+    └── ContextUsageControl     null until a real snapshot has loaded, then <ContextUsageReading/>
+```
+
+Inline BEM children of `.composer`, not a component of their own — consistent with `.composer__hint`/
+`.composer__row` already being inline JSX rather than extracted, and it keeps the ticket's exported
+surface to two symbols.
+
+**`contextUsagePercent(usedTokens, windowTokens): number | null`** — new file,
+`src/renderer/src/screens/conversation/contextUsage.ts`, React-free and dependency-free (the
+`composerSend.ts` idiom: a pure module beside the screen with its own `.test.ts`). This is the one
+computation [Run configuration Context window section](#run-configuration-context-window-section-192)
+used to own inline; see that section above for the extraction and the `Number.isFinite` guard it added.
+Returning `number | null` (not a number beside a separate `available` boolean) is what makes the two
+surfaces structurally unable to disagree about whether a reading exists — the guard is the return type,
+not a convention repeated at each call site.
+
+**`ContextUsageReading({ usedTokens, windowTokens })`** — the pure view, beside `ComposerErrorChip` in
+`ConversationScreen.tsx` (the exact pair this ticket clones, [Composer error chip](#composer-error-chip-797)
+above). Returns `null` when `contextUsagePercent` does; otherwise exactly one
+`<span className="composer__context">Context: {pct}%</span>`, a single template-literal text run. Every
+property `ComposerErrorChip` established carries over unedited: a `<span>` (this repo ships no global
+box-sizing/margin reset, so a `<p>`'s UA margin is a live layout hazard against the row's held height),
+no attribute beyond `className` (no `onClick`, `tabIndex`, `role`, `title`, `aria-*` — it is a reading,
+not a control), and no live region (`aria-live` would announce a percentage after every turn once #810
+made the figures live). Unlike the error chip, there is no daemon-supplied *string* on this path at all —
+the only interpolated value is an integer in `[0, 100]`, so none of #796/#797's escaping/attribute-sink
+questions apply here.
+
+**`ContextUsageControl()`** — module-private container, the `ComposerErrorChipControl` shape: one
+`useRunConfigStore(selectSnapshot)` read (not two narrow field selectors — both figures must come from
+the same store tick, or a tear could show a percentage of two unrelated snapshots), coalescing
+`snapshot?.usedTokens ?? 0` / `snapshot?.windowTokens ?? 0` — [`RunConfigSections`'s own
+container](#run-configuration-context-window-section-192) verbatim, so the not-yet-loaded state and the
+daemon's `window_tokens: 0` "unavailable" signal collapse into the identical rendered absence on both
+surfaces. Reads [Run configuration store](run-config-store.md)'s app-lifetime `RunConfigLiveData` feed
+(#810) — this ticket adds no store, no subscription, and no event of its own.
+
+**`.composer__footer` reserves its own height (20px) unconditionally**, the same `.composer-status`
+guarantee ([Composer status row](#composer-status-row-796) above): a null reading cannot move
+`.composer__row` because the row's box exists whether or not it holds a child. No vertical padding
+(no global box-sizing reset), `align-items: center`, `padding: 0 var(--space-4)` — aligned with the
+input's *text* start (`.composer__hint`'s treatment), deliberately not with `.composer-status`'s
+box-edge alignment; the two rows are inset differently by design. `gap: var(--space-5)` is declared now
+(the design's measured 20px item rhythm) though inert with one child today, so #680/#682/#683 inherit the
+row's spacing instead of each re-deriving it.
 
 ### Api-retry indicator (#493)
 
@@ -2253,7 +2333,7 @@ See [#366 codebase notes](../codebase/366.md) for the full design and patterns e
 - [Composer send](composer-send.md) — the composer's now-wired submit + optimistic echo (#66), retargeted from the session store into the timeline store since [#179](../codebase/179.md); the send half of this screen; also home of `shouldShowBanner`/`CONNECTION_BANNER_COPY` (#279), the connection banner's predicate + copy, co-located beside `composerAvailability`/`shouldOfferRepair` as a third read of `ConnectionStatus`
 - [Unpair channel](unpair-channel.md) — the main-side `window.pyry.unpair()` bridge this screen's unpair control consumes (#173, consumed in #166); the re-pair control reuses the same bridge via `runUnpair` (#167)
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) — the main-process consumer the Log data section's Download button and its three daemon events finally drive (#169, consumed in #72)
-- [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`
+- [Run configuration store](run-config-store.md) — the dedicated store the headless data path `<RunConfigData/>` feeds (#187) and `<RunConfigSections/>` reads via `selectSnapshot` (#188, widened by #192); mounted as the sheet body's first two children, ahead of `<LogDataSection/>`; since #810 also fed app-lifetime by `RunConfigLiveData`, which is what lets [Composer footer row](#composer-footer-row-811)'s `ContextUsageControl` read a live figure with no sheet ever opened
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the original transport data path (#180, extended #191) `<RunConfigData/>` consumed via `snapshotReceived` until #491/#500 moved it onto [Run configuration store](run-config-store.md)'s `runConfigReceived`; also hosted the `requestSnapshot` command (removed #620), the `screenSnapshotReceived` event #324's now-removed control used to send and render (#316, #324, removed #618), and both events removed outright by [#621](../codebase/621.md)
 - [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323), reader-less since [#618](../codebase/618.md) removed `ScreenSnapshotControl`, its former sole consumer (#324), then deleted outright by [#619](../codebase/619.md)
 - [Relay-link store](relay-link-store.md) — the dedicated store (#329) `<ConnectionStatusIndicatorControl/>` reads via `selectRelayLinkStatus`, its first real consumer; combined at render time with [session store](session-store.md)'s `ConnectionStatus` (#330)

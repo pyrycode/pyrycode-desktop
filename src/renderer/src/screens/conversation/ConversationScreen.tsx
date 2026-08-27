@@ -54,6 +54,7 @@ import { contextUsagePercent } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { isAtBottom } from './threadScrollPosition'
 import { toolHeadline } from './toolHeadline'
+import { listedInputFields, shellCommandBlock } from './toolBody'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
 import { sendInterrupt } from './sendInterrupt'
@@ -757,6 +758,26 @@ function TimelineRow({
 //     full rather than as a headline. An <a href> around it is the same beacon with an extra step.
 //   - NO log line for the list. Any useful one ("which fields did we draw?") carries daemon-chosen
 //     names and values into a log file, which ADR 0007 and CLAUDE.md both forbid.
+//
+// #780 promotes a shell call's `command` out of that list and into a code block above it, which adds
+// NO newly untrusted string — `command` is already drawn by #705's headline and #706's list, and this
+// MOVES one occurrence and REMOVES another, so the set of untrusted strings reaching the DOM is
+// unchanged and the number of sinks they reach goes down. It reaches the DOM only as auto-escaped
+// React children of a <pre>. Four sinks THIS change makes newly tempting are declined, each a MUST FIX
+// if it ever appears:
+//   - NO AssistantMarkdown for the command, a second time and now the OBVIOUS reach: the ticket asks
+//     for "the same chrome as a fenced code block in a message", and the shortest path to that
+//     sentence is `<AssistantMarkdown text={'```\n' + command + '\n```'} />`. It yields the <img src>
+//     beacon above, re-interprets backticks in the command as markdown, and lets a crafted command
+//     break out of the fence entirely. The chrome is shared through its CSS classes instead.
+//   - NO <code> child carrying a `language-*` class, to buy shell highlighting or a header label. AC1
+//     forbids the header, and #721's divider hangs on the header precisely so a headerless block draws
+//     no doubled edge.
+//   - NO title, a fourth time. The block is deliberately unbounded in height (no max-height, unlike
+//     .tool-row__result), which makes `title={command}` the natural next edit for anyone who notices.
+//     The answer to a long command is that it WRAPS — pre-wrap + break-word on .code-block__body.
+//   - NO linkification of a command containing a URL. `curl https://…` is an ordinary shell command
+//     and an <a href> around the detected URL is the beacon shape with an extra step.
 export function ToolRow({
   item,
   defaultExpanded = false
@@ -774,6 +795,11 @@ export function ToolRow({
   // structural rather than two conditions that could drift apart. Carrying the narrowed ToolResult
   // rather than a boolean is what lets both readers below use it without re-checking for null.
   const body = expanded ? result : null
+  // #780: the shell call's command, or null for every other tool and for a shell call carrying none.
+  // A `const` rather than an inline call because it is consumed TWICE below — by the guard and by the
+  // child — which is exactly the reason `chipRuns` is one. The field list stays inline for the
+  // opposite reason (consumed once), which keeps "a collapsed row never computes the list" structural.
+  const command = shellCommandBlock(item)
   // The chip's two runs, declared once: the element forks below, the children never do.
   const chipRuns = (
     <>
@@ -816,29 +842,55 @@ export function ToolRow({
         // A SIBLING of the chip, not a child: the chip is a single-line inline-flex pill with
         // overflow: hidden (conversation.css), so nesting a stacked body inside it would need a new
         // wrapper around the two headline spans and change the collapsed markup. A container rather
-        // than a lone text node because #706 landed its per-input-field list in here, above the result.
+        // than a lone text node because #706 landed its per-input-field list in here, above the
+        // result, and #780 put a shell call's command block at the head of the same column.
         <div className={`tool-row__body${body.isError ? ' tool-row__body--error' : ''}`}>
+          {/* #780: a shell call's command, as code, leading the body. The SAME two elements and the
+              same two classes a message's fenced code block uses (AssistantMarkdown.tsx's `pre`
+              override) — the chrome lives entirely in conversation.css keyed on those classes, so a
+              later restyle of one lands on both rather than leaving them to drift. No <code> child
+              (react-markdown supplies one there; the rule applies --font-mono to both forms) and NO
+              header element ever: AC1 forbids a language header and #721's divider hangs on the
+              header, so the headerless form draws no doubled edge.
+
+              `command !== null`, never a bare && on the string: the guard names the one falsy value
+              the helper can return, so an empty-string command can never render an empty bordered
+              box. AssistantMarkdown.tsx's argument for `language !== null`, on the same chrome. */}
+          {command !== null && (
+            <div className="code-block">
+              <pre className="code-block__body">{command}</pre>
+            </div>
+          )}
           {/* #706: every entry of the map, name and value, in arrival order. Deliberately LITERAL
-              where #705's headline is selective — no shortenPath, no salience pick, no re-ordering,
-              and no skipping the field the headline already promoted. This list is what covers that
-              pick's misses, so a field silently missing from it is worse than a repeated one.
+              where #705's headline is selective — no shortenPath, no salience pick, no re-ordering.
+
+              ONE CARVE-OUT, #780's, and it does not weaken the rule above it. The rule is that this
+              list covers the HEADLINE PICK'S MISSES, so a field silently missing from it is worse
+              than a repeated one — which is true for every tool whose headline is a GUESS. `Bash` is
+              the one tool whose headline is not: toolHeadline's rule 1 matches the name with `===`
+              and probes `description` then `command` in fixed order, so there is no miss to cover.
+              Its two fields are therefore dropped from the list and drawn ELSEWHERE IN THE SAME BODY
+              — `description` on the row's own headline, `command` in the block above — promoted
+              rather than missing. Keyed on the TOOL NAME and never on which field the headline
+              happened to pick, which is what keeps `BashOutput` and every other tool on the full
+              list. Both rules live in toolBody.ts, where they are testable as values.
 
               NO list-wrapper element and no `.length > 0` guard: an empty array renders literally
-              nothing, so "an absent or empty map draws no field list AND no empty container" is
-              structural rather than a second condition that could drift from this one. The `??` is
-              what collapses absent and `{}` into one expression — the distinction stays alive at the
-              item (#643's contract), and the DISPLAY decision that both draw nothing lives here, in
-              one place.
+              nothing, so "an absent, empty or fully carved-out map draws no field list AND no empty
+              container" is structural rather than a second condition that could drift from this one.
+              The `??` that collapses absent and `{}` into one expression moved into toolBody.ts with
+              the entries call — the distinction stays alive at the item (#643's contract), and the
+              DISPLAY decision that both draw nothing still lives in exactly one place.
 
               Object.entries, never `for...in` and never `input[key]`: own enumerable keys only, in
               insertion order (threadTimeline.ts carries #642's rule — the map is an ordinary-
               prototype object, so `input['toString']` would return an inherited function, and
-              `for...in` walks the chain). No .sort(), no .filter(): "never re-sorted" is the absence
-              of a transform, not an assertion about it.
+              `for...in` walks the chain). No .sort(): "never re-sorted" is the absence of a
+              transform, not an assertion about it.
 
               Inline rather than a `const` beside `body`: consumed once, and inlining keeps "a
-              collapsed row never computes the list" structural. (`chipRuns` is a const because BOTH
-              chip branches consume it; that reason does not apply here.)
+              collapsed row never computes the list" structural. (`chipRuns` and `command` are consts
+              because BOTH their readers consume them; that reason does not apply here.)
 
               `key={name}` is a React reconciliation identity — it is never serialised to the DOM, so
               it is not the "attribute / filename / cache key / lookup path" the SAFETY block above
@@ -846,7 +898,7 @@ export function ToolRow({
               are unique by construction, so a collision is impossible. The <pre> is load-bearing
               and not a styled <div>: a div inherits white-space: normal and collapses the daemon's
               newlines onto one line, the defect #607 fixed for assistant text. */}
-          {Object.entries(item.input ?? NO_INPUT_FIELDS).map(([name, value]) => (
+          {listedInputFields(item).map(([name, value]) => (
             <div className="tool-row__input" key={name}>
               <span className="tool-row__input-name">{name}</span>
               <pre className="tool-row__input-value">{value}</pre>
@@ -862,8 +914,8 @@ export function ToolRow({
             // white-space: normal and collapses the daemon's newlines onto one line — the defect #607
             // fixed for assistant messages. Tool output is machine output (a listing, a diff, a stack
             // trace, an aligned table) where column position IS the information, so it keeps its exact
-            // shape and scrolls — the .unrecognized-row__raw side of the whitespace rule stated above
-            // .bubble__markdown pre in conversation.css, not the reflowing code-block side.
+            // shape and scrolls — the .unrecognized-row__raw side of the whitespace rule stated on
+            // .code-block__body in conversation.css, not the reflowing code-block side.
             <pre className="tool-row__result">{body.resultSummary}</pre>
           )}
         </div>
@@ -874,18 +926,6 @@ export function ToolRow({
 
 /** Shown in place of an expanded body when the daemon's result carried no text. Client-owned copy. */
 export const TOOL_RESULT_EMPTY_COPY = 'No output'
-
-/**
- * The `??` right-hand side for an absent `input` map, so absent and `{}` reach `Object.entries` as the
- * same value.
- *
- * A NAMED constant and never a bare `{}` literal at the call site: `item.input ?? {}` has type
- * `Readonly<Record<string, string>> | {}`, and TypeScript resolves `Object.entries` on that union to
- * the `entries(o: {}): [string, any][]` overload — silently typing every VALUE as `any` on a
- * security-sensitive render path. With both branches carrying the same type, `T` infers as `string`
- * and no annotation or explicit type argument is needed.
- */
-const NO_INPUT_FIELDS: Readonly<Record<string, string>> = {}
 
 // The collapsed/expanded diagnostic row. Built SPECIFIC, not generic: this is the first and only
 // expand-and-collapse in the repo, there is no <details> anywhere to reuse, and a reusable collapsible

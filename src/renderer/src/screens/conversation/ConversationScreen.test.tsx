@@ -41,6 +41,8 @@ import {
   ConnectionStatusIndicator,
   selectOpenTimelineFor
 } from './ConversationScreen'
+// #780's AC5 asserts one chrome from both sides, so the message-side renderer is imported here too.
+import { AssistantMarkdown } from './AssistantMarkdown'
 import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
   composerAvailability,
@@ -358,15 +360,22 @@ describe('Timeline — the streamed assistant text', () => {
   // one idiom, and every existing caller omits the parameter, which is what makes them the free
   // regression baseline below. The key is set unconditionally, mirroring #643's own reducer — an
   // omitted argument is a property holding `undefined`, which the picker reads as absence.
+  //
+  // #780 extended it the same way with `name`, THIRD and positional rather than an options object or a
+  // second parameter, for one reason: every existing caller must stay byte-identical. That is not
+  // tidiness — it is what makes the regression baseline below a real check rather than a hope, since
+  // every fixture that omits it keeps the name `read_file` and the shell carve-out fires on none of
+  // them.
   function toolItem(
     result: ToolResult | null,
-    input?: Readonly<Record<string, string>>
+    input?: Readonly<Record<string, string>>,
+    name = 'read_file'
   ): Extract<ThreadItem, { kind: 'toolCall' }> {
     return {
       kind: 'toolCall',
       turnId: 't1',
       toolUseId: 'u1',
-      name: 'read_file',
+      name,
       inputSummary: 'schema.ts',
       input,
       result
@@ -774,6 +783,173 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).not.toContain('title=')
     expect(markup).not.toContain('aria-label')
     expect(markup).not.toContain('dangerously')
+  })
+
+  // #780: a shell call's command as a code block above the list, and both `description` and `command`
+  // off the list. The rules themselves live in toolBody.test.ts; this block owns the MARKUP — the two
+  // elements, their position, the escaping posture, and the chrome shared with a message's fence.
+  //
+  // REGRESSION BASELINE, free of charge and sharper than #706's. Every fixture above carries the name
+  // `read_file`, so the carve-out fires on none of them — and two of them (':675-688' and ':691-705')
+  // pass a `command` field into an EXPANDED row and assert it renders as a `tool-row__input-value`.
+  // Under a name-keyed carve-out they stay green UNEDITED; under a field-keyed one — the mistake AC4
+  // exists to forbid — they go red at once. If either needs editing to stay green, the carve-out was
+  // keyed on the field name instead of the tool name: that is a stop signal, not a stale fixture.
+  const CODE_BLOCK = '<div class="code-block"><pre class="code-block__body">'
+
+  it('draws a Bash command as a code block above a list carrying neither field (AC1, AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: 'RESULT_SENTINEL_zzz' },
+          {
+            description: 'DESC_SENTINEL_zzz',
+            command: 'CMD_SENTINEL_zzz',
+            timeout: 'TIMEOUT_SENTINEL_zzz'
+          },
+          'Bash'
+        )}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain(`${CODE_BLOCK}CMD_SENTINEL_zzz</pre></div>`)
+    // Every other field the call arrived with still renders, unchanged.
+    expect(markup).toContain(INPUT_NAME('timeout'))
+    expect(markup).toContain('<pre class="tool-row__input-value">TIMEOUT_SENTINEL_zzz</pre>')
+    // Read off the NAME spans: a bare not.toContain('command') would be satisfied by nothing at all
+    // here, and not.toContain('description') would be vacuous the moment a class string carried it.
+    expect(markup).not.toContain(INPUT_NAME('description'))
+    expect(markup).not.toContain(INPUT_NAME('command'))
+    // Block, then the surviving list, then the result — one ordering claim across the whole body.
+    expect(markup.indexOf('CMD_SENTINEL_zzz')).toBeLessThan(markup.indexOf(INPUT_NAME('timeout')))
+    expect(markup.indexOf(INPUT_NAME('timeout'))).toBeLessThan(
+      markup.indexOf('RESULT_SENTINEL_zzz')
+    )
+  })
+
+  it('still draws the block when there is no description, headline repeat and all (AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { command: 'CMD_SENTINEL_zzz' },
+          'Bash'
+        )}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain(`${CODE_BLOCK}CMD_SENTINEL_zzz</pre></div>`)
+    // TWICE, and that is the WANTED shape rather than a defect to fix: with no `description` the
+    // headline falls through to `command` (toolHeadline rule 1), so the same text appears in the chip
+    // and in the block. The chip ellipsizes on one line and the block does not, and a command long
+    // enough to be cut is exactly the call the row was opened for. Do not add a guard suppressing it.
+    expect(markup.split('CMD_SENTINEL_zzz')).toHaveLength(3)
+    expect(markup).toContain('<span class="tool-row__summary">CMD_SENTINEL_zzz</span>')
+  })
+
+  it('draws no block and the list alone for a Bash call with no command (AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { description: 'DESC_SENTINEL_zzz', timeout: 'TIMEOUT_SENTINEL_zzz' },
+          'Bash'
+        )}
+        defaultExpanded
+      />
+    )
+    // No empty bordered box — the helper's null is what makes that structural.
+    expect(markup).not.toContain('code-block')
+    expect(markup).toContain(INPUT_NAME('timeout'))
+    expect(markup).not.toContain(INPUT_NAME('description'))
+  })
+
+  it('draws the block and no list at all when the two carved-out fields are all there is (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: 'RESULT_SENTINEL_zzz' },
+          { description: 'DESC_SENTINEL_zzz', command: 'CMD_SENTINEL_zzz' },
+          'Bash'
+        )}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain(`${CODE_BLOCK}CMD_SENTINEL_zzz</pre></div>`)
+    // Not an empty container either: #706 left no list-wrapper element to strand.
+    expect(markup).not.toContain('tool-row__input')
+    expect(markup).toContain('<pre class="tool-row__result">RESULT_SENTINEL_zzz</pre>')
+  })
+
+  it('draws the same chrome as a message fenced code block, header included (AC5)', () => {
+    // ONE substring, asserted from both sides, so a structural divergence in either fails here — which
+    // is what makes "a later restyle of one lands on both" a test rather than a claim. The chrome
+    // itself lives entirely in CSS keyed on these two classes (#721 was a pure restyle across two CSS
+    // files and zero TSX), so sharing the classes is what shares the chrome.
+    const row = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '184 lines' }, { command: 'ls -la' }, 'Bash')}
+        defaultExpanded
+      />
+    )
+    const fence = renderToStaticMarkup(<AssistantMarkdown text={'```\nls -la\n```'} />)
+    expect(row).toContain(CODE_BLOCK)
+    expect(fence).toContain(CODE_BLOCK)
+    // AC1's no language header, and #721's divider-on-the-header decision is what keeps the headerless
+    // form from drawing a doubled edge.
+    expect(row).not.toContain('code-block__header')
+  })
+
+  it('changes no other tools body, matching the tool NAME and not the field (AC4)', () => {
+    // BashOutput is the load-bearing third: it is the name a `startsWith` test would wrongly catch,
+    // and it is a real tool that carries a `command` field of its own.
+    for (const name of ['read_file', 'Edit', 'BashOutput']) {
+      const markup = renderToStaticMarkup(
+        <ToolRow
+          item={toolItem(
+            { isError: false, resultSummary: '184 lines' },
+            { description: 'DESC_SENTINEL_zzz', command: 'CMD_SENTINEL_zzz' },
+            name
+          )}
+          defaultExpanded
+        />
+      )
+      expect(markup).toContain(INPUT_NAME('description'))
+      expect(markup).toContain(INPUT_NAME('command'))
+      expect(markup).not.toContain('code-block')
+    }
+  })
+
+  it('renders the command as inert escaped text, never markup (AC5)', () => {
+    // No apostrophes in the fixture (renderToStaticMarkup escapes ' → &#x27;).
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { description: 'a shell call', command: '<img src=x onerror=alert(1)>' },
+          'Bash'
+        )}
+        defaultExpanded
+      />
+    )
+    expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(markup).not.toContain('<img')
+    // The block is unbounded in height, which makes `title={command}` the natural next edit; the
+    // answer to a long command is that it wraps, never an attribute carrying daemon text.
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('aria-label')
+    expect(markup).not.toContain('dangerously')
+  })
+
+  it('withholds the block from a collapsed Bash row (AC1)', () => {
+    // The block lives INSIDE the body, like the field list, so a collapsed row cannot draw it.
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '184 lines' }, { command: 'ls -la' }, 'Bash')}
+      />
+    )
+    expect(markup).not.toContain('code-block')
+    expect(markup).not.toContain('tool-row__body')
   })
 
   it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {

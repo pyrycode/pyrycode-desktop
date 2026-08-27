@@ -82,8 +82,15 @@ export const PATH_FIELDS: readonly string[] = ['file_path', 'path', 'notebook_pa
  */
 const BASH_FIELDS: readonly string[] = ['description', 'command']
 
-/** The tool name whose input reads better description-first. Matched with `===`, see `pick`. */
-const BASH_TOOL_NAME = 'Bash'
+/**
+ * The tool name whose input reads better description-first. Matched with `===`, see `pick`.
+ *
+ * Exported for toolBody.ts, which keys #780's body carve-out on the SAME name — dropping `description`
+ * from the field list precisely because this rule promoted it onto the headline. Sharing the constant
+ * is what makes "the name moved in one file and not the other, so the body drops a field the headline
+ * no longer shows" unreachable rather than merely unlikely.
+ */
+export const BASH_TOOL_NAME = 'Bash'
 
 interface PickedField {
   key: string

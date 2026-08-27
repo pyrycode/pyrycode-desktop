@@ -42,8 +42,19 @@ import { expect, type Page } from '@playwright/test'
  * The caller owns the launch above and the readiness gate below. `payload` is the caller-built pairing
  * code — the fake stack's synthetic-token payload or the real daemon's `pairFields`; the contents differ
  * between the two stacks, the arrival and the driving do not.
+ *
+ * `label` (#834) is the operator's optional host name. OPTIONAL, so all ten existing call sites are
+ * untouched and keep pairing without one. Invariant 2 applies to it as written: it is filled and
+ * referenced nowhere else — never asserted on by value, never interpolated into a `test.step` title or
+ * an assertion message, never logged. It is not a credential, but the field sits directly below the
+ * pairing-code field and a mis-paste of the payload into it is an anticipated mistake
+ * (PairingScreen.tsx:306-315 bounds the field for exactly that reason), so it gets the same hygiene.
  */
-export async function pairFromUnpairedLaunch(page: Page, payload: string): Promise<void> {
+export async function pairFromUnpairedLaunch(
+  page: Page,
+  payload: string,
+  label?: string
+): Promise<void> {
   // #662: an unpaired launch now lands on the WELCOME screen, and its primary CTA is what opens the
   // pairing form. The click's own actionability wait settles the pending→welcome route, taking over the
   // role the pasteBox visibility wait below used to play. `exact` matches this file's idiom and keeps
@@ -57,6 +68,15 @@ export async function pairFromUnpairedLaunch(page: Page, payload: string): Promi
   // `exact` on Pair avoids the busy `Pairing…` label and the `Cancel` button.
   await expect(pasteBox).toBeVisible()
   await pasteBox.fill(payload)
+
+  // BEFORE Pair, not after: `EntryPage` and `ReviewCard` are alternative phases of `PairingView`, so
+  // this field is gone by the fingerprint card. The reducer carries `state.label` through submitting →
+  // reviewing → confirming, and the confirm sends it (trimmed; an empty or whitespace-only one is sent
+  // as no label at all — pairingState.ts). Attribute selector on the accessible name, this file's idiom.
+  if (label !== undefined) {
+    await page.locator('[aria-label="Host name (optional)"]').fill(label)
+  }
+
   await page.getByRole('button', { name: 'Pair', exact: true }).click()
 
   // Fingerprint card proves #97 active — reached only because parsePairingPayload accepted the

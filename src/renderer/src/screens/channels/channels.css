@@ -62,10 +62,25 @@
 /* The label. Same type set as the section header above it — the theme's label-large is an EXACT match for
    the design's M3 title-small (14/20/0.1/500) — but full-strength on-surface with NO opacity. That
    contrast against the header's muted on-surface-variant at .85 is the point: the machine's name reads one
-   step stronger than the section label. #688 swaps the constant for an operator-typed label; the
-   ellipsizing treatment `.channel-list__title` carries belongs with that ticket, since a six-character
-   compile-time constant cannot overflow the 400px sidebar. */
+   step stronger than the section label.
+
+   #834 put the OPERATOR-TYPED label here in place of the six-character constant, which expired this rule's
+   ellipsize exemption: the value is bounded at MAX_HOST_LABEL_LENGTH (shared/ipc/pairing.ts:41) — 128
+   characters, wide enough to blow out the 400px sidebar — so it must yield rather than widen the row.
+   Three of `.channel-list__workspace-label`'s four ellipsize declarations, plus `min-width: 0`, do that:
+   the min-width lifts the flexbox min-content floor and the default `flex-shrink: 1` then shrinks and
+   ellipsizes the label.
+
+   DELIBERATELY NOT the fourth thing that rule carries, `flex: 1 1 auto`. `flex-grow: 1` would make the
+   label absorb the row's free space and render `.channel-list__host-status`'s `margin-left: auto` inert —
+   replacing a shipped, documented mechanism for pinning the dots to the trailing edge with an implicit
+   one. The workspace row has no trailing element and no such mechanism to preserve, which is the whole
+   reason the two rules differ here. Do not "fix" this into a copy of its neighbour. */
 .channel-list__host-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-on-surface);
   font-size: var(--text-label-large-size);
   line-height: var(--text-label-large-line);

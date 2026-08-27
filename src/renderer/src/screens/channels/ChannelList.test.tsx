@@ -1,8 +1,15 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ConversationSummary } from '@shared/wire/types'
-import { ChannelListView, CollapsibleWorkspaceGroup, HostConnectionDots } from './ChannelList'
+import {
+  ChannelListView,
+  CollapsibleWorkspaceGroup,
+  HostConnectionDots,
+  HostRow,
+  hostRowLabel
+} from './ChannelList'
 import { UNKNOWN_WORKSPACE_LABEL } from './channelListViewModel'
+import type { HostLabelValue } from '../../store/hostLabelStore'
 import type { ConnectionLeg } from '../conversation/ConversationScreen'
 import {
   createConversationActivityStore,
@@ -428,6 +435,103 @@ describe('ChannelListView', () => {
       const markup = bothTrees()
       expect(countOf(markup, ROW_MARKER)).toBe(2)
       expect(countOf(markup, ROW_OPEN_MARKER)).toBe(2)
+    })
+
+    describe('the operator-typed label on the row (#834)', () => {
+      // The four-arm matrix is proven on the PURE COLLAPSE and the markup contract on the PURE VIEW —
+      // never on the store-bound container. Seeding `hostLabelStore` before a `renderToStaticMarkup`
+      // call is invisible to it (the file header's #801 paragraph, and HostConnectionDots' own doc
+      // comment): React's server renderer resolves `useSyncExternalStore` through `getServerSnapshot()`
+      // and zustand wires that to the state captured at store CREATION, so a seeded container can only
+      // ever render the initial `loading` cell.
+      const renderHostRow = (label: string): string => renderToStaticMarkup(<HostRow label={label} />)
+
+      // Read the SHIPPED fallback back out of the collapse rather than restating 'Server', the same
+      // discipline `hostLabelsIn` applies to the render — a copy change that collides with a section
+      // label must fail the AC4 guard above, not be re-blessed by a literal restated here.
+      const FALLBACK = hostRowLabel({ status: 'not-stored' })
+
+      // A label with no regex-, HTML- or attribute-significant character, so "occurs exactly once" is a
+      // statement about the RENDER and not about escaping. Distinct from every marker in this file.
+      const SENTINEL = 'Pyrybox-Sentinel'
+
+      it('shows a stored label verbatim (AC1)', () => {
+        expect(hostRowLabel({ status: 'stored', label: 'Pyrybox' })).toBe('Pyrybox')
+      })
+
+      it('holds a 128-character label whole — the truncation is CSS, not a slice (AC4)', () => {
+        const long = 'x'.repeat(128)
+        expect(hostRowLabel({ status: 'stored', label: long })).toBe(long)
+      })
+
+      it.each<[string, HostLabelValue]>([
+        ['a stored empty label', { status: 'stored', label: '' }],
+        ['a stored whitespace-only label', { status: 'stored', label: '   ' }],
+        ['never stored', { status: 'not-stored' }],
+        ['unreadable', { status: 'error' }],
+        ['not yet settled', { status: 'loading' }]
+      ])('falls back to the word already on the row for %s (AC2)', (_name, value) => {
+        expect(hostRowLabel(value)).toBe(FALLBACK)
+        expect(FALLBACK).not.toBe('')
+      })
+
+      it('gives the pre-settle arm the SAME word as the three settled ones (AC2)', () => {
+        // The distinct guard, not a restatement of the table above: the pre-settle arm is the one that
+        // invites a 'Loading…' placeholder (ServerRow.tsx:12 ships exactly that, deliberately — a
+        // details surface, not a name slot). A placeholder HERE would read as the machine's name, so a
+        // future one must fail at this line rather than ship.
+        expect(hostRowLabel({ status: 'loading' })).toBe(hostRowLabel({ status: 'not-stored' }))
+        expect(hostRowLabel({ status: 'loading' })).toBe(hostRowLabel({ status: 'error' }))
+        expect(hostRowLabel({ status: 'loading' })).toBe(
+          hostRowLabel({ status: 'stored', label: '' })
+        )
+      })
+
+      it('renders a hostile label as escaped text only (AC3)', () => {
+        const markup = renderHostRow('<img src=x onerror=alert(1)>')
+        // The label's own `<` and `>` are what must not survive as raw delimiters — `onerror=alert`
+        // itself remains, inert, as ordinary text, and asserting its absence would be asserting the
+        // wrong thing. Read the label back out of the render (the `hostLabelsIn` discipline) so the
+        // whole rendered text node is pinned, not a substring of it.
+        expect(markup).not.toContain('<img')
+        expect(hostLabelsIn(markup)).toEqual(['&lt;img src=x onerror=alert(1)&gt;'])
+      })
+
+      it('puts the label in NO attribute value — the `title=` reflex, ruled out (AC3)', () => {
+        // The stronger half of AC3, and the one that actually pins it: the ellipsized text this ticket
+        // introduces invites `title={label}` ("hover for the rest"), which is the exact sink CLAUDE.md
+        // forbids and #696's review made a MUST FIX. Asserting the label occurs ONCE, immediately after
+        // the label span's opening tag, catches `title=` AND any other attribute nobody thought to ban.
+        const markup = renderHostRow(SENTINEL)
+        expect(countOf(markup, SENTINEL)).toBe(1)
+        expect(markup.indexOf(SENTINEL)).toBe(
+          markup.indexOf(HOST_LABEL_OPEN) + HOST_LABEL_OPEN.length
+        )
+        expect(markup).not.toContain('title=')
+      })
+
+      it('keeps the row structure the #710/#718 locator guards pin (AC1)', () => {
+        const markup = renderHostRow(SENTINEL)
+        expect(countOf(markup, HOST_ROW_MARKER)).toBe(1)
+        expect(countOf(markup, HOST_ICON_MARKER)).toBe(1)
+        expect(countOf(markup, HOST_LABEL_OPEN)).toBe(1)
+        expect(countOf(markup, DOT_WRAPPER_MARKER)).toBe(1)
+        expect(hostDotTagsIn(markup)).toHaveLength(2)
+        // Neither section label, either way — Playwright's `hasText` matches substrings
+        // case-insensitively, so an operator naming their machine "Chats" is the hazard, not the copy.
+        expect(SENTINEL.toLowerCase()).not.toContain('channels')
+        expect(SENTINEL.toLowerCase()).not.toContain('chats')
+        expect(markup).not.toContain(ROW_MARKER)
+        expect(markup).not.toContain(ROW_OPEN_MARKER)
+      })
+
+      it('renders the fallback in BOTH trees on the store default (AC2)', () => {
+        // The regression guard on every existing assertion in this file and on the ~28 e2e specs riding
+        // `launchPairedApp`: the singleton's created-in `loading` cell is what every server render sees,
+        // so the default markup is exactly what it was before this ticket.
+        const labels = hostLabelsIn(bothTrees())
+        expect(labels).toEqual([FALLBACK, FALLBACK])
+      })
     })
   })
 

@@ -51,6 +51,10 @@ transport, or new store/wire code, so not security-sensitive.
   conversation's `cwd`; there is no separate wire concept for it. Both trees group independently,
   so a workspace with rows in both appears in both. Groups render expanded (collapse is #704).
   Added by [#703](../codebase/703.md).
+- Every row in both trees now leads with a [status dot](conversation-status-dot.md), resolved from
+  that row's **own** conversation id — a chat that has never been opened still shows its working or
+  unread state, not just the currently-open one. Added by
+  [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801); see § The row's status dot below.
 
 ## Why last-activity time, not a message preview
 
@@ -244,6 +248,87 @@ auto-escaped React child, never an attribute (CLAUDE.md 2026-08-20, #696's MUST 
 [#703 codebase notes](../codebase/703.md) for the full fallback-key trap and selector-hazard
 writeup.
 
+### The row's status dot (`ChannelList.tsx`, added by #801)
+
+Split from #676, the last of the three ([#799](conversation-status.md)'s resolver,
+[#800](conversation-status-dot.md)'s leaf, and this ticket's wiring). A module-private, nullary-prop-free
+`ConversationStatusDotControl({ conversationId })`, mirroring `HostConnectionDotsControl`'s shape one level
+down: three narrow per-id subscriptions —
+`useConversationActivityStore(selectActivityFor(id))`, `useConversationTimelineStore(selectTimelineFor(id))`,
+`useConversationLastReadStore(selectLastReadFor(id))` — reduced through
+[`isConversationUnread`](conversation-unread.md) then [`resolveConversationStatus`](conversation-status.md)
+and handed straight to `ConversationStatusDot`. It renders as `Row`'s **first child**, ahead of the
+`.channel-list__row-open` button, in both `renderBody` map sites (`:558`, `:589`) — so both trees, every
+workspace group, get exactly one unconditional dot, idle included.
+
+This is also the answer to the question [`conversationUnread.ts`](conversation-unread.md) deliberately left
+open — **where the two-store unread composition lives.** It lives here, per row, keyed by the row's own
+conversation id: never the open conversation's, so a chat the operator has never opened still shows its
+working or unread state correctly.
+
+**Placement — a sibling of the open button, not a child of it.** `ConversationStatusDot` ships a named
+`role="img" aria-label` on all three statuses, idle included, so nesting the dot inside
+`.channel-list__row-open` would fold "Idle" (and, live, "Assistant working") into the button's own
+accessible name, mutating it as the daemon works. `RunConfigSections.tsx:270-280` already declined exactly
+this shape for the run-config sheet's unselected radios — a named `role="img"` stays a sibling of an
+interactive row, not nested in it. As a sibling the dot is announced in reading order and the button's name
+stays `title + time`.
+
+The geometry cost of that choice is real and is paid in CSS, not layout: in the row's ordinary flex flow
+the dot would push the button's left edge to x≈22, notching the `:hover`/`:focus-visible` fill short of the
+row's leading edge. `channels.css` instead takes the dot **out of flow** —
+`.channel-list__row { position: relative }` plus `.channel-list__row > .conversation-status-dot { position:
+absolute; left: var(--space-4); top: 50%; transform: translateY(-50%); pointer-events: none }` — landing
+both of the Figma's x-values (16px dot, 32px title) exactly while the button keeps spanning the full row and
+its hover/focus rectangles unchanged. `.channel-list__row-open`'s own left padding widened from `--space-4`
+to `--space-8` to reserve the 32px the dot no longer claims in flow (sidebar-only: `channel-list__row*`
+appears in this file alone, so the archive screen's rows are untouched). `pointer-events: none` is what
+keeps a click on the dot's box opening the conversation rather than being swallowed by it; it has no effect
+on the accessibility tree, so the dot's `role="img"` label is still announced.
+
+Making `.channel-list__row` a positioned element was checked for blast radius rather than assumed
+harmless: it moves the row into the positioned-descendants paint layer, where the two sticky top-right
+siblings (`.channel-list__actions`, `.channel-list__fab`) win on document order alone — both already carry
+`z-index: 1`, so rows still paint under them, and no fixed-position element renders inside a row. No
+regression, but worth recording since it's the one edit here whose cost isn't local to the row itself.
+
+**Vertical alignment is a measurement, not an inheritance — and it doesn't work the way this file's own
+prior reasoning for `.channel-list__host-dot` claimed.** The Figma frame's `Status dot` instance sits a few
+pixels below the `Channel` row title's own centre (`cy` at row-relative y=15 in a 24px frame whose centre is
+y=12); porting that 3px offset onto the shipped row would be meaningless, since the shipped row isn't the
+design's 24px frame — it carries its own vertical padding, a larger title type scale, and a trailing
+`.channel-list__time` the design node has no equivalent for. The dot is centred on the row instead
+(`top: 50%; transform: translateY(-50%)`), and the reasoning is recorded in the CSS comment so a later
+reader doesn't reopen it. [The dot's own doc](conversation-status-dot.md#edge-cases-and-limitations) records
+the matching correction: its "no wrapper needed to centre a 6px dot against the row's line box" claim,
+written for `.channel-list__host-dot`, does not hold for this node's Figma metadata and did not transfer
+here.
+
+**Testing: two traps in wiring a store into a `renderToStaticMarkup` component, not specific to this
+ticket.** Both surfaced while extending `ChannelList.test.tsx` and apply to any future row that reads a
+Zustand store under this repo's `environment: 'node'` renderer tier:
+
+- **Seeding a store singleton's setter is invisible to the render.** React's server renderer resolves
+  `useSyncExternalStore` through `getServerSnapshot()` and never subscribes, and Zustand v5 wires that
+  argument to `api.getInitialState()` — the snapshot captured at the store's **module-load** creation, which
+  no setter ever moves. Calling `conversationActivityStore.getState().setTurnRunning(id, true)` before
+  rendering therefore renders as if nothing were seeded; the naive "seed the singleton, then
+  `renderToStaticMarkup`" fixture shape (the one the architecture spec itself proposed) passes green while
+  asserting nothing. The fix is a `vi.mock` per test file that redirects only the three `useXStore` **React
+  bindings** onto a fresh per-file `createXStore()` instance, keeping `...importActual` for everything else
+  — the selectors, the predicate, the resolver — so the real logic under test stays real and only the
+  binding that `renderToStaticMarkup` can't see gets swapped.
+- **An `indexOf`-based ordering assertion passes vacuously when the needle is absent**, since `-1` compares
+  less than every real index. "The dot leads the row" cases must pin presence (`indexOf !== -1`) before
+  they pin ordering, or a row that draws no dot at all reads as a passing test.
+
+No new e2e spec: all four ACs are statically assertable in the unit tier with seeded stores (a per-row
+chunk sliced out of the markup by title, mirroring the file's existing `ROW_MARKER`/`ROW_OPEN_MARKER`
+slicing idiom), and the live path that feeds the activity store for a non-open conversation is #748's
+shipped coverage, not this ticket's. The `prefers-reduced-motion` clone of
+`e2e/composer-status-reduced-motion.spec.ts` that `channels.css:862` hands forward stays explicitly out of
+scope — a per-component e2e spec is a separate concern, filed only if wanted.
+
 ### CSS (`channels.css`)
 
 Token-only: every color/type/spacing value is a `var(--…)` token; opacity is the de-emphasis device
@@ -311,6 +396,12 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   coming back (component-local state under the sidebar's stable mount position, ADR 0006) but is
   gone on every fresh app start — every group renders expanded by default, and there is no store,
   disk, or wire involvement.
+- **Every idle row's status dot is still announced.** Since [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)
+  wired the [status dot](conversation-status-dot.md) into every row, a long sidebar of mostly-idle
+  conversations announces "Idle" once per row (`role="img" aria-label="Idle"` ships on all three
+  statuses). Built exactly as #799/#800/#801's specs intend and confirmed in #801's code review;
+  the cheap fix, if wanted, is `aria-hidden` on the dot's idle branch — a change to
+  `ConversationStatusDot` alone, not a conditional wrapper here. Not filed as a follow-up ticket yet.
 
 ## Related
 
@@ -350,6 +441,20 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [#719 codebase notes](../codebase/719.md) — gave the relay leg's `null` sentinel its own
   `unknown`/`Relay Unknown` category instead of collapsing it into `down`/`Relay Offline`; reaches
   this screen's dots via the shared mapping with no edit here.
+- [Conversation status dot](conversation-status-dot.md) / [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800)
+  — the presentational leaf every row now leads with; see § The row's status dot above for the
+  #801 call site.
+- [Conversation status resolver](conversation-status.md) / [#799](https://github.com/pyrycode/pyrycode-desktop/issues/799)
+  — the pure join `ConversationStatusDotControl` calls to reduce a row's activity and unread facts
+  to one status.
+- [Conversation unread predicate](conversation-unread.md) / [#778](https://github.com/pyrycode/pyrycode-desktop/pull/795)
+  — composed at the row alongside the resolver above; #801 is the ticket that finally answers where
+  this composition lives.
+- [Conversation activity store](conversation-activity-store.md) / [#747](../codebase/747.md) and
+  [conversation timeline holder](conversation-timeline-holder.md) / [conversation last-read
+  store](conversation-last-read-store.md) — the three per-id stores `ConversationStatusDotControl`
+  subscribes to through their shipped selector factories.
+- [#801 spec](../../specs/architecture/801-sidebar-row-status-dot.md) — the row's status dot.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open), #688 (operator-typed host label), #716 (same-last-segment workspace label
-  ambiguity).
+  ambiguity), a possible follow-up to suppress the idle dot's announced label (see § Edge cases).

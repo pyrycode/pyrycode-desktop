@@ -7,9 +7,9 @@ nothing, reads no store, holds no state.
 
 Introduced in [#799](https://github.com/pyrycode/pyrycode-desktop/pull/805), split from #676. The
 [dot component](conversation-status-dot.md) ([#800](https://github.com/pyrycode/pyrycode-desktop/issues/800))
-now draws it — its first consumer — but only as a type import; the row wiring
-([#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)) still needs to land before anything calls
-`resolveConversationStatus` in production.
+draws its type as a type import; [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) is the
+first module to call `resolveConversationStatus` in production, composed per row in
+[`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801).
 
 ## What it does
 
@@ -85,8 +85,10 @@ in two places, with two chances to get the precedence backwards. This module shi
 
 - File: `src/renderer/src/store/conversationStatus.ts`. Two exports: the `ConversationStatus` type and
   `resolveConversationStatus`. `isWorking` stays module-private.
-- No consumer yet. #801 is expected to compose `selectActivityFor(id)` and `isConversationUnread(timeline, lastRead)`
-  at its own call site and pass both results in; this module does not read either source store.
+- One consumer: [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) composes
+  `selectActivityFor(id)` and `isConversationUnread(timeline, lastRead)` at its own call site
+  ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801)) and
+  passes both results straight in; this module still does not read either source store itself.
 - Lives beside its two inputs under `store/`, not `screens/`, for the reason `conversationUnread.ts`
   already gives: its inputs are store slices rather than wire rows, and its consumer is the sidebar rather
   than any one screen. `threadTimeline.ts` (pure) beside `timelineStore.ts` (a store) is the naming pair

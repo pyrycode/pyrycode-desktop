@@ -13,7 +13,9 @@ still-undecided question of where the two-store composition below lives.
 [Conversation status resolver](conversation-status.md) (#799) is the first module to consume this
 predicate's *output* rather than its inputs: it takes the resulting `boolean` as a parameter and joins it
 with the activity store's four facts. It does not call `isConversationUnread` itself and never touches
-this file's two source stores — that composition is still #801's, unbuilt.
+this file's two source stores — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) landed
+that composition, in [`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801),
+per row, keyed by the row's own conversation id.
 
 ## What it does
 
@@ -77,12 +79,12 @@ ticket adds one new file that reads both selectors' outputs and nothing else.
 
 - File: `src/renderer/src/store/conversationUnread.ts`. One export:
   `isConversationUnread(timeline: TimelineState | null, lastRead: LastReadMark | null): boolean`.
-- No consumer yet. [#676](https://github.com/pyrycode/pyrycode-desktop/issues/676) is expected to compose
-  `useConversationTimelineStore(selectTimelineFor(id))` and
-  `useConversationLastReadStore(selectLastReadFor(id))` at its own render site and call this predicate — a
-  `useConversationUnread(id)` hook was considered and declined here, since this repo's vitest runtime has no
-  DOM and a hook would ship an untestable surface. Where that composition eventually lives is left for #676
-  to decide with a real consumer in hand.
+- One consumer: [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) (the #676 split's final
+  ticket) composes `useConversationTimelineStore(selectTimelineFor(id))` and
+  `useConversationLastReadStore(selectLastReadFor(id))` at its own render site
+  ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801)) and
+  calls this predicate — a `useConversationUnread(id)` hook was considered and declined, since this repo's
+  vitest runtime has no DOM and a hook would ship an untestable surface.
 
 ## Edge cases and limitations
 

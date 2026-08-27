@@ -2,8 +2,8 @@
 
 The presentational leaf of a sidebar row: `ConversationStatusDot({ status })` takes one already-resolved
 [`ConversationStatus`](conversation-status.md) and draws it as a single dot. It reads no store, resolves
-nothing, and has no call site yet — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) wires
-it into [`ChannelList`](channel-list.md)'s rows.
+nothing — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) wires it into
+[`ChannelList`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801)'s rows, its only consumer.
 
 Introduced in [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800), split from #676.
 Renderer-only, no store, no transport — not security-sensitive.
@@ -80,36 +80,47 @@ once. `--color-success` needs no such substitution: `#2fc038` is the Figma's `Sc
 - File: `src/renderer/src/screens/channels/ConversationStatusDot.tsx`. One export:
   `ConversationStatusDot({ status: ConversationStatus })`.
 - Styles: appended block in `src/renderer/src/screens/channels/channels.css`.
-- No consumer yet. #801 is expected to resolve a row's status via
-  [`resolveConversationStatus`](conversation-status.md) and pass the result straight in.
+- One consumer: [`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801)
+  (#801), which resolves a row's status via [`resolveConversationStatus`](conversation-status.md) and
+  passes the result straight in as the row's leading child.
 
 ## Edge cases and limitations
 
-- **Not yet wired to any screen.** `ChannelList.tsx` does not render this component; #801 is the ticket
-  that gives it a call site.
-- **The idle dot is invisible but still announced.** `--idle` paints nothing, yet the element still carries
-  `role="img" aria-label="Idle"`, so a long sidebar will announce "Idle" once per conversation once #801
-  wires it in. Built as the ticket's AC2 and its own Open Question 2 specify literally; flagged for the
-  operator as a candidate for suppression at #801's call site, not fixed here.
+- **The idle dot is invisible but still announced, live.** `--idle` paints nothing, yet the element still
+  carries `role="img" aria-label="Idle"`, so a sidebar of mostly-idle conversations announces "Idle" once
+  per row. Built as the ticket's AC2 and its own Open Question 2 specify literally, and #801's code review
+  confirmed it ships exactly that way (its Open Question 1 shipped open, not a regression). The cheap fix,
+  if wanted, is `aria-hidden` on the idle branch here — a change to this component and its unit spec alone,
+  never a conditional wrapper at the call site. Not filed as a follow-up yet.
 - **The component ships no vertical positioning, correctly** — it's a leaf with no opinion on how its
-  parent centers it. Code review flagged that this directory's existing "centring a 6px dot against the
-  row's line box reproduces the Figma frame with no wrapper" reasoning (established for
-  `.channel-list__host-dot`, [Channel List](channel-list.md)) does not actually hold for this node's own
-  metadata — the `Status dot` instance sits a few pixels below the `Channel` row title's own centre in the
-  Figma frame. Nothing in this ticket needs to change for that; #801 should measure the row's actual
-  vertical alignment against the Figma frame rather than inherit the claim unchecked.
-- **No e2e coverage ships with this ticket** — nothing renders the component yet, so there is nothing for
-  Playwright to load. The reduced-motion fallback and the three colours are CSS-level guarantees the node
-  unit tier (`renderToStaticMarkup`, no DOM, no CSSOM) cannot see; e2e coverage lands with #801's call site,
-  cloning `e2e/composer-status-reduced-motion.spec.ts`'s shape.
+  parent centers it, and #801 confirmed that stays the right call: centring happens entirely at the call
+  site (`.channel-list__row > .conversation-status-dot { position: absolute; top: 50%; transform:
+  translateY(-50%) }`), not here. But the *reasoning* this directory previously gave for that stance —
+  "centring a 6px dot against the row's line box reproduces the Figma frame with no wrapper," established
+  for `.channel-list__host-dot` — turned out not to hold for this node's own metadata: the `Status dot`
+  instance sits measurably below the `Channel` row title's centre in the Figma frame (row-relative y=15 in
+  a 24px frame centred at y=12), and #801 found that offset doesn't port onto the shipped row at all (which
+  isn't the design's 24px frame — different padding, a larger title scale, a trailing time the design node
+  lacks). #801 centres the dot on the row instead of reproducing that offset; see [Channel
+  List](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801) for the measurement.
+- **`.conversation-status-dot`'s `flex: 0 0 auto` (`channels.css:848`) is now inert.** It dates from before
+  this component had a consumer, written for a flow-laid-out dot; #801's sole call site takes the dot out
+  of flow with `position: absolute` instead, so the flex property never applies. Flagged by #801's code
+  review as harmless but stale — left unedited (it's this component's own rule, out of #801's scope to
+  touch), recorded here so the next reader doesn't infer a flow-layout consumer from it.
+- **e2e coverage stays at zero.** The reduced-motion fallback and the three colours are CSS-level
+  guarantees the node unit tier (`renderToStaticMarkup`, no DOM, no CSSOM) cannot see. #801 wired the only
+  consumer but added no e2e spec — all four of its ACs are statically assertable with seeded stores in the
+  unit tier — so a `prefers-reduced-motion` clone of `e2e/composer-status-reduced-motion.spec.ts` for this
+  component specifically remains unbuilt; file it separately if wanted.
 
 ## Related
 
 - [Conversation status resolver](conversation-status.md) / [#799](https://github.com/pyrycode/pyrycode-desktop/issues/799)
   — the `ConversationStatus` type and `resolveConversationStatus` this component's prop is typed against;
   this ticket is that module's first consumer.
-- [Channel List home screen](channel-list.md) / [#141 codebase notes](../codebase/141.md) — the screen
-  this dot will lead each row of, once #801 wires it in; also the source of the `HostConnectionDots`
+- [Channel List home screen](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801) — the
+  screen this dot leads each row of, since #801; also the source of the `HostConnectionDots`
   labelled-dot shape this component's markup follows.
 - [#719 codebase notes](../codebase/719.md) / [spec](../../specs/architecture/719-relay-not-yet-known-state.md)
   — the prior contrast rejection of the Figma node's own bound colour, reused here rather than re-measured.

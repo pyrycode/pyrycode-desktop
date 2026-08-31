@@ -613,6 +613,7 @@ describe('createDaemonConnection reconnect modal reconcile (in-process fake targ
   // A well-formed modal_shown envelope: pushed mid-session and (variant 1) re-sent after the reconnect
   // handshake with the SAME modal_id, so the renderer reducer's shown-idempotency is under test.
   const modalPayload: ModalShownPayload = {
+    conversation_id: 'conv-reconnect-1',
     modal_id: MODAL_ID,
     class: 'permission',
     title: 'Allow Bash?',

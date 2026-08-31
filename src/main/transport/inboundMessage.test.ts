@@ -377,8 +377,9 @@ const QUEUE_STATE = {
   ]
 }
 
-/** A fully-populated, well-formed modal_shown payload with two ordered options (#201). */
+/** A fully-populated, well-formed modal_shown payload with two ordered options (#201, #870). */
 const MODAL_SHOWN = {
+  conversation_id: 'conv-7f3a',
   modal_id: 'mdl-7f3a',
   class: 'permission',
   title: 'Allow Bash?',
@@ -2959,7 +2960,7 @@ describe('parseInboundMessage — queue_state fail-closed (#292, AC4)', () => {
 })
 
 describe('parseInboundMessage — modal_shown recognition (#201, additive)', () => {
-  it('narrows a full modal_shown into { kind: modal-shown } carrying all six fields verbatim', () => {
+  it('narrows a full modal_shown into { kind: modal-shown } carrying all seven fields verbatim', () => {
     expect(parseInboundMessage(encodeModalShown(MODAL_SHOWN))).toEqual({
       kind: 'modal-shown',
       modalShown: MODAL_SHOWN
@@ -2991,12 +2992,27 @@ describe('parseInboundMessage — modal_shown recognition (#201, additive)', () 
     })
   })
 
-  it('drops unknown server keys, keeping only the six known fields (forward-compat)', () => {
-    const withExtras = { ...MODAL_SHOWN, conversation_id: 'conv-1', extra: 'ignore-me' }
+  it('drops unknown server keys, keeping only the seven known fields (forward-compat)', () => {
+    // `conversation_id` was this test's example of an unknown key until #870 made it a known one; the
+    // forward-compat point stands on `extra` alone.
+    const withExtras = { ...MODAL_SHOWN, extra: 'ignore-me' }
     expect(parseInboundMessage(encodeModalShown(withExtras))).toEqual({
       kind: 'modal-shown',
       modalShown: MODAL_SHOWN
     })
+  })
+
+  it('carries conversation_id verbatim, never policing its shape or membership (#870)', () => {
+    // The decoder narrows type, not membership: no known-conversation set is consulted (that scoping
+    // concern is #872's), and no path/shape check is applied — the same posture `default_option_id`
+    // already gets for its `∈ options[].id` invariant.
+    for (const conversation_id of ['../../x', '', 'conv-7f3a', '__proto__']) {
+      const payload = { ...MODAL_SHOWN, conversation_id }
+      expect(parseInboundMessage(encodeModalShown(payload))).toEqual({
+        kind: 'modal-shown',
+        modalShown: payload
+      })
+    }
   })
 
   it('drops unknown keys per option, keeping only { id, label } (forward-compat)', () => {
@@ -3034,7 +3050,7 @@ describe('parseInboundMessage — modal_shown fail-closed (#201)', () => {
   })
 
   it('throws when any string field is absent (never a partial)', () => {
-    for (const field of ['modal_id', 'title', 'prompt', 'default_option_id'] as const) {
+    for (const field of ['conversation_id', 'modal_id', 'title', 'prompt', 'default_option_id'] as const) {
       const { [field]: _dropped, ...missing } = MODAL_SHOWN
       expect(() => parseInboundMessage(encodeModalShown(missing))).toThrow(WireDecodeError)
     }
@@ -3042,6 +3058,9 @@ describe('parseInboundMessage — modal_shown fail-closed (#201)', () => {
 
   it('throws when any string field is a non-string (number, object, null)', () => {
     const bad: unknown[] = [
+      { ...MODAL_SHOWN, conversation_id: 42 },
+      { ...MODAL_SHOWN, conversation_id: null },
+      { ...MODAL_SHOWN, conversation_id: {} },
       { ...MODAL_SHOWN, modal_id: 42 },
       { ...MODAL_SHOWN, title: {} },
       { ...MODAL_SHOWN, prompt: null },
@@ -3050,6 +3069,16 @@ describe('parseInboundMessage — modal_shown fail-closed (#201)', () => {
     for (const payload of bad) {
       expect(() => parseInboundMessage(encodeModalShown(payload))).toThrow(WireDecodeError)
     }
+  })
+
+  it('lets no partial escape when only conversation_id is missing (#870)', () => {
+    // Every other field is well-formed, so the frame would decode were the new narrow absent. The
+    // throw precedes the return: no partially-decoded modal-shown reaches a consumer.
+    const { conversation_id: _dropped, ...missing } = MODAL_SHOWN
+    expect(() => parseInboundMessage(encodeModalShown(missing))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeModalShown(missing))).toThrow(
+      'missing required field: conversation_id'
+    )
   })
 
   it('throws when options is absent or not an array', () => {
@@ -3888,14 +3917,16 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
-  it('logs a modal_shown content-free, never a title / prompt / option label / modal_id (#201)', () => {
+  it('logs a modal_shown content-free, never a title / prompt / option label / modal_id / conversation_id (#201, #870)', () => {
     const { log, lines } = captureLog()
     const SECRET_MODAL = 'secret-modal-id'
     const SECRET_TITLE = 'secret-modal-title'
     const SECRET_PROMPT = 'secret-modal-prompt'
     const SECRET_LABEL = 'secret-option-label'
+    const SECRET_CONVERSATION = 'secret-conversation-id'
     const plaintext = encodeModalShown({
       ...MODAL_SHOWN,
+      conversation_id: SECRET_CONVERSATION,
       modal_id: SECRET_MODAL,
       title: SECRET_TITLE,
       prompt: SECRET_PROMPT,
@@ -3912,7 +3943,7 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(record.hash).toMatch(HEX64)
     // The exact content-free field set — no decoded field reaches the log.
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
-    for (const secret of [SECRET_MODAL, SECRET_TITLE, SECRET_PROMPT, SECRET_LABEL]) {
+    for (const secret of [SECRET_MODAL, SECRET_TITLE, SECRET_PROMPT, SECRET_LABEL, SECRET_CONVERSATION]) {
       expect(lines[0]).not.toContain(secret)
     }
   })

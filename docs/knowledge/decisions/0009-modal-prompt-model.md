@@ -4,6 +4,8 @@
 
 Accepted, 2026-07-10. First realized in [#122](../codebase/122.md). Foundation for the modal render / answer vertical (the peeled follow-up) and the reconnect / idempotency refinements ([#195](https://github.com/pyrycode/pyrycode-desktop/issues/195), [#196](https://github.com/pyrycode/pyrycode-desktop/issues/196)). This ADR is to modals what [0008](0008-thread-timeline-model.md) is to the timeline.
 
+Amended 2026-09-01 ([#870](../codebase/870.md)): two premises in § Context were retired by pyrycode#1065 (`modal_shown` gained an outbound-scoping `conversation_id`). § Decision, § Rationale, and § Consequences are unaffected and stand as written — see the inline notes below.
+
 ## Context
 
 When `claude` surfaces a permission or trust prompt during a desktop-driven interactive session, the daemon — once desktop advertises the `interactive` capability (#179, deliberately withheld today) — sends a `modal_shown` frame, and later a `modal_dismissed`. The desktop must hold that prompt as current truth, surface it, and later clear it.
@@ -17,7 +19,7 @@ The wire contract already exists on the daemon/mobile side (pyrycode `docs/proto
 
 Two contract facts are load-bearing for this model:
 
-- **`modal_id` is the sole correlation key.** It is a one-time, opaque, unguessable nonce minted per surfaced modal; **no `conversation_id` is carried on a modal** (the daemon hosts one active conversation and resolves `modal_id` against its own outstanding-modal state).
+- **`modal_id` is the sole correlation key.** It is a one-time, opaque, unguessable nonce minted per surfaced modal, and the daemon resolves an answer against its own outstanding-modal state by `modal_id` alone. (At the time this ADR was accepted, `modal_shown` also carried no `conversation_id`; pyrycode#1065, merged 2026-07-17, added one as an **outbound display-scoping key** — desktop#870 mirrored it into the wire decode. It does not change this bullet: a client still cannot assert which conversation an *answer* targets, since `modal_answer`/`modal_cancel` carry no `conversation_id`. Amended 2026-09-01.)
 - **The shipped `class` set is `permission | trust` only.** There is **no `destructive` wire class** — "a destructive action needs a second confirm" is a client-side UX policy on the answer path (the follow-up), not a wire distinction; the contract carries no machine-readable destructiveness signal.
 
 The open architect's-call questions this ADR settles: what member set the renderer-local modal-event union carries; what feeds the reducer when the wire types don't exist yet; how outstanding prompts are held and addressed; the reduce semantics for hold / clear / unknown-id; and where the resolution metadata lives.
@@ -50,7 +52,7 @@ Outstanding prompts are held in an **ordered array** `outstanding: readonly Moda
 
 ### The wire boundary — a renderer-local event union, not wire types
 
-The modal wire types do not exist in desktop yet and are **out of scope here** (the follow-up's). So the reducer's input is a renderer-owned, camelCase, sealed `ModalEvent` union defined in this module — exactly as `sessionStore`'s `SessionAction` and 0008's `ThreadEvent`. When the follow-up lands the wire types and the transport bridge, that bridge maps wire (snake_case) → `ModalEvent` (`modal_id`→`modalId`, `default_option_id`→`defaultOptionId`, `options` pass through) — the desktop analog of `daemonEventBridge` mapping `DaemonEvent` → `SessionAction`. Field names/types here **mirror the wire so that bridge is a thin rename**. `conversation_id` is not carried because the **wire carries none** (contrast 0008, where the bridge *drops* a present `conversation_id`).
+The modal wire types do not exist in desktop yet and are **out of scope here** (the follow-up's). So the reducer's input is a renderer-owned, camelCase, sealed `ModalEvent` union defined in this module — exactly as `sessionStore`'s `SessionAction` and 0008's `ThreadEvent`. When the follow-up lands the wire types and the transport bridge, that bridge maps wire (snake_case) → `ModalEvent` (`modal_id`→`modalId`, `default_option_id`→`defaultOptionId`, `options` pass through) — the desktop analog of `daemonEventBridge` mapping `DaemonEvent` → `SessionAction`. Field names/types here **mirror the wire so that bridge is a thin rename**. `conversation_id` is not carried on `ModalEvent`, but as of desktop#870 that is a choice, not a wire fact: the wire's `modal_shown` now carries a daemon-asserted `conversation_id` (pyrycode#1065), decoded into `ModalShownPayload` and then deliberately dropped at the `daemonConnection.ts` emit — the same posture 0008's bridge takes toward a present `conversation_id`, not the "wire carries none" case this passage originally described. Amended 2026-09-01; see [inbound message decode](../features/inbound-message-decode.md) for the decode-site detail.
 
 ### Reduce behavior (the contract each arm honors)
 

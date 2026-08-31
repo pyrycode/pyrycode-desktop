@@ -125,5 +125,9 @@ once. `--color-success` needs no such substitution: `#2fc038` is the Figma's `Sc
 - [#719 codebase notes](../codebase/719.md) / [spec](../../specs/architecture/719-relay-not-yet-known-state.md)
   — the prior contrast rejection of the Figma node's own bound colour, reused here rather than re-measured.
 - [ADR 0009 — Modal prompt model](../decisions/0009-modal-prompt-model.md) — why the fourth status, input
-  required, stays unbuilt: no `conversation_id` rides a modal frame yet.
+  required, stays unbuilt. The wire now carries a `conversation_id` on `modal_shown`
+  ([#870](../codebase/870.md), pyrycode#1065) and [Inbound message decode](inbound-message-decode.md)
+  narrows it, but it stops there: the consumer emit deliberately drops it, so it isn't yet on the
+  `DaemonEvent` ([#871](../codebase/871.md)) or in the [modal-prompt model](modal-prompt-model.md)'s
+  store ([#872](../codebase/872.md)) this dot's resolver would need to key off of.
 - Spec: `docs/specs/architecture/800-conversation-status-dot.md`.

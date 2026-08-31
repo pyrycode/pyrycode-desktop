@@ -836,18 +836,26 @@ export interface WireModalOption {
 
 /**
  * Inbound `modal_shown` event (daemon → client). Mirrors the daemon's ModalShownPayload field-for-field
- * (SSOT #701, ADR 0009), wire order `modal_id, class, title, prompt, options, default_option_id` — all
- * always present (no `omitempty`). The permission/trust prompt `claude` raises during an interactive
- * session (surfaced once #179 flips `interactive` on). **`modal_id` is the sole correlation key — a
- * one-time nonce; NO `conversation_id` is carried on a modal** (the daemon hosts one active conversation
- * and resolves `modal_id` against its own outstanding-modal state, ADR 0009). `class` is a plain wire
- * string closed to `WireModalClass` exactly like `MessagePayload.role`. `options` is ORDERED.
- * `default_option_id` is the id of a fail-safe deny default set daemon-side (its `∈ options[].id`
- * invariant is a render concern, #224, not cross-checked at decode). `title` / `prompt` / each
- * `options[].label` are untrusted `claude`-surfaced FREE TEXT the render slice (#224) must render as
- * plain text, never HTML. See #201.
+ * (SSOT #701, ADR 0009), wire order `conversation_id, modal_id, class, title, prompt, options,
+ * default_option_id` — all always present (no `omitempty`). The permission/trust prompt `claude` raises
+ * during an interactive session (surfaced once #179 flips `interactive` on).
+ *
+ * `conversation_id` (pyrycode#1065, #870) is an **OUTBOUND routing/scoping key only**: the daemon asserts
+ * it from its own active-conversation cursor so a client filters display by conversation and one
+ * conversation's permission prompt is never rendered by a client viewing another. **`modal_id` remains
+ * the sole INBOUND correlation key** — a one-time nonce; a `modal_answer` / `modal_cancel` carries no
+ * conversation id and the daemon resolves the answer against its own outstanding-modal state, so a
+ * client cannot assert which conversation an answer targets. Adding this field does not loosen that
+ * anti-forgery model.
+ *
+ * `class` is a plain wire string closed to `WireModalClass` exactly like `MessagePayload.role`.
+ * `options` is ORDERED. `default_option_id` is the id of a fail-safe deny default set daemon-side (its
+ * `∈ options[].id` invariant is a render concern, #224, not cross-checked at decode). `title` / `prompt`
+ * / each `options[].label` are untrusted `claude`-surfaced FREE TEXT the render slice (#224) must render
+ * as plain text, never HTML. See #201.
  */
 export interface ModalShownPayload {
+  conversation_id: string
   modal_id: string
   class: WireModalClass
   title: string
@@ -875,9 +883,11 @@ export interface ModalDismissedPayload {
  * modal. Mirrors the daemon's ModalAnswerPayload field-for-field (SSOT protocol-mobile.md § Modal (v2),
  * #701, ADR 0009), wire order `modal_id, option_id, answer_token` — all always present (no `omitempty`).
  * The OUTBOUND counterpart to the inbound `modal_shown`/`modal_dismissed` above (this is the frame the
- * desktop sends back). **`modal_id` is the sole correlation key — NO `conversation_id` rides a modal**
- * (the daemon hosts one active conversation and resolves `modal_id` against its own outstanding-modal
- * state, ADR 0009). `option_id` is a SINGLE string referencing a `WireModalOption.id` from the inbound
+ * desktop sends back). **`modal_id` is the sole correlation key — NO `conversation_id` rides an ANSWER**
+ * (the daemon resolves `modal_id` against its own outstanding-modal state, ADR 0009). One does ride the
+ * inbound `modal_shown` as of pyrycode#1065 (#870), but purely as an outbound display-scoping key — a
+ * client still cannot assert which conversation an answer targets.
+ * `option_id` is a SINGLE string referencing a `WireModalOption.id` from the inbound
  * `modal_shown.options[].id` — NOT the stale ADR-025 multi-select `option_ids[]`. `answer_token` is a
  * client-minted idempotency key tying the answer to the one-time `modal_id` so a replayed / reordered
  * answer is inert (first-answer-wins, daemon-side): its uniqueness and stability matter, but its

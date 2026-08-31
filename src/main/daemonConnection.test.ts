@@ -3153,13 +3153,14 @@ describe('createDaemonConnection — modal_shown stream (#201)', () => {
     return ctx
   }
 
-  it('decodes an inbound modal_shown into one modalShown carrying all six camelCase fields, options in order', async () => {
+  it('emits six camelCase fields, options in order — and deliberately NOT conversation_id (#870, carried by #871)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
     drivers[0].emit({
       type: 'message',
       plaintext: modalShownPlaintext({
+        conversation_id: 'conv-7f3a',
         modal_id: 'mdl-7f3a',
         class: 'permission',
         title: 'Allow Bash?',
@@ -3197,6 +3198,8 @@ describe('createDaemonConnection — modal_shown stream (#201)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: modalShownPlaintext({
+          // Present so this stays a test of the `class` enum, not of the missing-field path (#870).
+          conversation_id: 'conv-7f3a',
           modal_id: 'mdl-7f3a',
           class: 'destructive', // no destructive wire class → fail closed
           title: 'Allow Bash?',

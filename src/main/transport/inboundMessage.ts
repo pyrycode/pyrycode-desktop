@@ -252,9 +252,10 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * The two modal kinds (#201) carry the decoded ModalShownPayload / ModalDismissedPayload — the
  * permission/trust prompt `claude` blocks on. The fail-closed decode here (two closed-enum checks on
  * `class` / `source` + a per-option narrower over the ordered `options` array) is the boundary this
- * slice defends; `title` / `prompt` / `options[].label` are untrusted display text carried onward
- * (dropping nothing — a modal has no `conversation_id`). BOTH renderer bridges no-op these arms; the
- * real consumer is the modal store + bridge (#223).
+ * slice defends; `title` / `prompt` / `options[].label` are untrusted display text carried onward.
+ * A `modal_shown` also carries a `conversation_id` (pyrycode#1065, #870) — decoded here, then dropped
+ * at the emit until #871 carries it across IPC. BOTH renderer bridges no-op these arms; the real
+ * consumer is the modal store + bridge (#223).
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
@@ -1212,21 +1213,27 @@ function parseModalOption(payload: unknown): WireModalOption {
 }
 
 /**
- * Narrow an opaque payload into a ModalShownPayload (#201). Fail-closed like parseTurnStatePayload,
- * scaled to six fields plus a nested ordered array. The `class` closed-enum check is cloned from the
+ * Narrow an opaque payload into a ModalShownPayload (#201, #870). Fail-closed like parseTurnStatePayload,
+ * scaled to seven fields plus a nested ordered array. The `class` closed-enum check is cloned from the
  * `role` / `state` idiom: it covers non-string and unknown-string alike, narrowing to WireModalClass
  * without a cast — a bare requireString would accept any string and defeat the closed-enum boundary
  * this slice exists to defend (there is NO `destructive` wire class, ADR 0009). `options` must be an
  * array, then each element narrows via parseModalOption — one bad option throws the whole modal closed
  * (the `conversations` precedent), an empty array tolerated. `default_option_id ∈ options[].id` is NOT
- * cross-checked here (a render concern, #224). Returns exactly the six known fields; unknown keys are
- * tolerated but not copied. Its messages name the failure CATEGORY only — never interpolating
- * `title` / `prompt` / `options[].label` / `modal_id` / `class` (untrusted content or the nonce).
+ * cross-checked here (a render concern, #224). `conversation_id` (#870) is narrowed like every other
+ * required string and, for the same reason, is NOT cross-checked against any known-conversation set —
+ * that is a scoping concern for the consuming slice (#872); this decoder polices TYPE, not membership.
+ * Fail-closed on it is decided, not open: the field shipped in pyrycode#1065, so a tolerant fallback
+ * would only buy compatibility with a daemon that will never be run, at the cost of a silently
+ * unattributed prompt. Returns exactly the seven known fields; unknown keys are tolerated but not
+ * copied. Its messages name the failure CATEGORY only — never interpolating `title` / `prompt` /
+ * `options[].label` / `modal_id` / `class` / `conversation_id` (untrusted content or the nonce).
  */
 function parseModalShownPayload(payload: unknown): ModalShownPayload {
   if (!isRecord(payload)) {
     throw new WireDecodeError('malformed modal_shown payload')
   }
+  const conversation_id = requireString(payload, 'conversation_id')
   const modal_id = requireString(payload, 'modal_id')
   const cls = payload.class
   if (cls !== 'permission' && cls !== 'trust') {
@@ -1240,7 +1247,7 @@ function parseModalShownPayload(payload: unknown): ModalShownPayload {
   }
   const options = rawOptions.map(parseModalOption)
   const default_option_id = requireString(payload, 'default_option_id')
-  return { modal_id, class: cls, title, prompt, options, default_option_id }
+  return { conversation_id, modal_id, class: cls, title, prompt, options, default_option_id }
 }
 
 /**

@@ -779,6 +779,23 @@ function TimelineRow({
 //     The answer to a long command is that it WRAPS — pre-wrap + break-word on .code-block__body.
 //   - NO linkification of a command containing a URL. `curl https://…` is an ordinary shell command
 //     and an <a href> around the detected URL is the beacon shape with an extra step.
+//
+// #854 adds ONE element into that same chip and no untrusted string with it: the vector below is a
+// client-owned constant and the two runs are unedited. Three of the clauses above therefore apply to it
+// verbatim, each a MUST FIX if it ever appears — NO aria-label, no <title> child and no role="img" on
+// the chevron (it is decorative, and an exposed name would perturb the button's own); NO aria-controls /
+// id pair, for the reason written at :723-726; and NO title, a fifth time.
+//
+// Figma 155:558's chevron, exported verbatim from the design's icon asset (I155:558;134:4925). It points
+// RIGHT — the `›` the design draws at the header's trailing edge — and is the right-pointing sibling of
+// ComposerActionsMenu's CHEVRON_PATH: same family, same construction, same slight overflow past the
+// nominal box, which is why the viewBox reproduces the exporter's own 4x8 rather than being padded to
+// contain it. Module-level and NOT exported: no second caller exists. The export's #9DCBFC is this
+// scheme's --color-primary exactly (tokens.css:24), so unlike ComposerActionsMenu's there is nothing to
+// correct here; it is still dropped for currentColor, per the idiom.
+const TOOL_ROW_CHEVRON_PATH =
+  'M3.8393 3.58178C4.03385 3.804 4.03385 4.16489 3.8393 4.38711L0.850973 7.80045C0.656421 8.02267 0.340467 8.02267 0.145915 7.80045C-0.048638 7.57822 -0.048638 7.21733 0.145915 6.99511L2.78249 3.98356L0.147471 0.972C-0.0470815 0.749778 -0.0470815 0.388889 0.147471 0.166667C0.342024 -0.0555556 0.657977 -0.0555556 0.85253 0.166667L3.84086 3.58L3.8393 3.58178Z'
+
 export function ToolRow({
   item,
   defaultExpanded = false
@@ -801,16 +818,68 @@ export function ToolRow({
   // child — which is exactly the reason `chipRuns` is one. The field list stays inline for the
   // opposite reason (consumed once), which keeps "a collapsed row never computes the list" structural.
   const command = shellCommandBlock(item)
-  // The chip's two runs, declared once: the element forks below, the children never do.
+  // The chip's children, declared once: the element forks below, the children never do.
+  //
+  // #854 SPLITS them into the design's two frames — a Left that fills the header and a Right that hugs
+  // its content — which is what pins a trailing element to the header's edge whatever the runs beside
+  // it are doing, so a thread of tool rows reads as a column with its edges lined up. <span> and never
+  // <div> for both: a resolved chip is a real <button>, which admits phrasing content only, so a <div>
+  // in here is invalid HTML and a React DOM-nesting warning. Both are display: flex in CSS — the
+  // ELEMENT is chosen for validity, the BOX for layout.
   const chipRuns = (
     <>
-      <span className="tool-row__name">{item.name}</span>
-      {/* #705: the second run is now the picked INPUT FIELD (toolHeadline.ts), not `inputSummary` —
-          same element, same class, same single-line ellipsizing, different text. `inputSummary` is
-          the daemon's whole input compacted, so for an Edit that is mostly replacement text the file
-          path was buried in it and usually cut off; it survives as the picker's rule-4 fallback,
-          which is what keeps this row working against a pre-pyrycode#1678 daemon. */}
-      <span className="tool-row__summary">{toolHeadline(item)}</span>
+      <span className="tool-row__left">
+        <span className="tool-row__name">{item.name}</span>
+        {/* #705: the second run is now the picked INPUT FIELD (toolHeadline.ts), not `inputSummary` —
+            same element, same class, same single-line ellipsizing, different text. `inputSummary` is
+            the daemon's whole input compacted, so for an Edit that is mostly replacement text the file
+            path was buried in it and usually cut off; it survives as the picker's rule-4 fallback,
+            which is what keeps this row working against a pre-pyrycode#1678 daemon. */}
+        <span className="tool-row__summary">{toolHeadline(item)}</span>
+      </span>
+      {/* Gated on the SAME `result` binding that already drives rowClass, the chip fork and `body` —
+          never a second predicate, never `expanded`, never a new `hasResult` const. Whether a row is
+          worth opening is a fact about the result, so one condition forks all four and "a pending row
+          draws no chevron" is structural rather than a fourth condition that can drift.
+
+          THE WHOLE GROUP IS GATED, not just the chevron. An always-rendered empty .tool-row__right
+          would still take one side of the chip's 12px gap and move a pending row's trailing edge away
+          from the resolved row's — the "a resolving row does not shift" property #722 shipped and
+          pinned with three chip-width equalities in e2e/tool-row-toggle.spec.ts.
+
+          The gate lives inside this one shared fragment, which both branches keep consuming: the
+          <div> branch below IS `result === null`, so the group is unreachable from it by construction
+          rather than by a second check.
+
+          THE CHEVRON IS THE GROUP'S LAST CHILD. #856 inserts the result count BEFORE it. */}
+      {result !== null && (
+        <span className="tool-row__right">
+          {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
+              own width/height, fill="currentColor" so it takes the ink from CSS, and aria-hidden so it
+              adds no accessible name — the button's name stays exactly its two text runs (WCAG 2.5.3
+              label-in-name, ComposerActionsMenu.tsx:81-83's reasoning for the same reason). NOT a
+              shared component: three call sites, three different glyphs, and extracting one is a
+              refactor this row does not need.
+
+              IT POINTS RIGHT AND IT DOES NOT TURN. Figma draws the collapsed state only (the Body
+              frame is hidden in 155:553), so rotating it on open would be design invented here rather
+              than implemented — the ruling ComposerActionsMenu.tsx:47-52 already recorded for its own
+              chevron. The open state is not going unsaid: aria-expanded carries it and the body
+              appearing below is the visible half. If a turning chevron is ever wanted it is a one-rule
+              follow-up keyed on the .tool-row--expanded class that already ships, so NO --expanded
+              variant class here and no reading of `expanded` to pick a glyph. */}
+          <svg
+            className="tool-row__chevron"
+            viewBox="0 0 4 8"
+            width="4"
+            height="8"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d={TOOL_ROW_CHEVRON_PATH} />
+          </svg>
+        </span>
+      )}
     </>
   )
   return (

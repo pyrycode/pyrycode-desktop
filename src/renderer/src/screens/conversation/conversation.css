@@ -1240,6 +1240,71 @@
   background: var(--color-surface-container);
 }
 
+/* #854 — the header's two frames (Figma 155:554 -> Left 156:629 / Right 156:630). The chip stops being
+   one packed run of children and becomes a group that FILLS beside a group that HUGS, which is what pins
+   a trailing element to the header's edge whatever the runs beside it are doing — the reason a thread of
+   tool rows reads as a column with its edges lined up rather than as a ragged stack.
+
+   .tool-row__chip IS NOT EDITED. Its gap: var(--space-3) simply changes job: it used to fall between the
+   two runs, and now falls between Left and Right, which the design gives the same 12px. That is the whole
+   reason this split needs no new spacing value, and the left group's own gap below restores the 12px
+   between the runs that the chip's gap no longer supplies.
+
+   min-width: 0 is REQUIRED, not decorative. Without it the group's automatic minimum floors at the two
+   runs' intrinsic width, the chip cannot shrink below it, and .tool-row__summary's ellipsis becomes
+   unreachable in a narrow window — link 2 of the three-link truncation chain written out on
+   .composer-status__label--tool, whose argument (and whose re-measured numbers) this reuses rather than
+   restates. Link 3 is .tool-row__summary's own min-width/overflow/ellipsis/nowrap, unedited.
+
+   overflow: hidden is what the design's overflow-clip buys, and it is load-bearing after the split.
+   .tool-row__name is flex: 0 0 auto; white-space: nowrap, so a 3000-character daemon tool name overflows
+   this group's box. Overflow is paint, not layout, so today the chip's own overflow: hidden clips it
+   harmlessly; once the chevron sits to its right, an unclipped group would paint OVER the chevron before
+   being clipped at the chip edge. Clipping at the group boundary is the design's own declaration.
+
+   flex: 1 1 auto where Figma says flex: 1 0 0. Equivalent in this container — the automatic minimum is
+   already removed by min-width: 0 and the single sibling never grows, so both forms resolve to "take the
+   leftover" — and 1 1 auto is the form .composer-status__activity already ships one screen region away,
+   so the file gains no second idiom for the same job. */
+.tool-row__left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* The trailing frame: hugs its content, flush against the header's trailing edge. One child today, the
+   chevron; #856 lands the result count as its FIRST child, which is what the gap is stated for.
+
+   flex: 0 0 auto is REQUIRED, not decorative, and for .composer-status__error's reason with the
+   names swapped: the left group is flex: 1 1 auto; min-width: 0, so without this the trailing group is a
+   shrink candidate too and an oversized daemon-chosen tool name would squeeze the CHEVRON instead of
+   ellipsizing the HEADLINE — inverting the truncation chain above, remotely triggerable by a hostile or
+   merely buggy daemon. With it, the chain still terminates in the headline.
+
+   The group RENDERS ONLY ON A RESOLVED ROW (ConversationScreen.tsx), which is a markup fact rather than a
+   CSS one and is why there is no pending variant here: an always-rendered empty group would still take
+   one side of the chip's gap and move a pending row's trailing edge. */
+.tool-row__right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+}
+
+/* .status-row__chevron's two declarations plus the ink the design binds (Schemes/Primary, #9DCBFC, which
+   is --color-primary exactly). The SIZE comes from the svg's own width/height attributes — the idiom
+   every chevron in this file follows — so nothing here sets one, and the design's 8x10 icon FRAME around
+   the 3.985x7.967 vector is dropped along with its 2px inset: both deltas are inside the ±2px/±1px
+   convention .tool-row states. display: block kills the inline baseline gap. */
+.tool-row__chevron {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--color-primary);
+}
+
 /* The tool-name run: monospace tertiary — the tool's identity, never shrinks or truncates. #218 sized it
    from the mobile mock's raw 13px (Figma 16-30) down to body-small's 12px per the ±2px convention; #722
    redraws it at the desktop design's 14/16 (Figma 134:4939), which is a raw pair bound to no type style

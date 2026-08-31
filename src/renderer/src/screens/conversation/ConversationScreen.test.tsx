@@ -558,30 +558,103 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).not.toContain('schema.ts')
   })
 
-  it('leaves the chip element, classes and run order otherwise unchanged (AC1)', () => {
+  // #854 SPLITS the chip into two groups, so the two byte-level cases below are UPDATED rather than
+  // loosened: the runs keep their element, their classes and their order, and gain one wrapper each
+  // side. The path constant is not exported (no second caller), so the resolved chip is pinned as two
+  // CONTIGUOUS fragments meeting at the `d` attribute rather than by inlining 300 characters of vector
+  // into this file. Both fragments together still pin the whole chip end to end.
+  const RESOLVED_CHIP_HEAD =
+    '<button type="button" class="tool-row__chip tool-row__chip--toggle" data-thread-role="tool" aria-expanded="false">' +
+    '<span class="tool-row__left">' +
+    '<span class="tool-row__name">read_file</span>' +
+    `<span class="tool-row__summary">${SHORTENED_PATH}</span>` +
+    '</span>' +
+    '<span class="tool-row__right">' +
+    '<svg class="tool-row__chevron" viewBox="0 0 4 8" width="4" height="8" fill="currentColor" aria-hidden="true">' +
+    '<path d="'
+  const RESOLVED_CHIP_TAIL = '"></path></svg></span></button>'
+
+  it('wraps the runs in a filling left group and closes with the hugging right group (AC1)', () => {
     const markup = renderToStaticMarkup(
       <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' }, { file_path: DEEP_PATH })} />
     )
-    // Byte-level: same button, same two runs in the same order, no new element and no new class —
-    // only the TEXT of the second run changed. This is the AC that keeps the row on the Figma mock.
-    expect(markup).toContain(
-      '<button type="button" class="tool-row__chip tool-row__chip--toggle" data-thread-role="tool" aria-expanded="false">' +
-        '<span class="tool-row__name">read_file</span>' +
-        `<span class="tool-row__summary">${SHORTENED_PATH}</span>` +
-        '</button>'
-    )
+    // Byte-level: the same two runs, in the same order, inside .tool-row__left; then .tool-row__right
+    // as the chip's LAST child with the chevron as ITS last child — the position #856's count node
+    // inserts in front of.
+    expect(markup).toContain(RESOLVED_CHIP_HEAD)
+    expect(markup).toContain(RESOLVED_CHIP_TAIL)
   })
 
   it('draws the headline on a pending row too — the swap is inside the shared runs (AC1)', () => {
     // `chipRuns` is declared once and consumed by both branches; this is the half a resolved-row test
-    // cannot reach.
+    // cannot reach. #854: the left group reaches the <div> branch, the right group does not.
     const markup = renderToStaticMarkup(<ToolRow item={toolItem(null, { file_path: DEEP_PATH })} />)
     expect(markup).toContain(
       '<div class="tool-row__chip" data-thread-role="tool">' +
+        '<span class="tool-row__left">' +
         '<span class="tool-row__name">read_file</span>' +
         `<span class="tool-row__summary">${SHORTENED_PATH}</span>` +
+        '</span>' +
         '</div>'
     )
+  })
+
+  // #854. The unit tier sees markup only: a flush trailing edge and the ellipsis under a narrow window
+  // are geometry and live in e2e/tool-row-toggle.spec.ts. What these four cases pin is the STRUCTURE
+  // that geometry rests on — which group exists in which state, and that the chevron never varies.
+
+  it('draws no trailing group at all on a pending row, not an empty one (#854 AC2)', () => {
+    // AC2's "neither it nor a gap where it would be": an empty .tool-row__right would still take one
+    // side of the chip's 12px gap and move the pending row's trailing edge, which is exactly the
+    // property #722's three chip-width equalities pin.
+    const markup = renderToStaticMarkup(<ToolRow item={toolItem(null)} />)
+    expect(markup).not.toContain('tool-row__right')
+    expect(markup).not.toContain('tool-row__chevron')
+    expect(markup).not.toContain('<svg')
+    expect(markup).toContain('tool-row__left')
+  })
+
+  it('draws the chevron decoratively, leaving the button named by its runs (#854 AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} />
+    )
+    expect(markup).toContain('<svg class="tool-row__chevron"')
+    expect(markup).toContain('aria-hidden="true"')
+    // The chevron adds no accessible name of its own and no new attribute sink: the button's name is
+    // still exactly its two text runs (WCAG 2.5.3), and the SAFETY block's three declined sinks hold.
+    expect(markup).not.toContain('aria-label')
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('aria-controls')
+    expect(markup).not.toContain('role="img"')
+  })
+
+  it('draws the chevron on an error row too — it follows the body, not the outcome (#854)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: true, resultSummary: 'ENOENT' })} />
+    )
+    expect(markup).toContain('tool-row__chevron')
+    // The error accent is untouched: same wrapper classes, same retinting selector.
+    expect(markup).toContain('class="tool-row tool-row--resolved tool-row--error"')
+  })
+
+  it('leaves an expanded row header byte-identical to the collapsed one (#854)', () => {
+    // The chevron does not turn: Figma draws the collapsed state only, `aria-expanded` and the body
+    // below already carry the open state, and ComposerActionsMenu declined exactly this once already.
+    const collapsed = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} />
+    )
+    const expanded = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} defaultExpanded />
+    )
+    const rightGroup = (markup: string): string => {
+      const match = /<span class="tool-row__right">[\s\S]*?<\/span>/.exec(markup)
+      if (match === null) throw new Error('no trailing group in the rendered chip')
+      return match[0]
+    }
+    expect(rightGroup(expanded)).toBe(rightGroup(collapsed))
+    // And the body it opens is unchanged.
+    expect(expanded).toContain('tool-row__body')
+    expect(expanded).toContain('tool-row__result')
   })
 
   it('renders inputSummary unchanged when input is absent (AC4)', () => {

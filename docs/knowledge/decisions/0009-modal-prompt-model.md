@@ -4,7 +4,7 @@
 
 Accepted, 2026-07-10. First realized in [#122](../codebase/122.md). Foundation for the modal render / answer vertical (the peeled follow-up) and the reconnect / idempotency refinements ([#195](https://github.com/pyrycode/pyrycode-desktop/issues/195), [#196](https://github.com/pyrycode/pyrycode-desktop/issues/196)). This ADR is to modals what [0008](0008-thread-timeline-model.md) is to the timeline.
 
-Amended 2026-09-01 ([#870](../codebase/870.md)): two premises in § Context were retired by pyrycode#1065 (`modal_shown` gained an outbound-scoping `conversation_id`). § Decision, § Rationale, and § Consequences are unaffected and stand as written — see the inline notes below.
+Amended 2026-09-01 ([#870](../codebase/870.md), [#871](../codebase/871.md), [#877](../codebase/877.md)): two premises in § Context were retired by pyrycode#1065 (`modal_shown` gained an outbound-scoping `conversation_id`, now carried onto `ModalEvent` itself as of #877). § Decision, § Rationale, and § Consequences are unaffected and stand as written — see the inline notes below.
 
 ## Context
 
@@ -42,7 +42,7 @@ Plus a pure, exported **`reduceModal(state, event): ModalState`**, an `initialMo
 
 ### id-addressing — `modalId` is the sole correlation key
 
-Outstanding prompts are held in an **ordered array** `outstanding: readonly ModalPrompt[]` and correlated by `modalId` — the one-time nonce is the only key (no `conversation_id` exists on a modal). An array, **not** a `Map` / `Record`, because:
+Outstanding prompts are held in an **ordered array** `outstanding: readonly ModalPrompt[]` and correlated by `modalId` — the one-time nonce is the sole key for *answering* a prompt. An array, **not** a `Map` / `Record`, because:
 
 - it mirrors 0008's `items` array + scan-by-id correlation exactly (the `fillResult` / same-reference-on-no-op discipline);
 - the selector returns the array **by reference**, giving the follow-up render referential stability — a `[...map.values()]` selector would allocate a fresh array on every call and churn React;
@@ -52,7 +52,7 @@ Outstanding prompts are held in an **ordered array** `outstanding: readonly Moda
 
 ### The wire boundary — a renderer-local event union, not wire types
 
-The modal wire types do not exist in desktop yet and are **out of scope here** (the follow-up's). So the reducer's input is a renderer-owned, camelCase, sealed `ModalEvent` union defined in this module — exactly as `sessionStore`'s `SessionAction` and 0008's `ThreadEvent`. When the follow-up lands the wire types and the transport bridge, that bridge maps wire (snake_case) → `ModalEvent` (`modal_id`→`modalId`, `default_option_id`→`defaultOptionId`, `options` pass through) — the desktop analog of `daemonEventBridge` mapping `DaemonEvent` → `SessionAction`. Field names/types here **mirror the wire so that bridge is a thin rename**. `conversation_id` is not carried on `ModalEvent`, but as of desktop#870 that is a choice, not a wire fact: the wire's `modal_shown` now carries a daemon-asserted `conversation_id` (pyrycode#1065), decoded into `ModalShownPayload` and then deliberately dropped at the `daemonConnection.ts` emit — the same posture 0008's bridge takes toward a present `conversation_id`, not the "wire carries none" case this passage originally described. Amended 2026-09-01; see [inbound message decode](../features/inbound-message-decode.md) for the decode-site detail.
+The modal wire types do not exist in desktop yet and are **out of scope here** (the follow-up's). So the reducer's input is a renderer-owned, camelCase, sealed `ModalEvent` union defined in this module — exactly as `sessionStore`'s `SessionAction` and 0008's `ThreadEvent`. When the follow-up lands the wire types and the transport bridge, that bridge maps wire (snake_case) → `ModalEvent` (`modal_id`→`modalId`, `default_option_id`→`defaultOptionId`, `options` pass through) — the desktop analog of `daemonEventBridge` mapping `DaemonEvent` → `SessionAction`. Field names/types here **mirror the wire so that bridge is a thin rename**. `conversation_id` now rides the full chain: the wire's `modal_shown` carries a daemon-asserted `conversation_id` (pyrycode#1065), decoded into `ModalShownPayload` ([#870](../codebase/870.md)), carried onto the `modalShown` `DaemonEvent` arm by name ([#871](../codebase/871.md)), and carried the last hop onto `ModalEvent`'s `shown` arm by name ([#877](../codebase/877.md)). It stops there: `reduceModal` builds `ModalPrompt` from named fields and omits it, so `modalId` remains the sole correlation key for *answering* — the consumer that scopes a prompt to a conversation is [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878). Amended 2026-09-01; see [inbound message decode](../features/inbound-message-decode.md) for the decode-site detail and [modal-prompt model](../features/modal-prompt-model.md) for the current `ModalEvent` shape.
 
 ### Reduce behavior (the contract each arm honors)
 

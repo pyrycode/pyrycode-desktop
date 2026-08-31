@@ -17,6 +17,9 @@ function shown(
 ): ModalEvent {
   return {
     type: 'shown',
+    // Derived from, but never equal to, the modal id: both are `string`, so only distinct values can
+    // catch a transposition. Supplied before the spread, which is what keeps `overrides` optional.
+    conversationId: `conv-${modalId}`,
     modalId,
     class: 'permission',
     title: `Title ${modalId}`,

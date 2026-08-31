@@ -648,9 +648,10 @@ export type DaemonEvent =
   //
   // The id is a daemon-asserted SCOPING KEY, not rendered text — none of the untrusted-text warnings
   // below attach to it. It is never markup, a filename, a cache key, a lookup path, an attribute or a
-  // URL, and it reaches no log sink (emitDaemonEvent is log-free by construction). It STOPS at the
-  // renderer modal bridge (#223), which rebuilds a fresh ModalEvent from named fields and omits it;
-  // ModalEvent does not carry it, and the consumer that scopes a prompt to a row is #872. It is an
+  // URL, and it reaches no log sink (emitDaemonEvent is log-free by construction). The renderer modal
+  // bridge (#223) rebuilds a fresh ModalEvent from named fields and, as of #877, copies this one across
+  // by name onto the `shown` arm. It STOPS one hop further, at `reduceModal`, which builds `ModalPrompt`
+  // from named fields and omits it; the consumer that scopes a prompt to a row is #878. It is an
   // OUTBOUND scoping key only: `modalId` remains the sole correlation key for ANSWERING a prompt, and
   // the daemon still resolves an inbound `modal_answer` against its own outstanding-modal state.
   //

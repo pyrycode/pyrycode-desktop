@@ -43,6 +43,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'modalShown':
       return {
         type: 'shown',
+        conversationId: event.conversationId,
         modalId: event.modalId,
         class: event.class,
         title: event.title,

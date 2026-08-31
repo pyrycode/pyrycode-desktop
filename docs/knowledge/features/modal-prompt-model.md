@@ -44,7 +44,7 @@ interface ModalPrompt {
 }
 
 type ModalEvent =
-  | { type: 'shown'; modalId: string; class: ModalClass; title: string; prompt: string; options: readonly ModalOption[]; defaultOptionId: string }
+  | { type: 'shown'; conversationId: string; modalId: string; class: ModalClass; title: string; prompt: string; options: readonly ModalOption[]; defaultOptionId: string }
   | { type: 'dismissed'; modalId: string; outcome: string; source: 'remote' | 'local' | 'timeout' }
   // #249: a modal answer that round-tripped to a daemon `error`. Produced by the bridge from the
   // content-free `modalAnswerRejected` daemon event (#248) — carries ONLY the `modalId` nonce.
@@ -65,17 +65,19 @@ interface ModalState {
 }
 ```
 
-`ModalPrompt` is the durable, held content; `ModalEvent` is the renderer-local (camelCase,
-`conversation_id`-free) input the reducer consumes — the wire types don't exist yet, so this union
-is the stable target contract the follow-up's bridge maps onto (wire `modal_id` → `modalId`,
-`default_option_id` → `defaultOptionId`, thin rename). **There is no `destructive` wire class** —
+`ModalPrompt` is the durable, held content; `ModalEvent` is the renderer-local (camelCase) input the
+reducer consumes — this union is the stable target contract the bridge maps onto (wire `modal_id` →
+`modalId`, `default_option_id` → `defaultOptionId`, thin rename). The `shown` arm carries
+`conversationId` ([#877](../codebase/877.md)), copied by name from the `modalShown` `DaemonEvent`
+arm; it is a daemon-asserted outbound scoping key, not consulted by the reducer — see § The reducer
+and § Edge cases and limitations below. **There is no `destructive` wire class** —
 the shipped `class` set is `permission | trust` only; a destructive second-confirm is a client-side
 UX policy on the answer path, not a wire distinction.
 
 `outstanding` is an **ordered array**, not a `Map`/`Record`, correlated by `modalId` (the sole
 correlation key for *answering* a prompt — a `modal_answer`/`modal_cancel` still carries no
-`conversation_id`, unaffected by [#870](../codebase/870.md)/[#871](../codebase/871.md) carrying one on
-`modal_shown` outbound). This mirrors `ThreadItem`'s array +
+`conversation_id`, unaffected by [#870](../codebase/870.md)/[#871](../codebase/871.md)/
+[#877](../codebase/877.md) carrying one on `modal_shown` all the way onto `ModalEvent` itself). This mirrors `ThreadItem`'s array +
 scan-by-id shape exactly: the selector returns the array by reference (referential stability for a
 future render), and insertion order survives without leaning on `Record` key ordering.
 
@@ -214,6 +216,14 @@ instead of silently decaying into a deny-on-timeout.
   flag, not on the wire and not in `PairedServerRecord` — the desktop cannot self-gate. The follow-up
   renders and answers regardless; an ungranted answer round-trips to an `error` envelope.
 - **Strangler Fig, not a migration.** `sessionStore` and `threadTimeline` are completely untouched.
+- **`conversationId` rides the `shown` arm, carried but not consulted** ([#877](../codebase/877.md),
+  shipped) — the wire's outbound-scoping `conversation_id` (pyrycode#1065) reaches `ModalEvent` via the
+  `DaemonEvent` arm ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)) and is copied by
+  name into the `shown` arm. `reduceModal` builds `ModalPrompt` from six named fields and omits it, so
+  the field is dormant here — the same carried-but-unconsulted posture `dismissed`'s `outcome`/`source`
+  already hold. It does not change id-addressing: `modalId` remains the sole correlation key for
+  *answering* a prompt. The consumer that scopes a prompt to a conversation is
+  [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878).
 
 ## Related
 
@@ -254,3 +264,8 @@ instead of silently decaying into a deny-on-timeout.
 - [#510 codebase notes](../codebase/510.md) — the `reconnected` arm also clears `resolved`, reversing
   #415 AC3: a prompt answered while disconnected re-surfaces after the reconnect instead of staying
   suppressed.
+- [#877 codebase notes](../codebase/877.md) — carries `conversation_id` (pyrycode#1065, decoded
+  [#870](../codebase/870.md), carried onto `DaemonEvent` by [#871](../codebase/871.md)) the last hop
+  onto `ModalEvent`'s `shown` arm, by name; the reducer does not read it.
+  [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) is the consumer that scopes a prompt
+  to a conversation.

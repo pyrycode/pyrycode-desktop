@@ -93,7 +93,8 @@ fields.
 
 ```
 daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversation_id` rides the
-   DaemonEvent as of #871 (decoded #870) but this bridge still drops it, rebuilding a fresh ModalEvent)→
+   DaemonEvent as of #871 (decoded #870), and as of #877 this bridge copies it by name onto
+   ModalEvent's `shown` arm)→
    DaemonEvent{modalShown|modalDismissed|modalAnswerRejected}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeModal listener → translateModalEvent → ModalEvent (or null → skip)
@@ -112,13 +113,15 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
   production through #178; live since [#179](../codebase/179.md).
 - Import surface: `import { useModalStore, selectOutstanding, selectRejections } from
   '@renderer/store/modalStore'` and `import { useModalBridge } from '@renderer/store/modalBridge'`.
-- No conversation-id scoping — `modal_shown` carries a `conversation_id` on the wire
-  ([pyrycode#1065](https://github.com/pyrycode/pyrycode/issues/1065)) and the `DaemonEvent` arm now
-  carries it too ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)), but
-  `translateModalEvent` rebuilds a fresh `ModalEvent` that omits it, so the bridge still translates and
-  dispatches unconditionally, scoped to nothing. [#872](../codebase/872.md) is the consumer that adds
-  it to `ModalEvent`. `modal_dismissed` still carries no `conversation_id` at all (ADR 0009 stands for
-  that frame).
+- No conversation-id scoping **yet in the store** — `modal_shown` carries a `conversation_id` on the
+  wire ([pyrycode#1065](https://github.com/pyrycode/pyrycode/issues/1065)), decoded onto the
+  `DaemonEvent` arm ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)), and, as of
+  [#877](../codebase/877.md), `translateModalEvent` copies it by name onto `ModalEvent`'s `shown` arm.
+  It stops there: `reduceModal` builds `ModalPrompt` from named fields and omits it, so the bridge
+  still translates and dispatches unconditionally, and no selector reports per-conversation.
+  [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) is the consumer that carries it into
+  `ModalPrompt`/`ModalState`. `modal_dismissed` still carries no `conversation_id` at all (ADR 0009
+  stands for that frame).
 
 ## Edge cases and limitations
 
@@ -212,3 +215,6 @@ notes](../codebase/249.md) for the render design.
   `selectOutstanding` clears then repopulates exactly once. No production code in this file changed.
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` arm's dormant-arm-ahead-of-holder
   posture `modalAnswerRejected` followed until #249.
+- [#877 codebase notes](../codebase/877.md) — carries `conversation_id` the last hop onto `ModalEvent`'s
+  `shown` arm; `translateModalEvent` copies it by name into the existing fresh literal. No new case, no
+  new arm — this bridge's shape is otherwise unchanged.

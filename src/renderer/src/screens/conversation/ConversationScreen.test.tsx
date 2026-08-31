@@ -696,6 +696,117 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).not.toContain('KEY_SENTINEL_zzz')
   })
 
+  // #855: WHICH run the picked text lands in. The routing itself is toolHeadline.test.ts's; what these
+  // cases own is the MARKUP half — that a hidden run is ABSENT rather than empty, that both switches
+  // reach the pending <div> as well as the resolved <button>, and that the lead's new occupant arrives
+  // under the same escaping posture the summary run already held.
+  //
+  // REGRESSION BASELINE, free of charge and unusually sharp: every case above renders `read_file`, and
+  // the two byte-level chips at :566-600 pin its whole header end to end. A routing keyed on the picked
+  // KEY rather than on the TOOL — the mistake the ticket exists to forbid — takes them red at once, and
+  // so does one that reaches a non-shell call. If one of them needs editing, the routing is wrong.
+  const LEFT_GROUP = (runs: string): string => `<span class="tool-row__left">${runs}</span>`
+
+  it('draws a described shell call as the subject alone, with no lead element (#855 AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { description: 'DESC_SENTINEL_zzz', command: 'CMD_SENTINEL_zzz' },
+          'Bash'
+        )}
+      />
+    )
+    // Byte-level, and that is the point: a bare not.toContain would be satisfied by an EMPTY lead
+    // element being emitted beside a correct subject — which is the shape AC1 forbids, because it
+    // would still take one side of the left group's 12px gap and push the subject off the hard left.
+    expect(markup).toContain(LEFT_GROUP('<span class="tool-row__summary">DESC_SENTINEL_zzz</span>'))
+    expect(markup).not.toContain('tool-row__name')
+    // The collapsed row draws the description and NOT the command it arrived beside.
+    expect(markup).not.toContain('CMD_SENTINEL_zzz')
+  })
+
+  it('draws an undescribed shell call as the lead alone, with no subject element (#855 AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '184 lines' }, { command: 'git status' }, 'Bash')}
+      />
+    )
+    // The CLASS is the type-and-ink claim — .tool-row__name is the design's mono/14/16/tertiary run,
+    // reused verbatim rather than approximated by a modifier. That the cascade actually lands on it is
+    // e2e/tool-row-toggle.spec.ts's, where a computed style exists to read.
+    expect(markup).toContain(LEFT_GROUP('<span class="tool-row__name">git status</span>'))
+    expect(markup).not.toContain('tool-row__summary')
+    // The tool name is genuinely gone from the row, not merely moved: the command replaced it.
+    expect(markup).not.toContain('>Bash<')
+  })
+
+  it('routes a still-running shell call the same way — the switches are in the shared runs (#855)', () => {
+    // `chipRuns` is declared once and consumed by both branches, so this is the half a resolved-row
+    // test cannot reach. Figma draws exactly this row ("Find all assertNever sites", 155:566).
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem(null, { description: 'DESC_SENTINEL_zzz' }, 'Bash')} />
+    )
+    expect(markup).toContain(
+      '<div class="tool-row__chip" data-thread-role="tool">' +
+        LEFT_GROUP('<span class="tool-row__summary">DESC_SENTINEL_zzz</span>') +
+        '</div>'
+    )
+    expect(markup).not.toContain('tool-row__name')
+  })
+
+  it('keeps todays shape for a shell call carrying no input map at all (#855 AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' }, undefined, 'Bash')} />
+    )
+    expect(markup).toContain(
+      LEFT_GROUP(
+        '<span class="tool-row__name">Bash</span><span class="tool-row__summary">schema.ts</span>'
+      )
+    )
+  })
+
+  it('leaves every other call on both runs — a path tool, a search, a long tail (#855 AC3)', () => {
+    for (const [name, input, subject] of [
+      ['Edit', { file_path: DEEP_PATH }, SHORTENED_PATH],
+      ['Grep', { pattern: 'TODO' }, 'TODO'],
+      ['mcp__codegraph__codegraph_callers', { symbol: 'RelayConnection' }, 'RelayConnection']
+    ] as const) {
+      const markup = renderToStaticMarkup(
+        <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' }, input, name)} />
+      )
+      expect(markup).toContain(
+        LEFT_GROUP(
+          `<span class="tool-row__name">${name}</span>` +
+            `<span class="tool-row__summary">${subject}</span>`
+        )
+      )
+    }
+  })
+
+  it('renders a command in the lead as inert escaped children, never markup (#855 AC2)', () => {
+    // No apostrophes in the fixture (renderToStaticMarkup escapes ' → &#x27;). The lead previously only
+    // ever carried `item.name`; it now carries a model-authored shell command line, in the same sink
+    // under the same escaping — so the SAFETY block's declined sinks are re-asserted on it here.
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem(
+          { isError: false, resultSummary: '184 lines' },
+          { command: '<img src=x onerror=alert(1)>' },
+          'Bash'
+        )}
+      />
+    )
+    expect(markup).toContain('<span class="tool-row__name">&lt;img src=x onerror=alert(1)&gt;</span>')
+    expect(markup).not.toContain('<img')
+    // A lead too wide for the header HARD-CUTS at the group boundary, which makes `title={command}`
+    // the natural next edit. The answer is that the row opens and the body draws it in full.
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('aria-label')
+    expect(markup).not.toContain('href')
+    expect(markup).not.toContain('dangerously')
+  })
+
   // #706: the expanded body's field list — every entry of `item.input`, drawn as its name and its
   // value, above the result block. Deliberately LITERAL where #705 is selective: no shortening, no
   // salience pick, no re-ordering, and no skipping the field #705 promoted into the headline. This
@@ -914,11 +1025,14 @@ describe('Timeline — the streamed assistant text', () => {
     )
     expect(markup).toContain(`${CODE_BLOCK}CMD_SENTINEL_zzz</pre></div>`)
     // TWICE, and that is the WANTED shape rather than a defect to fix: with no `description` the
-    // headline falls through to `command` (toolHeadline rule 1), so the same text appears in the chip
-    // and in the block. The chip ellipsizes on one line and the block does not, and a command long
-    // enough to be cut is exactly the call the row was opened for. Do not add a guard suppressing it.
+    // command takes the header's LEAD run (#855's routing) and the block draws it again below. The
+    // header cuts on one line and the block does not, and a command long enough to be cut is exactly
+    // the call the row was opened for. Do not add a guard suppressing it.
+    //
+    // #855 moved the header half from the summary run to the lead run — the same text in the same
+    // chip, one element over. The count is what pins the repeat and it is UNCHANGED.
     expect(markup.split('CMD_SENTINEL_zzz')).toHaveLength(3)
-    expect(markup).toContain('<span class="tool-row__summary">CMD_SENTINEL_zzz</span>')
+    expect(markup).toContain('<span class="tool-row__name">CMD_SENTINEL_zzz</span>')
   })
 
   it('draws no block and the list alone for a Bash call with no command (AC3)', () => {

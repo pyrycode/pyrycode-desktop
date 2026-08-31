@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { PATH_FIELDS, PREFERRED_FIELDS, toolHeadline } from './toolHeadline'
+import type { ToolHeadlineSource } from './toolHeadline'
+import { PATH_FIELDS, PREFERRED_FIELDS, toolHeadline, toolHeadlineRuns } from './toolHeadline'
 
 // The picker is isolated in toolHeadline.ts precisely so it can be tested here: vitest runs in the
 // `node` environment (vitest.config.ts:27) with no DOM, so the renderer tier is renderToStaticMarkup
@@ -295,5 +296,145 @@ describe('toolHeadline — shortening', () => {
   it('leaves inputSummary unshortened', () => {
     const summary = 'a/b/c/d/e/f.txt · 184 lines'
     expect(toolHeadline({ name: 'read_file', inputSummary: summary })).toBe(summary)
+  })
+})
+
+// #855 — WHICH of the header's two runs the picked text lands in. Every block above is unedited and
+// stays green: the picker is unchanged, and this file's own diff being additive is the evidence for it.
+// The routing is a second reader of the same rules, never a second copy of them.
+describe('toolHeadlineRuns — the shell call cases', () => {
+  it('gives a described shell call the subject alone, no lead at all', () => {
+    // The `command` beside it is load-bearing rather than scenery: it proves the description WINS
+    // rather than merely being present, which is rule 1's own order read through the router.
+    expect(
+      toolHeadlineRuns({
+        name: 'Bash',
+        inputSummary: 'SUMMARY',
+        input: { command: 'ls -la src', description: 'List the source folder' }
+      })
+    ).toEqual({ lead: null, subject: 'List the source folder' })
+  })
+
+  it('gives an undescribed shell call the lead alone, no subject at all', () => {
+    // 11.2% of shell calls, measured over 58199. On these the command is not a substitute for the
+    // headline — it is the row's whole visible content.
+    expect(
+      toolHeadlineRuns({ name: 'Bash', inputSummary: 'SUMMARY', input: { command: 'ls -la src' } })
+    ).toEqual({ lead: 'ls -la src', subject: null })
+  })
+
+  it('treats an empty description as absent and hands the lead to the command', () => {
+    // `firstNonEmpty`'s `!== ''` reaching the router. Without it the row would draw a blank subject
+    // and no lead — a visibly empty header.
+    expect(
+      toolHeadlineRuns({
+        name: 'Bash',
+        inputSummary: 'SUMMARY',
+        input: { command: 'ls -la src', description: '' }
+      })
+    ).toEqual({ lead: 'ls -la src', subject: null })
+  })
+
+  it('keeps todays shape for a shell call whose input map is absent (AC4)', () => {
+    expect(toolHeadlineRuns({ name: 'Bash', inputSummary: 'SUMMARY' })).toEqual({
+      lead: 'Bash',
+      subject: 'SUMMARY'
+    })
+  })
+
+  it('keeps todays shape for an empty input map too, identically to an absent one', () => {
+    expect(toolHeadlineRuns({ name: 'Bash', inputSummary: 'SUMMARY', input: {} })).toEqual({
+      lead: 'Bash',
+      subject: 'SUMMARY'
+    })
+  })
+
+  it('falls all the way through for a shell call carrying neither field', () => {
+    // The gap the ticket's table does not spell out, resolved by FALLING THROUGH to the general shape
+    // rather than by a fourth branch: rule 1 selects nothing, rule 3 lands on the one value there is.
+    expect(
+      toolHeadlineRuns({ name: 'Bash', inputSummary: 'SUMMARY', input: { timeout: '5' } })
+    ).toEqual({ lead: 'Bash', subject: '5' })
+  })
+
+  it('leaves BashOutput on the general shape though it carries a command', () => {
+    // The load-bearing negative: it is the name a `startsWith` test would wrongly catch, it really
+    // carries a `command` field, and stripping its tool name off the row would be a regression.
+    expect(
+      toolHeadlineRuns({
+        name: 'BashOutput',
+        inputSummary: 'SUMMARY',
+        input: { command: 'ls -la src' }
+      })
+    ).toEqual({ lead: 'BashOutput', subject: 'ls -la src' })
+  })
+})
+
+describe('toolHeadlineRuns — every other call, unchanged', () => {
+  it('keeps the tool name on a non-shell call that carries a description', () => {
+    // THE CENTRAL RULING AS A TEST. `description` is not exclusive to shell calls — subagent launches
+    // carry one on all 208 corpus calls and task creation on 97.5% of 121 — so a router keyed on the
+    // PICKED KEY instead of the TOOL would return `{ lead: null }` here and strip the name off those
+    // rows. The switch is on the tool, and the key test lives inside it.
+    expect(
+      toolHeadlineRuns({
+        name: 'Task',
+        inputSummary: 'SUMMARY',
+        input: { description: 'Review the spec' }
+      })
+    ).toEqual({ lead: 'Task', subject: 'Review the spec' })
+    expect(
+      toolHeadlineRuns({
+        name: 'mcp__linear__create_issue',
+        inputSummary: 'SUMMARY',
+        input: { description: 'Ship the row' }
+      })
+    ).toEqual({ lead: 'mcp__linear__create_issue', subject: 'Ship the row' })
+  })
+
+  it('still shortens a path tool through the untouched picker (AC3)', () => {
+    expect(
+      toolHeadlineRuns({
+        name: 'Edit',
+        inputSummary: 'SUMMARY',
+        input: { file_path: 'src/renderer/src/screens/conversation/ConversationScreen.tsx' }
+      })
+    ).toEqual({ lead: 'Edit', subject: '.../src/screens/conversation/ConversationScreen.tsx' })
+  })
+
+  it('keeps a search and a long-tail tool on both runs (AC3)', () => {
+    expect(
+      toolHeadlineRuns({ name: 'Grep', inputSummary: 'SUMMARY', input: { pattern: 'TODO' } })
+    ).toEqual({ lead: 'Grep', subject: 'TODO' })
+    expect(
+      toolHeadlineRuns({
+        name: 'mcp__codegraph__codegraph_callers',
+        inputSummary: 'SUMMARY',
+        input: { symbol: 'RelayConnection' }
+      })
+    ).toEqual({ lead: 'mcp__codegraph__codegraph_callers', subject: 'RelayConnection' })
+  })
+
+  it('draws SOMETHING on every source, and defers to the picker on every non-shell one', () => {
+    // The structural pair, and the machine-checked form of "the general case is today's shape
+    // VERBATIM" — the subject is not re-derived here, it IS `toolHeadline(source)`.
+    const sources: ToolHeadlineSource[] = [
+      { name: 'read_file', inputSummary: 'SUMMARY' },
+      { name: 'read_file', inputSummary: '', input: {} },
+      { name: 'Bash', inputSummary: 'SUMMARY' },
+      { name: 'Bash', inputSummary: 'SUMMARY', input: { description: 'D' } },
+      { name: 'Bash', inputSummary: 'SUMMARY', input: { command: 'C' } },
+      { name: 'Bash', inputSummary: 'SUMMARY', input: { timeout: '5' } },
+      { name: 'BashOutput', inputSummary: 'SUMMARY', input: { command: 'C' } },
+      { name: 'Edit', inputSummary: 'SUMMARY', input: { file_path: 'a/b/c/d/e.ts' } },
+      { name: 'mcp__x__y', inputSummary: 'SUMMARY', input: { a: 'one\ntwo' } }
+    ]
+    for (const source of sources) {
+      const runs = toolHeadlineRuns(source)
+      expect(runs.lead === null && runs.subject === null).toBe(false)
+      if (source.name !== 'Bash') {
+        expect(runs).toEqual({ lead: source.name, subject: toolHeadline(source) })
+      }
+    }
   })
 })

@@ -352,3 +352,149 @@ test('tool row: the header pins its trailing group flush while the headline elli
   const shortGroup = await boxOf(shortRow.locator('.tool-row__right'), 'the short row group')
   expect(Math.abs(longGroup.x - shortGroup.x)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
 })
+
+// #855 — WHICH of the two runs the headline lands in, per call. A THIRD sibling test launching its own
+// app, for the reason above: three more rows on either test's page would make its bare `.tool-row`
+// locators strict-mode-ambiguous. Two claims are asserted here and nothing else, because they are
+// exactly the two the renderToStaticMarkup tier structurally cannot observe — a rendered LEFT EDGE (AC1)
+// and a COMPUTED TYPE AND INK (AC2). Which elements exist in which case is pinned in
+// ConversationScreen.test.tsx, byte for byte.
+//
+// The hard cut of an over-long command is NOT asserted, on purpose. .tool-row__left's overflow: hidden
+// ships and is #854's, this ticket adds no rule that could regress it, and the ticket rules the cut is
+// the intended degrade — a test for it would be a defence for an unobserved failure mode.
+
+const DESCRIBED_TOOL_USE_ID = 'tool-use-855-described'
+const UNDESCRIBED_TOOL_USE_ID = 'tool-use-855-undescribed'
+const PATH_TOOL_USE_ID = 'tool-use-855-path'
+
+// Drawn from Figma's own cases (155:621 and 155:662). Both are short enough to fit the 800px-minimum
+// window's message column, which is what makes the left-edge assertion below a placement check rather
+// than an overflow one.
+const SHELL_DESCRIPTION = 'List unscoped role queries in e2e'
+const SHELL_COMMAND = 'git status --short'
+
+/**
+ * A #855 call, pending — the first frame here to carry an `input` map. `ToolUsePayload.input` is a
+ * shipped wire field (#642), so this is one more property on the existing payload shape rather than any
+ * new fixture machinery.
+ */
+function routedToolUseFrame(
+  toolUseId: string,
+  name: string,
+  input?: Record<string, string>
+): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'tool_use',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: SEEDED_ROW.id,
+      turn_id: 'turn-855',
+      tool_use_id: toolUseId,
+      name,
+      input_summary: 'the whole input, compacted',
+      input
+    }
+  })
+}
+
+/** Its result — every row here is resolved, so all three carry the trailing group and the chevron. */
+function routedToolResultFrame(toolUseId: string): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'tool_result',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: SEEDED_ROW.id,
+      turn_id: 'turn-855',
+      tool_use_id: toolUseId,
+      is_error: false,
+      result_summary: 'one line of result text'
+    }
+  })
+}
+
+test('tool row: a described shell call starts at the hard left, an undescribed one takes the lead type', async ({
+  launchPairedApp
+}) => {
+  const { page, daemon } = await launchPairedApp()
+
+  // Three rows land on this page, so every locator is scoped by index (#670's strict-mode collisions).
+  // Arrival order is the thread's order.
+  const rows = page.locator('.tool-row')
+  const describedRow = rows.nth(0)
+  const undescribedRow = rows.nth(1)
+  const pathRow = rows.nth(2)
+
+  daemon.pushFrame(
+    routedToolUseFrame(DESCRIBED_TOOL_USE_ID, 'Bash', {
+      description: SHELL_DESCRIPTION,
+      command: SHELL_COMMAND
+    })
+  )
+  daemon.pushFrame(routedToolUseFrame(UNDESCRIBED_TOOL_USE_ID, 'Bash', { command: SHELL_COMMAND }))
+  daemon.pushFrame(routedToolUseFrame(PATH_TOOL_USE_ID, 'read_file'))
+  daemon.pushFrame(routedToolResultFrame(DESCRIBED_TOOL_USE_ID))
+  daemon.pushFrame(routedToolResultFrame(UNDESCRIBED_TOOL_USE_ID))
+  daemon.pushFrame(routedToolResultFrame(PATH_TOOL_USE_ID))
+
+  await expect(pathRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(rows).toHaveCount(3)
+
+  // --- AC1. The described call draws its description alone, and that run starts at the header's HARD
+  // LEFT — the chip's CONTENT-box left edge. An empty lead element would still take one side of the left
+  // group's 12px gap and push it right, which is the failure this measures and a count assertion cannot.
+  await expect(describedRow.locator('.tool-row__name')).toHaveCount(0)
+  await expect(describedRow.locator('.tool-row__summary')).toHaveText(SHELL_DESCRIPTION)
+  const describedChip = describedRow.locator('.tool-row__chip')
+  // Read rather than hardcoded — the tokens behind the chip's padding may be retuned.
+  const leadingInset = await describedChip.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth)
+  })
+  const chipBox = await boxOf(describedChip, 'the described row chip')
+  const subjectBox = await boxOf(describedRow.locator('.tool-row__summary'), 'the subject run')
+  expect(Math.abs(subjectBox.x - (chipBox.x + leadingInset))).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // --- AC2. The undescribed call draws its command alone, in the SAME type and ink the tool name takes
+  // in that run. Asserted COMPARATIVELY against the path row's tool name rather than against hardcoded
+  // token values: a retune of the type scale must not turn this red, while a `--command` modifier class
+  // added later — the one thing AC2 forbids — must.
+  await expect(undescribedRow.locator('.tool-row__summary')).toHaveCount(0)
+  await expect(undescribedRow.locator('.tool-row__name')).toHaveText(SHELL_COMMAND)
+
+  async function leadTypeOf(row: Locator): Promise<Record<string, string>> {
+    return row.locator('.tool-row__name').evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        fontFamily: style.fontFamily,
+        color: style.color,
+        fontSize: style.fontSize,
+        lineHeight: style.lineHeight
+      }
+    })
+  }
+  expect(await leadTypeOf(undescribedRow)).toEqual(await leadTypeOf(pathRow))
+
+  // --- AC3's control, and the proof neither switch disturbed the rest of the row: the path call keeps
+  // BOTH runs, and all three rows still resolve into a one-line header with its trailing group.
+  await expect(pathRow.locator('.tool-row__name')).toHaveText('read_file')
+  await expect(pathRow.locator('.tool-row__summary')).toHaveCount(1)
+  const pathChip = await boxOf(pathRow.locator('.tool-row__chip'), 'the path row chip')
+  for (const [row, what] of [
+    [describedRow, 'the described row'],
+    [undescribedRow, 'the undescribed row']
+  ] as const) {
+    await expect(row.locator('.tool-row__right')).toHaveCount(1)
+    await expect(row.locator('.tool-row__chevron')).toHaveCount(1)
+    // EVERY ROW IS THE SAME HEIGHT whichever run it drew — Figma draws all three at 36px, the lead-only
+    // case (155:662) included, and a thread whose rows are two different heights is the ragged stack the
+    // header's two groups exist to prevent. This equality catches BOTH directions and one of them is
+    // real: without .tool-row__left's min-height the lead-only row is 4px SHORTER, because switching the
+    // subject off removes the 20px line box that used to set the header's height. (The other direction
+    // is a run wrapping onto a second line.) Measured as a control before the rule was added.
+    const chip = await boxOf(row.locator('.tool-row__chip'), `${what} chip`)
+    expect(Math.abs(chip.height - pathChip.height)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  }
+})

@@ -83,7 +83,8 @@ ConversationScreen            .conversation        (flex column, full height, po
 │   ├── ThinkingIndicator       .composer-status__label ("Thinking…"/"Working…"/"Running <tool>…", #648, #649; off the daemon-bubble surface since #796)
 │   └── ComposerErrorChipControl .composer-status__error (row's trailing slot, right-aligned; null unless the `error` connection arm, #797)
 ├── Composer                  .composer            (pinned)
-│   └── ContextUsageControl     .composer__footer    (third row, below `.composer__row`; holds one reading today — the other four desktop-layout slots (#680/#682/#683/#685) stay empty, #811)
+│   ├── ComposerActionsMenu     .composer__footer    (leading item, opens the shared options panel — #680)
+│   └── ContextUsageControl     .composer__footer    (second child, below `.composer__row`; the other three desktop-layout slots (#682/#683/#685) stay empty, #811)
 ├── RepairControl              .composer__repair    (conditional, beneath composer, #167)
 ├── StatusSheet (if open)     .status-sheet-overlay (absolute overlay, #177)
 ├── ChannelInfoSheet (if open) .status-sheet-overlay (absolute overlay, #365)
@@ -1322,15 +1323,19 @@ The desktop layout's fixed-height row **below** the message box (Figma `110:3494
 child of the `Input area` symbol after `Status area`/`ComposerStatusArea` and `Message input`) — not to
 be confused with [Composer status row](#composer-status-row-796), which sits *above* the message box.
 The desktop layout puts five affordances in this row — Actions (#680), permission mode (#682), model and
-effort (#683), this ticket's context-usage reading, and attach (#685) — and four of them are blocked on
-daemon work that doesn't exist yet. #811 builds the row itself and lands the one occupant that isn't
-blocked; **the other four slots stay genuinely empty, no placeholder element, no disabled control**:
+effort (#683), this ticket's context-usage reading, and attach (#685) — and at the time #811 shipped, four
+of them were blocked on daemon work that doesn't exist yet. #811 built the row itself and landed the one
+occupant that wasn't blocked; **no placeholder element and no disabled control for the rest**. **#680 is
+the first of the blocked four to land** — it needed no daemon work at all, only the already-shipped
+[options panel](#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680)
+— so two of the row's five slots are occupied today and three (#682, #683, #685) still stay empty:
 
 ```
 Composer
 ├── .composer__hint             (unchanged, #31)
 ├── .composer__row              (unchanged — textarea + ComposerSendButton)
-└── .composer__footer           (new, third child)
+└── .composer__footer           (third child, #811)
+    ├── ComposerActionsMenu     leading item — opens the shared options panel with sendText (#680)
     └── ContextUsageControl     null until a real snapshot has loaded, then <ContextUsageReading/>
 ```
 
@@ -1374,19 +1379,20 @@ guarantee ([Composer status row](#composer-status-row-796) above): a null readin
 (no global box-sizing reset), `align-items: center`, `padding: 0 var(--space-4)` — aligned with the
 input's *text* start (`.composer__hint`'s treatment), deliberately not with `.composer-status`'s
 box-edge alignment; the two rows are inset differently by design. `gap: var(--space-5)` is declared now
-(the design's measured 20px item rhythm) though inert with one child today, so #680/#682/#683 inherit the
-row's spacing instead of each re-deriving it.
+(the design's measured 20px item rhythm), inert with one child at #811 but live between the Actions
+trigger and the context reading since #680; #682/#683 inherit the same row spacing instead of each
+re-deriving it.
 
-### Composer options panel (#838, placed #839, keyboard-driven since #840)
+### Composer options panel (#838, placed #839, keyboard-driven since #840, first live mount since #680)
 
-The one panel surface that all four remaining footer slots and one message-box consumer will open
-rather than each building its own: Actions (#680), permission mode (#682), model and effort (#683),
-and #694's slash-command type-ahead. #838 shipped only the panel's **resting appearance** — its
-surface, its rows, its one new colour token — with no host anywhere in the app yet. #839 placed it in
-the footer; #840 completed the interaction — opening, dismissing and driving it from the keyboard.
-The panel is now feature-complete but still **ships dormant**: nothing mounts `ComposerOptionsPanel`
-or `ComposerOptionsMenu` in production today, and that stays true until #680 draws the first real
-footer button. Deliberate, not a gap.
+The one panel surface that all remaining footer slots and one message-box consumer open rather than
+each building its own: Actions (#680, landed), permission mode (#682), model and effort (#683), and
+#694's slash-command type-ahead. #838 shipped only the panel's **resting appearance** — its surface,
+its rows, its one new colour token — with no host anywhere in the app yet. #839 placed it in the
+footer; #840 completed the interaction — opening, dismissing and driving it from the keyboard. The
+panel shipped feature-complete but dormant across all three tickets: nothing mounted
+`ComposerOptionsPanel` or `ComposerOptionsMenu` in production. **#680 is that first live mount** — see
+[Actions menu](#actions-menu-680) below for the consumer and the in-app interaction proof it carries.
 
 **New file, not `ConversationScreen.tsx`.** `ComposerOptionsPanel.tsx` follows the
 `PermissionModal.tsx` / `WorkspacePickerSheet.tsx` split: five named future consumers across two later
@@ -1655,13 +1661,110 @@ Code review PASS with one deferred SHOULD FIX: the `switch (outcome.type)` in `h
 uniformly (`composerSend.ts`, `messageViewModel.ts`, `pairingState.ts`, and others). Its absence is
 silent today — every outcome is handled — but a fifth outcome added later (the module's own docblock
 names Home/End as a two-line follow-up) would be swallowed by the switch with no type error and no test
-catching it, since the container is untested-by-design. Folding the guard into #680's first live mount
-was the call recorded on the PR rather than a rework cycle here — worth doing at that point, not
-forgotten. Two accepted NITs alongside it: `Enter` on a Shift-Tabbed-back trigger resolves to `pick`
-rather than toggling the menu shut (unreachable without the still-open Tab question above, deferred to
-the same ticket), and the container's trigger assertions don't yet pin `type="button"` the way the
-panel's own row test pins it on each option — see
-[PR #845](https://github.com/pyrycode/pyrycode-desktop/pull/845).
+catching it, since the container is untested-by-design. The PR recorded folding the guard into #680's
+first live mount as the intended timing — **that did not happen**: #680's diff touches no line of
+`ComposerOptionsPanel.tsx` (confirmed against its merged diff and its code review, PR #848, which is
+silent on the guard). The gap is still open for whichever ticket next touches this file. Two accepted
+NITs alongside the deferred fix: `Enter` on a Shift-Tabbed-back trigger resolves to `pick` rather than
+toggling the menu shut (unreachable without the still-open Tab question above, also still open), and the
+container's trigger assertions don't yet pin `type="button"` the way the panel's own row test pins it on
+each option — see [PR #845](https://github.com/pyrycode/pyrycode-desktop/pull/845).
+
+### Actions menu (#680)
+
+The shared [options panel](#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680)'s
+first live consumer, and the composer footer's leading item (Figma `115:3677`, x=0). Sends `/clear`,
+`/compact` or `/knowledge-capture` as ordinary message text — reset, compact and knowledge capture, one
+click instead of typed by hand. Needs no daemon change and no wire change: claude intercepts a message
+whose text begins with a slash and runs it as a command rather than passing it to the model (measured
+2026-08-21 against claude 2.1.220), and an unknown command comes back as a synthetic "Unknown command"
+assistant reply at zero turns and zero cost — which is why an absent `/knowledge-capture` in a workspace
+that doesn't define it is a correct, visible, harmless outcome this ticket deliberately does not detect
+or grey out (that's [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681), gated on a daemon
+change). See [Driving a running session](../../../CLAUDE.md) in CLAUDE.md for the general mechanism.
+
+**`ComposerActionsMenu.tsx` (new file)** — its own module rather than another 70 lines in
+`ConversationScreen.tsx` (~2700 lines, a declared merge hot-spot), the precedent #682 (permission mode)
+and #683 (model and effort) follow for the same reason. Three exports:
+
+```ts
+export const COMPOSER_ACTIONS: readonly ComposerOptionsPanelOption[] = [
+  { id: '/clear', label: 'Reset session' },
+  { id: '/compact', label: 'Compact session' },
+  { id: '/knowledge-capture', label: 'Knowledge capture' }
+]
+export const COMPOSER_ACTIONS_LABEL = 'Actions'
+export function ComposerActionsMenu({ onCommand }: { onCommand: (command: string) => void }): JSX.Element
+```
+
+**The `id` is the command, sent verbatim.** `ComposerOptionsPanelOption.id` is documented elsewhere as
+"the stable identity — the wire/model value," kept separate from `label` because #683 shows `Opus 5` for
+`claude-opus-5`. A command menu has no wire/model value behind the row — the command string *is* the
+identity — so collapsing them is the honest shape rather than a shortcut: `COMPOSER_ACTIONS` passes
+straight into the panel's `options` prop with no `.map()`/`useMemo` and no parallel array to drift, and
+`onSelect(id)` is `onCommand(id)` with no lookup and no unreachable `undefined` branch. There is
+deliberately no `command` field, no lookup function and no `ComposerActionId` union — that would be
+ceremony around an array whose ids already are the answer. `ComposerActionsMenu` renders
+`<ComposerOptionsMenu options={COMPOSER_ACTIONS} currentId={null} onSelect={onCommand} ariaLabel={COMPOSER_ACTIONS_LABEL} triggerContent={…} triggerClassName="composer__actions" />`
+and nothing else — no store read, no `window.pyry`, no state of its own, and (per the panel's boundary
+rule stated at its own `:121-126`) `ComposerOptionsPanel.tsx` is untouched by this ticket's diff.
+`currentId={null}` takes the panel's existing non-matching branch (a list of actions, not a choice — no
+row wears `aria-current`), and the trigger's chevron (Figma's `chevron-up-solid-full`, inlined as an
+8×4 `currentColor` svg, does **not** flip on open — the shared component keeps its `open` state private)
+carries `aria-hidden="true"` so the button's accessible name stays exactly the client-owned
+`COMPOSER_ACTIONS_LABEL` string — a load-bearing e2e locator once `e2e/composer-actions.spec.ts` reads it.
+
+**One send path, not two.** `Composer.handleSubmit` (`ConversationScreen.tsx`) split into a reusable
+`sendText(value): boolean` — the `canSend` gate, the `submitMessage` call with its existing deps object,
+and the `onMessageSent()` notify, moved verbatim — and a one-line `handleSubmit` that clears the message
+box on success. `<ComposerActionsMenu onCommand={sendText} />` mounts ahead of `ContextUsageControl` in
+`.composer__footer`, so a picked command gets the identical `submitMessage` call, `message_id`, wire
+`send_message`, optimistic `userText` echo and `followBottom()` scroll-follow a typed message gets — no
+second entry point to drift. The menu carries no `canSend` prop of its own for exactly that reason: the
+gate exists in one place, and the trigger is never disabled (including while disconnected) — picking
+while the composer can't send sends nothing and writes nothing, silently, the same posture the composer's
+existing `Not connected` hint one row up already explains. `window.pyry` is still dereferenced only
+inside `sendText`, at interaction time, never during render, so the container smoke test still
+server-renders with no bridge mock.
+
+**Styling** — `.composer__actions` (`conversation.css`) is an explicit `<button>` reset (no border, no
+fill, no padding) plus `color: var(--color-primary)` and the `.composer__context` body-small type block;
+the file's `--color-primary`-onto-`.composer__footer` hoist question (raised at #811) is answered here as
+declined — the UA stylesheet sets `color` on form controls, so a hoisted value wouldn't reach a `<button>`
+at all, and every button-shaped consumer would still need its own `color: inherit` plus the same font
+block. The real extraction — a shared `.composer__footer-button` — is deferred to #682 landing as the
+row's second button, not built speculatively here. `outline: none` is deliberately absent: every close
+path in `ComposerOptionsMenu` returns DOM focus to this button, so its focus ring is load-bearing.
+
+**Testing.** `ComposerActionsMenu.test.tsx` pins the mapping (`renderToStaticMarkup` cannot fire
+`onCommand`, so only the data half and the closed-at-mount markup are unit-tested) plus a direct render
+of `ComposerOptionsPanel` fed `COMPOSER_ACTIONS`/`currentId={null}` to prove zero `aria-current`
+occurrences. `ConversationScreen.test.tsx` gained the mount-site guard — the trigger renders inside
+`.composer__footer`, closed, ahead of the context reading in DOM order, and (since the container smoke
+renders a disconnected session) present-and-**enabled** in that state, pinning AC4's static half.
+`e2e/composer-actions.spec.ts` is the in-app interaction proof #840 deferred here: open → three rows in
+order → pick → the outbound `send_message`'s `text` is the command verbatim *and* the thread's
+`.bubble[data-thread-role="user"]` shows it; Escape and an outside click both dismiss; Escape also
+returns focus to the trigger (an outside click deliberately does not — `close()`'s `.focus()` runs before
+the browser's own mousedown focus action, the same accepted deviation `ComposerOptionsMenu` shipped
+under #840). AC4's *interactive* half is not driven in e2e — tearing down the fake daemon mid-spec is
+larger fixture work than this ticket's whole feature — and the spec says so in its own header comment
+rather than leaving the gap silent.
+
+**A landmine found and repaired, not introduced.** `getByRole`'s `name` option matches as a
+case-insensitive *substring* by default, and the thread overflow trigger one region up is labelled `More
+actions` — so `page.getByRole('button', { name: 'Actions' })` resolved two buttons and failed Playwright
+strict mode until the locator added `exact: true`. Worth checking on any future control whose accessible
+name is a common word. Separately, the pre-existing `renders no overflow menu for a bare ConversationScreen`
+test used `not.toContain('aria-haspopup="menu"')` as a stand-in for "no menu popup exists" — a global
+absence assertion on an attribute now legitimately present a second time. It was repaired rather than
+deleted: pinned as a count of exactly one, scoped to the Actions trigger, so a second unrelated menu in
+the bare tree still fails it. Code review (PR #848) flagged two non-blocking NITs — both about a test
+comment overstating what the static tier can prove, not about behavior — and otherwise PASS.
+
+Not security-sensitive: `/clear`, `/compact` and `/knowledge-capture` are client-owned constants, never
+daemon-supplied, and reach the DOM only as ordinary auto-escaped React text (the panel's `option.label`
+render) — no attribute, URL, filename or log sink. See [PR #848](https://github.com/pyrycode/pyrycode-desktop/pull/848).
 
 ### Api-retry indicator (#493)
 

@@ -54,7 +54,7 @@ import { ComposerActionsMenu } from './ComposerActionsMenu'
 import { contextUsagePercent } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { isAtBottom } from './threadScrollPosition'
-import { toolHeadline } from './toolHeadline'
+import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
@@ -786,6 +786,22 @@ function TimelineRow({
 // the chevron (it is decorative, and an exposed name would perturb the button's own); NO aria-controls /
 // id pair, for the reason written at :723-726; and NO title, a fifth time.
 //
+// #855 adds NO newly untrusted string and opens NO new sink: `command` and `description` already reach
+// the DOM today — as the summary run's children via the picker's rule 1, and `command` again as the code
+// block's <pre> children — so this MOVES an existing untrusted string between two <span>s that both
+// already carry auto-escaped daemon text. Two clauses are inherited verbatim, each a MUST FIX if it ever
+// appears: NO title, a SIXTH time — the lead now holds a value that HARD-CUTS at the group boundary,
+// which makes `title={command}` the natural next edit for whoever notices, and the answer is that the
+// row opens and the body draws the command in full, unwrapped and unbounded, never an attribute; and NO
+// linkification of a command and no AssistantMarkdown for either run, since `curl https://…` is an
+// ordinary shell command and an <a href> or a markdown render around it is the outbound-beacon shape
+// declined at :769-781 for this same string. One clause is genuinely new and is also a MUST FIX: THE
+// LEAD IS STILL TEXT CHILDREN OF A <span> AND NEVER BECOMES ANYTHING ELSE. .tool-row__name previously
+// only ever carried `item.name`; it now carries a model-authored shell command line, and
+// src/shared/wire/types.ts's tool-input contract governs it — these are display strings, not
+// capabilities, never resolved, opened, fetched or executed. The routed value is read exactly once, as
+// children: never a path, a filename, a cache key, a lookup key or an argument to anything.
+//
 // Figma 155:558's chevron, exported verbatim from the design's icon asset (I155:558;134:4925). It points
 // RIGHT — the `›` the design draws at the header's trailing edge — and is the right-pointing sibling of
 // ComposerActionsMenu's CHEVRON_PATH: same family, same construction, same slight overflow past the
@@ -818,6 +834,11 @@ export function ToolRow({
   // child — which is exactly the reason `chipRuns` is one. The field list stays inline for the
   // opposite reason (consumed once), which keeps "a collapsed row never computes the list" structural.
   const command = shellCommandBlock(item)
+  // #855: the header's two runs, either of which may be null. A `const` for `command`'s stated reason —
+  // it is consumed TWICE below, once per switch — and it is the ONE call for both, so "the two runs
+  // agree about which call this is" is structural rather than two calls that could be given different
+  // arguments.
+  const runs = toolHeadlineRuns(item)
   // The chip's children, declared once: the element forks below, the children never do.
   //
   // #854 SPLITS them into the design's two frames — a Left that fills the header and a Right that hugs
@@ -829,13 +850,33 @@ export function ToolRow({
   const chipRuns = (
     <>
       <span className="tool-row__left">
-        <span className="tool-row__name">{item.name}</span>
-        {/* #705: the second run is now the picked INPUT FIELD (toolHeadline.ts), not `inputSummary` —
-            same element, same class, same single-line ellipsizing, different text. `inputSummary` is
-            the daemon's whole input compacted, so for an Edit that is mostly replacement text the file
-            path was buried in it and usually cut off; it survives as the picker's rule-4 fallback,
-            which is what keeps this row working against a pre-pyrycode#1678 daemon. */}
-        <span className="tool-row__summary">{toolHeadline(item)}</span>
+        {/* #855: EITHER RUN CAN BE OFF, which is what makes a thread of shell calls a scannable column
+            rather than a wall of near-identical chips. A described shell call draws the description in
+            the prose subject and NO LEAD; an undescribed one draws its command in the mono lead and no
+            subject; every other call draws both, exactly as it does today. The routing lives in
+            toolHeadline.ts, where it is a value in and a value out — this tier renders markup only.
+
+            `!== null`, NEVER a bare `&&` on the string. `runs.subject` can legitimately be `''` — a
+            call whose `inputSummary` is empty, which draws the name beside an empty run today and must
+            keep doing so — and a truthiness test would silently drop the element for it. Naming the one
+            falsy value that means absence is `command !== null`'s argument below, on the same kind of
+            value.
+
+            NO EMPTY ELEMENT IN EITHER DIRECTION, and that is the whole reason these are switches rather
+            than empty strings: a rendered <span class="tool-row__name"></span> would still take one
+            side of the left group's 12px gap and push the subject off the header's hard left. #854's
+            "the whole group, not just the chevron" argument, one level down.
+
+            THE CLASSES DO NOT CHANGE and no modifier is added. A command in the lead takes
+            .tool-row__name verbatim, which IS the design's mono/14/16/tertiary run for it — the
+            type-and-ink claim expressed as the cascade rather than as a second rule. */}
+        {runs.lead !== null && <span className="tool-row__name">{runs.lead}</span>}
+        {/* #705: the subject is the picked INPUT FIELD (toolHeadline.ts), not `inputSummary` — same
+            element, same class, same single-line ellipsizing, different text. `inputSummary` is the
+            daemon's whole input compacted, so for an Edit that is mostly replacement text the file path
+            was buried in it and usually cut off; it survives as the picker's rule-4 fallback, which is
+            what keeps this row working against a pre-pyrycode#1678 daemon. */}
+        {runs.subject !== null && <span className="tool-row__summary">{runs.subject}</span>}
       </span>
       {/* Gated on the SAME `result` binding that already drives rowClass, the chip fork and `body` —
           never a second predicate, never `expanded`, never a new `hasResult` const. Whether a row is

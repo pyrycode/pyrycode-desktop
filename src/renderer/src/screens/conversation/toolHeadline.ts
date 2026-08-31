@@ -1,4 +1,4 @@
-// The collapsed tool row's second run — framework-free and React-free, co-located with the screen like
+// The collapsed tool row's header text — framework-free and React-free, co-located with the screen like
 // shortenPath.ts / messageViewModel.ts / threadScrollPosition.ts. It performs no effects and takes no
 // injected deps: a total function of its argument, whose only import is the sibling shortener.
 //
@@ -18,8 +18,10 @@
 // data; the expanded per-field list (#706) is what covers its misses.
 //
 // SAFETY. Every value this module returns is untrusted daemon display text and stays a plain `string`
-// all the way to its one caller, which renders it as auto-escaped React children of the same <span>
-// that carried `inputSummary` — never into an attribute, a URL, a filename, a cache key or a log line.
+// (or a `null` meaning "draw no element") all the way to its one caller, which renders each one as
+// auto-escaped React children of a <span> that already carried daemon text — the summary run that
+// carried `inputSummary`, and since #855 the NAME run, which used to carry only `item.name` and can now
+// carry a shell command line. Never into an attribute, a URL, a filename, a cache key or a log line.
 // See ConversationScreen.tsx's SAFETY block for the sinks that are declined on purpose. The KEY is
 // never returned: keys are daemon-controlled display text too, and drawing them is #706's separately
 // reviewed decision.
@@ -73,14 +75,32 @@ export const PREFERRED_FIELDS: readonly string[] = [
 export const PATH_FIELDS: readonly string[] = ['file_path', 'path', 'notebook_path']
 
 /**
+ * The two shell fields, named so the router below can switch on WHICH of them rule 1 landed on.
+ *
+ * `toolBody.ts:58`'s `COMMAND_FIELD` idiom. Naming both is what makes `toolHeadlineRuns`'s two-way
+ * switch total over the list it switches on: if a third member were ever added to `BASH_FIELDS` while
+ * the switch still read `=== 'description'`, the new field would silently route to the lead.
+ */
+const BASH_DESCRIPTION_FIELD = 'description'
+const BASH_COMMAND_FIELD = 'command'
+
+/**
  * Rule 1's probe order, for the one tool name that gets a precedence override.
  *
- * Module-private: unlike the two above it pins no measured order a caller could need. The FALLBACK is
- * load-bearing rather than defensive — measured over 6459 real `Bash` calls, 1397 of them (22%) carry
- * no `description` at all, so a headline keyed on `description` alone would render blank on nearly a
- * quarter of shell calls.
+ * Module-private: unlike the two above it pins no measured order a caller could need. BUILT from the
+ * two constants rather than repeating their strings — unlike `toolBody.ts`'s independently declared
+ * omission set, this is not a second copy of the same fact but THE SAME LIST READ TWICE, once as this
+ * probe order and once as the router's key switch. `readonly string[]` and never `as const`, for
+ * `PREFERRED_FIELDS`'s reason.
+ *
+ * The FALLBACK is load-bearing rather than defensive — measured over 93227 tool calls across 4988
+ * sessions (2026-08-24), shell is 62.4% of them and 6538 of those 58199 shell calls (11.2%) carry no
+ * `description` at all. That supersedes the 22%-of-6459 figure this comment used to cite, from a corpus
+ * nine times smaller; `toolBody.ts` already carries the corrected number. Since #855 the fallback is
+ * stronger than "not blank": on those 6538 calls the command is not a substitute for the headline, it
+ * IS the row's entire visible content — the only run drawn.
  */
-const BASH_FIELDS: readonly string[] = ['description', 'command']
+const BASH_FIELDS: readonly string[] = [BASH_DESCRIPTION_FIELD, BASH_COMMAND_FIELD]
 
 /**
  * The tool name whose input reads better description-first. Matched with `===`, see `pick`.
@@ -209,4 +229,65 @@ export function toolHeadline(source: ToolHeadlineSource): string {
     return source.inputSummary
   }
   return PATH_FIELDS.includes(picked.key) ? shortenPath(picked.value) : picked.value
+}
+
+/**
+ * The header's two runs, either of which may be off. ONE row with two parts, never two row styles.
+ *
+ * `null` means DRAW NO ELEMENT, and it is distinct from `''`, which means draw the element with no
+ * text — today's shape for a call whose `inputSummary` is empty, preserved exactly. The caller tests
+ * `!== null` for that reason; a truthiness test would silently drop the element for the empty string.
+ *
+ * Two independent nullable fields rather than a discriminated union: the three reachable shapes are the
+ * PRODUCT of two independent presence facts and the caller reads them independently. CLAUDE.md's sealed
+ * -union convention is scoped to daemon events and user actions crossing a boundary, not to a
+ * screen-local helper's return.
+ */
+export interface ToolHeadlineRuns {
+  lead: string | null
+  subject: string | null
+}
+
+/**
+ * Which run the picked text lands in, per call. Measured over 93227 calls (2026-08-24): five tools are
+ * 95% of every call, so this is five known shapes and a fallback rather than a classifier.
+ *
+ * - a shell call WITH a `description`: no lead, the description in the prose subject.
+ * - a shell call WITHOUT one: the command in the mono lead, no subject.
+ * - everything else, INCLUDING a shell call the probe found nothing in: the tool name in the lead and
+ *   `toolHeadline` in the subject — today's shape.
+ *
+ * THE TOOL TEST COMES FIRST AND THE KEY TEST ONLY INSIDE IT. `description` is not exclusive to shell
+ * calls — subagent launches carry one on all 208 corpus calls and task creation on 97.5% of 121 — and
+ * `description` is LAST in `PREFERRED_FIELDS`, so a router keyed on the picked key alone would strip
+ * the tool name off those rows too. Keying on the tool is also what stops the rule spreading to a tool
+ * where the headline is a guess. `===` and never `startsWith`, for `BashOutput`'s sake: it is a real
+ * tool name, it carries a `command` field of its own, and it keeps the general treatment — the ruling
+ * `pick` and `toolBody.ts:87-89` already reached independently, for the same reason.
+ *
+ * The general case is not re-derived here, it IS the one expression the row already evaluated, which is
+ * what makes "every other call renders exactly as it does today" structural rather than a third branch
+ * that could drift. THE SECOND PROBE INSIDE IT IS DELIBERATE REDUNDANCY: on a shell call that falls
+ * through, `pick` runs rule 1 again and finds nothing again. That is what keeps `toolHeadline` a black
+ * box this function CALLS rather than reimplements — the alternative, exporting `pick` and branching on
+ * its key, is exactly the coupling that would let a future edit change rule 1's probe without changing
+ * this one's. `firstNonEmpty` and `BASH_FIELDS` stay module-private for the same reason.
+ *
+ * Total over its input type, `toolHeadline`'s posture: every branch is a comparison, a property read or
+ * a call to two functions that are themselves total, so it throws nothing and returns no message that
+ * could carry daemon content. Neither run is ever bounded here — the daemon caps each value at 4000
+ * runes, the subject ellipsizes and the lead hard-cuts at the group boundary (conversation.css's
+ * .tool-row__left overflow, the design's own declaration for a lead too wide for the header).
+ */
+export function toolHeadlineRuns(source: ToolHeadlineSource): ToolHeadlineRuns {
+  const { input } = source
+  if (source.name === BASH_TOOL_NAME && input !== undefined) {
+    const shellField = firstNonEmpty(input, BASH_FIELDS)
+    if (shellField !== null) {
+      return shellField.key === BASH_DESCRIPTION_FIELD
+        ? { lead: null, subject: shellField.value }
+        : { lead: shellField.value, subject: null }
+    }
+  }
+  return { lead: source.name, subject: toolHeadline(source) }
 }

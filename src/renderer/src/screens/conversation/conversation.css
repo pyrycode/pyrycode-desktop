@@ -1265,13 +1265,24 @@
    flex: 1 1 auto where Figma says flex: 1 0 0. Equivalent in this container — the automatic minimum is
    already removed by min-width: 0 and the single sibling never grows, so both forms resolve to "take the
    leftover" — and 1 1 auto is the form .composer-status__activity already ships one screen region away,
-   so the file gains no second idiom for the same job. */
+   so the file gains no second idiom for the same job.
+
+   #855 ADDS min-height, and it is the ONE rule that ticket needs. Until either run could be switched
+   off, the group's height was always .tool-row__summary's 20px line box, because every row drew that
+   run; an undescribed shell call now draws the MONO LEAD ALONE, whose leading is 16px, and the row
+   silently lost 4px of height. Figma draws every collapsed row at exactly 36px — 155:662, the lead-only
+   case, included — and a thread whose rows are two different heights is precisely the ragged stack the
+   two groups exist to prevent. Stated as the group's own floor rather than as a height on the chip or a
+   modifier on the lead: the header's line box is body-medium's whatever runs are inside it, which stays
+   true for #856's count node and for any later run. The TOKEN and never a literal 20px — it is the same
+   step .tool-row__summary sets its leading from, which is what the floor is a floor of. */
 .tool-row__left {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex: 1 1 auto;
   min-width: 0;
+  min-height: var(--text-body-medium-line);
   overflow: hidden;
 }
 

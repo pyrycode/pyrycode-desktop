@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { NOISE_PROTOCOL, PROTOCOL_VERSION, CAPABILITY_INTERACTIVE } from './types'
+import {
+  NOISE_PROTOCOL,
+  PROTOCOL_VERSION,
+  CAPABILITY_INTERACTIVE,
+  ATTACHMENT_CHUNK_DATA_BYTES,
+  ATTACHMENT_ID_MAX_BYTES,
+  ATTACHMENT_FILENAME_MAX_BYTES,
+  ATTACHMENT_MIME_TYPE_MAX_BYTES
+} from './types'
 import type {
   EnvelopeType,
   DebugBundleChunkPayload,
@@ -35,7 +43,8 @@ import type {
   ConversationUpdatedPayload,
   QueuedItem,
   QueueStatePayload,
-  DequeueMessagePayload
+  DequeueMessagePayload,
+  AttachmentChunkPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -869,5 +878,77 @@ describe('dequeue-message wire vocabulary (#299)', () => {
     // @ts-expect-error queued_msg_id is number, not string
     const wrong: DequeueMessagePayload = { conversation_id: 'conv-1', queued_msg_id: '7' }
     expect(wrong.conversation_id).toBe('conv-1')
+  })
+})
+
+describe('attachment-chunk wire vocabulary (#860)', () => {
+  it('admits the attachment_chunk envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType. It is the
+    // whole point of the row — `Envelope.type` is `EnvelopeType | string`, so a builder round-trip
+    // passes with or without the union member and cannot see the hole. `npm run typecheck` does.
+    const chunk: EnvelopeType = 'attachment_chunk'
+    expect(chunk).toBe('attachment_chunk')
+  })
+
+  it('shapes AttachmentChunkPayload as the published eight fields, all always present', () => {
+    // Mirrors the daemon SSOT (pyrycode #1752 / docs/protocol-mobile.md § Attachments) field-for-
+    // field. Every field rides every chunk in BOTH directions — no omitempty — so a decoder may
+    // rely on all eight. A literal missing one, or carrying a ninth, fails to typecheck.
+    // Note what is NOT here: there is no conversation_id, and the omission is a security property.
+    const payload: AttachmentChunkPayload = {
+      attachment_id: 'att-1',
+      index: 0,
+      total_chunks: 2,
+      filename: 'notes.txt',
+      mime_type: 'text/plain',
+      size: 45001,
+      sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      data: 'aGVsbG8='
+    }
+
+    expect(Object.keys(payload)).toEqual([
+      'attachment_id',
+      'index',
+      'total_chunks',
+      'filename',
+      'mime_type',
+      'size',
+      'sha256',
+      'data'
+    ])
+    expect(payload.attachment_id).toBe('att-1')
+    expect(payload.index).toBe(0)
+    expect(payload.total_chunks).toBe(2)
+    expect(payload.filename).toBe('notes.txt')
+    expect(payload.mime_type).toBe('text/plain')
+    expect(payload.size).toBe(45001)
+    expect(payload.sha256).toHaveLength(64)
+    expect(payload.data).toBe('aGVsbG8=')
+  })
+
+  it('pins index as a number — a JSON string is a compile-time type error', () => {
+    // The no-drift pin: the position counter is a number on the wire. If the field were ever relaxed
+    // to `string`, this line would stop erroring and fail the test at compile time.
+    const wrong: AttachmentChunkPayload = {
+      attachment_id: 'att-1',
+      // @ts-expect-error index is a number, not a string
+      index: '0',
+      total_chunks: 2,
+      filename: 'notes.txt',
+      mime_type: 'text/plain',
+      size: 1,
+      sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      data: ''
+    }
+    expect(wrong.attachment_id).toBe('att-1')
+  })
+
+  it('pins the mandated stride and the three metadata byte ceilings', () => {
+    // 45000 is RAW BYTES of `data` before base64, and it is a stride the receiver derives
+    // total_chunks from — not a ceiling to fit under. The three ceilings count BYTES, not runes.
+    expect(ATTACHMENT_CHUNK_DATA_BYTES).toBe(45000)
+    expect(ATTACHMENT_ID_MAX_BYTES).toBe(64)
+    expect(ATTACHMENT_FILENAME_MAX_BYTES).toBe(255)
+    expect(ATTACHMENT_MIME_TYPE_MAX_BYTES).toBe(255)
   })
 })

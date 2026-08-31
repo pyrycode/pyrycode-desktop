@@ -92,7 +92,7 @@ fields.
 ### Data flow
 
 ```
-daemon frame ─(#201/#248 transport, snake→camel, no conversation_id on a modal)→
+daemon frame ─(#201/#248 transport, snake→camel; the emit drops `modal_shown`'s `conversation_id`, #870)→
    DaemonEvent{modalShown|modalDismissed|modalAnswerRejected}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeModal listener → translateModalEvent → ModalEvent (or null → skip)

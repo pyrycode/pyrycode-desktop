@@ -40,12 +40,14 @@ in two places, with two chances to get the precedence backwards. This module shi
   precedence order: `activity` first because working outranks new messages.
 
 - **Precedence, a flat sequence of early returns, one line per level:**
-  1. **Input required** — reserved, not buildable. An outstanding permission or trust prompt cannot be
-     attributed to a conversation because no `conversation_id` rides a modal frame
-     ([ADR 0009](../decisions/0009-modal-prompt-model.md); `src/shared/wire/types.ts:835`;
-     `src/shared/ipc/events.ts:637`). [#802](https://github.com/pyrycode/pyrycode-desktop/issues/802) is
-     the ticket that inserts it, above working, once a wire change carries the id. No unreachable branch
-     is written for it in the meantime — the reserved docstring slot is the whole affordance.
+  1. **Input required** — reserved, not buildable yet. `modal_shown` now carries a `conversation_id` on
+     the wire ([#870](../codebase/870.md), pyrycode#1065, ADR 0009 amended) and
+     [Inbound message decode](inbound-message-decode.md) narrows it, but the consumer emit deliberately
+     drops it there — it isn't on `DaemonEvent` (`src/shared/ipc/events.ts:637`) yet, so this resolver
+     still has nothing to attribute a prompt to a conversation with. [#871](../codebase/871.md) carries
+     it onto `DaemonEvent`; [#872](../codebase/872.md) is the ticket that inserts this precedence level,
+     above working, once the modal store holds it. No unreachable branch is written for it in the
+     meantime — the reserved docstring slot is the whole affordance.
   2. **Working** — any of the four activity facts.
   3. **New messages** — the `unread` boolean, already derived by `isConversationUnread` at the call site;
      this module never re-derives it.
@@ -119,4 +121,6 @@ in two places, with two chances to get the precedence backwards. This module shi
   shaped after (posture, not logic): store-slice inputs, no store of its own, `import type`-only,
   mutation-checked.
 - [ADR 0009 — Modal prompt model](../decisions/0009-modal-prompt-model.md) — why input-required is
-  reserved rather than built: no `conversation_id` rides a modal frame yet.
+  reserved rather than built: the wire carries a `conversation_id` on `modal_shown` since
+  [#870](../codebase/870.md), but it stops at decode until [#871](../codebase/871.md)/
+  [#872](../codebase/872.md) carry it onto `DaemonEvent` and into the modal store.

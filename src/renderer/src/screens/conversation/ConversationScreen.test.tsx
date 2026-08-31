@@ -43,6 +43,7 @@ import {
 } from './ConversationScreen'
 // #780's AC5 asserts one chrome from both sides, so the message-side renderer is imported here too.
 import { AssistantMarkdown } from './AssistantMarkdown'
+import { COMPOSER_ACTIONS_LABEL } from './ComposerActionsMenu'
 import { createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
   composerAvailability,
@@ -3015,6 +3016,41 @@ describe('ConversationScreen — store binding', () => {
     expect(footerAt).toBeGreaterThan(rowAt)
   })
 
+  // #680: the Actions menu's mount site. Every assertion in ComposerActionsMenu.test.tsx passes on an
+  // UNMOUNTED component, so these two are the only proof the control is actually wired into the footer.
+  //
+  // They render against a DISCONNECTED session — this block's beforeEach leaves it there, and zustand v5
+  // reads getInitialState() under renderToStaticMarkup anyway (the standing note at :2972-2977). That is
+  // convenient rather than limiting: it also pins AC4's static half, that the trigger renders ENABLED
+  // while the composer cannot send. Picking sends nothing because `sendText`'s first line is the canSend
+  // gate, not because the menu is unopenable.
+  it('mounts the Actions trigger in the footer row, closed and enabled while disconnected (AC1, AC4)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    const footerAt = markup.indexOf('class="composer__footer"')
+    const triggerAt = markup.indexOf('class="composer__actions"')
+    expect(footerAt).toBeGreaterThanOrEqual(0)
+    expect(triggerAt).toBeGreaterThan(footerAt)
+    expect(markup).toContain(COMPOSER_ACTIONS_LABEL)
+    // Closed at mount: aria-expanded="false" and no panel in the tree.
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).not.toContain('composer-options__item')
+    // Enabled: the trigger's own tag carries no `disabled`, unlike the send control one row up.
+    const triggerTag = markup.match(/<button[^>]*class="composer__actions"[^>]*>/)?.[0] ?? ''
+    expect(triggerTag).not.toContain('disabled')
+  })
+
+  // The design's item order: Actions is the footer's leftmost control (Figma 110:3494, x=0), ahead of the
+  // context reading. The container smoke renders against the initial run-config store, where the reading
+  // is ABSENT — so the comparison is against the row's own opening tag, not against composer__context.
+  it('places the Actions trigger first in the footer row (Figma 115:3677 at x=0)', () => {
+    const markup = renderToStaticMarkup(<ConversationScreen />)
+    const anchorAt = markup.indexOf('class="composer-options-anchor"')
+    const footerAt = markup.indexOf('class="composer__footer"')
+    expect(anchorAt).toBeGreaterThan(footerAt)
+    // Nothing of the footer's own between the row's tag and the anchor: the anchor opens the row.
+    expect(markup.slice(footerAt, anchorAt)).not.toContain('composer__context')
+  })
+
   // #811: the reading's PRESENT arm through the mounted container — the only test that proves
   // ContextUsageControl is actually wired into the row. An unwired control passes every pure-view
   // assertion above.
@@ -3245,8 +3281,13 @@ describe('ConversationScreen — store binding', () => {
   it('renders no overflow menu for a bare ConversationScreen (onBack absent — unchanged, AC1)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__overflow')
-    // StatusRow keeps its own aria-haspopup="dialog"; only the menu popup must be absent.
-    expect(markup).not.toContain('aria-haspopup="menu"')
+    // StatusRow keeps its own aria-haspopup="dialog"; only the menu popup must be absent. #680 mounted
+    // the footer's Actions trigger, which legitimately advertises aria-haspopup="menu" — so the bare
+    // absence check this line used to make is no longer the right proxy. Pinned as a COUNT instead, and
+    // pinned to the composer's trigger: a second menu popup appearing in the bare tree still fails here,
+    // which is the guard #276 wanted.
+    expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
+    expect(markup).toContain('class="composer__actions" aria-haspopup="menu"')
   })
 })
 

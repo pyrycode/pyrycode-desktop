@@ -50,6 +50,7 @@ import {
   COMPOSER_ERROR_CHIP_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY
 } from './composerSend'
+import { ComposerActionsMenu } from './ComposerActionsMenu'
 import { contextUsagePercent } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { isAtBottom } from './threadScrollPosition'
@@ -2178,14 +2179,25 @@ function Composer({
   // rejects an unknown conversation_id with an error frame, so a placeholder is never sent).
   const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
 
-  const handleSubmit = (): void => {
+  // #680: the composer's ONE send path, extracted from handleSubmit so the Actions menu's picked command
+  // takes the identical route a typed message does rather than a parallel one. The gate, the deps object,
+  // the notify and their order are moved verbatim, not rewritten — which is what makes the typed path
+  // behaviour-preserving by construction. Everything except the message box's own text-clearing lives
+  // here, because clearing an input a command never touched would be wrong.
+  //
+  // It is also the whole of AC4: this first line is the only send gate, and there is no second entry point
+  // to forget. The Actions menu holds no `canSend` prop of its own precisely so a drift-capable copy of it
+  // cannot exist.
+  const sendText = (value: string): boolean => {
     // AC1: the authoritative gate. Return before touching submitMessage so no sendCommand and no
     // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
     // as the button. The input is not cleared; nothing was sent.
-    if (!canSend) return
+    if (!canSend) return false
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
-    // server-rendered container smoke test never touches the bridge.
-    const sent = submitMessage(text, activeConversationId, {
+    // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
+    // this function: that would move the dereference into the render path, where `window.pyry` does not
+    // exist under renderToStaticMarkup, and every container smoke test would throw.
+    const sent = submitMessage(value, activeConversationId, {
       sendCommand: window.pyry.sendCommand,
       dispatch,
       dispatchFor,
@@ -2199,10 +2211,16 @@ function Composer({
     // armed pin behind, so the next unrelated arriving item still cannot yank a scrolled-up operator. A send
     // whose bridge call throws is caught (composerSend.ts:69-72), still posts the echo and still returns
     // `true`, so it follows — correctly, because the timeline did move.
-    if (sent) {
-      setText('')
-      onMessageSent()
-    }
+    if (sent) onMessageSent()
+    return sent
+  }
+
+  // The notify now runs a line BEFORE the clear rather than a line after it. Inert: `onMessageSent` is
+  // `followBottom`, a single ref assignment with no measurement and no scrollTop write (:464-475), and
+  // both calls sit in one discrete handler that React 18 batches, so the render mounting the echo lands
+  // after the whole handler either way.
+  const handleSubmit = (): void => {
+    if (sendText(text)) setText('')
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -2260,12 +2278,18 @@ function Composer({
           the composer's own third sub-row. It renders UNCONDITIONALLY and holds its height from the
           stylesheet, which is what stops the message box moving when the reading comes and goes (AC4).
 
-          Exactly one child today, and NO wrapper element for the group Figma's `Info and buttons`
-          sub-frame draws: #680 Actions, #682 permission mode, #683 model and effort and #685 attach are
-          all blocked on daemon work that does not exist, and emitting an empty wrapper (or a spacer, or a
-          disabled control) for them is precisely the placeholder this ticket forbids. #680/#682/#683
-          prepend siblings here; #685 right-aligns with margin-left: auto. */}
+          Still NO wrapper element for the group Figma's `Info and buttons` sub-frame draws: #682
+          permission mode, #683 model and effort and #685 attach are blocked on daemon work that does not
+          exist, and emitting an empty wrapper (or a spacer, or a disabled control) for them is precisely
+          the placeholder #811 forbade. #682/#683 prepend siblings here; #685 right-aligns with
+          margin-left: auto.
+
+          #680: Actions is the row's FIRST item (Figma 115:3677 at x=0), ahead of the reading. It takes
+          `sendText`, so a picked command travels the identical path a typed one does — the same gate, the
+          same submitMessage call, the same optimistic echo and the same scroll follow (AC3, AC4). No
+          `canSend` prop goes down with it: the gate stays in one place. */}
       <div className="composer__footer">
+        <ComposerActionsMenu onCommand={sendText} />
         <ContextUsageControl />
       </div>
     </div>

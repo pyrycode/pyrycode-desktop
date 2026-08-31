@@ -8,6 +8,7 @@ import { createModalStore, selectOutstanding } from './modalStore'
 
 const shown: ModalEvent = {
   type: 'shown',
+  conversationId: 'conv-7f3a',
   modalId: 'mdl-7f3a',
   class: 'permission',
   title: 'Allow Bash?',

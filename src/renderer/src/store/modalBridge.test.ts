@@ -44,6 +44,9 @@ describe('translateModalEvent — the owned arms', () => {
     const translated = translateModalEvent(modalShown)
     expect(translated).toEqual({
       type: 'shown',
+      // Deliberately distinct from `modalId` below: both fields are `string`, so tsc cannot catch
+      // `conversationId: event.modalId`. This exact-match expectation is the only transposition guard.
+      conversationId: 'conv-7f3a',
       modalId: 'mdl-7f3a',
       class: 'permission',
       title: 'Allow Bash?',
@@ -266,6 +269,8 @@ describe('subscribeModal', () => {
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect(dispatch).toHaveBeenCalledWith({
       type: 'shown',
+      // Distinct from `modalId` for the same reason as the translate expectation above.
+      conversationId: 'conv-7f3a',
       modalId: 'mdl-7f3a',
       class: 'permission',
       title: 'Allow Bash?',

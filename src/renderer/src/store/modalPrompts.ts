@@ -28,13 +28,27 @@ export interface ModalPrompt {
 
 /**
  * The renderer-local, sealed input union the reducer consumes. camelCase and defined here (not in
- * `src/shared/wire`); the follow-up's bridge maps the snake_case wire frames into these. `modalId`
- * is the sole correlation key — no `conversation_id` is carried (the wire carries none on a modal,
- * ADR 0009).
+ * `src/shared/wire`); the follow-up's bridge maps the snake_case wire frames into these.
+ *
+ * The `shown` arm carries `conversationId` (#877) — the frame's `conversation_id` (pyrycode#1065,
+ * decoded by #870), arriving on the `modalShown` `DaemonEvent` (#871) and copied BY NAME into the
+ * fresh literal the bridge builds, never by spreading that event. REQUIRED, never optional: the wire
+ * has it always-present and the decode fail-closes on absence, so an optional field would invent an
+ * absence case the daemon never produces — and an assigned `undefined` survives the structured clone
+ * across the IPC channel, so a later `'conversationId' in event` check would read true on an event
+ * carrying nothing. The id is a daemon-asserted SCOPING KEY, not rendered text, so none of the
+ * untrusted-display-text handling `title` / `prompt` / `options[].label` need attaches to it.
+ *
+ * It STOPS at `reduceModal`, which builds `ModalPrompt` from named fields and omits it; the consumer
+ * that scopes a prompt to a sidebar row is #878. It is an OUTBOUND scoping key only: `modalId`
+ * remains the sole correlation key for ANSWERING a prompt — `modal_answer` / `modal_cancel` carry no
+ * conversation id and the daemon resolves an answer against its own outstanding-modal state
+ * (ADR 0009).
  */
 export type ModalEvent =
   | {
       type: 'shown'
+      conversationId: string
       modalId: string
       class: ModalClass
       title: string

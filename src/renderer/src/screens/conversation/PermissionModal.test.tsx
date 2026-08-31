@@ -199,6 +199,7 @@ describe('PermissionModal — the second-confirm marker is scoped to its prompt 
   function shown(modalId: string): ModalEvent {
     return {
       type: 'shown',
+      conversationId: `conv-${modalId}`,
       modalId,
       class: 'permission',
       title: `Allow Bash (${modalId})`,

@@ -1028,7 +1028,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // The modal data path (#201). snake→camel here (`modal_id`→`modalId`,
             // `default_option_id`→`defaultOptionId`); `options` is reused verbatim (the `conversations`
             // precedent — parseModalOption already stripped each option to `{ id, label }`, nothing to
-            // drop, no snake→camel on id/label). NO `conversation_id` to drop — a modal carries none.
+            // drop, no snake→camel on id/label). The payload DOES carry a `conversation_id` as of
+            // pyrycode#1065 (#870) and this emit deliberately drops it — no renderer-visible surface
+            // changes at the decode slice; #871 adds the DaemonEvent field that carries it across IPC.
             // A fresh literal with named fields, never a spread. The modal store + bridge (#223), not
             // the session or timeline store, consumes this. `title` / `prompt` / `options[].label` are
             // untrusted `claude`-surfaced display text the render slice (#224) must render as plain text.

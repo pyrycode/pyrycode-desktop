@@ -61,7 +61,11 @@ const REJECTION_COPY = 'Your answer was rejected.'
 // Spec-local frame builders (the conversationsFrame idiom): each seals one envelope via the production
 // codec, deterministic id/ts.
 
-// A permission modal_shown, surfaced via daemon.pushFrame. All six fields always present (no omitempty);
+// The conversation every modal in this spec is raised by (#870). A required wire field, but nothing here
+// scopes by it — this spec drives one conversation, so a module constant keeps the helper's shape.
+const CONVERSATION_ID = 'conv-permission-modal-answer-paths'
+
+// A permission modal_shown, surfaced via daemon.pushFrame. All seven fields always present (no omitempty);
 // class 'permission' is a shipped WireModalClass. `default_option_id` is the fail-safe deny default.
 function modalShownFrame(
   modalId: string,
@@ -72,6 +76,7 @@ function modalShownFrame(
     type: 'modal_shown',
     ts: FIXED_TS,
     payload: {
+      conversation_id: CONVERSATION_ID,
       modal_id: modalId,
       class: 'permission',
       title: opts.title,

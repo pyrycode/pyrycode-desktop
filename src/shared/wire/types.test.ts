@@ -629,8 +629,9 @@ describe('modal wire vocabulary (#201)', () => {
     expect(option).toEqual({ id: 'allow', label: 'Allow' })
   })
 
-  it('shapes ModalShownPayload as { modal_id, class, title, prompt, ordered options, default_option_id }', () => {
+  it('shapes ModalShownPayload as { conversation_id, modal_id, class, title, prompt, ordered options, default_option_id }', () => {
     const payload: ModalShownPayload = {
+      conversation_id: 'conv-7f3a',
       modal_id: 'mdl-7f3a',
       class: 'permission',
       title: 'Allow Bash?',
@@ -642,6 +643,7 @@ describe('modal wire vocabulary (#201)', () => {
       default_option_id: 'deny'
     }
     expect(payload).toEqual({
+      conversation_id: 'conv-7f3a',
       modal_id: 'mdl-7f3a',
       class: 'permission',
       title: 'Allow Bash?',
@@ -652,8 +654,9 @@ describe('modal wire vocabulary (#201)', () => {
       ],
       default_option_id: 'deny'
     })
-    // No conversation_id — modal_id is the sole correlation key (ADR 0009).
-    expect(payload).not.toHaveProperty('conversation_id')
+    // `conversation_id` rides a modal_shown as of pyrycode#1065 (#870) — an OUTBOUND display-scoping
+    // key. `modal_id` stays the sole INBOUND correlation key: an answer carries no conversation id.
+    expect(payload).toHaveProperty('conversation_id')
   })
 
   it('shapes ModalDismissedPayload as { modal_id, outcome, source } with source a closed wire enum', () => {

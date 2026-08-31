@@ -40,13 +40,16 @@ in two places, with two chances to get the precedence backwards. This module shi
   precedence order: `activity` first because working outranks new messages.
 
 - **Precedence, a flat sequence of early returns, one line per level:**
-  1. **Input required** — reserved, not buildable yet. `modal_shown` now carries a `conversation_id` on
-     the wire ([#870](../codebase/870.md), pyrycode#1065, ADR 0009 amended) and
-     [Inbound message decode](inbound-message-decode.md) narrows it, but the consumer emit deliberately
-     drops it there — it isn't on `DaemonEvent` (`src/shared/ipc/events.ts:637`) yet, so this resolver
-     still has nothing to attribute a prompt to a conversation with. [#871](../codebase/871.md) carries
-     it onto `DaemonEvent`; [#872](../codebase/872.md) is the ticket that inserts this precedence level,
-     above working, once the modal store holds it. No unreachable branch is written for it in the
+  1. **Input required** — reserved, not buildable yet, though the blocker has now cleared on the store
+     side. `modal_shown` carries a `conversation_id` on the wire ([#870](../codebase/870.md),
+     pyrycode#1065, ADR 0009 amended), [#871](../codebase/871.md) carried it onto `DaemonEvent`, and the
+     [modal-prompt model](modal-prompt-model.md) now carries it the rest of the way: #877 onto
+     `ModalEvent`'s `shown` arm, and #878 onto the held `ModalPrompt`, exposing
+     `selectHasOutstandingFor(conversationId): boolean`. This resolver has a boolean to consume; it just
+     doesn't consume it yet. Inserting this precedence level above working — composing
+     `selectHasOutstandingFor` at the #801 call site the way `selectActivityFor`/`isConversationUnread`
+     already are — is a separate ticket, not #878, which scoped the sidebar dot out on purpose (a
+     store-slice ticket with no rendered surface). No unreachable branch is written for it in the
      meantime — the reserved docstring slot is the whole affordance.
   2. **Working** — any of the four activity facts.
   3. **New messages** — the `unread` boolean, already derived by `isConversationUnread` at the call site;
@@ -120,7 +123,10 @@ in two places, with two chances to get the precedence backwards. This module shi
 - [Conversation unread predicate](conversation-unread.md) — the sibling pure-join module this one is
   shaped after (posture, not logic): store-slice inputs, no store of its own, `import type`-only,
   mutation-checked.
-- [ADR 0009 — Modal prompt model](../decisions/0009-modal-prompt-model.md) — why input-required is
-  reserved rather than built: the wire carries a `conversation_id` on `modal_shown` since
-  [#870](../codebase/870.md), but it stops at decode until [#871](../codebase/871.md)/
-  [#872](../codebase/872.md) carry it onto `DaemonEvent` and into the modal store.
+- [ADR 0009 — Modal prompt model](../decisions/0009-modal-prompt-model.md) /
+  [Modal-prompt model](modal-prompt-model.md) — why input-required is reserved rather than built: the
+  wire carries a `conversation_id` on `modal_shown` since [#870](../codebase/870.md), and
+  [#871](../codebase/871.md)/[#877](../codebase/877.md)/
+  [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) have since carried it all the way
+  onto the held `ModalPrompt` and a `selectHasOutstandingFor` boolean — this resolver is the one piece
+  of that chain not yet wired up.

@@ -650,10 +650,11 @@ export type DaemonEvent =
   // below attach to it. It is never markup, a filename, a cache key, a lookup path, an attribute or a
   // URL, and it reaches no log sink (emitDaemonEvent is log-free by construction). The renderer modal
   // bridge (#223) rebuilds a fresh ModalEvent from named fields and, as of #877, copies this one across
-  // by name onto the `shown` arm. It STOPS one hop further, at `reduceModal`, which builds `ModalPrompt`
-  // from named fields and omits it; the consumer that scopes a prompt to a row is #878. It is an
-  // OUTBOUND scoping key only: `modalId` remains the sole correlation key for ANSWERING a prompt, and
-  // the daemon still resolves an inbound `modal_answer` against its own outstanding-modal state.
+  // by name onto the `shown` arm. #878 carries it one hop further still: `reduceModal` copies it by
+  // name onto the held `ModalPrompt`, and `selectHasOutstandingFor` is the consumer that scopes a
+  // prompt to a conversation. It is an OUTBOUND scoping key only: `modalId` remains the sole
+  // correlation key for ANSWERING a prompt, and the daemon still resolves an inbound `modal_answer`
+  // against its own outstanding-modal state.
   //
   // `title` / `prompt` / `options[].label` are untrusted `claude`-surfaced display text the render
   // slice (#224) must render as plain text, never HTML. No token, key, or raw frame (AC4).

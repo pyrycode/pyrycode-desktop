@@ -125,9 +125,12 @@ once. `--color-success` needs no such substitution: `#2fc038` is the Figma's `Sc
 - [#719 codebase notes](../codebase/719.md) / [spec](../../specs/architecture/719-relay-not-yet-known-state.md)
   — the prior contrast rejection of the Figma node's own bound colour, reused here rather than re-measured.
 - [ADR 0009 — Modal prompt model](../decisions/0009-modal-prompt-model.md) — why the fourth status, input
-  required, stays unbuilt. The wire now carries a `conversation_id` on `modal_shown`
-  ([#870](../codebase/870.md), pyrycode#1065) and [Inbound message decode](inbound-message-decode.md)
-  narrows it, but it stops there: the consumer emit deliberately drops it, so it isn't yet on the
-  `DaemonEvent` ([#871](../codebase/871.md)) or in the [modal-prompt model](modal-prompt-model.md)'s
-  store ([#872](../codebase/872.md)) this dot's resolver would need to key off of.
+  required, stays unbuilt, though the store-side blocker has cleared. The wire carries a
+  `conversation_id` on `modal_shown` ([#870](../codebase/870.md), pyrycode#1065), and
+  [#871](../codebase/871.md)/[#877](../codebase/877.md)/
+  [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) have since carried it onto
+  `DaemonEvent`, `ModalEvent`, and the held `ModalPrompt` in the [modal-prompt
+  model](modal-prompt-model.md), which now exposes `selectHasOutstandingFor(conversationId): boolean`.
+  This component and [conversation status](conversation-status.md) are the two pieces still waiting to
+  compose it.
 - Spec: `docs/specs/architecture/800-conversation-status-dot.md`.

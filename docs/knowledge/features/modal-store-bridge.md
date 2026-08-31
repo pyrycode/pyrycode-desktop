@@ -113,15 +113,16 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
   production through #178; live since [#179](../codebase/179.md).
 - Import surface: `import { useModalStore, selectOutstanding, selectRejections } from
   '@renderer/store/modalStore'` and `import { useModalBridge } from '@renderer/store/modalBridge'`.
-- No conversation-id scoping **yet in the store** — `modal_shown` carries a `conversation_id` on the
-  wire ([pyrycode#1065](https://github.com/pyrycode/pyrycode/issues/1065)), decoded onto the
-  `DaemonEvent` arm ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)), and, as of
-  [#877](../codebase/877.md), `translateModalEvent` copies it by name onto `ModalEvent`'s `shown` arm.
-  It stops there: `reduceModal` builds `ModalPrompt` from named fields and omits it, so the bridge
-  still translates and dispatches unconditionally, and no selector reports per-conversation.
-  [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) is the consumer that carries it into
-  `ModalPrompt`/`ModalState`. `modal_dismissed` still carries no `conversation_id` at all (ADR 0009
-  stands for that frame).
+- **Conversation-id scoping now reaches the store, but not this bridge's own surface.** `modal_shown`
+  carries a `conversation_id` on the wire ([pyrycode#1065](https://github.com/pyrycode/pyrycode/issues/1065)),
+  decoded onto the `DaemonEvent` arm ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)),
+  copied by name onto `ModalEvent`'s `shown` arm by `translateModalEvent` ([#877](../codebase/877.md)),
+  and — as of [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) — copied by name a hop
+  further onto the held `ModalPrompt`, where `selectHasOutstandingFor(conversationId)` reads it. This
+  module (`translateModalEvent`/`subscribeModal`) is untouched by #878: it still translates and
+  dispatches unconditionally, since the scoping decision lives one layer down in `reduceModal`. See
+  [modal-prompt model](modal-prompt-model.md) for the current shape. `modal_dismissed` still carries no
+  `conversation_id` at all (ADR 0009 stands for that frame).
 
 ## Edge cases and limitations
 

@@ -35,6 +35,7 @@ type ModalClass = 'permission' | 'trust'
 interface ModalOption { id: string; label: string }
 
 interface ModalPrompt {
+  conversationId: string   // #878: daemon-asserted scoping label, copied by name, never derived
   modalId: string
   class: ModalClass
   title: string
@@ -69,8 +70,10 @@ interface ModalState {
 reducer consumes — this union is the stable target contract the bridge maps onto (wire `modal_id` →
 `modalId`, `default_option_id` → `defaultOptionId`, thin rename). The `shown` arm carries
 `conversationId` ([#877](../codebase/877.md)), copied by name from the `modalShown` `DaemonEvent`
-arm; it is a daemon-asserted outbound scoping key, not consulted by the reducer — see § The reducer
-and § Edge cases and limitations below. **There is no `destructive` wire class** —
+arm; `reduceModal`'s `shown` arm copies it by name onto the held `ModalPrompt` in turn
+([#878](https://github.com/pyrycode/pyrycode-desktop/issues/878)), and `selectHasOutstandingFor`
+reads it — see § The reducer and § Edge cases and limitations below. **There is no `destructive` wire
+class** —
 the shipped `class` set is `permission | trust` only; a destructive second-confirm is a client-side
 UX policy on the answer path, not a wire distinction.
 
@@ -108,8 +111,13 @@ any future field added to `ModalState` needs the same audit of every non-spreadi
 confirmed the audit still held when it added `resolved`: both arms already spread `state`.
 
 `initialModalState = { outstanding: [], rejections: [], resolved: [] }`; `selectOutstanding` and
-`selectRejections` are the two read surfaces, each returning its slice by reference. `resolved` has no
-selector — it is internal reducer bookkeeping only, never read outside `reduceModal` itself.
+`selectRejections` return their slice by reference, and `selectHasOutstandingFor(conversationId)`
+([#878](https://github.com/pyrycode/pyrycode-desktop/issues/878)) — a selector *factory*, matching
+`selectActivityFor` / `selectRosterFor` / `selectBacklogFor` — is a third read surface answering
+whether any prompt in `outstanding` belongs to that conversation: an `Array.prototype.some` with
+`===` over `conversationId`, deliberately not a keyed lookup (see § Edge cases). All three are
+re-exported from `modalStore.ts` alongside the Zustand container. `resolved` has no selector — it is
+internal reducer bookkeeping only, never read outside `reduceModal` itself.
 
 ### Internal helpers (unexported)
 
@@ -216,14 +224,19 @@ instead of silently decaying into a deny-on-timeout.
   flag, not on the wire and not in `PairedServerRecord` — the desktop cannot self-gate. The follow-up
   renders and answers regardless; an ungranted answer round-trips to an `error` envelope.
 - **Strangler Fig, not a migration.** `sessionStore` and `threadTimeline` are completely untouched.
-- **`conversationId` rides the `shown` arm, carried but not consulted** ([#877](../codebase/877.md),
+- **`conversationId` rides the full chain onto the held prompt and is read by one selector**
+  ([#877](../codebase/877.md)/[#878](https://github.com/pyrycode/pyrycode-desktop/issues/878), both
   shipped) — the wire's outbound-scoping `conversation_id` (pyrycode#1065) reaches `ModalEvent` via the
-  `DaemonEvent` arm ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)) and is copied by
-  name into the `shown` arm. `reduceModal` builds `ModalPrompt` from six named fields and omits it, so
-  the field is dormant here — the same carried-but-unconsulted posture `dismissed`'s `outcome`/`source`
-  already hold. It does not change id-addressing: `modalId` remains the sole correlation key for
-  *answering* a prompt. The consumer that scopes a prompt to a conversation is
-  [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878).
+  `DaemonEvent` arm ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)), is copied by name
+  into the `shown` arm (#877), and `reduceModal`'s `shown` arm copies it by name a hop further onto the
+  held `ModalPrompt` literal (#878) — required, never derived from `modalId`, which stays an opaque
+  answer-correlation nonce. `selectHasOutstandingFor(conversationId)` is the one reader: an `===` scan
+  over `outstanding`, never a keyed container, so the daemon-asserted id has no prototype hazard to
+  exploit and the array keeps the referential stability ADR 0009 chose it for. It does not change
+  id-addressing: `modalId` remains the sole correlation key for *answering* a prompt — `modal_answer` /
+  `modal_cancel` carry no `conversation_id`. The consumer is the sidebar's status resolver (the
+  input-required dot in [conversation status](conversation-status.md)), which reads the boolean, not
+  the prompt.
 
 ## Related
 
@@ -266,6 +279,11 @@ instead of silently decaying into a deny-on-timeout.
   suppressed.
 - [#877 codebase notes](../codebase/877.md) — carries `conversation_id` (pyrycode#1065, decoded
   [#870](../codebase/870.md), carried onto `DaemonEvent` by [#871](../codebase/871.md)) the last hop
-  onto `ModalEvent`'s `shown` arm, by name; the reducer does not read it.
-  [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) is the consumer that scopes a prompt
-  to a conversation.
+  onto `ModalEvent`'s `shown` arm, by name; the reducer did not yet read it.
+- [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) (shipped) — the terminus: copies
+  `conversationId` by name onto the held `ModalPrompt` and adds `selectHasOutstandingFor`, the
+  boolean read the sidebar's status resolver ([conversation status](conversation-status.md)) needs for
+  the input-required dot. Security-sensitive (a permission prompt's `prompt` field is a tool title and
+  command line, and must never be reported against another conversation) — reviewed PASS on the record
+  (architect self-review + code review), resting on the `===` array scan having no prototype hazard and
+  the value being copied, never derived from the `modalId` nonce.

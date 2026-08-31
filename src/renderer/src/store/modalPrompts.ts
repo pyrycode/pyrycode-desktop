@@ -18,6 +18,12 @@ export interface ModalOption {
 
 /** The held, outstanding prompt — what a `shown` event installs and a `dismissed` clears. */
 export interface ModalPrompt {
+  // #878: the conversation that raised this prompt — DAEMON-ASSERTED (the wire's `conversation_id`,
+  // pyrycode#1065), narrowed to `string` once at `parseInboundMessage` (#870) and carried by name ever
+  // since. Not client-owned, and never re-validated here. It is a SCOPING LABEL only — it authorises
+  // nothing and selects no resource, so it needs no branded type; `selectHasOutstandingFor` is its one
+  // reader. `modalId` remains the sole correlation key for ANSWERING (ADR 0009).
+  conversationId: string
   modalId: string
   class: ModalClass
   title: string
@@ -39,11 +45,11 @@ export interface ModalPrompt {
  * carrying nothing. The id is a daemon-asserted SCOPING KEY, not rendered text, so none of the
  * untrusted-display-text handling `title` / `prompt` / `options[].label` need attaches to it.
  *
- * It STOPS at `reduceModal`, which builds `ModalPrompt` from named fields and omits it; the consumer
- * that scopes a prompt to a sidebar row is #878. It is an OUTBOUND scoping key only: `modalId`
- * remains the sole correlation key for ANSWERING a prompt — `modal_answer` / `modal_cancel` carry no
- * conversation id and the daemon resolves an answer against its own outstanding-modal state
- * (ADR 0009).
+ * #878 carries it one hop further: `reduceModal`'s `shown` arm copies it BY NAME onto the held
+ * `ModalPrompt`, and `selectHasOutstandingFor` reads it to answer whether a given conversation has a
+ * prompt waiting. It is a scoping key only: `modalId` remains the sole correlation key for ANSWERING a
+ * prompt — `modal_answer` / `modal_cancel` carry no conversation id and the daemon resolves an answer
+ * against its own outstanding-modal state (ADR 0009).
  */
 export type ModalEvent =
   | {
@@ -152,6 +158,10 @@ export function reduceModal(state: ModalState, event: ModalEvent): ModalState {
       // arm clears `resolved`, so this check simply finds nothing after a handshake.
       if (state.resolved.includes(event.modalId)) return state
       const prompt: ModalPrompt = {
+        // #878: COPIED from the event, never derived. `modalId` is a one-time, opaque nonce (ADR 0009)
+        // and computing a conversation id from it would misattribute every prompt while pushing the
+        // nonce into a value later consumers may render or key on.
+        conversationId: event.conversationId,
         modalId: event.modalId,
         class: event.class,
         title: event.title,
@@ -220,3 +230,28 @@ export const selectOutstanding = (s: ModalState): readonly ModalPrompt[] => s.ou
 
 /** Selector for the rejection surface (#249) — the read surface, returns the slice by reference. */
 export const selectRejections = (s: ModalState): readonly string[] => s.rejections
+
+/**
+ * #878: does any outstanding prompt belong to this conversation? A selector FACTORY bound to one
+ * `conversationId`, matching `selectActivityFor` / `selectRosterFor` / `selectBacklogFor`. The consumer
+ * is the sidebar's status resolver, which lights an input-required dot — so it wants a boolean, not the
+ * prompt.
+ *
+ * A `===` scan over the ordered array, deliberately: `outstanding` is NEVER re-keyed by the
+ * conversation id. That id is a daemon-asserted string, and comparing own field VALUES has no prototype
+ * hazard at all — a `'__proto__'` or `'constructor'` query cannot resolve onto `Object.prototype`, and
+ * no assignment path exists to pollute one. The scan also preserves the array's referential stability,
+ * which ADR 0009 § "Ordered array + scan-by-id, not a Map" chose the array for. Re-keying by this id
+ * would reintroduce both hazards at once.
+ *
+ * No hoisted `EMPTY_*` constant and nothing to memoize — unlike the sibling selectors, which return
+ * arrays: a `boolean` compares by value, so a fresh `false` is `Object.is`-identical to the last one and
+ * a component binding this re-renders only when ITS conversation's answer flips.
+ *
+ * An unknown / never-seen id is a legitimate query answered `false`, not an error — the same
+ * deterministic non-throwing discipline the reducer's unknown-`modalId` arms hold.
+ */
+export const selectHasOutstandingFor =
+  (conversationId: string) =>
+  (s: ModalState): boolean =>
+    s.outstanding.some((p) => p.conversationId === conversationId)

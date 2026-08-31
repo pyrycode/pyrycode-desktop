@@ -345,6 +345,19 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   the literal name `'___'` are indistinguishable once built. No length bound and no existence check by
   design — both deferred to #814, on [save-debug-bundle](features/save-debug-bundle.md)'s exclusive-create
   precedent. No consumer wired yet. Architect self-review PASS.
+- [Attachment chunk envelope](features/attachment-chunk-envelope.md) — the **producer** half of the daemon's
+  attachment wire contract (#860): the new `attachment_chunk` `EnvelopeType` member + `AttachmentChunkPayload`
+  (eight always-present fields, no `conversation_id` by design — a security property, not an oversight), the
+  pure `planAttachmentChunks` (whole file → complete ordered chunk list; `total_chunks = max(1,
+  ceil(size/45000))`, sliced by index never by remainder, `max(1,…)` is what defines the one-chunk zero-byte
+  file) and the pure `buildAttachmentChunk` (the `dequeueMessageEnvelope.ts` builder shape, one envelope per
+  chunk). 45000 is a **mandated stride** the receiver cross-checks, not a ceiling to fit under — every
+  non-final chunk is asserted `=== 45000`, never `<= 45000`. Metadata byte ceilings (64/255/255) are
+  documented, not validated, the same declined-bound call as [attachment filename
+  sanitiser](features/attachment-filename-sanitiser.md); `encodeEnvelope`'s existing `WireEncodeError` above
+  `MAX_PLAINTEXT_BYTES` is the sole, inherited backstop. Nothing sends, reads a file, or mints an
+  `attachment_id` — both modules main-process-only, unreferenced until #861 (send driver, not started).
+  Architect self-review PASS.
 - [Host label store](features/host-label-store.md) — `createHostLabelStore({ secureStore })`, the third
   consumer of [secure store](features/secure-store.md) and the first that isn't a secret: the sidebar
   nickname the operator types at pairing, persisted so it survives a restart. Can't live on

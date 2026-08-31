@@ -110,6 +110,13 @@ export type EnvelopeType =
   | 'create_workspace_folder'
   | 'workspace_folder_created'
   | 'conversation_updated'
+  // ONE frame carrying BOTH directions: it rides upload (client → daemon) and retrieval
+  // (daemon → client) alike, and all eight AttachmentChunkPayload fields are always present in
+  // both. There is NO conversation_id on it, and the omission is a SECURITY PROPERTY: an upload
+  // lands in the conversation the authenticated session is already on, decided daemon-side from
+  // session context, so a client cannot steer bytes into another conversation's directory by naming
+  // one. Do not add one "for clarity". SSOT pyrycode #1752 / docs/protocol-mobile.md § Attachments.
+  | 'attachment_chunk'
   | 'ack'
   | 'error'
 
@@ -1204,6 +1211,69 @@ export interface DebugBundleChunkPayload {
  */
 export interface DebugBundleDonePayload {
   total: number
+}
+
+/**
+ * The MANDATED per-chunk stride: 45000 RAW bytes of `data` BEFORE base64 — not base64 characters,
+ * not payload bytes, not envelope bytes. A sender that reads it as base64 characters emits frames
+ * that fit and wastes a quarter of every one.
+ *
+ * It is a stride, not a ceiling to fit under. The receiver never inspects the stride: it checks the
+ * two declared numbers against each other and refuses any transfer where
+ * `total_chunks != max(1, ceil(size / 45000))` (pyrycode #1776). So a sender that chunks at its own
+ * buffer size and declares the count that follows from THAT stride is refused at admission, while
+ * one that declares the formula's count but emits a different stride clears admission and then fails
+ * on the assembled length. Neither is a frame-size problem — every such frame fits comfortably.
+ *
+ * 45000 is chosen so a chunk's serialized envelope (base64 x4/3 = exactly 60000 characters, since
+ * 45000 divides by 3, plus every metadata field at its bound with worst-case JSON escaping) stays
+ * under MAX_PLAINTEXT_BYTES. That cap is a producer-side contract with no validator: an over-cap
+ * envelope is rejected by the transport with `message.too_long`, never with an `attachment.*` code.
+ */
+export const ATTACHMENT_CHUNK_DATA_BYTES = 45000
+
+/** Ceiling on `attachment_id`, in BYTES of encoded UTF-8 — not runes. Documented, not validated. */
+export const ATTACHMENT_ID_MAX_BYTES = 64
+
+/** Ceiling on `filename`, in BYTES of encoded UTF-8 — not runes. Documented, not validated. */
+export const ATTACHMENT_FILENAME_MAX_BYTES = 255
+
+/** Ceiling on `mime_type`, in BYTES of encoded UTF-8 — not runes. Documented, not validated. */
+export const ATTACHMENT_MIME_TYPE_MAX_BYTES = 255
+
+/**
+ * One slice of an attachment transfer. The CONTRAST with DebugBundleChunkPayload above is the thing
+ * to hold onto: bundle chunks demand contiguous ascending `seq` and are APPENDED, attachment chunks
+ * are INDEX-ADDRESSED and may arrive in any order — the receiver addresses by `index` and never
+ * appends. The neighbouring rule is the obvious one to copy and it is the wrong one here.
+ *
+ * All eight fields are always present in both directions (no `omitempty`), so a decoder may rely on
+ * all eight. Because `total_chunks` rides every chunk, the stream needs NO completion frame — the
+ * DebugBundleDonePayload analogue does not exist. Mirrors the daemon field-for-field
+ * (pyrycode #1752); do not drift it without a matching daemon change. See ADR 0002.
+ */
+export interface AttachmentChunkPayload {
+  /** The transfer this chunk belongs to, identical on every chunk; <= ATTACHMENT_ID_MAX_BYTES.
+   *  NOT a capability — not secret, not unguessable, and never resolved into a filesystem path. */
+  attachment_id: string
+  /** 0-based position within the attachment, in [0, total_chunks). It decides where the bytes land. */
+  index: number
+  /** How many chunks the attachment splits into, >= 1, identical on every chunk. */
+  total_chunks: number
+  /** The client's own name for the file: a display string and a sanitiser input, NEVER a path;
+   *  <= ATTACHMENT_FILENAME_MAX_BYTES. Often private in itself — never log it. */
+  filename: string
+  /** The client's DECLARED media type — a hint, not a verified property of the bytes;
+   *  <= ATTACHMENT_MIME_TYPE_MAX_BYTES. */
+  mime_type: string
+  /** Declared byte length of the WHOLE file — not of this chunk. */
+  size: number
+  /** Lowercase hex sha256 of the WHOLE file — not of this chunk. Always 64 characters. INTEGRITY,
+   *  not authenticity (the same party supplies the bytes and the digest), and NOT a fetch key:
+   *  retrieval names a conversation and an attachment, never a hash. */
+  sha256: string
+  /** This chunk's raw bytes as standard PADDED base64 (Go base64.StdEncoding). */
+  data: string
 }
 
 export interface BackfillSincePayload {

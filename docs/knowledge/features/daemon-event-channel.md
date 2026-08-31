@@ -63,9 +63,22 @@ consumer is the third, independent [modal store + bridge](modal-store-bridge.md)
 [#223](../codebase/223.md). `modalShown` carries `class` (a closed
 `WireModalClass`), `title`/`prompt` (untrusted `claude`-surfaced free text), an ordered
 `options: readonly WireModalOption[]`, and `defaultOptionId`; `modalDismissed` carries `outcome`
-(opaque) and `source` (a closed `WireModalSource`). **Neither arm drops a `conversation_id`** — unlike
-every member above, the wire payload never carries one; `modalId` is the sole correlation key (a
-one-time nonce, ADR 0009).
+(opaque) and `source` (a closed `WireModalSource`). At ship time **neither arm dropped a
+`conversation_id`** — the wire payload carried one on neither frame; `modalId` was the sole
+correlation key (a one-time nonce, ADR 0009).
+
+[pyrycode#1065](https://github.com/pyrycode/pyrycode/issues/1065) put `conversation_id` on the
+`modal_shown` frame only — `modal_dismissed` still carries none.
+[#870](../codebase/870.md) decoded it in `parseModalShownPayload` but stopped there, and
+[#871](../codebase/871.md) carried it the rest of the way, widening this arm with a required
+`conversationId: string`, copied by name from the already-validated payload, read bare (the decode
+already guarantees it, so no `?? ''` fallback). It is the tenth arm in the `#675` family — after
+`turnState`/`stallDetected`/`apiRetry`/`compacting`/`assistantDelta`/`turnEnd`/`toolUse`/
+`toolResult`/`unrecognizedMessage` — and, like the rest of that family, an **outbound scoping key
+only**: `modalId` remains the sole correlation key for *answering* a prompt, unchanged. It ships
+dormant — [`translateModalEvent`](modal-store-bridge.md) rebuilds a fresh `ModalEvent` literal and
+does not forward it; [#872](../codebase/872.md) is the consumer. `modalDismissed` is unaffected and
+still carries no `conversation_id`.
 
 [#229](../codebase/229.md) added a twelfth no-`SessionAction` member, `toolResult` — the outcome half of
 `toolUse` (#217), the vertical's last transport slice. Carries four camelCase fields (`turnId`,
@@ -140,8 +153,8 @@ export type DaemonEvent =
   | { type: 'stallDetected' }
   | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string
       ; input?: Readonly<Record<string, string>> }
-  | { type: 'modalShown'; modalId: string; class: WireModalClass; title: string; prompt: string
-      ; options: readonly WireModalOption[]; defaultOptionId: string }
+  | { type: 'modalShown'; conversationId: string; modalId: string; class: WireModalClass; title: string
+      ; prompt: string; options: readonly WireModalOption[]; defaultOptionId: string }
   | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }
   | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
   | { type: 'queueState'; conversationId: string; queued: readonly QueuedItem[] }
@@ -235,17 +248,21 @@ the two removed members carried while they existed.
 `input: event.input` onto its `ThreadEvent`, unconditional and by reference — the field crosses this
 channel's IPC boundary the same way every other field in the arm does, with no new drop and no new
 copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645) owns that.
-- **`modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,
-  source}`** ([#201](../codebase/201.md)) also map to *no* `SessionAction`, consumed instead by the
-  **third**, independent [modal store + bridge](modal-store-bridge.md), shipped in
-  [#223](../codebase/223.md) — the existing session bridge and
-  [conversation timeline store](conversation-timeline-store.md) bridge both map these to `null`. Field
-  names/types mirror `ModalEvent` ([#122](../codebase/122.md)) field-for-field (the snake→camel decode
-  already happened here, at the transport) — so the #223 bridge is a filter + fresh-literal copy, not
-  a rename, except for the discriminant tag itself (`modalShown`→`type: 'shown'`,
-  `modalDismissed`→`type: 'dismissed'`), which does change. Unlike every arm above, **neither carries a
-  `conversation_id`** to drop — the wire payload never has one; `modalId` is the sole correlation key.
-  `title`/`prompt`/`options[].label` are untrusted `claude`-surfaced free text the render slice
+- **`modalShown{conversationId,modalId,class,title,prompt,options,defaultOptionId}` /
+  `modalDismissed{modalId,outcome,source}`** ([#201](../codebase/201.md)) also map to *no*
+  `SessionAction`, consumed instead by the **third**, independent
+  [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md) — the existing
+  session bridge and [conversation timeline store](conversation-timeline-store.md) bridge both map
+  these to `null`. Field names/types mirror `ModalEvent` ([#122](../codebase/122.md)) field-for-field
+  (the snake→camel decode already happened here, at the transport) — so the #223 bridge is a filter +
+  fresh-literal copy, not a rename, except for the discriminant tag itself (`modalShown`→
+  `type: 'shown'`, `modalDismissed`→`type: 'dismissed'`), which does change. At ship time neither arm
+  carried a `conversation_id` to drop — the wire payload had one on neither frame.
+  [#871](../codebase/871.md) widened `modalShown` with it ([pyrycode#1065](https://github.com/pyrycode/pyrycode/issues/1065),
+  decoded by [#870](../codebase/870.md)); `modalDismissed` still carries none. `modalId` remains the
+  sole correlation key for *answering* a prompt — the new field is outbound scoping only, and it stops
+  at the #223 bridge (dormant until [#872](../codebase/872.md)). `title`/`prompt`/`options[].label` are
+  untrusted `claude`-surfaced free text the render slice
   ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)) must render as plain text, never
   HTML.
 - **`toolResult{turnId,toolUseId,isError,resultSummary}`** ([#229](../codebase/229.md)) also maps to *no*
@@ -518,7 +535,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#316 codebase notes](../codebase/316.md) — the `screenSnapshotReceived` member (removed [#621](../codebase/621.md)), the nineteenth no-`SessionAction` arm and, unlike every prior member, a deliberate **widening** (not a minimisation): carried exactly the `text`/`ts` fields `snapshotReceived` (#180) was built to exclude, emitted from that same member's `case 'snapshot'` seam; consumed as a no-op by all three exhaustive bridges, real consumer was the [screen-snapshot store](screen-snapshot-store.md) (#323) and the display slice #324, both removed by #618/#619 before this member itself was
 - [Conversation timeline store](conversation-timeline-store.md) / [#217](../codebase/217.md) — the `toolUse` member, the fourth arm the `timelineBridge` owns, and the first to drive a durable `toolCall` item rather than text or a scalar
 - [#642 codebase notes](../codebase/642.md) — a field, not a member: `toolUse` widened with an optional fifth field, `input?: Readonly<Record<string, string>>`, still ships dormant on this arm — #643 is the first consumer
-- [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md)
+- [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md). [#871 codebase notes](../codebase/871.md) later widened `modalShown` with `conversationId`, the tenth arm in the `#675` family, copied by name and required; it still crosses this bridge as a no-op ([#223](../codebase/223.md) rebuilds a fresh `ModalEvent`) and reaches no sink until [#872](../codebase/872.md). `modalDismissed` is unaffected.
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member, the twelfth no-`SessionAction` arm and the vertical's last transport slice; the fifth arm the `timelineBridge` owns and the first to resolve an existing `ThreadItem` in place rather than append one or set a scalar
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `conversationCreated` member, the thirteenth no-`SessionAction` arm and the write-side twin of `conversationsReceived` (#139); consumed by neither existing bridge, real consumer is the render sibling #242
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` member, the fourteenth no-`SessionAction` arm and the second (after `snapshotReceived`) to content-minimise its emit relative to its decoded wire payload; consumed by none of the three existing bridges, real consumer is the renderer holder #259, blocked on this ticket

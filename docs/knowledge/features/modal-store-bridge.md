@@ -92,7 +92,8 @@ fields.
 ### Data flow
 
 ```
-daemon frame ─(#201/#248 transport, snake→camel; the emit drops `modal_shown`'s `conversation_id`, #870)→
+daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversation_id` rides the
+   DaemonEvent as of #871 (decoded #870) but this bridge still drops it, rebuilding a fresh ModalEvent)→
    DaemonEvent{modalShown|modalDismissed|modalAnswerRejected}
    → window.pyry.onDaemonEvent (preload channel)
    → subscribeModal listener → translateModalEvent → ModalEvent (or null → skip)
@@ -111,8 +112,13 @@ daemon frame ─(#201/#248 transport, snake→camel; the emit drops `modal_shown
   production through #178; live since [#179](../codebase/179.md).
 - Import surface: `import { useModalStore, selectOutstanding, selectRejections } from
   '@renderer/store/modalStore'` and `import { useModalBridge } from '@renderer/store/modalBridge'`.
-- No conversation-id scoping — a modal carries no `conversation_id` on the wire at all (ADR 0009); the
-  bridge translates and dispatches unconditionally.
+- No conversation-id scoping — `modal_shown` carries a `conversation_id` on the wire
+  ([pyrycode#1065](https://github.com/pyrycode/pyrycode/issues/1065)) and the `DaemonEvent` arm now
+  carries it too ([#871](../codebase/871.md), decoded [#870](../codebase/870.md)), but
+  `translateModalEvent` rebuilds a fresh `ModalEvent` that omits it, so the bridge still translates and
+  dispatches unconditionally, scoped to nothing. [#872](../codebase/872.md) is the consumer that adds
+  it to `ModalEvent`. `modal_dismissed` still carries no `conversation_id` at all (ADR 0009 stands for
+  that frame).
 
 ## Edge cases and limitations
 

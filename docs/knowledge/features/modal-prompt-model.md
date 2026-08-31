@@ -73,7 +73,9 @@ the shipped `class` set is `permission | trust` only; a destructive second-confi
 UX policy on the answer path, not a wire distinction.
 
 `outstanding` is an **ordered array**, not a `Map`/`Record`, correlated by `modalId` (the sole
-correlation key — no `conversation_id` exists on a modal). This mirrors `ThreadItem`'s array +
+correlation key for *answering* a prompt — a `modal_answer`/`modal_cancel` still carries no
+`conversation_id`, unaffected by [#870](../codebase/870.md)/[#871](../codebase/871.md) carrying one on
+`modal_shown` outbound). This mirrors `ThreadItem`'s array +
 scan-by-id shape exactly: the selector returns the array by reference (referential stability for a
 future render), and insertion order survives without leaning on `Record` key ordering.
 

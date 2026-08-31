@@ -224,8 +224,10 @@ describe('ComposerOptionsMenu — the interaction container, collapsed (#840)', 
 
   it('renders the anchor and a trigger advertising a closed menu popup (AC1)', () => {
     const markup = renderMenu()
-    // The #839 wrapper, with NO style prop: --composer-options-shift is the consumer's to set, and wiring
-    // the clamp belongs to #680 with the rest of the first live mount.
+    // The #839 wrapper, with NO style prop. Since #847 the clamp lives in this container, so this reads:
+    // --composer-options-shift is written IMPERATIVELY in a layout effect, which no static render runs, so
+    // the resting markup is unchanged. It is the deterministic detector for that decision — the declarative
+    // form would append style="--composer-options-shift:0px" and fail this whole opening tag.
     expect(markup).toContain('<div class="composer-options-anchor">')
     expect(markup).toContain('aria-haspopup="menu"')
     // React stringifies the aria boolean under server render → "false", directly assertable.

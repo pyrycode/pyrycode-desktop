@@ -1327,7 +1327,7 @@ effort (#683), this ticket's context-usage reading, and attach (#685) — and at
 of them were blocked on daemon work that doesn't exist yet. #811 built the row itself and landed the one
 occupant that wasn't blocked; **no placeholder element and no disabled control for the rest**. **#680 is
 the first of the blocked four to land** — it needed no daemon work at all, only the already-shipped
-[options panel](#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680)
+[options panel](#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)
 — so two of the row's five slots are occupied today and three (#682, #683, #685) still stay empty:
 
 ```
@@ -1383,7 +1383,7 @@ box-edge alignment; the two rows are inset differently by design. `gap: var(--sp
 trigger and the context reading since #680; #682/#683 inherit the same row spacing instead of each
 re-deriving it.
 
-### Composer options panel (#838, placed #839, keyboard-driven since #840, first live mount since #680)
+### Composer options panel (#838, placed #839, keyboard-driven since #840, first live mount since #680, right-edge clamp wired since #847)
 
 The one panel surface that all remaining footer slots and one message-box consumer open rather than
 each building its own: Actions (#680, landed), permission mode (#682), model and effort (#683), and
@@ -1541,7 +1541,9 @@ put it on the message box rather than on a button):
   If the row inset ever moves, this must move with it or the labels drift; writing the token rather
   than the literal makes that automatic.
 - **`--composer-options-shift`** is AC3's right-edge clamp, defaulting to `0px` so the resting rule
-  stands with no consumer setting it. It is computed by `composerOptionsShiftPx()`, a new file,
+  holds at every legal window width, where the computed shift is in fact always `0` (see #847 below —
+  the sole live consumer's anchor sits over 200px inside the narrowest permitted window). It is computed
+  by `composerOptionsShiftPx()`, a new file,
   `composerOptionsPlacement.ts`, built to the `threadScrollPosition.ts` shape: framework-free, DOM-free,
   a total function over three named plain numbers (`anchorLeft`, `panelWidth`, `windowWidth` — named
   rather than positional so `panelWidth`↔`windowWidth` can't transpose silently at the untested call
@@ -1556,8 +1558,9 @@ put it on the message box rather than on a button):
   clamp**: the sidebar is `flex: 0 0 400px` and never shrinks, so the leftmost footer button's left edge
   is `20 + 400 + 20 + 12 + 16 = 468` at every window width and the panel's leftmost resting edge is
   456 — unreachable by construction, so a guard for it would be an untestable branch defending an
-  unobservable failure. Ships dormant, exactly like `threadScrollPosition.ts` ahead of #601: no footer
-  button exists yet to open the panel from, so no caller was added to "prove it works."
+  unobservable failure. Shipped dormant at #839, exactly like `threadScrollPosition.ts` ahead of #601:
+  no footer button existed yet to open the panel from, so no caller was added to "prove it works." #847
+  (below) is the caller.
 - The custom property is set on the **anchor**, not the panel, so inheritance carries the shift down
   without widening `ComposerOptionsPanel`'s four-prop surface or forwarding a ref into it — the value
   must carry a unit, or the whole `left` declaration goes invalid at computed-value time and the panel
@@ -1585,7 +1588,11 @@ Code review PASS on both — #838's two non-blocking NITs above, and #839's two 
 reference in a coupling comment, and `window.innerWidth` vs. `document.documentElement.clientWidth` for
 a scrollbar edge case neither worth fixing without a live consumer) — see
 [PR #841](https://github.com/pyrycode/pyrycode-desktop/pull/841) and
-[PR #843](https://github.com/pyrycode/pyrycode-desktop/pull/843).
+[PR #843](https://github.com/pyrycode/pyrycode-desktop/pull/843). #847's review re-examined the
+`innerWidth`/`clientWidth` NIT now that a live consumer exists and closed it rather than reopening it:
+`html, body, #root` are `height: 100%` with every scroll container interior to a pane, so the document
+root never scrolls and the two values coincide — and independently, the shift is `0` at every legal
+window width, so the branch stays unobservable either way.
 
 **Interaction (#840).** Two pieces complete the panel: `composerOptionsKeyboard.ts`, a DOM-free total
 function holding the whole keyboard contract, and `ComposerOptionsMenu`, an exported container in
@@ -1670,9 +1677,77 @@ toggling the menu shut (unreachable without the still-open Tab question above, a
 container's trigger assertions don't yet pin `type="button"` the way the panel's own row test pins it on
 each option — see [PR #845](https://github.com/pyrycode/pyrycode-desktop/pull/845).
 
+**Right-edge clamp wiring (#847).** #839 shipped the arithmetic and the CSS hook dormant, on purpose:
+`composerOptionsShiftPx()` had no caller and `--composer-options-shift` had no setter, because no anchor
+had a real x-position until a real footer button gave it one — #680 was that button. #847 joins the two,
+entirely inside `ComposerOptionsMenu`; no consumer changed and none needed to, since the anchor and panel
+refs are private to the container and it exposes no `style` prop.
+
+A `useLayoutEffect`-shaped effect, gated on `open`, measures `anchorRef.current.getBoundingClientRect().left`,
+`panelRef.current.offsetWidth` and `window.innerWidth` — the three named fields `composerOptionsPlacement.ts`
+takes, in that order so the `panelWidth`↔`windowWidth` transposition stays impossible by inspection — feeds
+them to `composerOptionsShiftPx()`, and writes the result onto the anchor with
+`anchor.style.setProperty('--composer-options-shift', \`${shift}px\`)`. **Imperative, not declarative**: a
+`useState` shift plus a `style` prop was the shape `composerOptionsPlacement.ts`'s own dormant-era sketch
+showed, but it re-renders the subtree per resize event, needs an `as CSSProperties` cast the setter form
+doesn't, and — the deciding reason — `ComposerOptionsPanel.test.tsx:229` already pins the anchor's whole
+opening tag as plain `<div class="composer-options-anchor">`; a `style` prop would fail that shipped
+assertion. Applied once on open and again on every `resize` while open, torn down on close and unmount —
+the outside-click listener's lifecycle, copied verbatim. The property is never cleared on close: the panel
+that inherits it unmounts with it, and the next open recomputes before paint, so a stale value is
+inherited by nothing and displayed never.
+
+**The alias, not a raw `useLayoutEffect`.** `ComposerOptionsMenu` is reached under
+`renderToStaticMarkup` from three test files, `ConversationScreen.test.tsx`'s ~33 sites among them, and
+React 18 logs a warning once per render site when `useLayoutEffect` runs there. The fix is
+`ConversationScreen.tsx:387-394`'s own `useThreadLayoutEffect` pattern, duplicated rather than shared:
+`const useComposerOptionsLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect`,
+declared at module scope beside its only consumer. It costs nothing in the window, where `document`
+exists and the alias resolves to the real `useLayoutEffect`, so the panel still never paints unclamped.
+Duplicated rather than extracted to a shared module — lifting it means editing a ~2700-line merge
+hot-spot to refactor code this ticket didn't otherwise touch; a third consumer is the threshold this
+codebase uses elsewhere for pulling a one-liner out.
+
+**Idempotent by construction, and this is why `anchorLeft` stayed the input.** The panel is `position:
+absolute`, so shifting it moves neither the anchor's rect (an out-of-flow child isn't a flex item) nor
+the panel's own `max-content` width, and `window.innerWidth` is independent of both — every input to
+`composerOptionsShiftPx()` is invariant under the shift it produces, so a `resize` re-read converges
+instead of walking the panel further left each time.
+
+**No vitest coverage, and that absence is itself the ticket's finding**, not a gap: `environment: 'node'`
+runs no layout and no effects, so nothing here is executable at the unit tier. The proof is
+`e2e/composer-options-clamp.spec.ts`, a new file rather than an addition to `composer-actions.spec.ts`
+since the clamp belongs to the shared container and Actions is merely the only host that exists yet —
+this is the file #682 and #683 extend. The spec's rig had to manufacture an overflow no shipped consumer
+can produce: the footer's one control sits at anchor x≈468 at every window width (the sidebar never
+shrinks), and its longest label puts the resting right edge near 586 — over 200px inside the 800px
+minimum window width the app enforces. `BrowserWindow.setMinimumSize` is settable at runtime
+(`paired-shell-navigation.spec.ts`'s precedent), so the spec lifts the floor, narrows to 520px to force a
+real overflow, asserts the clamp, widens back past launch width to prove the shift releases, and restores
+the floor. The rig drives a window size no user can reach; that's disclosed rather than hidden, and it's
+sound because the clamp is geometry-independent and the arithmetic is already pinned at legal widths by
+`composerOptionsPlacement.test.ts`.
+
+One e2e lesson worth carrying to any future geometry spec: **`expect.poll(...).toBe(0)` on a rounded
+pixel delta is not safe** — `toBe` is `Object.is`, and `Math.round` of a tiny negative fraction returns
+`-0`, which is exactly what a *correctly* clamped panel produces. `Object.is(-0, 0)` is `false`, so the
+checkpoint that measured perfectly was the one that never passed, and the failure (`Expected: 0, Received:
+-0`) reads as a product bug rather than a normalisation gap. Normalise (`Object.is(x, -0) ? 0 : x`, or
+add `0`) before asserting zero on any rounded geometry delta.
+
+Code review PASS, one non-blocking SHOULD FIX left uncorrected in this PR: `composerOptionsPlacement.ts`'s
+own doc comment and two `conversation.css` comments still read as though the property ships dormant and
+is wired declaratively by a future consumer (`"It ships DORMANT BY DESIGN… Do not add a caller here"`, a
+`style={{…} as CSSProperties}` recipe, `"the wiring above is all that is left to write"`) — none of which
+is true after this PR, and the declarative shape shown is the one this PR's own reasoning rejected. Left
+uncorrected because both files were outside this diff's touched paths, not because the finding was
+disputed. **Whoever opens `composerOptionsPlacement.ts` for #682 or #683 should correct those four
+comments first** — they currently hand the next consumer a recipe for the wiring this ticket already
+built, in a shape review would reject a second time.
+
 ### Actions menu (#680)
 
-The shared [options panel](#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680)'s
+The shared [options panel](#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)'s
 first live consumer, and the composer footer's leading item (Figma `115:3677`, x=0). Sends `/clear`,
 `/compact` or `/knowledge-capture` as ordinary message text — reset, compact and knowledge capture, one
 click instead of typed by hand. Needs no daemon change and no wire change: claude intercepts a message

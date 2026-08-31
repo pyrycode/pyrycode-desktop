@@ -73,6 +73,9 @@ describe('answerPrompt', () => {
 // to the transient confirm state; both are plain spies here (the container/pure-view split, AC3).
 describe('selectOption — the second-confirm gate', () => {
   const PROMPT: ModalPrompt = {
+    // #878: derived from, but never equal to, the modal id — both are `string`, so only distinct values
+    // can catch a transposition of the two adjacent fields.
+    conversationId: 'conv-m1',
     modalId: 'm1',
     class: 'permission',
     title: 'Allow file write',
@@ -109,6 +112,7 @@ describe('selectOption — the second-confirm gate', () => {
 
   it('leaves the degenerate single-option-is-default prompt ungated (the only choice is the safe default)', () => {
     const single: ModalPrompt = {
+      conversationId: 'conv-m3',
       modalId: 'm3',
       class: 'trust',
       title: 'Trust this workspace',
@@ -143,6 +147,7 @@ describe('resolvePendingOption — the prompt-scoped second-confirm marker (#511
 
   function permissionPrompt(modalId: string): ModalPrompt {
     return {
+      conversationId: `conv-${modalId}`,
       modalId,
       class: 'permission',
       title: `Allow Bash (${modalId})`,
@@ -194,6 +199,7 @@ describe('resolvePendingOption — the prompt-scoped second-confirm marker (#511
   it('scopes by modalId in the `trust` vocabulary too (proceed / exit), the second closed id set', () => {
     function trustPrompt(modalId: string): ModalPrompt {
       return {
+        conversationId: `conv-${modalId}`,
         modalId,
         class: 'trust',
         title: 'Trust this workspace',

@@ -34,6 +34,9 @@ describe('createModalStore', () => {
     expect(outstanding).toHaveLength(1)
     const prompt = outstanding[0] as ModalPrompt
     expect(prompt).toEqual({
+      // #878: distinct from the modal id, so this exact-match expectation catches a transposition of
+      // the two adjacent `string` fields — which `tsc` cannot see through the cast above.
+      conversationId: 'conv-7f3a',
       modalId: 'mdl-7f3a',
       class: 'permission',
       title: 'Allow Bash?',

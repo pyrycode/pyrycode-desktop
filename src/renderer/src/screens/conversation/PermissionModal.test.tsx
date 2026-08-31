@@ -49,6 +49,9 @@ function optionCount(markup: string): number {
 
 // The default marked neither first nor last, so order and default-marking are independent (spec note).
 const PROMPT: ModalPrompt = {
+  // #878: derived from, but never equal to, the modal id — both are `string`, so only distinct values
+  // can catch a transposition of the two adjacent fields.
+  conversationId: 'conv-m1',
   modalId: 'm1',
   class: 'permission',
   title: 'Allow file write',
@@ -88,6 +91,7 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
   it('renders title / prompt / labels as inert text, never live markup (AC4)', () => {
     // No apostrophes — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
     const injected: ModalPrompt = {
+      conversationId: 'conv-m2',
       modalId: 'm2',
       class: 'trust',
       title: '<b>Trust</b>',
@@ -114,6 +118,7 @@ describe('PermissionModalView — the outstanding permission/trust prompt', () =
 
   it('renders exactly one button for a single-option prompt', () => {
     const single: ModalPrompt = {
+      conversationId: 'conv-m3',
       modalId: 'm3',
       class: 'trust',
       title: 'Trust this workspace',

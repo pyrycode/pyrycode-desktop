@@ -362,6 +362,9 @@ describe('subscribeModal', () => {
     const outstanding = selectOutstanding(store.getState())
     expect(outstanding).toHaveLength(1)
     expect(outstanding[0]).toEqual({
+      // #878: the re-delivered prompt carries its conversation too — distinct from the modal id, so an
+      // exact match here catches a transposition the untyped literal hides from `tsc`.
+      conversationId: 'conv-7f3a',
       modalId: 'mdl-7f3a',
       class: 'permission',
       title: 'Allow Bash?',

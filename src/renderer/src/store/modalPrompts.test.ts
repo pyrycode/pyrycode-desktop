@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   reduceModal,
   initialModalState,
+  selectHasOutstandingFor,
   selectOutstanding,
   selectRejections,
   type ModalEvent,
@@ -66,6 +67,7 @@ describe('reduceModal — install', () => {
     const state = run([shown('m1')])
     expect(state.outstanding).toHaveLength(1)
     const prompt: ModalPrompt = {
+      conversationId: 'conv-m1',
       modalId: 'm1',
       class: 'permission',
       title: 'Title m1',
@@ -82,6 +84,25 @@ describe('reduceModal — install', () => {
   it('carries a trust class through unchanged', () => {
     const state = run([shown('m1', { class: 'trust' })])
     expect(state.outstanding[0].class).toBe('trust')
+  })
+})
+
+describe('reduceModal — the held prompt carries its conversation (#878 AC1)', () => {
+  it('COPIES the event conversation id, never derives one from the modal id', () => {
+    // The override moves `conversationId` off the fixture's `conv-${modalId}` default, so a production
+    // derivation would produce `conv-m1` here and fail. The `modalId` nonce is the sole answer-
+    // correlation key (ADR 0009) and must never leak into the scoping value.
+    const state = run([shown('m1', { conversationId: 'conv-other' })])
+    expect(state.outstanding[0].conversationId).toBe('conv-other')
+    expect(state.outstanding[0].modalId).toBe('m1')
+  })
+
+  it('a re-delivery carrying a different conversation id replaces in place (position preserved)', () => {
+    const state = run([shown('m1'), shown('m2'), shown('m1', { conversationId: 'conv-moved' })])
+    expect(state.outstanding.map((p) => p.modalId)).toEqual(['m1', 'm2'])
+    expect(state.outstanding).toHaveLength(2)
+    // Match-and-replace takes the RE-DELIVERED conversation, exactly as it takes the re-delivered title.
+    expect(state.outstanding[0].conversationId).toBe('conv-moved')
   })
 })
 
@@ -408,5 +429,92 @@ describe('initial state + selector', () => {
   it('selectRejections returns the current slice by reference', () => {
     const state = run([rejected('m1')])
     expect(selectRejections(state)).toBe(state.rejections)
+  })
+})
+
+describe('selectHasOutstandingFor — the per-conversation read (#878)', () => {
+  // Inherited `Object.prototype` member names, queried as ordinary conversation ids. The array scan
+  // compares own field VALUES, so none of them can resolve onto the prototype — these pin that against
+  // a future refactor to a container keyed by the (daemon-asserted) conversation id.
+  const INHERITED_NAMES = ['__proto__', 'constructor', 'toString'] as const
+
+  it('reports true for the conversation that raised the held prompt (AC2)', () => {
+    const state = run([shown('m1')])
+    expect(selectHasOutstandingFor('conv-m1')(state)).toBe(true)
+  })
+
+  it('reports true with two prompts held for the SAME conversation (AC2)', () => {
+    const state = run([
+      shown('m1', { conversationId: 'conv-a' }),
+      shown('m2', { conversationId: 'conv-a' })
+    ])
+    expect(selectHasOutstandingFor('conv-a')(state)).toBe(true)
+  })
+
+  it('reports false against the initial, empty state (AC3)', () => {
+    expect(selectHasOutstandingFor('conv-m1')(initialModalState)).toBe(false)
+  })
+
+  it('reports false for a conversation with no outstanding prompt (AC3)', () => {
+    const state = run([shown('m1')])
+    expect(selectHasOutstandingFor('conv-m2')(state)).toBe(false)
+  })
+
+  it("reports false once that conversation's only prompt has been dismissed (AC3)", () => {
+    const state = run([shown('m1'), dismissed('m1')])
+    expect(selectHasOutstandingFor('conv-m1')(state)).toBe(false)
+  })
+
+  it('stays true while a sibling prompt on the same conversation is still held (AC3)', () => {
+    // Per-conversation, not per-prompt: dismissing one of two must not clear the row's dot.
+    const state = run([
+      shown('m1', { conversationId: 'conv-a' }),
+      shown('m2', { conversationId: 'conv-a' }),
+      dismissed('m1')
+    ])
+    expect(selectHasOutstandingFor('conv-a')(state)).toBe(true)
+  })
+
+  it('reports false after a reconnect clears outstanding (AC3)', () => {
+    const before = run([shown('m1')])
+    expect(selectHasOutstandingFor('conv-m1')(before)).toBe(true)
+    const after = reduceModal(before, reconnected())
+    expect(selectHasOutstandingFor('conv-m1')(after)).toBe(false)
+  })
+
+  it('answers two conversations independently — one prompt never answers for another (AC4)', () => {
+    const state = run([
+      shown('m1', { conversationId: 'conv-a' }),
+      shown('m2', { conversationId: 'conv-b' })
+    ])
+    expect(selectHasOutstandingFor('conv-a')(state)).toBe(true)
+    expect(selectHasOutstandingFor('conv-b')(state)).toBe(true)
+    expect(selectHasOutstandingFor('conv-c')(state)).toBe(false)
+  })
+
+  it('reads back TRUE under the exact inherited-property-name id held (AC4)', () => {
+    // A positive read-back, not an absence check: an absence check passes vacuously against an
+    // implementation that silently dropped the entry.
+    for (const name of INHERITED_NAMES) {
+      const state = run([shown('m1', { conversationId: name })])
+      expect(selectHasOutstandingFor(name)(state)).toBe(true)
+      // And it is still only that one conversation's prompt — no neighbour answers for it.
+      expect(selectHasOutstandingFor('conv-m1')(state)).toBe(false)
+    }
+  })
+
+  it('reports false for an inherited property name with no prompt held for it (AC4)', () => {
+    const state = run([shown('m1')])
+    for (const name of INHERITED_NAMES) {
+      expect(selectHasOutstandingFor(name)(state)).toBe(false)
+    }
+  })
+
+  it('installing a `__proto__` conversation id pollutes no prototype (AC4)', () => {
+    const state = run([shown('m1', { conversationId: '__proto__' })])
+    expect(state.outstanding[0].conversationId).toBe('__proto__')
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    expect(Object.prototype).not.toHaveProperty('conv-m1')
+    expect(Object.getOwnPropertyNames(Object.prototype)).not.toContain('m1')
   })
 })

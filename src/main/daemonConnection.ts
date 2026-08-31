@@ -1028,14 +1028,22 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // The modal data path (#201). snake→camel here (`modal_id`→`modalId`,
             // `default_option_id`→`defaultOptionId`); `options` is reused verbatim (the `conversations`
             // precedent — parseModalOption already stripped each option to `{ id, label }`, nothing to
-            // drop, no snake→camel on id/label). The payload DOES carry a `conversation_id` as of
-            // pyrycode#1065 (#870) and this emit deliberately drops it — no renderer-visible surface
-            // changes at the decode slice; #871 adds the DaemonEvent field that carries it across IPC.
-            // A fresh literal with named fields, never a spread. The modal store + bridge (#223), not
-            // the session or timeline store, consumes this. `title` / `prompt` / `options[].label` are
-            // untrusted `claude`-surfaced display text the render slice (#224) must render as plain text.
+            // drop, no snake→camel on id/label). The payload's `conversation_id` (pyrycode#1065,
+            // decoded by #870) is carried across too as of #871, copied BY NAME like every other field
+            // here and read BARE: parseModalShownPayload already requires it, so a missing or
+            // non-string one drops the whole line upstream of this emit, and reaching for `?? ''` here
+            // would turn that fail-closed drop into a silent misattribution — a permission prompt filed
+            // against the wrong conversation, on the one arm where the operator is being asked to grant
+            // something. It is an outbound scoping key, not a correlation key: answering still goes by
+            // `modalId` alone. A fresh literal with named fields, never a spread, so a decoder that
+            // later grows a field cannot smuggle it across IPC. The modal store + bridge (#223), not
+            // the session or timeline store, consumes this — and the bridge rebuilds a fresh ModalEvent
+            // from named fields, so the id stops there until its consumer (#872) reads it. `title` /
+            // `prompt` / `options[].label` are untrusted `claude`-surfaced display text the render
+            // slice (#224) must render as plain text.
             emitDaemonEvent(sink, {
               type: 'modalShown',
+              conversationId: inbound.modalShown.conversation_id,
               modalId: inbound.modalShown.modal_id,
               class: inbound.modalShown.class,
               title: inbound.modalShown.title,
@@ -1045,9 +1053,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             })
             return
           case 'modal-dismissed': {
-            // The modal-resolution data path (#201). snake→camel here; NO `conversation_id` (a modal
-            // carries none). `outcome` is an opaque string carried verbatim. A fresh literal, never a
-            // spread. Consumed by the modal store + bridge (#223).
+            // The modal-resolution data path (#201). snake→camel here; NO `conversation_id` (a
+            // DISMISSAL carries none — `modal_shown` does carry one and rides it across as of #871).
+            // `outcome` is an opaque string carried verbatim. A fresh literal, never a spread.
+            // Consumed by the modal store + bridge (#223).
             emitDaemonEvent(sink, {
               type: 'modalDismissed',
               modalId: inbound.modalDismissed.modal_id,

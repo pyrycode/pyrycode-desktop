@@ -361,10 +361,11 @@ plain text.
 merged 2026-07-17) into `ModalShownPayload` and `parseModalShownPayload`** — the field is now first in
 wire order, a required `requireString` like every other field on this payload, and fail-closed exactly
 like its siblings (absent or non-string → throw before any return). `ModalDismissedPayload` is
-untouched and still carries no `conversation_id`; ADR 0009's claim there stands. The consumer arm at
-`daemonConnection.ts` deliberately **drops the newly-decoded field** — a fresh named-field literal, no
-spread — so no renderer-visible surface changes at this slice; [#871](../codebase/871.md) is the one
-that carries it onward as `conversationId`. Unlike a prior scoping field's arc (`turn_state`,
+untouched and still carries no `conversation_id`; ADR 0009's claim there stands. At this slice the
+consumer arm at `daemonConnection.ts` deliberately **dropped the newly-decoded field** — a fresh
+named-field literal, no spread — so no renderer-visible surface changed yet;
+[#871](../codebase/871.md) is the one that carried it onward as `conversationId`, by name, off the same
+fresh literal. Unlike a prior scoping field's arc (`turn_state`,
 `stall`, `api_retry`, `model_announced`), where the consumer dropped the field at ship and a *later*
 ticket flipped it to carry-onward, `conversation_id` here is an **outbound display-scoping key only** —
 the daemon asserts it from its own active-conversation cursor so a client filters which conversation's
@@ -408,7 +409,7 @@ A **single throw type** (`WireDecodeError`) covers every failure, so the consume
    - `'stall'` → `{ kind: 'stall', stall }` ([#315](../codebase/315.md)) — narrowed via `parseStallPayload` (one `requireString` call, no enum), content-free-logged as `inbound-decoded(code: 'stall')` before the `default` branch. The onset-only liveness signal on the same v2 interactive stream as `turn_state`/`tool_use`; shipped dormant, the render slice #317 is now the first consumer (a sixth owned arm on the timeline bridge).
    - `'api_retry'` → `{ kind: 'api-retry', apiRetry }` ([#492](../codebase/492.md)) — narrowed via `parseApiRetryPayload` (four required fields: one `requireString`, one `requireBoolean`, two `requireNumber` calls, no enum), content-free-logged as `inbound-decoded(code: 'api_retry')` before the `default` branch. The PTY-derived status peer of `stall`, but **not** onset-only (an explicit `active: false` falling edge) and **not** deduped (the rising edge re-fires as the count climbs); shipped dormant, the render slice #493 is now the first consumer.
    - `'tool_use'` → `{ kind: 'tool-use', toolUse }` ([#217](../codebase/217.md)) — narrowed via `parseToolUsePayload` (five `requireString` calls, no enum), content-free-logged as `inbound-decoded(code: 'tool_use')` before the `default` branch. The fourth v2 interactive-stream kind to graduate out of `inbound-unmodeled`.
-   - `'modal_shown'` → `{ kind: 'modal-shown', modalShown }` / `'modal_dismissed'` → `{ kind: 'modal-dismissed', modalDismissed }` ([#201](../codebase/201.md)) — narrowed via `parseModalShownPayload` (the `class` closed-enum check + the `parseModalOption`-mapped `options` array) / `parseModalDismissedPayload` (the `source` closed-enum check), each content-free-logged as `inbound-decoded(code: 'modal_shown' | 'modal_dismissed')` before the `default` branch. Not part of the same v2 interactive-stream family as `assistant_delta`/`turn_state`/`tool_use` — a modal is the permission/trust prompt `claude` raises, gated behind the same `interactive` capability. `modal_shown` gained a `conversation_id` field ([#870](../codebase/870.md), pyrycode#1065) — decoded but dropped at the consumer emit until #871; `modal_dismissed` still carries none.
+   - `'modal_shown'` → `{ kind: 'modal-shown', modalShown }` / `'modal_dismissed'` → `{ kind: 'modal-dismissed', modalDismissed }` ([#201](../codebase/201.md)) — narrowed via `parseModalShownPayload` (the `class` closed-enum check + the `parseModalOption`-mapped `options` array) / `parseModalDismissedPayload` (the `source` closed-enum check), each content-free-logged as `inbound-decoded(code: 'modal_shown' | 'modal_dismissed')` before the `default` branch. Not part of the same v2 interactive-stream family as `assistant_delta`/`turn_state`/`tool_use` — a modal is the permission/trust prompt `claude` raises, gated behind the same `interactive` capability. `modal_shown` gained a `conversation_id` field ([#870](../codebase/870.md), pyrycode#1065) — decoded there, and carried across at the consumer emit by [#871](../codebase/871.md); `modal_dismissed` still carries none.
    - `'tool_result'` → `{ kind: 'tool-result', toolResult }` ([#229](../codebase/229.md)) — narrowed via `parseToolResultPayload` (four `requireString` calls plus one `requireBoolean` call on `is_error`), content-free-logged as `inbound-decoded(code: 'tool_result')` before the `default` branch. The fifth and last v2 interactive-stream kind to graduate out of `inbound-unmodeled`, alongside `assistant_delta`/`turn_end`/`turn_state`/`tool_use`.
    - `'session_settings_updated'` → `{ kind: 'session-settings-updated', sessionSettingsUpdated, inReplyTo: envelope.in_reply_to }` ([#264](../codebase/264.md), `inReplyTo` added by [#261](../codebase/261.md)) — narrowed via `parseSessionSettingsUpdatedPayload` (a single `requireString` call, no enum), content-free-logged as `inbound-decoded(code: 'session_settings_updated')` before the `default` branch. The `set_session_settings` (#263) confirmation reply; `inReplyTo` is propagated from the already-decoded `Envelope.in_reply_to`, not re-parsed.
    - anything else → `return null` — a well-formed `ack` / `hello_ack` / `backfill_since` / etc. is **not an error**, it is simply not modeled here. Since [#130](../codebase/130.md) it is also **logged content-free** (`inbound-unmodeled`, § *Diagnostic logging*) before the `return null`, so an unforeseen envelope kind leaves a footprint instead of vanishing; the return value and the "not surfaced to the UI" behavior are unchanged. (`error` was in this bucket until [#116](../codebase/116.md) promoted it to modeled — see above.)
@@ -573,10 +574,14 @@ case 'message': {
       })
       return
     case 'modal-shown':
-      // #201: fresh named-field literal. NO conversation_id to drop — the wire carries none on a
-      // modal. options reused verbatim (parseModalOption already stripped each to {id,label}).
+      // #201: fresh named-field literal. options reused verbatim (parseModalOption already stripped
+      // each to {id,label}). #871 widened this arm with conversationId — the payload's
+      // conversation_id (pyrycode#1065, decoded by #870), copied by name and read bare, since
+      // parseModalShownPayload already requires it. Outbound scoping only; it stops at the modal
+      // bridge (#223), dormant until #872.
       emitDaemonEvent(sink, {
         type: 'modalShown',
+        conversationId: inbound.modalShown.conversation_id,
         modalId: inbound.modalShown.modal_id,
         class: inbound.modalShown.class,
         title: inbound.modalShown.title,
@@ -586,7 +591,8 @@ case 'message': {
       })
       return
     case 'modal-dismissed':
-      // #201: fresh named-field literal. NO conversation_id to drop.
+      // #201: fresh named-field literal. NO conversation_id — a dismissal carries none (modal_shown
+      // does, and rides it across as of #871).
       emitDaemonEvent(sink, {
         type: 'modalDismissed',
         modalId: inbound.modalDismissed.modal_id,

@@ -185,6 +185,7 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     expect(
       translateDaemonEvent({
         type: 'modalShown',
+        conversationId: 'conv-7f3a',
         modalId: 'mdl-7f3a',
         class: 'permission',
         title: 'Allow Bash?',

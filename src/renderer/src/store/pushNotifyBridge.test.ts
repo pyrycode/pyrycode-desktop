@@ -35,6 +35,7 @@ const turnEnd: DaemonEvent = {
 }
 const modalShown: DaemonEvent = {
   type: 'modalShown',
+  conversationId: 'conv-modal-XYZ',
   modalId: 'modal-XYZ',
   class: 'permission',
   title: 'title-XYZ',
@@ -47,6 +48,7 @@ const modalShown: DaemonEvent = {
 // AC5 no-leak assertions stay meaningful when it is the one that gets sent.
 const otherModalShown: DaemonEvent = {
   type: 'modalShown',
+  conversationId: 'conv-modal-XYZ-2',
   modalId: 'modal-XYZ-2',
   class: 'trust',
   title: 'title-XYZ-2',

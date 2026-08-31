@@ -629,6 +629,7 @@ describe('createDaemonConnection reconnect modal reconcile (in-process fake targ
   // renderer store folds exactly this into `outstanding` (mirrored in modalBridge.test.ts, #416).
   const expectedModalShown = {
     type: 'modalShown',
+    conversationId: 'conv-reconnect-1',
     modalId: MODAL_ID,
     class: 'permission',
     title: 'Allow Bash?',

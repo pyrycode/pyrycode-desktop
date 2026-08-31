@@ -634,12 +634,31 @@ export type DaemonEvent =
   | { type: 'notificationActivated' }
   // The two modal arms (#201). Field names/types mirror `ModalEvent` (modalPrompts.ts, #122) so the
   // #223 bridge is a thin snake→camel rename. Consumed by the modal store + bridge (#223), NOT the
-  // session store or timeline store. `modalId` is the sole correlation key — no `conversation_id` is
-  // carried (the wire carries none on a modal). `title` / `prompt` / `options[].label` are untrusted
-  // `claude`-surfaced display text the render slice (#224) must render as plain text, never HTML.
-  // No token, key, or raw frame (AC4).
+  // session store or timeline store.
+  //
+  // modalShown carries `conversationId` (#871) — the frame's `conversation_id` (pyrycode#1065, decoded
+  // by #870), copied BY NAME at the emit from an already-validated payload, never by spreading the
+  // decoded payload. The decode already required it: a missing or non-string `conversation_id` fails
+  // the whole line without emitting, so the emit reads it bare and a `?? ''` there would turn that
+  // fail-closed drop into a silent misattribution — a permission prompt filed against the wrong
+  // conversation. REQUIRED, never optional: the wire has it always-present, and an assigned `undefined`
+  // survives the structured clone across this channel, so an optional field would invent an absence
+  // case the daemon never produces and make a later `'conversationId' in event` check read true on an
+  // event carrying nothing.
+  //
+  // The id is a daemon-asserted SCOPING KEY, not rendered text — none of the untrusted-text warnings
+  // below attach to it. It is never markup, a filename, a cache key, a lookup path, an attribute or a
+  // URL, and it reaches no log sink (emitDaemonEvent is log-free by construction). It STOPS at the
+  // renderer modal bridge (#223), which rebuilds a fresh ModalEvent from named fields and omits it;
+  // ModalEvent does not carry it, and the consumer that scopes a prompt to a row is #872. It is an
+  // OUTBOUND scoping key only: `modalId` remains the sole correlation key for ANSWERING a prompt, and
+  // the daemon still resolves an inbound `modal_answer` against its own outstanding-modal state.
+  //
+  // `title` / `prompt` / `options[].label` are untrusted `claude`-surfaced display text the render
+  // slice (#224) must render as plain text, never HTML. No token, key, or raw frame (AC4).
   | {
       type: 'modalShown'
+      conversationId: string
       modalId: string
       class: WireModalClass
       title: string

@@ -362,6 +362,7 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
       },
       {
         type: 'modalShown',
+        conversationId: 'conv-7f3a',
         modalId: 'mdl-7f3a',
         class: 'permission',
         title: 'Allow Bash?',

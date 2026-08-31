@@ -1,3 +1,4 @@
+import type { Locator } from '@playwright/test'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope } from '../src/main/transport/codec'
 import type { ToolResultPayload, ToolUsePayload } from '../src/shared/wire/types'
@@ -175,4 +176,179 @@ test('tool row: pending offers no toggle, resolved opens on click and on Enter',
   await page.keyboard.press('Enter')
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(result).toContainText(RESULT_NEEDLE)
+})
+
+// #854 — the header's two groups. A SIBLING test rather than an extension of the one above: each test
+// launches its own app through launchPairedApp, so a second row on the same page would make that test's
+// bare `.tool-row` locators strict-mode-ambiguous. Everything asserted here is GEOMETRY — a flush
+// trailing edge, an engaged ellipsis, a surviving 12px gap — which the renderToStaticMarkup unit tier
+// structurally cannot observe; the markup half is pinned there.
+//
+// The row's existing width equalities above are NOT re-asserted here. They are that test's, they still
+// run, and duplicating them would just make one property fail in two places.
+
+// BOTH LENGTHS ARE DRIVEN, and the short one is not a nicety. Under a long headline the left group
+// fills the header whether or not it is told to — its content alone is wider than the row — so a flush
+// trailing edge there is satisfied by a group that merely SHRINKS. Measured as a control: with
+// `flex: 1 1 auto` deleted from .tool-row__left, the long-headline assertions below all still pass. The
+// SHORT headline is the case the design describes — "anything at the trailing edge floats in behind the
+// headline and drifts with it" — and it is what makes AC1 a real check.
+const LONG_TOOL_USE_ID = 'tool-use-854-long'
+const SHORT_TOOL_USE_ID = 'tool-use-854-short'
+
+// Drawn VERBATIM: neither payload carries an `input` map, so toolHeadline's rule-4 fallback renders
+// `input_summary` as-is and no new fixture machinery is needed. The long one overflows the 800px-minimum
+// window's message column by a wide margin and holds no newline, so its overflow can only be horizontal.
+const LONG_HEADLINE = 'headline-that-overflows-the-message-column-'.repeat(20)
+const SHORT_HEADLINE = 'short.ts'
+
+function toolUseWith(toolUseId: string, inputSummary: string): ToolUsePayload {
+  return {
+    conversation_id: SEEDED_ROW.id,
+    turn_id: 'turn-854',
+    tool_use_id: toolUseId,
+    name: 'read_file',
+    input_summary: inputSummary
+  }
+}
+
+function toolResultFor(toolUseId: string): ToolResultPayload {
+  return {
+    conversation_id: SEEDED_ROW.id,
+    turn_id: 'turn-854',
+    tool_use_id: toolUseId,
+    is_error: false,
+    result_summary: 'one line of result text'
+  }
+}
+
+/** A #854 call, pending. Sealed via the production encoder, like the two frames above. */
+function splitToolUseFrame(toolUseId: string, inputSummary: string): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'tool_use',
+    ts: FIXED_TS,
+    payload: toolUseWith(toolUseId, inputSummary)
+  })
+}
+
+/** Its result — resolves that call in place, which is what brings the trailing group up. */
+function splitToolResultFrame(toolUseId: string): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'tool_result',
+    ts: FIXED_TS,
+    payload: toolResultFor(toolUseId)
+  })
+}
+
+type Box = { x: number; y: number; width: number; height: number }
+
+// `boundingBox()` returns null for a detached or hidden node, and every consumer below does arithmetic
+// on the result, so a `?? -1` sentinel would turn a missing box into a wrong number
+// (host-label-sidebar.spec.ts's shape). The message names the ELEMENT, never a value.
+async function boxOf(locator: Locator, what: string): Promise<Box> {
+  const box = await locator.boundingBox()
+  if (box === null) throw new Error(`expected a laid-out box for ${what}`)
+  return box
+}
+
+test('tool row: the header pins its trailing group flush while the headline ellipsises', async ({
+  launchPairedApp
+}) => {
+  const { page, daemon } = await launchPairedApp()
+
+  // Two rows land on this page, so EVERY locator is scoped to one of them by index — a bare `.tool-row`
+  // descendant selector would be strict-mode-ambiguous the moment the second call arrives (#670's three
+  // collisions). Arrival order is the thread's order, so 0 is the long call and 1 is the short one.
+  const rows = page.locator('.tool-row')
+  const longRow = rows.nth(0)
+  const shortRow = rows.nth(1)
+
+  /** A row's chip metrics, read rather than hardcoded — the tokens behind them may be retuned. */
+  async function chipMetricsOf(
+    row: Locator
+  ): Promise<{ paddingRight: number; borderRight: number; columnGap: number }> {
+    return row.locator('.tool-row__chip').evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        paddingRight: parseFloat(style.paddingRight),
+        borderRight: parseFloat(style.borderRightWidth),
+        columnGap: parseFloat(style.columnGap)
+      }
+    })
+  }
+
+  /**
+   * AC1 for one row: the trailing group's right edge sits on the header's trailing edge, which is the
+   * chip's PADDING edge (border-box right, less the computed padding and border).
+   */
+  async function expectTrailingGroupFlush(row: Locator, what: string): Promise<void> {
+    const metrics = await chipMetricsOf(row)
+    const chip = await boxOf(row.locator('.tool-row__chip'), `${what}'s chip`)
+    const group = await boxOf(row.locator('.tool-row__right'), `${what}'s trailing group`)
+    const headerTrailingEdge = chip.x + chip.width - metrics.paddingRight - metrics.borderRight
+    expect(Math.abs(headerTrailingEdge - (group.x + group.width))).toBeLessThanOrEqual(
+      WIDTH_TOLERANCE_PX
+    )
+  }
+
+  /** Whether a row's headline run is overflowing its box, i.e. whether the ellipsis is engaged. */
+  async function summaryOverflows(row: Locator): Promise<boolean> {
+    return row
+      .locator('.tool-row__summary')
+      .evaluate((element) => element.scrollWidth > element.clientWidth)
+  }
+
+  // --- Pending: the left group is there, the trailing group is ABSENT — not present and empty. An
+  // empty one would still take one side of the chip's 12px gap and move this row's trailing edge away
+  // from the resolved row's, which is the property the width equalities in the test above pin.
+  daemon.pushFrame(splitToolUseFrame(LONG_TOOL_USE_ID, LONG_HEADLINE))
+  await expect(longRow).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(longRow.locator('.tool-row__left')).toHaveCount(1)
+  await expect(longRow.locator('.tool-row__right')).toHaveCount(0)
+  await expect(longRow.locator('.tool-row__chevron')).toHaveCount(0)
+  const pendingChip = await boxOf(longRow.locator('.tool-row__chip'), 'the pending chip')
+
+  // --- Resolved: the trailing group and its chevron appear, flush against the trailing edge.
+  daemon.pushFrame(splitToolResultFrame(LONG_TOOL_USE_ID))
+  await expect(longRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(longRow.locator('.tool-row__right')).toHaveCount(1)
+  await expect(longRow.locator('.tool-row__chevron')).toHaveCount(1)
+  await expectTrailingGroupFlush(longRow, 'the long-headline row')
+
+  // AC3 — the long headline still ellipsises on ONE line and pushes nothing off the trailing edge. An
+  // overflowing scrollWidth is the ellipsis engaged; an unchanged chip height is the single line, and
+  // it is also the assertion that the chevron added no second row.
+  expect(await summaryOverflows(longRow)).toBe(true)
+  const resolvedChip = await boxOf(longRow.locator('.tool-row__chip'), 'the resolved chip')
+  expect(Math.abs(resolvedChip.height - pendingChip.height)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+
+  // The 12px between the two runs survived being re-homed from the chip onto the left group. This is
+  // the one silent regression the split can produce — the gap moving off the chip with no rule
+  // replacing it — and nothing else in either tier catches it.
+  const metrics = await chipMetricsOf(longRow)
+  const nameBox = await boxOf(longRow.locator('.tool-row__name'), 'the tool-name run')
+  const summaryBox = await boxOf(longRow.locator('.tool-row__summary'), 'the headline run')
+  expect(Math.abs(summaryBox.x - (nameBox.x + nameBox.width) - metrics.columnGap)).toBeLessThanOrEqual(
+    WIDTH_TOLERANCE_PX
+  )
+
+  // --- AC1's real check: a SHORT headline, where the runs come nowhere near the trailing edge. Without
+  // .tool-row__left filling the header the chevron would sit just behind the headline and drift with it,
+  // which is exactly what the split exists to prevent — and what the long row above cannot detect.
+  daemon.pushFrame(splitToolUseFrame(SHORT_TOOL_USE_ID, SHORT_HEADLINE))
+  daemon.pushFrame(splitToolResultFrame(SHORT_TOOL_USE_ID))
+  await expect(shortRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(shortRow.locator('.tool-row__chevron')).toHaveCount(1)
+  // The headline genuinely fits — so the group below is flush because it was PLACED there, not because
+  // its sibling's content pushed it there.
+  expect(await summaryOverflows(shortRow)).toBe(false)
+  await expectTrailingGroupFlush(shortRow, 'the short-headline row')
+
+  // Both rows put their trailing edge in the SAME column, which is the point of the split: a thread of
+  // tool calls reads as a column with its affordances lined up rather than as a ragged stack.
+  const longGroup = await boxOf(longRow.locator('.tool-row__right'), 'the long row group')
+  const shortGroup = await boxOf(shortRow.locator('.tool-row__right'), 'the short row group')
+  expect(Math.abs(longGroup.x - shortGroup.x)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
 })

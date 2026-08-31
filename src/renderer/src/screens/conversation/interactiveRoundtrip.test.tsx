@@ -93,6 +93,7 @@ describe('#179 interactive round-trip — the flip lights up the mounted pipelin
 
     bridge.emit({
       type: 'modalShown',
+      conversationId: 'conv-1',
       modalId: 'mdl-1',
       class: 'permission',
       title: 'Allow Bash?',

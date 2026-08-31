@@ -3153,7 +3153,7 @@ describe('createDaemonConnection — modal_shown stream (#201)', () => {
     return ctx
   }
 
-  it('emits six camelCase fields, options in order — and deliberately NOT conversation_id (#870, carried by #871)', async () => {
+  it('emits seven camelCase fields including the conversation id, options in order (#871)', async () => {
     const { sink, drivers } = await connected()
     const before = emitted(sink).length
 
@@ -3177,6 +3177,7 @@ describe('createDaemonConnection — modal_shown stream (#201)', () => {
     expect(events).toEqual([
       {
         type: 'modalShown',
+        conversationId: 'conv-7f3a',
         modalId: 'mdl-7f3a',
         class: 'permission',
         title: 'Allow Bash?',
@@ -3210,6 +3211,38 @@ describe('createDaemonConnection — modal_shown stream (#201)', () => {
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('emits exactly the seven modeled properties, never a spread of the decoded payload (#871)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modalShownPlaintext({
+        conversation_id: 'conv-7f3a',
+        modal_id: 'mdl-7f3a',
+        class: 'permission',
+        title: 'Allow Bash?',
+        prompt: 'claude wants to run: rm -rf build/',
+        options: [{ id: 'allow', label: 'Allow' }],
+        default_option_id: 'allow',
+        smuggled: 'must-not-cross'
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'class',
+      'conversationId',
+      'defaultOptionId',
+      'modalId',
+      'options',
+      'prompt',
+      'title',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
   })
 })
 

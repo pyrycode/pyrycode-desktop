@@ -347,3 +347,27 @@ a judgement call here.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-01
+
+## Revisions
+
+### 2026-09-01 — Open Questions resolved, no design change
+
+Both were naming/placement calls and both resolved as the plan leaned. Recorded so the pair is
+visibly closed rather than dropped.
+
+1. **`Wire` prefix on the nested types — kept.** Shipped as `WireQuestionOption` and `WireQuestion`,
+   matching `WireModalOption`'s precedent and leaving `Question` free for the renderer-side view
+   model the panel slice will want. No contract consequence: the wire keys are unaffected by the
+   TypeScript identifier.
+2. **Placement — after `ModalCancelPayload`, as leaned.** That is where the modal family ends, so the
+   question family reads as its own contiguous block directly below it, satisfying the ticket's
+   "beside `ModalShownPayload` and `WireModalOption`". The `EnvelopeType` member went after
+   `'modal_cancel'`, keeping the interactive-gated frames together.
+
+One implementation note worth carrying, since it is not visible in the diff: the **RED came from
+`tsc`, not from vitest**. The test file imports these types with `import type`, which vitest erases,
+and vitest never typechecks — so the new block's runtime assertions would have passed green against
+missing types. The genuine RED was `npm run typecheck` reporting the three absent exports, the
+unassignable `'question_shown'`, and three *unused* `@ts-expect-error` directives; that last one is
+what makes the required-field pins two-way, since relaxing any field to optional turns the directive
+unused and reddens the file at compile time.

@@ -219,3 +219,8 @@ notes](../codebase/249.md) for the render design.
 - [#877 codebase notes](../codebase/877.md) — carries `conversation_id` the last hop onto `ModalEvent`'s
   `shown` arm; `translateModalEvent` copies it by name into the existing fresh literal. No new case, no
   new arm — this bridge's shape is otherwise unchanged.
+- [Question-batch model](question-batch-model.md) § The bridge — the question vertical's clone of this
+  file's shape ([#900](https://github.com/pyrycode/pyrycode-desktop/issues/900), a fourth independent
+  subscriber on the same channel), diverging in one place: the question family rebuilds each row
+  (`multi_select` → `multiSelect`) rather than only filtering, since its wire fields aren't already
+  camelCase field-for-field the way this bridge's are.

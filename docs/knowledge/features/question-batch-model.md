@@ -22,8 +22,8 @@ fail-closed. This module holds the outstanding batches as a single, testable sou
 batch (if any) is outstanding for a given conversation, addressed by the daemon's one-time
 `questionBatchId` nonce. There is no Zustand store, no React hook, no wire-type import in *this* module
 — that's the sibling `questionBatchStore.ts` (§ The Zustand container, below), which wraps this reducer
-without redefining it. The `DaemonEvent → QuestionBatchEvent` bridge is still
-[#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s, natively blocked-by this module.
+without redefining it. The `DaemonEvent → QuestionBatchEvent` bridge has since shipped in
+[#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (§ The bridge, below).
 
 ## How it works
 
@@ -172,17 +172,76 @@ isolation, and a read-only check on the app singleton — not the reducer's bran
 `questionBatches.test.ts` already owns. No test for `useQuestionBatchStore` itself: a bare hook is
 untestable without a React renderer, which this repo has none of (the `useModalBridge`/#202 precedent).
 
-Nothing mounts this store yet. [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s bridge
-dispatches into it; the panel slices ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851),
+[#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s bridge dispatches into this store; the
+panel slices ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851),
 [#853](https://github.com/pyrycode/pyrycode-desktop/issues/853)) read from it via
 `useQuestionBatchStore`.
 
+### The bridge (`questionBridge.ts`)
+
+Introduced in [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900), the **fourth**
+independent subscriber on the `onDaemonEvent` channel — the `announcedModelBridge` posture, not
+`modalBridge`'s: `daemonEventBridge` owns the session arms, `timelineBridge` the stream arms and
+`modalBridge` the modal arms, each returning `null` for the two question arms *permanently*, since none
+of the three will ever claim them. This bridge owns exactly those two arms plus `connected`. It edits
+none of the other three files.
+
+```ts
+translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent | null
+// Owns questionShown / questionDismissed / connected, each rebuilt as a fresh named-field literal
+// (never `return event`, never a spread). Every other arm -> null via explicit fall-through case
+// labels, then default: assertNever(event) — modalBridge's hard-guard form, not
+// announcedModelBridge's `default: return null`.
+
+subscribeQuestionBatches(onDaemonEvent, dispatch): () => void
+// onDaemonEvent(event => { const qe = translateQuestionEvent(event); if (qe) dispatch(qe) })
+// returns the exact off handle (the subscribeModal idiom) — pure, spy-testable, no React.
+
+useQuestionBridge(): void
+// useEffect(() => subscribeQuestionBatches(window.pyry.onDaemonEvent,
+//   e => questionBatchStore.getState().dispatch(e)), [])
+// StrictMode double-mount (mount -> cleanup -> mount) nets exactly one live listener.
+```
+
+**This bridge rebuilds, where `translateModalEvent` only filters.** The modal wire fields were already
+camelCase field-for-field, so that translator copies them unchanged. This family has one renamed field
+and it sits on the nested question row: `multi_select` → `multiSelect`, per the reducer's own
+`multiSelect` field above — the nested rows otherwise cross IPC snake_case by settled house rule. The
+compiler forces the split rather than leaving it to care: `readonly WireQuestion[]` is not assignable to
+`readonly Question[]` (the `multi_select`/`multiSelect` mismatch), so the `questions.map(...)` rebuild
+is mandatory; `WireQuestionOption[]` *is* assignable to `readonly QuestionOption[]`, so each question's
+`options` is assigned by reference, no cast, no copy — matching `translateModalEvent`'s
+`options: event.options` and this module's own by-reference hold of `questions` one level up. **There is
+no rename at the option level** — `WireQuestionOption`/`QuestionOption` are both exactly
+`{ label, description }` — and inventing a per-option rebuild here is this family's easiest mistake to
+make by over-generalizing the two-nesting-level warning that runs through this vertical's docblocks
+(that warning is about *where* `options` hangs, off each question rather than off the batch, never a
+claim that a field is renamed at both levels).
+
+`connected` maps to a payload-free `{ type: 'reconnected' }`, ignoring `event.ack`, so every supervisor
+(re)handshake clears `outstanding` and the daemon's connect-time re-send is the sole repopulation truth
+— the same `#415` call `translateModalEvent` makes. `questionDismissed` carries `outcome`/`source`
+through verbatim though the reducer reads neither; `source` is deliberately read as an opaque `string`,
+never `WireModalSource`, matching § Edge cases below.
+
+`null` here means "not our arm", never "bad data": a malformed frame is rejected upstream by
+`parseQuestionShownPayload`'s fail-closed decode before any event is emitted, which is also why the
+`.map` in the `questionShown` case is total over `questions`.
+
+**Not wired into `App.tsx`.** `useQuestionBridge` ships dormant, matching how #223 left `useModalBridge`
+unmounted for #224 — the question panel ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851))
+is its production caller. No `useQuestionBridge` test exists for the same reason `useModalBridge` has
+none: a bare hook is untestable without a React renderer, and this repo has none. The StrictMode
+double-mount claim is instead proven at the `subscribeQuestionBatches` seam directly — the spec's
+`fakeBridge()` tracks a **set** of live listeners with per-subscription off handles (not the single
+captured listener `modalBridge.test.ts`'s fake uses), because a single-listener fake cannot distinguish
+"the cleanup ran" from "the second mount overwrote the first," which is exactly AC5's claim.
+
 ## Configuration and usage
 
-Nothing mounts this vertical yet. The `DaemonEvent → QuestionBatchEvent` bridge mapping
-`questionShown`/`questionDismissed` onto the events above, plus renaming `multi_select` at both nesting
-levels, is [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s, natively blocked-by this
-module and built on the container above.
+Nothing mounts this vertical's render surface yet. `useQuestionBridge` ships dormant, wired to no
+component; the question panel ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851)) is what
+mounts it and turns the container above into visible state.
 
 ## Edge cases and limitations
 
@@ -220,6 +279,22 @@ module and built on the container above.
   No findings across trust boundaries, keying, logging, tokens, storage, IPC/Electron surface, crypto,
   network/I/O, error messages, or concurrency — all either not applicable (no I/O, no async surface, no
   secret) or answered by the array-scanned-by-id + never-logs-the-nonce design above.
+- **The bridge is a shape boundary, not a trust boundary.** `translateQuestionEvent` (§ The bridge,
+  above) rebuilds each question row but does not — and cannot — make the four claude-authored strings
+  trusted; the untrusted→validated crossing already happened upstream in `parseQuestionShownPayload`.
+  `string` carries no type-system signal for the difference on either side of the bridge, so the render
+  slice's obligation to escape plain text only (never a raw-markup sink, never an attribute/URL/filename/
+  cache-key/lookup-path/log) stands unchanged by this module existing.
+- **The three pre-existing bridges' `null` arms for both question types are a permanent regression
+  guard, not dormant scaffolding.** `daemonEventBridge`, `timelineBridge` and `modalBridge` will never
+  claim `questionShown`/`questionDismissed` — [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)
+  added a fourth bridge rather than editing any of the three, and their `assertNever`-guarded exhaustive
+  switches mean a change in ownership would be a compile error in whichever file lost the case.
+- **Security review (#900): PASS.** No findings across trust boundaries, tokens/secrets, storage,
+  IPC/Electron surface, crypto, network/I/O, error messages/logs, or concurrency — the bridge adds no
+  IPC channel, no logger call and no comparison of any kind (`questionBatchId` matching stays
+  `reduceQuestionBatches`' plain `===`, never `crypto.timingSafeEqual`); see
+  `docs/specs/architecture/900-question-bridge.md` for the full review.
 
 ## Testing strategy
 
@@ -229,6 +304,17 @@ mirror `modalPrompts.test.ts`'s idiom: a `shown(...)`/`dismissed(...)`/`reconnec
 defaults and `Partial<Omit<Extract<…>>>` overrides, and a `run(...)` fold helper. One explicit test
 asserts the module's import set is empty (AC1) — stronger than a denylist, since any future import of
 any kind reddens the test rather than passing because it wasn't on a banned list. 32 tests green.
+
+`src/renderer/src/store/questionBridge.test.ts` (#900) covers the bridge: `questionShown` → `shown` with
+an exact `toEqual` and `conversationId`/`questionBatchId` distinct in the fixture (both are plain
+`string`, so tsc cannot catch a transposition); the rebuilt question carries `multiSelect` and no
+`multi_select` key, asserted on the key set since an extra key survives a loose match; each rebuilt
+question's `options` is the same array/object references as the wire question's; `questionDismissed` →
+`dismissed` including an unrecognised `source`, proving the field is not enum-checked; `connected` → a
+payload-free `reconnected`; an inverse-filter table over the other 38 `DaemonEvent` arms, each
+`toBeNull()`; `subscribeQuestionBatches` unit coverage; and an end-to-end pass through a real
+`createQuestionBatchStore()` and the seam (no React) proving shown → dismissed drives `outstanding`
+`[1] → []` and a `connected` after a `shown` clears the held set.
 
 ## Related
 
@@ -247,7 +333,10 @@ any kind reddens the test rather than passing because it wasn't on a banned list
   structural precedent § The Zustand container clones (DI-factory → singleton → hook → selectors).
 - `docs/specs/architecture/899-question-batch-store.md` — the container's architecture spec and its own
   security review (verdict PASS).
+- `docs/specs/architecture/900-question-bridge.md` — the bridge's architecture spec, including its own
+  security review (verdict PASS).
 - Split from [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850); the Zustand container
   shipped in [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899) (§ The Zustand container,
-  above); unblocks [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (the `DaemonEvent`
-  bridge).
+  above); the `DaemonEvent` bridge shipped in
+  [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (§ The bridge, above), landing dormant
+  — the question panel ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851)) mounts it.

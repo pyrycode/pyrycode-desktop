@@ -122,6 +122,11 @@ function encodeModalDismissed(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 16, type: 'modal_dismissed', ts: FIXED_TS, payload })
 }
 
+/** A `question_shown` envelope's plaintext bytes, wrapping an arbitrary payload (#884). */
+function encodeQuestionShown(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 901, type: 'question_shown', ts: FIXED_TS, payload })
+}
+
 /** A `conversation_created` envelope's plaintext bytes, wrapping an arbitrary payload (#241). */
 function encodeConversationCreated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 18, type: 'conversation_created', ts: FIXED_TS, payload })
@@ -397,6 +402,50 @@ const MODAL_DISMISSED = {
   outcome: 'allow',
   source: 'remote'
 }
+
+/**
+ * A fully-populated, well-formed question_shown payload (#884). Lifted VERBATIM from the daemon's own
+ * committed encoder output (`internal/protocol/testdata/question_shown.json`), as #883's type tests were:
+ * the pin is against the daemon's encoder rather than a hand-written guess, so a contract change surfaces
+ * as a fixture diff. Two questions, `multi_select` false then true, options in wire order.
+ */
+const QUESTION_SHOWN = {
+  conversation_id: 'conv-1',
+  question_batch_id: 'qb-7f3a',
+  questions: [
+    {
+      question: 'Which write strategy should the cache use?',
+      header: 'Write strategy',
+      options: [
+        { label: 'Write-through', description: 'Writes reach the cache and the store together.' },
+        { label: 'Write-behind', description: 'Writes reach the cache first, the store later.' }
+      ],
+      multi_select: false
+    },
+    {
+      question: 'Which eviction policies should it support?',
+      header: 'Eviction',
+      options: [
+        { label: 'LRU', description: 'Evict the least recently used entry.' },
+        { label: 'LFU', description: 'Evict the least frequently used entry.' },
+        { label: 'TTL', description: 'Evict entries after a fixed time to live.' }
+      ],
+      multi_select: true
+    }
+  ]
+}
+
+/** The daemon's `question_shown_zero.json` — every string empty, one option (#884). Empty is a VALUE. */
+const QUESTION_SHOWN_ZERO = {
+  conversation_id: '',
+  question_batch_id: '',
+  questions: [
+    { question: '', header: '', options: [{ label: '', description: '' }], multi_select: false }
+  ]
+}
+
+/** One well-formed question, for building single-question reject cases without restating the batch. */
+const ONE_QUESTION = QUESTION_SHOWN.questions[0]
 
 /** A well-formed conversation summary with a string name — a saved channel (#139). */
 const CONV_NAMED = {
@@ -3180,6 +3229,261 @@ describe('parseInboundMessage — modal_dismissed fail-closed (#201)', () => {
   })
 })
 
+/** A batch carrying exactly the given questions — for reject cases that vary one nesting level. */
+function batchWith(questions: unknown): unknown {
+  return { ...QUESTION_SHOWN, questions }
+}
+
+/** One question carrying exactly the given options — for reject cases at the option level. */
+function questionWith(options: unknown): unknown {
+  return { ...ONE_QUESTION, options }
+}
+
+describe('parseInboundMessage — question_shown recognition (#884, additive)', () => {
+  it('narrows a full question_shown into { kind: question-shown } carrying every field verbatim', () => {
+    // An exact toEqual, not a field-by-field spot check: it is what catches a key transposition between
+    // the two same-typed strings at each level, and what proves unknown keys are not spread through.
+    expect(parseInboundMessage(encodeQuestionShown(QUESTION_SHOWN))).toEqual({
+      kind: 'question-shown',
+      questionShown: QUESTION_SHOWN
+    })
+  })
+
+  it('preserves question and option order, and both multi_select positions', () => {
+    const result = parseInboundMessage(encodeQuestionShown(QUESTION_SHOWN))
+    if (result?.kind !== 'question-shown') throw new Error('expected a question-shown')
+    const { questions } = result.questionShown
+    expect(questions.map((q) => q.header)).toEqual(['Write strategy', 'Eviction'])
+    expect(questions.map((q) => q.multi_select)).toEqual([false, true])
+    // Array position IS the display order at both levels — a reordering here is a product bug.
+    expect(questions[1].options.map((o) => o.label)).toEqual(['LRU', 'LFU', 'TTL'])
+  })
+
+  it('stops reaching the inbound-unmodeled arm (#884, AC1)', () => {
+    // The behaviour this slice exists to change. Before it, the frame fell to `default:` and logged
+    // inbound-unmodeled; the log record is what actually distinguishes decoded from swallowed.
+    const { log, lines } = captureLog()
+    parseInboundMessage(encodeQuestionShown(QUESTION_SHOWN), log)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('question_shown')
+  })
+
+  it('decodes the all-zero fixture — an empty string is a VALUE, not an absence', () => {
+    expect(parseInboundMessage(encodeQuestionShown(QUESTION_SHOWN_ZERO))).toEqual({
+      kind: 'question-shown',
+      questionShown: QUESTION_SHOWN_ZERO
+    })
+  })
+
+  it('decodes an empty questions array without throwing (AC3)', () => {
+    // Out of contract daemon-side (a producer bug), but this decoder polices TYPE, not membership,
+    // and a client must not crash on one. The daemon's own question_shown_empty.json fixture.
+    expect(parseInboundMessage(encodeQuestionShown(batchWith([])))).toEqual({
+      kind: 'question-shown',
+      questionShown: { ...QUESTION_SHOWN, questions: [] }
+    })
+  })
+
+  it('decodes an empty options array on a question without throwing (AC3)', () => {
+    const question = questionWith([])
+    expect(parseInboundMessage(encodeQuestionShown(batchWith([question])))).toEqual({
+      kind: 'question-shown',
+      questionShown: { ...QUESTION_SHOWN, questions: [question] }
+    })
+  })
+
+  it('tolerates unknown keys at all three levels but does NOT copy them through', () => {
+    // Forward-compat: a server-added key must not fail the decode, and must not ride into a consumer.
+    const option = { ...ONE_QUESTION.options[0], future_option_key: 'x' }
+    const question = { ...ONE_QUESTION, options: [option], future_question_key: 'y' }
+    const result = parseInboundMessage(
+      encodeQuestionShown({ ...QUESTION_SHOWN, questions: [question], future_payload_key: 'z' })
+    )
+    expect(result).toEqual({
+      kind: 'question-shown',
+      questionShown: {
+        conversation_id: QUESTION_SHOWN.conversation_id,
+        question_batch_id: QUESTION_SHOWN.question_batch_id,
+        questions: [{ ...ONE_QUESTION, options: [ONE_QUESTION.options[0]] }]
+      }
+    })
+  })
+
+  it('copies every string through VERBATIM whatever its length — no bound, no truncation (AC5)', () => {
+    // AC5 is a decision, not an omission: no maximum length is enforced anywhere daemon-side, and the
+    // `header` cap is documented 12 but OBSERVED 14 runes, so a client trimming at 12 would mangle valid
+    // traffic. The shipped "must be a fail-closed reject rather than a silent trim" caveat chooses between
+    // two wrong behaviours should a bound ever exist; its operative half here is "never silently trim".
+    // Asserted on LENGTH explicitly — a plain decode assertion would pass green against a truncating decode.
+    const longQuestion = 'q'.repeat(10_000)
+    const longHeader = 'H'.repeat(40)
+    const longLabel = 'L'.repeat(5_000)
+    const question = {
+      ...ONE_QUESTION,
+      question: longQuestion,
+      header: longHeader,
+      options: [{ label: longLabel, description: 'd'.repeat(5_000) }]
+    }
+    const result = parseInboundMessage(encodeQuestionShown(batchWith([question])))
+    if (result?.kind !== 'question-shown') throw new Error('expected a question-shown')
+    const decoded = result.questionShown.questions[0]
+    expect(decoded.question).toHaveLength(10_000)
+    expect(decoded.header).toHaveLength(40)
+    expect(decoded.options[0].label).toHaveLength(5_000)
+    expect(decoded.question).toBe(longQuestion)
+    expect(decoded.header).toBe(longHeader)
+    expect(decoded.options[0].label).toBe(longLabel)
+  })
+})
+
+describe('parseInboundMessage — question_shown fail-closed (#884)', () => {
+  it('throws when the payload is not a record', () => {
+    for (const payload of ['nope', ['a'], 42, null, true]) {
+      expect(() => parseInboundMessage(encodeQuestionShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when either payload string is absent or a non-string', () => {
+    const bad: unknown[] = [
+      (() => {
+        const { conversation_id: _dropped, ...missing } = QUESTION_SHOWN
+        return missing
+      })(),
+      (() => {
+        const { question_batch_id: _dropped, ...missing } = QUESTION_SHOWN
+        return missing
+      })(),
+      { ...QUESTION_SHOWN, conversation_id: 42 },
+      { ...QUESTION_SHOWN, conversation_id: null },
+      { ...QUESTION_SHOWN, question_batch_id: {} },
+      { ...QUESTION_SHOWN, question_batch_id: ['qb'] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQuestionShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when questions is absent or not an array', () => {
+    const bad: unknown[] = [
+      (() => {
+        const { questions: _dropped, ...missing } = QUESTION_SHOWN
+        return missing
+      })(),
+      batchWith({}),
+      batchWith('x'),
+      batchWith(3),
+      batchWith(null)
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQuestionShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a question is not a record, or either of its strings is absent / a non-string', () => {
+    const bad: unknown[] = [
+      batchWith(['not-an-object']),
+      batchWith([null]),
+      batchWith([['nested']]),
+      batchWith([
+        (() => {
+          const { question: _dropped, ...missing } = ONE_QUESTION
+          return missing
+        })()
+      ]),
+      batchWith([
+        (() => {
+          const { header: _dropped, ...missing } = ONE_QUESTION
+          return missing
+        })()
+      ]),
+      batchWith([{ ...ONE_QUESTION, question: 42 }]),
+      batchWith([{ ...ONE_QUESTION, header: null }])
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQuestionShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it("throws when a question's options is absent or not an array", () => {
+    const bad: unknown[] = [
+      batchWith([
+        (() => {
+          const { options: _dropped, ...missing } = ONE_QUESTION
+          return missing
+        })()
+      ]),
+      batchWith([questionWith({})]),
+      batchWith([questionWith('x')]),
+      batchWith([questionWith(7)]),
+      batchWith([questionWith(null)])
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQuestionShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when multi_select is absent or not a REAL boolean (AC2)', () => {
+    // The family's only boolean, and the branch a truthiness test would pass green while broken: the
+    // string "false" is truthy, so `!!payload.multi_select` would decode it as `true`. requireBoolean
+    // checks the TYPE, so every one of these fails closed.
+    const bad: unknown[] = [
+      (() => {
+        const { multi_select: _dropped, ...missing } = ONE_QUESTION
+        return missing
+      })(),
+      { ...ONE_QUESTION, multi_select: 'false' },
+      { ...ONE_QUESTION, multi_select: 'true' },
+      { ...ONE_QUESTION, multi_select: 0 },
+      { ...ONE_QUESTION, multi_select: 1 },
+      { ...ONE_QUESTION, multi_select: null }
+    ]
+    for (const question of bad) {
+      expect(() => parseInboundMessage(encodeQuestionShown(batchWith([question])))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('throws when an option is not a record, or either of its strings is absent / a non-string', () => {
+    const bad: unknown[] = [
+      questionWith(['not-an-object']),
+      questionWith([null]),
+      questionWith([{ description: 'd' }]), // label missing
+      questionWith([{ label: 'L' }]), // description missing
+      questionWith([{ label: 42, description: 'd' }]),
+      questionWith([{ label: 'L', description: {} }])
+    ]
+    for (const question of bad) {
+      expect(() => parseInboundMessage(encodeQuestionShown(batchWith([question])))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('fails the WHOLE batch closed when any single option or question is malformed (AC2)', () => {
+    // The parseModalOption posture, propagated by .map through two nesting levels: one bad leaf throws
+    // the batch rather than dropping that leaf. A partial batch would silently hide a choice from the
+    // operator while claude waits on an answer covering it.
+    const badOptionInSecondQuestion = {
+      ...QUESTION_SHOWN,
+      questions: [ONE_QUESTION, questionWith([{ label: 'LRU' }])]
+    }
+    const badSecondQuestion = { ...QUESTION_SHOWN, questions: [ONE_QUESTION, 'not-an-object'] }
+    for (const payload of [badOptionInSecondQuestion, badSecondQuestion]) {
+      expect(() => parseInboundMessage(encodeQuestionShown(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('lets no partial escape — a malformed batch never returns a value (AC2)', () => {
+    // Every other field is well-formed, so the frame would decode were the nested narrow absent.
+    const result = (): unknown =>
+      parseInboundMessage(encodeQuestionShown(batchWith([questionWith([{ label: 'L' }])])))
+    expect(result).toThrow(WireDecodeError)
+    expect(result).toThrow('missing required field: description')
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -3980,6 +4284,60 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a question_shown content-free, never a question / header / label / description / id (#884)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONVERSATION = 'secret-conversation-id'
+    const SECRET_BATCH = 'secret-question-batch-nonce'
+    const SECRET_QUESTION = 'secret-question-text'
+    const SECRET_HEADER = 'secret-header'
+    const SECRET_LABEL = 'secret-option-label'
+    const SECRET_DESCRIPTION = 'secret-option-description'
+    const plaintext = encodeQuestionShown({
+      conversation_id: SECRET_CONVERSATION,
+      question_batch_id: SECRET_BATCH,
+      questions: [
+        {
+          question: SECRET_QUESTION,
+          header: SECRET_HEADER,
+          options: [{ label: SECRET_LABEL, description: SECRET_DESCRIPTION }],
+          multi_select: false
+        }
+      ]
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('question_shown')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log. Deliberately NO count of
+    // questions: the set stays type/bytes/hash, matching the modal_shown arm rather than message_chunk.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    // The four strings are untrusted claude-authored text; conversation_id is a routing key and
+    // question_batch_id an UNGUESSABLE nonce, which must never reach a log at all.
+    for (const secret of [
+      SECRET_CONVERSATION,
+      SECRET_BATCH,
+      SECRET_QUESTION,
+      SECRET_HEADER,
+      SECRET_LABEL,
+      SECRET_DESCRIPTION
+    ]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed question_shown throw path (#884)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeQuestionShown({ ...QUESTION_SHOWN, questions: {} }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('does NOT log on a malformed modal_dismissed throw path (#201)', () => {
     const { log, lines } = captureLog()
     expect(() =>
@@ -4399,6 +4757,60 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
     const dismissedMsg = (dismissedErr as Error).message
     for (const leak of ['admin', 'secret-outcome']) {
       expect(dismissedMsg).not.toContain(leak)
+    }
+  })
+
+  it('never echoes a question_shown field into the thrown message (#884, AC4)', () => {
+    // The message reaches a caller's catch — daemonConnection catches WireDecodeError — so a value
+    // interpolated here could ride into a log the decoder itself is careful never to write. Each case
+    // breaks ONE field while every sibling is a valid string carrying a distinctive sentinel.
+    const cases: Array<{ payload: unknown; leaks: string[] }> = [
+      {
+        // Broken at the option level, the deepest one, with all six sentinels present and valid.
+        payload: {
+          conversation_id: 'secret-conversation',
+          question_batch_id: 'secret-batch-nonce',
+          questions: [
+            {
+              question: 'secret-question',
+              header: 'secret-header',
+              options: [{ label: 'secret-label' }], // description missing
+              multi_select: false
+            }
+          ]
+        },
+        leaks: [
+          'secret-conversation',
+          'secret-batch-nonce',
+          'secret-question',
+          'secret-header',
+          'secret-label'
+        ]
+      },
+      {
+        // Broken at multi_select, with the string "false" — the truthiness trap — as the bad value.
+        payload: {
+          ...QUESTION_SHOWN,
+          conversation_id: 'secret-conversation',
+          question_batch_id: 'secret-batch-nonce',
+          questions: [{ ...ONE_QUESTION, question: 'secret-question', multi_select: 'false' }]
+        },
+        leaks: ['secret-conversation', 'secret-batch-nonce', 'secret-question', 'Write strategy']
+      }
+    ]
+
+    for (const { payload, leaks } of cases) {
+      let err: unknown = null
+      try {
+        parseInboundMessage(encodeQuestionShown(payload))
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(WireDecodeError)
+      const message = (err as Error).message
+      for (const leak of leaks) {
+        expect(message).not.toContain(leak)
+      }
     }
   })
 })

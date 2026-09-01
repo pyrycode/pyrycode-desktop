@@ -13,23 +13,26 @@ import type { ConversationStatus } from '../../store/conversationStatus'
 // same sidebar and must not read as one concept: different contract, different box (a 1px ring vs a filled
 // disc), and — see § the class token below — deliberately disjoint class names.
 //
-// SECURITY: no daemon text can reach this file. The only input is one of three client-owned literals, and
+// SECURITY: no daemon text can reach this file. The only input is one of four client-owned literals, and
 // the label it selects is a client-owned constant in the app's own voice. Nothing is logged on any path,
 // matching the resolver's log-free construction.
 
 /**
  * The accessible name per status, so colour is not the only signal (AC2).
  *
- * A `Record<ConversationStatus, string>` rather than a `switch`: the record is exhaustive BY TYPE, so
- * #802's reserved fourth status (input required) becomes a `npm run typecheck` failure here rather than a
- * silently unlabelled dot — which a `switch` with a `default:` arm would swallow. Its copy matches the
- * ticket's own status table.
+ * A `Record<ConversationStatus, string>` rather than a `switch`: the record is exhaustive BY TYPE, which a
+ * `switch` with a `default:` arm would not be. That choice is what forced #873's fourth status and its
+ * label to ship in ONE commit — adding `'input-required'` to the union without the entry below is a
+ * `npm run typecheck` failure, and `npm run build` runs typecheck first, so the salvage gate catches a
+ * silently unlabelled dot. The record now carries all four; key order mirrors the type's declaration order,
+ * which is the precedence order. Each label's copy is the design-notes status table's own wording.
  *
  * Module-private: nothing outside needs it, and exporting it would ship an unread read surface
  * (`backgroundTaskRosterStore.ts:418-420`'s rule, which `isWorking` in the resolver already follows). The
  * unit spec asserts the shipped literals instead.
  */
 const STATUS_LABELS: Record<ConversationStatus, string> = {
+  'input-required': 'Input required',
   working: 'Assistant working',
   'new-messages': 'New messages',
   idle: 'Idle'

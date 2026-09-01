@@ -27,8 +27,10 @@
 // an activity entry and an unread boolean through the two source stores' own `Map` lookups BEFORE calling
 // in, so the untrusted daemon-asserted string never enters this file and cannot be added without changing
 // the signature. No `Map` lookups here, no object literal keyed by an id, no computed object keys, no
-// `Object.fromEntries`. Daemon text is likewise unreachable: this module reads four booleans and returns
-// one of three client-owned literals, so untrusted content has no path in at all.
+// `Object.fromEntries`. Daemon text is likewise unreachable: this module reads booleans only and returns
+// one of four client-owned literals, so untrusted content has no path in at all. #873's `inputRequired` is
+// a BOOLEAN for exactly this reason — #874 resolves the id through `selectHasOutstandingFor`'s own `Map`
+// lookup at the call site, the same way the activity entry and the unread flag already arrive.
 //
 // Log-free by construction — no `console.*` on any path, matching both source stores. There is no read miss
 // to report: a `null` entry is a DEFINED READING, not an error.
@@ -38,48 +40,54 @@ import type { ConversationActivityEntry } from './conversationActivityStore'
  * The one status a sidebar row draws, as a sealed set. Declared in PRECEDENCE ORDER, so the type reads as
  * the rule the resolver applies.
  *
- * A string-literal union rather than a discriminated union of objects: none of the three carries a payload,
+ * A string-literal union rather than a discriminated union of objects: none of the four carries a payload,
  * and a payload-free closed set is a literal union repo-wide (`PairingRejectReason` at
  * pairingPayload.ts:37, `FingerprintRejectReason`, `WireModalClass`). CLAUDE.md's "discriminated unions on
  * a `type` field" rule is scoped to EVENTS AND ACTIONS; a status is a value, and `{ type: 'working' }`
  * would buy #800's `switch` nothing a literal union does not already give it.
  *
  * Kebab-case, matching every client-owned union in the repo (`'not-base64url'`, `'pubkey-wrong-length'`).
- * The snake_case of `src/shared/wire/` is a WIRE convention and does not apply: none of these three strings
+ * The snake_case of `src/shared/wire/` is a WIRE convention and does not apply: none of these four strings
  * ever crosses the wire, and none is ever rendered either — #800 maps them to client-owned display copy.
  */
 export type ConversationStatus =
+  | 'input-required' // a permission or trust prompt is outstanding; the operator is the blocker
   | 'working' // the assistant is mid-work in this conversation
   | 'new-messages' // content this client holds that the operator has not read
   | 'idle' // nothing to report
 
 /**
- * Which single status a conversation is in, from the two facts this client already holds about it.
+ * Which single status a conversation is in, from the facts this client already holds about it.
  *
  * Total: every input is a defined reading, there is no throw path and no failure mode, so no result type
  * and no UI error path. PARAMETER ORDER IS THE PRECEDENCE ORDER — a reader who has the signature has the
- * rule.
+ * rule. That is why `inputRequired` is FIRST and REQUIRED rather than optional-and-trailing: an optional
+ * parameter cannot hold first position, and keeping the order the rule outranks leaving #801's call site
+ * untouched. The resulting `tsc` red at that one call is the enforcement, not a cost.
  *
- *   0. INPUT REQUIRED → reserved, NOT BUILDABLE and deliberately not a branch. An outstanding permission
- *      or trust prompt cannot be attributed to a conversation because no `conversation_id` rides a modal
- *      frame (docs/knowledge/decisions/0009-modal-prompt-model.md; src/shared/wire/types.ts:835;
- *      src/shared/ipc/events.ts:637). #802 inserts it HERE, above working, once a wire change carries the
- *      id. Do not add an unreachable branch for it in the meantime.
+ *   0. INPUT REQUIRED → a permission or trust prompt is outstanding for this conversation. The one state
+ *      blocked on the OPERATOR, so it outranks everything below and must never hide behind a busier-looking
+ *      status. A boolean, derived at #874's call site from `selectHasOutstandingFor` (modalPrompts.ts:254)
+ *      — never a `conversationId` here, per SECURITY above.
  *   1. WORKING       → any of the four activity facts (see `isWorking`).
  *   2. NEW MESSAGES  → the `unread` boolean, already derived by `isConversationUnread` at the call site.
  *   3. IDLE          → otherwise.
  *
- * The order is what a green suite most easily misses: an implementation that tests `unread` first compiles
- * clean and fails exactly one assertion in `conversationStatus.test.ts` (the working-AND-unread one).
+ * The order is what a green suite most easily misses, at both of its levels: an implementation that tests
+ * `unread` first compiles clean and fails exactly one assertion in `conversationStatus.test.ts` (the
+ * working-AND-unread one), and one that tests `isWorking` before `inputRequired` compiles clean and fails
+ * only the input-required-AND-working one.
  *
  * The two-store read that feeds this happens at #801's CALL SITE, where the non-torn-read argument
  * `conversationUnread.ts:78-84` records applies unchanged — back-to-back reads with no `await` between them
  * in a single-threaded renderer. Nothing here needs a merged snapshot and #801 must not build one.
  */
 export function resolveConversationStatus(
+  inputRequired: boolean,
   activity: ConversationActivityEntry | null,
   unread: boolean
 ): ConversationStatus {
+  if (inputRequired) return 'input-required'
   if (isWorking(activity)) return 'working'
   if (unread) return 'new-messages'
   return 'idle'

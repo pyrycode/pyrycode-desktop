@@ -312,13 +312,20 @@ and handed straight to `ConversationStatusDot`. It renders as `Row`'s **first ch
 `.channel-list__row-open` button, in both `renderBody` map sites (`:558`, `:589`) — so both trees, every
 workspace group, get exactly one unconditional dot, idle included.
 
+[#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added
+[`resolveConversationStatus`](conversation-status.md)'s leading `inputRequired` parameter; this
+call site passes a literal `false` there today, with a comment naming
+[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) as the ticket that replaces it with a
+fourth per-id subscription, `selectHasOutstandingFor(conversationId)` from the modal-prompt model. Until
+then no row here can resolve to `input-required`.
+
 This is also the answer to the question [`conversationUnread.ts`](conversation-unread.md) deliberately left
 open — **where the two-store unread composition lives.** It lives here, per row, keyed by the row's own
 conversation id: never the open conversation's, so a chat the operator has never opened still shows its
 working or unread state correctly.
 
 **Placement — a sibling of the open button, not a child of it.** `ConversationStatusDot` ships a named
-`role="img" aria-label` on all three statuses, idle included, so nesting the dot inside
+`role="img" aria-label` on all four statuses, idle included, so nesting the dot inside
 `.channel-list__row-open` would fold "Idle" (and, live, "Assistant working") into the button's own
 accessible name, mutating it as the daemon works. `RunConfigSections.tsx:270-280` already declined exactly
 this shape for the run-config sheet's unselected radios — a named `role="img"` stays a sibling of an

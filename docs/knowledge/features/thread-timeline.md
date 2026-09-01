@@ -236,7 +236,7 @@ Nothing imports this module yet.
   `channelListViewModel.ts`'s `formatLastActivity`) — restyled and re-copied by
   [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690), which dropped the relative time
   entirely; see [Conversation shell § Session-boundary
-  delimiter](conversation-shell-conversation-and-modals.md#session-boundary-delimiter-286-redrawn-690). `item.occurredAt` stays
+  delimiter](conversation-shell-session-and-channel-info.md#session-boundary-delimiter-286-redrawn-690). `item.occurredAt` stays
   on `ThreadItem` unaffected — the store still owns it, only the render layer stopped reading it. The
   fifth application of the "new timeline-item kind → bridge arm → render row" pattern (#218/#230/#245).
 - **[#317](../codebase/317.md) (shipped)** added the `stalled` scalar and the `stallDetected` arm —

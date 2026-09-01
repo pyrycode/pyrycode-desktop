@@ -161,10 +161,11 @@ slices only read.
 `renderToStaticMarkup`: the server renderer reads `getServerSnapshot()`, which zustand wires to
 `getInitialState()` (the state captured at store creation), so a seed-then-render test against the
 singleton silently asserts against the initial cell. Renderer tests here are static server renders
-(`environment: 'node'`, no `jsdom`, no `@testing-library`), so the render slices, [#851](https://github.com/pyrycode/pyrycode-desktop/issues/851)
-and [#853](https://github.com/pyrycode/pyrycode-desktop/issues/853), need a per-file
-`createQuestionBatchStore(init)` instance to seed, overriding only the `useQuestionBatchStore` binding
-via `vi.mock`.
+(`environment: 'node'`, no `jsdom`, no `@testing-library`), so the render slices — [#906](https://github.com/pyrycode/pyrycode-desktop/issues/906),
+[#907](https://github.com/pyrycode/pyrycode-desktop/issues/907) and
+[#908](https://github.com/pyrycode/pyrycode-desktop/issues/908)/[#853](https://github.com/pyrycode/pyrycode-desktop/issues/853) —
+need a per-file `createQuestionBatchStore(init)` instance to seed, overriding only the
+`useQuestionBatchStore` binding via `vi.mock`, exactly as `composerSlot.test.tsx` (#906) does.
 
 `questionBatchStore.test.ts` asserts the wiring — initial state, `dispatch` threads the reducer through
 all three arms, a same-reference no-op on an unknown `dismissed` id, DI-seeded init, two-instance
@@ -173,9 +174,10 @@ isolation, and a read-only check on the app singleton — not the reducer's bran
 untestable without a React renderer, which this repo has none of (the `useModalBridge`/#202 precedent).
 
 [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s bridge dispatches into this store; the
-panel slices ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851),
-[#853](https://github.com/pyrycode/pyrycode-desktop/issues/853)) read from it via
-`useQuestionBatchStore`.
+panel slices ([#906](https://github.com/pyrycode/pyrycode-desktop/issues/906),
+[#907](https://github.com/pyrycode/pyrycode-desktop/issues/907),
+[#908](https://github.com/pyrycode/pyrycode-desktop/issues/908)/[#853](https://github.com/pyrycode/pyrycode-desktop/issues/853))
+read from it via `useQuestionBatchStore`.
 
 ### The bridge (`questionBridge.ts`)
 
@@ -228,20 +230,27 @@ never `WireModalSource`, matching § Edge cases below.
 `parseQuestionShownPayload`'s fail-closed decode before any event is emitted, which is also why the
 `.map` in the `questionShown` case is total over `questions`.
 
-**Not wired into `App.tsx`.** `useQuestionBridge` ships dormant, matching how #223 left `useModalBridge`
-unmounted for #224 — the question panel ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851))
-is its production caller. No `useQuestionBridge` test exists for the same reason `useModalBridge` has
-none: a bare hook is untestable without a React renderer, and this repo has none. The StrictMode
-double-mount claim is instead proven at the `subscribeQuestionBatches` seam directly — the spec's
-`fakeBridge()` tracks a **set** of live listeners with per-subscription off handles (not the single
-captured listener `modalBridge.test.ts`'s fake uses), because a single-listener fake cannot distinguish
-"the cleanup ran" from "the second mount overwrote the first," which is exactly AC5's claim.
+**Wired into `App.tsx` since [#906](https://github.com/pyrycode/pyrycode-desktop/issues/906).** Through
+that ticket `useQuestionBridge` shipped dormant, matching how #223 left `useModalBridge` unmounted for
+\#224; #906 is the production caller, mounting it beside `useModalBridge`. No `useQuestionBridge` test
+exists for the same reason `useModalBridge` has none: a bare hook is untestable without a React renderer,
+and this repo has none. The StrictMode double-mount claim is instead proven at the
+`subscribeQuestionBatches` seam directly — the spec's `fakeBridge()` tracks a **set** of live listeners
+with per-subscription off handles (not the single captured listener `modalBridge.test.ts`'s fake uses),
+because a single-listener fake cannot distinguish "the cleanup ran" from "the second mount overwrote the
+first," which is exactly AC5's claim.
 
 ## Configuration and usage
 
-Nothing mounts this vertical's render surface yet. `useQuestionBridge` ships dormant, wired to no
-component; the question panel ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851)) is what
-mounts it and turns the container above into visible state.
+[#906](https://github.com/pyrycode/pyrycode-desktop/issues/906) ends the dormant period: `useQuestionBridge`
+now mounts app-level in `App.tsx`, beside `useModalBridge`, and `ConversationScreen.tsx`'s `ComposerSlot`
+is the store's first reader — an outstanding batch for the conversation on screen draws
+`QuestionPanelView` in the composer's slot and covers the whole `.composer` with the native `hidden`
+attribute. See [Conversation shell — conversation surfaces and modals § Question
+panel](conversation-shell-modals.md#question-panel-906) for the render vertical's design;
+this document still owns the model and the bridge underneath it. That slice draws the panel's frame only
+— the title row, the question text, the separator, and an inert Cancel/Continue row — with the option
+rows landing in #907 and the answer path in #908/#853.
 
 ## Edge cases and limitations
 
@@ -335,8 +344,13 @@ payload-free `reconnected`; an inverse-filter table over the other 38 `DaemonEve
   security review (verdict PASS).
 - `docs/specs/architecture/900-question-bridge.md` — the bridge's architecture spec, including its own
   security review (verdict PASS).
+- [Conversation shell — conversation surfaces and modals § Question
+  panel](conversation-shell-modals.md#question-panel-906) — the render vertical #906
+  built on this model and bridge: `ComposerSlot`, `QuestionPanelView`, and the composer's `covered` cover
+  mechanism.
 - Split from [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850); the Zustand container
   shipped in [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899) (§ The Zustand container,
   above); the `DaemonEvent` bridge shipped in
-  [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (§ The bridge, above), landing dormant
-  — the question panel ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851)) mounts it.
+  [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (§ The bridge, above), landing dormant;
+  [#906](https://github.com/pyrycode/pyrycode-desktop/issues/906) mounted it and gave the store its first
+  reader (§ Configuration and usage, above) — the panel's frame only, with #907/#908 still to come.

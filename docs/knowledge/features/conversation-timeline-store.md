@@ -212,7 +212,7 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   the container now subscribes once to the [keyed holder](conversation-timeline-holder.md)'s
   `selectTimelineFor(openConversationId)` and destructures the same six `TimelineState` fields from that
   slice. See [Conversation shell § The open-conversation reader
-  cutover](conversation-shell-conversation-and-modals.md#the-open-conversation-reader-cutover-758). This store's own selectors stay
+  cutover](conversation-shell-actions-menu-and-reader-cutover.md#the-open-conversation-reader-cutover-758). This store's own selectors stay
   exported (unused re-exports of `threadTimeline`'s own, not dead code — see § Configuration below) and this
   store stays dual-written; only the container's read side moved.
 - Import surface (still exported, no longer imported by `ConversationScreen`):

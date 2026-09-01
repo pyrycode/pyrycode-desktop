@@ -421,9 +421,25 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   contract traps: the header cap is documented 12 but observed 14 runes, and this family ships no
   `truncated_fields`, so an over-long field must be a fail-closed reject rather than a silent trim.
   1–4 questions and 2–4 options are stated in claude's contract but enforced nowhere as of
-  2026-09-01, so deliberately not modelled as types. Declaration only — no decoder, no narrowing, no
-  consumer; the genuine RED was `tsc`, not vitest, since the test file's `import type` erases at
-  runtime. Architect self-review PASS.
+  2026-09-01, so deliberately not modelled as types. Declaration only at ship — no decoder, no
+  narrowing, no consumer; the genuine RED was `tsc`, not vitest, since the test file's `import type`
+  erases at runtime. Architect self-review PASS. [#884](https://github.com/pyrycode/pyrycode-desktop/issues/884)
+  added the fail-closed decode into a typed [inbound message](features/inbound-message-decode.md) arm;
+  [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885) carried the decoded batch across IPC
+  as the sealed union's `questionShown` arm — both ship dormant, the question store + bridge
+  ([#850](https://github.com/pyrycode/pyrycode-desktop/issues/850)) is still the first real consumer.
+  [#894](https://github.com/pyrycode/pyrycode-desktop/issues/894) added the sibling frame that retires
+  a batch, `question_dismissed` — its own `EnvelopeType` member, `QuestionDismissedPayload` (three
+  required strings, no `conversation_id`), and a fail-closed `parseQuestionDismissedPayload` mirroring
+  `parseModalDismissedPayload` minus its closed `source` enum: `source` here stays a plain string on
+  purpose, since two of the producer's three terminal paths (a caller disconnect, a daemon shutdown)
+  have no member in `WireModalSource`'s `{remote, local, timeout}` set and its arbiter can't tell them
+  apart, so all three emit the one landed pair, `outcome: 'unanswered'` / `source: 'no_answer'`. The
+  security review's sharpest finding: the frame's daemon-asserted provenance is the producer's promise,
+  not a property the decode verifies — only `typeof === 'string'` is checked, so the switch-arm comment
+  warns the eventual consumer (#895) not to read "decoded" as "sanitized". Also corrects the upstream
+  shape fixture's `source: "timeout"` (pyrycode#1974, pre-producer) against the landed producer's actual
+  pair (pyrycode#1973). Ships dormant; architect self-review PASS.
 - [Host label store](features/host-label-store.md) — `createHostLabelStore({ secureStore })`, the third
   consumer of [secure store](features/secure-store.md) and the first that isn't a secret: the sidebar
   nickname the operator types at pairing, persisted so it survives a restart. Can't live on

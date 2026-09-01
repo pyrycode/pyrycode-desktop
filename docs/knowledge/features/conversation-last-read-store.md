@@ -10,7 +10,7 @@ surface only, no writer, no reader — the same "populated and unread" posture t
 store](conversation-activity-store.md) shipped for #747 and the [conversation timeline
 holder](conversation-timeline-holder.md) shipped for #755 before their own feeds landed. #776 then made it
 survive a restart. **#777 landed the writer** — see [Configuration and usage](#configuration-and-usage)
-below and [Paired shell § The last-read stamp](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777)
+below and [Paired shell § The last-read stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777)
 for the write path itself. **[#778](conversation-unread.md) landed the reader** — a framework-free predicate
 over this store's `selectLastReadFor` and [conversation timeline holder](conversation-timeline-holder.md)'s
 `selectTimelineFor`, reading neither via a bound hook here. **#779 clears it at the pairing boundary** — see
@@ -117,11 +117,11 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   `useConversationLastRead()`, mounted in `PairedShell`, re-stamps the **open** conversation on every
   `conversationTimelineStore` emission so content landing while it stays open never pushes its count past
   its own mark. See [Paired shell § The last-read
-  stamp](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777) for the write path,
+  stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the write path,
   including a reachable, deliberately unfixed edge case where the pairing- and conversation-teardown
   clears can persist a spurious `0` over a true mark (below).
   **Reader landed in [#778](conversation-unread.md). Clear landed in #779** — `clearAllLastRead()`, wired as
-  the seventh and last effect of [`clearPairingScopedState`](paired-shell.md#the-pairserver-route-152),
+  the seventh and last effect of [`clearPairingScopedState`](paired-shell-pair-server-route.md#the-pairserver-route-152),
   called from both paths that end a pairing. Served by `storage.write(new Map())`, not a dedicated port
   `clear()` (#776 declined that method).
 
@@ -150,7 +150,7 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   `clearAllLastRead()` last in that helper's body precisely because of this re-mint, so a pairing-ending
   teardown's spurious `0` is wiped — in memory and on disk — before the helper returns, with a dedicated
   regression test proving it. See [Paired shell § The last-read
-  stamp](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777) for the ordering argument.
+  stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the ordering argument.
   **`exitActiveConversation` (deleting or archiving the open conversation) still has no such floor** — that
   helper clears only the one conversation's own state, never the whole map, so archiving or deleting the
   conversation you have 20 rows read into still drops its mark to `0` on the way out, persisted. No AC is
@@ -184,9 +184,9 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   — why the decode's reject path must stay silent rather than logging the untrusted blob.
 - [#775 codebase notes](../codebase/775.md) — the holder's implementation summary, code review, and
   lessons learned.
-- [Paired shell](paired-shell.md#the-last-read-stamp-conversationlastreadbridgets-777) — #777's write
+- [Paired shell](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) — #777's write
   path (`conversationLastReadBridge.ts`), its two restore points, and the teardown-ordering edge case
   above.
-- [Paired shell § the `pairServer` route](paired-shell.md#the-pairserver-route-152) — #779's
+- [Paired shell § the `pairServer` route](paired-shell-pair-server-route.md#the-pairserver-route-152) — #779's
   `clearAllLastRead`, wired as `clearPairingScopedState`'s seventh and last effect, and the re-mint
   ordering constraint that placement closes.

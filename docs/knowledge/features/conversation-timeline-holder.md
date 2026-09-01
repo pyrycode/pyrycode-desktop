@@ -8,7 +8,7 @@ both of its keyed precedents.
 
 Introduced in [#755](../codebase/755.md), split from #675 alongside #751-#754 (the transport arms that
 widened eight `DaemonEvent`s with `conversationId`, all shipped), #756 (the writer), #757 (the clears) and
-#758 (the reader cutover, shipped). #755 shipped the holder alone — no writer, no reader — the same
+\#758 (the reader cutover, shipped). #755 shipped the holder alone — no writer, no reader — the same
 "populated and unread" posture the [conversation activity store](conversation-activity-store.md) shipped
 for #747 before its own writer/reader landed. [#756](../codebase/756.md) gave it its first writer: both of
 the timeline's row-adding writers — the bridge fan-out and the composer's optimistic echo — now fold into
@@ -27,7 +27,7 @@ pane.
 [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) gave `markViewed` — the one write path
 still shipping unwired — its first production caller, at the activation seam (`activateConversation.ts`,
 constructed once in `PairedShell.tsx`; see [Paired shell § The view
-stamp](paired-shell.md#the-view-stamp-activateconversationts-786)). This is what **arms** the ten-slice
+stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786)). This is what **arms** the ten-slice
 eviction bound in production: until then every slice was never-viewed and eviction silently degraded to
 first-write order. #758 remains the reader cutover, now depending on this rather than performing it.
 
@@ -101,7 +101,7 @@ exactly the thread the operator stepped away from.
   **What is not true, and was before [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786):**
   that only the operator can move a key to the tail. `markViewed`'s one call site is the activation seam
   (`activateConversation.ts`, see [Paired shell § The view
-  stamp](paired-shell.md#the-view-stamp-activateconversationts-786)), and of the three paths that reach it
+  stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786)), and of the three paths that reach it
   two are the operator's own — a row click and a re-click of the row already open — while the third is the
   daemon's own `conversationCreated` confirmation, which `useConversationCreatedNav` activates on
   ungated. The tail is therefore **not** an operator-only region: a compromised paired daemon emitting N
@@ -170,7 +170,7 @@ exactly the thread the operator stepped away from.
   binds `selectTimelineFor(openConversationId)` through a `useMemo`-stable selector factory
   (`selectOpenTimelineFor`, exported from `ConversationScreen.tsx` for its own unit tests), keyed off
   `activeConversationStore`'s id. See [Conversation shell § The open-conversation reader
-  cutover](conversation-shell.md#the-open-conversation-reader-cutover-758).
+  cutover](conversation-shell-conversation-and-modals.md#the-open-conversation-reader-cutover-758).
 - **Clears, as of [#757](../codebase/757.md):** `clearAllTimelines()` — nullary, drops every retained
   slice — is wired into `clearPairingScopedState`, the shared helper both pairing-ending paths (unpair,
   pair-another-server) already call. `clearTimelineFor(conversationId)` — drops exactly one slice, every
@@ -232,7 +232,7 @@ exactly the thread the operator stepped away from.
 ## Related decisions
 
 - [Conversation unread predicate](conversation-unread.md) — #778, a second consumer of `selectTimelineFor`
-  alongside [Conversation shell](conversation-shell.md#the-open-conversation-reader-cutover-758): a
+  alongside [Conversation shell](conversation-shell-conversation-and-modals.md#the-open-conversation-reader-cutover-758): a
   framework-free predicate, not a render, reading this store's output against [conversation last-read
   store](conversation-last-read-store.md)'s mark to answer whether a conversation is unread.
 - [Conversation activity store](conversation-activity-store.md) — the direct structural precedent this
@@ -251,14 +251,14 @@ exactly the thread the operator stepped away from.
   cut the screen over to this store.
 - [Conversation shell](conversation-shell.md) — `ConversationScreen`, this store's first and (as of
   [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)) only reader. See
-  [§ The open-conversation reader cutover](conversation-shell.md#the-open-conversation-reader-cutover-758).
+  [§ The open-conversation reader cutover](conversation-shell-conversation-and-modals.md#the-open-conversation-reader-cutover-758).
 - [Composer send](composer-send.md) — the second row-adding writer #756 folded into this holder, beside
   the bridge fan-out documented on [conversation timeline store](conversation-timeline-store.md).
 - [Paired shell](paired-shell.md) — `clearPairingScopedState` and `exitActiveConversation`, the two pure
   helpers [#757](../codebase/757.md) wires the new clears into, and where they run inside `PairedShell`'s
   nav flow; `activateConversation`, the pure helper
   [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) wires `markViewed` into — see
-  [§ The view stamp](paired-shell.md#the-view-stamp-activateconversationts-786) for the ordering rationale
+  [§ The view stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786) for the ordering rationale
   (outside the id-change gate, after `setActiveConversation`).
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md).
 - [ADR 0008 — Thread timeline model](../decisions/0008-thread-timeline-model.md).

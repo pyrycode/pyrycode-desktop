@@ -108,7 +108,7 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
 - **`useModalBridge()` is mounted at App level, in [#224](../codebase/224.md)** — beside
   `useDaemonEventBridge()`/`useTimelineBridge()` in `App.tsx`, the third independent subscriber on the
   channel, mirroring how #202 shipped `useTimelineBridge` before #203 mounted it. From #224 onward, a
-  live `modalShown`/`modalDismissed` frame reaches `modalStore`, and [`PermissionModal`](conversation-shell.md#permission-modal-224)
+  live `modalShown`/`modalDismissed` frame reaches `modalStore`, and [`PermissionModal`](conversation-shell-conversation-and-modals.md#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511)
   reads `selectOutstanding` to render it. Was gated behind the `interactive` capability flip in
   production through #178; live since [#179](../codebase/179.md).
 - Import surface: `import { useModalStore, selectOutstanding, selectRejections } from
@@ -134,7 +134,7 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
 - **`dismissed` for an unknown/already-dismissed `modalId` is a same-reference no-op**, not a surfaced
   error — inherited from `reduceModal`; this store and bridge do not re-handle it.
 - **`title`/`prompt`/`options[].label` are untrusted `claude` free text, carried opaquely.** Neither
-  the store nor the bridge escapes or sanitizes them — [`PermissionModalView`](conversation-shell.md#permission-modal-224)
+  the store nor the bridge escapes or sanitizes them — [`PermissionModalView`](conversation-shell-conversation-and-modals.md#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511)
   (#224) renders them as plain React children, never HTML, the same discipline `assistant_delta`/#203
   and `tool_use`/#218 already established.
 - **No dedicated test for `useModalBridge`.** A bare hook is untestable without a React renderer (none
@@ -163,7 +163,7 @@ crosses. The arm's producer is a main-side FIFO correlation window in
 The translated `rejected` event feeds a new, `outstanding`-orthogonal `ModalState.rejections: readonly
 string[]` slice — arrival-ordered, de-duplicated `modalId`s — reduced by two new `ModalEvent` arms,
 `rejected` (append, dedup) and the local-only `rejectionDismissed` (remove, dispatched by the user
-clicking a dismiss control, never by the bridge). [`RejectionSurfaceView`](conversation-shell.md#rejection-surface-249)
+clicking a dismiss control, never by the bridge). [`RejectionSurfaceView`](conversation-shell-conversation-and-modals.md#rejection-surface-249)
 renders the stack as a transient banner at the modal host. See [Modal-prompt
 model](modal-prompt-model.md) for the full reducer contract and [#249 codebase
 notes](../codebase/249.md) for the render design.

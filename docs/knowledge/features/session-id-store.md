@@ -2,7 +2,7 @@
 
 The renderer's held copy of the open conversation's **current daemon `session_id`** — a dedicated,
 unidirectional Zustand store fed by the always-arriving `sessionTransition` marker, so the interactive
-[Run configuration](conversation-shell.md#run-configuration-sheet-177) controls ([#257](../codebase/257.md))
+[Run configuration](conversation-shell-workspace-and-run-config.md#run-configuration-sheet-177) controls ([#257](../codebase/257.md))
 can address a `set_session_settings` write to the session that is actually running.
 
 Introduced in [#259](../codebase/259.md), the renderer-side retention half of #183's interactive
@@ -49,10 +49,10 @@ Named setters rather than a reducer: `setSessionId`/`clearSessionId` are indepen
 writes, neither reading prior state nor constraining the other's ordering, so there is still no state
 machine for a discriminated-union action set to model. Shipped with no production caller; [#530](../codebase/530.md)
 (navigation) added the first — `clearSessionId` is now called from
-[`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx), gated on the active
+[`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx), gated on the active
 conversation's id actually changing — a same-id re-open leaves the held session id untouched.
 [#531](../codebase/531.md) (unpair / pair-another-server) added the second, unconditional call site, via
-[`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx) — the pairing
+[`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) — the pairing
 itself is ending there, so unlike #530's gate there is no id to compare against.
 [#652](../codebase/652.md) (the deleted-open-discussion exit) added a third, via
 [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
@@ -95,7 +95,7 @@ daemon → transport (#254) → sessionTransition{newSessionId}
                                      → translateSessionTransition → setSessionId
                                      → sessionIdStore                                  [last marker wins]
 
-#257: useSessionIdStore(selectSessionId) → RunConfigSections' AC5 gate input
+\#257: useSessionIdStore(selectSessionId) → RunConfigSections' AC5 gate input
 ```
 
 ## Configuration and usage
@@ -124,7 +124,7 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   by design, see above), so if the previous conversation is still streaming when the switch happens, a
   marker meant for it that arrives after `clearSessionId()` runs is indistinguishable from the new
   conversation's first marker and gets written — reopening the misdirected-write window
-  [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx) narrows. Not fixable
+  [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) narrows. Not fixable
   at this store's layer; needs a daemon-side conversation-id tag or main-process suppression. Named as an
   open PO follow-up by the architect's security review on #530, not yet its own ticket. The general
   form is unchanged by [#531](../codebase/531.md): unpair tears the transport down first, so no late
@@ -161,10 +161,10 @@ daemon → transport (#254) → sessionTransition{newSessionId}
   only, no caller yet.
 - [#530 codebase notes](../codebase/530.md) — `clearSessionId`'s first production caller: a conversation
   switch, gated on the active conversation's id changing, via
-  [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#531 codebase notes](../codebase/531.md) — `clearSessionId`'s second production caller: a pairing
   ending (unpair / pair-another-server), unconditional, via
-  [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#652 codebase notes](../codebase/652.md) — `clearSessionId`'s third production caller: the open
   discussion being deleted, gated on the id like #530's, via
   [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652).

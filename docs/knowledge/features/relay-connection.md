@@ -88,7 +88,7 @@ Nothing in this flow reaches IPC, the preload, or the renderer. Both directions 
 
 ## Dependency: `ws` (the project's first network dependency)
 
-#21 adds `ws` (`^8.18.0`, runtime `dependencies`) + `@types/ws` (`devDependencies`) — the project's **first network dependency**, justified per CLAUDE.md "Don't add dependencies without justification". The built-in browser/`undici` `WebSocket` in the Electron main process **cannot** set request headers, enforce a max inbound payload, or give handshake-timeout / native ping-pong control. All AC mechanics map directly onto `ws`:
+\#21 adds `ws` (`^8.18.0`, runtime `dependencies`) + `@types/ws` (`devDependencies`) — the project's **first network dependency**, justified per CLAUDE.md "Don't add dependencies without justification". The built-in browser/`undici` `WebSocket` in the Electron main process **cannot** set request headers, enforce a max inbound payload, or give handshake-timeout / native ping-pong control. All AC mechanics map directly onto `ws`:
 
 | Need | `ws` primitive |
 |---|---|

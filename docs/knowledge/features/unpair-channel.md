@@ -19,7 +19,7 @@ pairing" action that, on `ok`, routes back to pairing via `onUnpaired`. `runUnpa
 renderer's session state on that branch until [#531](../codebase/531.md) moved the clear upstream: the
 route flip now runs through a `PairedShell` wrapper that clears the session store alongside the
 timeline, the active conversation, and the daemon session id in one shared step (see [Paired
-shell](paired-shell.md#the-pure-view--container-pairedshelltsx)) — `runUnpair`'s ok branch is left as
+shell](paired-shell-routing.md#the-pure-view--container-pairedshelltsx)) — `runUnpair`'s ok branch is left as
 "flip the route," nothing more. A second caller (an offer-re-pair-on-connection-failure prompt) may
 still ship in [#167](https://github.com/pyrycode/pyrycode-desktop/issues/167).
 

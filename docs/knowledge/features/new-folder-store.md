@@ -40,7 +40,7 @@ already-resolved status (`created`/`rejected`) is ignored — the reducer return
 so zustand's functional `set` sees `Object.is(next, prev)` and skips the notify. Because
 `workspaceFolderRejected` is bare (no correlation key, [#396](../codebase/396.md)), this gate is the
 **sole** guard against a stale or unsolicited reply flipping state — the renderer-side companion to
-#396's main-side `pendingCreateFolders` correlation.
+\#396's main-side `pendingCreateFolders` correlation.
 
 ## How it works
 

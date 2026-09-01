@@ -236,7 +236,7 @@ Nothing imports this module yet.
   `channelListViewModel.ts`'s `formatLastActivity`) — restyled and re-copied by
   [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690), which dropped the relative time
   entirely; see [Conversation shell § Session-boundary
-  delimiter](conversation-shell.md#session-boundary-delimiter-286-redrawn-690). `item.occurredAt` stays
+  delimiter](conversation-shell-conversation-and-modals.md#session-boundary-delimiter-286-redrawn-690). `item.occurredAt` stays
   on `ThreadItem` unaffected — the store still owns it, only the render layer stopped reading it. The
   fifth application of the "new timeline-item kind → bridge arm → render row" pattern (#218/#230/#245).
 - **[#317](../codebase/317.md) (shipped)** added the `stalled` scalar and the `stallDetected` arm —
@@ -271,10 +271,10 @@ Nothing imports this module yet.
   ticket, and `timelineStore.ts`/`timelineBridge.ts` needed no edit — `dispatch` already accepted any
   `ThreadEvent`, and `timelineBridge.ts` never produces a `reset` since no wire frame maps to it.
   [#530](../codebase/530.md) (conversation switch, shipped) added the first dispatch site, via
-  [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx), gated on the active
+  [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx), gated on the active
   conversation's id actually changing. [#531](../codebase/531.md) (unpair / pair-another-server, shipped)
   added the second, unconditional site, via
-  [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
   [#652](../codebase/652.md) (the deleted-open-discussion exit, shipped) added the third, via
   [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
   gated on the id like #530's, but comparing against the just-deleted conversation's id rather than a
@@ -421,26 +421,26 @@ Nothing imports this module yet.
   stops at the timeline bridge, so `ThreadEvent.stallDetected` above is unaffected.
 - [#317 codebase notes](../codebase/317.md) — the render slice: the `stalled` scalar, the
   `stallDetected` arm, and `StallIndicator` (see [Conversation shell § Stall
-  indicator](conversation-shell.md#stall-indicator-317)).
+  indicator](conversation-shell-turn-status.md#stall-indicator-317)).
 - [#492 codebase notes](../codebase/492.md) — the transport slice: decodes `api_retry` into the
   non-nullary `apiRetry` `DaemonEvent` (`active`/`current`/`total`), shipped dormant.
 - [#493 codebase notes](../codebase/493.md) — the render slice: the `apiRetry` scalar, the `apiRetry`
   arm (clearing semantics inverted from `stalled`), `ApiRetryIndicator`, and the `shouldShowThinking`
   supersede predicate (see [Conversation shell § Api-retry
-  indicator](conversation-shell.md#api-retry-indicator-493)).
+  indicator](conversation-shell-turn-status.md#api-retry-indicator-493)).
 - [#495 codebase notes](../codebase/495.md) — the transport slice: decodes `compacting` into the
   non-nullary `compacting` `DaemonEvent` (`active`), shipped dormant.
 - [#496 codebase notes](../codebase/496.md) — the render slice: the `compacting` scalar, the
   `compacting` arm (`apiRetry`'s clearing inversion, minus the counter), `CompactingIndicator`, and the
   second `shouldShowThinking` clause (see [Conversation shell § Compacting
-  indicator](conversation-shell.md#compacting-indicator-496)).
+  indicator](conversation-shell-turn-status.md#compacting-indicator-496)).
 - [#528 codebase notes](../codebase/528.md) — the nullary `reset` arm, ported from [`sessionStore`'s
   `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
 - [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation
-  switch, via [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  switch, via [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#531 codebase notes](../codebase/531.md) — `reset`'s second production dispatch site: a pairing
   ending, unconditional, via
-  [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#642 codebase notes](../codebase/642.md) — the transport slice: decodes `tool_use.input` into the
   optional `DaemonEvent.toolUse.input` field, shipped dormant.
 - [#643 codebase notes](../codebase/643.md) — widens the `toolUse`/`toolCall` pair with `input`, carried

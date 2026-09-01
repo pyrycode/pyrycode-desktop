@@ -97,7 +97,7 @@ generic `sendCommand(command: RendererCommand)` pipe already carries the new mem
 `phase` off `useTimelineStore(selectPhase)` and later (through
 [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)) off a required prop from the container
 instead — see [Conversation shell § The open-conversation reader
-cutover](conversation-shell.md#the-open-conversation-reader-cutover-758) for that history.
+cutover](conversation-shell-conversation-and-modals.md#the-open-conversation-reader-cutover-758) for that history.
 
 **As of [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678):** `InterruptControl` and
 `InterruptButton`, their mount, and all five `.conversation__interrupt` / `.interrupt-button*` CSS rules
@@ -157,7 +157,7 @@ always-visible container is a deliberate desktop divergence before it is filed.
 
 **One accepted behavioural consequence, not a defect** (code review, PR #804): because the stop variant is
 never disabled, a stray second activation now interrupts the turn the first one started, where under
-#307's separate standalone control it would have landed on a still-Send button and done nothing. The
+\#307's separate standalone control it would have landed on a still-Send button and done nothing. The
 window is narrow — the daemon-owned phase gate means the stop variant doesn't arm until
 `turn_state{thinking}` lands, so [#650](conversation-shell.md)'s local send window is still a Send
 affordance — and `sendInterrupt` against an already-ended turn is a harmless no-op. No guard was added
@@ -219,7 +219,7 @@ without an observed failure.
   `interrupt` → single claude Esc, `interactive`-gated, fire-and-forget,
   `TestV2Session_Interrupt_RoutesEscByCapability`).
 - [Conversation shell § The open-conversation reader
-  cutover](conversation-shell.md#the-open-conversation-reader-cutover-758) —
+  cutover](conversation-shell-conversation-and-modals.md#the-open-conversation-reader-cutover-758) —
   [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) moved `phase` from
   `InterruptControl`'s own `useTimelineStore(selectPhase)` read to a required prop from the container,
   which derives `phase` from the open conversation's own retained timeline slice; that same prop now

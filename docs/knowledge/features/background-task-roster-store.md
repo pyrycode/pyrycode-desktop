@@ -234,7 +234,7 @@ returns; order is a readability choice, not a correctness one.
 The relay re-emits `connected` on every (re)handshake and a new pairing always re-handshakes, so this
 branch is what stops a previous pairing's literal command lines (`description`, for `local_bash`-typed
 tasks, and now `patch`, whose keys may carry the same class of text under a structured-looking shape —
-#577) from surviving into a new one — started-sourced tasks and recorded patches both included. It is a
+\#577) from surviving into a new one — started-sourced tasks and recorded patches both included. It is a
 leading branch in `subscribeBackgroundTaskRoster` *before* any translator runs — the `queueBridge`
 posture, not `modalBridge`'s `reconnected`-as-translator-action posture — because each translator returns
 a **value** (a snapshot), and folding the reset into any of them would force its return type to widen into
@@ -371,7 +371,7 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent
   the trap in the `setRoster` rebuild branch (a field that "no roster row can report" is two different
   kinds, and picking the wrong kind is silent and untested by any pre-existing test).
 - [#581 codebase notes](../codebase/581.md) / [Conversation shell — Background-task
-  panel](conversation-shell.md#background-task-panel-581) — the store's first real reader: the shell of
+  panel](conversation-shell-turn-status.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583) — the store's first real reader: the shell of
   #568's panel (split three ways: #581 → #582 → #583), reading `selectRosterFor(conversationId)` and
   rendering only `description` + `taskType` per held task. `droppedTasks`/`truncatedFields` remain
   unread until #582; `latestUpdate`/`patch` remain unread until #583. #569 (open) owns repopulation

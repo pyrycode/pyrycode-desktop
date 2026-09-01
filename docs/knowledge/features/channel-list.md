@@ -229,7 +229,7 @@ Split from #672 (the not-yet-known relay state half is [#719](../codebase/719.md
 as a fourth `LegCategory` picked up here with no code change — see below). Each host row ends with
 two label-less 6px dots at its trailing edge — the host (daemon)
 leg first, the relay leg second — reusing [#330's shipped `relayLeg`/`daemonLeg`/`ConnectionLeg`
-mapping](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330) verbatim
+mapping](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330) verbatim
 rather than growing a second copy of it. The exported pure view `HostConnectionDots({ host, relay
 })` renders `<span className="channel-list__host-status">` holding two
 `<span className="channel-list__host-dot conn-dot--{category}" role="img" aria-label={leg.label}
@@ -254,13 +254,13 @@ Two reuse decisions, at the two levels the contract exists on:
   cross-file dependency the node-environment unit tier cannot see: if `.conn-dot--*` ever leaves
   `conversation.css`, the sidebar dots go invisible with no test failure. Mitigated by a comment
   on those three rules naming the sidebar as a second consumer — see
-  [conversation-shell.md](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330).
+  [conversation-shell.md](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330).
 
 The accessible name is `leg.label` unchanged — "Pyrycode Connected"/"Relay Offline"/"Relay
 Unknown"/etc. — on a
 `role="img"` span (a bare `<span>`'s `aria-label` is dropped by the accessible-name computation,
 so this is load-bearing, not decorative). The wrapper carries no role or name of its own, unlike
-#330's `role="group" aria-label="Connection status"`: the host row renders twice, and #670's
+\#330's `role="group" aria-label="Connection status"`: the host row renders twice, and #670's
 two-pane layout shows the conversation status row at the same time, so a per-group name would
 put three identically-named groups in one window. The dots add no text node.
 
@@ -436,7 +436,7 @@ min-content size is the whole string: a 128-character label measured the sidebar
 this fix, and `.channel-list`'s `overflow-x: auto` (a side effect of its `overflow-y: auto`) does not
 stop that propagation — a scroll container's automatic minimum size is 0 for *itself*, but its
 min-content *contribution* to an ancestor is still content-derived. See [Paired shell § the sidebar's
-`min-width: 0`](paired-shell.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
+`min-width: 0`](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
 fix, landed as its own commit so it stayed independently reviewable.
 
 `.channel-list` deviates from the architecture spec's `flex: 1 1 auto`: it uses `height: 100%;
@@ -459,7 +459,7 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   open is a real switch, not just an `open` nav.** Because the sidebar is now permanently mounted, this
   click no longer necessarily passes through `list` — it's the interaction the two-pane shell exists to
   enable, and it drives [the paired shell's `paneKey`
-  re-key](paired-shell.md#the-conversation-switch-remount-bug-and-the-panekey-fix) so
+  re-key](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix) so
   `ConversationScreen` remounts instead of carrying the old conversation's screen-local state over.
 - **Archived rows are filtered out.** `renderBody` partitions via `partitionActive`, which drops
   `is_archived` rows before the promotion split — archived conversations render only in the
@@ -542,13 +542,13 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   the host row: the `hostRowLabel` four-arm collapse, the `HostRow`/`HostRowControl` split, the
   `<HostLabelData />` mount site, and the label's ellipsize treatment. Also fixed a `min-width: auto`
   gap on `.paired-shell__sidebar` the 128-character label made reachable — see [Paired
-  shell](paired-shell.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
+  shell](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
 - [#703 codebase notes](../codebase/703.md) — added the workspace grouping level between each
   host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
 - [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree
   disclosure control; renderer-only and unpersisted.
 - [#718 codebase notes](../codebase/718.md) — added the host row's two trailing connection dots
-  (Figma `110:3499`/`106:3114`), reusing [#330's two-leg mapping](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330)
+  (Figma `110:3499`/`106:3114`), reusing [#330's two-leg mapping](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330)
   across screens rather than a second copy of it.
 - [#719 codebase notes](../codebase/719.md) — gave the relay leg's `null` sentinel its own
   `unknown`/`Relay Unknown` category instead of collapsing it into `down`/`Relay Offline`; reaches

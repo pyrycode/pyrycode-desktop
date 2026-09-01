@@ -7,7 +7,7 @@ answer on an un-overridden daemon.
 
 Introduced in [#588](../codebase/588.md), consuming the `modelAnnounced` daemon event
 [#587](../codebase/587.md) already decodes off claude's `system` / `init` line. Shipped dormant at
-#588; rendered by [#560](../codebase/560.md)'s `RunningModelSection`, the sixth section of
+\#588; rendered by [#560](../codebase/560.md)'s `RunningModelSection`, the sixth section of
 `RunConfigView` — see [Run configuration store](run-config-store.md) § Running model section. Cleared
 when a pairing ends, both on the unpair route flip and the pair-another-server transition, by
 [#593](../codebase/593.md) — see § Edge cases below and [Paired shell](paired-shell.md) for the shared
@@ -65,7 +65,7 @@ both fields behind one nullable record makes "not yet announced" a single sentin
 field of a present record a real daemon-delivered value by construction.
 
 Named setters rather than a reducer — the two mutations ("record the latest announcement" and, since
-#593, "clear when the pairing that scoped it ends") are independent whole-value writes that neither read
+\#593, "clear when the pairing that scoped it ends") are independent whole-value writes that neither read
 prior state nor constrain each other's ordering, so a discriminated-union action set would still be
 ceremony without benefit. `setAnnouncedModel` replaces the whole `announced` record unconditionally: no
 merge, no coercion, no validation. Memory is O(1) regardless of announcement volume — the store holds
@@ -127,7 +127,7 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
                                      → translateModelAnnounced → setAnnouncedModel
                                      → announcedModelStore                        [most recent announcement wins]
 
-#560: useAnnouncedModelStore(selectAnnouncedModel) → RunningModelSection, the sheet's sixth section
+\#560: useAnnouncedModelStore(selectAnnouncedModel) → RunningModelSection, the sheet's sixth section
 ```
 
 ## Configuration and usage

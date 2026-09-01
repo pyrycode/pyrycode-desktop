@@ -201,7 +201,7 @@ chevron `<svg>` is `aria-hidden`. Unlike the Server row (#334) and Storage row (
 **omit** their trailing chevron because they have no detail screen to lead to, this row **keeps** its
 chevron — it is a genuine forward-nav affordance, matching Figma `17:21`. Activating it fires
 `onPairAnother`, wired by `PairedShellView` to `dispatch({ type: 'openPairServer' })` — see
-[Paired shell](paired-shell.md#the-pairserver-route-152) for what renders next.
+[Paired shell](paired-shell-pair-server-route.md#the-pairserver-route-152) for what renders next.
 
 ### The Server row (`ServerRow.tsx`, #334)
 
@@ -478,9 +478,9 @@ PairAnotherServerRow.onClick (#152)
 The nav shell (`pairedRoute.ts`/`PairedShell.tsx`) added no store, IPC, wire, or daemon event — that
 part is still exactly the screen-local `useReducer` from #333. #334 wires the pre-existing
 [server-info store](server-info-store.md) into the tree; the store and its channel are entirely #339/#340's.
-#404's Defaults section reads and writes the pre-existing [default-workspace store](default-workspace-store.md)
+\#404's Defaults section reads and writes the pre-existing [default-workspace store](default-workspace-store.md)
 (#403) and reuses the pre-existing [recent-workspaces store](recent-workspaces-store.md)/bridge (#382)
-and [`WorkspacePickerSheetView`](conversation-shell.md#workspace-picker-sheet-383) (#383) for its picker —
+and [`WorkspacePickerSheetView`](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) (#383) for its picker —
 no new store, wire type, or daemon command; the sole wire traffic is the pre-existing
 `requestRecentWorkspaces` fetch, re-fired fresh on every picker open. #409's Notifications section adds
 no new data path either: it reads and writes the pre-existing [push-notification preference
@@ -578,7 +578,7 @@ fetch or subscribe to.
   notes](../codebase/408.md) — the client-owned preference [#409](../codebase/409.md)'s Notifications
   row reads and writes; this screen is that store's write consumer (the read consumer, #392, is
   separate — the delivery-side [Push notifications](push-notifications.md) trigger, still open).
-- [Conversation shell](conversation-shell.md#workspace-picker-sheet-383) / [#383 codebase notes](../codebase/383.md)
+- [Conversation shell](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) / [#383 codebase notes](../codebase/383.md)
   — `WorkspacePickerSheetView`, the pure picker view [#404](../codebase/404.md) reuses (not its
   conversation-coupled container).
 - [Recent-workspaces store](recent-workspaces-store.md) / [#382 codebase notes](../codebase/382.md) —

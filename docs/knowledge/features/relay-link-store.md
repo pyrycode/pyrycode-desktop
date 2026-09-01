@@ -95,7 +95,7 @@ daemon → relay supervisor + driver → relaySupervisor/noiseRelayDriver events
                                      → translateRelayLink → setRelayLinkStatus
                                      → relayLinkStore                              [last category wins]
 
-#330 (shipped): useRelayLinkStore(selectRelayLinkStatus) → relayLeg(status) → combined with
+\#330 (shipped): useRelayLinkStore(selectRelayLinkStatus) → relayLeg(status) → combined with
   daemonLeg(sessionStore's ConnectionStatus) at render time, in ConnectionStatusIndicatorControl
 ```
 

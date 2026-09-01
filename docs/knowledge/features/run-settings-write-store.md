@@ -7,11 +7,11 @@ back.
 
 Introduced in [#256](../codebase/256.md), the last store-machine slice of #183's interactive
 Run-configuration write path before the render consumer [#257](../codebase/257.md) (since shipped, PR
-#283). Consumes the two correlated daemon events [#261](../codebase/261.md) (`sessionSettingsUpdated`)
+\#283). Consumes the two correlated daemon events [#261](../codebase/261.md) (`sessionSettingsUpdated`)
 and [#269](../codebase/269.md) (`sessionSettingsRejected`), and drives the outbound
 [session settings send](session-settings-send.md) (#263) command. This store itself delivers no visible
 surface of its own — #257 is now its live consumer, the same posture `sessionIdStore` (#259) had before
-#257 and `runConfigStore` (#187) had before #188.
+\#257 and `runConfigStore` (#187) had before #188.
 
 ## What it does
 
@@ -161,7 +161,7 @@ returned off-handle is the effect cleanup, so a StrictMode double-mount nets exa
 ### Data flow
 
 ```
-#257 control → submitSettingsChange(deps, change)
+\#257 control → submitSettingsChange(deps, change)
                  ├─ dispatch({changeDispatched, changeId, change})  → pending + optimistic view
                  └─ sendCommand({setSessionSettings, payload, changeId}) → main (#263) → daemon
 daemon reply → main correlates by Envelope.in_reply_to (#261/#269) → emits:
@@ -169,7 +169,7 @@ daemon reply → main correlates by Envelope.in_reply_to (#261/#269) → emits:
    sessionSettingsRejected{changeId}            ─┤
 RunSettingsWriteData (App-level) → subscribeRunSettingsWrite → translateWriteEvent
    → dispatch({settingsConfirmed|settingsRejected, changeId}) → commit / roll back + error
-#257 reads: selectEffectiveSettings(runConfigStore snapshot, write state) + selectError + selectPendingFields
+\#257 reads: selectEffectiveSettings(runConfigStore snapshot, write state) + selectError + selectPendingFields
 ```
 
 ## Configuration and usage

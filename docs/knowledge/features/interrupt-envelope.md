@@ -157,7 +157,7 @@ always-visible container is a deliberate desktop divergence before it is filed.
 
 **One accepted behavioural consequence, not a defect** (code review, PR #804): because the stop variant is
 never disabled, a stray second activation now interrupts the turn the first one started, where under
-#307's separate standalone control it would have landed on a still-Send button and done nothing. The
+\#307's separate standalone control it would have landed on a still-Send button and done nothing. The
 window is narrow — the daemon-owned phase gate means the stop variant doesn't arm until
 `turn_state{thinking}` lands, so [#650](conversation-shell.md)'s local send window is still a Send
 affordance — and `sendInterrupt` against an already-ended turn is a harmless no-op. No guard was added

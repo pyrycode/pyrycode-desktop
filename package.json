@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "check:electron-digest": "ELECTRON_RUN_AS_NODE=1 electron scripts/electron-digest-check.mjs",
+    "check:docs": "node scripts/docs-guard.mjs",
     "e2e": "npm run build && playwright test",
     "e2e:real-claude": "npm run build && playwright test --config playwright.real-claude.config.ts",
     "e2e:real:gate": "npm run build && playwright test --config playwright.real-claude.config.ts --reporter=list,./e2e/reporters/zeroExecutedGate.ts"

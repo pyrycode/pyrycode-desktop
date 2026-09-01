@@ -221,7 +221,7 @@ border-box` is likewise load-bearing — `index.css` sets no global rule, so `co
 **The sidebar carries the symmetric `min-width: 0` too, added by [#834](https://github.com/pyrycode/pyrycode-desktop/issues/834).**
 `flex: 0 0 400px` fixes the basis but, like the pane before this fix, leaves `min-width: auto` — which
 floors a flex item at its *content's* min-content width regardless of the basis. It went unnoticed until
-#834 gave the [sidebar's host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834)
+\#834 gave the [sidebar's host row](channel-list.md#the-host-row-channellisttsx-added-by-710-the-operators-label-by-834)
 an operator-typed name up to `MAX_HOST_LABEL_LENGTH` (128) with `white-space: nowrap`: a nowrap string's
 min-content size is the whole string, measured at ~1063px, which took the sidebar with it and left the
 label unable to ellipsize no matter what `channels.css` said. `.channel-list`'s `overflow-x` (computed
@@ -229,7 +229,7 @@ label unable to ellipsize no matter what `channels.css` said. `.channel-list`'s 
 minimum size is 0 for *itself*, but its min-content *contribution* to an ancestor is still
 content-derived. `.channel-list__title` and `.channel-list__workspace-label` are nowrap too and had the
 same latent reach; this one declaration pins all three. Landed as its own commit (d6fdc3a) alongside
-#834's `ChannelList.tsx`/`channels.css` changes, kept separable for review since it touches a different
+\#834's `ChannelList.tsx`/`channels.css` changes, kept separable for review since it touches a different
 file than the spec named. **Lesson for any future ellipsizing element:** `min-width: 0` on the
 ellipsizing element is only half the fix when it is not the flex item being squeezed — check with
 `getBoundingClientRect()` before trusting an ellipsize rule works, since the unit tier (no DOM) cannot
@@ -273,7 +273,7 @@ Mounting the sidebar beside the thread made a new transition reachable: clicking
 conversation's row while a thread is already open. `nextPairedRoute('thread', 'open')` is absolute, so
 the route stays `thread` — the ternary above keeps returning `<ConversationScreen>` at the same
 position, and React **preserves that subtree** instead of remounting it. That path did not exist before
-#670 (the sidebar was unmounted whenever a thread was up), and every piece of `ConversationScreen`'s
+\#670 (the sidebar was unmounted whenever a thread was up), and every piece of `ConversationScreen`'s
 screen-local state written on the assumption that a remount always separates two conversations —
 five in-file comments say so in as many words (the run-config sheet, Channel Info, the workspace picker,
 the background-task panel, the scroll pin) — carried into the new conversation. The sharpest case: the
@@ -806,7 +806,7 @@ argument and why it must also run **last** overall, not merely after `clearAllTi
 **`exitActiveConversation` was out of #779's scope and still has the bare hazard.** Deleting or archiving
 the open conversation still writes and persists the spurious `0` with no floor to wipe it — that helper has
 no whole-map clear to place after `clearTimelineFor`, only per-conversation ones. No acceptance criterion of
-#779 is violated (its ACs are pairing-boundary-scoped), and no acceptance criterion of #652/#653 is violated
+\#779 is violated (its ACs are pairing-boundary-scoped), and no acceptance criterion of #652/#653 is violated
 either (the write still names only the open conversation, and `0` is its honest count at that instant), but
 the hazard PR #792 first flagged is only half closed. A future ticket picking this up should start from the
 code review on PR #792 and [#779's PR (#798)](https://github.com/pyrycode/pyrycode-desktop/pull/798) rather

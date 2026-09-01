@@ -63,7 +63,7 @@ A rejected `set_session_settings` doesn't reply with `session_settings_updated` 
 with a content-free `error` frame (#116), carrying `Envelope.in_reply_to = request.id` and one of
 `session.not_found` / `protocol.malformed` / `server.binary_offline` (never surfaced past the decode
 boundary). [#269](../codebase/269.md) reuses the **exact same** `pendingSettings` map + `changeId` key
-#261 built, keyed off the `daemon-error` kind instead of `session-settings-updated`:
+\#261 built, keyed off the `daemon-error` kind instead of `session-settings-updated`:
 
 1. `parseInboundMessage`'s `daemon-error` kind widens with the optional numeric `inReplyTo` — the same
    already-decoded `Envelope.in_reply_to` propagation #261 used for `session-settings-updated`. No

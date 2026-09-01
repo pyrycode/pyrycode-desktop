@@ -8,7 +8,7 @@ end to end.
 
 Introduced in [#299](../codebase/299.md) (the wire type + `buildDequeueMessage`), split from
 [#295](https://github.com/pyrycode/pyrycode-desktop/issues/295) along the #235/#236 seam (memory:
-#295 tripped the ≥5-file split gate and was re-split). Wired to the renderer→main command path in
+\#295 tripped the ≥5-file split gate and was re-split). Wired to the renderer→main command path in
 [#300](../codebase/300.md) (shipped): a `dequeueMessage` `RendererCommand` member, its
 `isDequeueMessagePayload` boundary guard, and a `daemonConnection.dequeueMessage` method.
 [#296](../codebase/296.md) (shipped) adds the render slice that calls `dequeueMessageCommand`.

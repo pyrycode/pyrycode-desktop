@@ -168,7 +168,7 @@ export type DaemonEvent =
 ```
 
 `snapshotReceived` and `screenSnapshotReceived` — the two members that occupied this spot through
-#620 — are gone as of [#621](../codebase/621.md); `runConfigReceived` (added at #491, shown above at
+\#620 — are gone as of [#621](../codebase/621.md); `runConfigReceived` (added at #491, shown above at
 its position between the debug-bundle members and `assistantDelta`) had already superseded
 `snapshotReceived` as the run-config sheet's data source. See § History below the bullet list for what
 the two removed members carried while they existed.

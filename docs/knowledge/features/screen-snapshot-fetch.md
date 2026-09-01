@@ -41,7 +41,7 @@ split into the store ([#323](../codebase/323.md)) and the action + view
 ## Why this is always-available, not gated on `interactive`
 
 `screen_snapshot` is ADR-025's **always-available, parser-independent** escape hatch (pyrycode
-#847/#848, closed on `main`) — deliberately *not* gated on the daemon's `interactive` capability. The
+\#847/#848, closed on `main`) — deliberately *not* gated on the daemon's `interactive` capability. The
 desktop client never advertises `interactive` (see the [hello exchange](hello-exchange.md), which
 never hardcodes it), yet this fetch works today because the daemon serves `screen_snapshot` to any
 paired, non-interactive connection.

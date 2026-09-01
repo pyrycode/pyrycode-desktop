@@ -176,7 +176,7 @@ reconnect now lands in the retained slice of whichever conversation is open **wh
 (read at dispatch time, not subscribe time, since one app-lifetime listener outlives any number of chat
 switches) and is dropped from the keyed path — with no key invented — when none is. The flat store keeps
 receiving both arms exactly as before: this ships as a verified no-op on what the operator sees, same as
-#756.
+\#756.
 
 ## What it does
 

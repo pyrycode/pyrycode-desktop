@@ -234,7 +234,7 @@ returns; order is a readability choice, not a correctness one.
 The relay re-emits `connected` on every (re)handshake and a new pairing always re-handshakes, so this
 branch is what stops a previous pairing's literal command lines (`description`, for `local_bash`-typed
 tasks, and now `patch`, whose keys may carry the same class of text under a structured-looking shape —
-#577) from surviving into a new one — started-sourced tasks and recorded patches both included. It is a
+\#577) from surviving into a new one — started-sourced tasks and recorded patches both included. It is a
 leading branch in `subscribeBackgroundTaskRoster` *before* any translator runs — the `queueBridge`
 posture, not `modalBridge`'s `reconnected`-as-translator-action posture — because each translator returns
 a **value** (a snapshot), and folding the reset into any of them would force its return type to widen into

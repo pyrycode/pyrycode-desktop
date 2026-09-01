@@ -246,6 +246,13 @@ instead of silently decaying into a deny-on-timeout.
   `options[].id`), and a clarifying question has no deny option, so growing this payload would have
   made that invariant class-conditional. Wire vocabulary only so far — no store, no reducer, no
   consumer.
+- [Question-batch model](question-batch-model.md) — the question vertical's counterpart to this
+  module (#898, shipped): a pure `reduceQuestionBatches` reducer over an id-addressed
+  `QuestionBatch[]`, cloning this module's discipline under the same ADR 0009 rather than minting a
+  sibling ADR. Diverges on purpose in three places — two nesting levels (`options` per question),
+  no `id` on the option row, and **no `resolved` id-memory**, since that vertical has no optimistic
+  local answer and no answer frame at all yet, so the failure `resolved`/#510 defends here cannot
+  occur there.
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — full rationale, every
   reducer arm's normative contract, and the Strangler-Fig coexistence decision.
 - [#122 codebase notes](../codebase/122.md) — implementation summary.

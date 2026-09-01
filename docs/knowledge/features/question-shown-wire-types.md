@@ -10,8 +10,12 @@ fail-closed decode into a typed [inbound message](inbound-message-decode.md) arm
 across IPC, as the sealed union's `questionShown` arm (see [Daemon event channel — the sealed
 union](daemon-event-channel-sealed-union.md)) — `daemonConnection.ts`'s inbound switch now has a case
 for the kind, and all three exhaustive renderer bridges no-op it. It still ships with no renderer
-surface: the question store + its own bridge, [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850),
-is the first real consumer. SSOT is
+surface: split from #850, the [question-batch model](question-batch-model.md)
+([#898](https://github.com/pyrycode/pyrycode-desktop/issues/898), shipped) is the first real consumer
+of the shape, though it holds a renderer-local camelCase mirror rather than importing these wire types
+directly — its own Zustand container ([#899](https://github.com/pyrycode/pyrycode-desktop/issues/899))
+and bridge ([#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)) are the first to actually
+read a live frame. SSOT is
 `pyrycode/pyrycode` `docs/protocol-mobile.md` § Question (v2) → `question_shown` (declared by
 pyrycode#1962, shape by #1963, fixtures and prose by #1964) / `internal/protocol/questions.go`.
 
@@ -23,9 +27,9 @@ message](inbound-message-decode.md) boundary (§ *Question dismissed*, below).
 hop across IPC, as the sealed union's `questionDismissed` arm (see [Daemon event channel — the sealed
 union](daemon-event-channel-sealed-union.md)) — `daemonConnection.ts`'s inbound switch now has a case
 for the kind, and all three exhaustive renderer bridges no-op it, the same shape `question_shown` took
-through #885. It still ships with no renderer surface: the question store + its own bridge,
-[#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), is the first real consumer of both
-arms.
+through #885. It still ships with no renderer surface: the [question-batch
+model](question-batch-model.md) (#898, shipped) is the first real consumer of both arms' shape; its
+container (#899) and bridge (#900) are the first to read a live frame.
 
 ## What it does
 
@@ -188,12 +192,14 @@ the eventual render slice's, the same as for `question_shown`'s claude-authored 
 switch-arm comment in `inboundMessage.ts` states this so it carries the warning forward rather than
 reading "decoded" as "sanitized" — and [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895)'s
 `DaemonEvent` arm doc comment restates it a second time at the IPC boundary, since that is the last
-typed surface before #850's render slice reads these strings.
+typed surface before the eventual render slice ([#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s
+bridge, downstream of the [question-batch model](question-batch-model.md)) reads these strings.
 
 `question_batch_id` is the batch's own one-time unguessable nonce echoed back — dead once this frame
 lands, and receiving it is **not** a capability: a retired batch resolves nothing server-side, the way a
 stale `modal_id` resolves nothing under first-answer-wins. It must never reach a log; matching it against
-a held batch wants plain `===`, not `crypto.timingSafeEqual` (#850's concern, not this decoder's).
+a held batch wants plain `===`, not `crypto.timingSafeEqual` — the [question-batch
+model](question-batch-model.md)'s `removeById` does exactly that, not this decoder's concern.
 
 **The upstream fixture is a trap, and the one place a careful implementer goes wrong.**
 `internal/protocol/testdata/question_dismissed.json` carries `source: "timeout"` — a *shape* fixture
@@ -247,7 +253,8 @@ Nothing renders `question_shown` yet:
 - `question_batch_id` comparisons on the dismissal/eventual-answer path want plain `===`, not
   `crypto.timingSafeEqual` — it is a local routing decision between two values the client already
   holds, not a secret compared against an attacker's guess. The anti-forgery property is server-side
-  resolution, exactly as for `modal_id`. Matching a dismissal to a held batch is [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850)'s.
+  resolution, exactly as for `modal_id`. Matching a dismissal to a held batch is the [question-batch
+  model](question-batch-model.md)'s `removeById` (#898, shipped).
 - No count field exists in this shape to be trusted — a hostile-or-buggy producer's batch is bounded
   only by the codec's existing `MAX_PLAINTEXT_BYTES` frame cap, and that holds only while a future
   decode slice allocates from what actually arrived and never from a claimed count.
@@ -309,8 +316,10 @@ same conclusion about its own fixture, for the same reason).
   bridge](daemon-event-bridge.md) — [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885)'s
   `questionShown` `DaemonEvent` arm and [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895)'s
   `questionDismissed` arm, the IPC carry of both the batch and its retirement, and the three permanent
-  bridge no-ops each gets. Their shared consumer, the question store + bridge, is
-  [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), open.
+  bridge no-ops each gets. Their shared consumer, split from #850, is the [question-batch
+  model](question-batch-model.md) (#898, shipped) plus its still-open Zustand container
+  ([#899](https://github.com/pyrycode/pyrycode-desktop/issues/899)) and bridge
+  ([#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)).
 - [Inbound message decode — public contract](inbound-message-decode-contract.md) /
   [internals](inbound-message-decode-internals.md) /
   [edge cases and limits](inbound-message-decode-limits.md) —
@@ -318,7 +327,9 @@ same conclusion about its own fixture, for the same reason).
   `QuestionDismissedPayload` type union member, `parseQuestionDismissedPayload`, the content-free log
   row, and the trust-boundary finding that "daemon-asserted" is the producer's promise, not a checked
   property. The IPC carry is [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895), landed;
-  both still ship dormant pending #850's render consumer.
+  both now feed a live consumer, the [question-batch model](question-batch-model.md) (#898), though its
+  own container/bridge ([#899](https://github.com/pyrycode/pyrycode-desktop/issues/899)/[#900](https://github.com/pyrycode/pyrycode-desktop/issues/900))
+  have not yet mounted a bridge that actually reads a live frame.
 - [Modal-prompt model](modal-prompt-model.md) — the `ModalDismissedPayload` /
   `parseModalDismissedPayload` precedent `question_dismissed` copies structurally, minus the closed
   `source` enum — see § *Question dismissed* above for why that one check does not transfer.

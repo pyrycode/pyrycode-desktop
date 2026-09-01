@@ -223,6 +223,29 @@ Ships dormant and unclaimed: `daemonConnection.ts`'s inbound switch has no `defa
 `question-shown` kind decodes and is then simply not matched — no IPC emit, no store consumer. The IPC
 carry is [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885).
 
+[#894](https://github.com/pyrycode/pyrycode-desktop/issues/894) added a twenty-first kind,
+`question_dismissed` → `question-dismissed` — the frame that retires the `question_shown` batch above,
+the dismissal half of the [question-shown wire types](question-shown-wire-types.md) vocabulary.
+`QuestionDismissedPayload{question_batch_id, outcome, source}` mirrors `parseModalDismissedPayload`'s
+flat three-`requireString` shape minus its closed `source` enum — **deliberately not closed to
+`WireModalSource`**, since two of the producer's three terminal paths (a caller disconnect, a daemon
+shutdown) have no member in `{remote, local, timeout}` at all, and its single dismissal-arbiter closure
+cannot tell the three apart, so every path emits the one landed pair, `outcome: 'unanswered'` /
+`source: 'no_answer'`. Closing the enum would reject the only traffic that exists — this decoder
+polices type, not membership; the fail-closed *reading* rule (an unrecognised `source` means
+resolved-cause-unknown, never an answer) is the eventual consumer's. No `conversation_id` — the batch
+nonce is the sole correlation key, unchanged from `question_shown`'s own design. The architect's
+security review flags this kind's sharpest finding: the frame's published daemon-asserted provenance is
+the honest producer's *promise*, not a property this decode *verifies* — the only check run is `typeof
+=== 'string'`, so a compromised daemon can put anything, at any length the frame cap allows, into
+`outcome`/`source`. The switch arm's comment states this explicitly so [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895)
+(the IPC carry, the first consumer) does not read "decoded" as "sanitized". Ships dormant the same way
+`question_shown` did: `daemonConnection.ts`'s inbound switch still has no `default` arm, so the decoded
+value is silently un-routed, not forwarded, and adding this kind cannot leak the dismissal across IPC
+ahead of #895. See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
+and [edge cases and limits](inbound-message-decode-limits.md) for the type union, the decode/log detail,
+and the fail-closed edge cases respectively.
+
 ## Where the detail lives
 
 Each section below keeps the heading it had here, so an existing `#anchor` still resolves once the link points at the right file.

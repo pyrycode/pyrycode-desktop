@@ -127,6 +127,11 @@ function encodeQuestionShown(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 901, type: 'question_shown', ts: FIXED_TS, payload })
 }
 
+/** A `question_dismissed` envelope's plaintext bytes, wrapping an arbitrary payload (#894). */
+function encodeQuestionDismissed(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 902, type: 'question_dismissed', ts: FIXED_TS, payload })
+}
+
 /** A `conversation_created` envelope's plaintext bytes, wrapping an arbitrary payload (#241). */
 function encodeConversationCreated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 18, type: 'conversation_created', ts: FIXED_TS, payload })
@@ -446,6 +451,26 @@ const QUESTION_SHOWN_ZERO = {
 
 /** One well-formed question, for building single-question reject cases without restating the batch. */
 const ONE_QUESTION = QUESTION_SHOWN.questions[0]
+
+/**
+ * A fully-populated, well-formed question_dismissed payload (#894). The nonce matches QUESTION_SHOWN's,
+ * so the pair reads as the batch and its own retirement.
+ *
+ * The values are NOT the daemon's committed fixture's, and that inverts QUESTION_SHOWN's habit
+ * deliberately: `internal/protocol/testdata/question_dismissed.json` carries `source: "timeout"`, a
+ * SHAPE fixture from the declaring slice (pyrycode#1974) minted before any producer existed. The landed
+ * producer contradicts it — `retireQuestion` emits the compile-time constants `outcomeQuestionUnanswered`
+ * / `sourceQuestionNoAnswer` on every one of its three terminal paths. Keys from the fixture, values from
+ * the producer.
+ *
+ * The three values are PAIRWISE DISTINCT on purpose: `outcome` and `source` are both plain `string`, so a
+ * transposition between them is invisible to tsc and only an exact `toEqual` over distinct values catches it.
+ */
+const QUESTION_DISMISSED = {
+  question_batch_id: 'qb-7f3a',
+  outcome: 'unanswered',
+  source: 'no_answer'
+}
 
 /** A well-formed conversation summary with a string name — a saved channel (#139). */
 const CONV_NAMED = {
@@ -3484,6 +3509,125 @@ describe('parseInboundMessage — question_shown fail-closed (#884)', () => {
   })
 })
 
+describe('parseInboundMessage — question_dismissed recognition (#894, additive)', () => {
+  it('narrows a full question_dismissed into { kind: question-dismissed } (AC1, AC4)', () => {
+    expect(parseInboundMessage(encodeQuestionDismissed(QUESTION_DISMISSED))).toEqual({
+      kind: 'question-dismissed',
+      questionDismissed: QUESTION_DISMISSED
+    })
+  })
+
+  it('decodes the live producer source `no_answer`, which WireModalSource would reject (AC2)', () => {
+    // The single most likely mistake in this family, and the assertion that goes red if someone later
+    // tightens `source` toward `modal_dismissed`'s closed `{remote, local, timeout}` set. Two of the
+    // producer's three terminal paths — a caller disconnect and a daemon shutdown — have no member in
+    // that set at all, so closing it would reject the only traffic that exists. `no_answer` is what
+    // #1973 actually emits; the modal set's three values and an as-yet-unnamed future cause decode
+    // identically, none of them enum-checked. A client reads an unrecognised value as *resolved, cause
+    // unknown* and never as an answer — a reading rule this decoder documents and #850 enforces.
+    for (const source of ['no_answer', 'timeout', 'remote', 'local', 'some_cause_named_later', '']) {
+      const payload = { ...QUESTION_DISMISSED, source }
+      expect(parseInboundMessage(encodeQuestionDismissed(payload))).toEqual({
+        kind: 'question-dismissed',
+        questionDismissed: payload
+      })
+    }
+  })
+
+  it('carries an opaque outcome sentinel verbatim, never enum-checked', () => {
+    // `outcome` is producer-defined, exactly as ModalDismissedPayload.outcome is. Its published
+    // contract is that it NEVER carries a claude-authored option label — a promise of the honest
+    // producer, not something this decode verifies, so an arbitrary string still decodes.
+    for (const outcome of ['unanswered', 'answered', '__sentinel__', '']) {
+      const payload = { ...QUESTION_DISMISSED, outcome }
+      expect(parseInboundMessage(encodeQuestionDismissed(payload))).toEqual({
+        kind: 'question-dismissed',
+        questionDismissed: payload
+      })
+    }
+  })
+
+  it('drops unknown server keys, keeping only the three known fields — conversation_id included (AC1)', () => {
+    // `conversation_id` as the planted extra is the sharpest available pin on the DELIBERATE absence:
+    // the batch nonce is the sole correlation key, and copying a stray one through would hand a
+    // consumer two keys that can disagree.
+    const withExtras = { ...QUESTION_DISMISSED, conversation_id: 'conv-1', extra: 'ignore-me' }
+    expect(parseInboundMessage(encodeQuestionDismissed(withExtras))).toEqual({
+      kind: 'question-dismissed',
+      questionDismissed: QUESTION_DISMISSED
+    })
+  })
+
+  it('decodes an all-empty payload — an empty string is a VALUE, not an absence', () => {
+    const empty = { question_batch_id: '', outcome: '', source: '' }
+    expect(parseInboundMessage(encodeQuestionDismissed(empty))).toEqual({
+      kind: 'question-dismissed',
+      questionDismissed: empty
+    })
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — question_dismissed fail-closed (#894)', () => {
+  it('throws when the payload is not a record (AC3)', () => {
+    const bad: unknown[] = ['nope', ['a'], 42, null, true]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQuestionDismissed(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when question_batch_id is absent or a non-string (AC3)', () => {
+    const bad: unknown[] = [
+      { outcome: 'unanswered', source: 'no_answer' }, // absent
+      { ...QUESTION_DISMISSED, question_batch_id: 42 },
+      { ...QUESTION_DISMISSED, question_batch_id: null },
+      { ...QUESTION_DISMISSED, question_batch_id: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQuestionDismissed(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when outcome is absent or a non-string (AC3)', () => {
+    const bad: unknown[] = [
+      { question_batch_id: 'qb-7f3a', source: 'no_answer' }, // absent
+      { ...QUESTION_DISMISSED, outcome: 42 },
+      { ...QUESTION_DISMISSED, outcome: null },
+      { ...QUESTION_DISMISSED, outcome: ['unanswered'] }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQuestionDismissed(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when source is absent or a non-string — but NOT for an unrecognised string (AC2, AC3)', () => {
+    const bad: unknown[] = [
+      { question_batch_id: 'qb-7f3a', outcome: 'unanswered' }, // absent
+      { ...QUESTION_DISMISSED, source: 42 },
+      { ...QUESTION_DISMISSED, source: null },
+      { ...QUESTION_DISMISSED, source: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeQuestionDismissed(payload))).toThrow(WireDecodeError)
+    }
+    // The boundary this arm defends is TYPE, not membership: the reject cases above are all non-strings.
+    expect(() =>
+      parseInboundMessage(encodeQuestionDismissed({ ...QUESTION_DISMISSED, source: 'admin' }))
+    ).not.toThrow()
+  })
+
+  it('lets no partial escape — a frame missing one field never returns a value (AC3)', () => {
+    // Every other field is well-formed, so the frame would decode were the narrow absent.
+    const { source: _dropped, ...missingSource } = QUESTION_DISMISSED
+    const result = (): unknown => parseInboundMessage(encodeQuestionDismissed(missingSource))
+    expect(result).toThrow(WireDecodeError)
+    expect(result).toThrow('missing required field: source')
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -4330,6 +4474,45 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     }
   })
 
+  it('logs a question_dismissed content-free, never the nonce / outcome / source (#894)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_BATCH = 'secret-question-batch-nonce'
+    const SECRET_OUTCOME = 'secret-outcome-sentinel'
+    const SECRET_SOURCE = 'secret-source-cause'
+    const plaintext = encodeQuestionDismissed({
+      question_batch_id: SECRET_BATCH,
+      outcome: SECRET_OUTCOME,
+      source: SECRET_SOURCE
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    // `inbound-decoded`, not `inbound-unmodeled`: the log record's event/code is what actually
+    // distinguishes a decoded frame from one the default arm swallowed (AC4).
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('question_dismissed')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    // `question_batch_id` is the batch's own UNGUESSABLE nonce, echoed back; it must never reach a log
+    // at all. `outcome` and `source` are producer sentinels — not secret, but no business in a record
+    // the operator can ship off-box in a debug bundle.
+    for (const secret of [SECRET_BATCH, SECRET_OUTCOME, SECRET_SOURCE]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+  })
+
+  it('does NOT log on a malformed question_dismissed throw path (#894)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(encodeQuestionDismissed({ ...QUESTION_DISMISSED, source: 42 }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('does NOT log on a malformed question_shown throw path (#884)', () => {
     const { log, lines } = captureLog()
     expect(() =>
@@ -4757,6 +4940,45 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
     const dismissedMsg = (dismissedErr as Error).message
     for (const leak of ['admin', 'secret-outcome']) {
       expect(dismissedMsg).not.toContain(leak)
+    }
+  })
+
+  it('never echoes a question_dismissed field into the thrown message (#894, AC3)', () => {
+    // The message reaches a caller's catch — daemonConnection catches WireDecodeError — so a value
+    // interpolated here could ride into a log this decoder is otherwise careful never to write. Each
+    // case breaks ONE field while both siblings are valid strings carrying distinctive sentinels.
+    const cases: Array<{ payload: unknown; leaks: string[] }> = [
+      {
+        payload: { question_batch_id: 'secret-batch-nonce', outcome: 'secret-outcome' }, // source absent
+        leaks: ['secret-batch-nonce', 'secret-outcome']
+      },
+      {
+        payload: {
+          question_batch_id: 'secret-batch-nonce',
+          outcome: 42, // the bad field
+          source: 'secret-source'
+        },
+        leaks: ['secret-batch-nonce', 'secret-source']
+      },
+      {
+        // Broken at the record level, so the whole payload is the offending value.
+        payload: ['secret-batch-nonce', 'secret-outcome', 'secret-source'],
+        leaks: ['secret-batch-nonce', 'secret-outcome', 'secret-source']
+      }
+    ]
+
+    for (const { payload, leaks } of cases) {
+      let err: unknown = null
+      try {
+        parseInboundMessage(encodeQuestionDismissed(payload))
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(WireDecodeError)
+      const message = (err as Error).message
+      for (const leak of leaks) {
+        expect(message).not.toContain(leak)
+      }
     }
   })
 

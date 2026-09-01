@@ -57,6 +57,7 @@ import type {
   ModalDismissedPayload,
   WireModalOption,
   QuestionShownPayload,
+  QuestionDismissedPayload,
   WireQuestion,
   WireQuestionOption
 } from '../../shared/wire/types'
@@ -300,6 +301,7 @@ export type InboundDaemonMessage =
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }
+  | { kind: 'question-dismissed'; questionDismissed: QuestionDismissedPayload }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -1368,6 +1370,37 @@ function parseQuestionShownPayload(payload: unknown): QuestionShownPayload {
 }
 
 /**
+ * Narrow an opaque payload into a QuestionDismissedPayload (#894) — the frame that retires a
+ * `question_shown` batch. Fail-closed like parseModalDismissedPayload, whose structure this copies
+ * exactly, MINUS its closed-enum check: an isRecord guard then three requireString calls, returning the
+ * three known fields. Unknown keys are tolerated (forward-compat) but NOT copied, which is also what
+ * keeps a stray `conversation_id` from riding into a consumer that would then hold two correlation keys
+ * able to disagree. This frame carries none, deliberately — the batch nonce is the sole one.
+ *
+ * **`source` goes through plain requireString and is NOT closed to WireModalSource, unlike its modal
+ * twin one screen up.** That is the one intended divergence between the two functions, so do not
+ * tighten them toward each other. Two of the producer's three terminal paths — a caller disconnect and
+ * a daemon shutdown — have no member in `{remote, local, timeout}` at all, and its arbiter cannot tell
+ * the three apart, so all three emit `no_answer`: closing the enum would reject the only traffic that
+ * exists. This decoder polices TYPE, not membership, and the fail-closed READING rule that makes the
+ * open type safe belongs to the consumer — an unrecognised `source` means *resolved, cause unknown*,
+ * never an answer. `outcome` is likewise an opaque producer sentinel carried verbatim.
+ *
+ * Its messages name the failure CATEGORY only: `question_batch_id` is an unguessable nonce, and
+ * `outcome` / `source` are producer-controlled strings with no business in an error a caller may log
+ * (daemonConnection catches WireDecodeError, so a value echoed here rides into that caller's log).
+ */
+function parseQuestionDismissedPayload(payload: unknown): QuestionDismissedPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed question_dismissed payload')
+  }
+  const question_batch_id = requireString(payload, 'question_batch_id')
+  const outcome = requireString(payload, 'outcome')
+  const source = requireString(payload, 'source')
+  return { question_batch_id, outcome, source }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), an `assistant_delta` → `assistant-delta` and
@@ -1827,6 +1860,31 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'question-shown', questionShown }
+    }
+    case 'question_dismissed': {
+      // Narrow BEFORE logging so a malformed frame (a non-record payload, a non-string field) throws
+      // first and leaves no record. No decoded field is logged — only the frame's byte length + one-way
+      // hash, the same content-free field set as the batch's arm, and deliberately no `outcome` or
+      // `source` even though neither is secret. Strictly safer than the `default:` arm this replaces
+      // for the type, which logged a WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
+      //
+      // The narrowing makes the SHAPE trusted; it does not make the CONTENT trusted, and the frame's
+      // published *daemon-asserted* provenance is the honest producer's PROMISE rather than a property
+      // checked here — all this arm verifies is `typeof === 'string'`. A compromised daemon puts
+      // whatever it likes in `outcome` and `source`, at whatever length the frame cap allows, so a
+      // consumer must not read "decoded" as "sanitized": the escaping and length-bounding boundary is
+      // the eventual render slice's. `question_batch_id` is the batch's unguessable one-time nonce,
+      // dead once this frame lands, and must never reach a log.
+      // Nothing consumes this arm yet: the IPC carry is #895, matching a dismissal to a held batch is
+      // #850, and daemonConnection's inbound switch has no catch-all, so it stops here until claimed.
+      const questionDismissed = parseQuestionDismissedPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'question_dismissed',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'question-dismissed', questionDismissed }
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

@@ -35,6 +35,7 @@ export type InboundDaemonMessage =
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }  // #565, additive
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }  // #566, additive
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }  // #884, additive — ships dormant, no consumer arm yet
+  | { kind: 'question-dismissed'; questionDismissed: QuestionDismissedPayload }  // #894, additive — ships dormant, no consumer arm yet
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/
@@ -42,7 +43,8 @@ export type InboundDaemonMessage =
 //                            `api_retry`/`compacting`/`model_announced`/`tool_use`/`modal_shown`/
 //                            `modal_dismissed`/`tool_result`/`conversation_created`/`session_transition`/
 //                            `session_settings_updated`/`background_task_started`/
-//                            `background_task_updated`/`background_task_roster`
+//                            `background_task_updated`/`background_task_roster`/`question_shown`/
+//                            `question_dismissed`
 //                            envelope, fully narrowed (`screen_snapshot` was modeled here #180-#622;
 //                            removed, now falls to the unmodeled `default` arm)
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
@@ -210,6 +212,21 @@ is documented 12 runes but observed 14 in the one real header ever captured, so 
 would reject valid traffic. The wire type's "an over-long field must be a fail-closed reject" caveat
 picks between two wrong responses *if* a bound ever becomes enforceable; its operative half today is the
 negative one — never silently trim — which copying verbatim satisfies without inventing a threshold.
+
+**Extended a twenty-first time by [#894](https://github.com/pyrycode/pyrycode-desktop/issues/894),
+additively.** `question_dismissed` → `{ kind: 'question-dismissed', questionDismissed:
+QuestionDismissedPayload }` via `parseQuestionDismissedPayload`, the frame that retires the batch above
+— the dismissal half of the same [question-shown wire types](question-shown-wire-types.md) vocabulary.
+Flat, one level, four reject branches: an `isRecord` guard then three `requireString` calls
+(`question_batch_id`/`outcome`/`source`), mirroring `parseModalDismissedPayload`'s shape minus its
+closed `source` enum check. **That is the one deliberate divergence** — `source` stays a plain string
+because the producer's dismissal arbiter cannot distinguish a caller disconnect or a daemon shutdown
+from the approval window elapsing, so two of the three real terminal paths have no member in
+`WireModalSource`'s `{remote, local, timeout}` set at all; closing the enum would reject the only
+traffic that exists. `outcome` is likewise carried verbatim, never enum-checked, exactly as
+`ModalDismissedPayload.outcome` is. Unknown extra keys (a planted `conversation_id` in the test suite)
+are tolerated but not copied — the returned object holds exactly the three known fields, which is also
+what keeps a stray correlation key from riding into a consumer that would then hold two.
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 

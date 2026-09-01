@@ -47,7 +47,8 @@ import type {
   AttachmentChunkPayload,
   WireQuestionOption,
   WireQuestion,
-  QuestionShownPayload
+  QuestionShownPayload,
+  QuestionDismissedPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -1139,5 +1140,56 @@ describe('question-shown wire vocabulary (#883)', () => {
     expect(missingHeader.question).toBe('Which write strategy should the cache use?')
     expect(missingDescription.label).toBe('Write-through')
     expect(missingQuestions.conversation_id).toBe('conv-1')
+  })
+})
+
+describe('question-dismissed wire vocabulary (#894)', () => {
+  // Values here are NOT lifted from the daemon's committed fixture, and that inverts the sibling
+  // block's habit deliberately. `internal/protocol/testdata/question_dismissed.json` carries
+  // `source: "timeout"`; it is a SHAPE fixture from the declaring slice (pyrycode#1974), minted
+  // before any producer existed, and the landed producer contradicts it — `retireQuestion` emits the
+  // compile-time constants `outcomeQuestionUnanswered` / `sourceQuestionNoAnswer` on every one of its
+  // three terminal paths. So the keys are the fixture's and the values are the producer's.
+
+  it('admits the question_dismissed inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType, and it is the
+    // only thing that catches a dropped one — `Envelope.type` is `EnvelopeType | string`, so the
+    // decoder's `case 'question_dismissed':` compiles green whether or not the member was ever added.
+    const dismissed: EnvelopeType = 'question_dismissed'
+    expect(dismissed).toBe('question_dismissed')
+  })
+
+  it('shapes QuestionDismissedPayload as { question_batch_id, outcome, source } — no conversation_id', () => {
+    const payload: QuestionDismissedPayload = {
+      question_batch_id: 'qb-7f3a',
+      outcome: 'unanswered',
+      source: 'no_answer'
+    }
+    // Exact `toEqual` over three PAIRWISE-DISTINCT values: `outcome` and `source` are both plain
+    // `string`, so a transposition between them is invisible to tsc and only distinct values catch it.
+    expect(payload).toEqual({
+      question_batch_id: 'qb-7f3a',
+      outcome: 'unanswered',
+      source: 'no_answer'
+    })
+    // NO `conversation_id`, though `question_shown` carries one. The batch nonce is the sole
+    // correlation key; a shape carrying both would admit a disagreeing pair someone has to adjudicate.
+    expect(payload).not.toHaveProperty('conversation_id')
+  })
+
+  it('types source as a PLAIN string, not WireModalSource', () => {
+    // The single most likely mistake in this family. Two of the producer's three terminal paths — a
+    // caller disconnect and a daemon shutdown — have no member in `{remote, local, timeout}` at all,
+    // so closing the enum would reject the only traffic that exists. `no_answer` is what actually
+    // ships; the modal set's three values assign here too, but nothing emits any of them.
+    const live: QuestionDismissedPayload['source'] = 'no_answer'
+    const unknownFuture: QuestionDismissedPayload['source'] = 'some_cause_named_later'
+    expect([live, unknownFuture]).toEqual(['no_answer', 'some_cause_named_later'])
+    // The reading rule that makes the open type safe: an unrecognised `source` means *resolved, cause
+    // unknown*, and NEVER an answer — reading it as one renders a daemon safe-deny as the operator's
+    // own choice. Enforced by documentation and by the consuming slice, not by this type.
+    const modalSource: WireModalSource = 'timeout'
+    const carriedOver: QuestionDismissedPayload['source'] = modalSource
+    expect(carriedOver).toBe('timeout')
   })
 })

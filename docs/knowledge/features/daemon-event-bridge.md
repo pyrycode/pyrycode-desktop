@@ -163,7 +163,7 @@ Turns each `DaemonEvent` arriving from the background process into the matching 
 
 ### 1. The pure translation (`translateDaemonEvent`)
 
-A `switch (event.type)` over all twenty-four `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
+A `switch (event.type)` over all forty `DaemonEvent` arms with a `default: return assertNever(event)` exhaustiveness guard (a module-local 3-line copy of `sessionStore.ts`'s pattern — kept local rather than widening the store's public surface).
 
 | `DaemonEvent` arm | `SessionAction` produced | conversion |
 |---|---|---|
@@ -186,6 +186,7 @@ A `switch (event.type)` over all twenty-four `DaemonEvent` arms with a `default:
 | `toolUse` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#217) |
 | `modalShown` | `null` | consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) (#223, shipped) — present only for exhaustiveness (#201) |
 | `modalDismissed` | `null` | consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md) (#223, shipped) — present only for exhaustiveness (#201) |
+| `questionShown` | `null` | consumed by none of the three existing bridges; the real consumer is a fourth, independent question store + bridge ([#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), open) — **permanently** for exhaustiveness ([#885](https://github.com/pyrycode/pyrycode-desktop/issues/885)), not dormant: unlike `stallDetected`/`apiRetry`/`compacting`/`connected`, this arm's own consumer is never a case in this file |
 | `toolResult` | `null` | consumed by the [conversation timeline store](conversation-timeline-store.md)'s bridge (#202), not the session store — present only for exhaustiveness (#229) |
 | `conversationCreated` | `null` | consumed by neither existing bridge; the real consumer is the render sibling #242 — present only for exhaustiveness (#241) |
 | `sessionTransition` | `null` | consumed by none of the three existing bridges; the real consumer is the renderer holder #259 — present only for exhaustiveness (#254) |

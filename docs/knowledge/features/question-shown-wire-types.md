@@ -5,9 +5,13 @@ interfaces mirroring the daemon's published `question_shown` contract field for 
 
 Introduced in [#883](https://github.com/pyrycode/pyrycode-desktop/issues/883), declaration only at
 that point — nothing decoded, narrowed, emitted or rendered it. [#884](../codebase/884.md) added the
-fail-closed decode into a typed [inbound message](inbound-message-decode.md) arm; it still ships
-dormant, since `daemonConnection.ts`'s inbound switch has no case for the new kind yet and no IPC
-event or renderer surface exists. SSOT is
+fail-closed decode into a typed [inbound message](inbound-message-decode.md) arm.
+[#885](https://github.com/pyrycode/pyrycode-desktop/issues/885) carried the decoded batch the last hop
+across IPC, as the sealed union's `questionShown` arm (see [Daemon event channel — the sealed
+union](daemon-event-channel-sealed-union.md)) — `daemonConnection.ts`'s inbound switch now has a case
+for the kind, and all three exhaustive renderer bridges no-op it. It still ships with no renderer
+surface: the question store + its own bridge, [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850),
+is the first real consumer. SSOT is
 `pyrycode/pyrycode` `docs/protocol-mobile.md` § Question (v2) → `question_shown` (declared by
 pyrycode#1962, shape by #1963, fixtures and prose by #1964) / `internal/protocol/questions.go`.
 
@@ -120,7 +124,7 @@ did.
 `src/shared/wire/**` — no React, no DOM, no IPC. Types are erased at compile time; the emitted
 JavaScript is unchanged by this slice.
 
-Nothing emits or renders `question_shown` yet:
+Nothing renders `question_shown` yet:
 
 - **The decoder landed in [#884](../codebase/884.md)** — `parseQuestionShownPayload` /
   `parseQuestion` / `parseQuestionOption` in `src/main/transport/inboundMessage.ts`, a validating
@@ -132,6 +136,11 @@ Nothing emits or renders `question_shown` yet:
   daemon — a dropped batch parks the session, since claude is waiting on the answer and the operator
   never sees the ask. See [inbound message decode](inbound-message-decode.md) for the decode's own
   detail.
+- **The IPC carry landed in [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885)** — the
+  decoded batch now crosses to the renderer as the `questionShown` `DaemonEvent` arm; see [Daemon
+  event channel — the sealed union](daemon-event-channel-sealed-union.md) for the arm itself and
+  [Daemon-event bridge](daemon-event-bridge.md) for the three permanent no-ops. No renderer store
+  reads it yet.
 - **No `question_dismissed`.** Upstream published it the same day (pyrycode#1974) and the desktop
   will need it; sibling slice, not this ticket.
 - **No outbound answer verb.** None exists upstream yet (pyrycode#1907). The eventual answer frame
@@ -184,9 +193,12 @@ them would pin a fiction.
 ## Related
 
 - [Inbound message decode](inbound-message-decode.md) / [#884 codebase notes](../codebase/884.md) —
-  the fail-closed decode into a typed inbound arm, the first consumer of these types. Ships dormant:
-  no consumer arm yet on `daemonConnection.ts`'s inbound switch. The IPC carry is
-  [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885).
+  the fail-closed decode into a typed inbound arm, the first consumer of these types.
+- [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) / [Daemon-event
+  bridge](daemon-event-bridge.md) — [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885)'s
+  `questionShown` `DaemonEvent` arm, the IPC carry of the decoded batch, and the three permanent
+  bridge no-ops. Its own consumer, the question store + bridge, is
+  [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), open.
 - [Modal-prompt model](modal-prompt-model.md) / [Modal store bridge](modal-store-bridge.md) — the
   sibling permission/trust-prompt family this one is deliberately **not** merged into, and the
   `WireModalOption`/`ModalShownPayload` naming precedent this slice's `Wire`-prefix and

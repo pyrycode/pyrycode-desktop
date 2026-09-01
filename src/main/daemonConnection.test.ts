@@ -336,6 +336,11 @@ function modalDismissedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'modal_dismissed', ts: FIXED_TS, payload })
 }
 
+/** A `question_shown` plaintext, wrapping an arbitrary payload (#885). */
+function questionShownPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'question_shown', ts: FIXED_TS, payload })
+}
+
 /** A `conversation_created` plaintext, wrapping an arbitrary payload (#241). */
 function conversationCreatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversation_created', ts: FIXED_TS, payload })
@@ -5477,5 +5482,147 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     })
 
     expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([])
+  })
+})
+
+describe('createDaemonConnection — question_shown stream (#885)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** A well-formed two-question batch, nesting two levels, `multi_select` both ways. */
+  const BATCH = {
+    conversation_id: 'conv-7f3a',
+    question_batch_id: 'qb_01HZY',
+    questions: [
+      {
+        question: 'Which strategy should I use?',
+        header: 'Write strategy',
+        options: [
+          { label: 'Rewrite', description: 'Replace the file wholesale' },
+          { label: 'Patch', description: 'Apply a minimal diff' }
+        ],
+        multi_select: false
+      },
+      {
+        question: 'Which files may I touch?',
+        header: 'Scope',
+        options: [
+          { label: 'src', description: 'Production sources' },
+          { label: 'e2e', description: 'Playwright specs' }
+        ],
+        multi_select: true
+      }
+    ]
+  }
+
+  it('emits three camelCase fields with the nested rows verbatim, in wire order', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: questionShownPlaintext(BATCH) })
+
+    // Exact toEqual on every field at both nesting levels: the top level is snake→camel
+    // (`conversation_id`→`conversationId`, `question_batch_id`→`questionBatchId`), each question row
+    // is reused VERBATIM so `multi_select` stays snake_case, and each option row likewise.
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'questionShown',
+        conversationId: 'conv-7f3a',
+        questionBatchId: 'qb_01HZY',
+        questions: [
+          {
+            question: 'Which strategy should I use?',
+            header: 'Write strategy',
+            options: [
+              { label: 'Rewrite', description: 'Replace the file wholesale' },
+              { label: 'Patch', description: 'Apply a minimal diff' }
+            ],
+            multi_select: false
+          },
+          {
+            question: 'Which files may I touch?',
+            header: 'Scope',
+            options: [
+              { label: 'src', description: 'Production sources' },
+              { label: 'e2e', description: 'Playwright specs' }
+            ],
+            multi_select: true
+          }
+        ]
+      }
+    ])
+  })
+
+  it('emits exactly the three modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // An extra key planted at ALL THREE levels. A top-level check alone would miss a row-borne extra,
+    // and this family nests two deep — so the smuggling surface is three wide, not one.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: questionShownPlaintext({
+        ...BATCH,
+        smuggled_payload: 'must-not-cross',
+        questions: [
+          {
+            ...BATCH.questions[0],
+            smuggled_question: 'must-not-cross',
+            options: [{ ...BATCH.questions[0].options[0], smuggled_option: 'must-not-cross' }]
+          }
+        ]
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
+      'questionBatchId',
+      'questions',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('drops a malformed question_shown (non-boolean multi_select) without emitting or throwing', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: questionShownPlaintext({
+          ...BATCH,
+          // The string "false" is truthy — the branch a truthiness check passes green while broken.
+          questions: [{ ...BATCH.questions[0], multi_select: 'false' }]
+        })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
+  it('emits an empty batch rather than dropping it (out of contract is not this leg to judge)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: questionShownPlaintext({ ...BATCH, questions: [] })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'questionShown',
+        conversationId: 'conv-7f3a',
+        questionBatchId: 'qb_01HZY',
+        questions: []
+      }
+    ])
   })
 })

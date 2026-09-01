@@ -172,6 +172,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
     case 'modelAnnounced':
+    case 'questionShown':
       // No timeline event: the session store (#19), download UI (#72), conversation-list store
       // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
@@ -210,6 +211,12 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // turn claude is running is not an item IN it. Its consumer is the #588 announced-model store,
       // and whether the announced model ever becomes a visible surface is #588's call, not this decode
       // slice's.
+      // questionShown (#885) joins this group on the same queueState rule — the frame carries no
+      // turn_id and opens and closes no turn, so a batch of clarifying questions is daemon STATE, not a
+      // turn-stream item. Its no-op here is PERMANENT rather than dormant, unlike every neighbour
+      // above: apiRetry and compacting each later flipped to an owned arm, but #850's consumer is a
+      // FOURTH INDEPENDENT SUBSCRIBER with its own bridge, so nothing in this switch will ever claim
+      // it. Whether a question panel ever becomes a timeline surface is #850's call, not this slice's.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

@@ -162,6 +162,17 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // background-task state at all. Present only because the assertNever guard below makes a new arm a
       // compile error (the apiRetry-was-a-no-op-until-#493 precedent).
       return null
+    case 'questionShown':
+      // No session-store action: the #850 question store holds the batch of clarifying questions
+      // claude raised, not the session store — which holds no question state at all. PERMANENTLY a
+      // no-op, NOT dormant, and that is the one thing to read carefully here: every "not yet built"
+      // case above is expected to flip when its consumer lands (compacting did, at #496), but #850's
+      // consumer is a FOURTH INDEPENDENT SUBSCRIBER on this channel with its own bridge (the
+      // announcedModelBridge shape), so no case here will ever claim this arm. It stays for the
+      // assertNever guard alone — and that guard is not a formality: it stringifies the WHOLE event
+      // into an Error message, so a missing case would put the unguessable batch nonce and claude's
+      // untrusted text there. This case is what keeps them out of it.
+      return null
     case 'unrecognizedMessage':
       // No session-store action: the parser-gap diagnostic becomes a timeline row (the render slice),
       // not connection state — the session store holds nothing about the daemon's own mapping gaps.

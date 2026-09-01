@@ -441,6 +441,32 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
           }
         ],
         droppedTasks: 3
+      },
+      // the question batch is PERMANENTLY no-op here (#885), not dormant: its consumer is the #850
+      // question store plus a dedicated bridge — a FOURTH independent subscriber — so unlike apiRetry
+      // and compacting, this case can never flip to an owned arm. Daemon STATE by the queueState rule
+      // (#720): the frame carries no turn_id and opens and closes no turn.
+      {
+        type: 'questionShown',
+        conversationId: 'conv-1',
+        questionBatchId: 'qb_01HZY',
+        questions: [
+          {
+            question: 'Which strategy should I use?',
+            header: 'Write strategy',
+            options: [
+              { label: 'Rewrite', description: 'Replace the file wholesale' },
+              { label: 'Patch', description: 'Apply a minimal diff' }
+            ],
+            multi_select: false
+          },
+          {
+            question: 'Which files may I touch?',
+            header: 'Scope',
+            options: [{ label: 'src', description: 'Production sources' }],
+            multi_select: true
+          }
+        ]
       }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
@@ -914,6 +940,36 @@ describe('subscribeTimeline', () => {
 
     // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
     // state ref), AND no chat row exists.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#885: a questionShown daemon event creates NO timeline item (permanently, not dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'questionShown',
+      conversationId: 'conv-1',
+      questionBatchId: 'qb_01HZY',
+      questions: [
+        {
+          question: 'Which strategy should I use?',
+          header: 'Write strategy',
+          options: [
+            { label: 'Rewrite', description: 'Replace the file wholesale' },
+            { label: 'Patch', description: 'Apply a minimal diff' }
+          ],
+          multi_select: false
+        }
+      ]
+    })
+
+    // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
+    // state ref), AND no chat row exists. Unlike every prior arm asserted this way, this one will not
+    // later flip — #850's consumer is a fourth independent subscriber, not a case in this switch.
     expect(store.getState()).toBe(before)
     expect(selectItems(store.getState())).toHaveLength(0)
   })

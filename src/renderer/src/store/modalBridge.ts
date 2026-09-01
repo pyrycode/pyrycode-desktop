@@ -98,6 +98,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'backgroundTaskUpdated':
     case 'backgroundTaskRoster':
     case 'modelAnnounced':
+    case 'questionShown':
       // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
       // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /
       // #256 session-settings consumers (confirmed + rejected #269), the #293 queue store
@@ -120,6 +121,16 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // waiting on an answer, not even when the roster is empty. modelAnnounced (#587) ships dormant on
       // the same terms; its consumer is the #588 announced-model store — an identity report about the
       // turn claude is running is not a modal, since nothing is waiting on an answer.
+      // questionShown (#885) is the one arm in this group where something IS waiting on an answer, so
+      // it needs the distinction the others do not: a modal is a PERMISSION PROMPT gating an action
+      // claude wants to take, resolved by `modal_answer` against `modal_id`, whereas a question batch
+      // is claude asking the operator to CHOOSE — its own `question_batch_id` nonce, its own
+      // outstanding-batch state daemon-side, its own stepped panel with header tabs, and as yet no
+      // answer frame in the contract at all. Routing it through this store would give it a modal's
+      // one-shot resolution semantics, which is exactly wrong. Its consumer is the #850 question store
+      // plus a dedicated bridge — a FOURTH INDEPENDENT SUBSCRIBER — so this no-op is PERMANENT, not
+      // dormant: unlike `connected`, which #538 flipped to a `reconnected` reset above, this case can
+      // never become an owned arm here.
       return null
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a

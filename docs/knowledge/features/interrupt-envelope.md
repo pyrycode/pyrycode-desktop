@@ -97,7 +97,7 @@ generic `sendCommand(command: RendererCommand)` pipe already carries the new mem
 `phase` off `useTimelineStore(selectPhase)` and later (through
 [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)) off a required prop from the container
 instead — see [Conversation shell § The open-conversation reader
-cutover](conversation-shell.md#the-open-conversation-reader-cutover-758) for that history.
+cutover](conversation-shell-conversation-and-modals.md#the-open-conversation-reader-cutover-758) for that history.
 
 **As of [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678):** `InterruptControl` and
 `InterruptButton`, their mount, and all five `.conversation__interrupt` / `.interrupt-button*` CSS rules
@@ -219,7 +219,7 @@ without an observed failure.
   `interrupt` → single claude Esc, `interactive`-gated, fire-and-forget,
   `TestV2Session_Interrupt_RoutesEscByCapability`).
 - [Conversation shell § The open-conversation reader
-  cutover](conversation-shell.md#the-open-conversation-reader-cutover-758) —
+  cutover](conversation-shell-conversation-and-modals.md#the-open-conversation-reader-cutover-758) —
   [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) moved `phase` from
   `InterruptControl`'s own `useTimelineStore(selectPhase)` read to a required prop from the container,
   which derives `phase` from the open conversation's own retained timeline slice; that same prop now

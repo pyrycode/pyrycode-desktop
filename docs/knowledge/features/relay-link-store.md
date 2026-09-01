@@ -139,7 +139,7 @@ daemon → relay supervisor + driver → relaySupervisor/noiseRelayDriver events
   cite, though the request/connected-gate shape itself is *not* mirrored here.
 - [Session store](session-store.md) — holds the daemon-session leg (`ConnectionStatus`) this store
   deliberately does not model; #330 combines both at render time.
-- [Conversation shell](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330) —
+- [Conversation shell](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330) —
   the two-dot indicator this store's first reader (`ConnectionStatusIndicatorControl`) renders into.
 - [#328 codebase notes](../codebase/328.md) — the transport slice that classifies the raw relay
   close code into `RelayLinkStatus` and emits the arm this store consumes.

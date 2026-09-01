@@ -93,7 +93,7 @@ Two behaviors:
   `useDefaultWorkspaceStore(selectDefaultWorkspace)` to render the value (`"scratch"` when `null`), and
   its picker sheet's `onChoose` calls `defaultWorkspaceStore.getState().setDefaultWorkspace(path)` to
   change it (no client-side clear-to-null path is exposed yet — every picker choice writes a concrete
-  path). #404 reuses [`WorkspacePickerSheetView`](conversation-shell.md#workspace-picker-sheet-383)
+  path). #404 reuses [`WorkspacePickerSheetView`](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383)
   (#383's pure view, not its conversation-coupled container) and the
   [recent-workspaces store](recent-workspaces-store.md) (#382) for the picker UI.
 

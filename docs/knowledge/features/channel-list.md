@@ -229,7 +229,7 @@ Split from #672 (the not-yet-known relay state half is [#719](../codebase/719.md
 as a fourth `LegCategory` picked up here with no code change — see below). Each host row ends with
 two label-less 6px dots at its trailing edge — the host (daemon)
 leg first, the relay leg second — reusing [#330's shipped `relayLeg`/`daemonLeg`/`ConnectionLeg`
-mapping](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330) verbatim
+mapping](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330) verbatim
 rather than growing a second copy of it. The exported pure view `HostConnectionDots({ host, relay
 })` renders `<span className="channel-list__host-status">` holding two
 `<span className="channel-list__host-dot conn-dot--{category}" role="img" aria-label={leg.label}
@@ -254,7 +254,7 @@ Two reuse decisions, at the two levels the contract exists on:
   cross-file dependency the node-environment unit tier cannot see: if `.conn-dot--*` ever leaves
   `conversation.css`, the sidebar dots go invisible with no test failure. Mitigated by a comment
   on those three rules naming the sidebar as a second consumer — see
-  [conversation-shell.md](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330).
+  [conversation-shell.md](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330).
 
 The accessible name is `leg.label` unchanged — "Pyrycode Connected"/"Relay Offline"/"Relay
 Unknown"/etc. — on a
@@ -548,7 +548,7 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 - [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree
   disclosure control; renderer-only and unpersisted.
 - [#718 codebase notes](../codebase/718.md) — added the host row's two trailing connection dots
-  (Figma `110:3499`/`106:3114`), reusing [#330's two-leg mapping](conversation-shell.md#two-dot-relaypyrycode-connection-status-indicator-330)
+  (Figma `110:3499`/`106:3114`), reusing [#330's two-leg mapping](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330)
   across screens rather than a second copy of it.
 - [#719 codebase notes](../codebase/719.md) — gave the relay leg's `null` sentinel its own
   `unknown`/`Relay Unknown` category instead of collapsing it into `down`/`Relay Offline`; reaches

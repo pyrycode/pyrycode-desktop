@@ -2,7 +2,7 @@
 
 The renderer's held copy of the open conversation's **current daemon `session_id`** — a dedicated,
 unidirectional Zustand store fed by the always-arriving `sessionTransition` marker, so the interactive
-[Run configuration](conversation-shell.md#run-configuration-sheet-177) controls ([#257](../codebase/257.md))
+[Run configuration](conversation-shell-workspace-and-run-config.md#run-configuration-sheet-177) controls ([#257](../codebase/257.md))
 can address a `set_session_settings` write to the session that is actually running.
 
 Introduced in [#259](../codebase/259.md), the renderer-side retention half of #183's interactive

@@ -107,7 +107,7 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
 | `disconnected` | `false` | `'Not connected'` |
 | `error` | `false` | `'Connection error'` |
 
-Both facts derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error. The `error` hint is a short generic label and deliberately does **not** surface `status.error.message` — that `ConnectionError.message` is [the connection banner's surface](conversation-shell.md#connection-banner-279) (#279), built beside this gate.
+Both facts derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error. The `error` hint is a short generic label and deliberately does **not** surface `status.error.message` — that `ConnectionError.message` is [the connection banner's surface](conversation-shell-chrome.md#connection-banner-279) (#279), built beside this gate.
 
 In the container, `Composer` selects `status`, derives `{ canSend, hint }`, and:
 
@@ -115,7 +115,7 @@ In the container, `Composer` selects `status`, derives `{ canSend, hint }`, and:
 
 A second pure predicate beside `composerAvailability`, over the same `ConnectionStatus`: whether the
 conversation screen should proactively surface a `Re-pair` escape hatch (see
-[Conversation shell → Re-pair control](conversation-shell.md#re-pair-control-167)).
+[Conversation shell → Re-pair control](conversation-shell-chrome.md#re-pair-control-167)).
 
 ```ts
 export function shouldOfferRepair(status: ConnectionStatus): boolean {
@@ -143,7 +143,7 @@ The `<textarea>` stays **enabled** while not connected — the user may draft wh
 A third pure predicate beside `composerAvailability`/`shouldOfferRepair`, over the same
 `ConnectionStatus` — whether the conversation screen should render the prominent, disconnected-only
 banner across the top of the thread (see
-[Conversation shell → Connection banner](conversation-shell.md#connection-banner-279)).
+[Conversation shell → Connection banner](conversation-shell-chrome.md#connection-banner-279)).
 
 ```ts
 export function shouldShowBanner(status: ConnectionStatus): boolean {
@@ -187,7 +187,7 @@ The predicate deliberately does **not** absorb the `canSend` gate (§4) — that
 
 A fifth and sixth string this module owns about the single `ConnectionStatus` fact, but unlike §4–§7
 these are plain constants, not predicates — no `shouldShowErrorChip` was added beside them. The gate is
-already the discriminant of the one arm the [composer status row's error chip](conversation-shell.md#composer-error-chip-797)
+already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer.md#composer-error-chip-797)
 belongs to (`status.type === 'error'`), so a named predicate would only restate that in an export and a
 test matrix.
 
@@ -230,7 +230,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 
 ## Edge cases and limitations
 
-- **Not connected** ([#31](../codebase/31.md)) — while `selectStatus` is not `connected`, the send button is `disabled`, the `handleSubmit` early-return inerts the Enter path, and a `role="status"` caption names why (`Connecting…` / `Not connected` / `Connection error`). No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. The `error` hint never surfaces `ConnectionError.message` — that string stays server-side-only; the same non-connected state also shows the prominent [connection banner](conversation-shell.md#connection-banner-279) (#279), which renders its own client-owned copy, not the composer's hint text.
+- **Not connected** ([#31](../codebase/31.md)) — while `selectStatus` is not `connected`, the send button is `disabled`, the `handleSubmit` early-return inerts the Enter path, and a `role="status"` caption names why (`Connecting…` / `Not connected` / `Connection error`). No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. The `error` hint never surfaces `ConnectionError.message` — that string stays server-side-only; the same non-connected state also shows the prominent [connection banner](conversation-shell-chrome.md#connection-banner-279) (#279), which renders its own client-owned copy, not the composer's hint text.
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone.
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
@@ -248,8 +248,8 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [#66 codebase notes](../codebase/66.md) — implementation summary, patterns, lessons.
 - [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control and inline "why" hint.
 - [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the `Re-pair` affordance it gates.
-- [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell.md#connection-banner-279) it gates.
+- [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell-chrome.md#connection-banner-279) it gates.
 - [#512 codebase notes](../codebase/512.md) — the `shouldSubmitOnKeyDown` keystroke-intent predicate: the Enter that commits an IME composition no longer submits or suppresses the commit.
-- [Conversation shell § Composer error chip](conversation-shell.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.
+- [Conversation shell § Composer error chip](conversation-shell-composer.md#composer-error-chip-797) / #797 — the fourth read of `ConnectionStatus`, using `COMPOSER_ERROR_CHIP_COPY`/`COMPOSER_ERROR_CHIP_PREFIX_COPY` (§8 above) in the composer status row's `trailing` slot.
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#756 codebase notes](../codebase/756.md) — `dispatchFor`'s target: the keyed store the echo folds into, dual-write alongside the flat `dispatch`, still unread until #758.
 - [Interrupt envelope](interrupt-envelope.md) — since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), the send button this page describes is one component with two variants: `ComposerSendButton` renders send at idle and the stop affordance (that page's subject) while a turn is running. `Composer` is the one render site for both.

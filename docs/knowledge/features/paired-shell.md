@@ -65,7 +65,7 @@ or frames, so not security-sensitive.
   conversation payload, and in the single-active-conversation model "open" already means "show the
   existing active conversation's thread."
 - That same `conversationCreated` payload — previously discarded after triggering the nav — is now
-  also snapshotted into the [active-conversation store](conversation-shell.md#workspace-chip-278) so
+  also snapshotted into the [active-conversation store](conversation-shell-workspace-and-run-config.md#workspace-chip-278) so
   the thread's workspace chip can read its `cwd` ([#278](../codebase/278.md)). Still no new route, nav
   arm, or subscription — one existing callback now does two things instead of one.
 - [#652](../codebase/652.md) added a **fourth** trigger for `back` specifically, not `open`: deleting
@@ -446,7 +446,7 @@ delivered the decoded `created: ConversationCreatedPayload` argument, and the ca
 it (`() => dispatch(...)`). It now also records `created` before dispatching the same `open` transition.
 No new subscription: this is the one existing `conversation_created` listener PairedShell already
 mounted, doing one more thing on the event it already receives. See [Workspace
-chip](conversation-shell.md#workspace-chip-278) for the store and the render it feeds.
+chip](conversation-shell-workspace-and-run-config.md#workspace-chip-278) for the store and the render it feeds.
 
 **[#530](../codebase/530.md) replaced the direct `setActiveConversation(created)` call** — and the
 matching one in `onOpen` above — with `activateConversation(activateDeps, …)`. Both nav sites used to
@@ -1049,7 +1049,7 @@ the pairing itself ends; see [#531](../codebase/531.md) above.
 - [Archive screen](archive-screen.md) / [#347](../codebase/347.md) — the fifth route, `archive`, and its entry button sharing the Channel List's actions cluster
 - [New-discussion FAB](new-discussion-fab.md) / [#242](../codebase/242.md) — the second `open` trigger, fired by a daemon-confirmed conversation create rather than a row click
 - [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
-- [Workspace chip](conversation-shell.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
+- [Workspace chip](conversation-shell-workspace-and-run-config.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
 - [Session store](session-store.md) — its `reset` action is one of the seven clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md) and [#779](conversation-last-read-store.md)); the store-backed messages otherwise survive plain navigation untouched
 - [Announced-model store](announced-model-store.md) / [#593](../codebase/593.md) — `clearAnnouncedModel` is the fifth member of `clearPairingDeps`, added after the store shipped dormant at #588 and the deferred clear it flagged

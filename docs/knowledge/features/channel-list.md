@@ -299,12 +299,13 @@ auto-escaped React child, never an attribute (CLAUDE.md 2026-08-20, #696's MUST 
 [#703 codebase notes](../codebase/703.md) for the full fallback-key trap and selector-hazard
 writeup.
 
-### The row's status dot (`ChannelList.tsx`, added by #801)
+### The row's status dot (`ChannelList.tsx`, added by #801, wired to `input-required` by #874)
 
 Split from #676, the last of the three ([#799](conversation-status.md)'s resolver,
 [#800](conversation-status-dot.md)'s leaf, and this ticket's wiring). A module-private, nullary-prop-free
 `ConversationStatusDotControl({ conversationId })`, mirroring `HostConnectionDotsControl`'s shape one level
-down: three narrow per-id subscriptions —
+down: four narrow per-id subscriptions —
+`useModalStore(selectHasOutstandingFor(id))`,
 `useConversationActivityStore(selectActivityFor(id))`, `useConversationTimelineStore(selectTimelineFor(id))`,
 `useConversationLastReadStore(selectLastReadFor(id))` — reduced through
 [`isConversationUnread`](conversation-unread.md) then [`resolveConversationStatus`](conversation-status.md)
@@ -313,11 +314,36 @@ and handed straight to `ConversationStatusDot`. It renders as `Row`'s **first ch
 workspace group, get exactly one unconditional dot, idle included.
 
 [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added
-[`resolveConversationStatus`](conversation-status.md)'s leading `inputRequired` parameter; this
-call site passes a literal `false` there today, with a comment naming
-[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) as the ticket that replaces it with a
-fourth per-id subscription, `selectHasOutstandingFor(conversationId)` from the modal-prompt model. Until
-then no row here can resolve to `input-required`.
+[`resolveConversationStatus`](conversation-status.md)'s leading `inputRequired` parameter, landing
+correct-but-unreachable behind a literal `false` at this call site.
+[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) closed that seam: a fourth per-id
+subscription, `useModalStore(selectHasOutstandingFor(conversationId))` imported from `modalStore` (the
+`selectHasOutstandingFor` re-export site, `modalStore.ts:45` — `PermissionModal.tsx:192-194` is the shipped
+precedent for taking the read surface from that one site rather than from `modalPrompts` directly), replaces
+the literal. `selectHasOutstandingFor` is total and answers an unseen id `false`
+([modal-prompt model](modal-prompt-model.md)), so it needs no memoization: it returns a plain `boolean`,
+`Object.is`-stable by value, and the merged-selector ban the three original subscriptions justify by
+held-reference stability does not transfer to it — the header now records that the ban holds for this
+fourth read too, but for a different reason (a merged object would be freshly allocated regardless of what
+its fields are). No change to `Row`, to `resolveConversationStatus`, or to `ConversationStatusDot` — the
+join is entirely inside this control.
+
+**The one wrong answer a green typecheck hides.** `resolveConversationStatus(inputRequired, activity,
+unread)` takes `boolean` in both first and third position, so a call transposing them —
+`resolveConversationStatus(isConversationUnread(...), activity, inputRequired)` — typechecks and builds
+clean. A precedence test that seeds input-required, working, and unread all on the *same* row cannot catch
+this: the transposed call reads that row's own `unread === true` in first position and still resolves
+`input-required`, for the wrong reason. The test gives each rival its own row instead — the row holding
+input-required against working with nothing else unread is the one a transposition actually mis-resolves.
+Worth remembering wherever a resolver's precedence order and its parameter order are the same list.
+
+**Test teardown trap: the modal store's clear must be `reconnected`, never `dismissed` per seeded prompt.**
+`dismissed` moves the id onto the `resolved` slice, and the `shown` arm treats a seen-then-resolved id as a
+no-op rather than an append ([modal-prompt model](modal-prompt-model.md)). A `dismissed`-based `afterEach`
+therefore leaves a later test's seed silently doing nothing, and that test renders `--idle` while asserting
+`--input-required` — a failure that reads as a bug in the wiring rather than in the test's own teardown.
+`reconnected` clears `outstanding` and `resolved` together and is the only teardown that returns the store to
+its initial state.
 
 This is also the answer to the question [`conversationUnread.ts`](conversation-unread.md) deliberately left
 open — **where the two-store unread composition lives.** It lives here, per row, keyed by the row's own
@@ -529,18 +555,25 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   this screen's dots via the shared mapping with no edit here.
 - [Conversation status dot](conversation-status-dot.md) / [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800)
   — the presentational leaf every row now leads with; see § The row's status dot above for the
-  #801 call site.
+  #801/#874 call site.
 - [Conversation status resolver](conversation-status.md) / [#799](https://github.com/pyrycode/pyrycode-desktop/issues/799)
-  — the pure join `ConversationStatusDotControl` calls to reduce a row's activity and unread facts
-  to one status.
+  — the pure join `ConversationStatusDotControl` calls to reduce a row's four per-id facts to one
+  status; [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added its leading
+  `inputRequired` parameter.
 - [Conversation unread predicate](conversation-unread.md) / [#778](https://github.com/pyrycode/pyrycode-desktop/pull/795)
   — composed at the row alongside the resolver above; #801 is the ticket that finally answers where
   this composition lives.
 - [Conversation activity store](conversation-activity-store.md) / [#747](../codebase/747.md) and
   [conversation timeline holder](conversation-timeline-holder.md) / [conversation last-read
-  store](conversation-last-read-store.md) — the three per-id stores `ConversationStatusDotControl`
+  store](conversation-last-read-store.md) — three of the four per-id stores `ConversationStatusDotControl`
   subscribes to through their shipped selector factories.
+- [Modal-prompt model](modal-prompt-model.md) and [modal store bridge](modal-store-bridge.md) — the
+  reducer and store `selectHasOutstandingFor(conversationId)` is defined on, re-exported from
+  `modalStore.ts` and read as the fourth per-id subscription by
+  [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874).
 - [#801 spec](../../specs/architecture/801-sidebar-row-status-dot.md) — the row's status dot.
+- [#874 spec](../../specs/architecture/874-input-required-dot-call-site.md) — the fourth subscription
+  that composes the input-required status into it.
 - Deferred: a future daemon+wire ticket (message-body preview text), a future select-and-load ticket
   (per-row open), multi-host (see § The host row), #716 (same-last-segment workspace label
   ambiguity), a possible follow-up to suppress the idle dot's announced label (see § Edge cases).

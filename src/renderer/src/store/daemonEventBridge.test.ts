@@ -384,6 +384,47 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('questionShown → null (consumed by the #850 question store, not the session store)', () => {
+    // PERMANENTLY no-op, not dormant: #850 is a FOURTH independent subscriber on this channel (the
+    // announcedModelBridge shape), so this case can never flip to an owned arm the way `compacting`
+    // did at #496. A realistic two-level batch, so the assertion also pins that the nested rows
+    // type-check renderer-side.
+    expect(
+      translateDaemonEvent({
+        type: 'questionShown',
+        conversationId: 'conv-1',
+        questionBatchId: 'qb_01HZY',
+        questions: [
+          {
+            question: 'Which strategy should I use?',
+            header: 'Write strategy',
+            options: [
+              { label: 'Rewrite', description: 'Replace the file wholesale' },
+              { label: 'Patch', description: 'Apply a minimal diff' }
+            ],
+            multi_select: false
+          },
+          {
+            question: 'Which files may I touch?',
+            header: 'Scope',
+            options: [{ label: 'src', description: 'Production sources' }],
+            multi_select: true
+          }
+        ]
+      })
+    ).toBeNull()
+    // An empty batch is out of contract daemon-side, but it is no more a session action than a
+    // populated one — this bridge draws no distinction the emit did not.
+    expect(
+      translateDaemonEvent({
+        type: 'questionShown',
+        conversationId: 'conv-1',
+        questionBatchId: 'qb_01HZY',
+        questions: []
+      })
+    ).toBeNull()
+  })
+
   it('unrecognizedMessage → null (consumed by the timeline render slice, not the session store)', () => {
     expect(
       translateDaemonEvent({

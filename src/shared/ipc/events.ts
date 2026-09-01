@@ -26,7 +26,8 @@ import type {
   WireUnrecognizedSite,
   WireModalClass,
   WireModalSource,
-  WireModalOption
+  WireModalOption,
+  WireQuestion
 } from '../wire/types'
 
 /** The IPC channel every typed daemon event travels on, main → renderer.
@@ -669,6 +670,55 @@ export type DaemonEvent =
       defaultOptionId: string
     }
   | { type: 'modalDismissed'; modalId: string; outcome: string; source: WireModalSource }
+  // The question-batch arm (#885) — one whole batch of the clarifying questions claude's
+  // `AskUserQuestion` tool raised, decoded fail-closed by #884 from the `question_shown` frame. Placed
+  // beside the modal arms rather than at the end of the union because it copies `modalShown`'s
+  // conversation-scoping shape and the two families are read together — but it is NOT a modal: a modal
+  // is a permission prompt gating an action, answered against `modal_id`, while this is claude asking
+  // the operator to choose, with its own nonce and (as yet) NO answer frame in the daemon contract at
+  // all.
+  //
+  // Top-level fields are snake→camel; THE NESTED ROW TYPES ARE REUSED VERBATIM with their snake_case
+  // fields, so `multi_select` stays `multi_select`. That is the settled house rule for nested arrays
+  // (queueState / conversationsReceived / backgroundTaskRoster), for its usual reason: #884's narrower
+  // already stripped each row to its known fields, so there is nothing to drop and no mapping to write.
+  // THIS FAMILY NESTS TWO LEVELS where those three nest one — `options` hangs off each QUESTION, not
+  // off the payload the way ModalShownPayload.options does — so the rule applies at BOTH levels, and a
+  // reader pattern-matching off the modal family above gets that wrong by default. `readonly` on the
+  // outer array mirrors queueState; WireQuestion and WireQuestionOption stay mutable interfaces exactly
+  // as QueuedItem and BackgroundTask are.
+  //
+  // PROVENANCE IS PER FIELD and must not be flattened. The two ids are DAEMON-ASSERTED — the daemon
+  // fills them from its own state, never from claude's tool input. `question`, `header`, and every
+  // option's `label` and `description` are CLAUDE-AUTHORED: they crossed the subprocess trust boundary
+  // and the daemon NEITHER BOUNDS NOR SANITIZES them (nothing on the path strips control characters or
+  // terminal escapes). DECODED IS NOT SANITIZED — #884 made the SHAPE trusted and nothing more, and
+  // `string` carries no signal for that. The render slice owes the escaping: plain text only, never
+  // HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute, a URL, a filename, a cache
+  // key, a lookup path, or a log. The last three are the ones a paraphrase drops and the ones a
+  // question panel reaches for first, keying a tab by `header` or memoising by `label`.
+  //
+  // `conversationId` is an OUTBOUND display-scoping key only — what lets a client with several live
+  // conversations avoid rendering one conversation's questions in another. `questionBatchId` remains
+  // the SOLE correlation key, exactly the split modalShown has carried since #870. The nonce is
+  // one-time and UNGUESSABLE, so it must never reach a log; nothing on this leg has a sink
+  // (emitDaemonEvent is log-free by construction).
+  //
+  // An empty `questions` array is OUT OF CONTRACT daemon-side (a producer bug, not "claude asked
+  // nothing" — the opposite of modelList's empty array) but it crosses unchanged: the transport
+  // polices type, not membership, and what an empty batch means on screen is #850's call.
+  //
+  // PERMANENTLY no-op in all three exhaustive bridges, NOT dormant — the distinction matters, because
+  // "dormant" in this file's vocabulary means a bridge case expected to flip later, and several have
+  // (stallDetected #317, apiRetry #493, compacting #496, connected #538). This one cannot: its consumer
+  // is #850's question store plus a DEDICATED bridge — a FOURTH independent subscriber on this channel,
+  // the announcedModelBridge shape — so no case in session, timeline or modal will ever claim it.
+  | {
+      type: 'questionShown'
+      conversationId: string
+      questionBatchId: string
+      questions: readonly WireQuestion[]
+    }
   // The correlated modal-answer rejection arm (#248). Emitted by the MAIN-side correlation window
   // (daemonConnection.ts) when a content-free daemon `error` (#116) arrives while a `modal_answer` this
   // client sent (#236) is awaiting its reply — an ungranted device's answer round-trips to an `error`

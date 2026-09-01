@@ -226,6 +226,35 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
           }
         ],
         droppedTasks: 3
+      },
+      // the question batch is PERMANENTLY no-op here (#885), not dormant: its consumer is the #850
+      // question store plus a dedicated bridge — a FOURTH independent subscriber — so unlike
+      // `connected`, which #538 flipped to an owned `reconnected`, this case can never flip. A batch
+      // of clarifying questions is emphatically NOT a modal in this codebase's sense: `modal_shown`
+      // is a permission prompt gating an action, resolved by `modal_answer` against `modal_id`, and
+      // this frame has its own nonce, its own outstanding-batch state daemon-side, and no answer
+      // frame in the contract at all.
+      {
+        type: 'questionShown',
+        conversationId: 'conv-1',
+        questionBatchId: 'qb_01HZY',
+        questions: [
+          {
+            question: 'Which strategy should I use?',
+            header: 'Write strategy',
+            options: [
+              { label: 'Rewrite', description: 'Replace the file wholesale' },
+              { label: 'Patch', description: 'Apply a minimal diff' }
+            ],
+            multi_select: false
+          },
+          {
+            question: 'Which files may I touch?',
+            header: 'Scope',
+            options: [{ label: 'src', description: 'Production sources' }],
+            multi_select: true
+          }
+        ]
       }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()

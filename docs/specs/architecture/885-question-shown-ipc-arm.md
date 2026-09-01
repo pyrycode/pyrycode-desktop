@@ -338,3 +338,46 @@ what this slice did.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-01
+
+## Revisions
+
+### 2026-09-01 — Open questions resolved, and the size actual
+
+**Open question 1 — per-arm case or fall-through group in `daemonEventBridge`: resolved per-arm**, as
+the plan leaned. That file gives every recent arm its own `case` with its own comment while the other
+two use grouped fall-through, and following each file's local convention beats imposing one shape
+across the three — the comments differ per bridge anyway, since each states the no-op against *that*
+file's own flip precedent. No design change.
+
+**Open question 2 — placement in the union: resolved beside the modal arms**, as the ticket asked and
+the plan leaned, rather than accreted at the end with the recent additions. The neighbourhood carries
+meaning: `modalShown` is the `conversationId`-scoping precedent this arm copies, so the arm's comment
+can contrast against the arm directly above it. The contrast turned out to be worth more than
+expected — see below. No design change.
+
+**One thing the plan predicted and the RED run then demonstrated.** The security review argued that the
+three bridge cases are load-bearing beyond compilation, because `assertNever` stringifies the whole
+event into an `Error.message`. The pre-implementation test run printed exactly that: three failures
+whose messages carried the full batch — nonce, every question, every option — into the vitest output.
+The argument was written from reading the guard; the RED run is the evidence.
+
+**The modal bridge's comment grew past what the plan specified, deliberately.** The plan called for
+each bridge comment to state the same two facts in that file's voice. In `modalBridge` that was not
+enough: `questionShown` is the only arm in its no-op group where something genuinely *is* waiting on an
+answer, so the group's standing rationale ("not a modal — nothing is waiting on an answer") is false
+for it and would read as a copy-paste slip. The comment therefore draws the real line instead —
+permission prompt gating an action versus claude asking the operator to choose, each with its own nonce
+and its own daemon-side outstanding state. Worth naming because a future arm in this family
+(`question_dismissed`, pyrycode#1974) will land in the same group and needs the same treatment.
+
+**Size: 388 lines of production and test across nine files, plus a 340-line plan — 728 total against a
+~400 estimate.** Production (116) and consumer call sites (4) landed where planned; the overrun is
+entirely doc-comment and plan prose, the same shape #884 measured at 1.8×. Two concrete drivers, both
+the "these lines are cheap" pattern: the union arm came to 52 lines of which ~45 are comment (the
+per-field provenance note is not compressible without dropping the sanitization warning that is the
+whole point of it), and the plan's own § Security review is 60 lines because the label demands a
+finding per category rather than a verdict. The refiner's five-file floor analysis was correct and I
+re-derived it independently; what neither of us sized was that a *five-file, zero-branch, zero-export*
+ticket still writes 700+ lines when every touched site carries this codebase's comment convention. That
+is calibration data for the next `DaemonEvent`-arm ticket — the family's floor is closer to 700 than to
+400 — not a salvage: both gates are green and the run finished well inside its turn and wall-clock caps.

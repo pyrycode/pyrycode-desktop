@@ -1052,6 +1052,41 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               defaultOptionId: inbound.modalShown.default_option_id
             })
             return
+          case 'question-shown':
+            // The question-batch data path (#885). An UNSOLICITED daemon BROADCAST (not correlated by
+            // in_reply_to), so it is emitted unconditionally on decode — no outstanding-request memory.
+            // snake→camel at the TOP LEVEL only (`conversation_id`→`conversationId`,
+            // `question_batch_id`→`questionBatchId`); `questions` is reused VERBATIM and passes across
+            // BY REFERENCE, the `options` / `conversations` precedent — parseQuestionShownPayload
+            // already stripped every question and every nested option to its known fields, so there is
+            // nothing to drop and no per-row mapping to write. Do not "fix" that into a `.map`: the
+            // fresh-literal rule below governs the EVENT OBJECT, and deep-remapping the rows would
+            // break the verbatim-row rule instead.
+            //
+            // A fresh literal naming three fields, never a spread of the decoded payload, so a decoder
+            // that later grows a field cannot smuggle it across IPC — and this family nests two levels,
+            // so the round-trip test plants its extra key at all three.
+            //
+            // Every field is read BARE — no `??`, no optional handling. The decode requires all three,
+            // so a missing or non-string one drops the whole line upstream of this emit; a `?? ''` here
+            // would turn that fail-closed drop into a silent misattribution, filing a batch against the
+            // wrong conversation. It is an outbound display-scoping key: `questionBatchId` stays the
+            // sole correlation key (the #870/#871 split). NO log call — #884's decode already emitted
+            // the content-free record, and this is the one place on the leg where the unguessable nonce
+            // could reach a sink.
+            //
+            // The #850 question store plus its own dedicated bridge — a fourth independent subscriber —
+            // consumes this; all three exhaustive bridges no-op it permanently. `question` / `header` /
+            // `label` / `description` are untrusted claude-authored text: decoded is not sanitized, and
+            // the render slice owes the escaping. Not compile-forced (this inner switch has no
+            // assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'questionShown',
+              conversationId: inbound.questionShown.conversation_id,
+              questionBatchId: inbound.questionShown.question_batch_id,
+              questions: inbound.questionShown.questions
+            })
+            return
           case 'modal-dismissed': {
             // The modal-resolution data path (#201). snake→camel here; NO `conversation_id` (a
             // DISMISSAL carries none — `modal_shown` does carry one and rides it across as of #871).

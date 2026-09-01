@@ -388,5 +388,41 @@ removes the two-level nesting prose, and the budget belongs to Phase B.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+### 2026-09-02 — Open questions resolved, and the trap measured rather than asserted
+
+**Open question 1 — where `case 'question-dismissed':` goes in the inbound switch: resolved after
+`modal-dismissed`**, as the plan leaned. It is the natural append point at the end of that inner switch
+and it puts the case adjacent to the twin whose two divergences its comment has to name (the
+`WireModalSource` annotation, and the `outstandingAnswers` drain). No design change.
+
+**Open question 2 — the second `source` value in the round-trip test: resolved keep**, as the plan
+leaned. The two assertions pin different things and read as two tests, not one: the first that today's
+only landed pair crosses, the second that a sentinel the producer has yet to name crosses *unchanged*,
+which is the precondition the fail-closed reading rule depends on. No design change.
+
+**The trap was verified empirically, not argued.** The plan claimed a `source: WireModalSource` arm
+fails at the emit site. Rather than trust that, the arm was temporarily narrowed and typechecked: it
+does — `daemonConnection.ts` rejects `string` against `WireModalSource` — and so do **five typed test
+fixtures** in the three bridge specs. Six compile guards, not one.
+
+**And that measurement is where the one non-obvious lesson of this slice came from.** The first run of
+the narrowed arm reported **exactly one error**, which reads as "the emit site is the only guard" and
+would have made three of the test comments false as written. It was an artifact: `npm run typecheck` is
+`tsc -p tsconfig.node.json && tsc -p tsconfig.web.json`, and the `&&` means **a node-side error hides
+every web-side error**. Both tsconfigs `include` their `*.test.ts` files, so the web project had five
+errors waiting that never ran. Anything that counts a change's blast radius from a single
+`npm run typecheck` — a size check, a cascade estimate, a "does this even fail?" probe — undercounts
+whenever the node side errors first. Run `tsc -p tsconfig.web.json` on its own to see the other half.
+This is the compile-side twin of the already-recorded tsc/vitest split, and it bit inside one ticket.
+
+**Size: ~480 lines of production and test across nine files, plus a ~330-line plan.** Under #885's
+actual (388 production+test, 383-line plan) as the estimate predicted, and the reason is the one the
+estimate named — the flat payload removes the two-level nesting prose and one whole level of
+extra-key planting. The union arm is again the single largest item and again almost entirely comment,
+which remains this family's real floor: the `WireModalSource` rationale and the fail-closed reading
+rule are not compressible without dropping the two things that make the open `string` safe.
 </content>
 </invoke>

@@ -173,6 +173,16 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // into an Error message, so a missing case would put the unguessable batch nonce and claude's
       // untrusted text there. This case is what keeps them out of it.
       return null
+    case 'questionDismissed':
+      // No session-store action either: retiring a batch is the #850 question store's business, and the
+      // session store holds no question state to retire. PERMANENTLY a no-op on the same terms as the
+      // arm above — #850's consumer is a FOURTH INDEPENDENT SUBSCRIBER with its own bridge, not a future
+      // case here, so this will not flip the way `compacting` did at #496. What an unrecognised `source`
+      // MEANS is likewise not decided here: the fail-closed reading rule (resolved, cause unknown, never
+      // an answer) belongs to that consumer. Present for the assertNever guard, which — as the RED run
+      // for this slice demonstrated — stringifies the WHOLE event into an Error message, so a missing
+      // case would put the unguessable batch nonce there.
+      return null
     case 'unrecognizedMessage':
       // No session-store action: the parser-gap diagnostic becomes a timeline row (the render slice),
       // not connection state — the session store holds nothing about the daemon's own mapping gaps.

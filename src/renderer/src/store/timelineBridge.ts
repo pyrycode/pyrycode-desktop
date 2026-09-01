@@ -173,6 +173,7 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'backgroundTaskRoster':
     case 'modelAnnounced':
     case 'questionShown':
+    case 'questionDismissed':
       // No timeline event: the session store (#19), download UI (#72), conversation-list store
       // (#208), modal store + bridge (#223, and the #249 rejection render), the create render slice
       // (#242), the #261 / #256 session-settings consumers (confirmed + rejected #269), the #293
@@ -217,6 +218,11 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // above: apiRetry and compacting each later flipped to an owned arm, but #850's consumer is a
       // FOURTH INDEPENDENT SUBSCRIBER with its own bridge, so nothing in this switch will ever claim
       // it. Whether a question panel ever becomes a timeline surface is #850's call, not this slice's.
+      // questionDismissed (#895) lands here by the same rule and for the same reason — the retirement
+      // frame carries no turn_id and opens and closes no turn either, so a batch dying is daemon STATE
+      // exactly as the batch appearing was. It is worth saying rather than assuming, because a
+      // dismissal is the kind of event that reads like something that "happened during the turn": it
+      // does not, and there is no turn to file it under.
       return null
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a

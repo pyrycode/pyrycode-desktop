@@ -341,6 +341,11 @@ function questionShownPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'question_shown', ts: FIXED_TS, payload })
 }
 
+/** A `question_dismissed` plaintext, wrapping an arbitrary payload (#895). */
+function questionDismissedPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'question_dismissed', ts: FIXED_TS, payload })
+}
+
 /** A `conversation_created` plaintext, wrapping an arbitrary payload (#241). */
 function conversationCreatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversation_created', ts: FIXED_TS, payload })
@@ -5624,5 +5629,108 @@ describe('createDaemonConnection — question_shown stream (#885)', () => {
         questions: []
       }
     ])
+  })
+})
+
+describe('createDaemonConnection — question_dismissed stream (#895)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** The producer's ONE landed pair, for the whole no-answer class. Deliberately not `timeout`: that
+   *  value lives only in upstream `testdata/question_dismissed.json`, a shape fixture minted by the
+   *  declaring slice before any producer existed. */
+  const DISMISSAL = {
+    question_batch_id: 'qb_01HZY',
+    outcome: 'unanswered',
+    source: 'no_answer'
+  }
+
+  it('emits three camelCase fields in wire order, carrying an out-of-WireModalSource source verbatim', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: questionDismissedPlaintext(DISMISSAL) })
+
+    // This one assertion is also the type-trap test. `no_answer` is NOT a member of WireModalSource
+    // (`remote` | `local` | `timeout`), so an arm that copied `modalDismissed`'s `source:
+    // WireModalSource` annotation cannot reach green here — it fails at the emit site, where the
+    // decoded field is a plain string. The fix for that error is to widen the arm, never to cast the
+    // payload and never to reach for the fixture's `timeout`.
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'questionDismissed',
+        questionBatchId: 'qb_01HZY',
+        outcome: 'unanswered',
+        source: 'no_answer'
+      }
+    ])
+  })
+
+  it('carries a source sentinel the producer has yet to name, unchanged', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // The open `string` is not "open enough for today's two values" — it is open. The producer's
+    // arbiter cannot tell an elapsed approval window from a caller disconnect or a daemon shutdown,
+    // so the vocabulary is expected to grow, and an unrecognised value must cross rather than be
+    // rejected here. What it MEANS is the fail-closed reading rule, which belongs to the consumer
+    // (#850): resolved, cause unknown — never an answer.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: questionDismissedPlaintext({
+        ...DISMISSAL,
+        outcome: 'superseded',
+        source: 'daemon_shutdown'
+      })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'questionDismissed',
+        questionBatchId: 'qb_01HZY',
+        outcome: 'superseded',
+        source: 'daemon_shutdown'
+      }
+    ])
+  })
+
+  it('emits exactly the three modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // One level, unlike the batch's three: this payload is flat, so the smuggling surface is the
+    // payload object alone.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: questionDismissedPlaintext({ ...DISMISSAL, smuggled_payload: 'must-not-cross' })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'outcome',
+      'questionBatchId',
+      'source',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('drops a malformed question_dismissed (non-string source) without emitting or throwing', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: questionDismissedPlaintext({ ...DISMISSAL, source: null })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
   })
 })

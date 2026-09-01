@@ -854,7 +854,7 @@
    same sidebar. The 6x14 is the INSTANCE frame, not the dot: centring a 6px dot against the row's line box
    reproduces it with no wrapper element, the treatment `:92-107` and #703 already record.
 
-   GEOMETRY IS IDENTICAL IN ALL THREE STATES (AC4) — the horizontal advance is 6px whatever the status, so
+   GEOMETRY IS IDENTICAL IN ALL FOUR STATES (AC4) — the horizontal advance is 6px whatever the status, so
    a row's title never shifts as its status changes. Both 6px values are literals rather than tokens, the
    `.conn-dot { width: 8px }` precedent for structural component geometry. */
 .conversation-status-dot {
@@ -866,8 +866,8 @@
 
 /* The ring is an INSET BOX-SHADOW, not a `border` — the load-bearing choice for AC4. This repo has no
    global box-sizing reset (recorded at conversation.css:750), so a 1px border would grow the 6px box to
-   8px and shift the title by 2px in exactly the two states where the dot is visible. An inset shadow has
-   zero layout effect by construction, so "the same box in all three states" holds without depending on a
+   8px and shift the title by 2px in exactly the three states where the dot is visible. An inset shadow has
+   zero layout effect by construction, so "the same box in all four states" holds without depending on a
    `box-sizing` declaration a later edit could drop. `background` stays unset: the design's circle is
    unfilled.
 
@@ -885,6 +885,21 @@
 
 .conversation-status-dot--new-messages {
   box-shadow: inset 0 0 0 1px var(--color-success);
+}
+
+/* #873 — input required, the highest-precedence state and the only one blocked on the operator. Amber from
+   the operator's design-notes table (2026-08-21), not from a node: `Status dot` is a local instance with no
+   variants and draws the working ring alone, so there is no amber node to read and none missing.
+
+   A RING like its two siblings, never a filled disc: `.conn-dot--in-progress` (conversation.css:1817) is a
+   FILLED dot in this same --color-warning amber six pixels above in the sidebar, and it reports whether a
+   MACHINE is reachable. The ring-vs-disc form is the whole of what keeps the two readings apart.
+
+   NO ANIMATION, and deliberately no `prefers-reduced-motion` entry below: the blink and its fallback belong
+   to --working alone. A dot waiting on the operator has no reason to blink. Contrast is not a concern here
+   — #ffca45 reads 12.3:1 against --color-surface — so no substitution like the working ring's is needed. */
+.conversation-status-dot--input-required {
+  box-shadow: inset 0 0 0 1px var(--color-warning);
 }
 
 /* `--idle` has NO RULE ON PURPOSE, and the missing rule is the design: an idle dot is the same 6px box
@@ -909,7 +924,7 @@
 
 /* AC3's fallback — the working dot still RENDERS under reduced motion as a steady blue ring, it just does
    not blink. The .bubble__cursor guard's shape verbatim (conversation.css:737). It touches the working
-   modifier ALONE: the base class and the other two modifiers have no animation to cancel. No vitest
+   modifier ALONE: the base class and the other three modifiers have no animation to cancel. No vitest
    detector reaches a media query (`environment: 'node'`, no CSSOM), so this is a CSS-level guarantee here;
    the e2e coverage lands with #801's call site, cloning e2e/composer-status-reduced-motion.spec.ts. */
 @media (prefers-reduced-motion: reduce) {

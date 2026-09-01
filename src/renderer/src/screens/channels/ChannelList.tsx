@@ -764,7 +764,14 @@ function ConversationStatusDotControl({
   const lastRead = useConversationLastReadStore(selectLastReadFor(conversationId))
   return (
     <ConversationStatusDot
-      status={resolveConversationStatus(activity, isConversationUnread(timeline, lastRead))}
+      status={resolveConversationStatus(
+        // #874 replaces this literal with `selectHasOutstandingFor(conversationId)` read through a fourth
+        // store subscription — its whole deliverable, including the tests for it. #873 landed the status,
+        // the branch, the label and the paint, so until then no row can resolve to `input-required`.
+        false,
+        activity,
+        isConversationUnread(timeline, lastRead)
+      )}
     />
   )
 }

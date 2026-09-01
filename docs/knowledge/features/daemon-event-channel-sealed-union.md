@@ -144,6 +144,29 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   are untrusted `claude`-surfaced free text the render slice
   ([#224](https://github.com/pyrycode/pyrycode-desktop/issues/224)) must render as plain text, never
   HTML.
+- **`questionShown{conversationId,questionBatchId,questions}`**
+  ([#885](https://github.com/pyrycode/pyrycode-desktop/issues/885)) carries claude's
+  `AskUserQuestion` batch the last hop across IPC — the wire vocabulary
+  ([#883](https://github.com/pyrycode/pyrycode-desktop/issues/883)) and the fail-closed decode
+  ([#884](https://github.com/pyrycode/pyrycode-desktop/issues/884)) already existed; this arm is the
+  emit. It sits beside `modalShown`/`modalDismissed` rather than at the union's tail because it copies
+  `modalShown`'s `conversationId`-scoping shape, but it is **not** a modal: a modal is a permission
+  prompt gating an action, answered against `modalId`; this is claude asking the operator to *choose*,
+  with its own nonce and — as yet — no answer frame anywhere in the daemon contract. Top-level fields
+  are snake→camel (`conversation_id`→`conversationId`, `question_batch_id`→`questionBatchId`); unlike
+  every prior nested-array member, **this family nests two levels, and the verbatim-row rule applies
+  at both** — `questions: readonly WireQuestion[]` is the outer array (the `queueState`/
+  `backgroundTaskRoster` precedent) and each question's own `options` is reused unchanged too, since
+  #884's narrower already stripped every row to its known fields. `conversationId` is an outbound
+  display-scoping key only; `questionBatchId` stays the sole correlation key, the split `modalShown`
+  has carried since #870/#871. `question`, `header`, and every option's `label`/`description` are
+  claude-authored, unbounded and unsanitized — decoded is not sanitized, so the eventual render slice
+  owns the escaping (plain text only, never HTML, an attribute, a URL, a filename, a cache key, or a
+  log). Consumed as a **permanent** no-op by all three exhaustive bridges — unlike `stallDetected`/
+  `apiRetry`/`compacting`/`connected` (each shipped dormant and later flipped to an owned arm), this
+  one cannot: its consumer, [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), is a
+  fourth independent subscriber on this channel (the `announcedModelBridge`/`queueBridge`/
+  `backgroundTaskRosterBridge` shape), not a future case on session, timeline or modal state.
 - **`toolResult{turnId,toolUseId,isError,resultSummary}`** ([#229](../codebase/229.md)) also maps to *no*
   `SessionAction`, consumed instead by the [conversation timeline store](conversation-timeline-store.md)'s
   bridge — the `timelineBridge`'s fifth owned arm, and the vertical's last transport slice. Unlike

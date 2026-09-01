@@ -13,7 +13,7 @@ its rows, its one new colour token — with no host anywhere in the app yet. #83
 footer; #840 completed the interaction — opening, dismissing and driving it from the keyboard. The
 panel shipped feature-complete but dormant across all three tickets: nothing mounted
 `ComposerOptionsPanel` or `ComposerOptionsMenu` in production. **#680 is that first live mount** — see
-[Actions menu](conversation-shell-conversation-and-modals.md#actions-menu-680) below for the consumer and the in-app interaction proof it carries.
+[Actions menu](conversation-shell-actions-menu-and-reader-cutover.md#actions-menu-680) below for the consumer and the in-app interaction proof it carries.
 
 **New file, not `ConversationScreen.tsx`.** `ComposerOptionsPanel.tsx` follows the
 `PermissionModal.tsx` / `WorkspacePickerSheet.tsx` split: five named future consumers across two later

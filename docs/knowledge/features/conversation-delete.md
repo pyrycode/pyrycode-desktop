@@ -177,7 +177,7 @@ See [#652 codebase notes](../codebase/652.md) for the full design.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — re-lists on
   a `conversation_updated` broadcast (#275) and, since #376, on a `conversationDeleted` reply too —
   one widened `shouldRefreshList` trigger, not two separate paths.
-- [Conversation shell](conversation-shell-conversation-and-modals.md#channel-info-sheet-365) / [#377 codebase
+- [Conversation shell](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) / [#377 codebase
   notes](../codebase/377.md) — the Channel Info sheet's Delete action, this transport's live caller.
 - [#155 codebase notes](../codebase/155.md) — parent split ticket, once it exists.
 - [#364 codebase notes](../codebase/364.md) — outbound transport implementation summary.

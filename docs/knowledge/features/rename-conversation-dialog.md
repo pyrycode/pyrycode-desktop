@@ -12,7 +12,7 @@ Introduced in [#360](../codebase/360.md), split from #154 (transport [#359](../c
 dialog #360). Renderer-only — no new transport, IPC, store, or wire code; consumes the
 `renameConversation` command #359 already shipped.
 
-**Second entry point ([#368](../codebase/368.md)):** the [Channel Info sheet](conversation-shell-conversation-and-modals.md#channel-info-sheet-365)'s
+**Second entry point ([#368](../codebase/368.md)):** the [Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365)'s
 Actions slot gained a Rename tonal pill (Figma 20:89) that opens this same
 `RenameConversationDialogView` and dispatches through this same `requestRenameConversation`,
 imported verbatim from this module — no clone, no second dialog. The sheet's active conversation
@@ -180,7 +180,7 @@ Saved Channel row's Rename affordance click → container: setRenameRow(row); se
 - [Channel List home screen](channel-list.md) / [#141 codebase notes](../codebase/141.md) — the
   screen this affordance is added to.
 - [#360 codebase notes](../codebase/360.md) — implementation summary, patterns, lessons.
-- [Conversation shell](conversation-shell-conversation-and-modals.md#channel-info-sheet-365) / [#368 codebase notes](../codebase/368.md)
+- [Conversation shell](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) / [#368 codebase notes](../codebase/368.md)
   — the Channel Info sheet's Rename action, this dialog's second entry point and the source of the
   `Pick<ConversationSummary, 'id'>` param widening.
 - Spec: `docs/specs/architecture/360-rename-dialog.md` (dialog); `docs/specs/architecture/368-channel-info-rename-action.md` (second entry point).

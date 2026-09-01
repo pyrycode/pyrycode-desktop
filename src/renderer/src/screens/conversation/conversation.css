@@ -1542,6 +1542,21 @@
   background: var(--color-surface);
 }
 
+/* #906 — the covered composer. THIS RULE IS LOAD-BEARING, NOT BELT-AND-BRACES: the UA stylesheet's
+   `[hidden] { display: none }` loses to the author-level `display: flex` above regardless of specificity,
+   because author rules beat UA rules outright. Without this line the `hidden` attribute ConversationScreen
+   sets is a no-op for LAYOUT — the composer would keep painting under the question panel — and only its
+   accessibility half (out of the tab order, out of the accessibility tree) would work, which is the worst
+   of the three outcomes because it looks fine on screen and is broken for a keyboard.
+
+   display: none rather than visibility: hidden, so the collapsed composer claims no height and the panel
+   takes its slot at the panel's own size, with no absolute positioning to keep in sync. The subtree stays
+   MOUNTED either way — this is CSS, not a conditional render — which is what preserves the operator's
+   half-typed draft. */
+.composer[hidden] {
+  display: none;
+}
+
 /* The input + send-button row — carries the composer's former horizontal layout. */
 .composer__row {
   display: flex;
@@ -3450,4 +3465,164 @@
 .composer-options-anchor {
   position: relative;
   display: flex;
+}
+
+/* #906 — the question panel (Figma node 347:6913, the single-question instance), drawn in the composer's
+   slot when claude has a clarifying question outstanding for the conversation on screen.
+
+   Every colour below was read from the VARIABLES on that node, never from the generated fallbacks, which
+   print the LIGHT scheme while desktop is dark-only (ADR 0003) — the standing rule in .composer-status and
+   .status-row, and the trap tokens.css records three times. The variable read gave Tertiary #ffb59f,
+   On Background #e0e2e8, Primary Container #134a74, Primary #9dcbfc, Background #101418 and On Primary
+   #003355, which are --color-tertiary, --color-on-surface, --color-primary-container, --color-primary,
+   --color-surface and --color-on-primary respectively. No --color-background or --color-on-background
+   token is minted: M3's dark scheme defines Background = Surface and On Background = On Surface, so the
+   design's two names resolve onto tokens that already exist.
+
+   The panel carries .composer's own padding and ground rather than the design frame's zero inset, so the
+   slot's edges and background do not move when the panel replaces the message box. flex: 0 0 auto for the
+   composer's reason: it is pinned chrome and never grows or shrinks with the thread. */
+.question-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  background: var(--color-surface);
+}
+
+/* The title row (347:6018) above the bordered box: the mark, an 8px gap, then the label row.
+   align-items: flex-start so the glyph sits on the label's first line however the labels wrap. */
+.question-panel__title {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+/* flex: 0 0 auto and display: block for .composer-status__icon's reasons — an inline SVG picks up the
+   line box's descender gap otherwise, and the glyph must not be squeezed by the label beside it. */
+.question-panel__mark {
+  flex: 0 0 auto;
+  display: block;
+  color: var(--color-tertiary);
+}
+
+/* The labels row (347:6829). It wraps, with the design's asymmetric 8px row / 16px column rhythm, and it
+   holds exactly ONE label today: four of the five slots and the Previous control are hidden in the
+   single-question instance. The row is drawn anyway, because omitting it would diverge from the locked
+   design — and #907's stepped panel fills the other slots without touching this rule. */
+.question-panel__labels {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2) var(--space-4);
+}
+
+/* M3 label/small at Schemes/Tertiary, uppercased. The 11/16/0.5/500 quartet is label-small exactly; the
+   design prints 11px as a literal rather than binding the step, so the quartet is matched by value.
+
+   text-transform: uppercase is a PRESENTATION transform and not a rewrite of the string: the DOM text
+   node still carries claude's `header` verbatim, so nothing here inspects, parses or truncates untrusted
+   text — it is only drawn differently. word-break lets a single unbroken hostile token wrap instead of
+   pushing the row's width out. */
+.question-panel__label {
+  color: var(--color-tertiary);
+  font-size: var(--text-label-small-size);
+  line-height: var(--text-label-small-line);
+  letter-spacing: var(--text-label-small-tracking);
+  font-weight: var(--text-label-small-weight);
+  text-transform: uppercase;
+  word-break: break-word;
+}
+
+/* The bordered box (347:6021). overflow: hidden clips the border radius against any child; the 16px gap
+   is the design's, and separates the question text from the separator and the action row. #907's option
+   rows land between the question and the separator and inherit that gap. */
+.question-panel__box {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-primary-container);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+/* The question itself (347:6024) — M3 body/medium at the emphasized weight, in Schemes/On Background.
+   THIS IS CLAUDE-AUTHORED TEXT, and the single-line ellipsis clamp is the design's own, kept verbatim
+   rather than relaxed: it is also the layout bound on a hostile string, so a 256 KiB question (the codec's
+   MAX_FRAME_BYTES cap is the size bound upstream) is cut at one line instead of growing the panel or
+   pushing the slot off screen. The clamp does NOT get a `title` tooltip to reveal the rest — that would
+   put untrusted text into an attribute, which questionBatchStore.ts bans by name; QuestionPanel.tsx
+   carries the full reasoning. min-width: 0 is what makes the ellipsis actually engage inside a flex
+   column whose default min-width is auto. */
+.question-panel__question {
+  margin: 0;
+  min-width: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight-emphasized);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The rule (347:6543): a 1px block in the box's own border colour, full width. flex: 0 0 auto so the
+   column's stretch never rounds it away. */
+.question-panel__separator {
+  flex: 0 0 auto;
+  height: 1px;
+  background: var(--color-primary-container);
+}
+
+/* The action row (347:6657) — right-aligned, 16px apart. */
+.question-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* The two buttons share everything but their fill. A <button> needs an explicit type reset because the UA
+   stylesheet gives form controls their own font, and the row's labels are M3 body/small at the emphasized
+   weight. The labels are client-owned constants, so white-space: nowrap cannot be blown out by daemon
+   text (.composer__context's ruling). No `outline: none` — these are the only focusable controls on the
+   panel while it covers the composer, so their focus ring is load-bearing. */
+.question-panel__cancel,
+.question-panel__continue {
+  flex: 0 0 auto;
+  border-radius: var(--radius-xs);
+  font-family: inherit;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight-emphasized);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Outlined: 7px vertical padding plus the 1px border is the design's own border-box compensation against
+   Continue's 8px and no border, so the two buttons come out the same height under this repo's absent
+   global box-sizing reset. 7px is a literal because it is structural geometry rather than spacing, and it
+   is off the 4px grid by construction — the .composer__footer height precedent. */
+.question-panel__cancel {
+  padding: 7px var(--space-4);
+  border: 1px solid var(--color-primary);
+  background: var(--color-surface);
+  color: var(--color-primary);
+}
+
+/* Filled: Schemes/Primary carrying On Primary, and no border, hence the 8px padding above. */
+.question-panel__continue {
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
 }

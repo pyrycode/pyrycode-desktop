@@ -90,7 +90,7 @@ silently-missing feature. #157 lands as a pure additive: pass an `onChange` that
 Picker sheet (Figma node 20-2) and the button un-disables, with no other change to this view — the same
 optional-prop extension seam #276 originally reserved for #155's `onChannelInfo?` — [#365](../codebase/365.md)
 later retired that speculative prop in favor of `ConversationScreen` owning the Channel Info sheet's
-open-state itself (see [Channel Info sheet](conversation-shell-conversation-and-modals.md#channel-info-sheet-365) below), so `onChange?` here was, for
+open-state itself (see [Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) below), so `onChange?` here was, for
 a time, the pattern's only live instance. **[#383](../codebase/383.md) bound it:** `ConversationScreen`
 passes `onChange={() => setPickerOpen(true)}` (a `pickerOpen` `useState` twin of `channelInfoOpen`), which
 un-disables the button — no other change to this view. See [Workspace Picker
@@ -160,7 +160,7 @@ precedent, and neither branch crashes.
 `activeConversationStore` (#278) — is compared by exact string equality against each row's `path`; a
 match renders `.workspace-picker__default-pill` (secondary-container fill, Figma 20:36). `activeCwd
 === null` (a list-opened thread never populates `activeConversationStore`) marks no row — the same
-graceful-empty posture the [Channel Info sheet](conversation-shell-conversation-and-modals.md#channel-info-sheet-365) established for the same
+graceful-empty posture the [Channel Info sheet](conversation-shell-session-and-channel-info.md#channel-info-sheet-365) established for the same
 store.
 
 **Choose → dispatch → close (AC3).** Each row is `disabled={!onChoose}`; the container supplies

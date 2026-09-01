@@ -177,3 +177,22 @@ nothing else in the suite is reachable from this diff.
 
 Each is resolved during implementation; any resolution that changes the design above is recorded in a
 `## Revisions` entry.
+
+## Revisions
+
+**2026-09-02 — both open questions resolved, no design change.** Recorded here so the audit does not
+have to infer that they were answered rather than dropped.
+
+- **The `net.createServer(() => {})` stall is genuine.** The new test is red on the pre-fix `connect`
+  with `Test timed out in 5000ms` — the reported failure's exact text, not an early transient-ladder
+  rejection — and green after, settling at ~3060ms against the 3000ms budget.
+- **3000ms is the right budget, and the stall window is not the lever.** The file's other 12 tests
+  total ~200ms of the 3257ms run, so the healthy dial path sits two orders of magnitude below the
+  1500ms per-attempt window; the contention margin needed was in the whole-ladder bound, exactly
+  where this ticket put it.
+
+One thing the plan did not anticipate and the implementation checked: the unhandled-error assertion
+could have passed vacuously. Removing only the `'error'` swallow — budget fix left in place — was run
+as a discrimination check, and the assertion captured two `WebSocket was closed before the connection
+was established` errors, one per stalled attempt, matching the ticket's evidence. So the assertion is
+load-bearing, and the re-dial after the terminate is confirmed to run.

@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { createServer } from 'net'
+import type { AddressInfo, Socket } from 'net'
 import { WebSocket } from 'ws'
 import type { RawData } from 'ws'
 import { startFakeRoutingRelay, type FakeRoutingRelay } from './fakeRoutingRelay'
@@ -34,22 +36,52 @@ function isTransientDialError(err: Error): boolean {
 // the dial hangs to vitest's 5000ms budget — the emitted-'error' ladder above can't see it. A
 // per-attempt timeout drops the half-open socket and re-dials (a stall is inherently transient: the
 // server is already 'listening', so a dial that yields no event within a generous margin is a
-// contention artifact), bounded by the same attemptsLeft budget. > healthy contended dial (~250ms)
-// and leaves room for ≥2 attempts inside the 5000ms per-test budget.
+// contention artifact). > a healthy contended dial (~250ms). This is the per-ATTEMPT window only;
+// what bounds the ladder as a whole is DIAL_BUDGET_MS below, not the attempt count (#904).
 const DIAL_STALL_MS = 1500
 
+// vitest's per-test default, which this file does not override (`vitest.config.ts` sets no
+// testTimeout). Named here so the dial budget below can state its relationship to it in the file
+// rather than leaving the next reader to infer it.
+const VITEST_DEFAULT_TIMEOUT_MS = 5000
+
+// The whole-dial wall-clock bound (#904). Bounding the ladder by attempts alone left
+// `attemptsLeft = 5` × `DIAL_STALL_MS` = 7500ms out-running the very 5000ms budget it existed to
+// protect, so the descriptive rejection below was unreachable and every stall surfaced as a bare
+// `Test timed out in 5000ms`. One deadline, armed once per connect() and re-checked at every re-dial
+// gate, fixes that by construction: no combination of stalls and re-dials can outlive it, whatever
+// `attemptsLeft` says. 3000ms admits two full-margin attempts and leaves ~2000ms of headroom for the
+// test's own work, the rejection's unwinding, and afterEach teardown. The bound is per-connect(), not
+// per-test as fakeDaemon.test.ts's `bounded()` is: an exhausted dial rejects and so fails its test at
+// once rather than accumulating, and threading a deadline would touch all 32 dial call sites here.
+const DIAL_BUDGET_MS = 3000
+
+// Arms the wall-clock deadline ONCE and delegates. Every retry recurses through `dial`, never back
+// through here, so neither a caller nor a re-dial can extend the budget.
 function connect(
   url: string,
   opts: { headers?: Record<string, string>; attemptsLeft?: number } = {}
 ): Promise<WebSocket> {
   const { headers, attemptsLeft = 5 } = opts
+  return dial(url, headers, attemptsLeft, Date.now() + DIAL_BUDGET_MS)
+}
+
+function dial(
+  url: string,
+  headers: Record<string, string> | undefined,
+  attemptsLeft: number,
+  deadline: number
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, headers ? { headers } : undefined)
     const onDialError = (err: Error): void => {
       clearTimeout(dialTimer) // this dial settled: the stall timer must not also fire
-      ws.terminate() // drop the half-open socket before re-dialling so none leaks
-      if (attemptsLeft > 1 && isTransientDialError(err)) {
-        setTimeout(() => resolve(connect(url, { headers, attemptsLeft: attemptsLeft - 1 })), 20)
+      // Drop the half-open socket before re-dialling so none leaks. No swallow needed here, unlike
+      // the stall path below: ws has already emitted 'error', which drove the socket out of
+      // CONNECTING, so this terminate() cannot take the abortHandshake branch.
+      ws.terminate()
+      if (attemptsLeft > 1 && Date.now() < deadline && isTransientDialError(err)) {
+        setTimeout(() => resolve(dial(url, headers, attemptsLeft - 1, deadline)), 20)
         return
       }
       reject(err)
@@ -61,18 +93,31 @@ function connect(
       ws.on('error', () => {})
       resolve(ws)
     })
-    // Re-dial unconditionally on a stall (no error object to classify); detach onDialError first so
-    // terminate()'s teardown events cannot spawn a duplicate re-dial. Exhaustion rejects with a
-    // descriptive message so a genuine never-accept regression still turns the test red.
+    // Re-dial unconditionally on a stall (no error object to classify — an isTransientDialError clause
+    // here would be dead code). SWAP onDialError for a benign swallow rather than dropping it:
+    // detaching keeps terminate()'s teardown events from spawning a duplicate re-dial, but a stall
+    // timer can only fire while the socket is still CONNECTING, and terminate() on a CONNECTING socket
+    // takes ws@8's abortHandshake branch, which emits 'error' on nextTick — with zero listeners Node
+    // throws `Unhandled 'error' event`, out of band, killing the very re-dial this path exists to run
+    // (#904, the repair #550 made on fakeDaemon.test.ts). Exhausting the attempts or the budget
+    // rejects with a descriptive message, so a genuine never-accept regression still turns the test
+    // red — reachably now, which under the old attempts-only ladder it was not.
+    const stallMs = Math.min(DIAL_STALL_MS, Math.max(0, deadline - Date.now()))
     const dialTimer = setTimeout(() => {
       ws.off('error', onDialError)
+      ws.on('error', () => {})
       ws.terminate()
-      if (attemptsLeft > 1) {
-        resolve(connect(url, { headers, attemptsLeft: attemptsLeft - 1 }))
+      if (attemptsLeft > 1 && Date.now() < deadline) {
+        resolve(dial(url, headers, attemptsLeft - 1, deadline))
       } else {
-        reject(new Error(`dial to ${url} stalled: no open/error within ${DIAL_STALL_MS}ms`))
+        reject(
+          new Error(
+            `dial to ${url} stalled: no open/error within ${stallMs}ms ` +
+              `(attempts left ${attemptsLeft}, ${DIAL_BUDGET_MS}ms dial budget)`
+          )
+        )
       }
-    }, DIAL_STALL_MS)
+    }, stallMs)
   })
 }
 
@@ -129,10 +174,11 @@ describe('startFakeRoutingRelay — lifecycle parity (AC1)', () => {
 
     await serverLeg(relay)
     let resolved = false
-    // 4000ms headroom (not the 1000ms default): a stalled client-leg dial (116) below is detected
-    // and re-dialled at DIAL_STALL_MS=1500ms, which the default gate would pre-empt with a 1000ms
-    // rejection. Decouples this test's readiness gate from the dial-timeout retry; touches no
-    // production timeout and no expect(). (#342)
+    // 4000ms headroom (not the 1000ms default): a stalled client-leg dial below is detected and
+    // re-dialled, and settles — resolved or rejected — by DIAL_BUDGET_MS=3000ms at the latest, which
+    // the default gate would pre-empt with a far less useful 1000ms rejection. Decouples this test's
+    // readiness gate from the dial-retry ladder; touches no production timeout and no expect().
+    // (#342, re-anchored to the whole-dial budget by #904)
     void relay.whenReady(4000).then(() => {
       resolved = true
     })
@@ -336,5 +382,59 @@ describe('startFakeRoutingRelay — content-blindness & robustness (AC5)', () =>
     const atB = nextText(clientB)
     server.send(JSON.stringify({ conn_id: idB, frame: { still: 'alive' } }))
     expect(JSON.parse(await atB)).toEqual({ still: 'alive' })
+  })
+})
+
+// The dial harness's own remedy branch. #550 shipped this repair on the sibling fakeDaemon.test.ts and
+// flagged that the stall re-dial ladder — the entire point of the hardening — had no regression test,
+// which is how its `Unhandled 'error' event` defect reached main on reading alone. This pins both
+// halves here: the wall-clock bound, and the listener that must survive the terminate. (#904)
+describe('connect() — dial-stall budget and re-dial path (#904)', () => {
+  it('rejects a genuine stall inside the documented budget, re-dialling with no unhandled error', async () => {
+    // Accepts the TCP connection and never answers the HTTP upgrade, so `ws` emits neither 'open' nor
+    // 'error' — the exact shape the emitted-'error' ladder cannot see. The injection #550 verified with.
+    const accepted: Socket[] = []
+    const stallTarget = createServer((socket) => {
+      accepted.push(socket)
+    })
+    await new Promise<void>((ready) => stallTarget.listen(0, '127.0.0.1', ready))
+    cleanups.push(
+      () =>
+        new Promise<void>((done) => {
+          for (const socket of accepted) socket.destroy()
+          stallTarget.close(() => done())
+        })
+    )
+    const { port } = stallTarget.address() as AddressInfo
+
+    // An abortHandshake 'error' with no listener escapes as an uncaught exception, out of band. This
+    // probe is the only thing that attributes such an escape to the path that raised it.
+    const uncaught: Error[] = []
+    const onUncaught = (err: Error): void => {
+      uncaught.push(err)
+    }
+    process.on('uncaughtException', onUncaught)
+    cleanups.push(() => {
+      process.off('uncaughtException', onUncaught)
+    })
+
+    const started = Date.now()
+    await expect(connect(`ws://127.0.0.1:${port}/v1/client`)).rejects.toThrow(/stalled/)
+    const elapsed = Date.now() - started
+
+    // The bound holds — and the bound itself is under the budget vitest would otherwise kill us at,
+    // which is the whole defect this test exists for.
+    const ceiling = DIAL_BUDGET_MS + 800 // contention margin for a late-firing timer
+    expect(ceiling).toBeLessThan(VITEST_DEFAULT_TIMEOUT_MS)
+    expect(elapsed).toBeLessThan(ceiling)
+    expect(elapsed).toBeGreaterThanOrEqual(DIAL_STALL_MS) // it really waited a stall window out
+
+    // The terminate() on the stall path did not take out the re-dial that follows it. A lower bound,
+    // not an exact count: the last attempt's window is whatever the deadline leaves, so a late-firing
+    // timer can legitimately admit one more short attempt.
+    expect(accepted.length).toBeGreaterThan(1)
+
+    await new Promise((settle) => setTimeout(settle, 50)) // let a nextTick abortHandshake emit land
+    expect(uncaught).toEqual([])
   })
 })

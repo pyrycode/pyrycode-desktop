@@ -255,6 +255,18 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
             multi_select: true
           }
         ]
+      },
+      // and its dismissal (#895) is PERMANENTLY no-op here for the same reason — the frame that ends
+      // the waiting still routes nowhere near the modal store. `modalDismissed` resolves a permission
+      // prompt against `modal_id` under first-answer-wins; this retires a question batch against its
+      // own nonce, with no answer frame in the daemon contract at all. `source` is deliberately the
+      // landed `no_answer`, which is NOT a WireModalSource member: this typed call site is one of the
+      // places an arm wrongly annotated `source: WireModalSource` fails to compile.
+      {
+        type: 'questionDismissed',
+        questionBatchId: 'qb_01HZY',
+        outcome: 'unanswered',
+        source: 'no_answer'
       }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()

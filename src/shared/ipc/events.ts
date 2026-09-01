@@ -719,6 +719,62 @@ export type DaemonEvent =
       questionBatchId: string
       questions: readonly WireQuestion[]
     }
+  // The question-retirement arm (#895) — the frame that ends the batch above, decoded fail-closed by
+  // #894, so a client takes the panel down rather than rendering an ask that is already dead.
+  //
+  // `source` IS A PLAIN string AND DELIBERATELY NOT WireModalSource, and getting that wrong is the
+  // single most likely mistake in this family — it compiles nowhere it should and passes everywhere it
+  // shouldn't. The pull is real: this file already imports WireModalSource, the modalDismissed arm two
+  // lines up annotates its `source` with it, and QuestionDismissedPayload's own doc calls this frame
+  // "field for field with ModalDismissedPayload". It is still wrong. That closed set is
+  // {remote, local, timeout} and THE PRODUCER EMITS NO MEMBER OF IT: `remote` and `local` are ANSWERED
+  // outcomes belonging to the not-yet-landed answer half (upstream pyrycode#1907), and `timeout` is not
+  // emitted either, because the dismissal arbiter is one closure the control server defers on every
+  // `Await` return and cannot tell an elapsed approval window from a caller disconnect or a daemon
+  // shutdown — so all three terminal paths emit the ONE landed pair, `outcome: "unanswered"` with
+  // `source: "no_answer"`. Closing the enum here rejects the only traffic that exists. The trap has
+  // teeth because `timeout` IS a valid member and is sitting in upstream
+  // internal/protocol/testdata/question_dismissed.json — a SHAPE fixture minted by the declaring slice
+  // before any producer existed, not the live vocabulary. An arm typed WireModalSource and tested with
+  // `timeout` typechecks AND passes while rejecting every real frame. If a type error appears at the
+  // emit site, WIDEN THE ARM; never cast the payload, never copy that fixture's value.
+  // parseQuestionDismissedPayload's docblock made this same call one hop upstream ("do not tighten them
+  // toward each other") — do not un-make it here.
+  //
+  // THE FAIL-CLOSED READING RULE IS WHAT MAKES THE OPEN TYPE SAFE, and it belongs to the consumer: an
+  // unrecognised `source` means RESOLVED, CAUSE UNKNOWN, and NEVER an answer. Backwards, it renders a
+  // daemon safe-deny as the operator's own choice — showing them as having approved something they
+  // never saw. The values a client written today will not recognise are precisely the ones the producer
+  // has yet to name, so this is a live path, not a hypothetical one.
+  //
+  // NO conversationId, and DO NOT ADD ONE "for symmetry with the batch" — the absence is part of the
+  // contract. The batch nonce is the sole correlation key; a shape carrying both would admit a
+  // disagreeing pair someone has to adjudicate, and a client holding the batch already knows its
+  // conversation. This arm carries exactly one id where questionShown carries two.
+  //
+  // THE TRUST TIER DIFFERS FROM ITS SIBLING'S IN BOTH DIRECTIONS. Unlike questionShown this arm carries
+  // NO CLAUDE-AUTHORED BYTE: the id is daemon-asserted and `outcome` is an opaque producer-defined
+  // sentinel carried verbatim and never enum-checked, which NEVER carries a claude-authored option
+  // label — a published contract rather than a coincidence, and the reason a consumer needing the label
+  // reads it from the batch it already holds, keyed on questionBatchId. So questionShown's per-field
+  // escaping obligations have no counterpart here. THEY ARE NOT REPLACED BY A SAFETY GUARANTEE: all
+  // three fields are daemon-ASSERTED, not daemon-BOUNDED. That provenance is the honest producer's
+  // promise, not a property anything verifies — the only check at the boundary is `typeof === 'string'`,
+  // and a compromised daemon puts whatever it likes in `outcome` and `source` at whatever length the
+  // frame cap allows. Do not read "daemon-asserted" as "safe to render as trusted chrome": the escaping
+  // and length-bounding boundary is still this client's.
+  //
+  // `questionBatchId` is the batch's one-time UNGUESSABLE nonce echoed back and must never reach a log;
+  // nothing on this leg has a sink (emitDaemonEvent is log-free by construction). It is DEAD once this
+  // frame lands, and receiving it is NOT a capability — a retired batch resolves nothing daemon-side,
+  // the way a stale modalId resolves nothing under first-answer-wins. Matching it against a held batch
+  // wants plain `===`, not crypto.timingSafeEqual: a local routing decision between two values the
+  // client already holds, not a secret compared against an attacker's guess.
+  //
+  // PERMANENTLY no-op in all three exhaustive bridges, NOT dormant, on its sibling's terms — its
+  // consumer is #850's question store plus a DEDICATED bridge, a FOURTH independent subscriber on this
+  // channel, so no case in session, timeline or modal will ever claim it.
+  | { type: 'questionDismissed'; questionBatchId: string; outcome: string; source: string }
   // The correlated modal-answer rejection arm (#248). Emitted by the MAIN-side correlation window
   // (daemonConnection.ts) when a content-free daemon `error` (#116) arrives while a `modal_answer` this
   // client sent (#236) is awaiting its reply — an ungranted device's answer round-trips to an `error`

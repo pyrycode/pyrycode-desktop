@@ -425,6 +425,33 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('questionDismissed → null (consumed by the #850 question store, not the session store)', () => {
+    // PERMANENTLY no-op, not dormant, on the same terms as its `questionShown` sibling above: #850 is
+    // a FOURTH independent subscriber on this channel, so this case can never flip to an owned arm the
+    // way `compacting` did at #496. The landed producer pair, which is also what keeps this call site
+    // honest — `no_answer` is not a WireModalSource member, so a `source: WireModalSource` arm would
+    // fail to compile right here.
+    expect(
+      translateDaemonEvent({
+        type: 'questionDismissed',
+        questionBatchId: 'qb_01HZY',
+        outcome: 'unanswered',
+        source: 'no_answer'
+      })
+    ).toBeNull()
+    // A source this client does not recognise is no more a session action than one it does. The
+    // fail-closed READING rule — resolved, cause unknown, never an answer — is #850's to apply; this
+    // bridge draws no distinction at all.
+    expect(
+      translateDaemonEvent({
+        type: 'questionDismissed',
+        questionBatchId: 'qb_01HZY',
+        outcome: 'superseded',
+        source: 'daemon_shutdown'
+      })
+    ).toBeNull()
+  })
+
   it('unrecognizedMessage → null (consumed by the timeline render slice, not the session store)', () => {
     expect(
       translateDaemonEvent({

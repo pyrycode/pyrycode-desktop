@@ -99,6 +99,7 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'backgroundTaskRoster':
     case 'modelAnnounced':
     case 'questionShown':
+    case 'questionDismissed':
       // No modal event: the session store (#19), download UI (#72), conversation-list store (#208),
       // timeline store (#202), create render slice (#242), the #259 session-id holder, the #261 /
       // #256 session-settings consumers (confirmed + rejected #269), the #293 queue store
@@ -131,6 +132,13 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // plus a dedicated bridge — a FOURTH INDEPENDENT SUBSCRIBER — so this no-op is PERMANENT, not
       // dormant: unlike `connected`, which #538 flipped to a `reconnected` reset above, this case can
       // never become an owned arm here.
+      // questionDismissed (#895) is the frame that ENDS that waiting, and it routes nowhere near this
+      // store either — which is the whole point, since a dismissal is the one arm a reader is most
+      // tempted to hand to the modal store on the strength of its `modalDismissed` twin. The two are
+      // not the same resolution: `modalDismissed` retires a permission prompt against `modal_id` under
+      // first-answer-wins, while this retires a question batch against its own nonce, and the daemon
+      // contract has no question-answer frame at all yet. Its no-op is PERMANENT on the same #850
+      // grounds as its sibling.
       return null
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a

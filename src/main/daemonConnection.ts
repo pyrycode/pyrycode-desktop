@@ -1106,6 +1106,46 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             if (answered !== -1) outstandingAnswers.splice(answered, 1)
             return
           }
+          case 'question-dismissed':
+            // The question-retirement data path (#895) — the frame that ends the #885 batch. An
+            // UNSOLICITED daemon BROADCAST (not correlated by in_reply_to), emitted unconditionally on
+            // decode. snake→camel, one level; NO `conversation_id` (the batch carries one, this does
+            // not — the nonce is the sole correlation key and adding one "for symmetry" is forbidden by
+            // the wire contract). A fresh literal naming three fields, never a spread of the decoded
+            // payload, so a decoder that later grows a field cannot smuggle it across IPC.
+            //
+            // Every field is read BARE — no `??`, no optional handling. The decode requires all three,
+            // so a missing or non-string one drops the whole line upstream of this emit; a `?? ''` here
+            // would turn that fail-closed drop into a silent misattribution, retiring the wrong batch or
+            // reporting a cause the daemon never stated. NO log call — #894's decode already emitted the
+            // content-free record, and this is the one place on the leg where the unguessable nonce
+            // could reach a sink.
+            //
+            // `source` crosses as a PLAIN string, never narrowed to WireModalSource: the producer emits
+            // no member of that set, only `outcome: "unanswered"` / `source: "no_answer"` for the whole
+            // no-answer class. A type error here means the ARM is wrong, not this line. See the arm's
+            // own comment in shared/ipc/events.ts for why, and why the upstream `timeout` fixture is a
+            // trap rather than a value.
+            //
+            // DELIBERATELY NO `outstandingAnswers` DRAIN, unlike the modal-dismissed twin directly
+            // above. That list holds modal_ids exclusively, and this client sends no question answer at
+            // all (the outbound verb is upstream pyrycode#1907, unlanded), so there is nothing here to
+            // drain. Copying the block would search the MODAL correlation window with a
+            // question_batch_id — letting a daemon retire a live modal-answer entry by echoing a known
+            // modal_id as a batch nonce, after which a later content-free `error` (#116) mis-attributes.
+            // It would read as a harmless no-op in review, because the indexOf is -1 on every honest
+            // frame.
+            //
+            // The #850 question store plus its own dedicated bridge — a fourth independent subscriber —
+            // consumes this; all three exhaustive bridges no-op it permanently. Not compile-forced
+            // (this inner switch has no assertNever) — the round-trip test guards this emit.
+            emitDaemonEvent(sink, {
+              type: 'questionDismissed',
+              questionBatchId: inbound.questionDismissed.question_batch_id,
+              outcome: inbound.questionDismissed.outcome,
+              source: inbound.questionDismissed.source
+            })
+            return
         }
         return
       }

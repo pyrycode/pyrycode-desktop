@@ -18,9 +18,14 @@ pyrycode#1962, shape by #1963, fixtures and prose by #1964) / `internal/protocol
 [#894](https://github.com/pyrycode/pyrycode-desktop/issues/894) added the sibling frame that retires a
 batch, `question_dismissed` — its own `EnvelopeType` member and `QuestionDismissedPayload`, plus the
 fail-closed `parseQuestionDismissedPayload` decode into the same [inbound
-message](inbound-message-decode.md) boundary (§ *Question dismissed*, below). It ships dormant, the
-same way `question_shown` did through #884: the IPC carry is
-[#895](https://github.com/pyrycode/pyrycode-desktop/issues/895), already blocked on this ticket.
+message](inbound-message-decode.md) boundary (§ *Question dismissed*, below).
+[#895](https://github.com/pyrycode/pyrycode-desktop/issues/895) carried the decoded dismissal the last
+hop across IPC, as the sealed union's `questionDismissed` arm (see [Daemon event channel — the sealed
+union](daemon-event-channel-sealed-union.md)) — `daemonConnection.ts`'s inbound switch now has a case
+for the kind, and all three exhaustive renderer bridges no-op it, the same shape `question_shown` took
+through #885. It still ships with no renderer surface: the question store + its own bridge,
+[#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), is the first real consumer of both
+arms.
 
 ## What it does
 
@@ -179,10 +184,11 @@ compromised daemon, or anything impersonating one inside the Noise session, can 
 unbounded string in `outcome` or `source` — including a claude-authored label, up to the frame's
 `MAX_PLAINTEXT_BYTES` cap — and nothing at this boundary would reject it. Reading "daemon-asserted" as
 "safe to render as trusted chrome" is exactly wrong; the escaping and length-bounding boundary is still
-the eventual render slice's, the same as for `question_shown`'s claude-authored strings. Nothing is
-exploitable at #894 itself, since the decode has no consumer yet — the switch-arm comment in
-`inboundMessage.ts` states this so [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895) does
-not read "decoded" as "sanitized".
+the eventual render slice's, the same as for `question_shown`'s claude-authored strings. The
+switch-arm comment in `inboundMessage.ts` states this so it carries the warning forward rather than
+reading "decoded" as "sanitized" — and [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895)'s
+`DaemonEvent` arm doc comment restates it a second time at the IPC boundary, since that is the last
+typed surface before #850's render slice reads these strings.
 
 `question_batch_id` is the batch's own one-time unguessable nonce echoed back — dead once this frame
 lands, and receiving it is **not** a capability: a retired batch resolves nothing server-side, the way a
@@ -225,10 +231,12 @@ Nothing renders `question_shown` yet:
   event channel — the sealed union](daemon-event-channel-sealed-union.md) for the arm itself and
   [Daemon-event bridge](daemon-event-bridge.md) for the three permanent no-ops. No renderer store
   reads it yet.
-- **`question_dismissed`'s decode landed in [#894](https://github.com/pyrycode/pyrycode-desktop/issues/894)** —
-  see § *Question dismissed* above. It ships dormant the same way `question_shown` did:
-  [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895) is the IPC carry, already blocked on
-  this ticket.
+- **`question_dismissed`'s decode landed in [#894](https://github.com/pyrycode/pyrycode-desktop/issues/894)**,
+  and its IPC carry in [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895) — the decoded
+  dismissal now crosses to the renderer as the `questionDismissed` `DaemonEvent` arm, the same shape
+  and the same three permanent no-ops as its sibling above; see § *Question dismissed* above and
+  [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md). Both arms now ship
+  dormant on the same terms: no renderer store reads either yet, and both wait on the same consumer.
 - **No outbound answer verb.** None exists upstream yet (pyrycode#1907). The eventual answer frame
   returns a claude-authored string (selected by `label`, since options carry no id) — publishing that
   string here does not make it trusted on the way back; it is re-resolved daemon-side against the
@@ -299,8 +307,9 @@ same conclusion about its own fixture, for the same reason).
   the fail-closed decode into a typed inbound arm, the first consumer of these types.
 - [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) / [Daemon-event
   bridge](daemon-event-bridge.md) — [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885)'s
-  `questionShown` `DaemonEvent` arm, the IPC carry of the decoded batch, and the three permanent
-  bridge no-ops. Its own consumer, the question store + bridge, is
+  `questionShown` `DaemonEvent` arm and [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895)'s
+  `questionDismissed` arm, the IPC carry of both the batch and its retirement, and the three permanent
+  bridge no-ops each gets. Their shared consumer, the question store + bridge, is
   [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), open.
 - [Inbound message decode — public contract](inbound-message-decode-contract.md) /
   [internals](inbound-message-decode-internals.md) /
@@ -308,8 +317,8 @@ same conclusion about its own fixture, for the same reason).
   [#894](https://github.com/pyrycode/pyrycode-desktop/issues/894)'s `question_dismissed` decode: the
   `QuestionDismissedPayload` type union member, `parseQuestionDismissedPayload`, the content-free log
   row, and the trust-boundary finding that "daemon-asserted" is the producer's promise, not a checked
-  property. Ships dormant; the IPC carry is
-  [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895), already blocked on this ticket.
+  property. The IPC carry is [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895), landed;
+  both still ship dormant pending #850's render consumer.
 - [Modal-prompt model](modal-prompt-model.md) — the `ModalDismissedPayload` /
   `parseModalDismissedPayload` precedent `question_dismissed` copies structurally, minus the closed
   `source` enum — see § *Question dismissed* above for why that one check does not transfer.

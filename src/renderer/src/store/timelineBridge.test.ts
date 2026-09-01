@@ -467,6 +467,17 @@ describe('translateTimelineEvent — every other arm returns null (the inverse f
             multi_select: true
           }
         ]
+      },
+      // and its dismissal (#895) joins on the same queueState rule (#720): the frame carries no
+      // turn_id and opens and closes no turn, so retiring a batch is daemon STATE, not a turn-stream
+      // item — and PERMANENTLY so, since #850's consumer is a fourth independent subscriber rather
+      // than a future case here. `source` is the landed `no_answer`, which is not a WireModalSource
+      // member: this typed call site is one of the places a wrongly-annotated arm fails to compile.
+      {
+        type: 'questionDismissed',
+        questionBatchId: 'qb_01HZY',
+        outcome: 'unanswered',
+        source: 'no_answer'
       }
     ]
     for (const event of others) expect(translateTimelineEvent(event)).toBeNull()
@@ -970,6 +981,26 @@ describe('subscribeTimeline', () => {
     // Both halves, as elsewhere: the bridge filtered it out so no dispatch reached the reducer (same
     // state ref), AND no chat row exists. Unlike every prior arm asserted this way, this one will not
     // later flip — #850's consumer is a fourth independent subscriber, not a case in this switch.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
+  it('#895: a questionDismissed daemon event creates NO timeline item (permanently, not dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'questionDismissed',
+      questionBatchId: 'qb_01HZY',
+      outcome: 'unanswered',
+      source: 'no_answer'
+    })
+
+    // Both halves: the bridge filtered it out so no dispatch reached the reducer (same state ref), AND
+    // no chat row exists. Neither this arm nor its `questionShown` sibling above will later flip —
+    // #850's consumer is a fourth independent subscriber, not a case in this switch.
     expect(store.getState()).toBe(before)
     expect(selectItems(store.getState())).toHaveLength(0)
   })

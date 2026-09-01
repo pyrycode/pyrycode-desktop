@@ -24,22 +24,24 @@ import {
   type ConversationLastReadStore,
   type ConversationLastReadStorage
 } from '../../store/conversationLastReadStore'
+import { createModalStore, type ModalStore } from '../../store/modalStore'
 
-// #801's per-row dot reads three app-wide SINGLETONS, and A WRITE TO ANY OF THEM IS INVISIBLE TO
-// `renderToStaticMarkup`. React's server renderer resolves `useSyncExternalStore` through its THIRD
-// argument (react-dom-server.node.development.js:5283 returns `getServerSnapshot()` and never subscribes),
-// and zustand v5 wires that argument to `api.getInitialState()` (zustand/esm/react.mjs) — the state
-// captured at store CREATION, which no setter ever moves. Seeding the singletons therefore renders three
-// idle dots and proves nothing; this is a property of the whole node-environment renderer tier, not of
-// this file.
+// #801's per-row dot reads four app-wide SINGLETONS (#874 added the fourth), and A WRITE TO ANY OF THEM IS
+// INVISIBLE TO `renderToStaticMarkup`. React's server renderer resolves `useSyncExternalStore` through its
+// THIRD argument (react-dom-server.node.development.js:5283 returns `getServerSnapshot()` and never
+// subscribes), and zustand v5 wires that argument to `api.getInitialState()` (zustand/esm/react.mjs) — the
+// state captured at store CREATION, which no setter ever moves. Seeding the singletons therefore renders
+// three idle dots and proves nothing; this is a property of the whole node-environment renderer tier, not
+// of this file.
 //
-// So the three React BINDINGS are redirected onto per-file isolated store instances, built by the same
+// So the four React BINDINGS are redirected onto per-file isolated store instances, built by the same
 // shipped factories and driven through the same shipped setters. Only the binding is replaced: `...actual`
-// keeps the real `selectActivityFor` / `selectTimelineFor` / `selectLastReadFor`, so the row's id → entry
-// lookup runs for real, and `isConversationUnread` and `resolveConversationStatus` are untouched imports
-// in `ChannelList.tsx`. What the #801 cases below assert is exactly the wiring this ticket adds.
+// keeps the real `selectActivityFor` / `selectTimelineFor` / `selectLastReadFor` /
+// `selectHasOutstandingFor`, so the row's id → entry lookup runs for real, and `isConversationUnread` and
+// `resolveConversationStatus` are untouched imports in `ChannelList.tsx`. What the #801 and #874 cases
+// below assert is exactly the wiring those tickets add.
 //
-// Each factory's body is evaluated at import time and touches none of the three consts below; only the
+// Each factory's body is evaluated at import time and touches none of the four consts below; only the
 // returned hook reads them, and it is not called until a render inside a test.
 const activityStore = createConversationActivityStore()
 const timelineStore = createConversationTimelineStore()
@@ -48,6 +50,10 @@ const timelineStore = createConversationTimelineStore()
 // this file's stores off any shared surface (conversationLastReadStore.ts:246-257).
 const lastReadMemory: ConversationLastReadStorage = { read: () => new Map(), write: () => {} }
 const lastReadStore = createConversationLastReadStore(lastReadMemory)
+// #874's fourth read. Named `promptStore` and not `modalStore`: the module's own app-wide singleton export
+// carries that name and the mock factory below spreads it, so a same-named local const — legal — would
+// invite a misread about which of the two a seed writes to.
+const promptStore = createModalStore()
 
 vi.mock('../../store/conversationActivityStore', async (importActual) => ({
   ...(await importActual<typeof import('../../store/conversationActivityStore')>()),
@@ -63,6 +69,10 @@ vi.mock('../../store/conversationLastReadStore', async (importActual) => ({
   ...(await importActual<typeof import('../../store/conversationLastReadStore')>()),
   useConversationLastReadStore: <T,>(selector: (s: ConversationLastReadStore) => T): T =>
     selector(lastReadStore.getState())
+}))
+vi.mock('../../store/modalStore', async (importActual) => ({
+  ...(await importActual<typeof import('../../store/modalStore')>()),
+  useModalStore: <T,>(selector: (s: ModalStore) => T): T => selector(promptStore.getState())
 }))
 
 // The #218 idiom: server-render the pure view with injected props — no DOM harness, no store. The
@@ -170,6 +180,11 @@ const STATUS_DOT_WORKING = 'class="conversation-status-dot conversation-status-d
 const STATUS_DOT_NEW_MESSAGES =
   'class="conversation-status-dot conversation-status-dot--new-messages"'
 const STATUS_DOT_IDLE = 'class="conversation-status-dot conversation-status-dot--idle"'
+// #874's status, reachable from a row for the first time. Same full-value form and same reason; the string
+// is restated here rather than imported from `ConversationStatusDot.test.tsx:17`, matching its three
+// siblings above.
+const STATUS_DOT_INPUT_REQUIRED =
+  'class="conversation-status-dot conversation-status-dot--input-required"'
 
 // Counting dots regardless of status. The trailing SPACE is on purpose and is the `DOT_TAG_PREFIX`
 // treatment: the base class never appears alone, so this matches every dot and no other element.
@@ -708,14 +723,23 @@ describe('ChannelListView', () => {
   })
 
   describe('the status dot leading every conversation row (#801)', () => {
-    // THE ONE REAL TRAP IN THIS SUITE. The three stores are file-level instances shared by every case in
+    // THE ONE REAL TRAP IN THIS SUITE. The four stores are file-level instances shared by every case in
     // this describe, so a seed left standing silently colours a LATER case's render — an `--idle` row
-    // quietly turning `--working`, which is a passing-looking wrong answer rather than a failure. Three
-    // clears, one per store, because no single boundary helper owns all three.
+    // quietly turning `--working`, which is a passing-looking wrong answer rather than a failure. Four
+    // clears, one per store, because no single boundary helper owns all four.
+    //
+    // The modal clear is `reconnected` and MUST NOT be a `dismissed` per seeded prompt. `dismissed` moves
+    // the id onto the `resolved` slice, where the `shown` arm reads a seen-then-resolved id as a no-op
+    // rather than an append (modalPrompts.ts:154) — so a `dismissed`-based teardown leaves a later case's
+    // seed silently doing nothing, and that case renders an `--idle` row while asserting
+    // `--input-required`, a failure that reads as a product bug in the wiring #874 adds. `reconnected`
+    // clears `outstanding` and `resolved` together (modalPrompts.ts:202-220) and is the only teardown
+    // that returns the store to its initial state.
     afterEach(() => {
       activityStore.getState().clearAllActivity()
       timelineStore.getState().clearAllTimelines()
       lastReadStore.getState().clearAllLastRead()
+      promptStore.getState().dispatch({ type: 'reconnected' })
     })
 
     // The seeds, named for the STATUS they produce rather than for the store they write, so each case
@@ -734,6 +758,26 @@ describe('ChannelListView', () => {
       seedUnread(id)
       lastReadStore.getState().recordLastRead(id, 0)
     }
+
+    // #874: one outstanding prompt for that conversation. The event literal is built inline rather than
+    // imported out of `modalPrompts.test.ts`, but it borrows that builder's one load-bearing discipline
+    // (modalPrompts.test.ts:20-24): the `modalId` is DERIVED from the conversation id without being equal
+    // to it. Both fields are `string`, so a scan reading the wrong one is invisible to `tsc` and only
+    // distinct values can catch it.
+    const seedInputRequired = (id: string): void =>
+      promptStore.getState().dispatch({
+        type: 'shown',
+        conversationId: id,
+        modalId: `m-${id}`,
+        class: 'permission',
+        title: 'Allow tool use?',
+        prompt: 'Run `git status`?',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' }
+        ],
+        defaultOptionId: 'allow'
+      })
 
     // Three rows spread across both trees and two workspaces, so every claim below is a claim about more
     // than one row — a single-row fixture cannot tell "resolved per row" from "resolved once for all".
@@ -831,6 +875,73 @@ describe('ChannelListView', () => {
       const chunk = chunkFor(render(threeRows()), 'Help me debug auth flow')
       expect(chunk).toContain(STATUS_DOT_WORKING)
       expect(chunk).not.toContain(STATUS_DOT_NEW_MESSAGES)
+    })
+
+    it('draws the input-required dot on a row with a prompt waiting (#874 AC1)', () => {
+      seedInputRequired('d1')
+      const markup = render(threeRows())
+      expect(chunkFor(markup, 'Help me debug auth flow')).toContain(STATUS_DOT_INPUT_REQUIRED)
+      expect(chunkFor(markup, 'kitchenclaw refactor')).toContain(STATUS_DOT_IDLE)
+      expect(chunkFor(markup, 'Third conversation')).toContain(STATUS_DOT_IDLE)
+      // The count PAIR is what says "one row, one dot, no extra element": the new status appears once in
+      // the whole render, and the render still carries exactly three dots.
+      expect(countOf(markup, STATUS_DOT_INPUT_REQUIRED)).toBe(1)
+      expect(countOf(markup, STATUS_DOT_PREFIX)).toBe(3)
+    })
+
+    it('outranks working AND new messages on the same row (#874 AC2)', () => {
+      // The assertion #874 exists to make true. The resolver's own suite pins the precedence one layer
+      // down; restating it here is deliberate — this is where the four stores actually meet.
+      //
+      // Each rival gets its OWN row, and that separation is load-bearing rather than tidiness. It is what
+      // makes this case catch the one wrong answer a green typecheck hides: `resolveConversationStatus`
+      // takes a `boolean` in BOTH first and third position, so a call passing the unread flag first and
+      // `inputRequired` third builds clean and passes the salvage gate. Seeding all three facts on ONE row
+      // cannot catch it — a transposed call reads that row's `unread` in first position, which is also
+      // true, and resolves `input-required` for the wrong reason. `c1` holds input-required against
+      // working with NOTHING unread, which is exactly the row that transposition mis-resolves.
+      seedInputRequired('c1')
+      seedWorking('c1')
+      seedInputRequired('d1')
+      seedUnread('d1')
+      seedInputRequired('d2')
+      seedWorking('d2')
+      seedUnread('d2')
+      const markup = render(threeRows())
+      const titles = ['kitchenclaw refactor', 'Help me debug auth flow', 'Third conversation']
+      for (const title of titles) {
+        const chunk = chunkFor(markup, title)
+        expect(chunk).toContain(STATUS_DOT_INPUT_REQUIRED)
+        expect(chunk).not.toContain(STATUS_DOT_WORKING)
+        expect(chunk).not.toContain(STATUS_DOT_NEW_MESSAGES)
+      }
+      expect(countOf(markup, STATUS_DOT_INPUT_REQUIRED)).toBe(3)
+    })
+
+    it('resolves three rows to three different statuses in one render (#874 AC3)', () => {
+      // Two claims a single-row fixture cannot make: a row with no outstanding prompt draws exactly what
+      // it drew before the fourth fact existed, and the fourth fact does not leak across rows. One render
+      // proves both.
+      seedInputRequired('d1')
+      seedWorking('c1')
+      seedUnread('d2')
+      const markup = render(threeRows())
+      expect(chunkFor(markup, 'Help me debug auth flow')).toContain(STATUS_DOT_INPUT_REQUIRED)
+      expect(chunkFor(markup, 'kitchenclaw refactor')).toContain(STATUS_DOT_WORKING)
+      expect(chunkFor(markup, 'Third conversation')).toContain(STATUS_DOT_NEW_MESSAGES)
+    })
+
+    it('lights the dot on a conversation the operator has never opened (#874 AC4)', () => {
+      // The same never-opened proof the working case above makes: the seeded id is absent from BOTH the
+      // timeline and the last-read stores, and the modal store is fed independently of which conversation
+      // is open — `ChannelListView` takes no active-conversation prop and this component has no
+      // open-conversation concept at all, so the open row is not a special case anywhere.
+      seedInputRequired('d2')
+      expect(timelineStore.getState().timelines.has('d2')).toBe(false)
+      expect(lastReadStore.getState().marks.has('d2')).toBe(false)
+      expect(chunkFor(render(threeRows()), 'Third conversation')).toContain(
+        STATUS_DOT_INPUT_REQUIRED
+      )
     })
 
     it('joins no existing row, host-row or affordance match set (AC4)', () => {

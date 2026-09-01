@@ -20,10 +20,10 @@ import {
   type HostLabelValue
 } from '../../store/hostLabelStore'
 import { HostLabelData } from '../../store/hostLabelLoader'
-// #801's three per-row reads and the two pure modules that reduce them. All five are consumed EXACTLY as
-// shipped: none takes a `conversationId` except the three selector FACTORIES, which is what keeps the
-// untrusted daemon-asserted id a `Map` key and nothing else (conversationStatus.ts:26-31,
-// conversationUnread.ts:28-34).
+// #801's three per-row reads, #874's fourth, and the two pure modules that reduce them. All six are
+// consumed EXACTLY as shipped: none takes a `conversationId` except the four selector FACTORIES, which is
+// what keeps the untrusted daemon-asserted id a `Map` key and nothing else (conversationStatus.ts:26-33,
+// conversationUnread.ts:28-34, modalPrompts.ts:21-25).
 import {
   useConversationActivityStore,
   selectActivityFor
@@ -36,6 +36,10 @@ import {
   useConversationLastReadStore,
   selectLastReadFor
 } from '../../store/conversationLastReadStore'
+// From `modalStore`, not from `modalPrompts`: the selector is defined on the pure reducer module and
+// RE-EXPORTED at modalStore.ts:45 precisely so consumers take the read surface from one site
+// (PermissionModal.tsx:192-194 is the shipped precedent).
+import { useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
 import { resolveConversationStatus } from '../../store/conversationStatus'
 import { isConversationUnread } from '../../store/conversationUnread'
 // #718 reuses #330's shipped two-leg mapping ACROSS SCREENS rather than growing a second copy of it —
@@ -711,11 +715,11 @@ function renderBody(
 }
 
 /**
- * One row's status dot (#801, Figma 103:2968) — the first consumer of both #800's leaf and #799's
+ * One row's status dot (#801 / #874, Figma 103:2968) — the first consumer of both #800's leaf and #799's
  * resolver, and the answer to the question `conversationUnread.ts:81` left open: WHERE the two-store
  * unread composition lives. Here, per row, keyed by THE ROW'S OWN conversation id.
  *
- * Read the three narrow per-id slices, reduce them to one status, render the dot. That is the whole body.
+ * Read the four narrow per-id slices, reduce them to one status, render the dot. That is the whole body.
  * It is `HostConnectionDotsControl`'s shape one level down — a store-bound `*Control` beside a store-free
  * leaf — and it lives HERE rather than in `ConversationStatusDot.tsx` because that file declares itself
  * store-free in its own header.
@@ -730,9 +734,14 @@ function renderBody(
  *
  * Five things this must not become, none of them a type error:
  *
- *   - THE THREE SUBSCRIPTIONS MERGED INTO ONE SELECTOR returning `{ activity, timeline, lastRead }`. Each
- *     shipped selector returns a held reference or `null`, which is what keeps `useSyncExternalStore`
- *     stable; a selector building an object returns a fresh one every call and loops.
+ *   - THE FOUR SUBSCRIPTIONS MERGED INTO ONE SELECTOR returning
+ *     `{ inputRequired, activity, timeline, lastRead }`. Three of the shipped selectors return a held
+ *     reference or `null`, which is what keeps `useSyncExternalStore` stable; a selector building an
+ *     object returns a fresh one every call and loops. The ban holds for `selectHasOutstandingFor` too but
+ *     for a DIFFERENT reason, and the argument above must not be restated as though it covered it: that
+ *     selector returns a plain `boolean`, which is perfectly value-stable on its own — it is the MERGED
+ *     OBJECT that would be freshly allocated regardless of what its fields are, so the boolean's stability
+ *     buys nothing there.
  *   - THE TWO PURE CALLS MOVED INSIDE A SELECTOR. Same reason, plus it would drag both runtime-free
  *     modules into the stores' read path — the graph property both their headers are built around.
  *   - A `useMemo`, A COMBINED SNAPSHOT OR A COMBINED STORE. `conversationUnread.ts:78-84` rules that
@@ -742,33 +751,33 @@ function renderBody(
  *     CHANGES over the component's life, whereas `Row` is keyed by `c.id` so a row instance's id is fixed
  *     for its whole life — and a fresh selector closure costs one allocation and one `Object.is`
  *     comparison, never a re-subscription (`api.subscribe` is what React watches) and never a re-render.
- *   - THE `conversationId` ANYWHERE BUT THE THREE SELECTOR FACTORIES. It is daemon-asserted, so it stays a
+ *   - THE `conversationId` ANYWHERE BUT THE FOUR SELECTOR FACTORIES. It is daemon-asserted, so it stays a
  *     `Map` key: never a class-name interpolation, never an attribute value, never a `title`, never an
  *     object key, never a log line. Both upstream headers state this as a condition of their signatures.
  *   - A `console.*` ON ANY PATH. Both source stores and both pure modules are log-free by construction,
  *     and there is no read miss to report — `null` is a defined reading, not an error.
  *
  * The honest cost, the same one HostConnectionDotsControl (:353-364) already took and recorded:
- * `ChannelListView` drifts further from its "pure view" docstring, since its subtree now reads three more
+ * `ChannelListView` drifts further from its "pure view" docstring, since its subtree now reads four more
  * singletons. Safe under `renderToStaticMarkup` in Node — the activity and timeline stores hydrate to
- * empty maps and the last-read store's `localStorage` port short-circuits on `typeof window === 'undefined'`
- * (conversationLastReadStore.ts:246-257) — so every unseeded row server-renders as `idle`.
+ * empty maps, the modal store hydrates to `initialModalState` with an empty `outstanding`
+ * (modalPrompts.ts:226), and the last-read store's `localStorage` port short-circuits on
+ * `typeof window === 'undefined'` (conversationLastReadStore.ts:246-257) — so every unseeded row
+ * server-renders as `idle`.
  */
 function ConversationStatusDotControl({
   conversationId
 }: {
   conversationId: string
 }): JSX.Element {
+  const inputRequired = useModalStore(selectHasOutstandingFor(conversationId))
   const activity = useConversationActivityStore(selectActivityFor(conversationId))
   const timeline = useConversationTimelineStore(selectTimelineFor(conversationId))
   const lastRead = useConversationLastReadStore(selectLastReadFor(conversationId))
   return (
     <ConversationStatusDot
       status={resolveConversationStatus(
-        // #874 replaces this literal with `selectHasOutstandingFor(conversationId)` read through a fourth
-        // store subscription — its whole deliverable, including the tests for it. #873 landed the status,
-        // the branch, the label and the paint, so until then no row can resolve to `input-required`.
-        false,
+        inputRequired,
         activity,
         isConversationUnread(timeline, lastRead)
       )}

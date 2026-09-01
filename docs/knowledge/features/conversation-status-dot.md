@@ -3,13 +3,15 @@
 The presentational leaf of a sidebar row: `ConversationStatusDot({ status })` takes one already-resolved
 [`ConversationStatus`](conversation-status.md) and draws it as a single dot. It reads no store, resolves
 nothing — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) wires it into
-[`ChannelList`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801)'s rows, its only consumer.
+[`ChannelList`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874)'s rows, its only
+consumer.
 
 Introduced in [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800), split from #676.
 Renderer-only, no store, no transport — not security-sensitive.
 [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added the fourth state, `input-required`,
-and its amber ring; it lands correct-but-unreachable until
-[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) wires the call site.
+and its amber ring, landing correct-but-unreachable until
+[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) wired the call site — all four states are
+now reachable in production.
 
 ## What it does
 
@@ -138,7 +140,7 @@ design-notes status table (2026-08-21) rather than from a node — see
 - [Conversation status resolver](conversation-status.md) / [#799](https://github.com/pyrycode/pyrycode-desktop/issues/799)
   — the `ConversationStatus` type and `resolveConversationStatus` this component's prop is typed against;
   this ticket is that module's first consumer.
-- [Channel List home screen](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801) — the
+- [Channel List home screen](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874) — the
   screen this dot leads each row of, since #801; also the source of the `HostConnectionDots`
   labelled-dot shape this component's markup follows.
 - [#719 codebase notes](../codebase/719.md) / [spec](../../specs/architecture/719-relay-not-yet-known-state.md)
@@ -152,7 +154,8 @@ design-notes status table (2026-08-21) rather than from a node — see
   model](modal-prompt-model.md), which now exposes `selectHasOutstandingFor(conversationId): boolean`.
   [Conversation status](conversation-status.md)'s resolver consumes that boolean as of #873; this
   component only ever draws whatever `ConversationStatus` it's handed, so it never touches the selector
-  directly — [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) is the piece still waiting to
-  compose it, at the `ChannelList.tsx` call site.
+  directly — [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) composed it at the
+  `ChannelList.tsx` call site.
 - Spec: `docs/specs/architecture/800-conversation-status-dot.md`,
-  `docs/specs/architecture/873-input-required-status-and-dot.md`.
+  `docs/specs/architecture/873-input-required-status-and-dot.md`,
+  `docs/specs/architecture/874-input-required-dot-call-site.md`.

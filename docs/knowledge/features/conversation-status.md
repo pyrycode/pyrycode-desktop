@@ -11,8 +11,8 @@ draws its type as a type import; [#801](https://github.com/pyrycode/pyrycode-des
 first module to call `resolveConversationStatus` in production, composed per row in
 [`ChannelList.tsx`'s `ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801).
 [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added the fourth state, `input-required`, and
-its leading `inputRequired` parameter; the call site still passes a literal `false` for it until
-[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) composes `selectHasOutstandingFor` there.
+its leading `inputRequired` parameter; [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874)
+composed `selectHasOutstandingFor` at that call site, so all four states are reachable in production.
 
 ## What it does
 
@@ -54,12 +54,12 @@ once.
      state blocked on the *operator*, so it outranks everything below and must never hide behind a
      busier-looking status — including when that same conversation is also working, also unread, or both
      ([#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) AC2). A plain boolean, never a
-     `conversationId` — see the SECURITY note below. Landed correct-but-unreachable: the one production
-     call site ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801))
-     still passes a literal `false`, until
-     [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) composes
-     `selectHasOutstandingFor(conversationId)` (`modalPrompts.ts:254`) there — the same way #799 and #800
-     each landed before #801 wired them.
+     `conversationId` — see the SECURITY note below. Landed correct-but-unreachable behind a literal
+     `false` at the one production call site
+     ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874))
+     — the same way #799 and #800 each landed before #801 wired them — until
+     [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) composed
+     `selectHasOutstandingFor(conversationId)` (`modalPrompts.ts:254`) there.
   2. **Working** — any of the four activity facts.
   3. **New messages** — the `unread` boolean, already derived by `isConversationUnread` at the call site;
      this module never re-derives it.
@@ -92,8 +92,8 @@ once.
 
 - **No `conversationId` parameter, deliberately — and `inputRequired` is a boolean for the same reason.**
   #801 resolves an id to an activity entry and an unread boolean through the two source stores' own
-  selectors *before* calling in, and [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) will
-  do the same for `selectHasOutstandingFor` — so the untrusted daemon-asserted id never enters this file.
+  selectors *before* calling in, and [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) does
+  the same for `selectHasOutstandingFor` — so the untrusted daemon-asserted id never enters this file.
   No `Map` lookup here, no object literal keyed by an id, no computed keys. Daemon text is likewise
   unreachable: this module reads booleans only and returns one of four client-owned literals. Log-free by
   construction — a `null` entry is a defined reading, not a miss to report.
@@ -102,13 +102,11 @@ once.
 
 - File: `src/renderer/src/store/conversationStatus.ts`. Two exports: the `ConversationStatus` type and
   `resolveConversationStatus`. `isWorking` stays module-private.
-- One consumer: [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) composes
-  `selectActivityFor(id)` and `isConversationUnread(timeline, lastRead)` at its own call site
-  ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801)) and
-  passes both results straight in, alongside a literal `false` in the leading `inputRequired` position;
-  this module still does not read any source store itself.
-  [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) replaces that literal with
-  `selectHasOutstandingFor(conversationId)`.
+- One consumer: [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801)/[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874)
+  compose `selectHasOutstandingFor(id)`, `selectActivityFor(id)` and `isConversationUnread(timeline,
+  lastRead)` at their shared call site
+  ([`ConversationStatusDotControl`](channel-list.md#the-row-s-status-dot-channellist-tsx-added-by-801-874))
+  and pass all three results straight in; this module still does not read any source store itself.
 - Lives beside its two inputs under `store/`, not `screens/`, for the reason `conversationUnread.ts`
   already gives: its inputs are store slices rather than wire rows, and its consumer is the sidebar rather
   than any one screen. `threadTimeline.ts` (pure) beside `timelineStore.ts` (a store) is the naming pair
@@ -146,5 +144,5 @@ once.
   since [#870](../codebase/870.md), and [#871](../codebase/871.md)/[#877](../codebase/877.md)/
   [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) carried it all the way onto the held
   `ModalPrompt` and a `selectHasOutstandingFor(conversationId): boolean` selector. #873 (this doc) is the
-  branch that consumes that boolean; [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) is the
-  one piece of the chain still unwired — composing the selector at the #801 call site.
+  branch that consumes that boolean; [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) closed
+  the chain by composing the selector at the #801 call site.

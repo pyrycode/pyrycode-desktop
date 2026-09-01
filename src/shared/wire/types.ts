@@ -103,6 +103,14 @@ export type EnvelopeType =
   // question has no deny option — growing the modal payload would have made that invariant
   // class-conditional. SSOT pyrycode docs/protocol-mobile.md § Question (v2) / internal/protocol.
   | 'question_shown'
+  // The frame that RETIRES the batch above (#894), so a client clears the panel instead of rendering
+  // an ask that is already dead. Same v2 gating and same not-in-`v1TypeSet` posture. ITS OWN TYPE
+  // rather than a reused `modal_dismissed`, decided upstream: that frame identifies what it clears by
+  // `modal_id` and a client routes it to the modal panel, so a `question_batch_id` arriving in that
+  // field would clear the wrong panel or none — making the routing depend on a value's shape instead
+  // of on the frame's name. SSOT pyrycode docs/protocol-mobile.md § Question (v2) / internal/protocol
+  // codes.go TypeQuestionDismissed; emitted by pyrycode#1973.
+  | 'question_dismissed'
   | 'list_conversations'
   | 'conversations'
   | 'recent_workspaces'
@@ -1043,6 +1051,70 @@ export interface QuestionShownPayload {
   conversation_id: string
   question_batch_id: string
   questions: WireQuestion[]
+}
+
+/**
+ * Inbound `question_dismissed` event (daemon → client). Mirrors the daemon's QuestionDismissedPayload
+ * field-for-field (SSOT pyrycode docs/protocol-mobile.md § Question (v2), shape pyrycode#1974, producer
+ * #1973), wire order `question_batch_id, outcome, source` — all always present (no `omitempty`). It
+ * retires the `question_shown` batch above, so a client takes the panel down rather than rendering an
+ * ask that is already dead.
+ *
+ * **Field for field with `ModalDismissedPayload`, INCLUDING THE ABSENCE.** There is no
+ * `conversation_id`, though `question_shown` carries one: the batch nonce is the sole correlation key,
+ * and a shape carrying both would admit a disagreeing pair someone has to adjudicate. A client holding
+ * the batch already knows its conversation. Do not add one "for symmetry with the batch".
+ *
+ * **`source` is a PLAIN string and NOT `WireModalSource`, and that is the single most likely mistake
+ * in this family.** Of the modal frame's closed `{remote, local, timeout}`, nothing emits any member
+ * here: `remote` and `local` are ANSWERED outcomes belonging to the not-yet-landed answer half
+ * (pyrycode#1907), and `timeout` is not emitted either — the producer's dismissal arbiter is a single
+ * closure the control server defers on every `Await` return, so it cannot tell the approval window
+ * elapsing from a caller disconnect or a daemon shutdown, and naming `timeout` would state a cause
+ * that is wrong on two paths out of three. Two of those three paths have no member in that set AT ALL.
+ * Closing the enum here would reject the only traffic that exists.
+ *
+ * **The fail-closed reading rule that makes the open type safe: an unrecognised `source` means
+ * *resolved, cause unknown*, and NEVER an answer.** Getting it backwards renders a daemon safe-deny as
+ * the operator's own choice. The values a client written today will not recognise are precisely the
+ * ones the producer has yet to name.
+ *
+ * The producer's landed vocabulary is ONE PAIR — `outcome: "unanswered"` with `source: "no_answer"`,
+ * for the whole no-answer class. **Recognise it; do not enforce it.** The upstream fixture
+ * `internal/protocol/testdata/question_dismissed.json` carries `source: "timeout"` and is a SHAPE
+ * fixture minted by the declaring slice before the producer existed — not evidence of the live
+ * vocabulary, and not a value to copy.
+ *
+ * `outcome` is an opaque producer-defined sentinel carried verbatim and never enum-checked, exactly as
+ * `ModalDismissedPayload.outcome` is. **It never carries a claude-authored option label** — a published
+ * contract rather than a coincidence, and the reason this frame, unlike the batch, carries no
+ * claude-authored byte at all and therefore sits at a different trust tier from its sibling. The rule is
+ * stated positively because the natural implementation violates it: `WireQuestionOption` carries no
+ * `id` and claude's answer protocol selects by `label`, so a producer reporting the chosen option
+ * reaches for that subprocess-authored string first. A consumer needing the label reads it from the
+ * batch it already holds, keyed on `question_batch_id`.
+ *
+ * **That provenance is the producer's promise, not a property a decoder verifies.** All three fields
+ * are published as daemon-asserted, but the only thing checked at the transport boundary is that each
+ * is a string; a compromised daemon puts whatever it likes in `outcome` and `source`, at whatever
+ * length the frame cap allows. Do not read "daemon-asserted" as "safe to render as trusted chrome" —
+ * the escaping and length-bounding boundary is still this client's.
+ *
+ * `question_batch_id` is the batch's own one-time unguessable nonce echoed back. It must never reach a
+ * log. It is DEAD once this frame lands, and receiving it is NOT a capability: a retired batch resolves
+ * nothing server-side, the way a stale `modal_id` resolves nothing under first-answer-wins. Matching it
+ * against a held batch wants plain `===`, not `crypto.timingSafeEqual` — a local routing decision
+ * between two values the client already holds, not a secret compared against an attacker's guess.
+ *
+ * Every field being required is load-bearing for the same reason `QuestionShownPayload`'s are: it
+ * leaves a fail-closed narrower no optional key to wave through. **A required field is still only a
+ * promise the wire has not kept until it is checked** — reach this type through a validating narrower
+ * (`parseQuestionDismissedPayload`), never a bare cast on `Envelope.payload`.
+ */
+export interface QuestionDismissedPayload {
+  question_batch_id: string
+  outcome: string
+  source: string
 }
 
 /**

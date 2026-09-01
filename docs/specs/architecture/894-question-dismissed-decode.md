@@ -290,3 +290,40 @@ redundant with the decode tests — see Open question 2.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-01
+
+## Revisions
+
+### 2026-09-01 — Open questions resolved, and the size actual against the plan's own estimate
+
+**Open question 1 — export a `no_answer` constant, or stay purely structural: resolved purely
+structural**, as the plan leaned. Nothing is exported. The live vocabulary lives in
+`QuestionDismissedPayload`'s doc comment, in `parseQuestionDismissedPayload`'s, and in the
+`QUESTION_DISMISSED` test fixture's — three places a later reader lands, none of them a consumer-facing
+API this slice has no consumer to decide for. The decode branches on nothing, which is the point: it
+polices type, and the fail-closed *reading* rule is #850's to enforce. No design change.
+
+**Open question 2 — keep the `types.test.ts` block: kept**, as the plan leaned, and the RED settled the
+argument empirically rather than by reasoning. With `QuestionDismissedPayload` and the `EnvelopeType`
+member both absent, `npx vitest run src/shared/wire/types.test.ts` reported **87 passed** — the file
+imports these with `import type`, which vitest erases and never typechecks, so every runtime assertion
+in the new block passed green against types that did not exist. `npm run typecheck` produced the two
+real errors (`no exported member 'QuestionDismissedPayload'`, and `'question_dismissed' is not
+assignable to type 'EnvelopeType'`). That is the #883 finding reproduced exactly, and it is the reason
+the membership assertion earns its place: it is `tsc`-only evidence, invisible to the test runner.
+No design change.
+
+**Size: the estimate held, unusually.** Planned ~450 lines of total written work; actual **697** — 130
+production (72 `types.ts`, 58 `inboundMessage.ts`), 275 test (222 `inboundMessage.test.ts`, 53
+`types.test.ts`), 292 plan. Both boundaries the ticket cared about held: 2 production files, 0 consumer
+call sites, 4 reject branches. The overshoot is entirely in the two halves that are always
+under-counted and were under-counted again here — doc comment and plan prose. Of the 130 production
+lines, roughly 95 are comment: the *why* behind the open `source` is the whole deliverable of the type
+half, and recording it at the code site is what stops a later reader tightening the new narrower toward
+its modal twin. The plan itself ran 292 against ~150 planned, most of it the security review the
+`security-sensitive` label mandates.
+
+That confirms rather than weakens the `needs-human:sizing` marker filed at the start: 697 against a
+400-line boundary, on a ticket whose refiner estimate was ~250. The finding stands unchanged — the only
+available cut (wire vocabulary, then decode) manufactures a child whose sole consumer is its sibling,
+which the floor rule forbids, so this slice is simply larger than the size-S envelope rather than
+mis-split.

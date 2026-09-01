@@ -88,6 +88,24 @@ routing analog of the forwarder's two-leg gate (server + first client is the min
 round-trip). Additional clients after the first don't re-arm it. Same cached-promise / timeout /
 close-before-ready-rejects contract as the forwarder.
 
+### Test-file dial harness (`connect()`, #904)
+
+`fakeRoutingRelay.test.ts`'s own `connect()` — the WS dial helper its 12 tests share, not part of the
+relay itself — bounds its retry ladder by a single wall-clock deadline armed once per `connect()` call
+(`DIAL_BUDGET_MS = 3000`, well under vitest's 5000ms per-test default) and delegates the retry
+recursion to a private `dial()`, so no re-dial can extend the deadline the original caller armed. A
+prior attempt-count-only ladder (`attemptsLeft = 5` × `DIAL_STALL_MS = 1500` = 7500ms) could out-run
+the test timeout regardless of how the descriptive `stalled` rejection was worded, since vitest killed
+the test first — the same shape [#550](../codebase/550.md) fixed on the sibling
+[fake daemon](fake-daemon.md)'s `fakeDaemon.test.ts`.
+
+The stall path also swaps its `'error'` listener for a benign swallow before `terminate()`, rather than
+dropping it: under ws@8, `terminate()` on a still-`CONNECTING` socket takes the `abortHandshake`
+branch, which emits `'error'` on `nextTick` — with zero listeners that surfaces as an out-of-band
+`Unhandled 'error' event` that kills the very re-dial the stall path exists to run. Detaching the
+listener is still needed (it stops `terminate()`'s teardown events from spawning a duplicate re-dial);
+the fix is to attach a swallow in its place, not to leave the socket unlistened.
+
 ## Edge cases and limitations
 
 | Situation | Behaviour |
@@ -113,6 +131,11 @@ close-before-ready-rejects contract as the forwarder.
 
 ## Related
 
+- [Fake daemon](fake-daemon.md) / [#550 codebase notes](../codebase/550.md) — the sibling
+  `fakeDaemon.test.ts` dial harness this file's `connect()` retry-ladder shape was ported from; #550's
+  own follow-up flagged this file as carrying the identical latent drop-the-listener defect "confirmed
+  by reproduction rather than suspected by analogy," closed by
+  [#904](https://github.com/pyrycode/pyrycode-desktop/pull/905) — see § Test-file dial harness above.
 - [Fake relay forwarder](fake-relay-forwarder.md) — the raw two-leg sibling this reuses lifecycle
   scaffolding from; its "deliberately far simpler" section names exactly the Go surface this module
   ports back in (routing envelope, server-id/token headers, first-claim-wins grace, close_code

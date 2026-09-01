@@ -36,9 +36,14 @@ npm run dev          # run the app with fast reload
 npm run build        # typecheck, then build main + preload + renderer
 npm run typecheck    # type-check both the background and window sides
 npm test             # unit tests (vitest)
+npm run check:docs   # package-overview size cap + false-heading check
 ```
 
-`npm run build` is the salvage gate and part of the QA gate.
+`npm run build` is the salvage gate and part of the QA gate. `npm run check:docs` is a
+pre-verifier gate: it fails on an overview over 50000 bytes, and on a line that markdown
+reads as a heading because a wrapped paragraph put a ticket reference first. Escape the
+hash (`\#123`) rather than rejoining the line. It scans `docs/knowledge/features/` only;
+the decisions tree and the frozen per-ticket archive are deliberately out of scope.
 
 The e2e tiers, on top of the unit tests:
 

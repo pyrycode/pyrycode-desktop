@@ -55,7 +55,10 @@ import type {
   WorkspaceFolderCreatedPayload,
   ModalShownPayload,
   ModalDismissedPayload,
-  WireModalOption
+  WireModalOption,
+  QuestionShownPayload,
+  WireQuestion,
+  WireQuestionOption
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
@@ -296,6 +299,7 @@ export type InboundDaemonMessage =
   | { kind: 'workspace-folder-created'; workspaceFolderCreated: WorkspaceFolderCreatedPayload }
   | { kind: 'modal-shown'; modalShown: ModalShownPayload }
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
+  | { kind: 'question-shown'; questionShown: QuestionShownPayload }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -1271,6 +1275,99 @@ function parseModalDismissedPayload(payload: unknown): ModalDismissedPayload {
 }
 
 /**
+ * Narrow one opaque choice into a WireQuestionOption (#884). Fail-closed like parseModalOption, with two
+ * required strings and unknown keys tolerated but not copied. There is NO `id` — claude's answer protocol
+ * selects an option by its `label`, so `label` IS the option's identity. Its message names the category
+ * only: both fields are untrusted CLAUDE-AUTHORED text that crossed the subprocess trust boundary, neither
+ * bounded nor sanitized by the daemon. NO length check on either — see parseQuestionShownPayload.
+ */
+function parseQuestionOption(payload: unknown): WireQuestionOption {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed question option')
+  }
+  const label = requireString(payload, 'label')
+  const description = requireString(payload, 'description')
+  return { label, description }
+}
+
+/**
+ * Narrow one opaque question into a WireQuestion (#884). Fail-closed like parseModalShownPayload, scaled
+ * to two strings plus a nested ordered array plus the family's only boolean.
+ *
+ * **`options` nests HERE, on each question** — not flat on the payload the way ModalShownPayload.options
+ * is. This shape has two nesting levels where the modal family has one, so a reader pattern-matching off
+ * that family gets it wrong by default. Each element narrows via parseQuestionOption: one bad option
+ * throws the whole batch closed (the parseModalOption posture), an empty array is tolerated.
+ *
+ * `multi_select` goes through requireBoolean, which checks the TYPE rather than truthiness — the string
+ * `"false"` is truthy, so a `!!` here would decode it as `true`. It is always present on the wire, so
+ * `false` is a STATED POSITION rather than an absence.
+ *
+ * Its messages name the failure category only — `question` and `header` are untrusted claude-authored
+ * text. NO length check on either, `header`'s documented-12/observed-14 cap included.
+ */
+function parseQuestion(payload: unknown): WireQuestion {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed question')
+  }
+  const question = requireString(payload, 'question')
+  const header = requireString(payload, 'header')
+  const rawOptions = payload.options
+  if (!Array.isArray(rawOptions)) {
+    throw new WireDecodeError('malformed question options')
+  }
+  const options = rawOptions.map(parseQuestionOption)
+  const multi_select = requireBoolean(payload, 'multi_select')
+  return { question, header, options, multi_select }
+}
+
+/**
+ * Narrow an opaque payload into a QuestionShownPayload (#884) — claude's whole clarifying-question batch,
+ * carried in ONE frame. Fail-closed like parseModalShownPayload, scaled to TWO nesting levels: an isRecord
+ * guard, two required strings, then an Array.isArray check on `questions` whose elements narrow via
+ * parseQuestion. An empty `questions` is tolerated — out of contract daemon-side and a producer bug, but
+ * this decoder polices TYPE, not membership, and a client must not crash on one. Returns exactly the three
+ * known fields; unknown keys are tolerated (forward-compat) but NOT copied.
+ *
+ * `conversation_id` is narrowed like any other required string and, for parseModalShownPayload's reason, is
+ * NOT cross-checked against any known-conversation set — that is the consuming slice's scoping concern
+ * (#885). Fail-closed on it is decided, not open: the field is in the settled contract, so a tolerant
+ * fallback would only buy compatibility with a daemon that will never be run, at the cost of a silently
+ * unattributed question panel.
+ *
+ * **NO CONTRACT BOUND IS ENFORCED HERE, and that is a decision rather than an omission.** No 1-4 question
+ * count, no 2-4 option count, and no maximum length on any of the four strings: nothing enforces any of
+ * them daemon-side as of 2026-09-01, and `header`'s cap is documented 12 but OBSERVED 14 runes in the one
+ * real header ever captured, so a client rejecting at 12 would reject valid traffic. The wire type's
+ * "an over-long field must be a fail-closed REJECT rather than a silent trim" caveat chooses between two
+ * wrong behaviours should a bound ever become enforceable; its operative half here is the negative one —
+ * never silently trim. Copying verbatim satisfies it. Do not add a length check, a max constant, or a
+ * truncation.
+ *
+ * There is no count field in this shape to trust, so the batch is bounded only by parseInboundMessage's
+ * MAX_PLAINTEXT_BYTES guard — which holds only because `.map` allocates from the array that actually
+ * arrived, never from a claimed count.
+ *
+ * Its messages name the failure CATEGORY only, never interpolating `question` / `header` / `label` /
+ * `description` (untrusted claude-authored text) or `conversation_id` / `question_batch_id` (a routing key
+ * and an unguessable nonce). The message reaches a caller's catch, so a value echoed here could ride into
+ * a log this decoder is otherwise careful never to write.
+ */
+function parseQuestionShownPayload(payload: unknown): QuestionShownPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed question_shown payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const question_batch_id = requireString(payload, 'question_batch_id')
+  const rawQuestions = payload.questions
+  if (!Array.isArray(rawQuestions)) {
+    throw new WireDecodeError('malformed questions')
+  }
+  const questions = rawQuestions.map(parseQuestion)
+  return { conversation_id, question_batch_id, questions }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), an `assistant_delta` → `assistant-delta` and
@@ -1706,6 +1803,30 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'modal-dismissed', modalDismissed }
+    }
+    case 'question_shown': {
+      // Narrow BEFORE logging so a malformed frame (a non-array `questions`, a bad option two levels
+      // down, a non-boolean `multi_select`) throws first and leaves no record. No decoded field is
+      // logged — only the frame's byte length + one-way hash, reusing the existing content-free field
+      // set. Deliberately no `count` of questions (the modal_shown posture, not message_chunk's).
+      // Strictly safer than the `default:` arm this replaces for the type, which logged a WIRE-SUPPLIED
+      // `envelope.type`; the code here is a static literal.
+      //
+      // The narrowing makes the SHAPE trusted; it does not make the CONTENT trusted, and the type system
+      // carries no signal for that (a `string` is a `string`). `questions[].question` / `.header` and
+      // every `options[].label` / `.description` stay untrusted claude-authored text owed escaping at the
+      // render boundary — that boundary is this client's, since the daemon neither bounds nor sanitizes
+      // them. `question_batch_id` is an unguessable one-time nonce and must never reach a log.
+      // Nothing consumes this arm yet: the IPC carry is #885, and daemonConnection's inbound switch has
+      // no catch-all, so the batch stops here until that slice claims it.
+      const questionShown = parseQuestionShownPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'question_shown',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'question-shown', questionShown }
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

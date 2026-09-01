@@ -251,3 +251,38 @@ Scenarios:
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-01
+
+## Revisions
+
+### 2026-09-01 — Open questions resolved, and the size estimate corrected against the actual
+
+**Open question 1 — distinct messages for the two array guards: resolved distinct**, as the plan
+leaned. `parseQuestionShownPayload` throws `malformed questions`, `parseQuestion` throws `malformed
+question options`. Both name a wire key and neither echoes a value, and in a path where the throw is
+deliberately unlogged the message is the only signal separating a bad batch from a bad question. No
+design change.
+
+**Open question 2 — the no-truncation test: kept**, as the plan leaned, and asserted on `toHaveLength`
+rather than on the decoded value alone. A plain equality assertion would pass green against a
+truncating decode if the fixture were short; the explicit length is what makes AC 5 falsifiable.
+No design change.
+
+**Size: the estimate was wrong by 1.8×, and the direction matters.** Planned ~436 lines of total
+written work (~76 production, ~230 test, ~130 plan). Actual **787** — 123 production, 412 test, 253
+plan. The under-count came from three places, all of them the "these lines are cheap" shape the size
+rule exists to catch:
+
+- **Production doc comments.** This file's convention carries the *decision* at the code site, and
+  AC 5's no-bound reasoning is a decision that needed recording where someone would later try to add
+  a length check. ~60 of the 123 production lines are comment.
+- **The reject-case idiom.** An absent-field case needs an IIFE with a destructuring drop
+  (`(() => { const { header: _dropped, ...missing } = ONE_QUESTION; return missing })()`) — six lines
+  where I had modelled the one-line spread of a wrong-*typed* case.
+- **The log and secret-safety tests** came to ~120 lines together, against the ~60 I carried.
+
+So the ticket was oversized by more than either the refiner (~450) or I (~436) measured, and by
+enough that the `needs-human:sizing` marker is better justified after the fact than before it. The
+run finished inside budget — both gates green, well inside the turn and wall-clock caps — so this is
+calibration data rather than a salvage. The floor-rule finding is unchanged: there was still no valid
+cut, and the honest conclusion is that this slice is simply larger than the size-S envelope, not
+that it should have been split into children that violate the floor.

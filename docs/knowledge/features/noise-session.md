@@ -204,7 +204,7 @@ if (innerType !== undefined && innerType !== NOISE_RESP_TYPE) {
 
 This closed the last routing gap the [#524](../codebase/524.md)/[#525](../codebase/525.md) pair set
 up for: #524 taught `fakeDaemon` to route its own rekey window by inner type instead of state alone,
-#525 made both fakes tag handshake replies `noise_resp` rather than a uniform `noise_msg`, and this
+\#525 made both fakes tag handshake replies `noise_resp` rather than a uniform `noise_msg`, and this
 ticket is the client finally reading that same distinction on its own inbound frames.
 
 ### Outbound send buffering across the rekey window (#533)

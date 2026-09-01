@@ -9,7 +9,7 @@ truth.
 Introduced in [#293](../codebase/293.md), split from #145 alongside [#292](../codebase/292.md)
 (transport decode, shipped first) / [#294](../codebase/294.md) (render, shipped) / #295 (command,
 re-split) / [#296](../codebase/296.md) (drop, shipped). This ticket shipped no visible surface —
-#294 is its first consumer. #295 (the drop command) tripped the ≥5-file split gate and was
+\#294 is its first consumer. #295 (the drop command) tripped the ≥5-file split gate and was
 re-split along the #235/#236 seam into [#299](../codebase/299.md) (wire + builder, shipped) →
 [#300](../codebase/300.md) (the `daemonConnection` method + IPC command, shipped — see [dequeue
 message envelope](dequeue-message-envelope.md)); #295 itself is closed. #296 (the render
@@ -116,7 +116,7 @@ no command sent to trigger it. `translateQueueState` rebuilds a fresh named-fiel
 `return event`, never a spread — the `modalBridge` idiom), stays pure, and uses `default: null`, not
 `assertNever`: this is the *fourth* independent subscriber on the `onDaemonEvent` channel (after
 `daemonEventBridge`, `timelineBridge`, `modalBridge`, which all already no-op `queueState` from
-#292), not one of the three typecheck-gating exhaustive bridges. `subscribeQueue` guards on
+\#292), not one of the three typecheck-gating exhaustive bridges. `subscribeQueue` guards on
 `snapshot !== null`, not truthiness, so an empty `queued: []` snapshot is never dropped as falsy.
 
 The listener's other branch, the `connected`-edge reset ([#197](../codebase/197.md)), is

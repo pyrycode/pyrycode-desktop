@@ -260,7 +260,7 @@ The accessible name is `leg.label` unchanged — "Pyrycode Connected"/"Relay Off
 Unknown"/etc. — on a
 `role="img"` span (a bare `<span>`'s `aria-label` is dropped by the accessible-name computation,
 so this is load-bearing, not decorative). The wrapper carries no role or name of its own, unlike
-#330's `role="group" aria-label="Connection status"`: the host row renders twice, and #670's
+\#330's `role="group" aria-label="Connection status"`: the host row renders twice, and #670's
 two-pane layout shows the conversation status row at the same time, so a per-group name would
 put three identically-named groups in one window. The dots add no text node.
 

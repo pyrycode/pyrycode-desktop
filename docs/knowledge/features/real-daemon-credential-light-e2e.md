@@ -63,7 +63,7 @@ can pass vacuously if the daemon's reply content changes shape.
 `create_workspace_folder` prelude is already real-wire-proven by #441 and the daemon's #949 handler
 (Option B) ignores the promote payload's `cwd` entirely, leaving that branch's remaining contract a
 client-only concern already covered by the fake twin #423. This is the sibling that most directly proves
-#949 is fixed — a pre-#949 binary would answer `unsupported` and this spec's core assertion would time
+\#949 is fixed — a pre-#949 binary would answer `unsupported` and this spec's core assertion would time
 out.
 
 ## How it works

@@ -478,7 +478,7 @@ PairAnotherServerRow.onClick (#152)
 The nav shell (`pairedRoute.ts`/`PairedShell.tsx`) added no store, IPC, wire, or daemon event — that
 part is still exactly the screen-local `useReducer` from #333. #334 wires the pre-existing
 [server-info store](server-info-store.md) into the tree; the store and its channel are entirely #339/#340's.
-#404's Defaults section reads and writes the pre-existing [default-workspace store](default-workspace-store.md)
+\#404's Defaults section reads and writes the pre-existing [default-workspace store](default-workspace-store.md)
 (#403) and reuses the pre-existing [recent-workspaces store](recent-workspaces-store.md)/bridge (#382)
 and [`WorkspacePickerSheetView`](conversation-shell.md#workspace-picker-sheet-383) (#383) for its picker —
 no new store, wire type, or daemon command; the sole wire traffic is the pre-existing

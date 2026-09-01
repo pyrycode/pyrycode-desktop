@@ -95,7 +95,7 @@ daemon → transport (#254) → sessionTransition{newSessionId}
                                      → translateSessionTransition → setSessionId
                                      → sessionIdStore                                  [last marker wins]
 
-#257: useSessionIdStore(selectSessionId) → RunConfigSections' AC5 gate input
+\#257: useSessionIdStore(selectSessionId) → RunConfigSections' AC5 gate input
 ```
 
 ## Configuration and usage

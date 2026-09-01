@@ -102,7 +102,7 @@ client-derived self-clear). [#737](../codebase/737.md) later carried `conversati
 
 [#495](../codebase/495.md) added a fifteenth kind, `compacting` → `compacting` — the PTY-derived status
 peer of `stall`/`api_retry` the daemon fans out while claude auto-compacts the conversation (pyrycode
-#1074; detector tui-driver #298). Unlike `api_retry` it is **banner-only**: `CompactingPayload{
+\#1074; detector tui-driver #298). Unlike `api_retry` it is **banner-only**: `CompactingPayload{
 conversation_id, active}` carries the explicit falling edge (`active: false`) but no counter, percentage,
 or elapsed time — there is nothing on the wire to invent one from. `parseCompactingPayload` is
 `parseApiRetryPayload` minus its two `requireNumber` lines; both remaining fields map onto existing
@@ -176,7 +176,7 @@ background-task-roster store (#573, shipped)](../codebase/573.md) is the first c
 
 [#587](../codebase/587.md) added a nineteenth kind, `model_announced` → `model-announced` — claude's own
 report of the model it resolved for the turn, off its `system` / `init` line (pyrycode#1616 shape,
-#1638 producer). Not a claude sub-state like `stall`/`api_retry`/`compacting`, and not a daemon mapping
+\#1638 producer). Not a claude sub-state like `stall`/`api_retry`/`compacting`, and not a daemon mapping
 gap like `unrecognized_message`: an **identity** report, carrying no `turn_id` and opening/closing no
 turn. `ModelAnnouncedPayload{conversation_id, model, truncated}` is `parseUnrecognizedMessagePayload`'s
 shape minus `site`/`message_type` — three fields, all mapping onto existing helpers (`requireString` ×2,

@@ -56,7 +56,7 @@ express, without adding a single row to the timeline. The store's three `selectR
 (never-observed, observed-with-nothing-alive, populated) render as three structurally distinct
 outputs. This slice is the shell: chrome, the trigger, the three-way branch, and one row per task
 showing `description` + `taskType` only. Split from #568 alongside #582 (truncation/cap reports) and
-#583 (latest patch, shipped); visual design is #580's. See [Background-task panel](#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
+\#583 (latest patch, shipped); visual design is #580's. See [Background-task panel](#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
 below.
 
 The screen gained an interactive **permission/trust modal** in [#224](../codebase/224.md): a centered M3 dialog overlaying `.conversation`, rendering the oldest [outstanding modal prompt](modal-store-bridge.md) — title, prompt text, and ordered option buttons with the fail-safe default visually marked. Mounts the modal bridge that had shipped dormant in [#223](../codebase/223.md). Its option buttons and a new leading Cancel affordance became **answerable** in [#237](../codebase/237.md): each dispatches `answerModalCommand`/`cancelModalCommand` (#236) and clears the prompt locally via the existing `dismissed` reducer arm. Selecting a non-default option now surfaces a client-side `Back`/`Confirm` sub-step before that command is sent — a second-confirm UX policy gated on `defaultOptionId`, since the wire carries no `destructive` signal ([#226](../codebase/226.md)); the held-option marker is scoped to the exact prompt it was selected on via the prompt's `modalId`, closing a same-class-prompt collision ([#511](../codebase/511.md)). Inert in production until #179 flipped the `interactive` capability. See [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511) below.
@@ -463,7 +463,7 @@ surface filling below) with `Timeline`'s contract untouched and zero edits to it
 
 Styled `.conversation__workspace-chip*` (`conversation.css`) — token-only, no new token: `--radius-full`
 for the Material 3 pill shape (`.tool-row__chip`'s corner at the time, `--radius-sm`, made fully round —
-#722 later moved the tool-row chip on to `--radius-xs` for the desktop redraw, so the precedent is
+\#722 later moved the tool-row chip on to `--radius-xs` for the desktop redraw, so the precedent is
 historical rather than a live cross-reference), `--color-surface-container-high` fill +
 `--color-outline-variant` border (the `.conversation__banner` fill), `min-width: 0` +
 `text-overflow: ellipsis` on the `cwd` run so an unbounded daemon path can't blow out the layout (the
@@ -690,7 +690,7 @@ code-review record.
 
 The host modal for the session's Model / Effort / YOLO controls, context-window state, and
 Log-data download — each section is a follow-up ticket (#181 — since split into #187/#188, #182,
-#72) that owns both its header and its content. This ticket ships only the chrome: the trigger and
+\#72) that owns both its header and its content. This ticket ships only the chrome: the trigger and
 the empty, dismissible sheet.
 
 `StatusRow` is a full-width icon-only `<button aria-label="Run configuration" aria-haspopup="dialog">`
@@ -846,7 +846,7 @@ The fourth and last section of the read-only surface, mounted between `YoloSecti
 `LogDataSection` per Figma order. Widens the [Run configuration store](run-config-store.md)'s held
 `RunConfigSnapshot` (and the `toRunConfigSnapshot` copy) by the two usage figures [#191](../codebase/191.md)
 already carries on the transport event (originally `snapshotReceived`, now `runConfigReceived`,
-#491/#500) — `usedTokens`/`windowTokens` — and renders them as:
+\#491/#500) — `usedTokens`/`windowTokens` — and renders them as:
 
 - **Available (`windowTokens > 0`):** a usage line — `` `${pct}% used (${abbreviateTokens(usedTokens)}
   of ${abbreviateTokens(windowTokens)} tokens)` `` — above a `role="progressbar"` track/fill whose fill
@@ -1387,7 +1387,7 @@ re-deriving it.
 
 The one panel surface that all remaining footer slots and one message-box consumer open rather than
 each building its own: Actions (#680, landed), permission mode (#682), model and effort (#683), and
-#694's slash-command type-ahead. #838 shipped only the panel's **resting appearance** — its surface,
+\#694's slash-command type-ahead. #838 shipped only the panel's **resting appearance** — its surface,
 its rows, its one new colour token — with no host anywhere in the app yet. #839 placed it in the
 footer; #840 completed the interaction — opening, dismissing and driving it from the keyboard. The
 panel shipped feature-complete but dormant across all three tickets: nothing mounted
@@ -1437,7 +1437,7 @@ row alone carries `composer-options__item--current` **and** `aria-current="true"
 (`conversation.css:779-781`'s modifier-without-base vacuity guard). `aria-current` was chosen over a
 `menuitemradio` role branch because it's a global ARIA attribute meaning exactly "the current item
 within a set" — branching the role on `currentId` would make one panel two different widgets, which
-#694 (a type-ahead, not a menu) would then have to fight. Labels render as ordinary React text
+\#694 (a type-ahead, not a menu) would then have to fight. Labels render as ordinary React text
 children — escaped, no `dangerouslySetInnerHTML`, no attribute or URL sink — load-bearing once #694
 feeds it workspace-authored command names, per CLAUDE.md's daemon-text ruling.
 
@@ -1661,7 +1661,7 @@ static render sees). **What has no detector**: the container's `useState` transi
 listener and the focus calls are untested reviewed glue, the same ruling `ConversationScreen.test.tsx:2523-2528`
 gives #276's container — `environment: 'node'` fires no clicks and runs no effects, and adding jsdom to
 reach them is the separate, deliberate decision CLAUDE.md reserves. The in-app interaction proof rides
-#680, the first consumer with a real trigger in a real footer.
+\#680, the first consumer with a real trigger in a real footer.
 
 Code review PASS with one deferred SHOULD FIX: the `switch (outcome.type)` in `handleKeyDown` has no
 `default: return assertNever(outcome)`, the exhaustiveness-guard convention this repo otherwise applies
@@ -2161,7 +2161,7 @@ design, the token-provenance rationale, and patterns established.
 
 ### Expandable tool-call result (#696, toggle #697)
 
-#230 shipped resolved/error chip styling but deliberately did not surface `result.resultSummary` — no
+\#230 shipped resolved/error chip styling but deliberately did not surface `result.resultSummary` — no
 result-text slot existed in the Figma mock. #696 reversed that: `ToolRow` was extracted out of
 `TimelineRow`'s `toolCall` arm (`case 'toolCall': return <ToolRow item={item} />`, both signatures
 otherwise untouched) and gained a body, a sibling of the chip rather than a child (the chip is a
@@ -2330,7 +2330,7 @@ the entries call it exists for), not a bare `{}` literal at the call site: the b
 
 **No list-wrapper element, no `.length > 0` guard.** The per-field `<div class="tool-row__input">`s are
 direct children of the body; zero entries renders nothing. This is what makes "an absent, empty, or (since
-#780) fully carved-out `input` all render no field list and no empty container" structural rather than a
+\#780) fully carved-out `input` all render no field list and no empty container" structural rather than a
 second condition that could drift from the render — #643's absent-vs-`{}` distinction survives only at the
 item, and the *display* decision that all three draw nothing is made once, in `listedInputFields`.
 
@@ -2478,7 +2478,7 @@ Restyles the chip from the mobile mock's hug-width pill to the desktop design's 
 CSS and one theme token only: the markup, the class names and the collapsed prefix are byte-stable, so
 every existing tool-row assertion in `ConversationScreen.test.tsx` passed unedited. The third run (a
 per-call count) and the chevron that the redrawn Figma component (`155-553`) also draws were held for
-#773/#774 at the time — the chevron shipped in [#854](#tool-row-header-groups-854) (split from #774), the
+\#773/#774 at the time — the chevron shipped in [#854](#tool-row-header-groups-854) (split from #774), the
 count is [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856); the expanded body
 (`.tool-row__result`, and the `.code-block` #780 puts inside it) is untouched and deliberately not redrawn
 here.
@@ -2633,7 +2633,7 @@ still ellipsises without pushing the group off it, chip height is unchanged from
 `.tool-row__left`.
 
 **What this does not touch:** which runs sit in `.tool-row__left` (`toolHeadline.ts`/`shortenPath.ts`,
-#855's), the count node (`155:557`, #856's — the right group's first child, inserted *before* the
+\#855's), the count node (`155:557`, #856's — the right group's first child, inserted *before* the
 chevron), the expanded body (`.tool-row__body`, #706's field list, #780's command block,
 `.tool-row__result`), and the chip's own width mechanic + #722's three e2e width equalities.
 
@@ -2747,7 +2747,7 @@ The render half of the modal vertical (ADR [0009](../decisions/0009-modal-prompt
 answer: there is no machine-readable `destructive` class on the wire (ADR 0009), so "a consequential
 action needs a second confirm" can only be a renderer UX policy, gated on the one signal available —
 `prompt.defaultOptionId`. [#249](../codebase/249.md) then added a **rejection surface**: because
-#237's answer path clears the prompt optimistically, an ungranted device's answer round-tripping to a
+\#237's answer path clears the prompt optimistically, an ungranted device's answer round-tripping to a
 daemon `error` (correlated by [#248](../codebase/248.md)) had nothing left on screen to show it — see
 § Rejection surface below.
 
@@ -2947,7 +2947,7 @@ actually *can* resize the window (`app.evaluate(({ BrowserWindow }) => BrowserWi
 by measuring real rects at 800px and 1600px rather than only inspected. The explanatory sentence and
 `Install` affordance (Figma 16-38, #286's mobile file) remain out of scope, deferred with the
 memory-plugin subsystem neither ticket depends on. See [#286 codebase notes](../codebase/286.md) for
-#286's original design and patterns established.
+\#286's original design and patterns established.
 
 ### Queued backlog + drop affordance (#294, drop since #296)
 
@@ -3037,7 +3037,7 @@ footer. Renderer-contained: no transport, IPC, or wire code.
 **Open-state ownership stays local, not threaded through `PairedShell`.** `channelInfoOpen` is a new
 `useState(false)` in `ConversationScreen` — the `sheetOpen` precedent (ADR 0006) — flipped by the
 overflow menu's `onChannelInfo={() => setChannelInfoOpen(true)}`. This is a deliberate divergence from
-#276's original design: #276 shipped a speculative `ConversationScreenProps.onChannelInfo?` seam
+\#276's original design: #276 shipped a speculative `ConversationScreenProps.onChannelInfo?` seam
 assuming the sheet would live *above* `ConversationScreen` (opened by `PairedShell`). #365 retired that
 prop instead (removed from the interface and the destructure) because the sheet's trigger, data
 (`activeConversationStore`), and chrome are all `ConversationScreen`-local, exactly like `StatusSheet` —
@@ -3060,7 +3060,7 @@ type-scale simplification (the app's fixed vocabulary is the fidelity ceiling, n
 pixel match), not drift.
 
 Escape-to-dismiss is wired via the same `document`-`keydown`-listener-scoped-to-mount-lifetime idiom
-#276 established (`DocumentEventMap['keydown']`, not a bare `KeyboardEvent` — this file's top-level
+\#276 established (`DocumentEventMap['keydown']`, not a bare `KeyboardEvent` — this file's top-level
 `import { type KeyboardEvent } from 'react'` shadows the DOM type). Untested here, same as #276's
 Escape/outside-click and `StatusSheet`'s open-on-click wiring — the suite is `renderToStaticMarkup`-only,
 no jsdom, so interactive effects are reviewed glue, not asserted. Not security-sensitive: the only daemon

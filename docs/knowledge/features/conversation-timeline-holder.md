@@ -8,7 +8,7 @@ both of its keyed precedents.
 
 Introduced in [#755](../codebase/755.md), split from #675 alongside #751-#754 (the transport arms that
 widened eight `DaemonEvent`s with `conversationId`, all shipped), #756 (the writer), #757 (the clears) and
-#758 (the reader cutover, shipped). #755 shipped the holder alone — no writer, no reader — the same
+\#758 (the reader cutover, shipped). #755 shipped the holder alone — no writer, no reader — the same
 "populated and unread" posture the [conversation activity store](conversation-activity-store.md) shipped
 for #747 before its own writer/reader landed. [#756](../codebase/756.md) gave it its first writer: both of
 the timeline's row-adding writers — the bridge fan-out and the composer's optimistic echo — now fold into

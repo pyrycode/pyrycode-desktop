@@ -165,3 +165,6 @@ id-counter and clock, catching `WireEncodeError` to drop an over-cap send.
 - `docs/specs/architecture/860-attachment-chunk-envelope.md` — the full architecture spec, including the security review this doc summarizes (verdict: PASS).
 - Daemon twin (QMD `pyrycode-docs`): `docs/protocol-mobile.md` § Attachments — the source-of-truth contract this slice ports the producer half of.
 - #861 (send driver, not started) — the intended consumer: reads the file, mints `attachment_id`, iterates a plan into per-chunk envelopes, and owns the actual send/retry/progress.
+- [Question-shown wire types](question-shown-wire-types.md) — the other wire-vocabulary-only slice
+  that reuses this doc's "documented, not validated" bound discipline (#883), shipped unreferenced
+  ahead of its consumer for the same reason.

@@ -240,6 +240,12 @@ instead of silently decaying into a deny-on-timeout.
 
 ## Related
 
+- [Question-shown wire types](question-shown-wire-types.md) — claude's clarifying-question batch
+  (`question_shown`, #883), a **sibling frame family rather than a grown `modal_shown`**: this
+  family's `default_option_id` is a total invariant on the permission surface (must equal one of
+  `options[].id`), and a clarifying question has no deny option, so growing this payload would have
+  made that invariant class-conditional. Wire vocabulary only so far — no store, no reducer, no
+  consumer.
 - [ADR 0009 — Modal-prompt model](../decisions/0009-modal-prompt-model.md) — full rationale, every
   reducer arm's normative contract, and the Strangler-Fig coexistence decision.
 - [#122 codebase notes](../codebase/122.md) — implementation summary.

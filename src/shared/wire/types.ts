@@ -95,6 +95,14 @@ export type EnvelopeType =
   | 'modal_dismissed'
   | 'modal_answer'
   | 'modal_cancel'
+  // One whole batch of the clarifying questions claude's `AskUserQuestion` tool asks (#883). v2
+  // outbound (binary → phone), interactive-capability-gated and NOT in the daemon's `v1TypeSet`, so
+  // an old client never receives it. A NEW FAMILY rather than a grown `modal_shown`, decided
+  // upstream on security grounds: `modal_shown`'s `default_option_id` is the deny option and MUST
+  // equal one of `options[].id`, a TOTAL invariant on the permission surface, and a clarifying
+  // question has no deny option — growing the modal payload would have made that invariant
+  // class-conditional. SSOT pyrycode docs/protocol-mobile.md § Question (v2) / internal/protocol.
+  | 'question_shown'
   | 'list_conversations'
   | 'conversations'
   | 'recent_workspaces'
@@ -909,6 +917,132 @@ export interface ModalAnswerPayload {
  */
 export interface ModalCancelPayload {
   modal_id: string
+}
+
+/**
+ * One offered choice within a `question_shown` question. Mirrors the daemon `QuestionOption`
+ * field-for-field (SSOT pyrycode docs/protocol-mobile.md § Question (v2), `internal/protocol`
+ * questions.go), both fields always present (no `omitempty`). Array position (in
+ * `WireQuestion.options`) IS the display order.
+ *
+ * `label` and `description` are the COMPLETE per-option key set. claude's contract also gives an
+ * option an optional `preview` carrying an HTML fragment, emitted only when
+ * `toolConfig.askUserQuestion`'s `previewFormat` is set — pyry never sets it, so the field is absent
+ * BY CONSTRUCTION rather than dropped. Do not model it "for completeness".
+ *
+ * **There is NO `id`** — unlike `WireModalOption`'s `{ id, label }` above. claude's answer protocol
+ * selects an option by its `label`, so `label` IS the option's identity. The consequence is for
+ * whoever writes the answer frame (none exists yet; upstream pyrycode#1907): it will carry a
+ * claude-authored string back across the trust boundary, and publishing that string here does not
+ * make it trusted on the way back — it is re-resolved daemon-side against the recorded batch, keyed
+ * on `question_batch_id`, exactly as `modal_answer` is against `modal_id`.
+ *
+ * Both fields are CLAUDE-AUTHORED: see `QuestionShownPayload`'s provenance note.
+ */
+export interface WireQuestionOption {
+  label: string
+  description: string
+}
+
+/**
+ * One question within a `question_shown` batch. Mirrors the daemon `Question` field-for-field (same
+ * SSOT), all four fields always present (no `omitempty`). Array position (in
+ * `QuestionShownPayload.questions`) IS the canonical display order — claude's own.
+ *
+ * The wire key is `question`, NOT the Go struct's field name: upstream renamed the field to `Text`
+ * only because `Question.Question` stutters, and the WIRE key is what a client mirrors.
+ *
+ * **`options` nests HERE, on each question** — not flat on the payload the way
+ * `ModalShownPayload.options` is. This shape has two nesting levels and the modal family has one, so
+ * a reader pattern-matching off that family gets it wrong by default. It is a plain non-optional
+ * array (never `| null`): the daemon's `MarshalJSON` normalises a nil slice to `[]`, so no consumer
+ * branches on null. That is the opposite of `BackgroundTask.truncated_fields`, whose nullability is
+ * real — the two live one file apart and read alike.
+ *
+ * `multi_select` is claude's camelCase `multiSelect`, snake-cased for this wire exactly as
+ * `argument_hint` snake-cases `argumentHint`. Always present, so `false` is a STATED POSITION rather
+ * than an absent key.
+ *
+ * `header` is the short label a client shows on a tab, and its cap is the fact most likely to be got
+ * wrong: **documented 12, observed 14, counted in RUNES.** claude's vendor page says "max 12
+ * characters" while the only header in the committed upstream capture (`Write strategy`) is 14, so
+ * the cap is a generation-side guideline claude does not itself hold to, not a wire invariant — size
+ * a field for 14 and never truncate at 12. Nothing enforces it on either side. The rune/byte units
+ * coincide on that pure-ASCII sample and NOTHING COMMITTED ANYWHERE separates them, so the
+ * coincidence is not a measurement and must not be read as one.
+ *
+ * `question` and `header` are CLAUDE-AUTHORED: see `QuestionShownPayload`'s provenance note.
+ */
+export interface WireQuestion {
+  question: string
+  header: string
+  options: WireQuestionOption[]
+  multi_select: boolean
+}
+
+/**
+ * Inbound `question_shown` event (daemon → client). Mirrors the daemon's QuestionShownPayload
+ * field-for-field (SSOT pyrycode docs/protocol-mobile.md § Question (v2), shape pyrycode#1963,
+ * fixtures and section #1964), wire order `conversation_id, question_batch_id, questions` — all
+ * always present (no `omitempty`). The whole batch of clarifying questions claude's
+ * `AskUserQuestion` tool raises, carried in ONE frame because a client steps through it with header
+ * tabs and a Previous button and therefore needs every question in hand at once.
+ *
+ * **Wire vocabulary only.** Nothing decodes, narrows, emits or renders this yet — the fail-closed
+ * parse and the question panel are later slices, and upstream's producer is pyrycode#1973.
+ *
+ * **PROVENANCE IS PER FIELD, and a client must not flatten it.** The two ids are DAEMON-ASSERTED:
+ * the daemon fills them from its own state and they never come from claude's tool input. The four
+ * strings — `WireQuestion.question`, `WireQuestion.header`, and every `WireQuestionOption.label` and
+ * `.description` — are CLAUDE-AUTHORED at `model_list`'s trust tier: they crossed the subprocess
+ * trust boundary, and the daemon NEITHER BOUNDS NOR SANITIZES them (nothing on the path strips
+ * control characters or terminal escape sequences). They stay untrusted text all the way here, so
+ * the render boundary that owes the sanitization is THIS CLIENT'S. They are safe to render as inert,
+ * escaped, length-bounded text and must never reach a raw-markup sink (no `innerHTML`, no
+ * `dangerouslySetInnerHTML`), an attribute, a URL, a filename, a cache key, a lookup path, or a log
+ * (CLAUDE.md's daemon-text ruling in full — the last three are the ones a paraphrase drops and the
+ * ones a question panel reaches for first, keying a tab by `header` or memoising by `label`).
+ *
+ * `conversation_id` is an OUTBOUND routing/scoping key only, exactly as `modal_shown`'s is
+ * (pyrycode#1065): it is what lets a client with several open conversations avoid rendering one
+ * conversation's question in another. It grants no inbound capability.
+ *
+ * `question_batch_id` is a one-time, opaque, UNGUESSABLE nonce minted per surfaced batch — `modal_id`'s
+ * role exactly, with all four of those properties. An inbound answer would be resolved against it
+ * SERVER-SIDE rather than trusting anything a client asserts. Being unguessable, it must never reach
+ * a log. It is `question_batch_id` and not `question_id` because this payload also declares a nested
+ * question type carrying NO id at all, so a `question_id` beside a `questions` array would misread as
+ * that type's key. **The upstream fixtures' ids are placeholders** — neither their length nor their
+ * shape is a contract, and nothing about a real nonce may be sized from them.
+ *
+ * `questions` is a plain non-optional array for `WireQuestion.options`' reason (nil normalises to
+ * `[]`). Unlike `model_list`'s `models`, an empty array here is NOT a positive statement: it is out
+ * of contract and means a producer bug, not "claude asked nothing".
+ *
+ * **BOUNDS ARE DELIBERATELY NOT MODELLED, because nothing enforces them.** claude's contract states
+ * 1–4 questions per batch and 2–4 options per question; checked against the daemon tree at
+ * 2026-09-01, no bound is enforced anywhere, and neither is any maximum length for the four strings.
+ * A bound in the type system here would be stricter-than-wire in a family whose enforcement is still
+ * unwritten, so there are no tuple types, no branded numbers and no max constants.
+ *
+ * **This family ships NO `truncated_fields`**, unlike `SlashCommand` and `ModelOption`. A cut can
+ * therefore never be reported, which makes an over-long field a fail-closed REJECT for the decode
+ * slice rather than a silent trim — trimming would present claude's truncated text to a client as
+ * complete.
+ *
+ * Every field being required is load-bearing: it leaves a fail-closed narrower no optional key to
+ * wave through, so a missing field is a reject by construction. **A required field is still only a
+ * promise the wire has not kept until it is checked** — reach this type through a validating
+ * narrower, never a bare `as QuestionShownPayload` on `Envelope.payload`, which would hand a `.map`
+ * a non-array from a malformed frame. The cost of the all-required mirror is named rather than
+ * implicit: it holds while the daemon keeps its no-`omitempty` commitment, and widening is a
+ * coordinated change with the daemon (a dropped batch parks the session — claude waits on an answer
+ * the operator never sees), the same posture `WireModalClass` records for an unknown class.
+ */
+export interface QuestionShownPayload {
+  conversation_id: string
+  question_batch_id: string
+  questions: WireQuestion[]
 }
 
 /**

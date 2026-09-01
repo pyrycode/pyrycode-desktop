@@ -44,7 +44,10 @@ import type {
   QueuedItem,
   QueueStatePayload,
   DequeueMessagePayload,
-  AttachmentChunkPayload
+  AttachmentChunkPayload,
+  WireQuestionOption,
+  WireQuestion,
+  QuestionShownPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -953,5 +956,188 @@ describe('attachment-chunk wire vocabulary (#860)', () => {
     expect(ATTACHMENT_ID_MAX_BYTES).toBe(64)
     expect(ATTACHMENT_FILENAME_MAX_BYTES).toBe(255)
     expect(ATTACHMENT_MIME_TYPE_MAX_BYTES).toBe(255)
+  })
+})
+
+describe('question-shown wire vocabulary (#883)', () => {
+  // Every value below is lifted VERBATIM from the daemon's three committed fixtures
+  // (internal/protocol/testdata/question_shown{,_empty,_zero}.json), so a contract change shows up
+  // as a fixture diff rather than as a disagreement between two hand-written guesses.
+
+  it('admits the question_shown inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType. It is the
+    // whole point of the row — `Envelope.type` is `EnvelopeType | string`, so without the member a
+    // decode/re-encode round-trip passes silently on an unknown string and nothing else catches it.
+    const shown: EnvelopeType = 'question_shown'
+    expect(shown).toBe('question_shown')
+  })
+
+  it('shapes WireQuestionOption as { label, description } — no id, no preview', () => {
+    const option: WireQuestionOption = {
+      label: 'Write-through',
+      description: 'Writes reach the cache and the store together.'
+    }
+    expect(option).toEqual({
+      label: 'Write-through',
+      description: 'Writes reach the cache and the store together.'
+    })
+    // NO `id`, and the absence is the contract's — unlike `WireModalOption`'s `{ id, label }` one
+    // screen up. claude's answer protocol selects an option by its LABEL, so a future answer frame
+    // returns a claude-authored string rather than an id.
+    expect(option).not.toHaveProperty('id')
+    // NO `preview` either — claude's optional HTML-fragment field is absent BY CONSTRUCTION, since
+    // pyry never sets `toolConfig.askUserQuestion.previewFormat`.
+    expect(option).not.toHaveProperty('preview')
+  })
+
+  it('shapes WireQuestion as { question, header, ordered options, multi_select }', () => {
+    // The wire key is `question`, NOT the Go field's name: `Question.Text` is renamed upstream only
+    // to avoid `Question.Question` stuttering, and the wire key is what a client mirrors.
+    const question: WireQuestion = {
+      question: 'Which eviction policies should it support?',
+      header: 'Eviction',
+      options: [
+        { label: 'LRU', description: 'Evict the least recently used entry.' },
+        { label: 'LFU', description: 'Evict the least frequently used entry.' },
+        { label: 'TTL', description: 'Evict entries after a fixed time to live.' }
+      ],
+      multi_select: true
+    }
+    expect(question).toEqual({
+      question: 'Which eviction policies should it support?',
+      header: 'Eviction',
+      options: [
+        { label: 'LRU', description: 'Evict the least recently used entry.' },
+        { label: 'LFU', description: 'Evict the least frequently used entry.' },
+        { label: 'TTL', description: 'Evict entries after a fixed time to live.' }
+      ],
+      multi_select: true
+    })
+    // `options` nests HERE, on each question — not flat on the payload the way
+    // `ModalShownPayload.options` is. A reader pattern-matching off the modal family gets this wrong
+    // by default, so the two-level nesting is pinned rather than left to the type declaration.
+    expect(question.options).toHaveLength(3)
+  })
+
+  it('shapes QuestionShownPayload as { conversation_id, question_batch_id, questions }', () => {
+    // The populated fixture (question_shown.json): two questions, one with three options, one with
+    // multi_select true. Values are pairwise distinct on purpose — `toEqual` is what catches a
+    // transposition of two same-typed `string` fields, which tsc is structurally blind to.
+    const payload: QuestionShownPayload = {
+      conversation_id: 'conv-1',
+      question_batch_id: 'qb-7f3a',
+      questions: [
+        {
+          question: 'Which write strategy should the cache use?',
+          header: 'Write strategy',
+          options: [
+            { label: 'Write-through', description: 'Writes reach the cache and the store together.' },
+            { label: 'Write-behind', description: 'Writes reach the cache first, the store later.' }
+          ],
+          multi_select: false
+        },
+        {
+          question: 'Which eviction policies should it support?',
+          header: 'Eviction',
+          options: [
+            { label: 'LRU', description: 'Evict the least recently used entry.' },
+            { label: 'LFU', description: 'Evict the least frequently used entry.' },
+            { label: 'TTL', description: 'Evict entries after a fixed time to live.' }
+          ],
+          multi_select: true
+        }
+      ]
+    }
+    expect(payload.conversation_id).toBe('conv-1')
+    expect(payload.question_batch_id).toBe('qb-7f3a')
+    expect(payload.questions).toHaveLength(2)
+    // Array order IS the canonical display order — claude's own, carried through unchanged.
+    expect(payload.questions.map((q) => q.header)).toEqual(['Write strategy', 'Eviction'])
+    // `multi_select: false` is a STATED POSITION, never an absent key, so it is read as a value.
+    expect(payload.questions[0].multi_select).toBe(false)
+    expect(payload.questions[1].multi_select).toBe(true)
+    // The observed header is 14 runes while the vendor page documents a 12 cap. Nothing enforces
+    // either, and a client that sizes for 12 and truncates clips the only real header ever measured.
+    expect([...payload.questions[0].header].length).toBe(14)
+  })
+
+  it('carries NO truncated_fields at any of the three levels — a cut can never be reported', () => {
+    // The trap that separates this family from `SlashCommand` and `ModelOption`, both of which DO
+    // carry one. With no way to report a cut, an over-long field is a fail-closed REJECT for the
+    // decode slice rather than a silent trim — cutting silently would present claude's truncated
+    // text to a client as complete.
+    const payload: QuestionShownPayload = {
+      conversation_id: 'conv-1',
+      question_batch_id: 'qb-7f3a',
+      questions: [
+        {
+          question: 'Which write strategy should the cache use?',
+          header: 'Write strategy',
+          options: [
+            { label: 'Write-through', description: 'Writes reach the cache and the store together.' }
+          ],
+          multi_select: false
+        }
+      ]
+    }
+    expect(payload).not.toHaveProperty('truncated_fields')
+    expect(payload.questions[0]).not.toHaveProperty('truncated_fields')
+    expect(payload.questions[0].options[0]).not.toHaveProperty('truncated_fields')
+  })
+
+  it('admits an EMPTY questions array — the [] normalisation, never a null branch', () => {
+    // The daemon's second fixture (question_shown_empty.json). `questions` is a plain non-optional
+    // array because the daemon's MarshalJSON normalises a nil slice to [], so no consumer ever
+    // branches on null. Unlike `model_list`'s `models`, an empty batch is NOT a positive statement —
+    // it is out of contract and means a producer bug, not "claude asked nothing".
+    const emptyBatch: QuestionShownPayload = {
+      conversation_id: 'conv-1',
+      question_batch_id: 'qb-0e21',
+      questions: []
+    }
+    expect(emptyBatch.questions).toEqual([])
+  })
+
+  it('admits the ZERO-VALUE batch — the only route that reaches all nine wire keys', () => {
+    // The daemon's third fixture (question_shown_zero.json): one all-zero question holding one
+    // all-zero option. A batch with no questions reaches neither nested type, so this arm is what
+    // proves no key is optional — every field is present with its zero value.
+    const zero: QuestionShownPayload = {
+      conversation_id: '',
+      question_batch_id: '',
+      questions: [{ question: '', header: '', options: [{ label: '', description: '' }], multi_select: false }]
+    }
+    expect(zero).toEqual({
+      conversation_id: '',
+      question_batch_id: '',
+      questions: [{ question: '', header: '', options: [{ label: '', description: '' }], multi_select: false }]
+    })
+    // '' and false are VALUES, never consulted for truthiness: the daemon sets no `omitempty`, so an
+    // empty header or an unset multi_select is a real answer rather than a vanished one.
+    expect(zero.questions[0].header).toBe('')
+    expect(zero.questions[0].multi_select).toBe(false)
+  })
+
+  it('pins every field as REQUIRED — omitting one is a compile-time error', () => {
+    // The no-drift pin, and the load-bearing one: all-required is what leaves the decode slice's
+    // fail-closed narrower no optional key to wave through. If any field were ever relaxed to
+    // optional, the directives below would stop erroring and fail this file at compile time.
+
+    // @ts-expect-error `header` is required — the daemon sets no omitempty on it
+    const missingHeader: WireQuestion = {
+      question: 'Which write strategy should the cache use?',
+      options: [{ label: 'Write-through', description: 'Writes reach the cache and the store together.' }],
+      multi_select: false
+    }
+    // @ts-expect-error `description` is required — it and `label` are the COMPLETE per-option key set
+    const missingDescription: WireQuestionOption = { label: 'Write-through' }
+    // @ts-expect-error `questions` is required and non-optional — nil is normalised to [], never elided
+    const missingQuestions: QuestionShownPayload = {
+      conversation_id: 'conv-1',
+      question_batch_id: 'qb-7f3a'
+    }
+    expect(missingHeader.question).toBe('Which write strategy should the cache use?')
+    expect(missingDescription.label).toBe('Write-through')
+    expect(missingQuestions.conversation_id).toBe('conv-1')
   })
 })

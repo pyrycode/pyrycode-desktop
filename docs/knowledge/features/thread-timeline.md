@@ -236,7 +236,7 @@ Nothing imports this module yet.
   `channelListViewModel.ts`'s `formatLastActivity`) — restyled and re-copied by
   [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690), which dropped the relative time
   entirely; see [Conversation shell § Session-boundary
-  delimiter](conversation-shell.md#session-boundary-delimiter-286-redrawn-690). `item.occurredAt` stays
+  delimiter](conversation-shell-conversation-and-modals.md#session-boundary-delimiter-286-redrawn-690). `item.occurredAt` stays
   on `ThreadItem` unaffected — the store still owns it, only the render layer stopped reading it. The
   fifth application of the "new timeline-item kind → bridge arm → render row" pattern (#218/#230/#245).
 - **[#317](../codebase/317.md) (shipped)** added the `stalled` scalar and the `stallDetected` arm —
@@ -421,19 +421,19 @@ Nothing imports this module yet.
   stops at the timeline bridge, so `ThreadEvent.stallDetected` above is unaffected.
 - [#317 codebase notes](../codebase/317.md) — the render slice: the `stalled` scalar, the
   `stallDetected` arm, and `StallIndicator` (see [Conversation shell § Stall
-  indicator](conversation-shell.md#stall-indicator-317)).
+  indicator](conversation-shell-turn-status.md#stall-indicator-317)).
 - [#492 codebase notes](../codebase/492.md) — the transport slice: decodes `api_retry` into the
   non-nullary `apiRetry` `DaemonEvent` (`active`/`current`/`total`), shipped dormant.
 - [#493 codebase notes](../codebase/493.md) — the render slice: the `apiRetry` scalar, the `apiRetry`
   arm (clearing semantics inverted from `stalled`), `ApiRetryIndicator`, and the `shouldShowThinking`
   supersede predicate (see [Conversation shell § Api-retry
-  indicator](conversation-shell.md#api-retry-indicator-493)).
+  indicator](conversation-shell-turn-status.md#api-retry-indicator-493)).
 - [#495 codebase notes](../codebase/495.md) — the transport slice: decodes `compacting` into the
   non-nullary `compacting` `DaemonEvent` (`active`), shipped dormant.
 - [#496 codebase notes](../codebase/496.md) — the render slice: the `compacting` scalar, the
   `compacting` arm (`apiRetry`'s clearing inversion, minus the counter), `CompactingIndicator`, and the
   second `shouldShowThinking` clause (see [Conversation shell § Compacting
-  indicator](conversation-shell.md#compacting-indicator-496)).
+  indicator](conversation-shell-turn-status.md#compacting-indicator-496)).
 - [#528 codebase notes](../codebase/528.md) — the nullary `reset` arm, ported from [`sessionStore`'s
   `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
 - [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation

@@ -88,6 +88,6 @@ Archive action click (Channel Info sheet, #366)
   mechanism [#275](../codebase/275.md) relied on for promote and [#346](../codebase/346.md) for
   unarchive.
 - [#363 codebase notes](../codebase/363.md) — implementation summary.
-- [Conversation shell](conversation-shell.md#channel-info-sheet-365) / [#366
+- [Conversation shell](conversation-shell-conversation-and-modals.md#channel-info-sheet-365) / [#366
   codebase notes](../codebase/366.md) — the Channel Info sheet's Archive action, this transport's
   live caller.

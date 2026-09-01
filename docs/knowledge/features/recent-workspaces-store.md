@@ -4,7 +4,7 @@ The renderer's held copy of the daemon's recent-workspaces list — a dedicated,
 Zustand store fed by a headless bridge that observes the [daemon-event
 channel](daemon-event-channel.md)'s `recentWorkspacesReceived` event and drives a de-duplicated
 one-shot `requestRecentWorkspaces` request, so the [Workspace Picker
-sheet](conversation-shell.md#workspace-picker-sheet-383) (#157's remaining split-child) can read one
+sheet](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) (#157's remaining split-child) can read one
 source of truth.
 
 Introduced in [#382](../codebase/382.md), the renderer half of the `#380 transport → #382 renderer`
@@ -156,7 +156,7 @@ daemon → recent_workspaces_list frame → parseInboundMessage → recentWorksp
 - [Conversation workspace change](conversation-workspace-change.md) / [#379 codebase
   notes](../codebase/379.md) — the sibling outbound slice of the same #157 Workspace Picker split
   (`change_workspace`); both are now wired by the same consumer, the picker UI.
-- [Workspace Picker sheet](conversation-shell.md#workspace-picker-sheet-383) / [#383 codebase
+- [Workspace Picker sheet](conversation-shell-workspace-and-run-config.md#workspace-picker-sheet-383) / [#383 codebase
   notes](../codebase/383.md) — the real consumer, mounting `RecentWorkspacesData` and reading
   `selectRecentWorkspaces`.
 - [#382 codebase notes](../codebase/382.md) — implementation summary and patterns established.

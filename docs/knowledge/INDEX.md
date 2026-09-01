@@ -408,6 +408,22 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `MAX_PLAINTEXT_BYTES` is the sole, inherited backstop. Nothing sends, reads a file, or mints an
   `attachment_id` — both modules main-process-only, unreferenced until #861 (send driver, not started).
   Architect self-review PASS.
+- [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
+  claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
+  interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the
+  daemon's published contract field for field, every field required (no `omitempty` on the daemon
+  side). A **new frame family, not a grown `modal_shown`**, decided upstream on security grounds:
+  `modal_shown`'s `default_option_id` must equal one of `options[].id`, a total invariant that a
+  deny-option-less clarifying question would have made class-conditional. Options carry no `id` —
+  claude's answer protocol selects by `label` — and no `preview` (pyry never sets `previewFormat`).
+  Doc comments record per-field provenance (two ids daemon-asserted, four strings claude-authored and
+  neither bounded nor sanitized, safe as inert text only, CLAUDE.md's full banned-sink list) and two
+  contract traps: the header cap is documented 12 but observed 14 runes, and this family ships no
+  `truncated_fields`, so an over-long field must be a fail-closed reject rather than a silent trim.
+  1–4 questions and 2–4 options are stated in claude's contract but enforced nowhere as of
+  2026-09-01, so deliberately not modelled as types. Declaration only — no decoder, no narrowing, no
+  consumer; the genuine RED was `tsc`, not vitest, since the test file's `import type` erases at
+  runtime. Architect self-review PASS.
 - [Host label store](features/host-label-store.md) — `createHostLabelStore({ secureStore })`, the third
   consumer of [secure store](features/secure-store.md) and the first that isn't a secret: the sidebar
   nickname the operator types at pairing, persisted so it survives a restart. Can't live on

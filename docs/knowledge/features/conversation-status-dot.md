@@ -7,6 +7,9 @@ nothing — [#801](https://github.com/pyrycode/pyrycode-desktop/issues/801) wire
 
 Introduced in [#800](https://github.com/pyrycode/pyrycode-desktop/issues/800), split from #676.
 Renderer-only, no store, no transport — not security-sensitive.
+[#873](https://github.com/pyrycode/pyrycode-desktop/issues/873) added the fourth state, `input-required`,
+and its amber ring; it lands correct-but-unreachable until
+[#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) wires the call site.
 
 ## What it does
 
@@ -15,13 +18,14 @@ Renders exactly one `<span role="img" aria-label="…">`, no wrapper, no child, 
 
 | status | paint | label |
 | --- | --- | --- |
-| `idle` | none — a present, unpainted 6×6 box | "Idle" |
-| `new-messages` | green ring (`--color-success`) | "New messages" |
+| `input-required` | amber ring (`--color-warning`) | "Input required" |
 | `working` | blue ring (`--color-primary`) + a slow fading blink, stilled to a steady ring under `prefers-reduced-motion: reduce` | "Assistant working" |
+| `new-messages` | green ring (`--color-success`) | "New messages" |
+| `idle` | none — a present, unpainted 6×6 box | "Idle" |
 
-All three states share the same 6×6 footprint, so a row's title never shifts horizontally when its status
+All four states share the same 6×6 footprint, so a row's title never shifts horizontally when its status
 changes. The labels are client-owned constants in the app's own voice — the component's only input is one
-of three closed-union literals, so no daemon text can reach it.
+of four closed-union literals, so no daemon text can reach it.
 
 ## How it works
 
@@ -30,11 +34,12 @@ New file beside `ChannelList.tsx` (its only planned consumer), styled by an appe
 `import './channels.css'`, and both dialog siblings (`RenameConversationDialog`, `SaveAsChannelDialog`)
 already decline a second one.
 
-- **The label map is a `Record<ConversationStatus, string>`, not a `switch`.** It is exhaustive by type, so
-  [#802](https://github.com/pyrycode/pyrycode-desktop/issues/802)'s reserved fourth status (input required)
-  becomes a `npm run typecheck` failure here rather than a silently unlabelled dot — a `switch` with a
-  `default:` arm would swallow it. Module-private; the unit spec asserts the shipped literal strings
-  instead of importing the map.
+- **The label map is a `Record<ConversationStatus, string>`, not a `switch`.** It is exhaustive by type,
+  which is what forced [#873](https://github.com/pyrycode/pyrycode-desktop/issues/873)'s fourth status and
+  its label to ship in one commit — adding a union member without an entry here is a `npm run typecheck`
+  failure, and `npm run build` runs typecheck first, so the salvage gate catches a silently unlabelled dot
+  before it ever reaches this component. A `switch` with a `default:` arm would have swallowed it silently
+  instead. Module-private; the unit spec asserts the shipped literal strings instead of importing the map.
 - **Idle carries an explicit `--idle` modifier**, not the base class alone, so a dropped modifier fails a
   test instead of quietly rendering as a correct-looking idle dot.
 - **`role="img"` is load-bearing, not decorative.** On a bare `<span>` the accessible-name computation
@@ -43,11 +48,14 @@ already decline a second one.
   (`ChannelList.tsx:310-350`) already uses for the sidebar's connection dots.
 - **The ring is `box-shadow: inset 0 0 0 1px <token>`, never `border`.** This repo has no global
   `box-sizing` reset (`conversation.css:750`), so a 1px border would grow the 6px box to 8px and shift the
-  row title by 2px in exactly the two painted states — an inset shadow has zero layout effect by
+  row title by 2px in exactly the three painted states — an inset shadow has zero layout effect by
   construction, so the shared-footprint guarantee doesn't depend on a `box-sizing` declaration a later edit
   could drop. `background` stays unset in every state; the design's circle is unfilled, a **ring**, which is
   what separates this family from the filled `.channel-list__host-dot` / `.conn-dot` dots six pixels above
-  it in the same sidebar.
+  it in the same sidebar. This is what keeps `--input-required` (amber ring) from colliding with
+  `.conn-dot--in-progress` (`conversation.css:1817`), a *filled* dot in the same `--color-warning` amber
+  that reports whether a machine is reachable rather than what a conversation is doing — the ring-vs-disc
+  form is the whole of what keeps the two readings apart.
 - **`idle` has no CSS rule at all — the missing rule is the design.** The class still ships on the element
   so a dropped modifier fails a unit test rather than rendering as idle by coincidence.
 - **The blink fades to a floor (`opacity: 0.3` at 50%), never to zero,** and uses `ease-in-out` rather than
@@ -55,7 +63,9 @@ already decline a second one.
   animation/`@keyframes`/reduced-motion three-part shape). A caret that vanishes still reads as a caret; a
   status dot that vanishes reads as idle, the one wrong reading available. The 2s duration and the 0.3
   floor are client-owned constants — the Figma node is a static vector with no motion spec, so there was
-  nothing to port.
+  nothing to port. **The blink and its `prefers-reduced-motion` fallback stay scoped to `--working` alone**
+  — `--input-required` has no animation and no reduced-motion entry: a dot blocked on the operator has no
+  reason to animate ([#873](https://github.com/pyrycode/pyrycode-desktop/issues/873)).
 - **Its colour bindings are this component's own**, deliberately not `.conn-dot--up` (`conversation.css:1425-1435`).
   That family reports whether a *machine* is reachable and is kept to one copy in the renderer on purpose;
   this dot reports what a *conversation* is doing. The class token shares no substring with `conn-dot`,
@@ -74,6 +84,13 @@ relay-leg dot and found only **2.90:1** contrast — "a barely-visible dot reads
 there (see [its spec, § Rejected alternatives](../../specs/architecture/719-relay-not-yet-known-state.md)).
 Shipping the node's bound value here would repeat a contrast problem this codebase has already ruled out
 once. `--color-success` needs no such substitution: `#2fc038` is the Figma's `Schemes/Success` exactly.
+
+`--color-warning` (`#ffca45`), the amber `--input-required` ships, needs no substitution either — it reads
+12.3:1 against `--color-surface` and 8.1:1 against `--color-surface-container-highest`, well clear of the
+2.90:1 that sank the Figma-bound value above. Its colour isn't a Figma-node read at all: node `106:3051` is
+a local instance with no variants and draws the working ring alone, so amber comes from the operator's
+design-notes status table (2026-08-21) rather than from a node — see
+[conversation status § precedence](conversation-status.md) for the table.
 
 ## Configuration and usage
 
@@ -108,11 +125,13 @@ once. `--color-success` needs no such substitution: `#2fc038` is the Figma's `Sc
   of flow with `position: absolute` instead, so the flex property never applies. Flagged by #801's code
   review as harmless but stale — left unedited (it's this component's own rule, out of #801's scope to
   touch), recorded here so the next reader doesn't infer a flow-layout consumer from it.
-- **e2e coverage stays at zero.** The reduced-motion fallback and the three colours are CSS-level
-  guarantees the node unit tier (`renderToStaticMarkup`, no DOM, no CSSOM) cannot see. #801 wired the only
+- **e2e coverage stays at zero.** The reduced-motion fallback and all four colours, amber included, are
+  CSS-level guarantees the node unit tier (`renderToStaticMarkup`, no DOM, no CSSOM) cannot see — the unit
+  tier proves the union member, the class token and the label, never a computed colour. #801 wired the only
   consumer but added no e2e spec — all four of its ACs are statically assertable with seeded stores in the
   unit tier — so a `prefers-reduced-motion` clone of `e2e/composer-status-reduced-motion.spec.ts` for this
-  component specifically remains unbuilt; file it separately if wanted.
+  component specifically remains unbuilt; file it separately if wanted. #873 shipped the amber ring with the
+  same standing, deliberately without adding a DOM environment to close the gap.
 
 ## Related
 
@@ -124,13 +143,16 @@ once. `--color-success` needs no such substitution: `#2fc038` is the Figma's `Sc
   labelled-dot shape this component's markup follows.
 - [#719 codebase notes](../codebase/719.md) / [spec](../../specs/architecture/719-relay-not-yet-known-state.md)
   — the prior contrast rejection of the Figma node's own bound colour, reused here rather than re-measured.
-- [ADR 0009 — Modal prompt model](../decisions/0009-modal-prompt-model.md) — why the fourth status, input
-  required, stays unbuilt, though the store-side blocker has cleared. The wire carries a
+- [ADR 0009 — Modal prompt model](../decisions/0009-modal-prompt-model.md) — the store-side chain that made
+  the fourth status, input required, buildable. The wire carries a
   `conversation_id` on `modal_shown` ([#870](../codebase/870.md), pyrycode#1065), and
   [#871](../codebase/871.md)/[#877](../codebase/877.md)/
   [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) have since carried it onto
   `DaemonEvent`, `ModalEvent`, and the held `ModalPrompt` in the [modal-prompt
   model](modal-prompt-model.md), which now exposes `selectHasOutstandingFor(conversationId): boolean`.
-  This component and [conversation status](conversation-status.md) are the two pieces still waiting to
-  compose it.
-- Spec: `docs/specs/architecture/800-conversation-status-dot.md`.
+  [Conversation status](conversation-status.md)'s resolver consumes that boolean as of #873; this
+  component only ever draws whatever `ConversationStatus` it's handed, so it never touches the selector
+  directly — [#874](https://github.com/pyrycode/pyrycode-desktop/issues/874) is the piece still waiting to
+  compose it, at the `ChannelList.tsx` call site.
+- Spec: `docs/specs/architecture/800-conversation-status-dot.md`,
+  `docs/specs/architecture/873-input-required-status-and-dot.md`.

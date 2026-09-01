@@ -20,10 +20,10 @@ from. The transport half landed first — [Question-shown wire
 types](question-shown-wire-types.md)'s `questionShown`/`questionDismissed` `DaemonEvent` arms, decoded
 fail-closed. This module holds the outstanding batches as a single, testable source of truth: which
 batch (if any) is outstanding for a given conversation, addressed by the daemon's one-time
-`questionBatchId` nonce. There is no Zustand store, no React hook, no wire-type import here — that
-render-integration layer is the two follow-ups', [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899)
-(the Zustand container) and [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (the
-`DaemonEvent → QuestionBatchEvent` bridge), both natively blocked-by this module.
+`questionBatchId` nonce. There is no Zustand store, no React hook, no wire-type import in *this* module
+— that's the sibling `questionBatchStore.ts` (§ The Zustand container, below), which wraps this reducer
+without redefining it. The `DaemonEvent → QuestionBatchEvent` bridge is still
+[#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s, natively blocked-by this module.
 
 ## How it works
 
@@ -119,14 +119,70 @@ conversation id answers `undefined`, never an error.
   when nothing was removed. Mirrors `modalPrompts.ts`'s helper of the same name and contract.
 - `assertNever(event)` — the compile-time exhaustiveness guard, reused verbatim from `modalPrompts.ts`.
 
+### The Zustand container (`questionBatchStore.ts`)
+
+Introduced in [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899), the reducer's first
+consumer — the question vertical's counterpart to [modal store + bridge](modal-store-bridge.md)'s
+`modalStore.ts`, and a near-verbatim clone of its DI-factory → singleton → hook → selectors shape:
+
+```ts
+export type QuestionBatchStore = QuestionBatchState & { dispatch: (event: QuestionBatchEvent) => void }
+
+createQuestionBatchStore(init: QuestionBatchState = initialQuestionBatchState)  // vanilla createStore, DI seam
+questionBatchStore                                                             // app-wide singleton
+useQuestionBatchStore<T>(selector: (s: QuestionBatchStore) => T): T            // useStore(questionBatchStore, selector)
+export { selectOutstandingBatches, selectBatchFor } from './questionBatches'   // re-exported, never redefined
+```
+
+`dispatch` is `(event) => set((s) => reduceQuestionBatches(s, event))` — one call, no per-arm handling,
+so a fourth `QuestionBatchEvent` arm needs no change to this file. No third selector is minted:
+`selectBatchFor` already returns both panel-facing reads (which batch belongs to a conversation, and,
+on that batch, its full ordered question list), matching the container's own no-redefinition rule.
+
+No `observe?` diagnostics param, matching `createModalStore`: the #134 instrumentation seam is
+session-only, and an observer here would be the easiest way to hand `questionBatchId` (a one-time
+unguessable nonce) and the four claude-authored strings to an arbitrary sink in one line.
+`selectBatchFor(id)` is safe to call inline in a render with no `useMemo` — it's a selector factory
+producing a fresh function identity per render, but `useStore` compares the selector's *result* under
+`Object.is`, and `Array.prototype.find` returns the held batch by reference, stable while nothing
+changed. The singleton must never be attached to `window` as a debug handle — `dispatch` is otherwise
+reachable only from module importers, and a global would hand any injected script a live write path
+into renderer state.
+
+**Write serialisation — the item this module's own security review handed forward.** `dispatch` is
+fully synchronous with no `await`, so two dispatches cannot interleave: each `set(fn)` reads, reduces
+and assigns before the next observer runs, and there is no check-then-act race. The one reachable
+hazard is re-entrancy — zustand notifies subscribers synchronously inside `setState`, so a subscriber
+that dispatched during a notify would recurse. Unreachable as designed: [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s
+bridge dispatches from the preload event callback, never from a store subscription, and the panel
+slices only read.
+
+**The factory is load-bearing, not test sugar.** Seeding the app singleton is invisible to
+`renderToStaticMarkup`: the server renderer reads `getServerSnapshot()`, which zustand wires to
+`getInitialState()` (the state captured at store creation), so a seed-then-render test against the
+singleton silently asserts against the initial cell. Renderer tests here are static server renders
+(`environment: 'node'`, no `jsdom`, no `@testing-library`), so the render slices, [#851](https://github.com/pyrycode/pyrycode-desktop/issues/851)
+and [#853](https://github.com/pyrycode/pyrycode-desktop/issues/853), need a per-file
+`createQuestionBatchStore(init)` instance to seed, overriding only the `useQuestionBatchStore` binding
+via `vi.mock`.
+
+`questionBatchStore.test.ts` asserts the wiring — initial state, `dispatch` threads the reducer through
+all three arms, a same-reference no-op on an unknown `dismissed` id, DI-seeded init, two-instance
+isolation, and a read-only check on the app singleton — not the reducer's branches, which
+`questionBatches.test.ts` already owns. No test for `useQuestionBatchStore` itself: a bare hook is
+untestable without a React renderer, which this repo has none of (the `useModalBridge`/#202 precedent).
+
+Nothing mounts this store yet. [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s bridge
+dispatches into it; the panel slices ([#851](https://github.com/pyrycode/pyrycode-desktop/issues/851),
+[#853](https://github.com/pyrycode/pyrycode-desktop/issues/853)) read from it via
+`useQuestionBatchStore`.
+
 ## Configuration and usage
 
-Nothing imports this module yet. Its first consumer is
-[#899](https://github.com/pyrycode/pyrycode-desktop/issues/899), the Zustand container wrapping
-`reduceQuestionBatches` (the `modalStore.ts` precedent); the `DaemonEvent → QuestionBatchEvent` bridge
-mapping `questionShown`/`questionDismissed` onto the events above, plus renaming `multi_select` at both
-nesting levels, is [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s. Both are
-natively blocked-by this ticket.
+Nothing mounts this vertical yet. The `DaemonEvent → QuestionBatchEvent` bridge mapping
+`questionShown`/`questionDismissed` onto the events above, plus renaming `multi_select` at both nesting
+levels, is [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900)'s, natively blocked-by this
+module and built on the container above.
 
 ## Edge cases and limitations
 
@@ -187,6 +243,11 @@ any kind reddens the test rather than passing because it wasn't on a banned list
   behavior.
 - `docs/specs/architecture/898-question-batch-model.md` — the full architecture spec, including the
   security review this doc summarizes (verdict PASS).
-- Split from [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850); unblocks
-  [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899) (Zustand container) and
-  [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (the `DaemonEvent` bridge).
+- [Modal store + bridge](modal-store-bridge.md) — the modal vertical's `modalStore.ts`, the direct
+  structural precedent § The Zustand container clones (DI-factory → singleton → hook → selectors).
+- `docs/specs/architecture/899-question-batch-store.md` — the container's architecture spec and its own
+  security review (verdict PASS).
+- Split from [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850); the Zustand container
+  shipped in [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899) (§ The Zustand container,
+  above); unblocks [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (the `DaemonEvent`
+  bridge).

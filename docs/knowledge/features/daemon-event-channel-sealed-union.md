@@ -167,6 +167,36 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   one cannot: its consumer, [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), is a
   fourth independent subscriber on this channel (the `announcedModelBridge`/`queueBridge`/
   `backgroundTaskRosterBridge` shape), not a future case on session, timeline or modal state.
+- **`questionDismissed{questionBatchId,outcome,source}`**
+  ([#895](https://github.com/pyrycode/pyrycode-desktop/issues/895)) carries the frame that retires the
+  batch above — the wire vocabulary and fail-closed decode
+  ([#894](https://github.com/pyrycode/pyrycode-desktop/issues/894)) already existed; this arm is the
+  emit, placed immediately after `questionShown`. Flat, one level, three plain strings, built at the
+  emit site (`daemonConnection.ts`) as a fresh named-field literal rather than a spread of the decoded
+  payload, so a decoder that later grows a field cannot smuggle it across IPC. **No `conversationId`**,
+  unlike `questionShown` — the batch nonce (`questionBatchId`) is the sole correlation key, and adding
+  one "for symmetry with the batch" is forbidden by the wire contract, not merely omitted.
+  **`source` is typed as a plain `string`, never `WireModalSource`** — the one mistake in this family
+  that compiles and passes: `events.ts` already imports `WireModalSource` and the adjacent
+  `modalDismissed` arm annotates its `source` with it, but the producer emits no member of that closed
+  set, only the landed pair `outcome: "unanswered"` / `source: "no_answer"` for every terminal path
+  (caller disconnect, elapsed window, and daemon shutdown are indistinguishable to the arbiter that
+  emits it). Verified rather than asserted: narrowing the arm to `WireModalSource` and typechecking
+  fails it at six call sites (the emit plus five typed bridge test fixtures). If a type error appears
+  at the emit site, widen the arm — never cast the payload, and never reach for the `'timeout'` value
+  sitting in upstream `question_dismissed.json`, a shape fixture minted before any producer existed.
+  **Trust tier is the inverse of `questionShown`'s**: this arm carries no claude-authored byte at all —
+  `questionBatchId` is daemon-asserted, `outcome` is an opaque producer-defined sentinel never carrying
+  a claude-authored label — but "daemon-asserted" is the producer's promise, not a checked property;
+  the transport boundary verifies only `typeof === 'string'`, so the doc comment must not read as "safe
+  to render as trusted chrome". The **fail-closed reading rule** an eventual consumer needs: an
+  unrecognised `source` means *resolved, cause unknown*, never an answer — read backwards it renders a
+  daemon safe-deny as the operator's own choice. `daemonConnection.ts`'s emit deliberately does **not**
+  copy the adjacent `modalDismissed` case's `outstandingAnswers` drain — that list holds `modal_id`s
+  exclusively, this client sends no question answer at all (the outbound verb is upstream
+  pyrycode#1907, unlanded), and a copied drain would search the *modal* correlation window with a
+  `question_batch_id`, a cross-frame correlation-confusion path rather than a harmless no-op. Consumed
+  as a **permanent** no-op by all three exhaustive bridges, on the same #850 grounds as `questionShown`.
 - **`toolResult{turnId,toolUseId,isError,resultSummary}`** ([#229](../codebase/229.md)) also maps to *no*
   `SessionAction`, consumed instead by the [conversation timeline store](conversation-timeline-store.md)'s
   bridge — the `timelineBridge`'s fifth owned arm, and the vertical's last transport slice. Unlike

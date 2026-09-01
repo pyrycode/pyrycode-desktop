@@ -239,10 +239,12 @@ security review flags this kind's sharpest finding: the frame's published daemon
 the honest producer's *promise*, not a property this decode *verifies* — the only check run is `typeof
 === 'string'`, so a compromised daemon can put anything, at any length the frame cap allows, into
 `outcome`/`source`. The switch arm's comment states this explicitly so [#895](https://github.com/pyrycode/pyrycode-desktop/issues/895)
-(the IPC carry, the first consumer) does not read "decoded" as "sanitized". Ships dormant the same way
-`question_shown` did: `daemonConnection.ts`'s inbound switch still has no `default` arm, so the decoded
-value is silently un-routed, not forwarded, and adding this kind cannot leak the dismissal across IPC
-ahead of #895. See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
+(the IPC carry) does not read "decoded" as "sanitized" — and #895's own `DaemonEvent` arm doc comment
+restates the same split a second time, since it is the last typed surface before #850's render slice.
+`daemonConnection.ts`'s inbound switch now has a `case 'question-dismissed':` (#895), emitting the
+`questionDismissed` `DaemonEvent` arm; it still ships with no renderer store reading it, the same
+dormancy `question_shown` carried through #885 — see [Daemon event channel — the sealed
+union](daemon-event-channel-sealed-union.md). See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
 and [edge cases and limits](inbound-message-decode-limits.md) for the type union, the decode/log detail,
 and the fail-closed edge cases respectively.
 

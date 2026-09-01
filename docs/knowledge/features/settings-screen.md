@@ -201,7 +201,7 @@ chevron `<svg>` is `aria-hidden`. Unlike the Server row (#334) and Storage row (
 **omit** their trailing chevron because they have no detail screen to lead to, this row **keeps** its
 chevron — it is a genuine forward-nav affordance, matching Figma `17:21`. Activating it fires
 `onPairAnother`, wired by `PairedShellView` to `dispatch({ type: 'openPairServer' })` — see
-[Paired shell](paired-shell.md#the-pairserver-route-152) for what renders next.
+[Paired shell](paired-shell-pair-server-route.md#the-pairserver-route-152) for what renders next.
 
 ### The Server row (`ServerRow.tsx`, #334)
 

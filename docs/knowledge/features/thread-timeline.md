@@ -271,10 +271,10 @@ Nothing imports this module yet.
   ticket, and `timelineStore.ts`/`timelineBridge.ts` needed no edit — `dispatch` already accepted any
   `ThreadEvent`, and `timelineBridge.ts` never produces a `reset` since no wire frame maps to it.
   [#530](../codebase/530.md) (conversation switch, shipped) added the first dispatch site, via
-  [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx), gated on the active
+  [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx), gated on the active
   conversation's id actually changing. [#531](../codebase/531.md) (unpair / pair-another-server, shipped)
   added the second, unconditional site, via
-  [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
   [#652](../codebase/652.md) (the deleted-open-discussion exit, shipped) added the third, via
   [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
   gated on the id like #530's, but comparing against the just-deleted conversation's id rather than a
@@ -437,10 +437,10 @@ Nothing imports this module yet.
 - [#528 codebase notes](../codebase/528.md) — the nullary `reset` arm, ported from [`sessionStore`'s
   `reset` (#166)](../codebase/166.md); capability-only, no dispatch site until #530/#531.
 - [#530 codebase notes](../codebase/530.md) — `reset`'s first production dispatch site: a conversation
-  switch, via [`activateConversation`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  switch, via [`activateConversation`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#531 codebase notes](../codebase/531.md) — `reset`'s second production dispatch site: a pairing
   ending, unconditional, via
-  [`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx).
+  [`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx).
 - [#642 codebase notes](../codebase/642.md) — the transport slice: decodes `tool_use.input` into the
   optional `DaemonEvent.toolUse.input` field, shipped dormant.
 - [#643 codebase notes](../codebase/643.md) — widens the `toolUse`/`toolCall` pair with `input`, carried

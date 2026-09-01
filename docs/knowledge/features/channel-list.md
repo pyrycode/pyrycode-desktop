@@ -436,7 +436,7 @@ min-content size is the whole string: a 128-character label measured the sidebar
 this fix, and `.channel-list`'s `overflow-x: auto` (a side effect of its `overflow-y: auto`) does not
 stop that propagation — a scroll container's automatic minimum size is 0 for *itself*, but its
 min-content *contribution* to an ancestor is still content-derived. See [Paired shell § the sidebar's
-`min-width: 0`](paired-shell.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
+`min-width: 0`](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670) for the
 fix, landed as its own commit so it stayed independently reviewable.
 
 `.channel-list` deviates from the architecture spec's `flex: 1 1 auto`: it uses `height: 100%;
@@ -459,7 +459,7 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   open is a real switch, not just an `open` nav.** Because the sidebar is now permanently mounted, this
   click no longer necessarily passes through `list` — it's the interaction the two-pane shell exists to
   enable, and it drives [the paired shell's `paneKey`
-  re-key](paired-shell.md#the-conversation-switch-remount-bug-and-the-panekey-fix) so
+  re-key](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix) so
   `ConversationScreen` remounts instead of carrying the old conversation's screen-local state over.
 - **Archived rows are filtered out.** `renderBody` partitions via `partitionActive`, which drops
   `is_archived` rows before the promotion split — archived conversations render only in the
@@ -542,7 +542,7 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
   the host row: the `hostRowLabel` four-arm collapse, the `HostRow`/`HostRowControl` split, the
   `<HostLabelData />` mount site, and the label's ellipsize treatment. Also fixed a `min-width: auto`
   gap on `.paired-shell__sidebar` the 128-character label made reachable — see [Paired
-  shell](paired-shell.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
+  shell](paired-shell-routing.md#the-two-pane-desktop-shell-pairedshellcss-srcmainindexts-670).
 - [#703 codebase notes](../codebase/703.md) — added the workspace grouping level between each
   host row and its conversation rows (Figma `106:3098`), grouping on the daemon's `cwd`.
 - [#704 codebase notes](../codebase/704.md) — turned each workspace row into a per-group, per-tree

@@ -25,7 +25,7 @@ ticket is the first consumer of that payload beyond navigation.
 — snake_case, no camelCase remap, the `conversationListStore` doctrine — so the chip derives `cwd` and
 `is_promoted` at the read boundary rather than the store drifting from the wire shape. `setActiveConversation`,
 unconditional whole-value replace (most-recent-wins, no merge). [PairedShell's
-`conversation_created` callback](paired-shell.md#the-pure-view--container-pairedshelltsx) is the sole
+`conversation_created` callback](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) is the sole
 writer; `WorkspaceChip` (below) is the sole reader — no other consumer exists yet.
 
 [#529](../codebase/529.md) added a second mutation, `clearActiveConversation`, returning the state to
@@ -37,9 +37,9 @@ clear from, and [#530](../codebase/530.md) (navigation, shipped) did touch exact
 deliberately did **not** call `clearActiveConversation` there: `setActiveConversation` stays
 unconditional (a conversation switch still *records* the new conversation, it just also clears the
 timeline and session id first via the new `activateConversation` helper — see [Paired
-shell](paired-shell.md#the-pure-view--container-pairedshelltsx)). [#531](../codebase/531.md) (unpair /
+shell](paired-shell-routing.md#the-pure-view--container-pairedshelltsx)). [#531](../codebase/531.md) (unpair /
 pair-another-server, shipped) is `clearActiveConversation`'s sole caller, wired unconditionally into
-[`clearPairingScopedState`](paired-shell.md#the-pure-view--container-pairedshelltsx) — the pairing
+[`clearPairingScopedState`](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) — the pairing
 context itself ending, rather than the active conversation merely changing, is exactly the case that
 call site was reserved for.
 
@@ -230,7 +230,7 @@ Clicking it calls `onExpand`, which flips `sheetOpen` (a single `useState(false)
 phase-machine case). It resets to closed on remount for free — a guarantee [#670](../codebase/670.md)
 had to restore explicitly via `ConversationScreen`'s `key` once a sidebar-driven conversation switch
 could otherwise leave the route on `thread` with no remount at all; see [the paired shell's `paneKey`
-fix](paired-shell.md#the-conversation-switch-remount-bug-and-the-panekey-fix).
+fix](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix).
 
 `StatusSheet` (Figma node `20-100`) renders as the screen's last child when `sheetOpen` is true:
 

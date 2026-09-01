@@ -27,7 +27,7 @@ pane.
 [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) gave `markViewed` — the one write path
 still shipping unwired — its first production caller, at the activation seam (`activateConversation.ts`,
 constructed once in `PairedShell.tsx`; see [Paired shell § The view
-stamp](paired-shell.md#the-view-stamp-activateconversationts-786)). This is what **arms** the ten-slice
+stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786)). This is what **arms** the ten-slice
 eviction bound in production: until then every slice was never-viewed and eviction silently degraded to
 first-write order. #758 remains the reader cutover, now depending on this rather than performing it.
 
@@ -101,7 +101,7 @@ exactly the thread the operator stepped away from.
   **What is not true, and was before [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786):**
   that only the operator can move a key to the tail. `markViewed`'s one call site is the activation seam
   (`activateConversation.ts`, see [Paired shell § The view
-  stamp](paired-shell.md#the-view-stamp-activateconversationts-786)), and of the three paths that reach it
+  stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786)), and of the three paths that reach it
   two are the operator's own — a row click and a re-click of the row already open — while the third is the
   daemon's own `conversationCreated` confirmation, which `useConversationCreatedNav` activates on
   ungated. The tail is therefore **not** an operator-only region: a compromised paired daemon emitting N
@@ -258,7 +258,7 @@ exactly the thread the operator stepped away from.
   helpers [#757](../codebase/757.md) wires the new clears into, and where they run inside `PairedShell`'s
   nav flow; `activateConversation`, the pure helper
   [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) wires `markViewed` into — see
-  [§ The view stamp](paired-shell.md#the-view-stamp-activateconversationts-786) for the ordering rationale
+  [§ The view stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786) for the ordering rationale
   (outside the id-change gate, after `setActiveConversation`).
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md).
 - [ADR 0008 — Thread timeline model](../decisions/0008-thread-timeline-model.md).

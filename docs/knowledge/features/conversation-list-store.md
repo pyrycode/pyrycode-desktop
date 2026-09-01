@@ -80,7 +80,7 @@ ConversationListData(): null
 third `assertNever` on the `DaemonEvent` channel (alongside `daemonEventBridge` and
 `timelineBridge`) would make every future arm a compile error in three files without benefit. A
 rename of the owned arm is still caught — a `case` label that no longer overlaps the union is a type
-error regardless. Unlike [`translateTimelineEvent`](conversation-timeline-store.md#the-translator--binding-srcrenderersrcstoretimelinebridgets),
+error regardless. Unlike [`translateTimelineEvent`](conversation-timeline-store-internals.md#the-translator--binding-srcrenderersrcstoretimelinebridgets),
 this returns `event.conversations` directly: selecting one named field is a filter, not a rename, so
 no fresh-literal reconstruction is needed.
 

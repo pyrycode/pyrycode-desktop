@@ -34,6 +34,7 @@ export type InboundDaemonMessage =
   | { kind: 'background-task-started'; backgroundTaskStarted: BackgroundTaskStartedPayload }  // #564, additive
   | { kind: 'background-task-updated'; backgroundTaskUpdated: BackgroundTaskUpdatedPayload }  // #565, additive
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }  // #566, additive
+  | { kind: 'question-shown'; questionShown: QuestionShownPayload }  // #884, additive — ships dormant, no consumer arm yet
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/
@@ -190,6 +191,25 @@ verbatim, never interpreted here. `is_error` is a decoded boolean, not attacker 
 [#766](../codebase/766.md) later carried `conversation_id` onward too, as `conversationId` — the last
 arm in the #675 family to do so, completing it — copied by name, required, read bare because the decode
 already guarantees it; it stops at the renderer timeline bridge.
+
+**Extended a twentieth time by [#884](../codebase/884.md), additively.** `question_shown` → `{ kind:
+'question-shown', questionShown: QuestionShownPayload }` via `parseQuestionShownPayload`, the transport
+slice of the [question-shown wire types](question-shown-wire-types.md) vocabulary (#883). The first kind
+in the file needing **two nesting levels**: `parseQuestionShownPayload` (`isRecord` guard, two
+`requireString` fields, `Array.isArray` on `questions`) maps each element through `parseQuestion` (two
+`requireString` fields, `Array.isArray` on `options`, one `requireBoolean` on `multi_select`), which
+maps each element through `parseQuestionOption` (two `requireString` fields — no `id`, since claude's
+answer protocol selects an option by its `label`). One bad question or one bad option throws the whole
+batch closed, the `parseModalOption` posture propagated by nested `.map`; an empty `questions` or
+`options` array is tolerated — this decoder polices type, not membership.
+
+**No contract bound is enforced, by design.** No 1–4 question count, no 2–4 option count, and no length
+check on any of the four claude-authored strings (`question`/`header`/`label`/`description`) — each is
+copied through verbatim. Nothing enforces any of these daemon-side as of 2026-09-01, and `header`'s cap
+is documented 12 runes but observed 14 in the one real header ever captured, so rejecting at a length
+would reject valid traffic. The wire type's "an over-long field must be a fail-closed reject" caveat
+picks between two wrong responses *if* a bound ever becomes enforceable; its operative half today is the
+negative one — never silently trim — which copying verbatim satisfies without inventing a threshold.
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 

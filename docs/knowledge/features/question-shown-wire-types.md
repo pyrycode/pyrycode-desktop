@@ -1,10 +1,13 @@
 # Question-shown wire types
 
 The wire vocabulary for claude's clarifying-question batch: one `EnvelopeType` member and three
-interfaces mirroring the daemon's published `question_shown` contract field for field. **Declaration
-only** — nothing decodes, narrows, emits or renders this yet.
+interfaces mirroring the daemon's published `question_shown` contract field for field.
 
-Introduced in [#883](https://github.com/pyrycode/pyrycode-desktop/issues/883). SSOT is
+Introduced in [#883](https://github.com/pyrycode/pyrycode-desktop/issues/883), declaration only at
+that point — nothing decoded, narrowed, emitted or rendered it. [#884](../codebase/884.md) added the
+fail-closed decode into a typed [inbound message](inbound-message-decode.md) arm; it still ships
+dormant, since `daemonConnection.ts`'s inbound switch has no case for the new kind yet and no IPC
+event or renderer surface exists. SSOT is
 `pyrycode/pyrycode` `docs/protocol-mobile.md` § Question (v2) → `question_shown` (declared by
 pyrycode#1962, shape by #1963, fixtures and prose by #1964) / `internal/protocol/questions.go`.
 
@@ -117,17 +120,18 @@ did.
 `src/shared/wire/**` — no React, no DOM, no IPC. Types are erased at compile time; the emitted
 JavaScript is unchanged by this slice.
 
-Nothing decodes, narrows, emits or renders `question_shown` yet:
+Nothing emits or renders `question_shown` yet:
 
-- **No decoder, no narrowing, no `parse*` function.** `Envelope.payload` stays `unknown` through
-  [the codec](wire-codec.md) by design; narrowing is the consumer's edge. When it lands, it must
-  reach these types through a validating narrower, never a bare `as QuestionShownPayload` on
-  `Envelope.payload` — the cast would hand a `.map` a non-array from a malformed frame. Declaring the
-  types all-required is itself the load-bearing choice for that narrower: no optional key to wave
-  through, so a missing field is a reject by construction. The cost is named rather than implicit: an
-  all-required mirror is stricter-than-nothing only while the daemon keeps its no-`omitempty`
-  commitment, and widening is a coordinated change with the daemon — a dropped batch parks the
-  session, since claude is waiting on the answer and the operator never sees the ask.
+- **The decoder landed in [#884](../codebase/884.md)** — `parseQuestionShownPayload` /
+  `parseQuestion` / `parseQuestionOption` in `src/main/transport/inboundMessage.ts`, a validating
+  narrower rather than a bare `as QuestionShownPayload` cast on `Envelope.payload`, exactly as this
+  section anticipated. Declaring the types all-required was the load-bearing choice that made the
+  narrower simple: no optional key to wave through, so a missing field is a reject by construction.
+  The cost is named rather than implicit: an all-required mirror is stricter-than-nothing only while
+  the daemon keeps its no-`omitempty` commitment, and widening is a coordinated change with the
+  daemon — a dropped batch parks the session, since claude is waiting on the answer and the operator
+  never sees the ask. See [inbound message decode](inbound-message-decode.md) for the decode's own
+  detail.
 - **No `question_dismissed`.** Upstream published it the same day (pyrycode#1974) and the desktop
   will need it; sibling slice, not this ticket.
 - **No outbound answer verb.** None exists upstream yet (pyrycode#1907). The eventual answer frame
@@ -179,6 +183,10 @@ them would pin a fiction.
 
 ## Related
 
+- [Inbound message decode](inbound-message-decode.md) / [#884 codebase notes](../codebase/884.md) —
+  the fail-closed decode into a typed inbound arm, the first consumer of these types. Ships dormant:
+  no consumer arm yet on `daemonConnection.ts`'s inbound switch. The IPC carry is
+  [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885).
 - [Modal-prompt model](modal-prompt-model.md) / [Modal store bridge](modal-store-bridge.md) — the
   sibling permission/trust-prompt family this one is deliberately **not** merged into, and the
   `WireModalOption`/`ModalShownPayload` naming precedent this slice's `Wire`-prefix and

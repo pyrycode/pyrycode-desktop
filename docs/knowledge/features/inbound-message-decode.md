@@ -196,6 +196,33 @@ store](announced-model-store.md) is unaffected — still holding one value, stil
 no longer: [the announced-model store (#588, shipped)](announced-model-store.md) is the first consumer,
 still dormant pending #560's render surface.
 
+[#884](../codebase/884.md) added a twentieth kind, `question_shown` → `question-shown` — the transport
+slice of claude's clarifying-question batch (the [question-shown wire types](question-shown-wire-types.md)
+vocabulary, #883). Not a status peer of `stall`/`api_retry`/`compacting` and not a v2 interactive-stream
+member: it is the question family's own frame, deliberately kept out of `modal_shown`'s payload rather
+than grown into it, since a clarifying question has no deny option and `modal_shown`'s
+`default_option_id` invariant is total on that field. Three parsers, not one, nested two levels deep —
+the first kind in the file to need that: `parseQuestionShownPayload` (`isRecord` guard, two
+`requireString` fields, an `Array.isArray` check on `questions`) maps each element through
+`parseQuestion` (two `requireString` fields, an `Array.isArray` check on `options`, a `requireBoolean`
+on `multi_select`), which itself maps each option through `parseQuestionOption` (two `requireString`
+fields, no `id` — claude's answer protocol selects by `label`). One bad option or one bad question
+fails the whole batch closed, mirroring `parseModalOption`'s posture, propagated for free by nested
+`.map`; an empty `questions` or `options` array is tolerated, the same "type not membership"
+posture `parseConversationsPayload` established. `multi_select` is the family's only boolean, so it is
+the one field where a truthiness check would have been wrong: `requireBoolean` makes the string
+`"false"` fail closed rather than decode as `true`. **No contract bound is enforced by design** — no
+1–4 question count, no 2–4 option count, and no length check on any of the four claude-authored strings
+(`question`/`header`/`label`/`description`), each copied through verbatim. This reads as contradicting
+the wire type's "an over-long field must be a fail-closed reject" caveat until the caveat's own next
+section is read: that sentence picks between two wrong responses to a bound that might someday exist,
+and none exists today — the daemon enforces no maximum on any of the four strings, and `header`'s cap is
+documented 12 runes but observed 14 in the one real header ever captured, so rejecting at 12 would
+reject valid traffic. Copying verbatim, never trimming, is what satisfies the caveat's operative half.
+Ships dormant and unclaimed: `daemonConnection.ts`'s inbound switch has no `default` arm, so the new
+`question-shown` kind decodes and is then simply not matched — no IPC emit, no store consumer. The IPC
+carry is [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885).
+
 ## Where the detail lives
 
 Each section below keeps the heading it had here, so an existing `#anchor` still resolves once the link points at the right file.
@@ -283,6 +310,15 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   arm's arithmetic security clause ("exactly one untrusted string … rather than two") by replacing it
   rather than renumbering it. Stops at the announced-model bridge; [the announced-model
   store](announced-model-store.md) is unaffected.
+- [Question-shown wire types](question-shown-wire-types.md) / [#884 codebase notes](../codebase/884.md)
+  — the twentieth additive extension: the `question_shown` kind, three nested parsers
+  (`parseQuestionShownPayload`/`parseQuestion`/`parseQuestionOption`, two nesting levels — the first
+  kind in the file to need more than one), and the no-bound-by-design posture (no question/option
+  count, no length check on any of the four claude-authored strings) that the wire type's own
+  neighbourhood reads as contradicting until its "Bounds — deliberately not modelled" section is read
+  alongside it. Ships dormant: `daemonConnection.ts`'s inbound switch has no `default` arm, so the new
+  kind decodes and is simply unmatched until [#885](https://github.com/pyrycode/pyrycode-desktop/issues/885)
+  carries it across IPC.
 - [Thread timeline (conversation model)](thread-timeline.md) / [ADR 0008](../decisions/0008-thread-timeline-model.md) — the renderer-local `ThreadEvent`/`reduceTimeline` model these two kinds ultimately feed, once [#202](../codebase/202.md)'s bridge maps this boundary's `assistant-delta`/`turn-end` `DaemonEvent` arms onto it.
 - [#130 codebase notes](../codebase/130.md) — the content-free diagnostic logging added at this boundary (`inbound-decoded` / `inbound-unmodeled`); the ticket that flipped this module's "performs no logging" invariant.
 - [Content-free diagnostic log](diagnostic-log.md) / [#126](../codebase/126.md) — the logger injected here as the optional 2nd param; `parseInboundMessage` is its third consumer (after the relay leg #127 and daemon leg #128), and the `hash?` field on `DiagnosticEvent` was added additively for this boundary. Allowlist-not-scrubber contract: [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md).

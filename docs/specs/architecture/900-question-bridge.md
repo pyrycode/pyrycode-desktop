@@ -208,3 +208,22 @@ One new co-located spec, `src/renderer/src/store/questionBridge.test.ts` (vitest
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+**2026-09-02 — both Open Questions resolved during implementation. Neither changed the design.**
+
+- **Naming**: settled on `subscribeQuestionBatches`, as the plan proposed. It names what the store
+  holds, matching `QuestionBatchEvent` / `questionBatchStore`.
+- **Dormancy assertion**: settled as *no test*, as the plan leaned. An import-graph assertion would be
+  a new idiom in this repo for a fact the diff already shows, and the claim is verified directly — no
+  module under `src/` other than `questionBridge.ts` itself references `useQuestionBridge`, and
+  `App.tsx` is untouched.
+
+One thing the plan under-specified and the implementation settled: the AC5 proof needs a fake
+`onDaemonEvent` that models a listener **set** with per-subscription off handles, not the single
+captured listener `modalBridge.test.ts` uses. A single-listener fake cannot distinguish "the cleanup
+ran" from "the second mount overwrote the first", which is exactly the claim under test. The spec's
+`fakeBridge` therefore tracks live listeners and asserts the surviving listener delivers exactly once
+after mount → cleanup → mount, plus handle identity (`cleanup` *is* the channel's own off handle)
+rather than a call count.

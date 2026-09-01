@@ -1,6 +1,6 @@
 // The renderer translation half feeding the question store: it turns the two question daemon events
 // (#885 / #895) into the matching `QuestionBatchEvent`s (#898) and dispatches them into the
-// app-singleton `questionBatchStore` (#899) the panel slice (#851) will read.
+// app-singleton `questionBatchStore` (#899) the panel slice (#906) reads.
 // `translateQuestionEvent` is the pure choke point; `useQuestionBridge` is its only production caller,
 // wiring the channel into React's lifecycle. Nothing here touches keys, sockets, ipcRenderer, or raw
 // frames — it only subscribes through the preload bridge and dispatches typed events.
@@ -189,8 +189,9 @@ export function subscribeQuestionBatches(
  * listener — mirroring `useModalBridge`. `window.pyry` is dereferenced only inside the effect, never
  * during render.
  *
- * SHIPS DORMANT: nothing mounts this yet, and it is deliberately NOT wired into `App.tsx` — the
- * question panel (#851) mounts it, matching how #223 left `useModalBridge` unmounted for #224.
+ * MOUNTED APP-LEVEL BY #906, beside `useModalBridge` — unconditional and for the app's lifetime, so a
+ * batch raised against a conversation the operator is not looking at still lands in the store. It shipped
+ * dormant here, the way #223 left `useModalBridge` unmounted for #224; #906 is the slice that mounts it.
  */
 export function useQuestionBridge(): void {
   useEffect(

@@ -63,6 +63,8 @@ import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
+import { QuestionPanelView } from './QuestionPanel'
+import { useQuestionBatchStore, selectBatchFor } from '../../store/questionBatchStore'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
 import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
 import {
@@ -301,8 +303,17 @@ export function ConversationScreen({
           the bottom. The Composer learns nothing about scrolling.
           #678: `phase` goes down with it, because the running-turn stop affordance IS the send button now
           (#307's standalone control above the composer is gone). The composer's own send gate is
-          orthogonal and unchanged: Enter still sends mid-turn, and the daemon still enqueues it. */}
-      <Composer phase={phase} onMessageSent={followBottom} />
+          orthogonal and unchanged: Enter still sends mid-turn, and the daemon still enqueues it.
+          #906: the composer's render site is now its slot, which draws claude's clarifying question in
+          the input area's place when one is outstanding for THIS conversation and covers the composer
+          whole. The conversation id goes down as a prop off the `activeConversation` slice already read
+          above (the BackgroundTaskPanel idiom below); the question store read stays inside the slot, so a
+          question arriving never re-renders this screen. */}
+      <ComposerSlot
+        conversationId={activeConversation?.id ?? null}
+        phase={phase}
+        onMessageSent={followBottom}
+      />
       <RepairControl onUnpaired={onUnpaired} />
       {sheetOpen && (
         <StatusSheet onClose={() => setSheetOpen(false)}>
@@ -2261,12 +2272,18 @@ export function ComposerSendButton({
 // #678: `phase` arrives on the same terms and for the same reason — the open conversation's phase, already
 // destructured by the container, handed down so the send button can derive its stop variant. A required
 // prop, not a subscription of its own.
+//
+// #906: `covered` is the third prop and arrives on the same required terms. When an outstanding question
+// batch belongs to the conversation on screen, ComposerSlot below draws the panel in this component's
+// slot and passes `covered` so the whole composer goes behind it.
 function Composer({
   phase,
-  onMessageSent
+  onMessageSent,
+  covered
 }: {
   phase: TurnPhase
   onMessageSent: () => void
+  covered: boolean
 }): JSX.Element {
   // Thin controlled container over composerSend.submitMessage (the pairing container/pure-logic
   // split). Input text is ephemeral single-value screen-local state → useState, never the store
@@ -2346,7 +2363,20 @@ function Composer({
   }
 
   return (
-    <div className="composer">
+    // #906: the native `hidden` attribute is the WHOLE cover mechanism, and one attribute doing three
+    // jobs is why it was chosen over the alternatives. It hides the subtree, drops it from the tab order
+    // and drops it from the accessibility tree, while leaving every element MOUNTED — so the draft in
+    // `text` above survives the batch and is still in the message box when the daemon dismisses it. A
+    // conditional render would discard that draft; `aria-hidden` alone would leave a focusable invisible
+    // textarea whose Enter still sends. `.composer__footer` and `.composer__row` are CHILDREN of this
+    // div, so the one attribute takes the footer menus, the context reading and the send/stop control
+    // with it — there is no second element to hide separately, and nothing to draw a disabled state for.
+    // ComposerStatusArea is a SIBLING of this div in the conversation column, not a descendant, so the
+    // working indicator above the composer is deliberately untouched.
+    // conversation.css MUST carry `.composer[hidden] { display: none }`: the UA's `[hidden]` rule loses
+    // to the author-level `.composer { display: flex }` regardless of specificity, so without it this
+    // attribute is a no-op for layout and only the accessibility half works.
+    <div className="composer" hidden={covered}>
       {/* role="status" makes this a polite live region: a screen reader announces the change
           without stealing focus (AC2/AC3). On connect, `hint` is null, the caption unmounts. */}
       {hint && (
@@ -2403,6 +2433,56 @@ function Composer({
         <ContextUsageControl />
       </div>
     </div>
+  )
+}
+
+/**
+ * #906: the composer's slot — the store-bound container that decides whether the operator sees a message
+ * box or a clarifying question. The #224 split: the panel's markup is QuestionPanelView's, the store read
+ * is here, and this is also the only place that can own it, because covering the composer needs
+ * `Composer`, which is this module's own.
+ *
+ * `conversationId` arrives as a PROP rather than as a store read of its own, the BackgroundTaskPanel
+ * idiom two screens up: ConversationScreen already holds `activeConversation`, and re-reading it here
+ * would buy nothing. What that leaves is the question read, isolated in this leaf — so a batch arriving
+ * re-renders the composer slot and never ConversationScreen, whose re-render would take the whole
+ * timeline with it.
+ *
+ * `selectBatchFor` IS CALLED INLINE, with no `useMemo` and no per-conversation selector cache, on the
+ * store's own ruling: `useStore` compares the selector's RESULT under `Object.is`, not the selector's
+ * identity, and the held batch comes back by reference. A memo table keyed on a conversation id would be
+ * merely redundant; keyed on anything claude-authored it would put untrusted text in a lookup path, which
+ * is this family's named failure mode.
+ *
+ * `conversationId === null` is an explicit test and deliberately not `?? ''`, matching App.tsx's
+ * `openConversationId`: an empty-string id stays an ordinary key rather than collapsing into "nothing
+ * open" the way a truthiness test would.
+ *
+ * `batch.questions[0]` is read with no guard and no `!`. `reduceQuestionBatches` returns state unchanged
+ * when `questions` is empty — the guard sits before the match — so `[]` never reaches `outstanding`, even
+ * though the wire type admits it. A batch carrying several draws its first; stepping through them is
+ * #907's.
+ *
+ * A fragment, not a wrapper element: the conversation column's flex layout is unchanged, and the panel
+ * takes the slot the collapsed composer vacates.
+ */
+export function ComposerSlot({
+  conversationId,
+  phase,
+  onMessageSent
+}: {
+  conversationId: string | null
+  phase: TurnPhase
+  onMessageSent: () => void
+}): JSX.Element {
+  const batch = useQuestionBatchStore((s) =>
+    conversationId === null ? undefined : selectBatchFor(conversationId)(s)
+  )
+  return (
+    <>
+      {batch && <QuestionPanelView question={batch.questions[0]} />}
+      <Composer phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined} />
+    </>
   )
 }
 

@@ -5,6 +5,7 @@ import { WelcomeScreen } from './screens/welcome/WelcomeScreen'
 import { useDaemonEventBridge } from './store/daemonEventBridge'
 import { useTimelineBridge } from './store/timelineBridge'
 import { useModalBridge } from './store/modalBridge'
+import { useQuestionBridge } from './store/questionBridge'
 import { ConversationListData } from './store/conversationListBridge'
 import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
@@ -111,6 +112,15 @@ function App(): JSX.Element {
   // renderer state. App-lifetime and unconditional like its twins; it derefs window.pyry only inside its
   // effect, so the <App/> server-render test stays ''. Inert until #179 flips `interactive`.
   useModalBridge()
+  // #906: the question bridge is the fourth independent subscriber on the one daemon-event channel
+  // (#202), folding the two question arms into questionBatchStore so claude's outstanding clarifying
+  // questions become live renderer state. App-lifetime and unconditional like its three twins, and for
+  // the sharpened reason ConversationActivityData carries: a batch is raised against a conversation the
+  // operator may not be looking at, so a screen-scoped mount would miss it and the panel would appear
+  // only for whichever chat happened to be open when the daemon asked. It derefs window.pyry only inside
+  // its effect, so the <App/> server-render test stays ''. This mount is what ends the vertical's dormant
+  // period: #899's store and #900's bridge both shipped with nothing calling them.
+  useQuestionBridge()
   const [route, setRoute] = useState<AppRoute>('pending')
 
   useEffect(() => {

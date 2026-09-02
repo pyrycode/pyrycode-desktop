@@ -148,8 +148,12 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
   daemon-relayed text, bounded to 256 bytes by the daemon's producer but not sanitised — no
   control-character or terminal-escape stripping anywhere on this path. [#560](../codebase/560.md)'s
   `RunningModelSection` is the only DOM sink: one JSX text position, never `innerHTML`, an attribute,
-  or a URL, and the resolved catalog display name (client-owned) is never mixed into the same node as
-  the daemon-supplied verbatim text.
+  or a URL. At #560 ship time the resolved name on a lookup hit was a client-owned `MODEL_CATALOG`
+  label, kept out of the same node as the daemon-supplied verbatim text; [#975](../codebase/975.md)
+  deleted that catalog and re-anchored the lookup onto [Model-list store](model-list-store.md)'s
+  published rows, so **both branches are daemon-authored text now** — the provenance changed, the
+  one-JSX-text-position-per-branch property that actually matters did not, and #975's code comment
+  rewrote the now-false "provenances never mix" claim in place rather than leaving it standing.
 - **No dedup of a verbatim repeat, by design.** N daemon frames — including an identical repeat — produce
   N writes and N fresh object identities, so a component selecting `selectAnnouncedModel` re-renders on
   a repeat too. #560 memoises if that ever matters; this store does not pre-empt it.
@@ -185,8 +189,11 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
   **not** fold the announcement into (lifecycle mismatch, name collision on `model`, spent `null`
   sentinel); § Running model section documents this store's consumer, `RunConfigView`'s sixth
   section.
-- [#560 codebase notes](../codebase/560.md) — the render consumer: `runningCatalogEntry`'s exact-
-  match lookup, the render contract for the three states, and the sibling-element cut marker.
+- [#560 codebase notes](../codebase/560.md) — the original render consumer: the `MODEL_CATALOG`
+  exact-match lookup, the render contract for the three states, and the sibling-element cut marker.
+  [#975](../codebase/975.md) deleted the catalog and re-anchored the lookup (`runningPublishedRow`)
+  onto [Model-list store](model-list-store.md)'s published rows, joined on `value` — see [Run
+  configuration store § Running model section](run-config-store.md#running-model-section-560-resolved-onto-the-published-rows-by-975).
 - [#593 codebase notes](../codebase/593.md) — `clearAnnouncedModel` and its join into
   [`clearPairingScopedState`](paired-shell.md)'s shared set, closing the deferral #588 flagged and #560
   made observable.

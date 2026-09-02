@@ -6,11 +6,14 @@ surfaces offering models read one live source of truth rather than each subscrib
 channel themselves.
 
 Introduced in #974, catching #973's dormant `modelList` `DaemonEvent` arm — see [Model-list wire
-types](model-list-wire-types.md) for the wire contract this store holds. Shipped dormant: it
-populates the store, but nothing renders it yet. Four consumers are queued — the run-configuration
-sheet's model rows ([#975](https://github.com/pyrycode/pyrycode-desktop/issues/975)) and effort
-segments ([#976](https://github.com/pyrycode/pyrycode-desktop/issues/976)), the input footer's
-model and effort menus ([#683](https://github.com/pyrycode/pyrycode-desktop/issues/683)), and the
+types](model-list-wire-types.md) for the wire contract this store holds. Shipped dormant at #974;
+the first consumer landed at [#975](https://github.com/pyrycode/pyrycode-desktop/issues/975), which
+deleted `MODEL_CATALOG` and built the run-configuration sheet's Model rows (and re-anchored the
+running-model lookup) straight off this store — see [Conversation shell — workspace and run
+configuration § Run configuration Model section, daemon-published rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975).
+Three consumers remain queued — the sheet's effort segments
+([#976](https://github.com/pyrycode/pyrycode-desktop/issues/976)), the input footer's model and
+effort menus ([#683](https://github.com/pyrycode/pyrycode-desktop/issues/683)), and the
 permission-mode menu ([#682](https://github.com/pyrycode/pyrycode-desktop/issues/682)), which
 reads each row's `supports_auto_mode` to grey out a mode the running model refuses. The
 pairing-scoped clear is not in this slice — see § The pairing-scoped clear below.
@@ -189,14 +192,16 @@ daemon → model_list frame → #972 parseModelListPayload (fail-closed) →
                                      → modelListStore   [that conversation's menu replaced wholesale]
 
 selectModelListFor(openId) / useModelListStore
-  → #975 model rows / #976 effort segments / #683 footer menus / #682 permission-mode menu
+  → #975 model rows (shipped) / #976 effort segments / #683 footer menus / #682 permission-mode menu
 ```
 
 ## Configuration and usage
 
 - Mounted app-level in `src/renderer/src/App.tsx`, after `<SlashCommandListData />`.
-- `useModelListStore`/`selectModelListFor` are unread as of this ticket. #975, #976, #683 and #682
-  are the queued readers.
+- `useModelListStore`/`selectModelListFor` are read since #975, by `RunConfigSections`
+  (`src/renderer/src/screens/conversation/RunConfigSections.tsx`), which takes the active
+  conversation id as a prop rather than reading `sessionIdStore` — a session id keys nothing in
+  this store's map. #976, #683 and #682 remain queued readers.
 
 ## Edge cases and limitations
 
@@ -223,15 +228,19 @@ selectModelListFor(openId) / useModelListStore
 - **If any later slice indexes rows by a string, the index must be a `Map`.** The rows stay an
   array rather than an index built from row text on this path, so the `__proto__` hazard
   (`index[row.display_name] = row` writing through to `Object.prototype`) has no site to occur in
-  here; a `display_name`-keyed lookup added downstream inherits the obligation.
+  here; a `display_name`-keyed lookup added downstream inherits the obligation. #975 discharged this
+  for the Model section's own rows by keying its React `key` on the array index instead — no index
+  built from row text at all — and its running-model lookup joins on `value` via `Array.find`, not
+  an index.
 - **Nothing here is persisted, and nothing may be.** `createModelListStore` takes no storage port,
   unlike `createConversationLastReadStore`. Web storage would outlive the pairing that scoped the
   list, so a persisted copy would survive #977's future clear with every in-memory assertion still
   green.
 - **No DOM sink in this slice.** The inert-escaped-length-bounded render discipline is inherited
-  here and discharged by #975/#976, which also owe a React `key` scheme that is not `display_name`.
-- **Nothing renders the store's held list yet.** #975, #976, #683 and #682 are all unbuilt as of
-  this ticket.
+  here; #975 discharged it for the Model rows and the running-model lookup, #976 owes it for the
+  effort segments.
+- **The store's held list renders since #975** (`ModelSection` and `RunningModelSection` in
+  `RunConfigSections.tsx`). #976, #683 and #682 remain unbuilt.
 
 ## Related
 
@@ -248,6 +257,11 @@ selectModelListFor(openId) / useModelListStore
   owned arm, one injected setter, no reset branch, no request half, App-level headless leaf.
 - [Background-task roster store](background-task-roster-store.md) — the structural precedent for
   the keyed store shape (`ReadonlyMap`, copy-on-write, `?? null` selector).
+- [Conversation shell — workspace and run configuration § Run configuration Model section,
+  daemon-published rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975)
+  / [Run configuration store § Running model section](run-config-store.md#running-model-section-560-resolved-onto-the-published-rows-by-975)
+  — the first consumer, #975: deleted `MODEL_CATALOG`, built the Model rows off this store's held
+  entry, and re-anchored the running-model lookup onto a row's `value`.
 - `docs/specs/architecture/974-model-list-store.md` — the full architecture spec, including the
   self-review (verdict: PASS) with two SHOULD FIX findings mitigated by construction (no per-row
   mapping exists) and by design decision (never logged).

@@ -319,17 +319,12 @@ coalesces `snapshot ?? { model: '', effort: '', yolo: false }` before handing th
 through the identical code path (both are AC4's blessed default: no radio filled, no segment marked,
 switch off).
 
-- **Model** — a static catalog (Opus 4.7 / Sonnet 4.6 / Haiku 4.5, each with a one-line descriptor)
-  is renderer content from the design, not daemon data; the snapshot's `model` string only selects a
-  row via `matchedFamily`, a case-insensitive substring match against each catalog entry's family
-  token (`opus`/`sonnet`/`haiku`). That handles both the short alias the wire fixture uses
-  (`"opus"`) and a full `claude --model` id (`"claude-opus-4-7"`) with one rule, and degrades to no
-  selection for `''` or anything unrecognized. The selected row's radio is `role="img"
-  aria-label="Current model"`; the others are `aria-hidden`. [#590](../codebase/590.md) added a
-  fourth entry, `Fable 5` / `newest in the Fable family` (family token `fable`), between Sonnet and
-  Haiku — the published family the catalog previously made unreachable from the app; matching,
-  layout and the read-only render posture above are unchanged, since the row is emitted by the same
-  `map` and no vector collides two family tokens.
+- **Model** — shipped at #188 as a static catalog (Opus 4.7 / Sonnet 4.6 / Haiku 4.5, each with a
+  one-line descriptor) matched against the snapshot's `model` string via `matchedFamily`, a
+  case-insensitive substring match against each catalog entry's family token. [#590](../codebase/590.md)
+  added a fourth entry, `Fable 5` (family token `fable`), between Sonnet and Haiku. **Deleted outright
+  by #975** — the catalog, `matchedFamily` and all four hardcoded rows are gone; see § Run
+  configuration Model section, daemon-published rows (#975) below.
 - **Effort** — five fixed segments (`low`/`medium`/`high`/`xhigh`/`max`) matched by exact equality;
   the current level carries `aria-current="true"`, which is both the accessibility marker and the
   CSS hook (`[aria-current='true']`) for the filled-pill style — no parallel modifier class.
@@ -405,6 +400,82 @@ defensively instead"*), so a daemon frame carrying `used_tokens: 1e999, window_t
 `Infinity`/`Infinity` and the pre-#811 clamp rendered `NaN% used` with a `width: NaN%` fill. `windowTokens
 <= 0` and non-finite now collapse into the identical unavailable branch — an architect self-review
 security finding (MUST FIX), closed in the same extraction rather than as a follow-up.
+
+## Run configuration Model section, daemon-published rows (#975)
+
+The Model section stops guessing. `MODEL_CATALOG`, `ModelCatalogEntry`, its family tokens, its
+hand-written descriptors and the `matchedFamily` substring matcher are deleted outright — no model
+name and no family token is hardcoded in `RunConfigSections.tsx` anywhere. `ModelSection` renders
+one row per entry in [Model-list store](model-list-store.md)'s held [`ModelListEntry`](model-list-store.md)
+for the active conversation, in the daemon's published order, deriving nothing: `value` is not
+parseable (measured entries: `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `haiku`) and no
+family is split out of it.
+
+**`RunConfigSections` takes the conversation id as a prop, not a store read.** The container
+previously had only `sessionIdStore`'s *session* id in scope — a different identifier that keys
+nothing in `modelListStore`'s per-conversation map, so reaching for it would compile clean,
+typecheck clean, and render the not-yet-known line forever. `ConversationScreen` now passes
+`conversationId={activeConversation?.id ?? null}` at the existing `<RunConfigSections />` mount, the
+same `activeConversation`-sourced prop `ComposerSlot` and `BackgroundTaskPanel` already take. The
+container memoises the selector factory on the id (`useMemo`, the `useSlashCommandTypeAhead` idiom)
+and short-circuits a `null` id through the identical path rather than an invented key.
+
+**Three readings, not two.** `selectModelListFor` returns `null` for "no frame has arrived yet" and
+a present entry holding `models: []` for "claude published an empty list" — the Model section keeps
+them apart as two different sentences in two different elements (`RUN_CONFIG_MODELS_UNKNOWN_COPY` /
+`RUN_CONFIG_MODELS_EMPTY_COPY`), the [`BackgroundTaskPanel`](conversation-shell-question-panel.md)
+convention for the identical pair. Neither renders an empty control or a stale menu.
+
+**Selection is exact equality on `value`, full stop** — no `toLowerCase`, `includes`, `startsWith`,
+`trim` or regex anywhere on the path — and it round-trips: a row's `onClick` submits its `value`
+verbatim, the optimistic overlay ([Run configuration write store](run-settings-write-store.md))
+holds that same string, and the identical comparison re-selects the row it came from. The moment
+either side normalises, the two stop being the same string, which is why the guard `RunConfigSections.test.tsx:563`
+existed for (an announced identifier that is a *superstring* of a published `value` must not select
+that row) is re-anchored on a published row rather than dropped with the `matchedFamily` matcher it
+used to name.
+
+**The React `key` is the array index, deliberately.** `display_name` and `value` are both
+claude-authored text a key would turn into a lookup path — the store's own header assigns this slice
+that obligation. There is also no cross-frame identity to preserve: each frame replaces the
+conversation's list wholesale, rows never reorder within a render, and claude may legitimately
+publish two rows sharing a `value`.
+
+**Both of the frame's truncation reports reach the operator, kept apart.** A row whose
+`truncated_fields` is non-empty renders the sheet's existing cut copy (`RUN_CONFIG_CUT_COPY`,
+renamed from `RUN_CONFIG_RUNNING_CUT_COPY` and now shared by both this section and
+`RunningModelSection`) in a sibling element inside its text column — `null` and `[]` say the
+identical thing per the wire, so the check is on length, not presence. A frame reporting
+`droppedModels > 0` renders a partial-list notice as a **sibling of the three-way branch**, not a
+child of any arm, so an entry reporting drops beside zero carried rows still shows it; `> 0`, never
+truthiness, since React renders a bare `0` as a text node.
+
+**The running-model lookup ([§ Running model section](run-config-store.md#running-model-section-560-resolved-onto-the-published-rows-by-975))
+moves onto these same rows.** `runningPublishedRow` joins claude's per-turn announcement
+(`announcedModelStore`) against a published row's `value` by exact equality — not `resolved_model`,
+which the wire contract's join prose excludes and which would give the exactness guard above an
+exception (Haiku's `resolved_model` is a superstring of its own `value`). The lookup stays mostly
+dormant in practice, the same outcome [#560](../codebase/560.md) already documented and accepted —
+claude echoes an identifier at least as specific as the one it was given, so it rarely equals a bare
+`value` — but it now joins against real published data instead of four hardcoded family tokens.
+
+**Untrusted text, one boundary.** `display_name`, `value`, `resolved_model` and every
+`truncated_fields` element are claude-authored strings that crossed the subprocess trust boundary,
+bounded by the daemon and not sanitized by it (the tier [Model-list wire types](model-list-wire-types.md)
+declares). Each reaches exactly one JSX text position, escaped by React's default; none reaches an
+attribute, a URL, a filename, a cache key, a lookup path, or a log line — and nothing on this path is
+logged at all. Each row's second line renders `resolved_model` unconditionally (even an empty or a
+`<unmeasured>` value), which is the honest mitigation for the one risk that is *not* client-closable:
+a `value` cut mid-token by the daemon (`opus[1m]` → `opus`) still passes the daemon's inbound
+`validModel` charset check and silently runs a different model, so showing the concrete resolution
+before the first turn is the only defense available here.
+
+CSS gained `.run-config__model-unknown`, `.run-config__model-empty`, `.run-config__model-partial` and
+`.run-config__model-cut` on the shipped muted body-small tokens (none is an error state), and paired
+`overflow-wrap: anywhere` onto `.run-config__model-name`/`.run-config__model-descriptor` now that both
+lines carry unbounded daemon text instead of short static labels — the `.run-config__running-value`
+precedent. See [#975 codebase notes](../codebase/975.md) for the full design, the security review,
+and why the join key is `value` rather than `resolved_model`.
 
 ## Log data section (#72)
 

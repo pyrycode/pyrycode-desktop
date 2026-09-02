@@ -36,7 +36,10 @@ function assertNever(event: never): never {
  * Every other arm returns `null` via explicit fall-through cases, then `assertNever` — deliberately
  * NOT a catch-all `default: return null`, which would silently swallow a future arm. The guard is
  * load-bearing: a new `DaemonEvent` arm is then a compile error in this bridge, `daemonEventBridge`,
- * and `timelineBridge` until each decides its mapping.
+ * `timelineBridge` and `questionBridge` until each decides its mapping. THERE ARE FOUR, not three —
+ * `questionBridge` landed at #900, after this sentence was written, and a stale count here fails no
+ * typecheck. Derive the set by grep rather than from prose: the exhaustive bridges are the ones whose
+ * `DaemonEvent` switch ends in `assertNever`, not the ~20 siblings ending in `default: return null`.
  */
 export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
   switch (event.type) {
@@ -143,6 +146,16 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
     case 'runConfigReceived':
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a
       // compile error.
+      return null
+    case 'slashCommandList':
+      // Not a modal event (#937): nothing is waiting on an answer. The frame publishes the vocabulary
+      // of verbs claude will accept — text the operator MAY choose to type, unsolicited and
+      // outstanding against nothing — where a modal is a permission prompt gating an action claude
+      // wants to take, resolved by `modal_answer` against `modal_id`. Its consumer is the #938 store,
+      // and the no-op here is DORMANT rather than permanent as the two question arms' are: whether
+      // #938 subscribes through an existing bridge is its call. Present for the assertNever guard,
+      // which stringifies the WHOLE event into an Error message and would otherwise put every
+      // workspace-authored string on the frame there.
       return null
     default:
       return assertNever(event)

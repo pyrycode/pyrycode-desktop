@@ -27,7 +27,8 @@ import type {
   WireModalClass,
   WireModalSource,
   WireModalOption,
-  WireQuestion
+  WireQuestion,
+  WireSlashCommand
 } from '../wire/types'
 
 /** The IPC channel every typed daemon event travels on, main → renderer.
@@ -794,3 +795,73 @@ export type DaemonEvent =
   // two-dot indicator (#330); ships DORMANT — all three exhaustive bridges no-op it (the
   // stallDetected-was-a-no-op-until-#317 precedent).
   | { type: 'relayLinkChanged'; status: RelayLinkStatus }
+  // The slash-command menu arm (#937) — the verbs claude will accept for one conversation IN ITS
+  // WORKING DIRECTORY, decoded fail-closed by #936 from the `slash_command_list` frame. Placed at the
+  // end of the union rather than beside its wire neighbours the question arms: those sit mid-file
+  // because `questionShown` copies `modalShown`'s conversation-scoping shape and the two families are
+  // read together, whereas this one opens its own family and has no such neighbour. Its structural
+  // relative is `backgroundTaskRoster` above — one id, the rows, and a drop count — and the name
+  // follows it: a NOUN naming the snapshot, not a past participle naming an occurrence, and
+  // deliberately not `slashCommandsReceived`, since the union's `…Received` arms
+  // (`conversationsReceived`, `recentWorkspacesReceived`) name a reply to a request THIS CLIENT MADE
+  // and this frame is unsolicited.
+  //
+  // A SNAPSHOT, NOT A DELTA. Each frame REPLACES a reader's view of the menu rather than amending it.
+  // `commands: []` is a POSITIVE STATEMENT THAT CLAUDE OFFERED NOTHING — note the contrast with
+  // `questionShown`, whose empty array is out of contract and means a producer bug; the two read alike
+  // and say opposite things — so an empty menu must be emitted and consumed, never dropped or coalesced
+  // as "no news".
+  //
+  // Top-level fields are snake→camel; THE ROW TYPE IS REUSED VERBATIM with its snake_case fields, so
+  // `argument_hint` and `truncated_fields` stay as the wire spells them. That is the settled house rule
+  // for nested arrays, with four precedents (queueState, conversationsReceived, backgroundTaskRoster,
+  // questionShown): #936's narrower already stripped each row to its five known fields, so there is
+  // nothing to drop and no mapping to write. This family nests ONE level, unlike questionShown's two.
+  // `readonly` on the array mirrors queueState; WireSlashCommand itself stays a mutable interface,
+  // exactly as QueuedItem and BackgroundTask are.
+  //
+  // All three fields are REQUIRED, never optional: the wire has them always-present, #936's decode
+  // requires all three, and an assigned `undefined` SURVIVES THE STRUCTURED CLONE across this channel —
+  // so an optional field would invent an absence case the daemon never produces and make a later
+  // `'droppedCommands' in event` check read true on an event carrying nothing.
+  //
+  // `droppedCommands` IS THIS FRAME'S ONLY TRUNCATION REPORT AT THE FRAME LEVEL, so THE MENU'S TRUE
+  // SIZE IS `commands.length + droppedCommands` and a panel showing only the carried rows silently
+  // presents a cut menu as the whole one. `0` is a VALUE, never consulted for truthiness — the key is
+  // always written, so an absent one is a real defect rather than a valid zero — and nothing may
+  // recompute it from, or reconcile it against, the number of rows carried. Each row's
+  // `truncated_fields` names THAT ROW'S OWN cut fields and `null` means nothing was cut for it, a value
+  // distinct from `[]`: never hoist or flatten those lists across rows.
+  //
+  // **A CUT `aliases` IS UNKNOWABLE FROM `aliases` ALONE.** The wire collapses absent and empty into
+  // the same `[]`, so a `truncated_fields` NAMING `aliases` is the ONLY signal separating "cut to
+  // nothing" from "none", and a consumer must read it as UNKNOWN, never as *no aliases*. Reading it as
+  // "none" greys out a working command — the Actions menu's own `reset` entry is an ALIAS of `clear`
+  // (#681), not a command name.
+  //
+  // SECURITY — `name`, `argument_hint`, `description` and EVERY STRING IN `aliases` are
+  // WORKSPACE-AUTHORED: whoever wrote the repository wrote them. That is a LOWER TRUST TIER than the
+  // claude-authored strings `modelAnnounced` and `questionShown` carry, not a restatement of it. The
+  // daemon BOUNDS THEM AND DOES NOT SANITIZE THEM, and #936 made the SHAPE trusted and nothing more —
+  // `string` carries no signal for that. The render slice owes the escaping: plain text only, never
+  // HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute, a URL, a filename, a cache
+  // key, a lookup path, or a log. `name` in particular IS NOT AN IDENTIFIER — one measured name is
+  // `__remote-workflow` — so nothing may key a cache or a memo by it. The log clause bites harder here
+  // than on the neighbouring arms and the reason is measured: `0x0a` is the ONLY sub-`0x20` byte
+  // anywhere across the capture's 51 entries, so the control character that actually occurs is the one
+  // that splits a log line, and a logged description is a workspace author forging log records.
+  // `conversationId` is an OUTBOUND routing/scoping key and NOT a nonce — nothing on this arm is
+  // unguessable and nothing is a secret, unlike questionShown's batch id — so the never-log rule
+  // applies here for log forgery rather than for secrecy. No token, key, or raw frame can ride the arm
+  // (one id, a bounded list of five-field rows, and a count is the whole payload).
+  //
+  // Ships DORMANT: all FOUR exhaustive bridges no-op it until #938 holds the list per conversation
+  // (the apiRetry-was-a-no-op-until-#493 precedent), and #681 matches an Actions-menu entry against a
+  // name or an alias. Dormant, NOT permanent like the two question arms — whether #938 subscribes
+  // through an existing bridge or stands up its own is #938's call, not this slice's.
+  | {
+      type: 'slashCommandList'
+      conversationId: string
+      commands: readonly WireSlashCommand[]
+      droppedCommands: number
+    }

@@ -198,6 +198,16 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // configuration and the session id (#491), not the session store. Present only because the
       // assertNever guard below makes a new arm a compile error.
       return null
+    case 'slashCommandList':
+      // No session-store action: the #938 store holds the menu of verbs claude will accept, not the
+      // session store — which holds no slash-command state at all. Ships DORMANT rather than
+      // permanently no-op, unlike the two question arms above: whether #938 subscribes here or stands
+      // up its own bridge is its call, so this case may yet flip the way `compacting` did at #496.
+      // Present for the assertNever guard below, and that guard is NOT a formality here — it
+      // stringifies the WHOLE event into an Error message, so a missing case would put every
+      // workspace-authored name, argument hint, description and alias on the frame there, embedded
+      // newlines included. This case is what keeps them out of it.
+      return null
     default:
       return assertNever(event)
   }

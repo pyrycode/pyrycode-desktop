@@ -333,12 +333,36 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
         defaultOptionId: 'deny'
       },
       { type: 'modalDismissed', modalId: 'mdl-7f3a', outcome: 'allow', source: 'remote' },
-      { type: 'modalAnswerRejected', modalId: 'mdl-7f3a' }
+      { type: 'modalAnswerRejected', modalId: 'mdl-7f3a' },
+      // The slash-command menu (#937) is not an ask: it is the vocabulary of verbs claude will accept,
+      // published unsolicited, with nothing outstanding and nothing to answer. Its consumer is the #938
+      // store, and its no-op here is DORMANT rather than permanent, unlike the modal arms above.
+      {
+        type: 'slashCommandList',
+        conversationId: 'conv-1',
+        commands: [
+          {
+            name: 'synth-compact',
+            argument_hint: '[instructions]',
+            description: 'Synthetic row: nothing was cut for this one.',
+            aliases: [],
+            truncated_fields: null
+          },
+          {
+            name: 'synth-clear',
+            argument_hint: '',
+            description: 'Synthetic row: the cut-aliases reading rule.',
+            aliases: ['synth-reset'],
+            truncated_fields: ['aliases']
+          }
+        ],
+        droppedCommands: 2
+      }
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 41 union arms minus the 3 owned above.
-    expect(others).toHaveLength(38)
+    // 42 union arms minus the 3 owned above.
+    expect(others).toHaveLength(39)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

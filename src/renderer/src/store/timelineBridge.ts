@@ -32,8 +32,12 @@ function assertNever(event: never): never {
  *
  * Every other arm returns `null` via explicit fall-through cases, then `assertNever` — deliberately
  * NOT a catch-all `default: return null`, which would silently swallow a future arm. The guard is
- * load-bearing: a new `DaemonEvent` arm is then a compile error in both this bridge and
- * `daemonEventBridge` until each decides its mapping.
+ * load-bearing: a new `DaemonEvent` arm is then a compile error in this bridge, `daemonEventBridge`,
+ * `modalBridge` and `questionBridge` until each decides its mapping. THERE ARE FOUR, not two —
+ * `modalBridge` (#223) and `questionBridge` (#900) both landed after this sentence was written, and a
+ * stale count here fails no typecheck. Derive the set by grep rather than from prose: the exhaustive
+ * bridges are the ones whose `DaemonEvent` switch ends in `assertNever`, not the ~20 siblings ending
+ * in `default: return null`.
  */
 export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
   switch (event.type) {
@@ -227,6 +231,15 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
     case 'runConfigReceived':
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a
       // compile error.
+      return null
+    case 'slashCommandList':
+      // Not a timeline event (#937). The frame carries no turn_id and opens and closes no turn, so a
+      // menu of verbs is daemon STATE by the queueState rule (#720): a published vocabulary is not
+      // something that HAPPENED during a turn, and a snapshot that replaces a reader's view of the menu
+      // is not an item to append. Its consumer is the #938 store; the no-op is DORMANT rather than
+      // permanent, unlike the two question arms above — whether #938 subscribes here is its call.
+      // Present for the assertNever guard, which stringifies the WHOLE event into an Error message and
+      // would otherwise put every workspace-authored string on the frame there.
       return null
     default:
       return assertNever(event)

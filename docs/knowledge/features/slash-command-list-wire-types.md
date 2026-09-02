@@ -146,24 +146,30 @@ reach this type through #936's narrower ([inbound message decode](inbound-messag
 bare `as SlashCommandListPayload` on `Envelope.payload`, which would hand a `.map` a non-array from a
 malformed frame and would silently invert the cut-aliases reading rule above.
 
-Decodes and narrows now, but is still unclaimed by any consumer:
+Decodes, crosses IPC, and is still unclaimed by any renderer consumer:
 
 - **#936** (landed) added the `slash-command-list` inbound arm — `parseSlashCommandListPayload` +
   `parseSlashCommand`, plus a new helper, `requireStringArray`, the never-`null` sibling of
   `requireStringArrayOrNull` (which now delegates to it for the `null` case) — needed because `aliases`
-  must reject the `null` that `truncated_fields`, one field over on the same row, accepts. Ships dormant:
-  `daemonConnection.ts`'s inbound switch has no catch-all, so the decoded menu stops at the arm's return.
-  See [inbound message decode](inbound-message-decode.md).
-- **#681** owns the Actions-menu match against both `name` and `aliases`, the first consumer that must
-  not resolve a menu entry by rendering an unescaped `name`, and the first to actually read the frame
-  #936 now decodes.
+  must reject the `null` that `truncated_fields`, one field over on the same row, accepts. See [inbound
+  message decode](inbound-message-decode.md).
+- **#937** (landed) carries the decoded payload the last hop across IPC as the `slashCommandList`
+  `DaemonEvent` arm — a fresh named-field literal built at the emit in `daemonConnection.ts`, never a
+  spread of the decoded payload — and adds the matching no-op case to all four exhaustive
+  `assertNever`-guarded bridges (`daemonEventBridge`, `timelineBridge`, `modalBridge`, `questionBridge`)
+  so each still compiles. Ships dormant: nothing renders the list yet. See [Daemon event channel — the
+  sealed union](daemon-event-channel-sealed-union.md) for the arm's full field-by-field rationale.
+- **#938** will hold the list per conversation, and **#681** will match the Actions menu's entries
+  against both `name` and `aliases` — the first consumer that must not resolve a menu entry by
+  rendering an unescaped `name`, and the first to actually read the frame #936 decodes and #937 carries.
 
 ## Edge cases and limitations
 
 - Unlike `question_shown`'s producer, this frame's arrives to traffic that already exists: #2001–#2007
   landed upstream ahead of both desktop consumers, so #936 and #681 were blocked on the type only, not
-  on a daemon dependency. #936 has since landed the decode; #681 (the Actions-menu alias match) is the
-  one still blocked, now on the decoded arm rather than the type.
+  on a daemon dependency. #936 has since landed the decode and #937 the IPC carry, so #681 (the
+  Actions-menu alias match) is unblocked at the wire and IPC layers — it is now blocked, if at all, only
+  on whichever store #938 builds to hold the list.
 - `Envelope.type` is `EnvelopeType | string` (open) and no exhaustive switch exists over it today, so
   this widening is non-breaking. The `EnvelopeType` membership test in `types.test.ts` is what would
   otherwise miss a dropped member — without it, a decode/re-encode round-trip passes silently on an
@@ -208,9 +214,15 @@ radius.
 ## Related
 
 - [Inbound message decode](inbound-message-decode.md) — [#936](https://github.com/pyrycode/pyrycode-desktop/issues/936)'s
-  fail-closed decode of this vocabulary into the `slash-command-list` inbound arm; ships dormant awaiting
-  [#937](https://github.com/pyrycode/pyrycode-desktop/issues/937)'s IPC carry.
+  fail-closed decode of this vocabulary into the `slash-command-list` inbound arm.
+- [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) —
+  [#937](https://github.com/pyrycode/pyrycode-desktop/issues/937)'s `slashCommandList` `DaemonEvent` arm,
+  the IPC carry of this decode; ships dormant awaiting [#938](https://github.com/pyrycode/pyrycode-desktop/issues/938)
+  (holds the list per conversation) or [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681)
+  (Actions-menu alias match).
 - `docs/specs/architecture/936-slash-command-list-decode.md` — the decode slice's architecture spec,
+  including its security review (verdict: PASS, builder self-review).
+- `docs/specs/architecture/937-slash-command-list-ipc-arm.md` — the IPC-carry slice's architecture spec,
   including its security review (verdict: PASS, builder self-review).
 - [Question-shown wire types](question-shown-wire-types.md) — the shape this ticket follows: nested
   row declared before its payload, doc comment carrying provenance and traps, shipped dormant ahead of

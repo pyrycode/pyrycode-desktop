@@ -169,6 +169,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'modalShown':
     case 'modalDismissed':
     case 'modalAnswerRejected':
+    case 'slashCommandList':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
       // these — not the question store.
@@ -181,6 +182,11 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // daemon contract at all. `modalDismissed` in particular is not this family's `questionDismissed`
       // twin: the two retire different things against different keys. Their no-op here is PERMANENT
       // and mirrors `modalBridge`'s permanent no-op for the two question arms.
+      //
+      // `slashCommandList` (#937) is not an ask either, and reads least like one in this group: it
+      // publishes the vocabulary of verbs claude will ACCEPT, unsolicited, with nothing outstanding and
+      // no answer to give — the opposite direction from claude asking the operator to choose. Its
+      // consumer is the #938 store, and its no-op is DORMANT rather than permanent.
       return null
     default:
       return assertNever(event)

@@ -1005,6 +1005,42 @@ describe('subscribeTimeline', () => {
     expect(selectItems(store.getState())).toHaveLength(0)
   })
 
+  it('#937: a slashCommandList daemon event creates NO timeline item (ships dormant)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'slashCommandList',
+      conversationId: 'conv-1',
+      commands: [
+        {
+          name: 'synth-compact',
+          argument_hint: '[instructions]',
+          description: 'Synthetic row: nothing was cut for this one.',
+          aliases: [],
+          truncated_fields: null
+        },
+        {
+          name: 'synth-clear',
+          argument_hint: '',
+          description: 'Synthetic row: the cut-aliases reading rule.',
+          aliases: ['synth-reset'],
+          truncated_fields: ['aliases']
+        }
+      ],
+      droppedCommands: 2
+    })
+
+    // Both halves: the bridge filtered it out so no dispatch reached the reducer (same state ref), AND
+    // no chat row exists. The frame carries no turn_id and opens and closes no turn, so a menu of verbs
+    // is daemon STATE by the queueState rule (#720) — a published vocabulary is not something that
+    // happened during a turn. Dormant rather than permanent: whether #938 subscribes here is its call.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
   it('#564: a backgroundTaskStarted daemon event creates NO timeline item (ships dormant)', () => {
     const bridge = fakeBridge()
     const store = createTimelineStore()

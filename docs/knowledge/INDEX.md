@@ -23,7 +23,9 @@ One-line summaries of the evergreen docs. The documentation phase appends here.
     - [Paired shell — the pair server route](features/paired-shell-pair-server-route.md) — The pairServer route: how the shell reaches the pairing surface and what it does while it is there.
     - [Paired shell — routing and layout](features/paired-shell-routing.md) — The route model and its transition, the pure view and its container, the two-pane desktop layout, the seams at either end, and the data flow between them.
     - [Conversation shell — chrome and controls](features/conversation-shell-chrome.md) — The screen's structure and the persistent controls around the thread: layout, theme, the back, unpair and re-pair controls, and the connection surfaces in the header.
-    - [Conversation shell — composer options panel](features/conversation-shell-composer-options.md) — The composer's options panel: its resting appearance, placement, keyboard driving, and the live wiring behind each control.
+    - [Conversation shell — composer options panel](features/conversation-shell-composer-options.md) — Map only. **Split 2026-09-02** into the two documents below, once the slash-command type-ahead's mount pushed the shared doc over the size cap.
+    - [Conversation shell — composer options panel surface](features/conversation-shell-composer-options-panel.md) — The shared panel surface (#838), its footer placement and right-edge clamp arithmetic (#839, #847, clamp later lifted into a shared hook by #940), and its keyboard contract (#840).
+    - [Conversation shell — slash command type-ahead](features/conversation-shell-composer-options-slash-type-ahead.md) — #939's pure opening/filtering/completion decisions over a published command list, plus #940's mount that renders them as a panel anchored to the message box, per #934's product decision (no descriptions, a 10-row cap, a window-relative width bound).
     - [Conversation shell — composer](features/conversation-shell-composer.md) — The composer's own surfaces: its status row, error chip and footer row. The options panel is large enough to have its own document.
     - [Conversation shell — conversation surfaces and modals](features/conversation-shell-conversation-and-modals.md) — Surfaces that act on the conversation as a whole rather than on one turn. **Split 2026-09-02** into three further documents (below); this entry now holds only the interactive flip + thread cutover, the queued backlog, and screen-snapshot history.
     - [Conversation shell — actions menu and reader cutover](features/conversation-shell-actions-menu-and-reader-cutover.md) — The composer's Actions menu (#680: sends `/clear`/`/compact`/`/knowledge-capture` as ordinary message text via the shared options panel) and the per-conversation timeline reader cutover (#758: every render slice reads the open conversation's own holder slice instead of the flat store).
@@ -478,8 +480,8 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   [inbound message decode](features/inbound-message-decode.md)'s `slash-command-list` arm; **#937**
   landed the IPC carry into `DaemonEvent`; **#954** landed the per-conversation store (see below).
   #681 (Actions-menu alias match) is still blocked; **#939** (below) landed the type-ahead's decision
-  logic as the first reader, and #940 still owes the mount.
-- [Conversation shell — composer options panel](features/conversation-shell-composer-options.md#slash-command-type-ahead--decision-layer-939)
+  logic as the first reader, and **#940** (below) landed the mount.
+- [Slash command type-ahead — decision layer](features/conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--decision-layer-939)
   — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939), split from #694: the slash
   type-ahead's opening/filtering/completion decisions as a pure, DOM-free module,
   `slashCommandTypeAhead.ts`, the `composerOptionsKeyboard.ts` shape. `slashCommandTypeAheadRows(text,
@@ -492,8 +494,23 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   canonical name (even for an alias match) plus exactly one trailing space iff `argument_hint !== ''`
   — the two rules agree by construction, since a hinted completion's trailing space is itself a
   closing fragment. No log call and no throw anywhere (both functions total); rows returned by
-  reference, array identity not a contract. Ships dormant — no store read, no mount; #940 composes it
-  with `ComposerOptionsPanel`/`resolveComposerOptionsKey`. Architect self-review PASS, no findings.
+  reference, array identity not a contract. Shipped dormant, then mounted by #940 (below). Architect
+  self-review PASS, no findings.
+- [Slash command type-ahead — mount](features/conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--mount-940)
+  — [#940](https://github.com/pyrycode/pyrycode-desktop/issues/940), the visible half of #694: mounts
+  #939's decisions over the composer's message box, reading #954's per-conversation store
+  (`entry?.commands ?? null` join) and drawing on the shared options panel (#838). `#934` settled the
+  panel's own geometry by decision rather than a drawing — no descriptions (`ComposerOptionsPanelOption`
+  keeps its original two-field shape; only `name`/`argument_hint` reach the DOM), a 10-row cap with a
+  scroll (`flex-shrink: 0` fixing a silent compress-instead-of-scroll bug an 8-row first pass had), and
+  a window-relative width bound (`composerOptionsMaxWidthPx`, new arithmetic in
+  `composerOptionsPlacement.ts`, written to `--composer-options-max-width` *before* the clamp measures
+  the panel for its shift, which is why the shift is structurally `0` for this host). The right-edge
+  clamp effect (#847) was lifted out of `ComposerOptionsMenu` into an exported `useComposerOptionsClamp`
+  hook, since the type-ahead anchors on `.composer__row` rather than a footer button and could not reach
+  the private-ref effect. Row identity is the array index, never `name` (two rows can share a name).
+  Code review PASS on PR #959, two SHOULD FIX addressed pre-merge (the panel's `label` doc comment
+  sharpened for untrusted text; the clamp extraction's `[active]`-only listener lifecycle verified).
 - [Slash-command-list store](features/slash-command-list-store.md) — the renderer data path catching
   #937's dormant `slashCommandList` arm (#954): a keyed Zustand store
   (`createSlashCommandListStore`/`slashCommandListStore`/`useSlashCommandListStore`) plus an
@@ -510,9 +527,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   in the same working directory does not invalidate a published menu, and there is no request half to
   re-fetch one with. [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the
   pairing-scoped clear, `clearAllSlashCommandLists`, in `clearPairingScopedState`'s dep set, following
-  the #588 → #593 precedent. Ships dormant; #940 (type-ahead mount) and #681 (Actions-menu grey-out)
-  are its first readers — #939 (above) landed the type-ahead's decisions as a pure function taking the
-  row list as a parameter, so it does not read this store either. Builder self-review PASS.
+  the #588 → #593 precedent. Shipped dormant, then read for the first time by #940 (below), the
+  type-ahead's mount; #681 (Actions-menu grey-out) remains its other queued reader — #939 (above)
+  landed the type-ahead's decisions as a pure function taking the row list as a parameter, so it does
+  not read this store either. Builder self-review PASS.
 - [Question resolution envelope](features/question-resolution-envelope.md) — the **outbound** half of
   the question vertical, mirroring [modal resolution envelope](features/modal-resolution-envelope.md)
   seam for seam (#235 is this one's twin): `EnvelopeType` gains `'question_answer'`/`'question_refused'`

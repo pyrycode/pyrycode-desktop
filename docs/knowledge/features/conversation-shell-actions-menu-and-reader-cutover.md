@@ -6,7 +6,7 @@ Part of [Conversation shell](conversation-shell.md); see that document for what 
 
 ## Actions menu (#680)
 
-The shared [options panel](conversation-shell-composer-options.md#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)'s
+The shared [options panel](conversation-shell-composer-options-panel.md#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)'s
 first live consumer, and the composer footer's leading item (Figma `115:3677`, x=0). Sends `/clear`,
 `/compact` or `/knowledge-capture` as ordinary message text — reset, compact and knowledge capture, one
 click instead of typed by hand. Needs no daemon change and no wire change: claude intercepts a message

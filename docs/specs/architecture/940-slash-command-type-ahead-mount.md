@@ -438,3 +438,29 @@ existing caller), and no state machine.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+### 2026-09-02 — implementation
+
+- **The module is `ComposerSlashCommandTypeAhead.tsx`, not `SlashCommandTypeAhead.tsx`.** The planned
+  name differs from #939's shipped `slashCommandTypeAhead.ts` only by case, and this repo is developed on
+  a case-insensitive filesystem: a resolver that reached for `.tsx` before `.ts` would answer
+  `import … from './slashCommandTypeAhead'` with the new file itself. The `Composer*` prefix is also the
+  cluster's own (`ComposerOptionsPanel.tsx`, `ComposerActionsMenu.tsx`). Every export keeps its planned
+  name.
+- **The container smoke seeds the store at CREATION, not through `setSlashCommandList`.** The plan said to
+  mock the module onto a per-file instance and seed it; that half is right and the seed timing is not.
+  Under a server render zustand answers `useStore` from `getServerSnapshot`, which it binds to the state
+  captured when the store was created — so a seed written afterwards is invisible and every assertion runs
+  against an empty map. Measured, not reasoned: the first version of that test failed exactly this way.
+  The mock now passes the menu as `createSlashCommandListStore({ menus: … })`; only the
+  `useSlashCommandListStore` binding is overridden, so `selectSlashCommandListFor` stays the real one and
+  the join is still what is under test.
+- **Open questions, resolved as designed.** Blur-closing was not built (no criterion, and it introduces the
+  mousedown-before-click ordering bug); the 228px cap, the 320px description bound and the 4px label/text
+  offset all stand as planned, and remain #934's to settle with a drawing.
+- **One spec expectation was wrong, not the code.** The e2e drive first asserted that `/m` shows two rows;
+  it shows three, because `compact` contains an `m` and #939 ranks contained matches into a second bucket
+  behind the prefix ones. The spec now pins all three and their order, which turned a mistake into the
+  proof that both buckets reach the panel.

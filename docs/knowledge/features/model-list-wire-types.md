@@ -4,7 +4,10 @@ The wire vocabulary for the daemon's model inventory: one `EnvelopeType` member 
 mirroring the daemon's published `model_list` contract field for field.
 
 Introduced in [#971](https://github.com/pyrycode/pyrycode-desktop/issues/971), declaration only at
-that point — nothing decodes, narrows, stores or renders it yet. Split from #561. SSOT is
+that point — nothing decoded, narrowed, stored or rendered it yet.
+[#972](https://github.com/pyrycode/pyrycode-desktop/issues/972) added the fail-closed decode (see
+[Inbound message decode](inbound-message-decode.md) and its [Extension
+history](inbound-message-decode-history.md)); nothing stores or renders it yet. Split from #561. SSOT is
 `pyrycode/pyrycode` `internal/protocol/interactive.go` (`ModelListPayload` / `ModelOption`); do not
 trust `docs/protocol-mobile.md` § `model_list` for the delivery window — see
 [§ Delivery window](#delivery-window-two-lanes) below. The run-configuration sheet's model rows and
@@ -216,9 +219,12 @@ field is a reject by construction. A required field is still only a promise the 
 until it is checked — reach this type through that narrower once it exists, never a bare
 `as ModelListPayload` on `Envelope.payload`.
 
-Nothing decodes, narrows, stores or renders this frame yet. The decode, IPC-carry, store and
-run-config slices that replace `MODEL_CATALOG`/`EFFORT_LEVELS` in `RunConfigSections.tsx` are below
-this one in the family, unbuilt as of this ticket.
+The decode now exists ([#972](https://github.com/pyrycode/pyrycode-desktop/issues/972),
+`parseModelListPayload` + `parseModelOption` in [Inbound message
+decode](inbound-message-decode.md)), but ships dormant — `daemonConnection.ts`'s inbound switch has no
+case for `'model-list'` yet. The IPC-carry, store and run-config slices that replace
+`MODEL_CATALOG`/`EFFORT_LEVELS` in `RunConfigSections.tsx` are below this one in the family, unbuilt as
+of this ticket.
 
 ## Edge cases and limitations
 
@@ -272,6 +278,10 @@ radius.
   `truncated_fields: string[] | null`) than `slash_command_list` itself.
 - [Wire codec](wire-codec.md) — `Envelope.payload` stays an opaque carrier (`unknown`) through the
   codec; this slice adds no decoder, consistent with that boundary.
+- [Inbound message decode](inbound-message-decode.md) / [Extension
+  history](inbound-message-decode-history.md) — [#972](https://github.com/pyrycode/pyrycode-desktop/issues/972)
+  is the decoder: `parseModelListPayload` + `parseModelOption`, the fail-closed narrowing this type's
+  required-fields posture exists to make possible. Ships dormant — no consumer arm yet.
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)
   — "do not drift the wire types from the mobile contract without a matching daemon change"; this
   slice mirrors a settled upstream contract and makes no desktop-side architectural choice of its own.

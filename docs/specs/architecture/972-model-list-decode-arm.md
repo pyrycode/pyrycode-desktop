@@ -276,6 +276,19 @@ regardless. `needs-human:sizing` is already on the ticket for one operator glanc
    literal (`903` for `slash_command_list`, `902` for `question_dismissed`). Pick the next unused one
    and confirm nothing asserts on it.
 
+## Revisions
+
+**2026-09-02 — open questions resolved during Phase B. No design change; the implementation matches the
+plan above as committed.**
+
+1. **No renderer-bridge no-op is needed.** Resolved empirically rather than by reasoning, as the plan
+   said: `npm run build` typechecks both projects clean with the new `model-list` member on
+   `InboundDaemonMessage`. `daemonConnection.ts`'s inbound switch has no `default:` and no
+   `assertNever`, and the renderer-side `assertNever` guards switch on `DaemonEvent`, a union this
+   slice does not touch. The arm ships dormant with no consumer edit anywhere.
+2. **`encodeModelList` uses envelope `id: 907`.** 901–906 are taken by the existing helpers; nothing in
+   the suite asserts on an envelope id for this frame.
+
 ## Security review
 
 **Verdict:** PASS

@@ -137,6 +137,57 @@ Both `handleReconnect` and `reconnectResendFrames`/`pushFrame` are **modal-agnos
 consuming [#416](../codebase/416.md) e2e, so a future reconnect e2e for another slice (e.g. the queue
 store, [#197](../codebase/197.md)) can reuse this capability unchanged.
 
+## Test-file wall-clock deadline harness (`bounded`, #550, #931)
+
+`fakeDaemon.test.ts`'s own harness — not part of the daemon module above — bounds every stallable await
+across its 13 tests to a single **ambient** per-test wall-clock deadline, so a stall names the step that
+stalled instead of dying as a bare `Test timed out in 5000ms`. #550 introduced the mechanism for one
+test (the leg-boundary `frame-decode-failed` test, self-arming a local `deadline`); #931 generalised it
+to the other 11 by making the deadline ambient, closing the gap #550's own note flagged ("11 sibling
+tests are unchanged").
+
+The unsoundness this closes: several tests make sequential `makeWaiter().wait()` calls whose default
+2000ms timeout **resolves** rather than rejects, so nothing stopped three of them (6000ms) from summing
+past vitest's 5000ms per-test default before `standUp`/`driveClient`/`whenReady` had spent anything. An
+attempt-count re-dial ladder has the identical shape — bounded by attempts × a per-attempt constant,
+never by the clock the test runner actually enforces — the same family
+[`fakeRoutingRelay.test.ts`'s `connect()`](fake-routing-relay.md#test-file-dial-harness-connect-904)
+(#904) fixed on the sibling file. That failure shows up as the test **name varying between runs**: the
+tests differ only in how many budgets they sum, and none of them names its own stall.
+
+- `armDeadline(budgetMs = AWAIT_BUDGET_MS)` / `remainingMs()` hold a module-level `testDeadline`, armed
+  fresh in a `beforeEach` (`AWAIT_BUDGET_MS = 4000`, leaving ~1000ms of headroom under vitest's 5000ms
+  default for the rejection's own unwinding plus `afterEach` teardown). Module-level mutable state is
+  sound here only because vitest runs one file's tests sequentially in a single worker, so exactly one
+  deadline is ever live and `beforeEach` re-arming can't leak a short budget into the next test.
+- `bounded(step, work)` rejects at the ambient deadline naming `step` and the **armed** budget (never
+  the bare `AWAIT_BUDGET_MS` constant, so a test that re-arms a shorter one gets an honest message),
+  unless `work` settles first — a settle, value or error, always passes through unchanged, so a specific
+  diagnosis beats the generic bound. It wraps `startFakeRelayForwarder`/`startFakeDaemon`'s starts (via
+  `startForwarder`/`startDaemon`), `forwarder.whenReady()` (via `whenForwarderReady` — it does reject on
+  its own, but only after a static 1000ms and with a message naming no step, and it's cached, so the
+  first caller's timeout would otherwise govern every later one), `daemon.whenSettled()` itself (which
+  **never rejects** on its own — see § above — so without this bound a daemon that never settles is a
+  silent stall with nothing to surface), and `createNoiseSession`/`loadNoiseLib` inside `driveClient`.
+- `connect(url, attemptsLeft?)`'s re-dial ladder and `makeWaiter().wait()`'s own timeout are both
+  additionally floored by `remainingMs()`, so neither can sum past the deadline regardless of what its
+  own constant says. `wait()` **keeps its resolve-on-timeout contract** — the clamp can only shorten it,
+  never turn it into a rejection, because the caller's own assertion on the resulting state is the real
+  oracle (the same reason `whenSettled()` is a diagnostic aid rather than the primary one, § above).
+- `closeWhenStarted(start)` registers teardown against the **start promise**, not its resolved value,
+  racing the eventual `close()` against `TEARDOWN_CAP_MS = 500`: once a start can reject on a bound, a
+  start that goes on to resolve *late* would otherwise leak a listening server into the rest of the run
+  — a disposer keyed to the resolved value never gets the chance to be registered.
+
+**Deliberate divergence from #904's shape:** #904 arms its deadline **once per `connect()` call**, which
+cannot bound a *sibling* step. This file arms it **once per test**, because the flake it was chasing was
+a sum across sibling steps (three `wait()` calls plus `standUp` plus `driveClient`), not a stall within
+any single one of them.
+
+No production file carries this pattern — `fakeDaemon.ts` itself is deliberately wall-clock-free (see
+`whenSettled()` above); the deadline lives entirely in the test file because the 5000ms budget it
+protects is vitest's, not the daemon's.
+
 ## Error handling
 
 | Failure mode | Behaviour |
@@ -165,6 +216,7 @@ store, [#197](../codebase/197.md)) can reuse this capability unchanged.
 ## Related
 
 - [Fake relay forwarder](fake-relay-forwarder.md) / [#90](../codebase/90.md) — the content-blind plumbing half this daemon dials (`/v1/server`); the deliberate inverse discipline (blind vs. content-aware).
+- [Fake routing relay](fake-routing-relay.md#test-file-dial-harness-connect-904) — `fakeRoutingRelay.test.ts`'s own `connect()` (#904) is the sibling instance of the § Test-file wall-clock deadline harness above, arming its deadline once per call rather than once per test.
 - [Noise session](noise-session.md) / [#7](../codebase/7.md) — the initiator this daemon mirrors as a responder; the structural template (`HandshakeState`/`Initialize`/`WriteMessage`/`ReadMessage`/`Split`, `freeAll` teardown, the log-free error discipline).
 - [Hello exchange](hello-exchange.md) / [#10](../codebase/10.md) — `buildClientHello`/`parseHelloAck`; the daemon builds `hello_ack` as the inverse of `parseHelloAck` and the consuming test builds the client `hello` via `buildClientHello`.
 - [Wire codec](wire-codec.md) / [#5](../codebase/5.md) — `encode/decodeEnvelope`, `encode/decodeInnerFrame`, `base64Std*`; the production framing the daemon uses instead of a hand-rolled shortcut (AC3).

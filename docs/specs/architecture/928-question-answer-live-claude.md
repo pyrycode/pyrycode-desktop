@@ -105,3 +105,31 @@ The deliverable *is* the test; no vitest change. RED is structural rather than a
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+### 2026-09-02 — the tier routing was never filename-based; the live gate proved it
+
+**Finding that drove it:** the dispatcher's real-claude gate on `b9587b1` came back red with 2 failures out of **66 executed** — against a tier that holds **10** tests.
+
+**What § Design got wrong.** It asserted, following the ticket's own Technical Notes, that "the `real-` filename prefix does all of AC 4's routing … so no configuration changes." That was false in the environment AC 4 is graded in. Playwright matches a RegExp `testMatch` / `testIgnore` against the **absolute** file path, and both patterns were unanchored — `/real-.*\.spec\.ts$/`, where `.*` spans `/` freely. The dispatcher checks the branch out into a worktree named `real-claude-gate-<N>`, so **every** spec in the tree matched. The gate collected all 66 specs under `playwright.real-claude.config.ts`, and both reported failures were specs that had no business being there:
+
+| Reported failure | Verdict |
+|---|---|
+| `assistant-link-opens-externally.spec.ts` | **Not this branch, and not a real-tier spec at all.** A fake-tier spec (imports `launchPairedApp`, never `realDaemon`), collected only by the path bug. Passes at HEAD under its own config in 2.0s; in the gate it died on `pairingArrival`'s 5s fingerprint wait as a cold-first-launch flake. The anchoring fix removes it from this tier entirely. |
+| `real-daemon-session-settings.spec.ts` | **Pre-existing, reproduced against `origin/main`'s fixture.** Fails identically with this branch's `realDaemon.ts` reverted to main's, so this branch cannot be the cause — and structurally could not be: that spec runs `spawnClaude: false`, which never reaches the `--model` branch `claudeModel` threads through. Filed as #941 per § Scope Discipline; not fixed here. |
+
+The inverse half is worse than the half that fired, which is why this is fixed rather than noted: in the same worktree the **default** config's `testIgnore` would have ignored all 66 specs and exited 0 on a suite that never ran.
+
+**The new contract.** Both patterns become `/(^|\/)real-[^/]*\.spec\.ts$/` — `(^|\/)` pins the match to a path boundary, `[^/]*` keeps it inside one segment — and the two configs must stay byte-identical to each other. Routing now depends on the filename alone, which is what both configs always claimed. This is AC 4's own subject matter, not adjacent work: the exclusion half of that criterion had no working mechanism behind it.
+
+**Verified**, by `playwright test --list` in a throwaway worktree named `real-claude-gate-probe` — the gate's own path shape, which is the only environment where the two patterns differ at all:
+
+| config | main (unanchored) | this branch (anchored) |
+|---|---|---|
+| `playwright.real-claude.config.ts` | **66 tests in 43 files** | 10 tests in 10 files |
+| `playwright.config.ts` (default) | **0 tests in 0 files** | 56 tests in 33 files |
+
+Main's 66/43 is exactly what the gate reported executing, which closes the causal chain. In an ordinarily-named worktree both patterns give the same 10 / 56 partition, so the fix is a no-op everywhere except the environment that was broken.
+
+**Open questions, resolved by the gate run itself.** OQ-a — a live `claude-sonnet-5` did raise an answerable batch and the spec passed on its first live execution, so the trigger needs no tuning. OQ-b — the prefix/suffix reader was agnostic to it and the question never had to be answered, which is the outcome that choice was made for.

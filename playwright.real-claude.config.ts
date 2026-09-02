@@ -11,7 +11,12 @@ import { defineConfig } from '@playwright/test'
 // a trace could capture more than DOM text, and the transport is log-free by construction (#62).
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /real-.*\.spec\.ts$/,
+  // Anchored to the filename — see the long note on the mirrored `testIgnore` in playwright.config.ts
+  // (#928). Unanchored, this matched every spec in the tree whenever an ancestor directory name contained
+  // `real-`, which is exactly what the dispatcher's `real-claude-gate-<N>` worktree does: the gate ran all
+  // 66 specs under this config, and the 2 fake-tier failures it reported were specs that had no business
+  // being collected here at all. Keep this pattern byte-identical to playwright.config.ts's.
+  testMatch: /(^|\/)real-[^/]*\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,

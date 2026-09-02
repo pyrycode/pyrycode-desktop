@@ -42,10 +42,18 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 //
 // It inherits the real-claude harness for free: `spawnClaude` defaults true and the full skip-gate resolves
 // `pyry` + `claude` + a credential BEFORE any resource, calling testInfo.skip on any miss (AC4). The
-// `real-` filename prefix does the tier routing on its own — playwright.config.ts carries
-// `testIgnore: /real-.*\.spec\.ts$/` and playwright.real-claude.config.ts the matching `testMatch` — so it
-// runs under `npm run e2e:real-claude`, is excluded from the default `npm run e2e`, and its all-skip turns
-// into a non-zero exit under `npm run e2e:real:gate`. No new configuration.
+// `real-` filename prefix does the tier routing — playwright.config.ts's `testIgnore` and
+// playwright.real-claude.config.ts's matching `testMatch` — so it runs under `npm run e2e:real-claude`, is
+// excluded from the default `npm run e2e`, and its all-skip turns into a non-zero exit under
+// `npm run e2e:real:gate`.
+//
+// That routing needed one fix to actually be filename-based, and the live gate is what found it: both
+// patterns were unanchored (`/real-.*\.spec\.ts$/`) and Playwright matches them against the ABSOLUTE path,
+// so `.*` spanned `/` and every spec in the tree matched whenever an ancestor DIRECTORY was named `real-…`.
+// The dispatcher checks this branch out into a worktree named `real-claude-gate-<N>`, so the first live run
+// of this spec collected all 66 specs under the real-claude config instead of 10 — and the default tier
+// would have ignored all 66 and exited 0 on a suite that never ran. Both patterns are now anchored to a
+// path boundary and kept inside one segment; see the note in playwright.config.ts.
 //
 // SECRET HYGIENE (security-sensitive label). Every assertion reads DOM text / visibility / counts only. The
 // `answer_token` is minted MAIN-side by daemonConnection.answerQuestions and never reaches the renderer;

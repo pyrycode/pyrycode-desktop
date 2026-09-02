@@ -114,6 +114,60 @@ export const DEFAULT_REKEY_RESUME_MESSAGE: Uint8Array = encodeEnvelope({
   }
 })
 
+/**
+ * A `buildReplyFrames` builder that answers an attachment upload the way the real daemon does (#964):
+ * ONE `attachment_stored` for the chunk that completed the transfer, and SILENCE for everything else.
+ *
+ * The caller names WHICH chunk index completes, and that parameter is the point of the factory rather
+ * than a convenience. Upstream's rule is that `in_reply_to` carries the envelope id of the chunk WHOSE
+ * ARRIVAL COMPLETED THE TRANSFER — not the highest index. Chunks are index-addressed and may be
+ * reassembled in any order, so the completing chunk is whichever one closed the set and a client cannot
+ * predict which of its envelope ids that will be. A fake that always answered the last chunk would let a
+ * consumer keying on a PREDICTED final envelope id pass forever; naming a non-final index makes that
+ * failure mode reachable in a test.
+ *
+ * Every other chunk of a healthy upload gets NO REPLY AT ALL, which is why this cannot simply answer
+ * every chunk. A non-`attachment_chunk` frame and an undecodable one both yield `[]` — the fake answers
+ * only what it understands, and a decode failure inside it must not masquerade as a daemon-side crash.
+ *
+ * STATELESS BY CONSTRUCTION: the closure holds one number and no arrival set. Two transfers interleaving
+ * on one session therefore cannot race here, and there is nothing to reset between tests.
+ *
+ * Test-only scaffolding, and it lives beside the fake for DEFAULT_REKEY_RESUME_MESSAGE's reason: the fake
+ * owns the daemon's side of the protocol, a test owns the assertions.
+ */
+export function attachmentStoredReplyFrames(
+  completingIndex: number
+): (inboundPlaintext: Uint8Array) => Uint8Array[] {
+  return (inboundPlaintext: Uint8Array): Uint8Array[] => {
+    let envelope: ReturnType<typeof decodeEnvelope>
+    try {
+      envelope = decodeEnvelope(inboundPlaintext)
+    } catch {
+      return [] // not an envelope at all — nothing to answer
+    }
+    if (envelope.type !== 'attachment_chunk') return []
+    const payload = envelope.payload
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return []
+    const { attachment_id: attachmentId, index } = payload as Record<string, unknown>
+    if (typeof attachmentId !== 'string' || index !== completingIndex) return []
+    return [
+      encodeEnvelope({
+        id: ATTACHMENT_STORED_ID,
+        type: 'attachment_stored',
+        ts: ATTACHMENT_STORED_TS,
+        // The chunk THIS reply answers — the one that completed the set, whatever its index.
+        in_reply_to: envelope.id,
+        payload: { attachment_id: attachmentId }
+      })
+    ]
+  }
+}
+
+/** Deterministic id/ts for the fake's `attachment_stored` reply — the file's no-wall-clock convention. */
+const ATTACHMENT_STORED_ID = 7001
+const ATTACHMENT_STORED_TS = '2026-01-01T00:00:00Z'
+
 /** Config for one fake daemon. Test-only; nothing is persisted, no real credential is read. */
 export interface FakeDaemonOptions {
   /** Base forwarder URL, no trailing path (from startFakeRelayForwarder().url). The daemon dials

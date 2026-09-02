@@ -148,3 +148,15 @@ Fakes over mocks throughout: the only `vi` use is the injected `DiagnosticLog` r
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+### 2026-09-02 — Open Questions resolved during implementation
+
+No design change; all three resolved as planned, recorded here so the resolutions are auditable rather than merely assumed.
+
+1. **`requireNonEmptyString` as a named helper** — landed as designed, beside `requireString`, with a doc block stating its scope and naming the two arms (`slash_command_list`'s `argument_hint`, `question_dismissed`'s all-empty payload) where an empty string is a VALUE and the helper must not be swapped in.
+2. **The fake answers a caller-named completing index** — landed as designed, and the empty-reply path is confirmed safe: `handleTransport` calls `settle({ ok: true })` after the reply loop unconditionally, so a `[]` from a non-completing chunk neither stalls `whenSettled` nor sends a frame. The AC4 test asserts exactly one reply for two chunks sent.
+3. **No `daemonConnection` change** — confirmed by `npm run build`. Both typecheck projects pass with the new union member unconsumed, so the inbound switch has no `assertNever` and forces nothing. The file is untouched.
+
+One test-authoring correction, not a design departure: the prototype-safety test initially asserted `Object.getPrototypeOf(Object.prototype)`, a tautology that says nothing about the decode. It now asserts read-back under the exact key — `hasOwnProperty` plus the string's value — which is what actually proves a `__proto__` id survives as an ordinary own property.

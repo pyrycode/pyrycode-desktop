@@ -138,6 +138,24 @@ function encodeQuestionDismissed(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 902, type: 'question_dismissed', ts: FIXED_TS, payload })
 }
 
+/**
+ * An `attachment_stored` envelope's plaintext bytes, wrapping an arbitrary payload (#964).
+ *
+ * `in_reply_to` is a PARAMETER with a default rather than a fixed field, because the correlation is
+ * exactly what this arm must be shown to ignore: the real daemon sets it to the chunk envelope whose
+ * arrival completed the transfer, which a client cannot predict. Varying it across the suite is how the
+ * "decoded result never carries the envelope id" assertions stay honest.
+ */
+function encodeAttachmentStored(payload: unknown, inReplyTo = 904): Uint8Array {
+  return encodeEnvelope({
+    id: 905,
+    type: 'attachment_stored',
+    ts: FIXED_TS,
+    payload,
+    in_reply_to: inReplyTo
+  })
+}
+
 /** A `conversation_created` envelope's plaintext bytes, wrapping an arbitrary payload (#241). */
 function encodeConversationCreated(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 18, type: 'conversation_created', ts: FIXED_TS, payload })
@@ -561,6 +579,16 @@ const QUESTION_DISMISSED = {
   question_batch_id: 'qb-7f3a',
   outcome: 'unanswered',
   source: 'no_answer'
+}
+
+/**
+ * A well-formed attachment_stored payload (#964) — ONE key, the client's own attachment id echoed back.
+ * The value is the daemon's committed round-trip fixture's, a canonical lowercase UUIDv4
+ * (`internal/protocol/attachments_test.go`), so this suite and the two-sided wire-key test upstream
+ * agree on the same literal.
+ */
+const ATTACHMENT_STORED = {
+  attachment_id: '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67'
 }
 
 /** A well-formed conversation summary with a string name — a saved channel (#139). */
@@ -4155,6 +4183,136 @@ describe('parseInboundMessage — slash_command_list fail-closed (#936)', () => 
   })
 })
 
+describe('parseInboundMessage — attachment_stored recognition (#964, additive)', () => {
+  it('narrows a full attachment_stored into { kind: attachment-stored } (AC1)', () => {
+    expect(parseInboundMessage(encodeAttachmentStored(ATTACHMENT_STORED))).toEqual({
+      kind: 'attachment-stored',
+      attachmentStored: ATTACHMENT_STORED
+    })
+  })
+
+  it('names the transfer by the PAYLOAD id and never surfaces the envelope in_reply_to (AC1)', () => {
+    // The assertion that pins this arm's one real design decision. `in_reply_to` names the chunk whose
+    // ARRIVAL COMPLETED the transfer — not the highest index, and not something a client can predict,
+    // since chunks may be reassembled in any order. Three kinds on this union DO carry an `inReplyTo`
+    // (`daemon-error`, `session-settings`, `session-settings-updated`) because for those the envelope id
+    // IS the correlation; here it is not, so surfacing it would hand a consumer a plausible-looking match
+    // key that silently never fires. `toEqual` over the WHOLE result is what catches a smuggled field —
+    // an assertion that merely checked `attachmentStored` would pass with the id riding along.
+    for (const inReplyTo of [1, 7, 4242]) {
+      expect(parseInboundMessage(encodeAttachmentStored(ATTACHMENT_STORED, inReplyTo))).toEqual({
+        kind: 'attachment-stored',
+        attachmentStored: ATTACHMENT_STORED
+      })
+    }
+  })
+
+  it('drops unknown server keys, keeping only attachment_id (AC1)', () => {
+    // The planted extras are the five fields upstream DELIBERATELY left off this payload. The client
+    // sent every one of them and they were checked before the frame could be emitted, so echoing them
+    // confirms nothing — and a host path on a success frame would undo from the other side the
+    // disclosure mitigation `attachment.storage_failed` already carries.
+    const withExtras = {
+      ...ATTACHMENT_STORED,
+      size: 4096,
+      sha256: 'a'.repeat(64),
+      total_chunks: 2,
+      filename: 'secret-holiday-photo.png',
+      conversation_id: 'conv-1'
+    }
+    expect(parseInboundMessage(encodeAttachmentStored(withExtras))).toEqual({
+      kind: 'attachment-stored',
+      attachmentStored: ATTACHMENT_STORED
+    })
+  })
+
+  it('carries an unrecognised id verbatim — recognise-or-ignore is the CONSUMER’s rule, not this arm’s', () => {
+    // This decode polices TYPE and non-emptiness, never SHAPE. The canonical lowercase-UUIDv4 rule binds
+    // the side that MINTS ids (the outbound leg), because there the id becomes a directory name and only
+    // a lowercase alphabet keeps the mapping injective on a case-insensitive filesystem. A second copy of
+    // that rule here would fail-close a valid frame the moment the two disagreed.
+    for (const attachment_id of ['NOT-A-UUID', 'x', '3F2A1C40-9B7E-4D16-A5C3-0E8F1B2D4A67']) {
+      expect(parseInboundMessage(encodeAttachmentStored({ attachment_id }))).toEqual({
+        kind: 'attachment-stored',
+        attachmentStored: { attachment_id }
+      })
+    }
+  })
+
+  it('returns a fresh literal a consumer cannot use to reach Object.prototype', () => {
+    // A hostile daemon inside the session picks this string. `__proto__` is the sharp case: a consumer
+    // that looks the id up as `pending[id]` on a plain object reads back Object.prototype — truthy —
+    // and resolves a transfer that does not exist. The decode's job is to hand back an ordinary own
+    // property, which it does (JSON.parse and a fresh literal are both prototype-safe); the obligation
+    // to look the id up in a Map keyed by ids this client MINTED belongs to the consumer (#861).
+    const hostile = { attachment_id: '__proto__' }
+    const result = parseInboundMessage(encodeAttachmentStored(hostile))
+    expect(result).toEqual({ kind: 'attachment-stored', attachmentStored: hostile })
+    // Read back under the exact key: the string must survive as an ORDINARY OWN PROPERTY of a plain
+    // object, unaltered and not swallowed by a setter. `toEqual` alone would not prove that.
+    const decoded = result as { attachmentStored: { attachment_id: string } }
+    expect(Object.prototype.hasOwnProperty.call(decoded.attachmentStored, 'attachment_id')).toBe(true)
+    expect(decoded.attachmentStored.attachment_id).toBe('__proto__')
+    // And the decode altered no prototype: a plain object gains no `attachment_id` from it.
+    expect('attachment_id' in {}).toBe(false)
+  })
+
+  it('still routes a message to its existing kind (additive, unchanged)', () => {
+    expect(parseInboundMessage(encodeMessage(MSG))).toEqual({ kind: 'message', message: MSG })
+  })
+})
+
+describe('parseInboundMessage — attachment_stored fail-closed (#964)', () => {
+  it('throws when the payload is not a record (AC2)', () => {
+    const bad: unknown[] = ['nope', ['a'], 42, null, true]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeAttachmentStored(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when attachment_id is absent or a non-string (AC2)', () => {
+    const bad: unknown[] = [
+      {}, // absent
+      { attachment_id: 42 },
+      { attachment_id: null },
+      { attachment_id: ['3f2a1c40'] },
+      { attachment_id: {} }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeAttachmentStored(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an EMPTY attachment_id — the case a plain requireString would let through (AC2)', () => {
+    // The reason this arm needs its own helper, and it is upstream's rather than a style preference:
+    // every key is optional to Go's encoding/json, so a truncated or hostile attachment_stored decodes
+    // daemon-side to the ZERO VALUE and arrives here as `{"attachment_id": ""}`. Through requireString
+    // that yields a SUCCESS NAMING NO TRANSFER — the one outcome AC2 names alongside the content-free
+    // "unclaimed type" result. Note the contrast with question_dismissed directly above, where an empty
+    // string on all three fields is a VALUE and decodes fine; the two arms read alike and say opposite
+    // things, so requireString must NOT be tightened toward this one.
+    expect(() => parseInboundMessage(encodeAttachmentStored({ attachment_id: '' }))).toThrow(
+      WireDecodeError
+    )
+  })
+
+  it('REJECTS rather than ignores — the same bad payload on an UNCLAIMED type returns null (AC2)', () => {
+    // Reject and ignore are two different signals in this module and this is the assertion that keeps
+    // them apart, by driving ONE malformed payload down both paths. On `attachment_stored` — now a
+    // CLAIMED type — it throws. On a type this module has never claimed it returns the content-free
+    // "unclaimed" result, which is what the arm would have done before this slice. The two are
+    // indistinguishable downstream (daemonConnection catches WireDecodeError and drops the frame WITHOUT
+    // logging the message), so the unit boundary is the only place the difference is observable.
+    const malformed = { attachment_id: '' }
+    expect(() => parseInboundMessage(encodeAttachmentStored(malformed))).toThrow(WireDecodeError)
+    expect(
+      parseInboundMessage(
+        encodeEnvelope({ id: 906, type: 'attachment_not_a_real_type', ts: FIXED_TS, payload: malformed })
+      )
+    ).toBeNull()
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -5048,6 +5206,46 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(() =>
       parseInboundMessage(encodeQuestionDismissed({ ...QUESTION_DISMISSED, source: 42 }), log)
     ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('logs an attachment_stored content-free, adding NO field for the id (#964, AC3)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_ATTACHMENT = 'secret-attachment-id-2f9c'
+    const plaintext = encodeAttachmentStored({ attachment_id: SECRET_ATTACHMENT })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    // `inbound-decoded`, not `inbound-unmodeled`: the record's event/code is what actually distinguishes
+    // a decoded frame from one the default arm swallowed. The code is a STATIC LITERAL here, where the
+    // default arm logs a WIRE-SUPPLIED `envelope.type` capped at MAX_LOGGED_TYPE_CHARS — so claiming the
+    // type is strictly safer than the status quo, not merely equivalent.
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('attachment_stored')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // AC3 is a NEGATIVE, so the whole-key-set assertion is the one that proves it: checking only that
+    // the four expected fields are present would pass with an `attachment_id` riding alongside.
+    // DiagnosticEvent already carries `code` and `count`, so nothing structural stops an implementer
+    // adding the id — the omission has to be deliberate and asserted. Widening DiagnosticEvent would
+    // also disturb the renderer pin at #131.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    // Upstream calls this payload safe to log WHOLE — a statement about the frame, not a licence this
+    // client acts on. The id is the client's own, so logging it buys a correlation handle the client
+    // already holds, at the cost of a per-upload identifier in a JSON-lines log the operator can ship
+    // off-box in a debug bundle.
+    expect(lines[0]).not.toContain(SECRET_ATTACHMENT)
+  })
+
+  it('does NOT log on a malformed attachment_stored throw path (#964, AC3)', () => {
+    const { log, lines } = captureLog()
+    // The empty id is the case worth driving here: it is the one a plain requireString would ACCEPT,
+    // which would produce both a bogus success AND a log record for a frame naming no transfer.
+    expect(() => parseInboundMessage(encodeAttachmentStored({ attachment_id: '' }), log)).toThrow(
+      WireDecodeError
+    )
     expect(lines).toHaveLength(0)
   })
 

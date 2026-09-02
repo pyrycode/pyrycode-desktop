@@ -49,9 +49,12 @@ export type EnvelopeType =
   | 'debug_bundle_done'
   | 'set_session_settings'
   | 'session_settings_updated'
-  // v2-only bare phone→binary control frame — asks for the current run configuration. Carries NO
-  // payload at all: the reply is daemon-wide, so there is no field that could select another
-  // session's data. Answered by `session_settings`, correlated on in_reply_to. SSOT pyrycode #491.
+  // v2-only phone→binary control frame — asks for one conversation's current run configuration.
+  // Carries RequestSessionSettingsPayload: a single `conversation_id`, always present (`''` names
+  // nothing). Answered by `session_settings`, correlated on in_reply_to. Naming a conversation the
+  // daemon does not host, one bound to no live session, or none at all are all answered with a
+  // zero-valued reply — never an error frame and never another session's values. SSOT pyrycode
+  // #491, made conversation-keyed by pyrycode#1586 / #1610 (internal/protocol/settings.go).
   | 'request_session_settings'
   | 'session_settings'
   | 'assistant_delta'
@@ -253,13 +256,34 @@ export interface SessionSettingsUpdatedPayload {
 }
 
 /**
+ * Outbound `request_session_settings` payload (client → daemon). Mirrors the daemon's
+ * internal/protocol/settings.go RequestSessionSettingsPayload field-for-field: one
+ * `conversation_id`, no `omitempty`, so the key is ALWAYS on the wire and `''` is a real value
+ * meaning "this request names nothing" rather than an absence. The frame was genuinely bare when
+ * #491 shipped it; pyrycode#1586 gave it this payload and pyrycode#1610 taught the handler to
+ * resolve it, which is why a client still sending `{}` got the zero reply forever.
+ *
+ * `conversation_id` is a routing id, NEVER a secret (the `SetSessionSettingsPayload.session_id` /
+ * `conversation_id` convention). Upstream uses it for exactly one in-memory resolution through the
+ * handler's conversation-keyed run-configuration seam; it reaches no log line, error string,
+ * filesystem path, or reply on either side.
+ */
+export interface RequestSessionSettingsPayload {
+  conversation_id: string
+}
+
+/**
  * Inbound `session_settings` reply (daemon → client). Mirrors the daemon's
  * internal/protocol/settings.go SessionSettingsPayload field-for-field, wire order
  * `session_id, model, effort, yolo, used_tokens, window_tokens` — all always present (no
  * `omitempty`), so every zero value is a real answer rather than an absence.
  *
- * The answer to a bare `request_session_settings`, and the run-configuration sheet's source of
- * truth (#491). It replaces reading these values off the daemon's `screen_snapshot` reply, which still carries
+ * The answer to a `request_session_settings` naming one conversation (RequestSessionSettingsPayload
+ * above), and the run-configuration sheet's source of truth (#491). A request that names a
+ * conversation the daemon does not host, one bound to no live session, or none at all is answered
+ * with every field zero-valued — never an error frame and never another session's values — so a
+ * `session_id` of `''` is as much a real answer here as a resolved one.
+ * It replaces reading these values off the daemon's `screen_snapshot` reply, which still carries
  * copies: that reply is a picture of the terminal, and a daemon on the stream-json interactive
  * runner has no terminal, so it answers `server.binary_offline` and the settings — which have
  * nothing to do with a terminal — were refused along with it. On the runner in production that left

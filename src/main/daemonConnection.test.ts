@@ -5680,7 +5680,7 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     expect(drivers).toHaveLength(0)
   })
 
-  it('sends a bare request_session_settings frame when connected', async () => {
+  it('sends a request_session_settings frame naming no conversation when called with no id', async () => {
     const { connection, drivers } = await connected()
 
     connection.requestSessionSettings()
@@ -5688,8 +5688,21 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     const sent = drivers[0].sent.map((bytes) => decodeEnvelope(bytes))
     const request = sent.find((e) => e.type === 'request_session_settings')
     expect(request).toBeDefined()
-    // Bare: no conversation id, no session id, no selector of any kind. The reply is daemon-wide.
-    expect(request?.payload).toEqual({})
+    // The key is always present (the daemon's field has no `omitempty`); '' is the "names nothing"
+    // value, which the daemon answers with a zero-valued session_settings — the pre-#945 behaviour.
+    expect(request?.payload).toEqual({ conversation_id: '' })
+  })
+
+  it('forwards the conversation id it is handed into the frame', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.requestSessionSettings('conv-42')
+
+    const sent = drivers[0].sent.map((bytes) => decodeEnvelope(bytes))
+    const request = sent.find((e) => e.type === 'request_session_settings')
+    // Asserted as an exact payload against a value distinct from every other string on the envelope,
+    // so forwarding the wrong field cannot pass.
+    expect(request?.payload).toEqual({ conversation_id: 'conv-42' })
   })
 
   it('decodes an inbound session_settings into runConfigReceived with all six fields', async () => {

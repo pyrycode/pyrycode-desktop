@@ -252,6 +252,55 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(command)).toBe(true)
   })
 
+  it('accepts requestSessionSettings with no payload, and with an explicitly undefined one (#945)', () => {
+    // Both are the "names no conversation" shape the renderer still sends today. Testing the VALUE
+    // for undefined, not just `'payload' in value`, is load-bearing: structured clone PRESERVES an
+    // explicitly-undefined property across the IPC bridge, so an `in`-only check would reject a
+    // caller that spreads an optional id and silently drop the command at the boundary.
+    expect(isRendererCommand({ type: 'requestSessionSettings' })).toBe(true)
+    expect(isRendererCommand({ type: 'requestSessionSettings', payload: undefined })).toBe(true)
+    expect(isRendererCommand({ type: 'requestSessionSettings', extra: 'ignored' })).toBe(true)
+  })
+
+  it('accepts a requestSessionSettings naming a conversation, checking type not emptiness (#945)', () => {
+    // '' passes: the daemon polices ids, and it answers an unresolvable one with a zero-valued
+    // session_settings rather than an error frame. A structurally-extra field is harmless.
+    expect(
+      isRendererCommand({ type: 'requestSessionSettings', payload: { conversation_id: 'conv-1' } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({ type: 'requestSessionSettings', payload: { conversation_id: '' } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({
+        type: 'requestSessionSettings',
+        payload: { conversation_id: 'conv-1', extra: 'ignored' }
+      })
+    ).toBe(true)
+  })
+
+  it('rejects a requestSessionSettings whose payload is present but not a conversation id (#945)', () => {
+    // A present payload must be a well-formed one — a non-string id, a missing key, and a literal
+    // null are all type lies that would otherwise reach encodeEnvelope's bare JSON.stringify.
+    expect(
+      isRendererCommand({ type: 'requestSessionSettings', payload: { conversation_id: 42 } })
+    ).toBe(false)
+    expect(isRendererCommand({ type: 'requestSessionSettings', payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSessionSettings', payload: null })).toBe(false)
+  })
+
+  it('types both requestSessionSettings shapes as part of the union (#945)', () => {
+    // Compile-time proof the payload is OPTIONAL: the bare literal is the one production sender's
+    // shape (requestRunConfigSnapshot) and must keep type-checking until #946 supplies an id.
+    const bare: RendererCommand = { type: 'requestSessionSettings' }
+    const named: RendererCommand = {
+      type: 'requestSessionSettings',
+      payload: { conversation_id: 'conv-1' }
+    }
+    expect(isRendererCommand(bare)).toBe(true)
+    expect(isRendererCommand(named)).toBe(true)
+  })
+
   it('accepts the bare requestRecentWorkspaces command (no payload — the request carries nothing) (#380)', () => {
     // The recent-workspaces request carries nothing to parameterise, so its guard case is a bare
     // `return true`. A structurally-extra field is harmless (structural minimum), like requestConversations.

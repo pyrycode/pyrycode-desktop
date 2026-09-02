@@ -153,10 +153,12 @@ export interface DaemonConnection {
    */
   send(payload: SendMessagePayload): void
   /**
-   * Ask the daemon for the current run configuration (#491). Bare — no payload — because the reply
-   * is daemon-wide. Inert no-op when not connected, like send.
+   * Ask the daemon for one conversation's current run configuration (#491). The id is forwarded onto
+   * the frame as `conversation_id`; omitting it names nothing, which the daemon answers with a
+   * zero-valued reply rather than an error (#945). Optional only until #946 gives the renderer an id
+   * to supply. Inert no-op when not connected, like send.
    */
-  requestSessionSettings(): void
+  requestSessionSettings(conversationId?: string): void
   /**
    * Encrypt a bare `list_conversations` control envelope onto the live session — asks the daemon for
    * the current conversation list. The `send` TWIN, not `requestDebugBundle`: a list request has no
@@ -1368,7 +1370,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
-  function requestSessionSettings(): void {
+  function requestSessionSettings(conversationId?: string): void {
     // The send twin: inert no-op when not connected (see send's guard rationale — before start(),
     // mid-bootstrap, or bootstrap-failed). A read request has no consumer to fail; a request sent
     // while disconnected simply produces no reply, and the sheet re-requests on its next open.
@@ -1377,7 +1379,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Shares the one monotonic nextEnvelopeId with send / requestDebugBundle — no second counter —
       // so ids stay unique across interleaved calls (the daemon correlates the session_settings reply
       // by in_reply_to).
-      const bytes = buildRequestSessionSettings({ id: nextEnvelopeId, ts: now() })
+      // The id is forwarded verbatim; the builder owns the "absent → `conversation_id: ''`" rule, so
+      // nothing here has to know the wire's present-always shape. Never logged (#945): the catch
+      // below still drops its caught object and adds no line.
+      const bytes = buildRequestSessionSettings({ id: nextEnvelopeId, ts: now(), conversationId })
       nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
       driver.sendMessage(bytes)
     } catch {

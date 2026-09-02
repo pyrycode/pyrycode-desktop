@@ -3878,3 +3878,27 @@
   background: var(--color-primary);
   color: var(--color-on-primary);
 }
+
+/* Unavailable while the batch is short an answer (#922) — the ONE state on this panel the design does not
+   draw, because a static frame cannot express one that depends on what the operator has picked. So the
+   treatment is this ticket's own. It keeps the convention's SUBSTANCE (muted content token, no pointer
+   affordance, no opacity literal, no geometry change — the row's three buttons stay the same height under
+   the border-box compensation above) and departs on one property, deliberately.
+
+   THE FILL COMES ALONG, unlike .composer__send:disabled and .log-data__download:disabled, and the reason
+   is this button's ENABLED fill rather than a different taste. Desktop is dark-only (ADR 0003), where
+   --color-primary is #9dcbfc — a BRIGHT light blue. Muting only the content would put #c2c7cf on #9dcbfc:
+   light on light, a label at roughly 1.3:1 that cannot be read, on a pill that still reads as the most
+   prominent and most available control in the row. The two precedents do not transfer because their
+   enabled fills are already neutral (--color-surface-container-high and --color-secondary-container), so
+   there the content colour carries the whole signal. Here it cannot. --color-surface-container-high is
+   this stylesheet's own neutral control fill (.composer__send's background), which puts the muted label at
+   ~8.6:1 — legible, and unmistakably de-emphasized beside the outlined Cancel and Previous.
+
+   Only the Continue ROLE is ever gated; the same element reading Next is never disabled, or an incomplete
+   batch could not be stepped through to complete it. */
+.question-panel__continue:disabled {
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface-variant);
+  cursor: not-allowed;
+}

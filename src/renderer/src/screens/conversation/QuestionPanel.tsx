@@ -9,7 +9,9 @@ import type { QuestionPickEvent, QuestionSelection } from '../../store/questionP
 // respond, #915 filled the title row with one tab per question in the batch (347:6829) and made them jump
 // between them, and #916 put the same jump on the action row as Previous plus a trailing button that reads
 // Next until the last question. #921 GAVE CANCEL THE ROW'S FIRST SENDING HANDLER: it refuses the batch and
-// clears the panel. Continue is still inert as to answering — the answer path is #853's remaining slice.
+// clears the panel. #922 GAVE THE TRAILING BUTTON ITS SECOND, and the row is now fully live: in its
+// Continue role it sends the batch's assembled answers, and it is the one control here that can be
+// unavailable — see the action row for why the gate is a conjunction and not a bare `!canAnswer`.
 //
 // The pure view / store-bound container split is #224's, built on #177's dialog precedent: this file is
 // markup-in-props-out and server-render-testable from injected fixtures, while the store read lives in
@@ -59,11 +61,12 @@ import type { QuestionPickEvent, QuestionSelection } from '../../store/questionP
 
 // Client-owned copy, in the app's own voice — deliberately constants rather than JSX literals, so the
 // line between what the client says and what claude says is visible in the source of a file that renders
-// both. SINCE #921 EXACTLY ONE BUTTON ON THIS ROW SENDS: Cancel refuses the batch. Previous and Next step
-// it, which is navigation and not an answer, and Continue on the last question is as inert as it was
-// (#853 sends the assembled answer; the rows below only record it). None is `disabled`: the panel sits ON
-// TOP of the composer, so there is nothing to disable and no disabled state to draw. The inert-buttons
-// posture is #224's, so the answer path lands on a stable surface.
+// both. SINCE #922 TWO BUTTONS ON THIS ROW SEND: Cancel refuses the batch, and the trailing button in its
+// Continue role answers it. Previous and Next step, which is navigation and not an answer, and neither is
+// ever `disabled` — the stepping controls are absent where there is nowhere to go rather than present and
+// inert, the header tabs' call. The ONE unavailable state on this panel is Continue's, and it exists
+// because sending an incomplete batch is silently rejected upstream rather than because the design draws
+// one; the treatment follows the house `.composer__send:disabled` convention.
 export const QUESTION_CANCEL_COPY = 'Cancel'
 export const QUESTION_CONTINUE_COPY = 'Continue'
 // The two stepping labels (#916), constants for the same reason. Previous is the middle instance Figma
@@ -196,8 +199,10 @@ export function QuestionPanelView({
   questions,
   activeIndex,
   selection,
+  canAnswer,
   onQuestionSelected,
   onCancel,
+  onAnswer,
   onOptionChosen,
   onOtherChosen,
   onOtherTextChanged
@@ -205,6 +210,12 @@ export function QuestionPanelView({
   questions: readonly Question[]
   activeIndex: number
   selection: QuestionSelection
+  // WHETHER THE WHOLE BATCH HOLDS AN ANSWER (#922) — a prop rather than something derived here, and
+  // that is structural rather than convenience. This view holds the ACTIVE question's selection and no
+  // other, so it cannot see the batch; the container computes this from every question's picks through
+  // the one function that also builds the frame, so the button's availability and the payload's
+  // contents come from the same result and cannot disagree.
+  canAnswer: boolean
   onQuestionSelected: (questionIndex: number) => void
   // THE ROW'S ONE SENDING GESTURE (#921), and variant-neutral like the two chosen-callbacks below: this
   // view knows a refusal was asked for and nothing about what it becomes. It carries NO batch id even
@@ -213,6 +224,11 @@ export function QuestionPanelView({
   // its read, so the two cannot drift apart. Required rather than optional, so `tsc` forces the one
   // call site to supply it and an unwired Cancel cannot ship green a second time.
   onCancel: () => void
+  // THE ROW'S SECOND SENDING GESTURE (#922), and variant-neutral for `onCancel`'s reasons: this view
+  // knows an answer was asked for and nothing about what it becomes. It carries no batch id and no
+  // entries — which batch is answered, and with what, stays the container's single read. Required
+  // rather than optional, so `tsc` forces the one call site and an unwired Continue cannot ship green.
+  onAnswer: () => void
   // BOTH CHOSEN-CALLBACKS ARE VARIANT-NEUTRAL, deliberately. Picking and ticking are one gesture from this
   // view's side; which store arm it becomes is the container's call, through optionPickEventFor /
   // otherPickEventFor above. So this view holds no arm to transpose — and neither callback carries a
@@ -433,17 +449,26 @@ export function QuestionPanelView({
               {QUESTION_PREVIOUS_COPY}
             </button>
           ) : null}
-          {/* ONE ELEMENT WHOSE LABEL AND HANDLER VARY, never two branched elements, and the difference is
-              observable. Two branches reconcile as a REPLACEMENT, so stepping onto the last question from
-              the keyboard would drop focus mid-row; one element keeps the focus where the operator put it.
-              The class stays `__continue` even though the copy no longer always does: it names the design's
-              FILLED TREATMENT slot (347:6692), which is what does not vary.
-              STILL INERT AS TO ANSWERING on the last question, and by construction rather than by care —
-              there it carries no handler at all. #853 is the slice that sends. */}
+          {/* ONE ELEMENT WHOSE LABEL, HANDLER AND AVAILABILITY VARY, never two branched elements, and the
+              difference is observable. Two branches reconcile as a REPLACEMENT, so stepping onto the last
+              question from the keyboard would drop focus mid-row; one element keeps the focus where the
+              operator put it. `disabled` is an ATTRIBUTE on that same element, so #922's gate does not
+              reopen this. The class stays `__continue` even though the copy no longer always does: it
+              names the design's FILLED TREATMENT slot (347:6692), which is what does not vary.
+              #922 GAVE IT ITS HANDLER: on the last question it sends the assembled answer.
+
+              THE GATE IS A CONJUNCTION, AND THE SECOND CONJUNCT IS WHAT KEEPS THE PANEL FROM
+              DEADLOCKING. Unavailable only in the Continue ROLE and only while the batch is short an
+              answer. Gating on `!canAnswer` alone would disable NEXT on any incomplete batch, stranding
+              the operator on question 1 with no way to reach question 2 to answer it — so the batch could
+              never become complete. Stepping is never gated on what has been picked; neither is Previous.
+              The handler needs no null-guard beside `disabled`: `answerQuestionBatch` refuses the same
+              incomplete result that produced `canAnswer === false`, so the two cannot disagree. */}
           <button
             type="button"
             className="question-panel__continue"
-            onClick={isLastQuestion ? undefined : () => onQuestionSelected(activeIndex + 1)}
+            disabled={isLastQuestion && !canAnswer}
+            onClick={isLastQuestion ? onAnswer : () => onQuestionSelected(activeIndex + 1)}
           >
             {isLastQuestion ? QUESTION_CONTINUE_COPY : QUESTION_NEXT_COPY}
           </button>

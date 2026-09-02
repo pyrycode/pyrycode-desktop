@@ -285,6 +285,29 @@ never enters a spec array, a diff, or a failure diagnostic — #921's rule, unch
 - Whether the e2e tier can drive a `multi_select` question's checkbox rows and the Other field in
   one spec without a second launch. Expected yes (#912 drives both), confirmed during Phase B.
 
+## Revisions
+
+**2026-09-02 — the unavailable Continue mutes its FILL as well as its content.**
+
+Design source and Open Questions both said `.question-panel__continue:disabled` would copy
+`.log-data__download:disabled` exactly — content colour to `--color-on-surface-variant`, pointer
+affordance dropped, the button's own fill kept. Resolving the open question against the actual token
+values falsified that. Desktop is dark-only (ADR 0003) and `--color-primary` is `#9dcbfc`, a bright
+light blue; `--color-on-surface-variant` is `#c2c7cf`. Muting only the content puts light on light at
+roughly 1.3:1 — a label that cannot be read, on a pill that still reads as the most prominent and most
+available control in the row, which is the failure mode the open question was written to catch.
+
+The two precedents do not transfer because their enabled fills are already neutral
+(`--color-surface-container-high`, `--color-secondary-container`), so there the content colour carries
+the whole signal on its own. Implemented instead with `background: var(--color-surface-container-high)`
+— this stylesheet's own neutral control fill, `.composer__send`'s background — beside the muted
+content, putting the label at ~8.6:1 and reading unmistakably de-emphasized beside the outlined Cancel
+and Previous. The convention's substance is unchanged: token pair, no opacity literal, no geometry
+change, no border change.
+
+The second open question resolved as expected: the fake tier drives the multi-select rows and the
+Other field in one spec, so `e2e/question-answer-continue.spec.ts` needs no second launch.
+
 ## Security review
 
 **Verdict:** PASS

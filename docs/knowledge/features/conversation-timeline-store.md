@@ -47,6 +47,20 @@ self-check (written before #223 merged) undercounted by one file; see [#229 code
 notes](../codebase/229.md) § Lessons learned. `selectItems` now exposes a `toolCall`'s resolved outcome;
 no render yet — that's the sibling slice [#230](https://github.com/pyrycode/pyrycode-desktop/issues/230).
 
+[#773](../codebase/773.md) widened the fifth owned arm, `toolResult` ([#229](../codebase/229.md)) — no
+new arm, one field added straight through every layer at once: wire, IPC, and both the bridge's
+`DaemonEvent`/`ThreadEvent` sides gained `resultDetail?: string`, the daemon's short précis of a tool's
+structured outcome (pyrycode#2024). Unlike #642/#643's two-ticket split, a scalar has none of the
+daemon-chosen-keys surface that justified separating decode from carry, so this ticket also widens the
+`ThreadItem` the reducer resolves onto (`toolCall.result.resultDetail`) in the same pass —
+`reduceTimeline`'s `fillResult` needed no change, its existing spread already preserves the field, the
+`input` (#643) precedent exactly. Absence (a daemon predating pyrycode#2024) and an empty string stay
+distinct facts at every hop, pinned by tests asserting `=== undefined` rather than
+`'resultDetail' in …`; per the upstream contract the two carry no different *meaning* — both mean "no
+count" — they are simply never collapsed into each other, since collapsing is the lossy transform this
+ticket exists not to perform. Ships dormant: `selectItems` carries the field but nothing reads it yet —
+that's [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856).
+
 [#317](../codebase/317.md) added a sixth owned arm, `stallDetected` — the daemon's onset-only stall
 liveness signal ([#315](../codebase/315.md)), moved out of the inverse-filter `null` list it shipped
 dormant in. At ship time, unlike every prior owned arm, both the `DaemonEvent` and the `ThreadEvent`
@@ -415,3 +429,7 @@ event the composer dispatches directly (see below), the store's one non-bridge w
   `reconnected` (both early-outs widened to match) and cleared for free by `reset`. First reader:
   `ConversationScreen`'s `workingIndicatorStateWithLocalSend`, composed on `workingIndicatorState`
   rather than folded into `ThreadStatus`.
+- [#773 codebase notes](../codebase/773.md) — widens the fifth owned arm's `ThreadEvent`/`ThreadItem`
+  pair with `resultDetail`, in one ticket rather than #642/#643's two-ticket split, since a scalar has
+  no daemon-chosen keys to separate decode from carry over. Still dormant —
+  [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856) renders it.

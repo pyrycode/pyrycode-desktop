@@ -91,6 +91,20 @@ that bridge owns, and the first whose mapping **resolves** an existing `ThreadIt
 not attacker text; `resultSummary` is opaque daemon display text the render slice
 ([#230](https://github.com/pyrycode/pyrycode-desktop/issues/230)) must render as plain text.
 
+[#773](../codebase/773.md) widened this member — no new member, one field added — with a sixth,
+**optional** field: `resultDetail?: string`, the daemon's short précis of a tool's structured outcome
+(pyrycode#2024, e.g. `"265 lines"`, `"110 of 1676 lines"`). Assigned unconditionally at the emit,
+`undefined` when the wire omitted it — the consumer contract is `event.resultDetail === undefined`,
+never `'resultDetail' in event`, `input`'s (#642) exact posture. Per the upstream contract the field
+carries no `omitempty`, so absence here means only a daemon predating pyrycode#2024; an empty string is
+a value in its own right and is never collapsed into absence. Unlike `input`, this field carries no
+daemon-chosen keys to police — a scalar has none of that surface, so decode and this emit landed in one
+ticket rather than split like #642/#643. Unit words and interior spaces are part of the value on purpose
+(a client cannot tell a read from a search without switching on tool name); nothing on this path parses,
+trims, or extracts a number from it. Ships dormant; consumed by the same [conversation timeline
+store](conversation-timeline-store.md) bridge that already owns `toolResult` — the render slice is
+[#856](https://github.com/pyrycode/pyrycode-desktop/issues/856).
+
 [#241](../codebase/241.md) added a thirteenth no-`SessionAction` member, `conversationCreated` — the
 [conversation create](conversation-create.md) feature's reply, the write-side twin of
 `conversationsReceived` (#139). Reuses the wire `ConversationCreatedPayload` verbatim (its own 5-field
@@ -196,6 +210,7 @@ AC4 ("no key material, raw frames, or bytes cross the bridge") is **enforced by 
 - [#642 codebase notes](../codebase/642.md) — a field, not a member: `toolUse` widened with an optional fifth field, `input?: Readonly<Record<string, string>>`, still ships dormant on this arm — #643 is the first consumer
 - [Modal-prompt model](modal-prompt-model.md) / [#201](../codebase/201.md) — the `modalShown`/`modalDismissed` members, the tenth and eleventh no-`SessionAction` arms, consumed by neither existing bridge; the real consumer is the third, independent [modal store + bridge](modal-store-bridge.md), shipped in [#223](../codebase/223.md). [#871 codebase notes](../codebase/871.md) later widened `modalShown` with `conversationId`, the tenth arm in the `#675` family, copied by name and required; it crossed this bridge as a no-op ([#223](../codebase/223.md) rebuilt a fresh `ModalEvent`) until [#877 codebase notes](../codebase/877.md) carried it onto `ModalEvent`'s `shown` arm, and [#878](https://github.com/pyrycode/pyrycode-desktop/issues/878) carried it the rest of the way onto the held `ModalPrompt`, where `selectHasOutstandingFor` is the sink. `modalDismissed` is unaffected.
 - [Conversation timeline store](conversation-timeline-store.md) / [#229](../codebase/229.md) — the `toolResult` member, the twelfth no-`SessionAction` arm and the vertical's last transport slice; the fifth arm the `timelineBridge` owns and the first to resolve an existing `ThreadItem` in place rather than append one or set a scalar
+- [#773 codebase notes](../codebase/773.md) — a field, not a member: `toolResult` widened with an optional sixth field, `resultDetail?: string`, still ships dormant on this arm — [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856) is the first consumer
 - [Conversation create](conversation-create.md) / [#241](../codebase/241.md) — the `conversationCreated` member, the thirteenth no-`SessionAction` arm and the write-side twin of `conversationsReceived` (#139); consumed by neither existing bridge, real consumer is the render sibling #242
 - [#254 codebase notes](../codebase/254.md) — the `sessionTransition` member, the fourteenth no-`SessionAction` arm and the second (after `snapshotReceived`) to content-minimise its emit relative to its decoded wire payload; consumed by none of the three existing bridges, real consumer is the renderer holder #259, blocked on this ticket
 - [#292 codebase notes](../codebase/292.md) — the `queueState` member, consumed by neither existing bridge; the only member to date that carries `conversationId` while every sibling turn-stream arm drops it, because the daemon SSOT (pyrycode #720) fixes `queue_state` as a replacement-truth snapshot the still-unbuilt #293 store must key by conversation

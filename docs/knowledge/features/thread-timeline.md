@@ -51,7 +51,7 @@ no singleton, no React hook here; that render-integration layer is #202/#203's.
 ```ts
 type TurnPhase = 'thinking' | 'responding' | 'idle'
 type SessionBoundaryReason = 'clear' | 'idle_evict' | 'workspace_change'
-interface ToolResult { isError: boolean; resultSummary: string }
+interface ToolResult { isError: boolean; resultSummary: string; resultDetail?: string }
 
 type ThreadItem =
   | { kind: 'assistantText'; turnId: string; text: string }
@@ -63,7 +63,7 @@ type ThreadItem =
 type ThreadEvent =
   | { type: 'assistantDelta'; turnId: string; seq: number; text: string }
   | { type: 'toolUse'; turnId: string; toolUseId: string; name: string; inputSummary: string; input?: Readonly<Record<string, string>> }
-  | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
+  | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string; resultDetail?: string }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   | { type: 'userText'; text: string }
@@ -104,6 +104,17 @@ Both the bridge and the reducer carry it unchanged and by reference — no store
 no key singled out, no value shortened. Ships dormant: `reduceTimeline`'s `toolUse` arm appends it
 onto the `toolCall` item, but no render reads it yet — that's
 [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645).
+
+**`result.resultDetail` ([#773](../codebase/773.md)) is the same kind of widen, on the outcome side.**
+It is an optional field on `toolResult`/`ToolResult`, not a new scalar or item kind — the daemon's short
+précis of a tool call's structured outcome (`"265 lines"`, `"110 of 1676 lines"`, pyrycode#2024). Unlike
+`toolCall.input`, absence and `''` are not given different meanings here: the upstream contract states
+both mean "no count," so absence means only "a daemon predating pyrycode#2024." Both states are still
+carried faithfully rather than collapsed into each other, because collapsing is a lossy transform, not
+because the two states mean different things. `fillResult`'s existing spread needed no change to
+preserve the field, the same as `input`'s widen. Ships dormant — the sole consumer is
+[#856](https://github.com/pyrycode/pyrycode-desktop/issues/856), which also owns the decision that
+neither absence nor emptiness draws anything.
 
 ### The reducer
 
@@ -301,6 +312,11 @@ Nothing imports this module yet.
   arm and `fillResult` are otherwise unmodified; the reducer's appended literal gained one line
   carrying the map by reference. No render — [#645](https://github.com/pyrycode/pyrycode-desktop/issues/645)
   is the still-open sibling slice.
+- **[#773](../codebase/773.md) (shipped)** widened the `toolResult` arm/`ToolResult` pair with one
+  optional field, `resultDetail` — no new arm, no new item kind, and unlike #642/#643 it lands wire
+  through item in a single ticket, since a scalar has no daemon-chosen-keys surface forcing a split.
+  `reduceTimeline`'s pre-existing `toolResult` arm and `fillResult` are otherwise unmodified. No render
+  — [#856](https://github.com/pyrycode/pyrycode-desktop/issues/856) is the still-open sibling slice.
 
 ## Edge cases and limitations
 
@@ -445,6 +461,8 @@ Nothing imports this module yet.
   optional `DaemonEvent.toolUse.input` field, shipped dormant.
 - [#643 codebase notes](../codebase/643.md) — widens the `toolUse`/`toolCall` pair with `input`, carried
   unchanged and by reference through the bridge and the reducer; ships dormant.
+- [#773 codebase notes](../codebase/773.md) — widens the `toolResult`/`ToolResult` pair with
+  `resultDetail`, wire through item in one ticket rather than #642/#643's split; ships dormant.
 - [#538 codebase notes](../codebase/538.md) — the nullary `reconnected` arm: `timelineBridge.ts` maps
   the `connected` daemon edge onto it, clearing `phase`/`stalled`/`apiRetry`/`compacting` while
   preserving `items` by reference — the Mode B reconnect reconcile [`modalStore` #415](../codebase/415.md)

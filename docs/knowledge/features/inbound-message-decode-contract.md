@@ -195,6 +195,24 @@ verbatim, never interpreted here. `is_error` is a decoded boolean, not attacker 
 arm in the #675 family to do so, completing it — copied by name, required, read bare because the decode
 already guarantees it; it stops at the renderer timeline bridge.
 
+**[#773](../codebase/773.md) widens `tool_result` by a field, not a kind** — the #642 pattern applied to
+a scalar, so decode and carry land in one ticket rather than two, since a scalar has none of #642's
+daemon-chosen-keys surface to split off. `ToolResultPayload` gains a sixth field, **optional**,
+`result_detail?: string` (pyrycode#2024) — the daemon's short précis of a tool's structured outcome
+(`"265 lines"`, `"110 of 1676 lines"`). Decoded by a new module-private helper, `optionalString`, placed
+directly after `optionalStringMap` and sharing its posture minus the map walk: an absent key →
+`undefined`, a present `string` (`""` included) → returned verbatim, anything else → throws
+`WireDecodeError`, reusing `optionalStringMap`'s failure category (`malformed optional field:`), naming
+only the field constant. Per the upstream declaration the field carries no `omitempty` — a current
+daemon always writes it, empty when there is no count — so `undefined` here means only "a daemon
+predating pyrycode#2024"; absence and `''` carry no different *meaning*, but both are carried faithfully
+rather than collapsed into each other, since collapsing is the lossy transform this ticket exists not to
+perform. The value's alphabet (digits, spaces, ASCII letters) is a statement about an honest producer,
+not a wire guarantee, so it is handled exactly like `result_summary`: narrowed to a string and carried,
+never alphabet-validated and never parsed for its embedded count — the render slice
+([#856](https://github.com/pyrycode/pyrycode-desktop/issues/856)) is the sole consumer and the sole
+eventual sink.
+
 **Extended a twentieth time by [#884](../codebase/884.md), additively.** `question_shown` → `{ kind:
 'question-shown', questionShown: QuestionShownPayload }` via `parseQuestionShownPayload`, the transport
 slice of the [question-shown wire types](question-shown-wire-types.md) vocabulary (#883). The first kind

@@ -245,10 +245,13 @@ Nothing renders `question_shown` yet:
   and the same three permanent no-ops as its sibling above; see § *Question dismissed* above and
   [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md). Both arms now ship
   dormant on the same terms: no renderer store reads either yet, and both wait on the same consumer.
-- **No outbound answer verb.** None exists upstream yet (pyrycode#1907). The eventual answer frame
-  returns a claude-authored string (selected by `label`, since options carry no id) — publishing that
-  string here does not make it trusted on the way back; it is re-resolved daemon-side against the
-  recorded batch, keyed on `question_batch_id`, exactly as `modal_answer` is against `modal_id`.
+- **The outbound answer verb has since landed** ([#919](https://github.com/pyrycode/pyrycode-desktop/issues/919)):
+  `question_answer{question_batch_id, answer_token, answers[]}` / `question_refused{question_batch_id,
+  answer_token}` — see [Question resolution envelope](question-resolution-envelope.md). It departs
+  from what this section once anticipated: an answer selects by `question_index` into the batch's
+  `questions` array, **never** by `label` — so no claude-authored byte travels inbound at all, unlike
+  the speculative label-echo shape this bullet used to describe. Wire+builders only so far; no command
+  wiring, no `answer_token` minting, no renderer consumer yet.
 
 ## Edge cases and limitations
 
@@ -312,6 +315,9 @@ same conclusion about its own fixture, for the same reason).
 
 ## Related
 
+- [Question resolution envelope](question-resolution-envelope.md) — the outbound half that resolves a
+  batch, `question_answer`/`question_refused` (#919): the wire types and two pure builders, mirroring
+  `modal_answer`/`modal_cancel`. No command wiring or renderer consumer yet.
 - [Inbound message decode](inbound-message-decode.md) / [#884 codebase notes](../codebase/884.md) —
   the fail-closed decode into a typed inbound arm, the first consumer of these types.
 - [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) / [Daemon-event

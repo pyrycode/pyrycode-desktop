@@ -446,6 +446,33 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   warns the eventual consumer (#895) not to read "decoded" as "sanitized". Also corrects the upstream
   shape fixture's `source: "timeout"` (pyrycode#1974, pre-producer) against the landed producer's actual
   pair (pyrycode#1973). Ships dormant; architect self-review PASS.
+- [Question resolution envelope](features/question-resolution-envelope.md) — the **outbound** half of
+  the question vertical, mirroring [modal resolution envelope](features/modal-resolution-envelope.md)
+  seam for seam (#235 is this one's twin): `EnvelopeType` gains `'question_answer'`/`'question_refused'`
+  beside the inbound `'question_shown'`/`'question_dismissed'`; `QuestionAnswerPayload{question_batch_id,
+  answer_token, answers: QuestionAnswerEntry[]}` (`QuestionAnswerEntry{question_index, values: string[]}`)
+  / `QuestionRefusedPayload{question_batch_id, answer_token}` join `types.ts`, no `conversation_id` on
+  either. **An answer names its question by INDEX, never by `label`** — the security property the shape
+  exists for, since no claude-authored byte (a `WireQuestionOption` has no `id`) travels inbound this
+  way, unlike a reflex label-echo design would. `question_refused` carries `answer_token` too, unlike
+  `modal_cancel`'s `modal_id`-alone — do not size the pair from the modal asymmetry; a refusal is as
+  replayable as an answer, same one-shot `question_batch_id` dedup. Two pure fail-closed builders,
+  `buildQuestionAnswer`/`buildQuestionRefused` (one new file, `questionResolutionEnvelope.ts`, no
+  barrel, MAIN-PROCESS ONLY), each a structural clone of `buildModalAnswer`/`buildModalCancel` wrapping
+  a caller-supplied payload into a typed `Envelope` → `encodeEnvelope`, MAY throw `WireEncodeError` on
+  over-cap — propagated rather than truncated, since a trimmed answer would send a different choice
+  than the operator made; more reachable here than on the modal pair since `values` are unbounded
+  operator-typed free text. No range check on `question_index` — that bound is the daemon resolver's
+  (`answerVerdict`), the same reason `buildDequeueMessage` polices no `queued_msg_id`. The daemon never
+  reads `answer_token` on this path at all (`AnswerQuestion` takes the batch id and entries, not the
+  whole payload, precisely so it never holds a token it has no business reading) — the field is still
+  modelled and always-present, minted main-side by the not-yet-built consumer. Zero `EnvelopeType`
+  consumer cascade. **No consumer yet**: the command wiring that mints `answer_token` and the question
+  panel's action-row controls are later slices, split from #853. Not security-sensitive to ship (nothing
+  logs, no decode path, no IPC/Electron surface added); security review flagged one SHOULD-FIX for the
+  consumer slice — build the wire payload as a fresh object literal from validated scalars, never a
+  spread of the renderer's object, since `Envelope.payload` is `unknown` and every own key ships
+  verbatim. Architect self-review PASS (#919, split from #853).
 - [Host label store](features/host-label-store.md) — `createHostLabelStore({ secureStore })`, the third
   consumer of [secure store](features/secure-store.md) and the first that isn't a secret: the sidebar
   nickname the operator types at pairing, persisted so it survives a restart. Can't live on

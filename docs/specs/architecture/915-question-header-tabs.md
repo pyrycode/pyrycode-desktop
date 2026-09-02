@@ -193,4 +193,16 @@ and this is the re-run.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+**2026-09-02, implementation.** No design change — both Open Questions resolved as the plan proposed, and
+the code landed as designed.
+
+- The uniform button row stands: every tab in a multi-question batch is a `<button>`, the active one
+  included, and only the one-question row keeps the bare `<span>`.
+- The stale-`checked` question **did not reproduce**. Arc 3 of `e2e/question-picks.spec.ts` drives the worst
+  case directly — a single-select question's radios reconciled into a multi-select question's checkboxes by
+  position, and back — and both directions read their own store state on every hop. So no `key` was added to
+  the options list, which would have been a defence against a failure mode that does not occur.
 </content>

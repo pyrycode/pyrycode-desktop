@@ -3508,10 +3508,15 @@
   color: var(--color-tertiary);
 }
 
-/* The labels row (347:6829). It wraps, with the design's asymmetric 8px row / 16px column rhythm, and it
-   holds exactly ONE label today: four of the five slots and the Previous control are hidden in the
-   single-question instance. The row is drawn anyway, because omitting it would diverge from the locked
-   design — and #907's stepped panel fills the other slots without touching this rule. */
+/* The labels row (347:6829). It wraps, with the design's asymmetric 8px row / 16px column rhythm, and #915
+   fills it with one tab per question in the batch — the five slots the design draws are five `Question
+   label` instances wrapping onto two lines, so nothing here caps the count. The rule itself was already
+   right for that and is untouched.
+
+   THERE IS NO PREVIOUS CONTROL IN THIS ROW. #906's note here (and the matching one in QuestionPanel.tsx)
+   said four slots and a Previous button were hidden in the single-question instance; checked against Figma
+   on 2026-09-02, 347:6829 holds five label instances and no button at all. Previous is the middle of the
+   three buttons in the Actions row (347:6657), and it is #916's. */
 .question-panel__labels {
   flex: 1 1 auto;
   min-width: 0;
@@ -3536,6 +3541,36 @@
   font-weight: var(--text-label-small-weight);
   text-transform: uppercase;
   word-break: break-word;
+}
+
+/* A tab (#915) — the same typography, worn by a <button> once there is somewhere to jump. The
+   .conversation__unpair recipe minus its pill: the design's Question label has no fill, no padding and no
+   border in either state, so this strips the UA button chrome and adds nothing back but the pointer
+   affordance and the repo's focus ring. text-align: left so a header that wraps stays flush with the row
+   rather than centring the way a button's content does by default.
+
+   NO white-space: nowrap, though the design's generated code carries it on every slot. `header` is
+   claude-authored and bounded by nothing on either side, so nowrap would let one unbroken hostile token
+   push the row's width out; the inherited word-break above is what holds the layout instead. The design's
+   own wrapping row is preserved either way — only a pathological header draws differently than the mock. */
+.question-panel__label--tab {
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  text-align: left;
+}
+
+.question-panel__label--tab:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* State=Inactive (347:6862) at Schemes/Primary Container — the ONLY new colour this slice mints, and the
+   only property the two states differ in. Active (347:6845) is the base rule above, unchanged since #906,
+   which is what makes the one-question row byte-identical to what shipped. */
+.question-panel__label--inactive {
+  color: var(--color-primary-container);
 }
 
 /* The bordered box (347:6021). overflow: hidden clips the border radius against any child; the 16px gap

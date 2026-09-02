@@ -132,11 +132,16 @@ describe('ComposerSlot', () => {
     expect(markup).not.toContain('hidden=""')
   })
 
-  it('draws the first question of a batch carrying several', () => {
+  it('opens a batch carrying several on its first question, with a tab for each', () => {
     show(OPEN, [question('First'), question('Second')])
     const markup = render(OPEN)
+    // #915 draws EVERY header, as tabs, so "which question is showing" moved to the box's own text. The
+    // panel opens on the first — FIRST_QUESTION_INDEX seeds the slot's state, and a static render never
+    // leaves it, which is also why the jump itself is Playwright's.
+    expect(markup).toContain('Body of First')
+    expect(markup).not.toContain('Body of Second')
     expect(markup).toContain('>First<')
-    expect(markup).not.toContain('>Second<')
+    expect(markup).toContain('>Second<')
   })
 
   // #912 — the picks read. The view is proven against injected props in QuestionPanel.test.tsx; what only

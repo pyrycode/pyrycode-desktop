@@ -146,17 +146,15 @@ shape, which also dodges pluralisation.
 ### The running-model lookup moves onto the published rows
 
 `runningCatalogEntry` reads `MODEL_CATALOG` and goes with it. Its replacement resolves an announced
-identifier against the published rows by EXACT EQUALITY on `resolved_model`, rendering that row's
+identifier against the published rows by EXACT EQUALITY on `value`, rendering that row's
 `display_name` on a hit and the announced identifier verbatim on a miss.
 
-`resolved_model` rather than `value` is the join key because `resolved_model` is *the concrete
-identifier this row resolves to right now* and an announcement is *the concrete identifier claude
-resolved for the turn* — the same kind of thing, which is what makes it a real join rather than the
-permanently-dormant one it replaces. It is internally consistent within this one file too: the row that
-tells the operator it resolves to X is the row named when claude announces X. `value` cannot serve —
-claude echoes an identifier at least as specific as the one it was given, so a bare alias is never
-announced and a `value` join would never fire. A miss stays ORDINARY, not an error: an announced
-identifier need not appear in any published row, and the verbatim fallback is the correct outcome.
+`value` is the join key because it is the field the deleted lookup already compared (`entry.family` was
+the token the row submitted, and `value` is the argument the row now submits), so the rewrite moves the
+lookup onto real published data without changing what it compares. A miss stays ORDINARY, not an error:
+claude echoes an identifier at least as specific as the one it was given, so an announced identifier
+need not appear in any published row, and the verbatim fallback that surface already has is the correct
+outcome. See the Revisions entry below for why `resolved_model` is NOT the key.
 
 The exactness guard survives the rewrite re-anchored: an announced identifier that is a SUPERSTRING of
 a published `value` must not resolve to that row's display name. That is the assertion that fails if
@@ -339,3 +337,37 @@ a grandchild (#556 → #561 → #975), so the split-depth gate forbids a third l
 is on the ticket and the seam that would have been cut is recorded in a comment there. The file,
 call-site and reject-branch limits all hold comfortably — 2 production `.tsx` files plus one stylesheet,
 one consumer call site, no state machine — and the overage is test cascade rather than design surface.
+
+## Revisions
+
+### 2026-09-02 — the running-model join key is `value`, not `resolved_model`
+
+The first draft of this plan joined the announced identifier against each row's `resolved_model`,
+reasoning that an announcement and a `resolved_model` are the same kind of thing (a concrete
+identifier) and that this is the only choice under which the lookup ever actually fires — the ticket's
+"the published rows give it a real join".
+
+Two written contract lines say otherwise and they outrank that reasoning:
+
+- `WireModelOption`'s docblock states the join is *"not `resolved_model`"* — whichever way its first
+  clause is parsed, that exclusion is unambiguous, and `model-list-wire-types.md` repeats it.
+- The ticket makes the exactness guard a hard requirement: *an announced identifier that is a
+  superstring of a published `value` must not resolve to that row's display name.* Under a
+  `resolved_model` join that guard has an exception — the measured Haiku row's `resolved_model`
+  (`claude-haiku-4-5-20251001`) IS a superstring of its own `value` (`haiku`) and would resolve. A
+  guard with an exception is not the guard the ticket asked to be kept.
+
+So the key is `value`, compared with `===` and nothing else. This keeps the rewrite a pure substitution
+of the field the deleted lookup already used (`entry.family`, the token the row submitted → `value`,
+the argument the row submits) and leaves no way for substring matching to return in another guise.
+
+The cost, stated rather than hidden: the lookup stays mostly dormant, because claude announces an
+identifier at least as specific as the one it was given and so rarely echoes a bare `value`. That is
+the same outcome #560 documented and deliberately accepted — the verbatim path is the live path, and
+the operator sees the true running identifier rather than a display name inferred from a resemblance.
+What changes is that the lookup now joins against real published data instead of four hardcoded family
+tokens, and the ticket's own framing agrees that a miss is ordinary rather than an error. The row's
+second line is where an alias's current resolution reaches the operator (AC4), so `resolved_model` is
+not left unused — it is simply displayed rather than matched on.
+
+No other section of this plan changes.

@@ -351,6 +351,11 @@ function slashCommandListPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'slash_command_list', ts: FIXED_TS, payload })
 }
 
+/** A `model_list` plaintext, wrapping an arbitrary payload (#973). */
+function modelListPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'model_list', ts: FIXED_TS, payload })
+}
+
 /** A `conversation_created` plaintext, wrapping an arbitrary payload (#241). */
 function conversationCreatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversation_created', ts: FIXED_TS, payload })
@@ -6318,6 +6323,283 @@ describe('createDaemonConnection — slash_command_list stream (#937)', () => {
         plaintext: slashCommandListPlaintext({
           ...MENU,
           commands: [{ ...MENU.commands[0], aliases: null }]
+        })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — model_list stream (#973)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** A four-row menu, SYNTHETIC throughout — no real model identifier and no real display name, because
+   *  a failing `toEqual` prints the whole object into CI output. Each row is here for one property the
+   *  ACs pin: a `truncated_fields: null` row, a `truncated_fields` naming `effort_levels` BESIDE a
+   *  non-empty `effort_levels` (the shape proving the two fields cross independently, and the one that
+   *  separates "cut to nothing" from "this model exposes no effort control"), a `supports_auto_mode:
+   *  false` row whose `false` is a VALUE rather than a missing reading, and a display name carrying both
+   *  an embedded newline and a non-ASCII rune. `dropped_models` is 2 against 4 carried rows — the
+   *  committed fixture's own posture, which deliberately violates upstream's ten-entry invariant because
+   *  it pins SHAPE rather than capturing live traffic — so nothing can pass by recomputing one count
+   *  from the other. */
+  const MENU = {
+    conversation_id: 'conv-4b7e',
+    models: [
+      {
+        resolved_model: 'synth-model-a-2026',
+        value: 'synth-a',
+        display_name: 'Synthetic A',
+        effort_levels: ['low', 'high'],
+        supports_auto_mode: true,
+        truncated_fields: null
+      },
+      {
+        resolved_model: '<unmeasured>',
+        value: 'synth-b[1m]',
+        display_name: 'Synthetic B: first line\nsecond line — ünïcode ✓',
+        effort_levels: ['medium'],
+        supports_auto_mode: true,
+        truncated_fields: ['effort_levels']
+      },
+      {
+        resolved_model: '<unmeasured>',
+        value: 'synth-c',
+        display_name: 'Synthetic C',
+        effort_levels: [],
+        supports_auto_mode: false,
+        truncated_fields: null
+      },
+      {
+        resolved_model: '',
+        value: 'default',
+        display_name: '',
+        effort_levels: [],
+        supports_auto_mode: false,
+        truncated_fields: ['display_name', 'value']
+      }
+    ],
+    dropped_models: 2
+  }
+
+  it('emits three camelCase top-level fields with the rows verbatim, in wire order', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: modelListPlaintext(MENU) })
+
+    // One exact toEqual covering AC1 and AC2 at once. The top level is snake→camel
+    // (`conversation_id`→`conversationId`, `dropped_models`→`droppedModels`) and the wire `type` does
+    // NOT cross; each row is reused VERBATIM, so `resolved_model`, `display_name`, `effort_levels`,
+    // `supports_auto_mode` and `truncated_fields` all stay snake_case. A `.map` that camelCased the rows
+    // reddens here, which is the point: the fresh-literal rule governs the EVENT OBJECT only.
+    // `toEqual` distinguishes `null` from `undefined` and from an absent key, so the two
+    // `truncated_fields: null` rows are pinned by value and not merely by shape.
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'modelList',
+        conversationId: 'conv-4b7e',
+        models: [
+          {
+            resolved_model: 'synth-model-a-2026',
+            value: 'synth-a',
+            display_name: 'Synthetic A',
+            effort_levels: ['low', 'high'],
+            supports_auto_mode: true,
+            truncated_fields: null
+          },
+          {
+            resolved_model: '<unmeasured>',
+            value: 'synth-b[1m]',
+            display_name: 'Synthetic B: first line\nsecond line — ünïcode ✓',
+            effort_levels: ['medium'],
+            supports_auto_mode: true,
+            truncated_fields: ['effort_levels']
+          },
+          {
+            resolved_model: '<unmeasured>',
+            value: 'synth-c',
+            display_name: 'Synthetic C',
+            effort_levels: [],
+            supports_auto_mode: false,
+            truncated_fields: null
+          },
+          {
+            resolved_model: '',
+            value: 'default',
+            display_name: '',
+            effort_levels: [],
+            supports_auto_mode: false,
+            truncated_fields: ['display_name', 'value']
+          }
+        ],
+        droppedModels: 2
+      }
+    ])
+  })
+
+  it('carries truncated_fields: null as null, and a cut naming effort_levels beside a non-empty list', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: modelListPlaintext(MENU) })
+
+    const event = emitted(sink).slice(before)[0]
+    // Narrow rather than cast — the arm's own discriminant does the work, so no `as` is needed to read
+    // a row.
+    if (event.type !== 'modelList') throw new Error('expected a modelList arm')
+
+    // AC4's truncation contract, explicitly: `null` is the value, never `undefined` and never an absent
+    // key. Asserted by VALUE and deliberately NOT with `toHaveProperty` or an `in` check — this channel
+    // is `webContents.send`, so structured clone preserves an assigned `undefined` as a present key, and
+    // a presence check would read true on a row carrying nothing.
+    expect(event.models[0].truncated_fields).toBe(null)
+    expect(event.models[2].truncated_fields).toBe(null)
+
+    // The reading-rule row: `truncated_fields` naming `effort_levels` must arrive intact, because it is
+    // the ONLY signal separating "cut to nothing, or shortened" from "this model exposes no effort
+    // control" — an empty `effort_levels` says both, since the wire collapses absent, null and empty
+    // into one value. Here the cut rides beside a NON-empty list, the shape that proves the two fields
+    // cross independently rather than one being derived from the other.
+    expect(event.models[1].truncated_fields).toEqual(['effort_levels'])
+    expect(event.models[1].effort_levels).toEqual(['medium'])
+
+    // Row three is the other half of that pair: an empty `effort_levels` with NOTHING cut. The two rows
+    // together are what make the collapse legible — identical `effort_levels`-is-uninformative shapes
+    // saying opposite things, separated only by `truncated_fields`.
+    expect(event.models[2].effort_levels).toEqual([])
+
+    // `false` is a VALUE, not a missing reading: claude refuses `auto` permission mode per model, and
+    // absent in claude's reply decodes to `false` correctly. A crossing that dropped falsy fields
+    // reddens here.
+    expect(event.models[2].supports_auto_mode).toBe(false)
+
+    // Both byte-level properties of a claude-authored label survive the crossing unsanitized — which is
+    // the contract, not a defect: the daemon bounds these strings and does not sanitize them, and the
+    // RENDER boundary owes the escaping (AC4's provenance clause).
+    expect(event.models[1].display_name).toContain('\n')
+    expect(event.models[1].display_name).toContain('ünïcode')
+  })
+
+  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // An extra key planted at BOTH levels — the payload and a row. This family nests one level, so the
+    // smuggling surface is two wide. A hoisted `truncated_fields` is planted alongside, since that is
+    // the key this frame deliberately does NOT have (a cut is a property of one row and rides that row).
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modelListPlaintext({
+        ...MENU,
+        smuggled_payload: 'must-not-cross',
+        truncated_fields: ['must-not-cross'],
+        models: [{ ...MENU.models[0], smuggled_row: 'must-not-cross' }]
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'conversationId',
+      'droppedModels',
+      'models',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('carries dropped_models verbatim — 0 is a value, and nothing recomputes it from the entries', async () => {
+    const { sink, drivers } = await connected()
+
+    // Zero against four carried rows: a count consulted for truthiness, or defaulted with `|| 0`,
+    // reaches green here anyway — which is why the non-zero case below shares the assertion.
+    const beforeZero = emitted(sink).length
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modelListPlaintext({ ...MENU, dropped_models: 0 })
+    })
+    const zero = emitted(sink).slice(beforeZero)[0]
+    if (zero.type !== 'modelList') throw new Error('expected a modelList arm')
+    expect(zero.droppedModels).toBe(0)
+    expect(zero.models).toHaveLength(4)
+
+    // Three dropped against ONE carried row. The two numbers disagree on purpose: an emit that
+    // recomputed the count from `models.length`, or cross-checked the pair and "corrected" one, lands on
+    // 1 rather than 3 and reddens here. The menu's true size is 1 + 3, and only the daemon knows it. The
+    // producer's ten-entry cap is a DAEMON-SIDE cap rather than a wire constant, so a shorter list
+    // beside a non-zero count is not a contradiction to reconcile.
+    const beforeMany = emitted(sink).length
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modelListPlaintext({
+        ...MENU,
+        models: [MENU.models[0]],
+        dropped_models: 3
+      })
+    })
+    const many = emitted(sink).slice(beforeMany)[0]
+    if (many.type !== 'modelList') throw new Error('expected a modelList arm')
+    expect(many.droppedModels).toBe(3)
+    expect(many.models).toHaveLength(1)
+  })
+
+  it('emits an empty menu as an empty list, distinguishable from no frame at all', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // `models: []` is a POSITIVE STATEMENT that claude offered nothing — the daemon's MarshalJSON
+    // normalises a nil slice to `[]` and `omitempty` is deliberately out, because eliding the key would
+    // erase the frame's point. It must cross, never be coalesced away as "no news": asserting the slice
+    // has exactly one element is what separates an empty menu from a dropped frame (AC2). Note this is
+    // NOT the argument behind a row's empty `effort_levels` above, which is a COLLAPSE — one frame
+    // states three different positions on empty.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: modelListPlaintext({ ...MENU, models: [], dropped_models: 0 })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'modelList',
+        conversationId: 'conv-4b7e',
+        models: [],
+        droppedModels: 0
+      }
+    ])
+  })
+
+  it('drops a malformed model_list (models: null) without emitting or throwing', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    // `models` is the field whose contract forbids null while its row-level `truncated_fields` neighbour
+    // permits it — the branch a reader pattern-matching off one to the other waves through.
+    // `Array.isArray(null)` is false, which is precisely what fails it closed upstream of this emit.
+    // Asserted on the raw send-call count rather than on `emitted()`, so a non-event send would still be
+    // caught (AC2).
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: modelListPlaintext({ ...MENU, models: null })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+
+    // A malformed ROW fails the whole frame closed too, rather than yielding a partial menu — the
+    // outcome #972's narrower exists to prevent. One bad row among three good ones.
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: modelListPlaintext({
+          ...MENU,
+          models: [MENU.models[0], { ...MENU.models[1], effort_levels: null }, MENU.models[2]]
         })
       })
     ).not.toThrow()

@@ -1235,6 +1235,53 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               droppedCommands: inbound.slashCommandList.dropped_commands
             })
             return
+          case 'model-list':
+            // The model-menu data path (#973) — the IDENTITIES claude will accept for this conversation,
+            // decoded fail-closed by #972, where its sibling `slash_command_list` above inventories the
+            // VERBS the working directory will accept. An UNSOLICITED daemon report: it rides a
+            // `control_response` but is not correlated by this client's outstanding-request memory, so it
+            // is emitted unconditionally on decode. snake→camel at the TOP LEVEL only
+            // (`conversation_id`→`conversationId`, `dropped_models`→`droppedModels`); `models` is reused
+            // VERBATIM and passes across BY REFERENCE, the `queued` / `tasks` / `questions` / `commands`
+            // precedent — parseModelOption already rebuilt every row as a fresh six-field literal, so
+            // there is nothing to drop and no per-row mapping to write. Do not "fix" that into a `.map`
+            // that camelCases the rows: the fresh-literal rule below governs the EVENT OBJECT, and
+            // deep-remapping the rows would break the verbatim-row rule instead.
+            //
+            // A fresh literal naming three fields, never a spread of the decoded payload, so a decoder
+            // that later grows a field cannot smuggle it across IPC. The wire `type` does not cross.
+            //
+            // Every field is read BARE — no `??`, no `|| 0`, no optional handling. The decode requires
+            // all three, so a missing or wrong-typed one drops the whole line upstream of this emit; a
+            // `?? ''` here would turn that fail-closed drop into a silent misattribution, filing one
+            // conversation's model menu against another, and a `|| 0` on the count would turn a real
+            // defect into a plausible zero. NOTHING RECOMPUTES OR CROSS-CHECKS `droppedModels` AGAINST
+            // `models.length`: the two disagree by design, their sum is the menu's true size, and only
+            // the daemon knows it. The producer's ten-entry cap is a DAEMON-SIDE cap rather than a wire
+            // constant, so a short list beside a non-zero count is not a contradiction to reconcile.
+            //
+            // NO log call, and deliberately no `count` of models either. #972's decode already emitted
+            // the content-free record, and this leg is the one place on the path where a claude-authored
+            // `display_name` could reach a sink. The never-into-a-log clause rests here on the CONTRACT
+            // rather than on a measurement — no control byte is measured in these short labels, but the
+            // daemon bounds them and does not sanitize them, so one is PERMITTED rather than excluded;
+            // do not transcribe the sibling's measured `0x0a`, whose evidence is workspace-authored and
+            // does not transfer. How many models claude offers for a session is itself a fact about that
+            // session (the background_task_roster / model_announced posture).
+            //
+            // The #974 store consumes this through a DEDICATED subscriber; all four exhaustive bridges
+            // no-op it PERMANENTLY rather than dormantly, since none of them will ever claim it. The
+            // three strings and the effort levels on every row are untrusted CLAUDE-AUTHORED text — a
+            // HIGHER trust tier than the sibling's workspace-authored strings — and decoded is not
+            // sanitized: the render slice owes the escaping. Not compile-forced (this inner switch has no
+            // assertNever) — the round-trip tests guard this emit.
+            emitDaemonEvent(sink, {
+              type: 'modelList',
+              conversationId: inbound.modelList.conversation_id,
+              models: inbound.modelList.models,
+              droppedModels: inbound.modelList.dropped_models
+            })
+            return
         }
         return
       }

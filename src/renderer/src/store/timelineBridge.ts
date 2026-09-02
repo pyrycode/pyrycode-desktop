@@ -250,6 +250,20 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // Present for the assertNever guard, which stringifies the WHOLE event into an Error message and
       // would otherwise put every workspace-authored string on the frame there.
       return null
+    case 'modelList':
+      // Not a timeline event (#973), by the same reasoning as its sibling directly above and on the same
+      // wire facts: the frame carries no turn_id and opens and closes no turn, so a published menu of
+      // identities is daemon STATE by the queueState rule (#720) — what claude will ACCEPT is not
+      // something that HAPPENED during a turn, and a snapshot that replaces a reader's view of the menu
+      // is not an item to append. The distinction worth drawing is against `modelAnnounced` (#587), which
+      // is the closest-reading arm in this file: that one reports the identity claude is running FOR A
+      // TURN and still ships dormant here on these same facts, so a menu published BEFORE any turn picks
+      // from it is further from the timeline, not nearer. Its consumer is the #974 store, and unlike its
+      // sibling's the no-op is PERMANENT rather than dormant — #974 commits to a dedicated subscriber, so
+      // nothing in this switch will ever claim it. Present for the assertNever guard, which stringifies
+      // the WHOLE event into an Error message and would otherwise put every claude-authored string on the
+      // frame there.
+      return null
     default:
       return assertNever(event)
   }

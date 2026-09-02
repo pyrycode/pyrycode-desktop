@@ -28,7 +28,8 @@ import type {
   WireModalSource,
   WireModalOption,
   WireQuestion,
-  WireSlashCommand
+  WireSlashCommand,
+  WireModelOption
 } from '../wire/types'
 
 /** The IPC channel every typed daemon event travels on, main → renderer.
@@ -875,4 +876,96 @@ export type DaemonEvent =
       conversationId: string
       commands: readonly WireSlashCommand[]
       droppedCommands: number
+    }
+  // The model-menu arm (#973) — the IDENTITIES claude will accept for one conversation, decoded
+  // fail-closed by #972 from the `model_list` frame. Its sibling `slashCommandList` above rides the same
+  // `initialize` control reply and is its structural twin in every respect: one id, the rows, and a drop
+  // count. Placed after it for that arm's own stated reason — this family opens its own group and has no
+  // mid-file neighbour to sit beside. The name is a NOUN naming the snapshot, following
+  // `slashCommandList` and `backgroundTaskRoster` and deliberately not `modelsReceived`: the union's
+  // `…Received` arms (`conversationsReceived`, `recentWorkspacesReceived`) name a reply to a request THIS
+  // CLIENT MADE, and this frame is unsolicited — it rides a `control_response` but is not correlated by
+  // this client's outstanding-request memory, so it is emitted unconditionally on decode.
+  //
+  // EXACTLY TWO OTHER ARMS IN THIS UNION CARRY A FIELD NAMED `model`, AND BOTH MEAN SOMETHING ELSE THAN
+  // THIS ONE. `runConfigReceived.model` is the per-session OVERRIDE, where `''` means "inherited default,
+  // no override". `modelAnnounced.model` is what claude announced FOR THE CURRENT TURN. This arm's rows
+  // are a THIRD meaning — the MENU, what claude will accept BEFORE a turn picks one — and a reader
+  // meeting any of the three needs the other two to place it. Two, not three; do not transcribe a count
+  // from neighbouring prose.
+  //
+  // A SNAPSHOT, NOT A DELTA. Each frame REPLACES a reader's view of the menu rather than amending it. And
+  // A CONSUMER MUST NEVER BLOCK A MODEL MENU ON THIS FRAME: its delivery window is narrow and lossy, so a
+  // menu that waits for it can wait forever.
+  //
+  // ONE FRAME STATES THREE DIFFERENT POSITIONS ON EMPTY, and a reader who assumes one rule gets two of
+  // them wrong. `models: []` is a POSITIVE STATEMENT THAT CLAUDE OFFERED NOTHING — the daemon normalises
+  // a nil slice and `omitempty` is deliberately out — so an empty menu must be emitted and consumed,
+  // never dropped or coalesced as "no news". A row's `effort_levels: []` is a COLLAPSE, not a statement:
+  // absent, null and empty all arrive as `[]` because a client's behaviour is identical for all three.
+  // And `truncated_fields` is EXEMPT FROM NORMALISATION ENTIRELY, so `null` and `[]` are distinct values
+  // there and neither may be folded into the other.
+  //
+  // Top-level fields are snake→camel; THE ROW TYPE IS REUSED VERBATIM with its snake_case fields, so
+  // `resolved_model`, `display_name`, `effort_levels`, `supports_auto_mode` and `truncated_fields` stay
+  // as the wire spells them. That is the settled house rule for nested arrays, with five precedents
+  // (queueState, conversationsReceived, backgroundTaskRoster, questionShown, slashCommandList): #972's
+  // narrower already rebuilt each row as a fresh six-field literal, so there is nothing to drop and no
+  // mapping to write. This family nests ONE level. `readonly` on the array mirrors queueState and
+  // slashCommandList; WireModelOption itself stays a mutable interface, exactly as QueuedItem and
+  // BackgroundTask are.
+  //
+  // All three fields are REQUIRED, never optional: the wire has them always-present, #972's decode
+  // requires all three, and an assigned `undefined` SURVIVES THE STRUCTURED CLONE across this channel —
+  // so an optional field would invent an absence case the daemon never produces and make a later
+  // `'droppedModels' in event` check read true on an event carrying nothing.
+  //
+  // TRUNCATION — `droppedModels` IS THIS FRAME'S ONLY REPORT AT THE FRAME LEVEL, so THE MENU'S TRUE SIZE
+  // IS `models.length + droppedModels` and a panel showing only the carried rows silently presents a cut
+  // menu as the whole one ("10 of 40" is the honest render). THE LIST IS CUT FROM THE TAIL, so the rows
+  // carried are claude's FIRST N IN CLAUDE'S OWN ORDER — order is meaning here, never to be re-sorted
+  // before a reader is told what was lost. `0` is a VALUE, never consulted for truthiness — the key is
+  // always written, so an absent one is a real defect rather than a valid zero — and nothing may
+  // recompute it from, or reconcile it against, the number of rows carried. THE PRODUCER'S TEN-ENTRY CAP
+  // IS A DAEMON-SIDE PRODUCER CAP, NOT A WIRE CONSTANT: nothing may hardcode it, treat a list of exactly
+  // ten as a signal, or derive truncation from anything but this field. Each row's `truncated_fields`
+  // names THAT ROW'S OWN cut fields and reports only for itself — never hoist or flatten those lists
+  // across rows, and note there is no hoisted list on the frame at all.
+  //
+  // **A CUT `effort_levels` IS UNKNOWABLE FROM `effort_levels` ALONE.** The wire collapses absent and
+  // empty into the same `[]`, so a `truncated_fields` NAMING `effort_levels` is the ONLY signal
+  // separating "cut to nothing, or shortened" from "this model exposes no effort control", and a consumer
+  // must read it as UNKNOWN, never as *none*. Read as "none", a cut list silently removes an effort
+  // control the model actually supports. `WireSlashCommand`'s cut-`aliases` hazard, transposed.
+  //
+  // SECURITY — PROVENANCE IS PER FIELD, and the two halves differ. `conversationId` is DAEMON-ASSERTED:
+  // an OUTBOUND DISPLAY-SCOPING KEY ONLY, which is what lets a client with several live conversations
+  // avoid showing one conversation's model menu in another. It grants no inbound capability and is NOT a
+  // nonce — nothing here is unguessable and nothing is a secret, the posture `modal_shown` and
+  // `question_shown` carry — so matching it wants plain `===` and specifically not
+  // `crypto.timingSafeEqual`. EVERY STRING IN A ROW — `resolved_model`, `value`, `display_name`, and
+  // every string in `effort_levels` — is CLAUDE-AUTHORED text that crossed the subprocess trust boundary.
+  // That is a HIGHER trust tier than `slashCommandList`'s workspace-authored strings, not a restatement
+  // of it. DECODED IS NOT SANITIZED: #972 made the SHAPE trusted and nothing more (a `string` carries no
+  // signal for that), the daemon BOUNDS THESE STRINGS AND DOES NOT SANITIZE THEM, and THE RENDER BOUNDARY
+  // THAT OWES THE ESCAPING IS THIS CLIENT'S. Safe as inert, escaped, length-bounded text; never into a
+  // raw-markup sink (no innerHTML / dangerouslySetInnerHTML), an attribute, a URL, a filename, a cache
+  // key, a lookup path, or a log. Unlike its sibling's, the never-a-log clause here rests on the CONTRACT
+  // rather than on a measurement: no control byte is measured in these short labels, but the daemon does
+  // not sanitize, so one is PERMITTED rather than excluded. `value` in particular IS NOT PARSEABLE — the
+  // measured entries are `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `haiku` — so nothing may
+  // split it to derive a family or present it as a version. If a consumer indexes rows by `display_name`,
+  // THE INDEX IS A `Map`: `index[row.display_name] = row` with a `__proto__` label writes through to
+  // Object.prototype. No token, key, or raw frame can ride the arm (one id, a bounded list of six-field
+  // rows, and a count is the whole payload).
+  //
+  // PERMANENTLY no-op in all FOUR exhaustive bridges, NOT dormant — and unlike the sibling's, which
+  // shipped dormant because #938 had not yet chosen, this is already decided: #974 commits to a DEDICATED
+  // subscriber in the announcedModelBridge / backgroundTaskRosterBridge / slashCommandListBridge posture,
+  // so no case in the session, modal, question or timeline switch will ever claim it.
+  | {
+      type: 'modelList'
+      conversationId: string
+      models: readonly WireModelOption[]
+      droppedModels: number
     }

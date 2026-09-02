@@ -315,3 +315,24 @@ cascade.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+### 2026-09-02 — Phase B
+
+**Open question 1 resolved: there is no fifth bridge.** `npx tsc --noEmit -p tsconfig.web.json`, run on
+its own against the landed arm, reported exactly four `TS2345 … not assignable to parameter of type
+'never'` errors — `daemonEventBridge.ts`, `modalBridge.ts`, `questionBridge.ts`, `timelineBridge.ts`.
+The ticket's count of four is the whole compile-forced consumer set. No design change.
+
+**Open question 2 resolved: `tsc` forces the fixtures, vitest does not.** All four bridge test fixtures
+are typed call sites, so they redden the web typecheck; none of them would have failed vitest, which
+never typechecks. Confirmed by the RED run rather than assumed. No design change.
+
+**Departure from the plan's testing strategy — one assertion the plan did not anticipate.**
+`questionBridge.test.ts` carries an explicit arm-count assertion over its `others` table
+(`expect(others).toHaveLength(39)`, commented "42 union arms minus the 3 owned above"), which exists so
+an arm silently dropped from that table cannot pass unnoticed. Growing the union by one required bumping
+it to 40 and correcting the comment to 43. The plan's testing section said only "append to their `others`
+array"; the count is a second edit in that file. It is a mechanical consequence of the arm rather than a
+design change, recorded here because the diff shows a changed number the plan does not explain.

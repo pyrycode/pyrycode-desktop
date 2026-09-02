@@ -230,9 +230,11 @@ decode](inbound-message-decode.md)). The IPC carry landed at
 `case 'model-list':` emits the `modelList` arm of `DaemonEvent`, a fresh named-field literal with the
 rows reused verbatim (see [Daemon event channel — the sealed
 union](daemon-event-channel-sealed-union.md)), consumed as a permanent no-op by all four exhaustive
-renderer bridges. It still ships dormant — nothing stores or renders it. The store and run-config
-slices that replace `MODEL_CATALOG`/`EFFORT_LEVELS` in `RunConfigSections.tsx` are below this one in
-the family, unbuilt as of this ticket.
+renderer bridges. [#974](https://github.com/pyrycode/pyrycode-desktop/issues/974) added the
+per-conversation store and its dedicated fifth-observer bridge — see [Model-list
+store](model-list-store.md) — but it still ships dormant, since nothing renders the held list yet.
+The run-config slices that replace `MODEL_CATALOG`/`EFFORT_LEVELS` in `RunConfigSections.tsx` (#975
+model rows, #976 effort segments) are still unbuilt, along with #683 and #682.
 
 ## Edge cases and limitations
 
@@ -284,6 +286,8 @@ radius.
 - [Background-task roster store](background-task-roster-store.md) — the closer **structural**
   precedent for the snapshot shape (`conversation_id` + never-null array + dropped count, per-row
   `truncated_fields: string[] | null`) than `slash_command_list` itself.
+- [Model-list store](model-list-store.md) — [#974](https://github.com/pyrycode/pyrycode-desktop/issues/974)'s
+  per-conversation holder for this frame, the local consumer of the `modelList` arm below.
 - [Wire codec](wire-codec.md) — `Envelope.payload` stays an opaque carrier (`unknown`) through the
   codec; this slice adds no decoder, consistent with that boundary.
 - [Inbound message decode](inbound-message-decode.md) / [Extension

@@ -125,13 +125,37 @@ export type EnvelopeType =
   // TypeQuestionRefused; declared by pyrycode#1983, resolved by #1990/#1991, gated by #1986.
   | 'question_answer'
   | 'question_refused'
+  // The conversation's MODEL inventory (#971) — the identities claude will run as, with the
+  // reasoning-effort levels each one supports. Same shape of frame as its sibling below and drawn from
+  // the same `initialize` control reply: v2 outbound (binary → phone), interactive-capability-gated,
+  // absent from the daemon's `v1TypeSet` so an old client never receives it, riding a
+  // `control_response` rather than the turn stream, and a conversation-scoped SNAPSHOT that replaces a
+  // reader's view rather than a delta amending it — receiving one neither opens nor closes a turn, and
+  // it carries no `turn_id`.
+  //
+  // THE DELIVERY WINDOW IS NARROWER THAN "EMITTED" SUGGESTS, and it is the fact a consumer otherwise
+  // gets wrong. What the daemon runs on a schedule is an ASK, not a delivery: one `initialize`
+  // exchange per claude child spawn, emitted to whatever interactive connections exist at that
+  // instant. Three losses sit between that emit and a client — no conversation is routed yet (the
+  // daemon spawns its first child eagerly at startup, and that child's menu is lost UNCONDITIONALLY,
+  // so a client attaching to an already-running daemon was never sent one), the session is busy (the
+  // frame is classed droppable at fan-in, nothing is retried, and no error frame says a menu was
+  // lost), and the emitting child is not the active conversation's bound session (a session rotation
+  // starts a new child, and therefore a new ask, but does NOT deliver a fresh menu). There is NO
+  // connect-time snapshot and NO WAY TO ASK FOR ONE; only a RECONNECTING client whose cursor predates
+  // the frame is replayed it, which recovers nothing for a first attach. **NEVER BLOCK A MODEL MENU ON
+  // THIS FRAME** — render a usable UI without one rather than waiting for a frame that may never
+  // arrive. SSOT pyrycode docs/protocol-mobile.md § model_list / internal/protocol/interactive.go;
+  // shape declared by pyrycode#1704, fixtures and section by #1705, mapping by #1848, producer by
+  // #1849, proven end to end by #1845.
+  | 'model_list'
   // The workspace's slash-command inventory (#935) — a conversation-scoped MENU rather than a turn
   // event: it rides a `control_response` from the same `initialize` reply `model_list` is drawn from,
   // so receiving one neither opens nor closes a turn, and it is a SNAPSHOT that replaces a reader's
   // view rather than a delta amending it. Same v2 gating as the question family above and likewise
   // absent from the daemon's `v1TypeSet`, so an old client never receives it. Its sibling `model_list`
-  // rides the same reply and is NOT modelled on this side, so there is no local precedent to copy from
-  // it: that one inventories the IDENTITIES claude will run as, this one the VERBS the working
+  // rides the same reply and IS modelled on this side (#971), the member directly above: that one
+  // inventories the IDENTITIES claude will run as, this one the VERBS the working
   // directory will accept. SSOT pyrycode docs/protocol-mobile.md § slash_command_list /
   // internal/protocol/interactive.go; type declared by pyrycode#1726, shape by #1727, fixtures and
   // section by #1718, and emitted by the #2001–#2007 family (#2003 on the live lane, #2004–#2007 on
@@ -1302,6 +1326,195 @@ export interface QuestionAnswerPayload {
 export interface QuestionRefusedPayload {
   question_batch_id: string
   answer_token: string
+}
+
+/**
+ * ONE ROW of a `model_list` (daemon → client). Mirrors the daemon's `ModelOption` field-for-field
+ * (SSOT pyrycode docs/protocol-mobile.md § model_list, internal/protocol/interactive.go), wire order
+ * `resolved_model, value, display_name, effort_levels, supports_auto_mode, truncated_fields` — all
+ * always present (no `omitempty` on any of them). The key set is a deliberate SUBSET of claude's
+ * per-entry vocabulary and nothing invented: `description` and `supportsFastMode` are not carried
+ * because neither has a named consumer, and `supportsEffort` is subsumed by `effort_levels`.
+ *
+ * NAMED `WireModelOption`, NOT `ModelOption`, deliberately. `Wire` is this cluster's prefix for a
+ * nested row whose bare name is generic enough to be wanted again downstream (`WireQuestion`,
+ * `WireQuestionOption`, `WireModalOption`, `WireSlashCommand`), and the bare `ModelOption` is ALREADY
+ * USED across this repo's prose to mean the DAEMON's Go type — in `QuestionShownPayload`'s doc comment
+ * below, in this file's test suite, and in two package overviews. Leaving it unclaimed keeps every one
+ * of those references pointing where it always did.
+ *
+ * `value` IS THE ARGUMENT YOU PASS (`claude --model <value>`). It is NOT a dated identifier and NOT
+ * PARSEABLE: the measured entries are `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet` and
+ * `haiku` — a literal, a bare alias, or a bracketed variant. Splitting it on `-` to derive a family
+ * does not work and no consumer may try; nor may it be presented as a version.
+ *
+ * `resolved_model` is what `value` resolves to RIGHT NOW: the concrete identifier, published BEFORE
+ * the first turn, which is what lets a client show what an alias currently means instead of inferring
+ * it from an announcement after the fact. It is NOT reliably populated — four of the populated
+ * fixture's five rows carry the literal `<unmeasured>`, angle brackets included — so it is not an
+ * identifier merely because one row makes it look like one.
+ *
+ * `display_name` is claude's human label and THE INTENDED JOIN against a per-turn `model_announced`
+ * identifier — NOT `resolved_model`, because the announcement names a concrete dated identifier while
+ * these rows are alias families. A LOOKUP MAY MISS, and that is ordinary rather than an error;
+ * `ModelAnnouncedPayload` above states the same rule from the other side, and resolution is an EXACT
+ * EQUALITY LOOKUP, never inference. **If a consumer indexes rows by this field, the index is a `Map`,
+ * never a plain object** — `display_name` is claude-authored text, and `index[row.display_name] = row`
+ * with a `__proto__` label writes through to `Object.prototype`. That is the join's own instance of
+ * the never-a-lookup-path clause below, not a separate rule.
+ *
+ * `supports_auto_mode` is whether claude accepts `auto` permission mode for this model. claude refuses
+ * per model, so a client greys the option out when this is `false` (#682). It collides with nothing in
+ * the daemon's own vocabulary — `set_permission_mode` carries default / acceptEdits /
+ * bypassPermissions / plan, and `auto` is claude's mode name. Absent in claude's reply decodes to
+ * `false`, which is the CORRECT reading rather than a missing one, so `false` is a value.
+ *
+ * `effort_levels` are the reasoning-effort levels this model supports. IT IS A PLAIN ARRAY AND NEVER
+ * `string[] | null`, but NOT for `models`' reason, and the asymmetry is upstream's rather than an
+ * accident (both normalisations live in interactive.go, each with its own argument). For `models`,
+ * `[]` is a POSITIVE STATEMENT. Here `[]` is a COLLAPSE: Haiku's live entry omits
+ * `supportedEffortLevels` entirely, and a client's behaviour is identical for absent, `null` and `[]`
+ * (no effort control), so the wire states ONE position for all three rather than making every row
+ * branch on absent-versus-empty. Do not model it optional and do not invent a distinction the wire
+ * does not carry.
+ *
+ * **A CUT `effort_levels` IS UNKNOWABLE FROM `effort_levels` ALONE — the one place that collapse costs
+ * a reader.** Because absent and empty arrive as the same `[]`, a `truncated_fields` NAMING
+ * `effort_levels` is the ONLY signal separating "cut to nothing, or shortened" from "this model
+ * exposes no effort control", and it must be read as UNKNOWN, never as *none*. Read as *none*, a cut
+ * list silently removes an effort control the model actually supports. **That rule is only sound on a
+ * VALIDATED frame**, which is the trap this type cannot close on its own: reached through a bare `as`
+ * on `Envelope.payload`, a frame whose `truncated_fields` key is absent yields `undefined`, and
+ * `row.truncated_fields?.includes('effort_levels')` is then falsy for exactly the reason `null` is —
+ * the reader concludes nothing was cut. NULLABLE IS NOT OPTIONAL; go through the decode slice's
+ * narrower. This is `WireSlashCommand`'s cut-`aliases` hazard transposed onto a different field.
+ *
+ * `effort_levels` also carries a DIRECTION HAZARD, and it is upstream's rather than this repo's to
+ * fix. The daemon's inbound `validEffort` enum is CLOSED at the five levels claude returns today
+ * (`low`, `medium`, `high`, `xhigh`, `max`), while `validModel` was WIDENED (pyrycode#1838) for
+ * exactly these rows — so a level claude adds in future would be published here and REFUSED INBOUND.
+ * A consumer must read a published level as a candidate rather than a guarantee, and handle the
+ * refusal.
+ *
+ * `truncated_fields` names THIS ROW'S OWN cut fields, in producer order `resolved_model`, `value`,
+ * `display_name`, `effort_levels`, and `null` means NOTHING WAS CUT for this row. It is deliberately
+ * NOT normalised the way `effort_levels` is, and that exemption is upstream's too: `nil` and `[]` say
+ * the identical thing here and no consumer branches on the difference. Each row reports its own —
+ * there is no hoisted or flattened list on the payload. `effort_levels` is the one name reporting on a
+ * LIST rather than a scalar, and it covers an element cut to fit, the list shortened to fit, or both,
+ * appearing at most once per row in every case, because the report names FIELDS and a list is one
+ * field. The element vocabulary is a plain `string[]` and is NOT narrowed to those four names, for the
+ * reason `WireSlashCommand` records: each frame's set is its own, and a closed one would fail-close a
+ * valid future frame.
+ *
+ * **A CUT `value` IS LOAD-BEARING, NOT DECORATION, and it bites harder here than the same field does
+ * on any sibling** — because `value` is the one field a client sends BACK. `validModel` is a
+ * CHARSET-AND-LENGTH rule, not a membership check against the published list: a `value` cut mid-token
+ * (`claude-fable-5[1m]` → `claude-fable-5`, `opus[1m]` → `opus`) stays alphanumeric, stays inside 64
+ * bytes, and is ACCEPTED. The operator picks one row and gets a different model, with no error frame
+ * anywhere on the path. A row that ignored this field would also present claude's cut text as
+ * complete.
+ *
+ * The BOUND is the PRODUCER's, decided at construction. This type re-decides no maximum and declares
+ * no charset check: a second cap here would be a second place the limit is decided and the two could
+ * disagree silently, and stricter-than-wire would fail-close a valid frame.
+ *
+ * SECURITY — `resolved_model`, `value`, `display_name` and EVERY STRING IN `effort_levels` are
+ * CLAUDE-AUTHORED strings that crossed the subprocess trust boundary. That is a HIGHER trust tier than
+ * `WireSlashCommand`'s workspace-authored strings, and it is the tier the `model_list` references
+ * elsewhere in this file anchor against. The daemon BOUNDS THEM AND DOES NOT SANITIZE THEM — nothing
+ * on this path strips control characters or terminal escape sequences — so they stay untrusted,
+ * model-influenced text all the way here and THE RENDER BOUNDARY THAT OWES THE SANITIZATION IS THIS
+ * CLIENT'S. Safe to render as inert, escaped, length-bounded text; never into a raw-markup sink (no
+ * `innerHTML`, no `dangerouslySetInnerHTML`), an attribute, a URL, a filename, a cache key, a lookup
+ * path, or a log (CLAUDE.md's daemon-text ruling in full). Note that the never-a-log clause rests on a
+ * DIFFERENT footing here than in `WireSlashCommand`, whose argument is a measured `0x0a` across 51
+ * workspace-authored entries: no control byte is measured in these short labels, so the clause holds
+ * on the contract rather than on a measurement — the daemon bounds and does not sanitize, so a control
+ * byte is PERMITTED by the contract rather than excluded by it. Do not transcribe the sibling's
+ * measurement here; it would be a false claim about this frame.
+ */
+export interface WireModelOption {
+  resolved_model: string
+  value: string
+  display_name: string
+  effort_levels: string[]
+  supports_auto_mode: boolean
+  truncated_fields: string[] | null
+}
+
+/**
+ * Inbound `model_list` event (daemon → client). Mirrors the daemon's ModelListPayload field-for-field
+ * (same SSOT), wire order `conversation_id, models, dropped_models` — all always present (no
+ * `omitempty`). The models claude will accept for this conversation, in claude's own order, drawn from
+ * the same `initialize` control reply `slash_command_list` comes from: this one inventories the
+ * IDENTITIES claude will run as, that one the VERBS the working directory will accept.
+ *
+ * **Wire vocabulary only.** Nothing decodes, narrows, stores or renders this yet. The run-configuration
+ * sheet still guesses — a hardcoded `MODEL_CATALOG` array and a hardcoded `EFFORT_LEVELS` constant in
+ * `RunConfigSections.tsx` — and replacing those guesses with this frame is the slice family below
+ * this one. Upstream's producer landed ahead of all of them (pyrycode#1848 maps it, #1849 emits it,
+ * #1845 proves it end to end), so like `slash_command_list` and unlike `question_shown` this shape
+ * arrives to traffic that already exists.
+ *
+ * `models` IS A PLAIN ARRAY AND NEVER `WireModelOption[] | null`: the daemon's `MarshalJSON`
+ * normalises a nil slice to `[]`, and `omitempty` is deliberately out because eliding the key would
+ * erase the frame's point. AN EMPTY `[]` IS A POSITIVE STATEMENT THAT CLAUDE OFFERED NOTHING, so a
+ * client decoding into a non-optional array type never has to branch on null. Note that this is NOT
+ * the argument behind `WireModelOption.effort_levels`' identical posture — that one is a collapse, not
+ * a positive statement — so ONE FRAME STATES THREE DIFFERENT POSITIONS ON EMPTY, and a reader who
+ * assumes one rule gets two of them wrong. The third is `truncated_fields`, exempt from normalisation
+ * entirely.
+ *
+ * **`dropped_models` IS COUNTED AND CARRIED, so `models.length + dropped_models` IS THE MENU'S TRUE
+ * SIZE**, and a client can render "10 of 40" rather than presenting a shortened menu as complete. The
+ * number reaches the wire intact: the mapping carries it VERBATIM rather than recomputing it from
+ * `len(models)`. `dropped_models: 0` is a VALUE, never consulted for truthiness — the key is always
+ * written, so an absent one is a real defect rather than a valid zero. A COUNT is carried rather than
+ * a name because a name-only report loses HOW MANY were lost; per-row text cuts are a property of one
+ * row and ride that row's own `truncated_fields`, so there is deliberately no hoisted one here.
+ *
+ * **THE PRODUCER'S TEN-ENTRY CAP IS A DAEMON-SIDE PRODUCER CAP, NOT A WIRE CONSTANT.** It may change
+ * without any change to this contract, so a client must never hardcode it, treat a list of exactly ten
+ * as a signal, or derive it from anything but `dropped_models`. Upstream states that the producer cuts
+ * only the overflow, so a non-zero `dropped_models` arrives beside exactly ten entries and a shorter
+ * list is a complete one — but THE COMMITTED FIXTURE DOES NOT SATISFY THAT INVARIANT (five rows beside
+ * `dropped_models: 2`), because it pins SHAPE rather than capturing live traffic. Trust the field, not
+ * the length. The list is truncated FROM THE TAIL, so the entries received are claude's first N in
+ * claude's own order. No bound is modelled here for `SlashCommandListPayload`'s reason, and the frame
+ * cannot arrive unbounded regardless: `MAX_PLAINTEXT_BYTES` caps the decrypted envelope before any
+ * parse, in `parseInboundMessage`, ahead of `decodeEnvelope` and ahead of every narrower.
+ *
+ * NOT A TURN-STREAM ITEM: it rides a `control_response`, opens and closes no turn, and carries no
+ * `turn_id`. It is a SNAPSHOT that REPLACES a reader's view of the menu, never a delta amending it.
+ * Hence it keeps `conversation_id` — daemon state keyed by id — which is an OUTBOUND routing/scoping
+ * key only, exactly as `slash_command_list`'s and `modal_shown`'s are, granting no inbound capability.
+ * It is not a nonce: nothing here is unguessable and nothing here is a secret. **A client must never
+ * block a model menu on this frame** — the delivery window is narrow and lossy, and the `EnvelopeType`
+ * member comment above states the three ways it goes missing.
+ *
+ * THE FRAME IS A REPORT, NEVER A CONTROL INPUT — with one amendment a client needs, because the
+ * unqualified rule reads as forbidding the feature. A client IS meant to send a `value` BACK, on
+ * `set_session_settings`; it is the first field in this family that travels in that direction.
+ * Publishing it does not make it trusted: it is still claude's text arriving on an inbound path, and
+ * the daemon re-validates it at internal/relay's `validModel` rather than trusting that it came from a
+ * list the daemon itself published. That rule is pyrycode#845's argv-injection defense and is shaped
+ * the way it is because an accepted value reaches TWO sinks — the claude argv, where `--model` and the
+ * value are separate `execve` elements no shell parses, and the live child's TURN TEXT, since a model
+ * change on a running session is written as `/model <value>` on one line, so an accepted value must
+ * stay a single whitespace-free token.
+ *
+ * Every field being required is load-bearing: it leaves the decode slice's fail-closed narrower no
+ * optional key to wave through, so a missing field is a reject by construction. **A required field is
+ * still only a promise the wire has not kept until it is checked** — reach this type through that
+ * narrower, never a bare `as ModelListPayload` on `Envelope.payload`, which would hand a `.map` a
+ * non-array from a malformed frame and would silently invert `WireModelOption`'s cut-`effort_levels`
+ * rule above.
+ */
+export interface ModelListPayload {
+  conversation_id: string
+  models: WireModelOption[]
+  dropped_models: number
 }
 
 /**

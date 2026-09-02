@@ -191,8 +191,9 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
   section.
 - [#560 codebase notes](../codebase/560.md) — the original render consumer: the `MODEL_CATALOG`
   exact-match lookup, the render contract for the three states, and the sibling-element cut marker.
-  [#975](../codebase/975.md) deleted the catalog and re-anchored the lookup (`runningPublishedRow`)
-  onto [Model-list store](model-list-store.md)'s published rows, joined on `value` — see [Run
+  [#975](../codebase/975.md) deleted the catalog and re-anchored the lookup (`publishedRowFor`, renamed
+  from `runningPublishedRow` by #976 when it gained a second caller) onto [Model-list
+  store](model-list-store.md)'s published rows, joined on `value` — see [Run
   configuration store § Running model section](run-config-store.md#running-model-section-560-resolved-onto-the-published-rows-by-975).
 - [#593 codebase notes](../codebase/593.md) — `clearAnnouncedModel` and its join into
   [`clearPairingScopedState`](paired-shell.md)'s shared set, closing the deferral #588 flagged and #560

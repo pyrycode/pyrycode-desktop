@@ -315,7 +315,10 @@ indistinguishable from broken; the section answers what claude actually announce
 At #560 ship time, resolution was an exact-match lookup against `MODEL_CATALOG`, four hardcoded
 family tokens. **#975 deleted the catalog** (see [Conversation shell — workspace and run
 configuration § Run configuration Model section](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975))
-and moved the lookup onto the daemon-published rows: `runningPublishedRow` (`RunConfigSections.tsx`)
+and moved the lookup onto the daemon-published rows: `publishedRowFor` (`RunConfigSections.tsx`,
+renamed from `runningPublishedRow` by #976, which gave it a second caller — see [Conversation shell —
+workspace and run configuration § Run configuration Effort section, daemon-published
+levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976))
 finds the row whose `value` is `===` the announced identifier — `value`, deliberately not
 `resolved_model`, because a row's `resolved_model` is routinely a superstring of its own `value`
 (`'haiku'` → `'claude-haiku-4-5-20251001'`), which would give the ticket's exactness guard an

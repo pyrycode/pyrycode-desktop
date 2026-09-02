@@ -1,11 +1,13 @@
 import { isDeepStrictEqual } from 'node:util'
-import { test, expect, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   Envelope,
+  ModelListPayload,
   SessionSettingsPayload,
   SessionSettingsUpdatedPayload,
-  SetSessionSettingsPayload
+  SetSessionSettingsPayload,
+  WireModelOption
 } from '../src/shared/wire/types'
 
 // Fake-stack UI e2e for the RUN-CONFIG SHEET's `set_session_settings` write family (#425, split from
@@ -29,13 +31,18 @@ import type {
 // the product was permanently inert against a real daemon. Same shape as save-as-channel, which
 // passed every fake test and had never worked because the daemon had no handler at all. Twice now.
 //
-// STANDING RULE, adopted here: a fake-tier spec may not supply an input production does not produce.
-// If a precondition needs a manufactured push, that is a bug report, not a fixture.
+// STANDING RULE, adopted here and STILL IN FORCE: a fake-tier spec may not supply an input production
+// does not produce. If a precondition needs a manufactured push, that is a bug report, not a fixture.
 //
-// This spec now enforces that structurally rather than by discipline: it does not bind the `daemon`
-// handle at all, so it HAS no way to inject an unsolicited frame. Every byte the app receives is a
-// reply to a frame the app itself sent. A future edit cannot quietly reintroduce a manufactured push
-// without first re-adding the handle, which is a visible change in review.
+// #975 BINDS THE `daemon` HANDLE THIS SPEC USED TO LEAVE DELIBERATELY UNBOUND, and that is a change
+// worth reading rather than skimming. The unbound handle was a STRUCTURAL enforcement of the rule
+// above — with no handle there was no way to inject anything — and the model rows are now built from a
+// frame that only ever arrives unsolicited, so the rows cannot be exercised without one. The rule is
+// not weakened: `model_list` IS an input production produces. The daemon publishes it, unprovoked,
+// from the conversation's `initialize` reply — the same reply `slash_command_list` rides, whose spec
+// (e2e/slash-command-type-ahead.spec.ts) pushes it exactly this way. What was a structural guard is
+// now a stated one: the ONLY frame this spec pushes is that model list, and any future push must be
+// justified against the rule the same way, in this comment.
 //
 // WHY THE CAPTURED OUTBOUND FRAME IS THE LOAD-BEARING PROOF. The view renders NO pending/disabled state
 // (it consumes selectEffectiveSettings + selectError only), so a resolved confirm is DOM-indistinguishable
@@ -45,7 +52,8 @@ import type {
 // distinct outcome (the control reverts + a role="alert" line appears), so it carries its own DOM assertion.
 //
 // SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM attributes / text / counts
-// and captured wire frames only; SESSION_ID / the model-family tokens / effort levels are non-secret routing
+// and captured wire frames only; SESSION_ID / the published model values and labels / effort levels are
+// non-secret routing
 // & display literals; the pairing plumbing (synthetic token, fake static key) lives in launchPairedApp and is
 // never echoed. No failure diagnostic serialises a token, key, or plaintext; the snapshot `text` is '' and
 // never surfaced (#180). `changeId` is a client-minted, IPC-internal correlation key, never on the wire — the
@@ -64,32 +72,64 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // set_session_settings payload (#425 addressing key). A non-secret routing id.
 const SESSION_ID = 'session-425'
 
-// The seeded run configuration the read request is answered with. model 'opus' selects the 'Opus 4.7'
-// row, effort 'low' the low segment, yolo false the off switch — the crisp AC1 baseline and the value
-// a rejected model change reverts toward. session_id is the same non-secret routing id the write half
-// then echoes, and carrying it here is the whole point: it is what un-inerts the controls.
+// The seeded run configuration the read request is answered with. Since #975 the model is a PUBLISHED
+// value and selection is exact equality, so the baseline is `opus[1m]` verbatim — the first pushed
+// row's own value — which selects the OPUS_ROW row. effort 'low' selects the low segment, yolo false
+// the off switch: the crisp AC1 baseline and the value a rejected model change reverts toward.
+// session_id is the same non-secret routing id the write half then echoes, and carrying it here is the
+// whole point: it is what un-inerts the controls.
 const BASELINE_RUN_CONFIG: SessionSettingsPayload = {
   session_id: SESSION_ID,
-  model: 'opus',
+  model: 'opus[1m]',
   effort: 'low',
   yolo: false,
   used_tokens: 50_000,
   window_tokens: 200_000
 }
 
-// The two accepted changes and the one rejected change. Models are FAMILY tokens (the control submits
-// 'opus'/'sonnet'/'haiku', not a full id); effort is the exact level. Each is distinct from the baseline
-// so its settling is observable; the three model families give unique, mutually-non-substring row names.
+// The two accepted changes and the one rejected change. Since #975 a model is a PUBLISHED `value` —
+// the argument the picked row carries, sent back verbatim — rather than a catalog family token; effort
+// is still the exact level. Each is distinct from the baseline so its settling is observable.
 const HAPPY_MODEL = 'sonnet'
 const HAPPY_EFFORT = 'high'
 const REJECTED_MODEL = 'haiku'
 
-// The mutually-non-substring model row display names (RunConfigSections MODEL_CATALOG) — the unique
-// locators for the model rows, which share `.run-config__model-row`. The catalog has four rows since
-// #590 added Fable; this spec exercises three of them and needs no locator for the fourth.
-const OPUS_ROW = 'Opus 4.7'
-const SONNET_ROW = 'Sonnet 4.6'
-const HAIKU_ROW = 'Haiku 4.5'
+// #975 — the published rows the sheet renders, pushed as an unsolicited model_list frame below. The
+// display names are the row locators (rows share `.run-config__model-row`), so they are chosen
+// MUTUALLY NON-SUBSTRING, and none of them contains 'Current model' — the page-wide selection-marker
+// count depends on that. The values cover the measured shapes: a bare alias, another bare alias, and a
+// bracketed variant that is emphatically not parseable. `resolved_model` differs from `value` on every
+// row, which is what makes the second-line assertion a claim about the right field.
+const MODEL_ROWS: WireModelOption[] = [
+  {
+    value: 'opus[1m]',
+    display_name: 'Wide context',
+    resolved_model: 'claude-opus-5',
+    effort_levels: [],
+    supports_auto_mode: true,
+    truncated_fields: null
+  },
+  {
+    value: HAPPY_MODEL,
+    display_name: 'Balanced pick',
+    resolved_model: 'claude-sonnet-5',
+    effort_levels: [],
+    supports_auto_mode: true,
+    truncated_fields: null
+  },
+  {
+    value: REJECTED_MODEL,
+    display_name: 'Quick tier',
+    resolved_model: 'claude-haiku-4-5-20251001',
+    effort_levels: [],
+    supports_auto_mode: false,
+    truncated_fields: null
+  }
+]
+
+const OPUS_ROW = 'Wide context'
+const SONNET_ROW = 'Balanced pick'
+const HAIKU_ROW = 'Quick tier'
 
 // Spec-local frame builders (the conversationsFrame idiom): each seals one reply envelope via the
 // production codec, deterministic id/ts.
@@ -115,6 +155,23 @@ function sessionSettingsUpdatedFrame(sessionId: string, inReplyTo: number): Uint
     ts: FIXED_TS,
     in_reply_to: inReplyTo,
     payload: { session_id: sessionId } satisfies SessionSettingsUpdatedPayload
+  })
+}
+
+// #975 — the published model list, and the ONE unsolicited push this spec makes. Sealed with the
+// production encoder, keyed to the seeded conversation the app opens, so the decode this exercises is
+// the shipped one. `dropped_models: 0` states a complete list; the truncation surfaces are proven at
+// the unit tier, where a frame reporting a cut can be constructed directly.
+function modelListFrame(): Uint8Array {
+  return encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'model_list',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: SEEDED_ROW.id,
+      models: MODEL_ROWS,
+      dropped_models: 0
+    } satisfies ModelListPayload
   })
 }
 
@@ -171,17 +228,19 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
   launchPairedApp
 }) => {
   const captured: Envelope[] = []
-  // NOTE the destructure takes `page` ONLY. Not binding `daemon` is deliberate and load-bearing: the
-  // spec has no handle capable of pushing an unsolicited frame, so it cannot supply an input the real
-  // daemon does not produce. See the standing rule in the header.
-  const { page } = await launchPairedApp({
+  // #975 binds `daemon` — see the header. It is used for exactly ONE push, the unsolicited model_list
+  // frame the daemon publishes from the conversation's initialize reply; every other byte the app
+  // receives is still a reply to a frame the app itself sent.
+  const { page, daemon } = await launchPairedApp({
     buildReplyFrames: capturingRunConfigFake(captured)
   })
 
-  // Per-control locators. `.run-config__model-row` (4) and `.run-config__effort-segment` (5) are not
-  // unique, so scope by display text: model rows by their mutually-non-substring names, effort segments by
-  // an ANCHORED regex (bare 'high' is a substring of 'xhigh', so `/^high$/` avoids the false match). The
-  // selected-model marker (radio, aria-label="Current model") is scoped WITHIN its row, never by class.
+  // Per-control locators. `.run-config__model-row` (3, since #975 one per PUBLISHED row) and
+  // `.run-config__effort-segment` (5) are not unique, so scope by display text: model rows by their
+  // mutually-non-substring names — DAEMON-AUTHORED since #975, which is exactly what this spec now
+  // proves reaches a pixel — effort segments by an ANCHORED regex (bare 'high' is a substring of
+  // 'xhigh', so `/^high$/` avoids the false match). The selected-model marker (radio,
+  // aria-label="Current model") is scoped WITHIN its row, never by class.
   const modelRow = (name: string) => page.locator('.run-config__model-row', { hasText: name })
   const selectedRadioIn = (name: string) =>
     modelRow(name).locator('[aria-label="Current model"]')
@@ -196,11 +255,35 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
   // (no aria-readonly).
   await page.getByRole('button', { name: 'Run configuration' }).click()
 
+  // #975 AC5, end to end and in the only order that proves it: BEFORE the frame arrives the section
+  // says the list is not yet known and renders NO row. That is the not-yet-known reading, and a sheet
+  // that showed a stale menu or an empty control here would fail this pair.
+  await expect(page.locator('.run-config__model-unknown')).toBeVisible({
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+  await expect(page.locator('.run-config__model-row')).toHaveCount(0)
+
+  // The list arrives unsolicited — the daemon publishes it from the conversation's initialize reply,
+  // so nothing the client sends provokes it. This is the one push this spec makes.
+  daemon.pushFrame(modelListFrame())
+
   // THE BUG, STATED AS AN ASSERTION. role="button" is present ONLY when a session id gated the
   // handler on. On the parent commit this times out: the app asked for a screen snapshot, that reply
   // carries no session id, and the spec no longer manufactures one -- so the controls render inert
   // read-only markup and every click below is a no-op. This is desktop#491 exactly.
   await expect(modelRow(OPUS_ROW)).toHaveAttribute('role', 'button', { timeout: ROUNDTRIP_TIMEOUT_MS })
+
+  // #975 AC1/AC4 — one row per published entry, in the daemon's published order, labelled with the
+  // entry's display name, each second line carrying the concrete identifier that entry's value
+  // resolves to. toHaveText is EXACT and ordered, so this is also the proof that no client-owned model
+  // name survives: a leftover catalog row would change both counts.
+  await expect(page.locator('.run-config__model-name')).toHaveText(
+    MODEL_ROWS.map((row) => row.display_name)
+  )
+  await expect(page.locator('.run-config__model-descriptor')).toHaveText(
+    MODEL_ROWS.map((row) => row.resolved_model)
+  )
+  await expect(page.locator('.run-config__model-unknown')).toHaveCount(0)
 
   // Positive proof of the SOURCE of that id: a bare read request went out, and its reply is the only
   // thing the app could have learned a session id from. Combined with the unbound `daemon` handle above,

@@ -1,11 +1,61 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   createRunSettingsWriteStore,
   selectPendingFields,
   type RunSettingsWriteEvent
 } from '../../store/runSettingsWriteStore'
+import type { ModelListEntry, ModelListState } from '../../store/modelListStore'
+import type { WireModelOption } from '@shared/wire/types'
 import { RunConfigView, RunConfigSections } from './RunConfigSections'
+
+// #975: the published rows the sheet now renders. A local builder rather than a shared fixture — the
+// six-field row is the wire shape and every test below varies one field of it.
+function modelRow(
+  overrides: Partial<WireModelOption> & { value: string; display_name: string }
+): WireModelOption {
+  return {
+    resolved_model: '',
+    effort_levels: [],
+    supports_auto_mode: false,
+    truncated_fields: null,
+    ...overrides
+  }
+}
+
+// Display names chosen MUTUALLY NON-SUBSTRING, which is what keeps segmentFor's chunking and the
+// 'Current model' count assertions meaningful now that the labels are daemon-authored rather than the
+// catalog's. None of them contains 'Current model' or any other client-owned literal this file asserts
+// on. The values cover the three measured shapes — a literal, a bracketed variant, a bare alias — and
+// deliberately include one that is a SUBSTRING of another row's resolved_model, so a substring matcher
+// reintroduced anywhere on this path fails a test rather than passing quietly.
+const PUBLISHED_ROWS: readonly WireModelOption[] = [
+  modelRow({
+    value: 'default',
+    display_name: 'Recommended pick',
+    resolved_model: 'claude-sonnet-5'
+  }),
+  modelRow({
+    value: 'opus[1m]',
+    display_name: 'Wide context',
+    resolved_model: 'claude-opus-5'
+  }),
+  modelRow({
+    value: 'haiku',
+    display_name: 'Quick tier',
+    resolved_model: 'claude-haiku-4-5-20251001'
+  })
+]
+
+const PUBLISHED: ModelListEntry = { models: PUBLISHED_ROWS, droppedModels: 0 }
+
+// The two non-populated readings the store deliberately keeps apart, as this view receives them.
+const NO_FRAME = null
+const CLAUDE_OFFERED_NOTHING: ModelListEntry = { models: [], droppedModels: 0 }
+
+const MODELS_UNKNOWN = 'Model list not yet known'
+const MODELS_EMPTY = 'No models offered'
+const CUT = 'Truncated by the daemon'
 
 // No DOM harness (jsdom/Testing Library) — mirrors LogDataSection.test.tsx. RunConfigView is pure
 // (model/effort/yolo + the two usage figures in, markup out), so a server-rendered string proves each
@@ -45,115 +95,297 @@ function closedBefore(markup: string, openTag: string, needle: string): boolean 
   return (run.match(/<div/g)?.length ?? 0) === (run.match(/<\/div>/g)?.length ?? 0)
 }
 
-describe('RunConfigView — Model', () => {
-  it('marks the Opus row selected for the short alias "opus"; Sonnet/Haiku unmarked', () => {
-    const markup = renderToStaticMarkup(<RunConfigView model="opus" effort="" yolo={false} {...NO_USAGE} />)
-    expect(segmentFor(markup, 'run-config__model-row', 'Opus 4.7')).toContain('Current model')
-    expect(segmentFor(markup, 'run-config__model-row', 'Sonnet 4.6')).not.toContain('Current model')
-    expect(segmentFor(markup, 'run-config__model-row', 'Haiku 4.5')).not.toContain('Current model')
-    // Exactly one row is marked.
-    expect(markup.match(/Current model/g)?.length).toBe(1)
+// #975: the rows ARE the published entries. The catalog, its family tokens, its hand-written
+// descriptors and the matchedFamily substring matcher are gone, so every assertion here is a claim
+// about daemon data reaching a pixel unchanged rather than about client-owned content.
+describe('RunConfigView — Model rows from the published list (#975)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+
+  it('renders one row per published entry, in the daemon order, labelled with display_name (AC1)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />)
+    expect(markup.match(/run-config__model-row/g)?.length).toBe(3)
+    // Published ORDER, not merely presence: the three labels appear in the order the frame carried.
+    const positions = PUBLISHED_ROWS.map((row) => markup.indexOf(row.display_name))
+    expect(positions.every((at) => at >= 0)).toBe(true)
+    expect([...positions]).toEqual([...positions].sort((a, b) => a - b))
+    // Exactly as many name elements as published entries — the guard that no client-owned row survives
+    // alongside them. Stated as a count rather than as a list of the deleted labels, so this file keeps
+    // no model name of its own either.
+    expect(markup.match(/run-config__model-name/g)?.length).toBe(PUBLISHED_ROWS.length)
   })
 
-  it('marks Opus for a full id "claude-opus-4-7" (family substring match, not exact equality)', () => {
-    const markup = renderToStaticMarkup(
-      <RunConfigView model="claude-opus-4-7" effort="" yolo={false} {...NO_USAGE} />
-    )
-    expect(segmentFor(markup, 'run-config__model-row', 'Opus 4.7')).toContain('Current model')
-    expect(markup.match(/Current model/g)?.length).toBe(1)
-  })
-
-  it('marks the Sonnet row for "sonnet"', () => {
-    const markup = renderToStaticMarkup(<RunConfigView model="sonnet" effort="" yolo={false} {...NO_USAGE} />)
-    expect(segmentFor(markup, 'run-config__model-row', 'Sonnet 4.6')).toContain('Current model')
-    expect(markup.match(/Current model/g)?.length).toBe(1)
-  })
-
-  it('marks the Haiku row for "haiku"', () => {
-    const markup = renderToStaticMarkup(<RunConfigView model="haiku" effort="" yolo={false} {...NO_USAGE} />)
-    expect(segmentFor(markup, 'run-config__model-row', 'Haiku 4.5')).toContain('Current model')
-    expect(markup.match(/Current model/g)?.length).toBe(1)
-  })
-
-  // #590 — the Fable family. `entry.family` is ONE field with TWO uses: the token handed to onSelect
-  // and the token matchedFamily substring-matches the daemon's model against. So rendering with the
-  // bare alias and observing the row marked exercises the same literal the row submits — the
-  // round-trip proof, without a click the `node` env cannot fire.
-  it('marks the Fable row for the resolved id "claude-fable-5" (AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <RunConfigView model="claude-fable-5" effort="" yolo={false} {...NO_USAGE} />
-    )
-    expect(segmentFor(markup, 'run-config__model-row', 'Fable 5')).toContain('Current model')
-    expect(markup.match(/Current model/g)?.length).toBe(1)
-  })
-
-  it('marks that same row for the bare alias "fable" — the token the row submits (AC3)', () => {
-    const markup = renderToStaticMarkup(<RunConfigView model="fable" effort="" yolo={false} {...NO_USAGE} />)
-    expect(segmentFor(markup, 'run-config__model-row', 'Fable 5')).toContain('Current model')
-    expect(markup.match(/Current model/g)?.length).toBe(1)
-  })
-
-  it('steals no existing match — each sibling vector still marks its own single row (AC4)', () => {
-    const cases: ReadonlyArray<readonly [string, string]> = [
-      ['opus', 'Opus 4.7'],
-      ['sonnet', 'Sonnet 4.6'],
-      ['haiku', 'Haiku 4.5'],
-      ['claude-opus-5', 'Opus 4.7'],
-      ['claude-sonnet-4-6', 'Sonnet 4.6']
-    ]
-    for (const [model, row] of cases) {
-      const markup = renderToStaticMarkup(<RunConfigView model={model} effort="" yolo={false} {...NO_USAGE} />)
-      expect(segmentFor(markup, 'run-config__model-row', row)).toContain('Current model')
-      expect(segmentFor(markup, 'run-config__model-row', 'Fable 5')).not.toContain('Current model')
+  it('marks the row whose value is EXACTLY the current model, and only that row (AC2)', () => {
+    for (const row of PUBLISHED_ROWS) {
+      const markup = renderToStaticMarkup(<RunConfigView {...base} model={row.value} models={PUBLISHED} />)
+      expect(segmentFor(markup, 'run-config__model-row', row.display_name)).toContain('Current model')
       expect(markup.match(/Current model/g)?.length).toBe(1)
     }
   })
 
-  // Per-row, via segmentFor: the whole-markup role="button" assertion in the interactive-toggle block
-  // is satisfied by the other three rows and proves nothing about this one. Fable sits third of four,
-  // so its chunk is bounded by the Haiku row — the inert case is a tight negative, not an open-ended
-  // tail that would swallow the effort segments and the YOLO switch.
-  it('is operable on the same terms as its siblings, and inert without a handler (AC5)', () => {
-    const props = { model: 'fable', effort: '', yolo: false, ...NO_USAGE } as const
-    const operable = segmentFor(
-      renderToStaticMarkup(<RunConfigView {...props} onChange={(): void => undefined} />),
-      'run-config__model-row',
-      'Fable 5'
+  it('round-trips: the value a row submits re-selects that same row (AC2/AC3)', () => {
+    // The `node` environment cannot fire the click, so the round-trip is proven by construction: the
+    // row hands onSelect its own `value`, and rendering with that same string back as the effective
+    // model — which is what the optimistic overlay holds — must mark the row it came from.
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} models={PUBLISHED} onChange={(): void => undefined} />
     )
-    expect(operable).toContain('role="button"')
-    expect(operable).toContain('tabindex="0"')
-    const inert = segmentFor(
-      renderToStaticMarkup(<RunConfigView {...props} />),
-      'run-config__model-row',
-      'Fable 5'
-    )
-    expect(inert).not.toContain('role="button"')
-    expect(inert).not.toContain('tabindex')
+    expect(markup).toContain('role="button"')
+    for (const row of PUBLISHED_ROWS) {
+      const reselected = renderToStaticMarkup(
+        <RunConfigView {...base} model={row.value} models={PUBLISHED} />
+      )
+      expect(segmentFor(reselected, 'run-config__model-row', row.display_name)).toContain('Current model')
+    }
   })
 
-  it('marks no row for the empty model (AC4 default) or an unrecognized model', () => {
-    for (const model of ['', 'some-unknown-model']) {
-      const markup = renderToStaticMarkup(<RunConfigView model={model} effort="" yolo={false} {...NO_USAGE} />)
+  it('matches by equality ONLY — no substring, prefix or case fold anywhere (AC2)', () => {
+    // Each vector is a near miss of the 'haiku' row: its own resolved_model (a superstring), a padded
+    // and a case-folded form, a prefix, and a bare unrelated string. Any of the matchers this slice
+    // deletes would mark a row for at least one of them.
+    for (const model of [
+      'claude-haiku-4-5-20251001',
+      'HAIKU',
+      ' haiku',
+      'haik',
+      'haiku-plus',
+      'opus',
+      'some-unknown-model',
+      ''
+    ]) {
+      const markup = renderToStaticMarkup(<RunConfigView {...base} model={model} models={PUBLISHED} />)
       expect(markup).not.toContain('Current model')
     }
   })
 
-  it('always renders all four names and descriptors, matched or not', () => {
-    for (const model of ['opus', '', 'gibberish']) {
-      const markup = renderToStaticMarkup(<RunConfigView model={model} effort="" yolo={false} {...NO_USAGE} />)
-      for (const text of [
-        'Opus 4.7',
-        'best for complex work',
-        'Sonnet 4.6',
-        'faster, cheaper',
-        'Fable 5',
-        'newest in the Fable family',
-        'Haiku 4.5',
-        'fastest'
-      ]) {
-        expect(markup).toContain(text)
-      }
+  it('shows the concrete identifier the value resolves to on the second line (AC4)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />)
+    for (const row of PUBLISHED_ROWS) {
+      expect(markup).toContain(`<p class="run-config__model-descriptor">${row.resolved_model}</p>`)
     }
+  })
+
+  it('renders an unresolved (empty) identifier as a present, empty line rather than none', () => {
+    const models: ModelListEntry = {
+      models: [modelRow({ value: 'default', display_name: 'Recommended pick' })],
+      droppedModels: 0
+    }
+    const markup = renderToStaticMarkup(<RunConfigView {...base} models={models} />)
+    expect(markup).toContain('<p class="run-config__model-descriptor"></p>')
+  })
+
+  it('keeps rows operable on handler presence, inert without one (AC5)', () => {
+    const operable = renderToStaticMarkup(
+      <RunConfigView {...base} models={PUBLISHED} onChange={(): void => undefined} />
+    )
+    const row = segmentFor(operable, 'run-config__model-row', 'Wide context')
+    expect(row).toContain('role="button"')
+    expect(row).toContain('tabindex="0"')
+    const inert = segmentFor(
+      renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />),
+      'run-config__model-row',
+      'Wide context'
+    )
+    expect(inert).not.toContain('role="button"')
+    expect(inert).not.toContain('tabindex')
+  })
+})
+
+// #975 AC5: the store's two non-populated readings are DIFFERENT SENTENCES here, not one shared empty
+// state — collapsing them would erase the distinction one layer above where the store established it.
+describe('RunConfigView — Model, the two non-populated readings (#975)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+
+  it('reads not-yet-known when no frame has arrived, for null and for an omitted prop', () => {
+    for (const markup of [
+      renderToStaticMarkup(<RunConfigView {...base} models={NO_FRAME} />),
+      renderToStaticMarkup(<RunConfigView {...base} />)
+    ]) {
+      expect(markup).toContain(MODELS_UNKNOWN)
+      expect(markup).not.toContain(MODELS_EMPTY)
+      // No empty control and no stale menu: not one row element renders.
+      expect(markup).not.toContain('run-config__model-row')
+      expect(markup).not.toContain('Current model')
+    }
+  })
+
+  it('renders byte-identical markup for an explicit null and an omitted prop', () => {
+    expect(renderToStaticMarkup(<RunConfigView {...base} models={NO_FRAME} />)).toBe(
+      renderToStaticMarkup(<RunConfigView {...base} />)
+    )
+  })
+
+  it('states positively that claude offered nothing for a published empty list', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} models={CLAUDE_OFFERED_NOTHING} />)
+    expect(markup).toContain(MODELS_EMPTY)
+    expect(markup).not.toContain(MODELS_UNKNOWN)
+    expect(markup).not.toContain('run-config__model-row')
+  })
+
+  it('keeps the two readings distinguishable — different copy AND different elements', () => {
+    const unknown = renderToStaticMarkup(<RunConfigView {...base} models={NO_FRAME} />)
+    const empty = renderToStaticMarkup(<RunConfigView {...base} models={CLAUDE_OFFERED_NOTHING} />)
+    expect(unknown).not.toBe(empty)
+    expect(unknown).toContain('run-config__model-unknown')
+    expect(unknown).not.toContain('run-config__model-empty')
+    expect(empty).toContain('run-config__model-empty')
+    expect(empty).not.toContain('run-config__model-unknown')
+  })
+})
+
+// #975 AC6: the frame carries TWO truncation reports and neither may be collapsed into the other. A
+// sheet surfacing one and dropping the other presents a cut list as complete.
+describe('RunConfigView — Model truncation reports (#975)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+  const cutRow = modelRow({
+    value: 'claude-fable-5',
+    display_name: 'Cut label',
+    resolved_model: 'claude-fable-5-x',
+    truncated_fields: ['value']
+  })
+  const cleanRow = modelRow({ value: 'haiku', display_name: 'Quick tier' })
+
+  it('marks a row the daemon reports cut, in its own sibling element (AC6)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} models={{ models: [cutRow], droppedModels: 0 }} />
+    )
+    // Adjacent siblings: the daemon-supplied descriptor CLOSES before the sheet's own words open, so
+    // client copy is never inside a daemon-authored node.
+    expect(markup).toContain(
+      `<p class="run-config__model-descriptor">${cutRow.resolved_model}</p>` +
+        `<p class="run-config__model-cut">${CUT}</p>`
+    )
+  })
+
+  it('marks no row when nothing was cut — null and [] say the same thing (AC6)', () => {
+    for (const truncated_fields of [null, []]) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView
+          {...base}
+          models={{ models: [modelRow({ ...cleanRow, truncated_fields })], droppedModels: 0 }}
+        />
+      )
+      expect(markup).not.toContain('run-config__model-cut')
+      expect(markup).not.toContain(CUT)
+    }
+  })
+
+  it('marks only the cut row, never the whole list (AC6)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} models={{ models: [cutRow, cleanRow], droppedModels: 0 }} />
+    )
+    expect(markup.match(/run-config__model-cut/g)?.length).toBe(1)
+    expect(segmentFor(markup, 'run-config__model-row', 'Quick tier')).not.toContain(CUT)
+  })
+
+  it('cannot have a cut claim forged by a label ending in the same words (AC6)', () => {
+    const forged = modelRow({ value: 'x', display_name: `Sneaky ${CUT}` })
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} models={{ models: [forged], droppedModels: 0 }} />
+    )
+    // The words appear inside the daemon's own node, verbatim — but the sheet's marker ELEMENT does
+    // not exist. Structural on purpose: not.toContain(CUT) would fail on a CORRECT render here.
+    expect(markup).toContain(`<p class="run-config__model-name">${forged.display_name}</p>`)
+    expect(markup).not.toContain('run-config__model-cut')
+  })
+
+  it('says the list is incomplete when the frame reports rows dropped wholesale (AC6)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} models={{ models: [cleanRow], droppedModels: 2 }} />
+    )
+    expect(markup).toContain('run-config__model-partial')
+    expect(markup).toContain('2 not shown')
+  })
+
+  it('reports drops on the offered-nothing branch too — the count belongs to the entry (AC6)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} models={{ models: [], droppedModels: 3 }} />
+    )
+    expect(markup).toContain('3 not shown')
+    expect(markup).toContain(MODELS_EMPTY)
+  })
+
+  it('reports nothing — and prints no bare zero — when droppedModels is 0 (AC6)', () => {
+    const markup = renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />)
+    expect(markup).not.toContain('run-config__model-partial')
+    expect(markup).not.toContain('not shown')
+    // `{entry.droppedModels && …}` would render the number 0 as a text node.
+    expect(markup).not.toMatch(/>0</)
+  })
+
+  it('surfaces BOTH reports at once — neither collapses into the other (AC6)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} models={{ models: [cutRow, cleanRow], droppedModels: 4 }} />
+    )
+    expect(markup).toContain('4 not shown')
+    expect(markup).toContain('run-config__model-cut')
+  })
+})
+
+// #975: every row string is claude-authored text that crossed the subprocess trust boundary. The
+// daemon bounds it and does not sanitize it, so this file is the render boundary that owes the
+// escaping.
+describe('RunConfigView — Model rows render daemon text inertly (#975)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+
+  it('escapes hostile row text into text nodes and forges no attribute or URL', () => {
+    for (const hostile of [
+      '<img src=x onerror="alert(1)">',
+      'javascript:alert(1)',
+      '" onmouseover="x',
+      '[31mred',
+      '__proto__'
+    ]) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView
+          {...base}
+          models={{
+            models: [modelRow({ value: hostile, display_name: hostile, resolved_model: hostile })],
+            droppedModels: 0
+          }}
+        />
+      )
+      // Attribute-shaped guards, NEVER not.toContain('onerror=') — that substring survives a CORRECT
+      // render, since React escapes markup metacharacters rather than arbitrary text.
+      expect(markup).not.toContain('<img')
+      expect(markup).not.toContain('src="')
+      expect(markup).not.toContain('href="')
+      expect(markup).not.toMatch(/\son[a-z]+="/)
+    }
+  })
+
+  it('escapes markup metacharacters into the name and descriptor elements', () => {
+    const hostile = '<img src=x onerror="alert(1)">'
+    const escaped = '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;'
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        models={{
+          models: [modelRow({ value: 'v', display_name: hostile, resolved_model: hostile })],
+          droppedModels: 0
+        }}
+      />
+    )
+    expect(markup).toContain(`<p class="run-config__model-name">${escaped}</p>`)
+    expect(markup).toContain(`<p class="run-config__model-descriptor">${escaped}</p>`)
+  })
+
+  it('puts no daemon string in a key, an attribute or any other non-text position', () => {
+    // The row's whole opening tag carries only client-owned attributes; the daemon's strings appear
+    // exclusively as element CHILDREN. React never serialises `key`, so a display_name key would be
+    // invisible here — the positive guard is that the tag holds nothing daemon-authored at all.
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        models={{
+          models: [modelRow({ value: 'sentinel-value', display_name: 'sentinel-name' })],
+          droppedModels: 0
+        }}
+        onChange={(): void => undefined}
+      />
+    )
+    const tag = tagWithClass(markup, 'run-config__model-row')
+    expect(tag).not.toContain('sentinel-value')
+    expect(tag).not.toContain('sentinel-name')
   })
 })
 
@@ -289,7 +521,14 @@ describe('RunConfigView — interactive toggle (#257)', () => {
 
   it('makes rows/segments/switch operable when onChange is present (AC1/2/3)', () => {
     const markup = renderToStaticMarkup(
-      <RunConfigView model="opus" effort="high" yolo={false} {...NO_USAGE} onChange={noop} />
+      <RunConfigView
+        model="haiku"
+        effort="high"
+        yolo={false}
+        {...NO_USAGE}
+        models={PUBLISHED}
+        onChange={noop}
+      />
     )
     // Model rows and effort segments gain the operable affordance.
     expect(markup).toContain('role="button"')
@@ -298,20 +537,20 @@ describe('RunConfigView — interactive toggle (#257)', () => {
     expect(markup).toContain('role="switch"')
     expect(markup).not.toContain('aria-readonly')
     // Selection still reflects the passed values exactly as #188.
-    expect(segmentFor(markup, 'run-config__model-row', 'Opus 4.7')).toContain('Current model')
+    expect(segmentFor(markup, 'run-config__model-row', 'Quick tier')).toContain('Current model')
     expect(segmentFor(markup, 'run-config__effort-segment', '>high<')).toContain('aria-current="true"')
   })
 
   it('stays inert (identical to #188) when onChange is absent (AC5)', () => {
     const markup = renderToStaticMarkup(
-      <RunConfigView model="opus" effort="high" yolo={true} {...NO_USAGE} />
+      <RunConfigView model="haiku" effort="high" yolo={true} {...NO_USAGE} models={PUBLISHED} />
     )
     // No handler ⇒ literally today's read-only markup: no operable affordance, switch reads-only.
     expect(markup).not.toContain('role="button"')
     expect(markup).not.toContain('tabindex')
     expect(markup).toContain('aria-readonly="true"')
     // Selection markers unchanged.
-    expect(segmentFor(markup, 'run-config__model-row', 'Opus 4.7')).toContain('Current model')
+    expect(segmentFor(markup, 'run-config__model-row', 'Quick tier')).toContain('Current model')
     expect(markup).toContain('aria-checked="true"')
   })
 })
@@ -425,9 +664,10 @@ describe('RunConfigView — pending marker (#558)', () => {
     const markup = renderToStaticMarkup(
       <RunConfigView
         {...base}
-        model="opus"
+        model="haiku"
         effort="high"
         yolo={true}
+        models={PUBLISHED}
         pending={{ model: true, effort: true, yolo: true }}
       />
     )
@@ -523,51 +763,72 @@ describe('RunConfigView — running model (#560)', () => {
     )
   })
 
-  it('names the row an exactly-equal identifier resolves to (AC1)', () => {
+  // #975 re-anchors this lookup on the PUBLISHED rows: the catalog it used to read is deleted, so the
+  // join is now an exact equality against a row's `value`, rendering that row's display_name.
+  it('names the published row an exactly-equal identifier resolves to (AC1)', () => {
     const markup = renderToStaticMarkup(
-      <RunConfigView {...base} announced={{ model: 'opus', truncated: false }} />
+      <RunConfigView {...base} models={PUBLISHED} announced={{ model: 'haiku', truncated: false }} />
     )
-    expect(markup).toContain(value('Opus 4.7'))
+    expect(markup).toContain(value('Quick tier'))
     expect(markup).not.toContain(UNKNOWN)
     // Naming the row IS "identifies that row": no second selection marker joins the list, which is what
-    // keeps the six 'Current model' count assertions (and the page-wide e2e count) honest.
+    // keeps the 'Current model' count assertions (and the page-wide e2e count) honest.
     expect(markup).not.toContain('Current model')
   })
 
-  it('resolves every catalog token to its own display name (AC1)', () => {
-    const cases: ReadonlyArray<readonly [string, string]> = [
-      ['opus', 'Opus 4.7'],
-      ['sonnet', 'Sonnet 4.6'],
-      ['fable', 'Fable 5'],
-      ['haiku', 'Haiku 4.5']
-    ]
-    for (const [model, name] of cases) {
+  it('resolves every published value to its own display name (AC1)', () => {
+    for (const row of PUBLISHED_ROWS) {
       const markup = renderToStaticMarkup(
-        <RunConfigView {...base} announced={{ model, truncated: false }} />
+        <RunConfigView {...base} models={PUBLISHED} announced={{ model: row.value, truncated: false }} />
       )
-      expect(markup).toContain(value(name))
+      expect(markup).toContain(value(row.display_name))
     }
   })
 
-  it('misses on a case-folded or padded token and renders it verbatim (AC1/AC2)', () => {
+  it('resolves nothing at all when no list has arrived — the verbatim path (AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} models={NO_FRAME} announced={{ model: 'haiku', truncated: false }} />
+    )
+    expect(markup).toContain(value('haiku'))
+    expect(markup).not.toContain(value('Quick tier'))
+  })
+
+  it('misses on a case-folded or padded value and renders it verbatim (AC1/AC2)', () => {
     // The assertion that fails if anyone reintroduces toLowerCase or trim.
-    for (const model of ['Opus', 'OPUS', ' opus']) {
+    for (const model of ['Haiku', 'HAIKU', ' haiku']) {
       const markup = renderToStaticMarkup(
-        <RunConfigView {...base} announced={{ model, truncated: false }} />
+        <RunConfigView {...base} models={PUBLISHED} announced={{ model, truncated: false }} />
       )
       expect(markup).toContain(value(model))
-      expect(markup).not.toContain(value('Opus 4.7'))
+      expect(markup).not.toContain(value('Quick tier'))
     }
   })
 
-  it('misses on a superstring of a token — never matchedFamily substring matching (AC1/AC2)', () => {
-    // The assertion that fails if anyone swaps the exact lookup for the override's matchedFamily.
+  it('misses on a superstring of a published value — never substring matching (AC1/AC2)', () => {
+    // The re-anchored exactness guard #975 inherits from the deleted matchedFamily test: an announced
+    // identifier that merely CONTAINS a published `value` must not resolve to that row's display name.
+    // `claude-haiku-4-5` contains the published `haiku` and equals no row's `value`, so the exact
+    // lookup misses and the identifier renders verbatim; any substring matcher would resolve it.
     const markup = renderToStaticMarkup(
-      <RunConfigView {...base} announced={{ model: 'claude-opus-4-7', truncated: false }} />
+      <RunConfigView {...base} models={PUBLISHED} announced={{ model: 'claude-haiku-4-5', truncated: false }} />
     )
-    expect(markup).toContain(value('claude-opus-4-7'))
-    expect(markup).not.toContain(value('Opus 4.7'))
+    expect(markup).toContain(value('claude-haiku-4-5'))
+    expect(markup).not.toContain(value('Quick tier'))
     expect(markup).not.toContain('Current model')
+  })
+
+  it('does not join on resolved_model — that field is displayed, never matched (AC1)', () => {
+    // The Quick tier row publishes `claude-haiku-4-5-20251001` as its resolved_model, and an
+    // announcement carrying exactly that must still miss: the join key is `value` and nothing else.
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        models={PUBLISHED}
+        announced={{ model: 'claude-haiku-4-5-20251001', truncated: false }}
+      />
+    )
+    expect(markup).toContain(value('claude-haiku-4-5-20251001'))
+    expect(markup).not.toContain(value('Quick tier'))
   })
 
   it('renders a full unrecognized identifier character for character (AC2)', () => {
@@ -610,11 +871,11 @@ describe('RunConfigView — running model (#560)', () => {
 
   it('reports a cut independently of whether the identifier resolved', () => {
     // The flag is the daemon reporting on the identifier it delivered. Gating the marker on the lookup
-    // MISSING would let a daemon suppress its own cut report by sending a value equal to a catalog token.
+    // MISSING would let a daemon suppress its own cut report by sending a value equal to a published one.
     const markup = renderToStaticMarkup(
-      <RunConfigView {...base} announced={{ model: 'opus', truncated: true }} />
+      <RunConfigView {...base} models={PUBLISHED} announced={{ model: 'haiku', truncated: true }} />
     )
-    expect(markup).toContain(value('Opus 4.7'))
+    expect(markup).toContain(value('Quick tier'))
     expect(markup).toContain(cut)
   })
 
@@ -673,7 +934,12 @@ describe('RunConfigView — running model (#560)', () => {
 
   it('leaves the override marking alone — the two surfaces are independent', () => {
     const markup = renderToStaticMarkup(
-      <RunConfigView {...base} model="opus" announced={{ model: 'claude-unknown-9', truncated: false }} />
+      <RunConfigView
+        {...base}
+        model="haiku"
+        models={PUBLISHED}
+        announced={{ model: 'claude-unknown-9', truncated: false }}
+      />
     )
     // The override still marks its own row, exactly as today, and the running surface adds no marker.
     expect(markup.match(/Current model/g)?.length).toBe(1)
@@ -681,14 +947,71 @@ describe('RunConfigView — running model (#560)', () => {
   })
 })
 
+// #975: the container's own gate. Seeding a zustand singleton is INVISIBLE to renderToStaticMarkup —
+// the server renderer reads the state captured at store CREATION — so the seed goes in as the
+// factory's init and the module is mocked with ONLY the hook binding overridden, keeping the real
+// selectors. That is possible because modelListStore exports the factory, the hook and the selector
+// separately.
+// vi.hoisted, because vi.mock's factory is lifted above every module-level binding and would otherwise
+// read this id before initialisation.
+const { SEEDED_CONVERSATION_ID } = vi.hoisted(() => ({ SEEDED_CONVERSATION_ID: 'conv-975' }))
+
+vi.mock('../../store/modelListStore', async (importActual) => {
+  const actual = await importActual<typeof import('../../store/modelListStore')>()
+  const { useStore } = await import('zustand')
+  const seeded: ModelListState = {
+    lists: new Map([
+      [
+        SEEDED_CONVERSATION_ID,
+        {
+          models: [
+            {
+              value: 'seeded-value',
+              display_name: 'Seeded label',
+              resolved_model: 'seeded-resolved',
+              effort_levels: [],
+              supports_auto_mode: false,
+              truncated_fields: null
+            }
+          ],
+          droppedModels: 0
+        }
+      ]
+    ])
+  }
+  const store = actual.createModelListStore(seeded)
+  return {
+    ...actual,
+    useModelListStore: <T,>(selector: (s: ReturnType<typeof store.getState>) => T): T =>
+      useStore(store, selector)
+  }
+})
+
 describe('RunConfigSections (container)', () => {
+  it('renders the list published for the conversation it was given (#975)', () => {
+    const markup = renderToStaticMarkup(<RunConfigSections conversationId={SEEDED_CONVERSATION_ID} />)
+    expect(markup).toContain('Seeded label')
+    expect(markup).toContain('seeded-resolved')
+    expect(markup).not.toContain(MODELS_UNKNOWN)
+  })
+
+  it('reads not-yet-known for another conversation and for no conversation (#975)', () => {
+    // The trap this test exists for: the container used to have only a session id in scope, which keys
+    // NOTHING in the model-list map — reaching for it compiles clean and renders this branch forever.
+    for (const conversationId of ['some-other-conversation', null]) {
+      const markup = renderToStaticMarkup(<RunConfigSections conversationId={conversationId} />)
+      expect(markup).toContain(MODELS_UNKNOWN)
+      expect(markup).not.toContain('Seeded label')
+    }
+  })
+
   it('server-renders the AC4 default without touching window.pyry', () => {
     // useStore reads getInitialState() (snapshot:null) under server render, so the container always
     // renders the coalesced default — the real opening frame before a snapshot arrives. No bridge is
     // dereferenced during render, so no window.pyry mock is needed.
     let markup = ''
     expect(() => {
-      markup = renderToStaticMarkup(<RunConfigSections />)
+      markup = renderToStaticMarkup(<RunConfigSections conversationId={null} />)
     }).not.toThrow()
     // AC4 default: no radio filled, no segment marked, switch off.
     expect(markup).not.toContain('Current model')
@@ -706,8 +1029,10 @@ describe('RunConfigSections (container)', () => {
     expect(markup).not.toContain('% used')
     expect(markup).not.toContain('NaN')
     expect(markup).toContain('Context usage unavailable')
-    // The static catalog + labels still render.
-    expect(markup).toContain('Opus 4.7')
+    // #975: with no conversation in scope the Model section reads not-yet-known and renders no row;
+    // the effort labels (still client-owned until #976) are unchanged.
+    expect(markup).toContain(MODELS_UNKNOWN)
+    expect(markup).not.toContain('run-config__model-row')
     expect(markup).toContain('>low<')
     // #560: the fourth store read is wired and still needs no bridge mock — under server render zustand
     // reads getInitialState() (announced: null), so the container renders the not-yet-known state.

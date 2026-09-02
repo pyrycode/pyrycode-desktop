@@ -1,5 +1,12 @@
+import { useMemo } from 'react'
+import type { WireModelOption } from '@shared/wire/types'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { useSessionIdStore, selectSessionId } from '../../store/sessionIdStore'
+import {
+  useModelListStore,
+  selectModelListFor,
+  type ModelListEntry
+} from '../../store/modelListStore'
 import {
   useAnnouncedModelStore,
   selectAnnouncedModel,
@@ -29,51 +36,46 @@ import { contextUsagePercent } from './contextUsage'
 // is the whole AC5 gate at the view layer, since the container withholds the handler until a session id
 // exists (sessionIdStore, #259).
 
-interface ModelCatalogEntry {
-  /** The lowercase family token matched (case-insensitive substring) against the daemon's model. */
-  family: string
-  /** The display name and one-line descriptor — static design content (Figma 20:116/20:117 …). */
-  name: string
-  descriptor: string
-}
-
-// Static renderer content from the design (Figma 20:111): the snapshot supplies only the current
-// `model` string, which selects at most one row. First match wins.
-const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
-  { family: 'opus', name: 'Opus 4.7', descriptor: 'best for complex work' },
-  { family: 'sonnet', name: 'Sonnet 4.6', descriptor: 'faster, cheaper' },
-  // #590 — Fable is a published family the sheet offered no way to reach. Not drawn in Figma (the
-  // file has three rows); the row is derived from the drawn ones, which is exact because every row is
-  // emitted by the map below. The descriptor is deliberately not a when-to-pick-it line like its
-  // siblings: naming one means a capability claim unverifiable from this repo. Position is display
-  // order only — matching is first-match-wins, and no real model id carries two family tokens.
-  { family: 'fable', name: 'Fable 5', descriptor: 'newest in the Fable family' },
-  { family: 'haiku', name: 'Haiku 4.5', descriptor: 'fastest' }
-]
-
-// The daemon's `model` is a `claude --model <value>` argument: it may arrive as a short alias
-// ("opus") or a full id ("claude-opus-4-7"), and drifts across model versions. A case-insensitive
-// family substring match highlights the right row for all those forms and degrades to no match for
-// '' / unrecognized — exactly AC4's default (no row marked), not an error.
-function matchedFamily(model: string): string | null {
-  const lower = model.toLowerCase()
-  return MODEL_CATALOG.find((entry) => lower.includes(entry.family))?.family ?? null
-}
-
-// #560 — the RUNNING model's lookup, and deliberately NOT matchedFamily above: string equality only.
-// No toLowerCase, no includes, no startsWith, no trim, no regex. The announced identifier mixes dated
-// ('claude-haiku-4-5-20251001') and undated ('claude-opus-5') shapes, so any pattern that works today
-// breaks on the first identifier carrying no family word — and inferring a family would name a model
-// claude never announced.
+// #975 — the RUNNING model's lookup, re-anchored on the daemon-published rows now that MODEL_CATALOG
+// is gone. String equality only: no toLowerCase, no includes, no startsWith, no trim, no regex.
 //
-// IT IS DORMANT BY DESIGN AND THAT IS NOT A DEFECT TO REPAIR. The catalog's tokens are family words;
-// claude announces full identifiers, so equality essentially never fires until the sheet's rows come
-// from the daemon-published model list (#556 / #561). Until then the verbatim path is the live path,
-// which is the correct outcome: the operator sees the true running identifier rather than a wrong
-// display name inferred from a substring. Widening this into matchedFamily's substring match to make
-// it "work" would reintroduce exactly what #560 exists to stop.
-function runningCatalogEntry(model: string): ModelCatalogEntry | undefined {
-  return MODEL_CATALOG.find((entry) => entry.family === model)
+// The key is `value` and nothing else. It is the field the deleted catalog lookup already compared —
+// `entry.family` was the token a row submitted, and `value` is the argument a row submits now — so the
+// rewrite moves the lookup onto real published data without changing what it compares.
+// `resolved_model` is deliberately NOT the key: the wire contract excludes it, and joining on it would
+// give the exactness guard an exception, since a row's own resolved_model is routinely a superstring
+// of its own `value` ('haiku' → 'claude-haiku-4-5-20251001'). That field is DISPLAYED on each row's
+// second line instead, which is where an alias's current resolution reaches the operator.
+//
+// A MISS IS ORDINARY, NOT AN ERROR, and stays the common case: claude echoes an identifier at least as
+// specific as the one it was given, so an announced identifier need not appear in any published row.
+// The verbatim fallback is the correct outcome then — the operator sees the true running identifier
+// rather than a display name inferred from a resemblance. Widening this into a substring match to make
+// it fire more often would reintroduce exactly what #560 exists to stop.
+function runningPublishedRow(
+  models: ModelListEntry | null | undefined,
+  model: string
+): WireModelOption | undefined {
+  return models?.models.find((row) => row.value === model)
+}
+
+// #975 — the Model section's two non-populated readings, which the store deliberately keeps apart and
+// this section must not collapse. They read as DIFFERENT SENTENCES, not one sentence in two places
+// (the BackgroundTaskPanel convention): the first is the not-yet-known reading in the sheet's existing
+// vocabulary, the second a positive statement that claude offered nothing. Client-owned and
+// apostrophe-free — renderToStaticMarkup escapes ' → &#x27;. Neither may contain 'Current model': the
+// selection marker is asserted by COUNT at several unit sites and page-wide in e2e.
+const RUN_CONFIG_MODELS_UNKNOWN_COPY = 'Model list not yet known'
+const RUN_CONFIG_MODELS_EMPTY_COPY = 'No models offered'
+
+/** #975 — the frame-level truncation report, distinct from a row's own. `models.length +
+ *  droppedModels` is the list's true size; this notice states the missing half rather than the sum,
+ *  the shipped `partialListCopy` shape (BackgroundTaskPanel), which also dodges pluralisation — "1 not
+ *  shown" and "3 not shown" both read correctly, so the repo gains no pluralisation machinery.
+ *
+ *  `droppedModels` is a number, so this renders no untrusted string. */
+function partialModelListCopy(droppedModels: number): string {
+  return `Partial list (${droppedModels} not shown)`
 }
 
 // #560 — client-owned copy for the running-model surface, the RUN_CONFIG_ERROR_COPY convention.
@@ -85,8 +87,10 @@ function runningCatalogEntry(model: string): ModelCatalogEntry | undefined {
 const RUN_CONFIG_RUNNING_UNKNOWN_COPY = 'Running model not yet known'
 
 // Deliberately echoes BACKGROUND_TASK_PANEL_CUT_COPY / UNRECOGNIZED_TRUNCATED_COPY's vocabulary so the
-// app says the same thing the same way about the same daemon behaviour.
-const RUN_CONFIG_RUNNING_CUT_COPY = 'Truncated by the daemon'
+// app says the same thing the same way about the same daemon behaviour. #975 reuses this one sentence
+// for the published rows' own cut report rather than minting a second: the sentence is identical and
+// only the ATTRIBUTION differs, which position and the distinct classes already carry.
+const RUN_CONFIG_CUT_COPY = 'Truncated by the daemon'
 
 // The fixed accepted set (Figma 20:130); effort matches by exact equality, so '' / unknown marks
 // none — AC4's default.
@@ -130,6 +134,11 @@ function RunConfigError({ field }: { field: SettingsChange['field'] }): JSX.Elem
  * as that selector's return type so a parallel pending representation is a compile error, not a review
  * catch. NOT shaped like `errorField`: the store's `pending` is keyed by changeId so two fields can be
  * outstanding at once, and these three booleans are independent. Omitted ⇒ nothing is marked (AC5).
+ *
+ * `models` (#975) is the conversation's published model list — #974's HELD ENTRY, passed straight down
+ * and never a derived array, which is what keeps the store's by-reference guarantees intact at the
+ * render boundary. Optional, and its absence IS the `null` reading ("no frame has arrived"), the
+ * `announced` prop's shape: that is what keeps this view server-renderable with no store and no mock.
  */
 export function RunConfigView({
   model,
@@ -140,7 +149,8 @@ export function RunConfigView({
   onChange,
   errorField,
   pending,
-  announced
+  announced,
+  models
 }: {
   model: string
   effort: string
@@ -151,8 +161,11 @@ export function RunConfigView({
   errorField?: SettingsChange['field'] | null
   pending?: ReturnType<typeof selectPendingFields>
   announced?: AnnouncedModel | null
+  models?: ModelListEntry | null
 }): JSX.Element {
-  const onModel = onChange ? (family: string): void => onChange({ field: 'model', value: family }) : undefined
+  // #975: the submitted string is a published row's `value` VERBATIM — never normalised on the way out,
+  // which is the half of the round-trip this line owns.
+  const onModel = onChange ? (value: string): void => onChange({ field: 'model', value }) : undefined
   const onEffort = onChange ? (level: string): void => onChange({ field: 'effort', value: level }) : undefined
   const onYolo = onChange ? (next: boolean): void => onChange({ field: 'yolo', value: next }) : undefined
   // The marking is independent of operability: the view marks whatever it is told. In production the
@@ -164,8 +177,14 @@ export function RunConfigView({
       {/* #560: what is running, then what you can switch to. Placed BEFORE the rows deliberately —
           reading order first, and it keeps the surface out of the last model row's open-ended
           segmentFor chunk in the tests. */}
-      <RunningModelSection announced={announced} />
-      <ModelSection model={model} onSelect={onModel} error={errorField === 'model'} busy={pending?.model} />
+      <RunningModelSection announced={announced} models={models} />
+      <ModelSection
+        model={model}
+        models={models}
+        onSelect={onModel}
+        error={errorField === 'model'}
+        busy={pending?.model}
+      />
       <EffortSection
         effort={effort}
         onSelect={onEffort}
@@ -209,22 +228,29 @@ export function RunConfigView({
 // `{announced.model}{truncated && ' (truncated)'}` would fuse client copy and daemon text into one node,
 // so an identifier ending in those same words would be indistinguishable from the sheet's own claim.
 // Nothing here slices, measures, re-joins or re-sinks the identifier to produce the marker.
-function RunningModelSection({ announced }: { announced?: AnnouncedModel | null }): JSX.Element {
-  const entry = announced ? runningCatalogEntry(announced.model) : undefined
+function RunningModelSection({
+  announced,
+  models
+}: {
+  announced?: AnnouncedModel | null
+  models?: ModelListEntry | null
+}): JSX.Element {
+  const row = announced ? runningPublishedRow(models, announced.model) : undefined
   return (
     <>
       <p className="status-sheet__section-header">Running model</p>
       <div className="run-config__running">
         {announced ? (
-          // On a hit the rendered text is the CLIENT-owned display name; on a miss it is the daemon's
-          // identifier verbatim. The two provenances never mix in one node.
-          <p className="run-config__running-value">{entry ? entry.name : announced.model}</p>
+          // #975: BOTH paths are now daemon-authored — the hit renders a published row's display name,
+          // the miss the announced identifier verbatim. The provenance claim that used to stand here
+          // (a client-owned name on one path) stopped being true when the rows stopped being the
+          // client's. Both are still safe as escaped inert text in this one JSX text position, which is
+          // the obligation that actually matters; what changed is only who wrote the string.
+          <p className="run-config__running-value">{row ? row.display_name : announced.model}</p>
         ) : (
           <p className="run-config__running-unknown">{RUN_CONFIG_RUNNING_UNKNOWN_COPY}</p>
         )}
-        {announced?.truncated ? (
-          <p className="run-config__running-cut">{RUN_CONFIG_RUNNING_CUT_COPY}</p>
-        ) : null}
+        {announced?.truncated ? <p className="run-config__running-cut">{RUN_CONFIG_CUT_COPY}</p> : null}
       </div>
     </>
   )
@@ -237,55 +263,116 @@ function RunningModelSection({ announced }: { announced?: AnnouncedModel | null 
 // wrapper, never a descendant — aria-busy on an ancestor tells assistive technology to withhold the
 // subtree's announcements, which would silently suppress #269's role="alert" rejection line on the very
 // field the operator was told is in flight.
+//
+// #975 — THE ROWS ARE THE DAEMON'S. The section renders one row per published entry, in the daemon's
+// order, and derives nothing: no family is parsed out of a `value` (it is not parseable — the measured
+// entries are `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `haiku`), no descriptor is
+// written here, and no row is invented, reordered, deduped or dropped.
+//
+// THREE READINGS, NEVER TWO. `null` (no frame has arrived, a normal and permanent state under
+// best-effort delivery) and a present entry holding `models: []` (claude published an empty list) are
+// different sentences in different elements. Collapsing them would erase the distinction one layer
+// above where the store deliberately established it, and neither renders an empty control or a stale
+// menu.
+//
+// SECURITY — this is the render boundary for `display_name`, `value` and `resolved_model`. They are
+// claude-authored, unsanitized text that crossed the subprocess trust boundary (the daemon bounds and
+// does not sanitize; #972 made the SHAPE trusted and nothing more). Each reaches exactly one JSX text
+// position, where React escapes it. None reaches a raw-markup sink, an attribute, a URL, a filename, a
+// cache key, a lookup path or a log — and nothing on this path is logged at all.
+//
+// THE KEY IS THE ARRAY INDEX, and that is a security decision rather than a style one: a key is a
+// lookup path, and `display_name` / `value` are exactly the claude-authored strings the store's header
+// forbids using as one. There is also nothing for a stable key to preserve — each frame REPLACES the
+// conversation's list wholesale, rows never reorder within a render, and claude may legitimately
+// publish two rows sharing a `value`.
 function ModelSection({
   model,
+  models,
   onSelect,
   error,
   busy
 }: {
   model: string
-  onSelect?: (family: string) => void
+  models?: ModelListEntry | null
+  onSelect?: (value: string) => void
   error?: boolean
   busy?: boolean
 }): JSX.Element {
-  const selected = matchedFamily(model)
+  const entry = models ?? null
   return (
     <>
       <p className="status-sheet__section-header">Model</p>
+      {/* The frame-level truncation report, and a SIBLING of the branch below rather than a child of
+          any arm: the count belongs to the ENTRY, not to the list, so an entry reporting drops beside
+          zero carried rows must still show it. It is a strictly different report from a row's own
+          `truncated_fields` and neither may be collapsed into the other — a sheet surfacing one and
+          silently dropping the other presents a cut list as complete.
+
+          A boolean comparison, never `{entry.droppedModels && …}`: React renders the number `0` as a
+          text node, so the truthiness form would print a bare `0` into the sheet on every complete
+          list. `0` is a value here, never consulted for truthiness. `> 0` rather than `!== 0` so a
+          nonsense negative count degrades to "no notice" rather than to a notice claiming -1. */}
+      {entry !== null && entry.droppedModels > 0 && (
+        <p className="run-config__model-partial">{partialModelListCopy(entry.droppedModels)}</p>
+      )}
       <div className="run-config__model-list" aria-busy={busy ? 'true' : undefined}>
-        {MODEL_CATALOG.map((entry) => {
-          const isSelected = entry.family === selected
-          // onSelect present ⇒ the row is an operable button that submits its family token
-          // ('opus'/'sonnet'/'fable'/'haiku'); it round-trips — matchedFamily re-selects the same row from the
-          // optimistic overlay, and the token is a valid `claude --model` alias. Absent ⇒ #188's inert
-          // row (no role/tabindex/handler). Click is the baseline affordance (spec); keyboard activation
-          // (Enter/Space) is a deliberate non-goal here.
-          return (
-            <div
-              className="run-config__model-row"
-              key={entry.family}
-              role={onSelect ? 'button' : undefined}
-              tabIndex={onSelect ? 0 : undefined}
-              onClick={onSelect ? () => onSelect(entry.family) : undefined}
-            >
-              {isSelected ? (
-                // The filled M3 radio. Its accessible name lets a screen reader announce which model
-                // is active; the empty siblings are decorative (aria-hidden).
-                <span
-                  className="run-config__radio run-config__radio--selected"
-                  role="img"
-                  aria-label="Current model"
-                />
-              ) : (
-                <span className="run-config__radio" aria-hidden="true" />
-              )}
-              <div className="run-config__model-text">
-                <p className="run-config__model-name">{entry.name}</p>
-                <p className="run-config__model-descriptor">{entry.descriptor}</p>
+        {entry === null ? (
+          <p className="run-config__model-unknown">{RUN_CONFIG_MODELS_UNKNOWN_COPY}</p>
+        ) : entry.models.length === 0 ? (
+          <p className="run-config__model-empty">{RUN_CONFIG_MODELS_EMPTY_COPY}</p>
+        ) : (
+          entry.models.map((row, index) => {
+            // EXACT EQUALITY, and the whole of the selection rule: no substring, no prefix, no case
+            // fold, no trim, anywhere on this path. It is also the half of the round-trip this line
+            // owns — the row submits its `value` verbatim, the optimistic overlay holds that same
+            // string, and this comparison re-selects the row it came from. The moment either side
+            // normalises, the two stop being the same string.
+            const isSelected = row.value === model
+            // The daemon's report that it cut this row's own text. `null` and `[]` say the identical
+            // thing per the wire contract, so the test is on length rather than on presence.
+            const isCut = (row.truncated_fields?.length ?? 0) > 0
+            // onSelect present ⇒ the row is an operable button submitting its published `value`.
+            // Absent ⇒ #188's inert row (no role/tabindex/handler). Click is the baseline affordance;
+            // keyboard activation (Enter/Space) is a deliberate non-goal here.
+            return (
+              <div
+                className="run-config__model-row"
+                key={index}
+                role={onSelect ? 'button' : undefined}
+                tabIndex={onSelect ? 0 : undefined}
+                onClick={onSelect ? () => onSelect(row.value) : undefined}
+              >
+                {isSelected ? (
+                  // The filled M3 radio. Its accessible name lets a screen reader announce which model
+                  // is active; the empty siblings are decorative (aria-hidden).
+                  <span
+                    className="run-config__radio run-config__radio--selected"
+                    role="img"
+                    aria-label="Current model"
+                  />
+                ) : (
+                  <span className="run-config__radio" aria-hidden="true" />
+                )}
+                <div className="run-config__model-text">
+                  <p className="run-config__model-name">{row.display_name}</p>
+                  {/* The concrete identifier this row's `value` resolves to right now, so the operator
+                      can see what an alias means BEFORE the first turn rather than inferring it from an
+                      announcement after it. Rendered unconditionally: an empty one is a present, empty
+                      line, inventing no distinction the wire does not carry. It is not reliably
+                      populated — a row may carry the literal `<unmeasured>`, which renders escaped and
+                      verbatim, because it is what the daemon said. */}
+                  <p className="run-config__model-descriptor">{row.resolved_model}</p>
+                  {/* The cut marker is a SIBLING ELEMENT holding a client-owned constant, never text
+                      concatenated into a daemon-authored node: `{row.display_name}{isCut && ' (cut)'}`
+                      would fuse the two into one node, and a label ending in those same words would
+                      then be indistinguishable from the sheet's own claim. */}
+                  {isCut ? <p className="run-config__model-cut">{RUN_CONFIG_CUT_COPY}</p> : null}
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })
+        )}
       </div>
       {error ? <RunConfigError field="model" /> : null}
     </>
@@ -453,8 +540,14 @@ function ContextWindowSection({
  * The AC5 gate is structural: `onChange` is built ONLY when a session id is known, so under SSR (session
  * id null) the controls render inert and the window.pyry.sendCommand closure is never constructed — the
  * container server-renders with no bridge mock (the LogDataSection / composer discipline).
+ *
+ * #975 adds `conversationId` as a PROP rather than a fifth store read, the settled house idiom
+ * (`ComposerSlot`, `BackgroundTaskPanel`, both fed from `activeConversation` one scope up). It is NOT
+ * the session id already in scope: those are different identifiers, a session id keys nothing in the
+ * model-list map, and reaching for it would compile clean, typecheck clean and render the
+ * not-yet-known line forever.
  */
-export function RunConfigSections(): JSX.Element {
+export function RunConfigSections({ conversationId }: { conversationId: string | null }): JSX.Element {
   const sessionId = useSessionIdStore(selectSessionId)
   const snapshot = useRunConfigStore(selectSnapshot)
   // Select the RAW write state (stable identity between dispatches). Not selectEffectiveSettings as the
@@ -465,6 +558,16 @@ export function RunConfigSections(): JSX.Element {
   // announcement produces a fresh object identity (announcedModelStore.ts:88-95) and so re-renders this
   // section with identical output; that is anticipated by the store and needs no memoisation.
   const announced = useAnnouncedModelStore(selectAnnouncedModel)
+  // #975: a useMemo-stable selector per id (the ComposerSlashCommandTypeAhead / BackgroundTaskPanel
+  // idiom) — a fresh closure each render would churn the subscription. A null conversation selects
+  // nothing THROUGH THE SAME PATH, with no invented key and no second branch downstream, and `null` is
+  // a stable reference. The selector hands back the HELD ENTRY ITSELF, so a list published for another
+  // conversation leaves this one Object.is-identical and does not re-render the sheet.
+  const selectModels = useMemo(
+    () => (conversationId === null ? () => null : selectModelListFor(conversationId)),
+    [conversationId]
+  )
+  const models = useModelListStore(selectModels)
 
   const effective = selectEffectiveSettings(snapshot, writeState)
   // #558: derived from the SAME writeState reference in the SAME render pass as `effective` — that is
@@ -496,6 +599,7 @@ export function RunConfigSections(): JSX.Element {
       errorField={errorField}
       pending={pending}
       announced={announced}
+      models={models}
     />
   )
 }

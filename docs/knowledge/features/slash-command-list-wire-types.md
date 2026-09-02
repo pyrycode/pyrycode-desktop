@@ -20,11 +20,14 @@ delivery paths e2e (live push, connect-time snapshot).
 The daemon publishes the slash commands claude will accept for a conversation, drawn from the
 `commands` array of the same `initialize` control reply `model_list` comes from. `model_list`
 inventories the **identities** claude will run as; this frame inventories the **verbs** the working
-directory will accept. Nothing modelled `model_list` on this side either, so there was no local
-precedent to copy from it — the nearest structural precedent is
+directory will accept. At the time this ticket was written nothing modelled `model_list` on this
+side either, so there was no local precedent to copy from it — the nearest structural precedent was
 [`BackgroundTaskRosterPayload`](background-task-roster-store.md): a snapshot payload carrying
 `conversation_id` + a never-null array + a dropped count, whose rows each carry their own
-`truncated_fields: string[] | null`.
+`truncated_fields: string[] | null`. **`model_list` is modelled now** —
+[#971](https://github.com/pyrycode/pyrycode-desktop/issues/971) declared it, placed immediately
+before this frame's `EnvelopeType` member so the two siblings sit adjacent; see
+[Model-list wire types](model-list-wire-types.md).
 
 ```ts
 export type EnvelopeType =
@@ -243,6 +246,9 @@ radius.
   including its security review (verdict: PASS, builder self-review).
 - `docs/specs/architecture/939-slash-command-type-ahead-decisions.md` — the type-ahead decision
   layer's architecture spec, including its security review (verdict: PASS, builder self-review).
+- [Model-list wire types](model-list-wire-types.md) — the sibling frame from the same `initialize`
+  reply, declared by [#971](https://github.com/pyrycode/pyrycode-desktop/issues/971): that one
+  inventories the identities claude will run as, this one the verbs the working directory will accept.
 - [Question-shown wire types](question-shown-wire-types.md) — the shape this ticket follows: nested
   row declared before its payload, doc comment carrying provenance and traps, shipped dormant ahead of
   its decoder. Its `SlashCommand`/`ModelOption` contrast names the daemon's Go type this ticket

@@ -58,12 +58,20 @@ test('real daemon persists a session-settings write and returns it on a fresh re
 
   // --- Open the sheet. Per-control locators mirror run-config-settings.spec.ts so the two specs stay
   // readable side by side; `.run-config__model-row` is not unique, hence the hasText narrowing.
-  const sheetButton = page.getByRole('button', { name: 'Run configuration' })
+  //
+  // #962 retired the collapsed status row that used to be the one-click trigger, so opening is now the
+  // two-step overflow path (the conversation-create-rename.spec.ts idiom). It is a HELPER rather than a
+  // locator constant because this spec opens the sheet TWICE and the second open is load-bearing — see
+  // the read below — so both must go through the same sequence from one definition.
+  const openRunConfiguration = async (): Promise<void> => {
+    await page.locator('.conversation__overflow-trigger').click()
+    await page.getByRole('menuitem', { name: 'Run configuration' }).click()
+  }
   const modelRow = (name: string) => page.locator('.run-config__model-row', { hasText: name })
   const selectedRadioIn = (name: string) =>
     modelRow(name).locator('[aria-label="Current model"]')
 
-  await sheetButton.click()
+  await openRunConfiguration()
   await expect(modelRow(SONNET_ROW)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- The write. Reply-gated: the row is marked current only after the daemon answers, so a missing
@@ -78,7 +86,7 @@ test('real daemon persists a session-settings write and returns it on a fresh re
   await page.getByRole('button', { name: 'Close' }).click()
   await expect(page.locator('.run-config__model-row')).toHaveCount(0)
 
-  await sheetButton.click()
+  await openRunConfiguration()
   await expect(selectedRadioIn(SONNET_ROW)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // Exactly one model is marked, so a daemon that answered with every field set would fail here.

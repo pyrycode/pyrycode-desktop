@@ -104,11 +104,17 @@
   flex: 0 0 auto;
 }
 
-/* One dot. GEOMETRY ONLY — the colour is `.conn-dot--up` / `--in-progress` / `--down` / `--unknown` in
-   conversation.css, worn as a modifier WITHOUT its `.conn-dot` base (which bakes the status row's 8px box).
-   That reads as a mistake unless said out loud, so: it is deliberate, and the four category → token
-   bindings must NOT be re-declared here — #330's contract having exactly one copy in the renderer is what
-   AC2 asks for, and the split between colour and geometry classes is the seam #330 left for exactly this.
+/* One dot. GEOMETRY ONLY — the colour is `.conn-dot--up` / `--in-progress` / `--down` / `--unknown`,
+   declared directly below, worn as a modifier WITHOUT a `.conn-dot` base. That reads as a mistake unless
+   said out loud, so: it is deliberate. The base carried the retired status row's 8px box and #962 deleted
+   it with the row; the split between colour and geometry classes is the seam #330 left for exactly this,
+   and it is what let the colour half survive its first consumer.
+
+   The four category → token bindings live HERE, in this file, and are still the renderer's SINGLE copy —
+   which is what #330's AC2 asks for. That is an inversion of what this comment said until #962: they used
+   to be in conversation.css and re-declaring them here would have been a second copy. Now this file is
+   the copy, so the contract reads the other way round: do not re-introduce them in conversation.css or
+   anywhere else, and a NEW category's binding belongs below beside its siblings.
 
    Both 6px values are literals rather than tokens, the `.conn-dot { width: 8px }` precedent for structural
    component geometry. For the gap that is load-bearing rather than stylistic: the design's 12px dot pitch
@@ -120,6 +126,46 @@
   height: 6px;
   flex: 0 0 auto;
   border-radius: var(--radius-full);
+}
+
+/* The category → colour contract (mirrors mobile's ConnectionStatusLine): up = success green,
+   in-progress = warning amber (the daemon `connecting` state, #330 AC3), down = error peach, and since
+   #719 unknown = neutral outline grey.
+
+   These four moved here from conversation.css in #962, which retired the status row that used to host
+   them; `HostConnectionDots` above is their only consumer now, and it wears them flat, with no base
+   class of its own. Moving them rather than deleting them with the row is what the retired block's own
+   comment instructed, and why: the sidebar's dots would otherwise render as two 6px boxes with no
+   background and go invisible SILENTLY, since the unit tier asserts markup in a node environment and
+   never a computed colour. That is exactly the risk `e2e/connection-dot-colours.spec.ts` now reads back
+   from the shipped stylesheet. For the same reason a new category's binding belongs here flat beside its
+   siblings — nested under a base class it would be declared exactly once and still leave the 6px dot
+   unpainted. */
+.conn-dot--up {
+  background: var(--color-success);
+}
+
+.conn-dot--in-progress {
+  background: var(--color-warning);
+}
+
+.conn-dot--down {
+  background: var(--color-error);
+}
+
+/* #719's not-yet-known relay state: outline grey, the achromatic neutral. Deliberately none of the three
+   above — no status has arrived, which is neither good news nor bad, and #560's not-yet-known line set the
+   in-repo precedent that such a state declines --color-error rather than claiming a failure.
+   --color-outline already fills a small --radius-full off-state chip in the run-config and settings switch
+   knobs meaning "not on", the same shape and the same valence-free semantic; it is also the only
+   achromatic option, so this dot separates from green/amber/peach by chroma as well as hue and stays
+   tellable apart at 6px. NOT --color-on-surface-variant: that is this file's muted TEXT token, worn by
+   the section headings and by most secondary row copy in the sidebar, and a dot in the colour of the
+   text around it reads as a bullet rather than a status chip. (Until #962 the same sentence argued from
+   `.conn-leg__label`, the label this dot sat beside in the retired status row; the reasoning survived
+   the move, the class it named did not.) */
+.conn-dot--unknown {
+  background: var(--color-outline);
 }
 
 /* The workspace row heading each group under a host row (#703, Figma 106:3098) — structurally the host
@@ -872,9 +918,10 @@
    unfilled.
 
    These bindings are this component's OWN and must not be swapped for `.conn-dot--up` — that family is the
-   CONNECTION contract, deliberately kept to one copy in the renderer (conversation.css:1425-1435), and it
-   reports whether a machine is reachable. This dot reports what a conversation is DOING: a different
-   concept, a different box, and a class whose substring two other test files already assert on.
+   CONNECTION contract, deliberately kept to one copy in the renderer (which since #962 is in THIS file,
+   beside `.channel-list__host-dot`), and it reports whether a machine is reachable. This dot reports what
+   a conversation is DOING: a different concept, a different box, and a class whose substring two other
+   test files already assert on.
 
    Token names only. --color-primary IS the Figma stroke (#9dcbfc); do not paste the hex, and do not reach
    for a Figma export's #32628d, which is the light scheme's primary (desktop is dark-only, ADR 0003). */
@@ -891,9 +938,10 @@
    the operator's design-notes table (2026-08-21), not from a node: `Status dot` is a local instance with no
    variants and draws the working ring alone, so there is no amber node to read and none missing.
 
-   A RING like its two siblings, never a filled disc: `.conn-dot--in-progress` (conversation.css:1817) is a
-   FILLED dot in this same --color-warning amber six pixels above in the sidebar, and it reports whether a
-   MACHINE is reachable. The ring-vs-disc form is the whole of what keeps the two readings apart.
+   A RING like its two siblings, never a filled disc: `.conn-dot--in-progress` (declared in this file since
+   #962, beside `.channel-list__host-dot`) is a FILLED dot in this same --color-warning amber six pixels
+   above in the sidebar, and it reports whether a MACHINE is reachable. The ring-vs-disc form is the whole
+   of what keeps the two readings apart.
 
    NO ANIMATION, and deliberately no `prefers-reduced-motion` entry below: the blink and its fallback belong
    to --working alone. A dot waiting on the operator has no reason to blink. Contrast is not a concern here

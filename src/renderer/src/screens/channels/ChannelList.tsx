@@ -415,18 +415,22 @@ function HostRowControl(): JSX.Element {
  * The host row's two trailing connection dots (#718, Figma 110:3499 + 106:3114) — the HOST leg first, the
  * relay leg second. The pure view: props in, markup out, no store, no `window.pyry`, no effects.
  *
- * EXPORTED for the same reason `ConnectionStatusIndicator` and `CollapsibleWorkspaceGroup` are — it is the
- * only seam through which the unit tier reaches the full category × label matrix; the container below can
- * only ever render the two singletons' initial cell of it.
+ * EXPORTED for the same reason `CollapsibleWorkspaceGroup` is — it is the only seam through which the unit
+ * tier reaches the full category × label matrix; the container below can only ever render the two
+ * singletons' initial cell of it. #330's `ConnectionStatusIndicator` was exported on the same reasoning
+ * until #962 retired it with the status row, leaving this the only two-dot view in the app.
  *
- * LEG ORDER is the design's and is the REVERSE of `ConnectionStatusIndicator(relay, daemon)`'s. Both props
- * are a `ConnectionLeg`, so a swap type-checks and renders silently — hence the ordering test.
+ * LEG ORDER is the design's and is the REVERSE of the retired `ConnectionStatusIndicator(relay, daemon)`'s,
+ * whose argument order the container below still carries. Both props are a `ConnectionLeg`, so a swap
+ * type-checks and renders silently — hence the ordering test.
  *
- * COLOUR comes from `.conn-dot--up` / `--in-progress` / `--down` / `--unknown` in `conversation.css`, worn
- * WITHOUT their `.conn-dot` base (which bakes the status row's 8px box). #330 already split colour from
- * geometry into separate classes, and that split is the seam this slice reuses: re-declaring the four
- * bindings in `channels.css` would be a second copy of the contract one level below the mapping, which is
- * the thing AC2 forbids. `.channel-list__host-dot` therefore carries the 6px geometry and no `background`.
+ * COLOUR comes from `.conn-dot--up` / `--in-progress` / `--down` / `--unknown`, worn WITHOUT any base class
+ * of their own. #330 split colour from geometry into separate classes and that split is the seam this slice
+ * reused; #962 then deleted the status row that held both halves, and the colour half MOVED into
+ * `channels.css` beside `.channel-list__host-dot` rather than dying with it — these dots are its only
+ * consumer now, and one copy in the renderer is still what #330's AC2 asks for. `.channel-list__host-dot`
+ * carries the 6px geometry and no `background`. Nothing here reads a computed colour, so a lost binding
+ * would blank these dots silently; `e2e/connection-dot-colours.spec.ts` is the tier that would catch it.
  *
  * `role="img"` is what makes `aria-label` land: on a bare <span> the accessible-name computation drops it,
  * so the dot would have no name at all (AC3 passing review while failing in a screen reader). Not

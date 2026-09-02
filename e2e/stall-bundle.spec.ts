@@ -132,13 +132,16 @@ test('reliability affordances: stall push, debug-bundle download', async ({
   await expect(page.locator('.conversation__stall')).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(page.locator('.bubble--stall')).toContainText(STALL_COPY)
 
-  // AC2 — DEBUG-BUNDLE download (chunked reply stream). Open the Run-configuration sheet (the "Download"
-  // button lives inside it), click it, and let the CHUNK_COUNT chunk frames round-trip. The captured bare
+  // AC2 — DEBUG-BUNDLE download (chunked reply stream). Open the Run-configuration sheet from the thread
+  // overflow menu (the "Download" button lives inside it), click it, and let the CHUNK_COUNT chunk frames
+  // round-trip. The captured bare
   // request_debug_bundle proves the send; the role="status" caption reads "Downloading… N chunks received"
   // after the streamed chunks drive debugBundleProgress per chunk (no debug_bundle_done needed — the save
   // tail is the out-of-scope residual). Asserting the substring with the FINAL count waits past the
   // transient 0/1/2 captions.
-  await page.getByRole('button', { name: 'Run configuration' }).click()
+  // #962 retired the collapsed status row, so the sheet opens from the thread's overflow menu now.
+  await page.locator('.conversation__overflow-trigger').click()
+  await page.getByRole('menuitem', { name: 'Run configuration' }).click()
   await page.locator('.log-data__download').click()
   await expect.poll(() => capturedBundleRequests(captured), { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
   const status = page.locator('.log-data__status')

@@ -17,7 +17,6 @@ import type { Message } from './messageViewModel'
 import type { QueuedItem, ConversationCreatedPayload } from '@shared/wire/types'
 import type { RelayLinkStatus } from '@shared/ipc/events'
 import { useSessionStore, selectStatus, type ConnectionStatus } from '../../store/sessionStore'
-import { useRelayLinkStore, selectRelayLinkStatus } from '../../store/relayLinkStore'
 // #758: only the store hook survives here — the composer's optimistic echo still writes the flat store
 // (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
 // itself is its own ticket.
@@ -203,8 +202,10 @@ export function ConversationScreen({
   const { items, phase, stalled, apiRetry, compacting, localSendPending } = thread
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
-  // never reopens itself across a screen remount. The StatusRow trigger sits between the thread and
-  // the composer (per Figma); the sheet overlays the whole conversation surface as the last child.
+  // never reopens itself across a screen remount. #962 retired the StatusRow trigger that used to sit
+  // between the thread and the composer — the desktop design draws nothing there — so the overflow
+  // menu's Run-configuration item flips this now; the sheet still overlays the whole conversation
+  // surface as the last child.
   const [sheetOpen, setSheetOpen] = useState(false)
   // #365: the Channel Info sheet's open/closed state — the `sheetOpen` twin, a single-value screen-local
   // boolean → useState, never the store (ADR 0006), resetting to closed on remount for free. The overflow
@@ -218,7 +219,9 @@ export function ConversationScreen({
   const [pickerOpen, setPickerOpen] = useState(false)
   // #581: the background-task panel's open/closed state — the `pickerOpen` twin, a single-value
   // screen-local boolean → useState, never the store (ADR 0006), resetting to closed on remount for free.
-  // The BackgroundTaskTrigger beside the status row flips it open; the panel reads the roster store itself
+  // #962 retired the clock trigger beside the status row (the design draws no home for it, and #580
+  // owns the panel's final one), so the overflow menu's Background-tasks item flips it open now until
+  // that drawing lands; the panel reads the roster store itself
   // and needs only the active conversation's id, derived from the `activeConversation` slice already held
   // above (no second subscription). One overlay at a time in normal use.
   const [panelOpen, setPanelOpen] = useState(false)
@@ -239,8 +242,19 @@ export function ConversationScreen({
           actions. #365 wires its Channel-info item to open the Channel Info sheet (below): the seam is no
           longer a no-op. Gated on onBack presence, the established "mounted in the paired shell" signal
           (BackControl's gate): a bare `<ConversationScreen />` shows neither. Gated at the mount site, not
-          self-gated, so ThreadOverflowMenu's hooks stay unconditional (rules-of-hooks). */}
-      {onBack && <ThreadOverflowMenu onChannelInfo={() => setChannelInfoOpen(true)} />}
+          self-gated, so ThreadOverflowMenu's hooks stay unconditional (rules-of-hooks).
+          #962: it now carries all three entry points. The last two setters are VERBATIM what the retired
+          StatusRow and BackgroundTaskTrigger did from their own mounts in the region between the thread
+          and the composer — the overlays and their open/closed state are untouched, only the affordance
+          that flips them moved. This menu is itself mobile-era chrome that a later ticket retires
+          together with the sheet, once #683 lands the footer's model and effort controls. */}
+      {onBack && (
+        <ThreadOverflowMenu
+          onChannelInfo={() => setChannelInfoOpen(true)}
+          onRunConfiguration={() => setSheetOpen(true)}
+          onBackgroundTasks={() => setPanelOpen(true)}
+        />
+      )}
       <UnpairControl onUnpaired={onUnpaired} />
       {/* #279: the prominent, disconnected-only connection banner — the top of the thread, below the
           header row and above the message list. A third read of the connection status, distinct from
@@ -274,14 +288,14 @@ export function ConversationScreen({
           turn activity. Renders nothing at rest. */}
       <StallIndicator isStalled={stalled} />
       {/* #294: the held queued backlog — the not-yet-run tail below the delivered thread and the
-          working indicator, above the run-config row and composer. Renders nothing when empty. */}
+          working indicator, above the status area and composer (it sat above the run-config row too
+          until #962 retired it). Renders nothing when empty. */}
       <QueuedBacklogControl />
-      <StatusRow onExpand={() => setSheetOpen(true)} />
-      {/* #581: the background-task panel's trigger — a StatusRow sibling in the same region between the
-          thread and the composer. Rendered unconditionally, NOT gated on tasks existing: gating would make
-          both non-populated panel readings unreachable through the UI. It carries no count badge — a badge
-          would need its own roster subscription, which is the panel's job and #580's design call. */}
-      <BackgroundTaskTrigger onOpen={() => setPanelOpen(true)} />
+      {/* #962: the region between the queued backlog and the status area is EMPTY, and that emptiness is
+          the design (Figma 102:4 stacks the message area straight onto the input area). The run-config
+          row (#177) and the background-task trigger (#581) that used to mount here are both retired —
+          the row's controls live in the input footer now (#682/#683/#811) and its connection dots on the
+          sidebar host row (#672/#718), and neither overlay ever had a drawn home here. */}
       {/* #796: the desktop layout's status area (Figma 111:3525) — a fixed-height row directly above the
           message box, so there is one line telling the operator what is happening and it never moves the
           composer under their cursor. It hosts the working indicator's text and nothing else this slice:
@@ -1823,68 +1837,6 @@ function QueuedBacklogControl(): JSX.Element | null {
   )
 }
 
-// The collapsed status row between the thread and the composer (Figma node 16-57) — the trigger that
-// opens the Run configuration sheet (#177). Its live `model · effort · context%` summary (the left
-// region) is the collapsed mirror of the sheet's read sections, owned by #181/#182; this shell renders
-// the row as the trigger only, leaving that region empty. An icon-only button, so aria-label supplies
-// the accessible name (the .composer__send pattern). In-file and not exported, like Composer.
-function StatusRow({ onExpand }: { onExpand: () => void }): JSX.Element {
-  return (
-    <button
-      type="button"
-      className="status-row"
-      aria-label="Run configuration"
-      aria-haspopup="dialog"
-      onClick={onExpand}
-    >
-      {/* The live summary region. #330 mounts the two-dot connection indicator here as a distinct child;
-          #181/#182's run-config summary text ("Opus 4.7 · high · 73% used") lands as a SIBLING beside it —
-          this slot is a flex row, not claimed exclusively by either. */}
-      <span className="status-row__summary">
-        <ConnectionStatusIndicatorControl />
-      </span>
-      <svg
-        className="status-row__chevron"
-        viewBox="0 0 24 24"
-        width="18"
-        height="18"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M12 8l-6 6 1.41 1.41L12 10.83l4.59 4.58L18 14z" />
-      </svg>
-    </button>
-  )
-}
-
-// #581: the background-task panel's trigger label — client-owned copy, apostrophe-free (the standing
-// renderToStaticMarkup lesson). Never a daemon string.
-const BACKGROUND_TASK_TRIGGER_LABEL = 'Background tasks'
-
-// #581: the trigger that opens the background-task panel — the StatusRow idiom (an icon-only button whose
-// aria-label supplies its accessible name, advertising its popup via aria-haspopup="dialog"), mounted as a
-// StatusRow sibling. Chosen over the two other trigger idioms the ticket names: the overflow menu is
-// hardcoded to a single item, so routing through it would mean generalising the menu and its tests for no
-// gain here; and WorkspaceChip self-gates to null once the thread has a message, which is exactly when
-// background tasks exist. It subscribes to nothing — the panel owns the store read. In-file, like StatusRow.
-function BackgroundTaskTrigger({ onOpen }: { onOpen: () => void }): JSX.Element {
-  return (
-    <button
-      type="button"
-      className="background-task-trigger"
-      aria-label={BACKGROUND_TASK_TRIGGER_LABEL}
-      aria-haspopup="dialog"
-      onClick={onOpen}
-    >
-      {/* The Material `schedule` glyph — decorative, so aria-hidden; the button's aria-label is the
-          accessible name. */}
-      <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
-        <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" />
-      </svg>
-    </button>
-  )
-}
-
 // A stable id tying the dialog's aria-labelledby to its title element.
 const STATUS_SHEET_TITLE_ID = 'status-sheet-title'
 
@@ -2972,44 +2924,14 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
   }
 }
 
-// #330: the two-dot indicator's pure view — takes the two already-mapped legs (relay first, then daemon)
-// and renders a coloured dot + its label per leg. Pure props-in/markup-out and exported so tests
-// server-render the full category × label matrix directly with injected legs (the ConnectionBanner /
-// ThinkingIndicator discipline). The wrapper is a STATIC labelled group, not a live region — this is the
-// persistent at-a-glance state; the banner (#279) already politely announces disconnects, so a second
-// live region here would double-announce. Each dot is aria-hidden (decorative — its colour is redundant
-// with the label text, AC2); the category drives ONLY the dot's modifier class.
-export function ConnectionStatusIndicator({
-  relay,
-  daemon
-}: {
-  relay: ConnectionLeg
-  daemon: ConnectionLeg
-}): JSX.Element {
-  return (
-    <span className="status-row__connection" role="group" aria-label="Connection status">
-      <span className="conn-leg">
-        <span className={`conn-dot conn-dot--${relay.category}`} aria-hidden="true" />
-        <span className="conn-leg__label">{relay.label}</span>
-      </span>
-      <span className="conn-leg">
-        <span className={`conn-dot conn-dot--${daemon.category}`} aria-hidden="true" />
-        <span className="conn-leg__label">{daemon.label}</span>
-      </span>
-    </span>
-  )
-}
-
-// The store-bound container (#330). Reads both stores with narrow single-slice selectors — the relay leg
-// from relayLinkStore (#329), the daemon leg from sessionStore — and passes the mapped legs to the pure
-// view (the QueuedBacklogControl two-store precedent). No window.pyry, no IPC, no effects: a pure read,
-// so the server-rendered smoke test touches no bridge (initial state → two "Offline" dots, AC3 no false
-// green). The two narrow selectors re-render this control only on its own leg's change.
-function ConnectionStatusIndicatorControl(): JSX.Element {
-  const relayStatus = useRelayLinkStore(selectRelayLinkStatus)
-  const daemonStatus = useSessionStore(selectStatus)
-  return <ConnectionStatusIndicator relay={relayLeg(relayStatus)} daemon={daemonLeg(daemonStatus)} />
-}
+// #962 retired #330's two-dot indicator — the pure `ConnectionStatusIndicator` view and its store-bound
+// container — along with the status row that hosted it. The dots have been on the sidebar host row since
+// #718 (`HostConnectionDots` in ChannelList.tsx), which reads the two legs through the same narrow
+// selectors this container used and renders them in the design's reversed order. The three mappings
+// above are what SURVIVE the deletion: `ChannelList.tsx` imports `relayLeg`, `daemonLeg` and
+// `ConnectionLeg`, and the leg → category → label matrix is still proven on them directly. The four
+// `.conn-dot--*` colour bindings moved to `channels.css` beside `.channel-list__host-dot` rather than
+// dying with the row's stylesheet block, since the sidebar wears them without the `.conn-dot` base.
 
 // #140: the leading back affordance of the thread's top app bar (Figma node 16-9 → arrow_back 16-11):
 // a 48px touch target holding the 24px arrow_back glyph in on-surface, returning to the paired shell's
@@ -3046,23 +2968,49 @@ function BackControl({ onBack }: { onBack?: () => void }): JSX.Element | null {
 // the .conversation__back treatment; aria-label supplies its accessible name, aria-haspopup="menu"
 // advertises the popup, and aria-expanded tracks open/closed (React stringifies the aria boolean under
 // server render → "true"/"false", both directly assertable). When `open`, a role="menu" surface drops
-// below it holding a single role="menuitem" — the documented extension slot #155 and later action
-// tickets (#274/#153/#154) add rows to. The item is ENABLED and routed to `onSelect` (a live no-op this
-// ticket, since onChannelInfo is undefined) rather than disabled, so "dismisses on selecting an item"
-// (AC3) is genuinely live now. Copy `More actions` / `Channel info` is apostrophe-free (renderToStaticMarkup
-// escapes ' → &#x27; — the standing desktop lesson). `triggerRef` is forwarded for the container's
-// focus-return; omitted in tests (a native <button> accepts ref={undefined}).
+// below it holding one role="menuitem" per action — the extension slot #155 documented, which #962
+// finally used. Every item is ENABLED and routed to its own callback, so "dismisses on selecting an
+// item" (AC3) is live on all three. Copy is apostrophe-free (renderToStaticMarkup escapes ' → &#x27; —
+// the standing desktop lesson). `triggerRef` is forwarded for the container's focus-return; omitted in
+// tests (a native <button> accepts ref={undefined}).
+//
+// #962: the menu grew from one hardcoded item to three when the region between the thread and the
+// composer emptied — the run-config sheet (#177) and the background-task panel (#581) lost their own
+// triggers and moved in here. The three labels are LITERALS IN THIS VIEW, in the order the ticket
+// fixes, rather than data the container injects, and that is load-bearing rather than incidental: the
+// container below is in-file, the screen gates the menu on `onBack`, and the `node` test env fires no
+// clicks, so this pure view is the ONLY surface on which the unit tier can see the shipped copy and
+// the shipped order at all. Those two new strings are also the accessible names four e2e opens locate
+// by, so a typo must redden a unit assertion rather than merely time out a drive. Passing
+// `items: { label, onSelect }[]` instead would be the tidier prop, and it would move both facts out of
+// the one place that can prove them. The items are mapped from one local array so the three share a
+// single JSX shape — the alternative was three near-identical literal buttons.
+//
+// No item advertises aria-haspopup="dialog" even though all three open one. `Channel info` has opened
+// a dialog without it since #276, a hint on some items and not others reads as a difference between
+// them, and a second popup kind in this subtree would also break the bare-tree
+// `aria-haspopup="menu"` count assertion's premise. The retired StatusRow carried one because it was a
+// standalone button; a menuitem inside an already-advertised menu is not the same affordance.
 export function ThreadOverflowMenuView({
   open,
   onToggle,
-  onSelect,
+  onSelectChannelInfo,
+  onSelectRunConfiguration,
+  onSelectBackgroundTasks,
   triggerRef
 }: {
   open: boolean
   onToggle: () => void
-  onSelect: () => void
+  onSelectChannelInfo: () => void
+  onSelectRunConfiguration: () => void
+  onSelectBackgroundTasks: () => void
   triggerRef?: Ref<HTMLButtonElement>
 }): JSX.Element {
+  const items = [
+    { label: 'Channel info', onSelect: onSelectChannelInfo },
+    { label: 'Run configuration', onSelect: onSelectRunConfiguration },
+    { label: 'Background tasks', onSelect: onSelectBackgroundTasks }
+  ]
   return (
     <>
       <button
@@ -3087,14 +3035,17 @@ export function ThreadOverflowMenuView({
       </button>
       {open && (
         <div className="conversation__overflow-menu" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            className="conversation__overflow-item"
-            onClick={onSelect}
-          >
-            Channel info
-          </button>
+          {items.map(({ label, onSelect }) => (
+            <button
+              key={label}
+              type="button"
+              role="menuitem"
+              className="conversation__overflow-item"
+              onClick={onSelect}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       )}
     </>
@@ -3106,13 +3057,29 @@ export function ThreadOverflowMenuView({
 // nothing). Menu open/closed is screen-local useState, never the session store (ADR 0006, the `sheetOpen`
 // precedent), so it resets to closed on remount for free (AC5). In-file and not exported, like Composer.
 //
-// close/select both return focus to the trigger (AC3); select also invokes onChannelInfo (undefined this
-// ticket → the item just closes). Dismiss-on-Escape and dismiss-on-outside-click (AC3) attach document
-// listeners only while open, torn down by the effect cleanup on close/unmount so no listener outlives an
-// open menu. Both handlers read the DOM event via addEventListener's event-map inference — NOT an
-// annotation — because this file imports React's `KeyboardEvent` type at the top, which would otherwise
-// shadow the DOM one; the outside-click target is narrowed with `instanceof Node` (never an `as` cast).
-function ThreadOverflowMenu({ onChannelInfo }: { onChannelInfo?: () => void }): JSX.Element {
+// close/select both return focus to the trigger (AC3). Dismiss-on-Escape and dismiss-on-outside-click
+// (AC3) attach document listeners only while open, torn down by the effect cleanup on close/unmount so
+// no listener outlives an open menu. Both handlers read the DOM event via addEventListener's event-map
+// inference — NOT an annotation — because this file imports React's `KeyboardEvent` type at the top,
+// which would otherwise shadow the DOM one; the outside-click target is narrowed with `instanceof Node`
+// (never an `as` cast).
+//
+// #962: `select` became a FACTORY when the menu grew to three items, so close → invoke → return-focus
+// is written once and every item is dismissed on the same terms rather than three times over. The three
+// action props are REQUIRED, replacing #276's optional `onChannelInfo?`: that optionality existed only
+// because the menu shipped before #365 wired its one item, so the item was a deliberate live no-op.
+// All three are wired at the single mount site now, and a required prop turns a forgotten wire into a
+// compile error instead of a menu item that silently closes and does nothing — which is exactly the
+// failure the AC guards against.
+function ThreadOverflowMenu({
+  onChannelInfo,
+  onRunConfiguration,
+  onBackgroundTasks
+}: {
+  onChannelInfo: () => void
+  onRunConfiguration: () => void
+  onBackgroundTasks: () => void
+}): JSX.Element {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -3121,11 +3088,13 @@ function ThreadOverflowMenu({ onChannelInfo }: { onChannelInfo?: () => void }): 
     setOpen(false)
     triggerRef.current?.focus()
   }
-  const select = (): void => {
-    setOpen(false)
-    onChannelInfo?.()
-    triggerRef.current?.focus()
-  }
+  const select =
+    (action: () => void) =>
+    (): void => {
+      setOpen(false)
+      action()
+      triggerRef.current?.focus()
+    }
 
   useEffect(() => {
     if (!open) return
@@ -3153,7 +3122,9 @@ function ThreadOverflowMenu({ onChannelInfo }: { onChannelInfo?: () => void }): 
       <ThreadOverflowMenuView
         open={open}
         onToggle={() => setOpen((o) => !o)}
-        onSelect={select}
+        onSelectChannelInfo={select(onChannelInfo)}
+        onSelectRunConfiguration={select(onRunConfiguration)}
+        onSelectBackgroundTasks={select(onBackgroundTasks)}
         triggerRef={triggerRef}
       />
     </div>

@@ -240,3 +240,23 @@ presence, and is covered below.
 - Whether deleting the `.conn-dot` base rule leaves any consumer. Grep says the base was worn only by
   `ConnectionStatusIndicator`'s dots, and the sidebar deliberately wears the modifiers without it —
   confirm at the class's last call site before removing it.
+
+## Revisions
+
+### 2026-09-03 — both open questions resolved, design unchanged
+
+- **The menu items carry no `aria-haspopup="dialog"`**, as the question leaned. `Channel info` has
+  opened a dialog without one since #276, and advertising the hint on two of three items would read as
+  a difference between them rather than as extra help. The reasoning is recorded on
+  `ThreadOverflowMenuView`. The bare-tree `aria-haspopup="menu"` count assertion is untouched and still
+  passes at 1 — a dialog hint was never one of the popups it counts.
+- **The `.conn-dot` base rule had no surviving consumer** and was deleted with the rest of the block.
+  `HostConnectionDots` wears the four modifiers flat on `.channel-list__host-dot`, which was already
+  the deliberate split; the base only ever carried the retired row's 8px box.
+
+One correction outside both questions, found while moving the colour block. The `--unknown` rule's
+comment argued against `--color-on-surface-variant` on the grounds that it was `.conn-leg__label`'s own
+colour — a class this ticket deletes. Restating it against the host label next to the moved rules would
+have shipped a false claim: `.channel-list__host-label` is `--color-on-surface`, not the variant. The
+argument is restated against the token's actual role in `channels.css` (this file's muted text token,
+worn by the section headings and most secondary row copy), which is verifiable where it now stands.

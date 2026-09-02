@@ -51,7 +51,9 @@ import type {
   QuestionDismissedPayload,
   QuestionAnswerEntry,
   QuestionAnswerPayload,
-  QuestionRefusedPayload
+  QuestionRefusedPayload,
+  WireSlashCommand,
+  SlashCommandListPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -1275,5 +1277,256 @@ describe('outbound question wire vocabulary (#919)', () => {
     // name rather than on a value's shape.
     expect(payload).not.toHaveProperty('answers')
     expect(payload).not.toHaveProperty('conversation_id')
+  })
+})
+
+describe('slash-command-list wire vocabulary (#935)', () => {
+  // Values are lifted from the daemon's three committed fixtures
+  // (internal/protocol/testdata/slash_command_list{,_empty,_zero}.json), so a contract change shows up
+  // as a fixture diff rather than as a disagreement between two hand-written guesses. TWO DELIBERATE
+  // DEPARTURES, both named here rather than left to be spotted, following the `question_dismissed`
+  // block's precedent above:
+  //
+  //   1. `claude-api`'s description is ABRIDGED. The fixture's is 1,145 bytes of prose and none of it
+  //      is contract-bearing; what the row pins is its EMPTY argument hint, its EMPTY aliases, its
+  //      reported `description` cut, and the two byte-level properties measured on the real string —
+  //      an embedded newline and a non-ASCII rune — both of which the stand-in keeps.
+  //   2. The `truncated_fields: ['aliases']` case is HAND-AUTHORED. No committed upstream fixture
+  //      carries it: the populated fixture's only cut is `description`. It is the one arm that
+  //      separates "cut to nothing" from "none", so it is written rather than skipped for want of
+  //      bytes to copy.
+
+  it('admits the slash_command_list inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType, and it is the
+    // only thing that catches a dropped one — `Envelope.type` is `EnvelopeType | string`, so #936's
+    // `case 'slash_command_list':` compiles green whether or not the member was ever added.
+    const list: EnvelopeType = 'slash_command_list'
+    expect(list).toBe('slash_command_list')
+  })
+
+  it('shapes WireSlashCommand as { name, argument_hint, description, aliases, truncated_fields }', () => {
+    // The fixture's `model` row. Its hint arrives as a RAW `<model>`: the committed bytes carry
+    // `<model>` because Go's encoder escapes `<`, `>` and `&`, so the escaping is a transport
+    // artefact and the decoded value holds the literal angle brackets — the exact byte a render sink
+    // would be tempted by, which is why the trust-tier rule is stated at the type.
+    const command: WireSlashCommand = {
+      name: 'model',
+      argument_hint: '<model>',
+      description: 'Set the AI model for Claude Code',
+      aliases: [],
+      truncated_fields: null
+    }
+    expect(command).toEqual({
+      name: 'model',
+      argument_hint: '<model>',
+      description: 'Set the AI model for Claude Code',
+      aliases: [],
+      truncated_fields: null
+    })
+    expect(command.argument_hint).toBe('<model>')
+    // `name` is NOT an identifier — one name in the measured capture is `__remote-workflow`, so no
+    // charset assumption belongs in a client, and nothing may key a cache or a lookup path by it.
+    const oddName: WireSlashCommand = { ...command, name: '__remote-workflow' }
+    expect(oddName.name).toBe('__remote-workflow')
+  })
+
+  it('shapes SlashCommandListPayload as { conversation_id, commands, dropped_commands }', () => {
+    // The populated fixture (slash_command_list.json): five rows in claude's own order, one reporting
+    // a cut `description` beside four reporting `null`, and a NON-ZERO `dropped_commands`.
+    const payload: SlashCommandListPayload = {
+      conversation_id: 'c1',
+      commands: [
+        {
+          name: 'claude-api',
+          argument_hint: '',
+          // Abridged (see the block comment). Both measured properties of the real string are kept:
+          // an embedded newline — `0x0a` is the ONLY sub-`0x20` byte anywhere across the capture's 51
+          // entries' four string fields — and a non-ASCII rune, here the em dash.
+          description: 'Reference for the Claude API — model ids, pricing, params.\nTRIGGER — read first.',
+          aliases: [],
+          truncated_fields: ['description']
+        },
+        {
+          name: 'clear',
+          argument_hint: '[name]',
+          description:
+            'Start a new session with empty context; previous session stays on disk (resumable with /resume)',
+          aliases: ['reset', 'new'],
+          truncated_fields: null
+        },
+        {
+          name: 'config',
+          argument_hint: 'key=value',
+          description: 'Set a setting by key',
+          aliases: ['settings'],
+          truncated_fields: null
+        },
+        {
+          name: 'model',
+          argument_hint: '<model>',
+          description: 'Set the AI model for Claude Code',
+          aliases: [],
+          truncated_fields: null
+        },
+        {
+          name: 'usage',
+          argument_hint: '',
+          description: "Show session cost, plan usage, and what's contributing to your limits",
+          aliases: ['cost', 'stats'],
+          truncated_fields: null
+        }
+      ],
+      dropped_commands: 2
+    }
+    expect(payload.conversation_id).toBe('c1')
+    // Array order IS claude's own, carried through unchanged.
+    expect(payload.commands.map((c) => c.name)).toEqual(['claude-api', 'clear', 'config', 'model', 'usage'])
+    // `dropped_commands` IS COUNTED AND CARRIED, so this arithmetic yields the menu's true size. The
+    // published section still says "nothing counts it" and forbids exactly this sum; that prose is
+    // stale (the count landed upstream in #1826 and the frame-level cut adds to it in #2002 rather
+    // than recomputing it), and the correction is pyrycode#2010, still open. Asserted rather than only
+    // commented, because it is the statement most likely to be copied wrong from the upstream doc.
+    expect(payload.dropped_commands).toBe(2)
+    expect(payload.commands.length + payload.dropped_commands).toBe(7)
+    // A cut is per row and each row reports its OWN. There is no hoisted or flattened list on the
+    // payload, so a reader grepping the frame for one finds nothing.
+    expect(payload).not.toHaveProperty('truncated_fields')
+    expect(payload.commands[0].truncated_fields).toEqual(['description'])
+    expect(payload.commands.filter((c) => c.truncated_fields === null)).toHaveLength(4)
+    // A description is not necessarily one line, and the newline is the control character that
+    // actually occurs on this path — the reason the never-into-a-log clause of CLAUDE.md's ruling
+    // bites harder here than on its neighbours: a workspace author could forge a log record with it.
+    expect(payload.commands[0].description).toContain('\n')
+  })
+
+  it('admits an EMPTY commands array — a positive statement, never a null branch', () => {
+    // The daemon's second fixture (slash_command_list_empty.json). `commands` is a plain non-optional
+    // array because the daemon's MarshalJSON normalises a nil slice to [], so no consumer branches on
+    // null. Unlike `question_shown`'s `questions`, an empty list here IS in contract: it says claude
+    // offered nothing. `0` is a VALUE, never consulted for truthiness.
+    const emptyMenu: SlashCommandListPayload = {
+      conversation_id: 'c1',
+      commands: [],
+      dropped_commands: 0
+    }
+    expect(emptyMenu.commands).toEqual([])
+    expect(emptyMenu.dropped_commands).toBe(0)
+    expect(emptyMenu.commands.length + emptyMenu.dropped_commands).toBe(0)
+  })
+
+  it('admits the ZERO-VALUE entry — an empty hint, an empty aliases and a null truncated_fields', () => {
+    // The daemon's third fixture (slash_command_list_zero.json): one all-zero row, which is the only
+    // route to WireSlashCommand's five keys, since a frame carrying no entries reaches none of them.
+    // It is also the all-at-once case: an empty `argument_hint`, an empty `aliases` and a `null`
+    // `truncated_fields` on ONE entry, read with no branch on absent-versus-empty anywhere.
+    const zero: SlashCommandListPayload = {
+      conversation_id: '',
+      commands: [{ name: '', argument_hint: '', description: '', aliases: [], truncated_fields: null }],
+      dropped_commands: 0
+    }
+    expect(zero).toEqual({
+      conversation_id: '',
+      commands: [{ name: '', argument_hint: '', description: '', aliases: [], truncated_fields: null }],
+      dropped_commands: 0
+    })
+    // '' is a VALUE, never a vanished key: the daemon sets no `omitempty` on any of the eight keys.
+    expect(zero.commands[0].argument_hint).toBe('')
+    expect(zero.commands[0].aliases).toEqual([])
+    expect(zero.commands[0].truncated_fields).toBeNull()
+
+    // Neither empty is a zero-value artefact — both occur independently in the real capture, so a
+    // consumer may not read one as evidence of a malformed row. `argument_hint` is empty on 33 of the
+    // capture's 51 entries (the ORDINARY case rather than missing data), and `aliases` is `[]` on the
+    // 42 entries claude sends no alias key for at all.
+    const realEmptyHint: WireSlashCommand = {
+      name: 'usage',
+      argument_hint: '',
+      description: "Show session cost, plan usage, and what's contributing to your limits",
+      aliases: ['cost', 'stats'],
+      truncated_fields: null
+    }
+    const realEmptyAliases: WireSlashCommand = {
+      name: 'model',
+      argument_hint: '<model>',
+      description: 'Set the AI model for Claude Code',
+      aliases: [],
+      truncated_fields: null
+    }
+    expect(realEmptyHint.argument_hint).toBe('')
+    expect(realEmptyHint.aliases).toEqual(['cost', 'stats'])
+    expect(realEmptyAliases.aliases).toEqual([])
+    expect(realEmptyAliases.argument_hint).toBe('<model>')
+  })
+
+  it('carries a truncated_fields naming aliases — the ONLY signal that an empty aliases is UNKNOWN', () => {
+    // Hand-authored; no committed fixture carries this arm (see the block comment). `aliases` collapses
+    // claude's ABSENT and its EMPTY list into the same `[]`, which spares every other row a branch and
+    // costs a reader exactly here: with the key cut, `[]` no longer says "none".
+    const cutAliases: WireSlashCommand = {
+      name: 'clear',
+      argument_hint: '[name]',
+      description: 'Start a new session with empty context',
+      aliases: [],
+      truncated_fields: ['aliases']
+    }
+    expect(cutAliases.aliases).toEqual([])
+    expect(cutAliases.truncated_fields).toEqual(['aliases'])
+
+    // THE READING RULE, pinned as a predicate rather than left in prose: an empty `aliases` means
+    // "none" only when this row reported no cut naming it. Read the cut row as *no aliases* and #681's
+    // Actions menu greys out a working command — its own `reset` entry is an ALIAS of `clear`, not a
+    // command name, so `reset` disappears from a menu whose command is live.
+    const aliasesAreKnownEmpty = (c: WireSlashCommand): boolean =>
+      c.aliases.length === 0 && !(c.truncated_fields ?? []).includes('aliases')
+    expect(aliasesAreKnownEmpty(cutAliases)).toBe(false)
+    expect(aliasesAreKnownEmpty({ ...cutAliases, truncated_fields: null })).toBe(true)
+    // A cut naming some OTHER field says nothing about the aliases, so the rule keys on the name and
+    // never on the presence of a cut.
+    expect(aliasesAreKnownEmpty({ ...cutAliases, truncated_fields: ['description'] })).toBe(true)
+  })
+
+  it('pins every field as REQUIRED — omitting one is a compile-time error', () => {
+    // The no-drift pin, and the load-bearing one: all-required is what leaves #936's fail-closed
+    // narrower no optional key to wave through. If any field were ever relaxed to optional, the
+    // directives below would stop erroring and fail this file at compile time.
+
+    // @ts-expect-error `argument_hint` is required — always present, and empty is a value, not an absence
+    const missingHint: WireSlashCommand = {
+      name: 'usage',
+      description: 'Show session cost',
+      aliases: [],
+      truncated_fields: null
+    }
+    // @ts-expect-error `aliases` is required and non-optional — nil is normalised to [], never elided
+    const missingAliases: WireSlashCommand = {
+      name: 'usage',
+      argument_hint: '',
+      description: 'Show session cost',
+      truncated_fields: null
+    }
+    // @ts-expect-error `truncated_fields` is required — NULLABLE is not the same as OPTIONAL, and an
+    // absent key would decode to `undefined`, which a `?.includes('aliases')` reads as "nothing cut"
+    const missingTruncated: WireSlashCommand = {
+      name: 'usage',
+      argument_hint: '',
+      description: 'Show session cost',
+      aliases: []
+    }
+    // @ts-expect-error `dropped_commands` is required — the key is always written, so an absent one is
+    // a real defect rather than a valid zero
+    const missingDropped: SlashCommandListPayload = {
+      conversation_id: 'c1',
+      commands: []
+    }
+    // @ts-expect-error `commands` is required and non-optional — nil is normalised to [], never elided
+    const missingCommands: SlashCommandListPayload = {
+      conversation_id: 'c1',
+      dropped_commands: 0
+    }
+    expect(missingHint.name).toBe('usage')
+    expect(missingAliases.name).toBe('usage')
+    expect(missingTruncated.name).toBe('usage')
+    expect(missingDropped.conversation_id).toBe('c1')
+    expect(missingCommands.conversation_id).toBe('c1')
   })
 })

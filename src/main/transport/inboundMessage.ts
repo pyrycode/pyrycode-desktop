@@ -498,6 +498,49 @@ function optionalStringMap(
   return map
 }
 
+/** Narrow one OPTIONAL scalar string field off the payload, or fail closed with a category-only
+ *  message. optionalStringMap's posture with the map walk removed, for `tool_result.result_detail`
+ *  (#773, daemon-side pyrycode#2024):
+ *
+ *    undefined (key absent)       → undefined      a pre-pyrycode#2024 daemon; the one case that does not throw
+ *    ''                           → ''             an EMPTY value, never collapsed into undefined
+ *    any other string             → that string    verbatim, never trimmed or parsed
+ *    null / number / object / array → throws       a post-pyrycode#2024 daemon never writes any of these
+ *
+ *  Optional to the CLIENT, not on the wire — the same distinction optionalStringMap draws: the Go field
+ *  has no `omitempty`, so absence means an older daemon and requiring it would fail-close every frame
+ *  from a build predating the daemon change.
+ *
+ *  The empty string is the case worth stating twice. Absence and `''` MEAN the same thing upstream (no
+ *  count), yet they are kept distinct here, because collapsing them is a lossy transform that buys
+ *  nothing and no stage of a carry should invent a meaning the row (#856) owns. A `value || undefined`
+ *  or a truthiness check would do exactly that collapse — the check is on the TYPE, the requireBoolean
+ *  #180 discipline.
+ *
+ *  Deliberately NO length cap and NO alphabet check, even though the upstream declaration says this
+ *  field's producer only ever formats decoded integers. That describes an honest producer, not a wire
+ *  guarantee — but the bound that makes a cap here redundant is the same one every other narrower in
+ *  this file cites: parseInboundMessage's frame-level MAX_PLAINTEXT_BYTES guard (65519), applied to the
+ *  plaintext BEFORE decodeEnvelope and so before any narrower runs (decodeEnvelope itself size-checks
+ *  nothing, which is why that guard is where it is). `maxPayload` on the relay socket in
+ *  relayConnection is the outer socket-level bound behind it, not the nearer one. A client-invented
+ *  per-field rule would only fail-close a valid future frame (the parseQueuedItem no-cross-validate
+ *  posture, ADR 0002).
+ *
+ *  Shares optionalStringMap's message category rather than `missing required field:`, which for an
+ *  optional field is actively misleading since an absent key is the one case that does NOT throw. It
+ *  names the client-owned `field` constant only — the value is untrusted daemon-supplied text. */
+function optionalString(payload: Record<string, unknown>, field: string): string | undefined {
+  const value = payload[field]
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'string') {
+    throw new WireDecodeError(`malformed optional field: ${field}`)
+  }
+  return value
+}
+
 /**
  * Narrow an opaque payload into a MessagePayload. Fail-closed: throws WireDecodeError (never a
  * partial value) on any structural or semantic mismatch. Returns only the four known fields; unknown
@@ -1041,6 +1084,13 @@ function parseToolUsePayload(payload: unknown): ToolUsePayload {
  * throws rather than being silently accepted by a truthiness check). Unknown keys tolerated but not
  * copied, category-only error messages (no field value interpolated — `result_summary` could echo tool
  * content). `result_summary` is carried through as opaque display text, never interpreted here.
+ *
+ * `result_detail` (#773) is the one OPTIONAL field, handled by optionalString: an omitted key decodes
+ * as `undefined` (a pre-pyrycode#2024 daemon), `''` as a distinct empty value, and any present
+ * non-string throws the whole frame. The key is set on the returned literal UNCONDITIONALLY —
+ * `undefined` when the wire omitted it, which `toEqual` treats as absent. The consumer contract is
+ * `payload.result_detail === undefined`, never `'result_detail' in payload`. Carried through as opaque
+ * display text like `result_summary`, never parsed back into the number it describes.
  */
 function parseToolResultPayload(payload: unknown): ToolResultPayload {
   if (!isRecord(payload)) {
@@ -1051,7 +1101,8 @@ function parseToolResultPayload(payload: unknown): ToolResultPayload {
   const tool_use_id = requireString(payload, 'tool_use_id')
   const is_error = requireBoolean(payload, 'is_error')
   const result_summary = requireString(payload, 'result_summary')
-  return { conversation_id, turn_id, tool_use_id, is_error, result_summary }
+  const result_detail = optionalString(payload, 'result_detail')
+  return { conversation_id, turn_id, tool_use_id, is_error, result_summary, result_detail }
 }
 
 /**
@@ -1827,10 +1878,11 @@ export function parseInboundMessage(
     }
     case 'tool_result': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field, or a non-boolean
-      // is_error) throws first and leaves no record. No decoded field (result_summary / is_error /
-      // tool_use_id / turn_id / conversation_id) is logged — only the frame's byte length + one-way
-      // hash, reusing the existing content-free field set. `result_summary` is carried onward by the
-      // consumer (the render payload, #230), but it never enters the diagnostic log.
+      // is_error, or a non-string result_detail) throws first and leaves no record. No decoded field
+      // (result_summary / result_detail / is_error / tool_use_id / turn_id / conversation_id) is
+      // logged — only the frame's byte length + one-way hash, reusing the existing content-free field
+      // set. `result_summary` and `result_detail` (#773) are carried onward by the consumer (the render
+      // payload, #230 / #856), but neither ever enters the diagnostic log.
       const toolResult = parseToolResultPayload(envelope.payload)
       diagnosticLog?.event({
         event: 'inbound-decoded',

@@ -77,12 +77,21 @@ export function translateTimelineEvent(event: DaemonEvent): ThreadEvent | null {
       // selection), never a pass-through of the DaemonEvent object. reduceTimeline folds it through
       // `fillResult`, RESOLVING the correlated `toolCall`'s result in place (by toolUseId); an orphan or
       // duplicate is a deterministic same-reference no-op (#121).
+      //
+      // `resultDetail` (#773) is assigned unconditionally, the `input` discipline above: never a
+      // conditional spread, which would fold an empty detail into absence. ABSENT means the WIRE
+      // omitted it (a pre-pyrycode#2024 daemon) and `''` means the daemon found no count — the same
+      // thing upstream, carried distinctly anyway because collapsing is lossy and the decision that
+      // both draw nothing is the render slice's (#856). Nothing here parses, trims, or extracts a
+      // number from it; it is untrusted daemon display text under the same plain-text-NEVER-HTML
+      // constraint as `resultSummary`.
       return {
         type: 'toolResult',
         turnId: event.turnId,
         toolUseId: event.toolUseId,
         isError: event.isError,
-        resultSummary: event.resultSummary
+        resultSummary: event.resultSummary,
+        resultDetail: event.resultDetail
       }
     case 'sessionTransition':
       // The session-boundary arm (#285 widened it, #286 renders it). The DaemonEvent carries

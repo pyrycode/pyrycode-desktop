@@ -5,7 +5,8 @@ import { createDiagnosticLog, type DiagnosticLog } from '../diagnosticLog'
 import {
   MAX_PLAINTEXT_BYTES,
   type MessagePayload,
-  type ToolUsePayload
+  type ToolUsePayload,
+  type ToolResultPayload
 } from '../../shared/wire/types'
 
 // parseInboundMessage sits on the untrusted→trusted boundary, mirroring parseHelloAck: it is fed
@@ -2997,6 +2998,61 @@ describe('parseInboundMessage — tool_result fail-closed (#229)', () => {
   })
 })
 
+describe('parseInboundMessage — tool_result result_detail (#773, optional scalar)', () => {
+  /** Decode one tool_result payload, asserting the kind so the caller reads a typed payload. */
+  function decodeToolResult(payload: unknown): ToolResultPayload {
+    const result = parseInboundMessage(encodeToolResult(payload))
+    if (result?.kind !== 'tool-result') {
+      throw new Error(`expected a tool-result, got ${String(result?.kind)}`)
+    }
+    return result.toolResult
+  }
+
+  it('carries a value with unit words and interior spaces through BYTE-IDENTICAL (AC4)', () => {
+    // The unit words are on the wire on purpose — a client cannot tell a read from a search without
+    // switching on a tool name. Nothing on this path parses, trims, or extracts a number.
+    const detail = '110 of 1676 lines'
+    expect(decodeToolResult({ ...TOOL_RESULT, result_detail: detail }).result_detail).toBe(detail)
+  })
+
+  it('decodes the PRE-FEATURE payload (no result_detail key) without error, leaving it absent (AC2)', () => {
+    // TOOL_RESULT predates pyrycode#2024 and carries no `result_detail` — a daemon built before the
+    // field existed. The contract is `=== undefined`, never `'result_detail' in payload`.
+    const decoded = decodeToolResult(TOOL_RESULT)
+    expect(decoded.result_detail).toBeUndefined()
+    expect(decoded).toEqual(TOOL_RESULT)
+  })
+
+  it('decodes an empty result_detail as the value "", never collapsing it into absent (AC3)', () => {
+    expect(decodeToolResult({ ...TOOL_RESULT, result_detail: '' }).result_detail).toBe('')
+  })
+
+  it('throws on a present non-string result_detail — the WHOLE payload, never a silent drop (AC2)', () => {
+    const bad: unknown[] = [null, 42, 0, {}, ['265 lines'], true]
+    for (const result_detail of bad) {
+      expect(() => parseInboundMessage(encodeToolResult({ ...TOOL_RESULT, result_detail }))).toThrow(
+        WireDecodeError
+      )
+    }
+  })
+
+  it('names the failure CATEGORY only — no daemon-supplied value reaches the message', () => {
+    const SECRET_VALUE = 'secret-result-detail'
+    let caught: unknown
+    try {
+      parseInboundMessage(encodeToolResult({ ...TOOL_RESULT, result_detail: [SECRET_VALUE] }))
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(WireDecodeError)
+    const { message } = caught as WireDecodeError
+    // The optional-field category (#642's), not `missing required field:` — for an optional field
+    // that message is actively misleading, since an absent key is the one case that does NOT throw.
+    expect(message).toBe('malformed optional field: result_detail')
+    expect(message).not.toContain(SECRET_VALUE)
+  })
+})
+
 describe('parseInboundMessage — queue_state recognition (#292, additive)', () => {
   it('narrows a full queue_state into { kind: queue-state } carrying the ordered backlog verbatim', () => {
     expect(parseInboundMessage(encodeQueueState(QUEUE_STATE))).toEqual({
@@ -4769,12 +4825,14 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const SECRET_TURN = 'secret-turn-id'
     const SECRET_TU = 'secret-tool-use-id'
     const SECRET_SUMMARY = 'secret-result-summary'
+    const SECRET_DETAIL = 'secret-result-detail'
     const plaintext = encodeToolResult({
       conversation_id: SECRET_CONV,
       turn_id: SECRET_TURN,
       tool_use_id: SECRET_TU,
       is_error: true,
-      result_summary: SECRET_SUMMARY
+      result_summary: SECRET_SUMMARY,
+      result_detail: SECRET_DETAIL
     })
 
     parseInboundMessage(plaintext, log)
@@ -4787,7 +4845,7 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(record.hash).toMatch(HEX64)
     // The exact content-free field set — no decoded field reaches the log.
     expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
-    for (const secret of [SECRET_CONV, SECRET_TURN, SECRET_TU, SECRET_SUMMARY]) {
+    for (const secret of [SECRET_CONV, SECRET_TURN, SECRET_TU, SECRET_SUMMARY, SECRET_DETAIL]) {
       expect(lines[0]).not.toContain(secret)
     }
   })
@@ -4796,6 +4854,15 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     const { log, lines } = captureLog()
     expect(() =>
       parseInboundMessage(encodeToolResult({ ...TOOL_RESULT, is_error: 'nope' }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
+  it('does NOT log when the ONLY defect is a malformed result_detail (#773)', () => {
+    const { log, lines } = captureLog()
+    // Every other field is well-formed: the new throw path must leave no record either.
+    expect(() =>
+      parseInboundMessage(encodeToolResult({ ...TOOL_RESULT, result_detail: 42 }), log)
     ).toThrow(WireDecodeError)
     expect(lines).toHaveLength(0)
   })

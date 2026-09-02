@@ -799,14 +799,36 @@ export interface ToolUsePayload {
 /**
  * Inbound `tool_result` event (daemon → client). Mirrors the daemon's ToolResultPayload field-for-field
  * (pyrycode #607 / ADR 025, protocol-mobile.md), wire order `conversation_id, turn_id, tool_use_id,
- * is_error, result_summary` — all always present (no `omitempty`). The outcome half of the tool-call
- * enrichment on the v2 interactive stream (ADR 0008): it resolves an existing `toolCall` timeline item
- * in place, correlated by `tool_use_id`, NOT a new row. `is_error` is a required boolean whose `false`
- * is a value (success), never an absence (the `yolo` #180 convention) — the daemon pins `is_error: false`
- * exactly (no `omitempty`). `result_summary` is an untrusted daemon-supplied string carried as opaque
- * display text (like `input_summary` #217, `stop_reason` #199, `cwd` #139) — decoded, never interpreted;
- * its DOM sink is the render slice (#230), which must render it as plain text, never HTML. `tool_use_id`
- * is the correlation key. See #229.
+ * is_error, result_summary, result_detail` — all written by a current daemon (no `omitempty` on any of
+ * them; only `result_detail` is optional HERE, and only because an older daemon predates it). The outcome
+ * half of the tool-call enrichment on the v2 interactive stream (ADR 0008): it resolves an existing
+ * `toolCall` timeline item in place, correlated by `tool_use_id`, NOT a new row. `is_error` is a required
+ * boolean whose `false` is a value (success), never an absence (the `yolo` #180 convention) — the daemon
+ * pins `is_error: false` exactly (no `omitempty`). `result_summary` is an untrusted daemon-supplied string
+ * carried as opaque display text (like `input_summary` #217, `stop_reason` #199, `cwd` #139) — decoded,
+ * never interpreted; its DOM sink is the render slice (#230), which must render it as plain text, never
+ * HTML. `tool_use_id` is the correlation key. See #229.
+ *
+ * `result_detail` (#773, daemon-side pyrycode#2024) is the OPTIONAL sixth field: a short précis of the
+ * call's STRUCTURED outcome — `"265 lines"`, `"110 of 1676 lines"` — composed by the daemon from the
+ * `tool_use_result` sidecar. The unit words are carried on purpose, because a client cannot tell a read
+ * from a search without switching on a tool name; nothing on this path may parse, trim, or extract a
+ * number from it. Optional to the CLIENT, not on the wire (the `ToolUsePayload.input` #642 precedent):
+ * the Go field has no `omitempty`, so a current daemon always writes the key — absence means a build
+ * predating pyrycode#2024, and requiring it would fail-close every frame from one.
+ *
+ * Absence and `""` MEAN THE SAME THING (no count — the answer for most tools, for every failed call,
+ * and for every sidecar shape the daemon does not recognise), per the upstream declaration's own
+ * comment. They are nonetheless carried DISTINCTLY the whole way to the timeline item, because
+ * collapsing is a lossy transform that buys nothing; the decision that both draw nothing belongs to the
+ * row (#856), not to any stage of the carry.
+ *
+ * Its provenance differs from `result_summary` — that is claude's own text under a rune cap, while this
+ * contains no claude-supplied byte (its producer formats decoded integers). That describes an HONEST
+ * producer, not a wire guarantee: a hostile daemon, or a peer impersonating one inside the session,
+ * controls these bytes. So it is neither trusted nor alphabet-validated here (a client-invented rule
+ * would fail-close a valid future frame, ADR 0002) — it is narrowed to a string and carried, exactly
+ * like `result_summary`, and its only sink is auto-escaped React children.
  */
 export interface ToolResultPayload {
   conversation_id: string
@@ -814,6 +836,7 @@ export interface ToolResultPayload {
   tool_use_id: string
   is_error: boolean
   result_summary: string
+  result_detail?: string
 }
 
 /**

@@ -30,6 +30,15 @@ export type UnrecognizedSite = 'line_type' | 'assistant_block' | 'user_block' | 
 export interface ToolResult {
   isError: boolean
   resultSummary: string
+  // #773: the daemon's short précis of the call's STRUCTURED outcome — "265 lines", "110 of 1676
+  // lines" — carried from the `toolResult` event unchanged, unit words and interior spaces included.
+  // ABSENT means the WIRE omitted it (a pre-pyrycode#2024 daemon) — test
+  // `result.resultDetail === undefined`, never `'resultDetail' in result`. Absence and `''` mean the
+  // same thing upstream (no count); they are kept distinct here because collapsing is lossy, and the
+  // decision that both draw nothing belongs to the row (#856), which owns the DOM sink. Untrusted
+  // daemon display text under the same plain-text-NEVER-HTML constraint as `resultSummary`, and never
+  // parsed back into the number it describes.
+  resultDetail?: string
 }
 
 /**
@@ -119,7 +128,18 @@ export type ThreadEvent =
       inputSummary: string
       input?: Readonly<Record<string, string>>
     }
-  | { type: 'toolResult'; turnId: string; toolUseId: string; isError: boolean; resultSummary: string }
+  // #773: `resultDetail` is the daemon's précis of the call's structured outcome. Absent means the wire
+  // omitted it (a pre-pyrycode#2024 daemon), `''` means no count — the same thing upstream, carried
+  // distinctly anyway. The reducer puts it on the item's `result` verbatim; every display decision,
+  // including whether an empty and an absent detail differ at all, is #856's.
+  | {
+      type: 'toolResult'
+      turnId: string
+      toolUseId: string
+      isError: boolean
+      resultSummary: string
+      resultDetail?: string
+    }
   | { type: 'turnState'; state: TurnPhase }
   | { type: 'turnEnd'; turnId: string; stopReason: string }
   // The user's own message. A whole message, never a stream of deltas — folded by a plain fresh
@@ -326,9 +346,13 @@ export function reduceTimeline(state: TimelineState, event: ThreadEvent): Timeli
         localSendPending: state.localSendPending
       }
     case 'toolResult': {
+      // #773: `resultDetail` is carried onto the result verbatim and unconditionally — never a
+      // conditional spread, which would fold an empty detail into absence. The store owns no display
+      // opinion (#856 does): nothing is parsed, trimmed, or turned back into a number here.
       const items = fillResult(state.items, event.toolUseId, {
         isError: event.isError,
-        resultSummary: event.resultSummary
+        resultSummary: event.resultSummary,
+        resultDetail: event.resultDetail
       })
       // Turn activity — clears a live stall (AC2). Same-reference no-op ONLY when the result changed
       // nothing AND no stall is live; an orphan/duplicate result against a live stall must still clear

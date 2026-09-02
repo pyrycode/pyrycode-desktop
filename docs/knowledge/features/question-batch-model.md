@@ -70,18 +70,23 @@ ticket rather than inherited from ADR 0009:
 - **No `id` on `QuestionOption`, and no `defaultOptionId` on `QuestionBatch`.** Unlike `ModalOption`'s
   `{ id, label }`, claude's answer protocol selects an option by its `label`, so the label *is* the
   option's identity. A question batch has no fail-safe default the way a permission modal does.
-- **No `resolved` id-memory in `QuestionBatchState`, and that is a decision rather than an omission.**
-  `ModalState` carries a `resolved: readonly string[]` slice ([#195](../codebase/195.md)) because the
-  modal client answers *optimistically* — `answerModal` dispatches `dismissed` locally even when the
-  send is swallowed by a downed transport — so it can hold an id the daemon does not consider resolved.
-  This vertical has **no answer frame at all** (upstream pyrycode#1907 is where one would land): nothing
-  dismisses a batch locally, the daemon's `dismissed` is the only exit, and the daemon does not re-send
-  a batch it has already retired. `resolved` here would defend a failure that cannot occur, and
-  [#510](../codebase/510.md) (in [modal-prompt model](modal-prompt-model.md) § Edge cases) is the record
-  of what that costs when it outlives its justification: a retained id suppressed the daemon's
-  legitimate re-delivery, and an operator's explicit Allow decayed into a timeout deny. The slice
-  arrives with the answer path, the way the modal vertical added `rejected`/`rejectionDismissed` in
-  [#249](../codebase/249.md).
+- **No `resolved` id-memory in `QuestionBatchState`, and that stays a decision rather than an omission
+  even now that a local caller exists.** `ModalState` carries a `resolved: readonly string[]` slice
+  ([#195](../codebase/195.md)) because the modal client answers *optimistically* — `answerModal`
+  dispatches `dismissed` locally even when the send is swallowed by a downed transport — so it can hold
+  an id the daemon does not consider resolved. This module predicted `resolved` would arrive with the
+  answer path, on that precedent; [#921](https://github.com/pyrycode/pyrycode-desktop/issues/921)
+  (Cancel refuses the batch, see [Question panel — Cancel refuses the
+  batch](question-panel-cancel-refusal.md)) landed the family's first
+  local, optimistic dismissal without it, and the prediction is withdrawn rather than merely deferred:
+  the premise changed, the conclusion did not. It now rests on the daemon's re-delivery schedule rather
+  than on the absence of a local caller — the daemon re-asserts a batch only at **connect time**, and
+  both this store and `questionPicksStore` already clear on `reconnected` *before* that reconcile
+  installs anything, so there is no mid-connection re-delivery for a memory to guard. [#510](../codebase/510.md)
+  (in [modal-prompt model](modal-prompt-model.md) § Edge cases) is the record of what a `resolved` slice
+  costs once it outlives its justification: a retained id suppressed the daemon's legitimate
+  re-delivery, and an operator's explicit Allow decayed into a timeout deny. A batch reappearing after a
+  swallowed refusal is the honest outcome here — the refusal did not land, so the ask is still live.
 
 An **empty `questions` array installs nothing** — the fourth, ticket-settled decision, orthogonal to the
 three above. [Question-shown wire types](question-shown-wire-types.md) records that an empty batch is
@@ -332,10 +337,21 @@ A batch's picks come into being on the operator's first pick; an untouched batch
 re-shown batch cannot inherit stale picks across a *reconnect*. (The one gap this leaves — a
 **mid-connection** re-delivery of `question_shown` for a still-outstanding id with a different option
 list — is a named, accepted risk; see § Edge cases, below.) An unknown or already-cleared id is a
-same-state-reference no-op, mirroring `reduceQuestionBatches`' own clearing arms rather than inventing a
-local dismissal — this family has no answer frame yet, so the daemon's `dismissed` is the only way a
-batch leaves the held set, and there is no `resolved` id-memory here either (the same [#510](../codebase/510.md)
-lesson § Types above already cites).
+same-state-reference no-op, mirroring `reduceQuestionBatches`' own clearing arms. The daemon's `dismissed`
+was, until [#921](https://github.com/pyrycode/pyrycode-desktop/issues/921), the only way a batch left the
+held set; `refuseQuestionBatch` is now a second, local caller (§ The picks store, below), and there is
+still no `resolved` id-memory here (the same [#510](../codebase/510.md) lesson § Types above already
+cites, restated there on its new footing).
+
+**`dismissed`'s local caller since [#921](https://github.com/pyrycode/pyrycode-desktop/issues/921).**
+Until then only `questionBridge` drove this arm, from the daemon's own broadcast. `refuseQuestionBatch`
+(`src/renderer/src/screens/conversation/questionResolution.ts`, see [Question panel — Cancel refuses the
+batch](question-panel-cancel-refusal.md) for the full design) is the
+first local dispatcher: Cancel sends the `question_refused` frame and clears both stores optimistically,
+dispatching here **first**, matching `subscribeQuestionBatches`' own picks-first order so the two paths
+cannot drift. The daemon's own `question_dismissed` for the same id arriving afterwards is the
+already-covered unknown-id no-op above. There is still no `resolved` id-memory (the same
+[#510](../codebase/510.md) lesson § Types above cites, restated there on its new footing).
 
 `selectQuestionSelection(questionBatchId, questionIndex)` answers with the held selection by reference, or
 a hoisted `EMPTY_QUESTION_SELECTION` constant for an untouched question — never `null`, since absent and
@@ -367,7 +383,7 @@ shipped in: a store landing with no consumer mounted. [#912](https://github.com/
 wired the panel to it, making the rows and the Other field respond, and proved the picks survive a
 conversation switch in a new `e2e/question-picks.spec.ts`, built on the same pattern
 `e2e/conversation-switch-remount.spec.ts` established for the composer's draft. See [Question
-panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916)
+panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921)
 for the render-side design.
 
 ## Configuration and usage
@@ -377,7 +393,7 @@ now mounts app-level in `App.tsx`, beside `useModalBridge`, and `ConversationScr
 is the batch store's first reader — an outstanding batch for the conversation on screen draws the question
 panel in the composer's slot and covers the whole `.composer` with the native `hidden` attribute. See
 [Question
-panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916)
+panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921)
 for the render vertical's design; this document still owns the model and the bridge underneath it. That slice drew the
 panel's frame only — the title row, the question text, the separator, and an inert Cancel/Continue row —
 with the option rows landing in [#907](https://github.com/pyrycode/pyrycode-desktop/issues/907). #908 was
@@ -385,7 +401,10 @@ meant to land the picks and the answer path together; it was split into
 [#911](https://github.com/pyrycode/pyrycode-desktop/issues/911) (the picks store, § The picks store, above)
 and [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912), and closed as not planned without
 shipping anything of its own. #911 landed the picks store headless, no consumer mounted; #912 wired the
-panel to it, making the rows and the Other field respond. The answer path is still
+panel to it, making the rows and the Other field respond.
+[#921](https://github.com/pyrycode/pyrycode-desktop/issues/921) gave the panel's Cancel button its first
+sending handler — it refuses the batch and clears both stores, see [Question panel — Cancel refuses the
+batch](question-panel-cancel-refusal.md). The answer path is still
 [#853](https://github.com/pyrycode/pyrycode-desktop/issues/853)'s.
 
 ## Edge cases and limitations
@@ -525,9 +544,11 @@ that a `connected` clears a pick made against a still-outstanding batch. The 9 e
 - `docs/specs/architecture/900-question-bridge.md` — the bridge's architecture spec, including its own
   security review (verdict PASS).
 - [Question
-  panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916)
+  panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921)
   — the render vertical #906 built on this model and bridge: `ComposerSlot`, `QuestionPanelView`, and the
   composer's `covered` cover mechanism.
+- [Question panel — Cancel refuses the batch](question-panel-cancel-refusal.md) — `refuseQuestionBatch`
+  (#921), the first local dispatcher of this model's `dismissed` arm.
 - `docs/specs/architecture/911-question-picks-store.md` — the picks store's architecture spec and its own
   security review (verdict PASS), including the mid-connection re-delivery finding handed to #853.
 - Split from [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850); the Zustand container

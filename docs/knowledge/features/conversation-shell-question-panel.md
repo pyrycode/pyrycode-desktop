@@ -1,4 +1,4 @@
-# Question panel (#906, option rows since #907, live since #912, header tabs since #915, step controls since #916)
+# Question panel (#906, option rows since #907, live since #912, header tabs since #915, step controls since #916, Cancel sends since #921)
 
 Split out of [Conversation shell — modals](conversation-shell-modals.md) on 2026-09-02 to keep that
 document under the size cap. Part of [Conversation shell](conversation-shell.md); see that document for
@@ -77,8 +77,10 @@ replacing a dismissed one (same conversation) read a fresh empty selection with 
 right and no stale pick reachable, and, since #915, a fresh first question too (the `key` on this leaf,
 above); keyed on the conversation, the new batch would inherit the old one's picks and the old one's tab.
 `dispatch` is read off the store rather than through a hook, since it is a stable function on a singleton
-and subscribing to it would buy nothing. Neither `dismissed` nor `reconnected` is dispatched here —
-`questionBridge` already drives both, over its one daemon-event subscription, picks-first.
+and subscribing to it would buy nothing. `reconnected` is not dispatched here — `questionBridge` drives it
+from the transport's own (re)handshake, which this leaf cannot see. `dismissed` now is, since [Cancel
+refuses the batch (#921)](question-panel-cancel-refusal.md): this slot is the family's first local
+raiser of it, going through the same picks-first order the bridge uses so the two paths cannot drift.
 
 **`jumpedTo` is #915's, and `activeIndex`'s clamp is a crash guard, not tidiness.** `jumpedTo` is
 panel-local `useState`, deliberately not a new arm on the picks store: what must survive a chat switch is
@@ -132,8 +134,10 @@ would put untrusted text into an attribute, the ban `questionBatchStore.ts` stat
 derived from `header`, `question`, or the nonce `questionBatchId` either, which this slice never reads. The
 title row draws every question's header as a tab — see § Header tabs below — using the already-shipped
 `PyryMark` at `width={14} height={16}`, the composer status row's call verbatim, beside them. Cancel and
-Continue are `<button type="button">` with no `onClick` and no `disabled` — inert, not greyed, since the
-panel sits on top of the composer and there is nothing to disable.
+Continue are both `<button type="button">` with no `disabled` — never greyed, since the panel sits on top
+of the composer and there is nothing to disable. Through #916 neither carried an `onClick` either; since
+[#921](question-panel-cancel-refusal.md) Cancel does, the row's first sending control, while Continue stays
+inert until #853's answer path.
 
 **Colours came from the Figma variables on node `347:6913`, never the generated fallbacks** (which print
 the light scheme, per `tokens.css`'s standing warning): Tertiary, On Background, Primary Container,
@@ -465,8 +469,19 @@ frame-capped, and the exposure stays scoped to one conversation's composer); the
 scroll container or row cap, the bound #908 was meant to carry and which neither #911 nor #912 inherited as
 an acceptance criterion after the split. Out of scope, by design rather than oversight since #906: a daemon
 that raises a batch and never dismisses it covers that conversation's composer indefinitely, since this
-family draws no expiry (settled 2026-08-31 — the timeout is a daemon matter) and Cancel dispatches nothing;
-the exposure is bounded to the one conversation, and a `reconnected` arm still clears every held batch on
-each handshake. A malicious relay is content-blind and on-path only, so it can withhold a batch or its
-dismissal but cannot reach picks state directly.
+family draws no expiry (settled 2026-08-31 — the timeout is a daemon matter); through #916 Cancel
+dispatched nothing, so an operator with no daemon-side timeout had no exit at all. [Cancel refuses the
+batch (#921)](question-panel-cancel-refusal.md), § Cancel refuses the batch (#921) below, closes that gap.
+The exposure is bounded to the one
+conversation, and a `reconnected` arm still clears every held batch on each handshake. A malicious relay is
+content-blind and on-path only, so it can withhold a batch or its dismissal but cannot reach picks state
+directly.
+
+## Cancel refuses the batch (#921)
+
+Split out to [Question panel — Cancel refuses the batch](question-panel-cancel-refusal.md) on 2026-09-02
+to keep this document under the size cap. Through #916 the Actions row's Cancel button was inert chrome;
+that document covers `questionResolution.ts`'s `refuseQuestionBatch`, the picks-first optimistic clear, the
+client-owned `outcome`/`source` constants, the `onCancel` wiring on `QuestionPanelView`/`QuestionPanelSlot`,
+and the security review.
 

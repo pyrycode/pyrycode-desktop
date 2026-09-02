@@ -3574,6 +3574,138 @@
   text-overflow: ellipsis;
 }
 
+/* #907 — the option list (347:6025 single, 347:6706 multi), between the question and the separator,
+   inheriting .question-panel__box's own 16px gap. The two variants ARE the same list: same row geometry,
+   same 8px gap, same label-over-description stack, and a differently-cornered control. */
+.question-panel__options {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+/* One row: the control, a 12px gap, then the text. align-items: flex-start so the control sits on the
+   label's first line however far the text wraps — and it wraps freely here, unlike the clamped question
+   above: the design draws its second row wrapped on purpose. overflow: hidden is the Figma frame's own
+   clip, and doubles as the row's bound on a hostile string. */
+.question-panel__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  overflow: hidden;
+}
+
+/* The 20x20 control. box-sizing: border-box because this repo has no global reset (.composer__input's
+   precedent) and the design's 20px is the OUTER size, 2px ring included; flex: 0 0 auto so a long label
+   never squeezes it out of round. Empty at rest — #908 adds the selector child. */
+.question-panel__control {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-tertiary);
+}
+
+/* A 10px radius on a 20px box IS the circle, so the token says so rather than repeating the arithmetic. */
+.question-panel__control--radio {
+  border-radius: var(--radius-full);
+}
+
+/* 4px verbatim rather than snapped up to --radius-xs (6px) the way .pairing-field snaps a field's top
+   corners: on a 20px control that snap is visibly rounder. Structural geometry as a literal, which is
+   .question-panel__cancel's 7px precedent. */
+.question-panel__control--checkbox {
+  border-radius: 4px;
+}
+
+/* The Other row's control hangs 8px lower than the rest (its Figma frame is 20x28, centred), so it lands
+   against the middle of the taller field beside it rather than the field's top edge. */
+.question-panel__control--other {
+  margin-top: var(--space-2);
+}
+
+/* The label-over-description stack. min-width: 0 is what lets word-break engage inside the flex row; the
+   2px nudge is the design's own optical centring of a 16px line against the 20px control. */
+.question-panel__option-text {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+/* M3 label/medium: the label emphasized (600) over the description at the base weight (500). THE DESIGN
+   SEPARATES THE TWO LINES BY WEIGHT ALONE — the variable read on 347:6025 gives both Schemes/On
+   Background, so dimming the description to a variant colour would be an invention rather than fidelity.
+   Both are claude-authored, hence word-break: break-word: one unbroken hostile token wraps instead of
+   pushing the row's width out. */
+.question-panel__option-label,
+.question-panel__option-description {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--text-label-medium-size);
+  line-height: var(--text-label-medium-line);
+  letter-spacing: var(--text-label-medium-tracking);
+  word-break: break-word;
+}
+
+.question-panel__option-label {
+  font-weight: var(--text-label-medium-weight-emphasized);
+}
+
+.question-panel__option-description {
+  font-weight: var(--text-label-medium-weight);
+}
+
+/* The Other field's frame (the drawing's `Input small`). margin-top matches the 2px nudge on the text rows
+   beside it; position: relative anchors the ground below. */
+.question-panel__other-field {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  margin-top: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* The ground is --color-on-primary at 41% (the file draws it as rgba(0,51,85,0.41)) and it lands on a
+   dedicated pseudo-element at `opacity` rather than as an rgba()/color-mix() literal — the house rule
+   .pairing-field::before records, "opacity is not a color literal". An opacity on the field itself would
+   fade the placeholder with it. */
+.question-panel__other-field::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--color-on-primary);
+  border-radius: inherit;
+  opacity: 0.41;
+}
+
+/* The field itself: M3 body/small, clearing the UA's own border, ground and font the way .composer__input
+   does. position: relative paints it above the tinted ground. The typed colour is on-surface — the design
+   draws only the placeholder, and #908 owns what is typed. */
+.question-panel__other-input {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: inherit;
+  background: none;
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* Schemes/Primary Container — the design's own placeholder colour, dimmer than the typed text above it. */
+.question-panel__other-input::placeholder {
+  color: var(--color-primary-container);
+}
+
+.question-panel__other-input:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
 /* The rule (347:6543): a 1px block in the box's own border colour, full width. flex: 0 0 auto so the
    column's stretch never rounds it away. */
 .question-panel__separator {
@@ -3593,8 +3725,8 @@
 /* The two buttons share everything but their fill. A <button> needs an explicit type reset because the UA
    stylesheet gives form controls their own font, and the row's labels are M3 body/small at the emphasized
    weight. The labels are client-owned constants, so white-space: nowrap cannot be blown out by daemon
-   text (.composer__context's ruling). No `outline: none` — these are the only focusable controls on the
-   panel while it covers the composer, so their focus ring is load-bearing. */
+   text (.composer__context's ruling). No `outline: none` — with the composer covered, these and #907's
+   Other field are the only focusable controls on the panel, so their focus ring is load-bearing. */
 .question-panel__cancel,
 .question-panel__continue {
   flex: 0 0 auto;

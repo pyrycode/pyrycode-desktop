@@ -130,15 +130,16 @@ tokens, or raw bytes (the guarantee was defended upstream by #248). See [#248 co
 notes](../codebase/248.md) for the transport half and [#249 codebase notes](../codebase/249.md) for the
 full render design, testing strategy, and lessons learned.
 
-## Question panel (#906)
+## Question panel (#906, option rows since #907)
 
 The render vertical's frame slice, over the model and bridge documented in [Question-batch
 model](question-batch-model.md): `questionBatchStore` (#899) held the batches and `useQuestionBridge`
 (#900) filled it, but nothing mounted the hook or read the store — #906 closes both gaps, the same shape
 [Permission modal](#permission-modal-224-answerable-since-237-second-confirm-since-226-rejection-surface-since-249-confirm-marker-scoped-to-its-prompt-since-511)
-above took for the modal vertical (#223 → #224). It draws the panel's chrome only: the title row, the
-bordered box with the question's own text, a separator, and an inert Cancel/Continue row. The option rows
-are #907's and the picks/send are #908's/#853's.
+above took for the modal vertical (#223 → #224). #906 drew the panel's chrome only: the title row, the
+bordered box with the question's own text, a separator, and an inert Cancel/Continue row. #907 filled the
+band between the question's text and the separator with the option rows themselves — still drawing only,
+nothing responds to a click. The picks and the send are #908's and #853's.
 
 **`useQuestionBridge()` mounts in `App.tsx`**, beside `useModalBridge`, unconditional and app-lifetime —
 not screen-scoped, because a batch is raised against a conversation the operator may not have open, the
@@ -202,27 +203,107 @@ defines Background = Surface. Two new tokens, `--text-body-medium-weight-emphasi
 `--text-body-small-weight-emphasized` (both `500`), were minted for the question text and the button
 labels rather than a `font-weight: 500` literal at the call site.
 
-**Testing.** `QuestionPanel.test.tsx` renders `QuestionPanelView` from injected fixtures: header/question
-placement, the inert two-button row with no `disabled`, the decorative mark and separator, no option rows
-drawn, and — the security-relevant cases — a `<img onerror>`/`<script>` fixture renders escaped with no
-`<img`/`<script>` in the markup, and neither string reaches an attribute (`title=`, `data-`). Since the
-`QuestionPanel.tsx` module never imports React's `dangerouslySetInnerHTML` path, escaping is structural,
-not merely tested. `composerSlot.test.tsx` covers the container with a per-file `createQuestionBatchStore`
-instance bound over `useQuestionBatchStore` via `vi.mock` (the singleton's server snapshot is frozen at
-store *creation*, so seeding it directly would silently assert the initial cell) — the panel-and-cover
-pairing, the covered subtree still holding the message box/send control/footer, a batch for a different
-conversation or `conversationId={null}` leaving the composer untouched, `ComposerStatusArea`'s markup
-never appearing from this container in either state, and the first-of-several-questions draw.
+### Option rows (#907)
 
-**Security review: PASS** (architect self-review). One finding raised and fixed before the plan closed:
-the design's own single-line clamp invites a `title` tooltip, which would be claude-authored text in an
-attribute — the Design section now forbids it and every derived `data-*`, and the review re-walked the
-plan afterward finding only JSX-children sinks left. Everything else no-findings: no new IPC channel, no
-`window.pyry` dereference during either component's render (so both server-render tests stay clean), no
-logger call, no comparison beyond the store's existing `===` scan, and the two claude-authored strings are
-already size-bounded by the transport's 256 KiB frame cap plus the panel's own one-line clamp. Out of
-scope, by design rather than oversight: a daemon that raises a batch and never dismisses it covers that
-conversation's composer indefinitely, since this slice draws no expiry (settled 2026-08-31 — the timeout
-is a daemon matter) and Cancel dispatches nothing; the exposure is bounded to the one conversation, and a
-`reconnected` arm still clears every held batch on each handshake.
+`question.options.map(…)` inside a new `.question-panel__options` list, between
+`.question-panel__question` and the separator, inheriting `.question-panel__box`'s 16px gap. Each row is a
+20×20 control (`.question-panel__control`, `box-sizing: border-box`, a 2px `--color-tertiary` ring) beside
+a label-over-description text stack, plus a design-mandated Other row rendered last, unconditionally, in
+both variants. `multiSelect` is the one prop that changes the control's class — `--radio`
+(`border-radius: var(--radius-full)`, since a 10px radius on a 20px box *is* the circle) or `--checkbox`
+(`border-radius: 4px`, kept a literal rather than snapped to `--radius-xs` because that snap visibly
+over-rounds a 20px control — `.question-panel__cancel`'s "structural geometry" precedent). Everything else
+— row geometry, the 8px row gap, the label-over-description stack — is identical between variants; **the
+two lines are told apart by font weight alone**, both `--color-on-surface` (M3 label/medium-emphasized 600
+for the label over label/medium 500 for the description, read off the Figma variables on `347:6025`) —
+dimming the description to a muted/variant colour, the reflex reading of the ticket's own "bright" vs.
+"muted" language, would have been an invented fidelity break. An option with `description === ''` draws no
+description element at all (a required-`string` field, so `''` is legal traffic, not an absent one) rather
+than an empty `<p>` holding a line of height.
+
+**The row's React key is the array index, never `option.label`.** `QuestionOption` carries no `id` —
+[Question-batch model](question-batch-model.md) states why: claude's answer protocol selects an option by
+its `label`, so minting an id here would grow a field the wire never carries. That leaves `label` looking
+like the option's natural key, which is exactly the trap: it is untrusted claude-authored text, and keying
+on it is the lookup-path failure `questionBatchStore.ts` names by hand. The options array is claude's own
+display order and is never re-keyed, which makes the index the honest identity and keeps every
+claude-authored string confined to JSX children — no `key`, `title`, `data-*`, `id`, `name`, memo table, or
+log anywhere in the row.
+
+**The controls are chrome, not native inputs — a `<span>`, not `<input type="radio">`.** #906's "inert but
+real" posture (a `<button>` with no `onClick`) doesn't transfer cleanly here: a native radio or checkbox is
+*checkable* at rest, so mounting one before #908 lands the answer state would let a click paint a selection
+the store doesn't hold — a worse resting posture than an inert button, whose click leaves no residue. The
+control stays an empty, childless `<span>` (no selector/tick child, whatever the Figma mock draws
+pre-selected — AC5) until #908 replaces it with a real, stateful control. The **Other row's field**, by
+contrast, is a genuine `<input type="text">`, uncontrolled and unhandled — real DOM, nothing reads its
+value yet — carrying a new `QUESTION_OTHER_PLACEHOLDER_COPY = 'Other. Type something.'` constant (hoisted
+beside #906's `QUESTION_CANCEL_COPY`/`QUESTION_CONTINUE_COPY`, the same client-owned-copy idiom) as both its
+`placeholder` and its `aria-label`, since a placeholder alone is only a last-resort accessible name. The
+Other row's control sits inside a taller 20×28 frame, offset 8px down (`.question-panel__control--other`)
+so it centres against the field beside it instead of aligning to its top edge.
+
+**The Other field's tinted ground follows the file's `rgba()` house rule.** The Figma fill is a raw
+`rgba(0,51,85,0.41)`, which is `--color-on-primary` at 41% — and per `.pairing-field::before`'s precedent
+in the pairing screen's stylesheet, that belongs on a dedicated `::before` at `opacity: 0.41`, never a bare
+`rgba()`/`color-mix()` literal and never an `opacity` on the field itself, which would fade the placeholder
+text along with the ground.
+
+**Known gap, not fixed in #907 — the Other field's `:focus-visible` ring is clipped on two edges.**
+`.question-panel__option` carries `overflow: hidden` (the row's own bound against a hostile wrapped
+string, doubling as the Figma frame's clip), and the field's own border box sits flush against the row's
+content edge, so the ring's right and bottom segments — drawn outside the border box by `outline` — fall
+outside the clip. Code review flagged it SHOULD-FIX and it shipped anyway: fixing it needs either dropping
+`overflow: hidden` from the row or adding `outline-offset: -1px`, and #908 is the natural place, since
+that's where the field stops being chrome and starts being focused for real.
+
+**Known gap, also deferred to #908 — the Other field's placeholder measures 1.78:1 against its ground**,
+well under WCAG AA's 4.5:1 for text. The colour is `--color-primary-container`, read correctly off the
+Figma variable on `347:6386`; the low contrast is a design fidelity fact, not a builder error, and inventing
+a brighter colour to compensate was rejected as a fidelity violation of its own. Screen-reader users are
+covered by the field's `aria-label`; the exposure is low-vision sighted users reading an unlabelled-looking
+field. Worth resolving once the field is live rather than chrome.
+
+**Testing.** `QuestionPanel.test.tsx` renders `QuestionPanelView` from injected fixtures: header/question
+placement, the inert two-button row with no `disabled`, the decorative mark and separator, and — the
+security-relevant cases — a `<img onerror>`/`<script>` fixture renders escaped with no `<img`/`<script>` in
+the markup, and neither string reaches an attribute (`title=`, `data-`). Since the `QuestionPanel.tsx`
+module never imports React's `dangerouslySetInnerHTML` path, escaping is structural, not merely tested.
+\#906's original `draws no option rows` case is superseded by #907's positive assertions, rewritten rather
+than left stale: per-variant control-class counts (options plus the Other row), rows drawn in the held
+array's order with their `label`/`description` in the text stack, an empty `description` drawing no
+element while a sibling with one still draws it, every control empty at rest with no `checked` anywhere in
+the markup, the Other row last carrying an `<input type="text">` whose placeholder and accessible name are
+`QUESTION_OTHER_PLACEHOLDER_COPY`, the same escaping assertions extended to `label`/`description`, and two
+options sharing an identical `label` and `description` both still drawing — the observable consequence of
+index-keying, since a React key isn't itself visible in static markup. `composerSlot.test.tsx` covers the
+container with a per-file `createQuestionBatchStore` instance bound over `useQuestionBatchStore` via
+`vi.mock` (the singleton's server snapshot is frozen at store *creation*, so seeding it directly would
+silently assert the initial cell) — the panel-and-cover pairing, the covered subtree still holding the
+message box/send control/footer, a batch for a different conversation or `conversationId={null}` leaving
+the composer untouched, `ComposerStatusArea`'s markup never appearing from this container in either state,
+and the first-of-several-questions draw.
+
+**Security review: PASS** (#906 architect self-review, #907 builder self-review). #906's one finding — the
+design's own single-line clamp invites a `title` tooltip, claude-authored text in an attribute — was fixed
+before that plan closed and the ban extended to every derived `data-*`. #907 widened the same boundary from
+two claude-authored fields (`header`, `question`) to four (plus every option's `label` and `description`)
+and raised one finding of its own, fixed before that plan closed too: the option row's React key is a sink
+the frame slice never had, and `label` is the *only* identity `QuestionOption` carries, which makes
+`key={option.label}` the reflex — fixed by keying on array index instead, re-walked afterward finding only
+JSX-children sinks left for both new fields. Verifier code review on #907 raised two SHOULD-FIX items that
+shipped as **known, deferred gaps** rather than blocking fixes — the clipped focus ring and the sub-AA
+placeholder contrast, both above — neither a trust-boundary finding. Otherwise no-findings across both
+tickets: no new IPC channel, no `window.pyry` dereference during either component's render (so both
+server-render tests stay clean), no logger call, no comparison beyond the store's existing `===` scan, and
+every claude-authored string is size-bounded by the transport's 256 KiB frame cap, the panel's own one-line
+clamp on `question`, and — new in #907 — an explicit note that the option list has **no** such clamp: rows
+wrap by design, so a hostile daemon sending many long options can grow the panel and squeeze that
+conversation's timeline. Not defended here (the wrap is the locked design, the total is still frame-capped,
+and the exposure stays scoped to one conversation's composer); a real bound belongs with #908, where the
+list gains its own scroll container. Out of scope, by design rather than oversight since #906: a daemon
+that raises a batch and never dismisses it covers that conversation's composer indefinitely, since this
+slice draws no expiry (settled 2026-08-31 — the timeout is a daemon matter) and Cancel dispatches nothing;
+the exposure is bounded to the one conversation, and a `reconnected` arm still clears every held batch on
+each handshake.
 

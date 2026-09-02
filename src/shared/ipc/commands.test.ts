@@ -252,6 +252,62 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(command)).toBe(true)
   })
 
+  it('rejects requestSessionSettings with no payload, or an explicitly undefined one (#946)', () => {
+    // #945 accepted both as the "names no conversation" shape the renderer still sent; #946 supplies
+    // a real id, so an unnamed request is now a caller bug rather than the ordinary case. The
+    // explicitly-undefined arm is rejected BY VALUE, not by `'payload' in value`: structured clone
+    // PRESERVES an explicitly-undefined property across the IPC bridge, so the `in` check alone would
+    // pass it straight through — isRequestSessionSettingsPayload is what refuses it.
+    expect(isRendererCommand({ type: 'requestSessionSettings' })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSessionSettings', payload: undefined })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSessionSettings', extra: 'ignored' })).toBe(false)
+  })
+
+  it('accepts a requestSessionSettings naming a conversation, checking type not emptiness (#945)', () => {
+    // '' passes: the daemon polices ids, and it answers an unresolvable one with a zero-valued
+    // session_settings rather than an error frame. A structurally-extra field is harmless. This guard
+    // stays type-only after #946 — the renderer-side decision NOT to send an unaddressable id lives
+    // in requestRunConfigSnapshot, which is a behavioural gate, not a structural one.
+    expect(
+      isRendererCommand({ type: 'requestSessionSettings', payload: { conversation_id: 'conv-1' } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({ type: 'requestSessionSettings', payload: { conversation_id: '' } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({
+        type: 'requestSessionSettings',
+        payload: { conversation_id: 'conv-1', extra: 'ignored' }
+      })
+    ).toBe(true)
+  })
+
+  it('rejects a requestSessionSettings whose payload is present but not a conversation id (#945)', () => {
+    // A present payload must be a well-formed one — a non-string id, a missing key, and a literal
+    // null are all type lies that would otherwise reach encodeEnvelope's bare JSON.stringify.
+    expect(
+      isRendererCommand({ type: 'requestSessionSettings', payload: { conversation_id: 42 } })
+    ).toBe(false)
+    expect(isRendererCommand({ type: 'requestSessionSettings', payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: 'requestSessionSettings', payload: null })).toBe(false)
+  })
+
+  it('types requestSessionSettings as payload-REQUIRED — a bare send no longer compiles (#946)', () => {
+    // Compile-time half of AC3, and the half the runtime guard above cannot prove: `src/shared/**/*`
+    // is inside tsconfig.node.json's include, so `npm run typecheck` reads this file, and an unused
+    // expect-error directive is itself a TS2578 — relax the payload back to optional and this fails.
+    // (Do not open a prose line with the directive's own name: a comment whose first token is
+    // `@ts-expect-error` IS a directive, wherever it sits, and it will suppress the next line.)
+    // @ts-expect-error payload is required since #946 — a request must name a conversation
+    const bare: RendererCommand = { type: 'requestSessionSettings' }
+    const named: RendererCommand = {
+      type: 'requestSessionSettings',
+      payload: { conversation_id: 'conv-1' }
+    }
+    expect(isRendererCommand(bare)).toBe(false)
+    expect(isRendererCommand(named)).toBe(true)
+  })
+
   it('accepts the bare requestRecentWorkspaces command (no payload — the request carries nothing) (#380)', () => {
     // The recent-workspaces request carries nothing to parameterise, so its guard case is a bare
     // `return true`. A structurally-extra field is harmless (structural minimum), like requestConversations.

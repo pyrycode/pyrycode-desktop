@@ -84,6 +84,38 @@ rejected question answer, so there is nothing to correlate, unlike `answerModal`
 [question resolution envelope](question-resolution-envelope.md) for the wire contract and builders both
 drive.
 
+The union's `requestSessionSettings` member (#491, bare from the start and not previously called out
+in this growth log) reuses the wire `RequestSessionSettingsPayload{conversation_id}` type and carries
+a **required** payload: `{ type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }`.
+The daemon made the frame conversation-keyed on 2026-08-20 (pyrycode#1586/#1610), answering an unnamed
+request with a silent zero-valued reply rather than an error; [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945)
+threaded the capability through `src/main/`/`src/shared/` with the payload **optional**, because the
+sole renderer sender still sent no id; [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946)
+supplied a real one — [Run configuration store](run-config-store.md)'s `requestRunConfigSnapshot` now
+resolves the active conversation at both call sites — and tightened the payload back to required. Its
+guard collapsed to the neighbours' idiom, `'payload' in value && isRequestSessionSettingsPayload(value.payload)`:
+an absent or explicitly-`undefined` `payload` is now refused **by value**, inside
+`isRequestSessionSettingsPayload`, rather than accepted as a second shape — structured clone still
+preserves an explicitly-`undefined` property crossing `ipcRenderer.send`, so the `'payload' in value`
+half alone would let one through; `isRequestSessionSettingsPayload` is what closes it. The payload
+guard itself is unchanged: type checked, not emptiness, since `''` is a real value the daemon itself
+polices. See [Run configuration store § Conversation-keyed since
+2026-08-20](run-config-store.md#conversation-keyed-since-2026-08-20-945946) for the daemon-side
+degradation contract this closes.
+
+**Tightening a payload from optional back to required needs a compile-time proof, not just a runtime
+guard test (#946).** `isRendererCommand` rejecting a bare literal at runtime proves the guard; it does
+not prove the *type* forbids one. `src/shared/**/*` is inside `tsconfig.node.json`'s include, so
+`commands.test.ts` carries a `@ts-expect-error` assertion beside the runtime one — the
+`src/shared/wire/types.test.ts` idiom — and `TS2578: Unused '@ts-expect-error' directive` makes the
+proof self-invalidating if the field is ever relaxed back to optional. One trap in writing that
+assertion: **a comment line whose first token is `@ts-expect-error` is a directive wherever it sits in
+the block**, so a prose sentence *about* the directive placed on the line above it (e.g. explaining
+why the assertion exists) is itself parsed as a second directive — and because it precedes the real
+one, it is the one that suppresses nothing, surfacing as `TS2578` pointing at the prose line while the
+working directive one line below reads clean. Never open an explanatory comment line with the literal
+string `@ts-expect-error`.
+
 ## What it does
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge. `ipcRenderer` itself never crosses to the window.
@@ -241,5 +273,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Interrupt envelope](interrupt-envelope.md) / [#306 codebase notes](../codebase/306.md) — the bare `interrupt` member this channel's union gained; unlike its daemon-reply-bearing siblings, the daemon sends no correlated reply at all — the turn-stopped signal rides the pre-existing `turn_state`/`turn_end` stream instead
 - [Push notifications](push-notifications.md) / [#391 codebase notes](../codebase/391.md) — the payload-carrying `notify` member + `isNotifyPayload` guard this channel's union gained; the first member whose payload type is main-local (not wire-derived) and whose guard checks closed-set membership rather than `typeof`
 - [Question resolution envelope](question-resolution-envelope.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920) — the `answerQuestions`/`refuseQuestions` members + their guards this channel's union gained, `Omit`-derived like `answerModal`'s but both token-excluded (unlike the modal pair); `isAnswerQuestionsPayload` is this file's first guard to recurse into a structured payload, and the first place the `for…of`-over-`every` hole distinction mattered. [Daemon connection](daemon-connection.md) is the consumer that mints `answer_token` for both.
+- [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings` member's sole consumer, and the conversation-keying correction that gave it this file's only optional payload.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

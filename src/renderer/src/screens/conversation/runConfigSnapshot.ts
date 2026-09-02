@@ -44,14 +44,36 @@ export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | nul
 }
 
 /**
- * Fire exactly one `requestSessionSettings` (#491). Bare — no conversation id — because the reply is
- * daemon-wide, so there is no id to validate and no conversation_not_found to fire into. That is why
- * this takes no argument: the sheet no longer depends on having an active conversation resolved
- * before it can populate.
+ * Fire exactly one `requestSessionSettings` naming `conversationId` — or, when there is no
+ * addressable conversation, fire NOTHING (#946).
+ *
+ * The daemon has answered only the conversation a request names since 2026-08-20
+ * (pyrycode#1586/#1610), and it answers an unnamed one with a zero-valued reply rather than an error
+ * frame — silently, which is how the sheet spent two weeks inert (#941). #945 gave the frame the
+ * field; this supplies it.
+ *
+ * `conversationId` is REQUIRED, not optional, and that is the point: a caller that forgets to resolve
+ * an id must be a compile error, never a silent unnamed request. The two parameters cannot be
+ * cross-wired — a function is not assignable to `string | null` — so no named-deps object is needed.
+ *
+ * NOT SENDING is the whole of the no-conversation branch. An unresolvable request draws the zero
+ * reply, and `setSnapshot` replaces the WHOLE snapshot, so a refresh edge that could never have
+ * improved the held values would instead wipe them and blank the session id the write controls
+ * address. `''` takes the same branch as `null` under one falsy check: it serialises to the identical
+ * frame and draws the identical reply, so it is the same failure spelled differently, not a second
+ * case. The IPC-boundary guard (`isRequestSessionSettingsPayload`) deliberately still ACCEPTS `''` —
+ * it is a structural type check, while refusing to send an unaddressable id is a behavioural
+ * decision that belongs here, where a spy can reach it. No renderer spec in this repo can run an
+ * effect, so this helper is the only place either mount site's decision is provable.
+ *
  * Fire-and-forget, like the composer's send: `sendCommand` is `void`, so there is no result to await.
  */
-export function requestRunConfigSnapshot(sendCommand: (command: RendererCommand) => void): void {
-  sendCommand({ type: 'requestSessionSettings' })
+export function requestRunConfigSnapshot(
+  sendCommand: (command: RendererCommand) => void,
+  conversationId: string | null
+): void {
+  if (!conversationId) return
+  sendCommand({ type: 'requestSessionSettings', payload: { conversation_id: conversationId } })
 }
 
 /**

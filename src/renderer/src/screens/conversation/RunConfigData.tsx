@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { activeConversationStore } from '../../store/activeConversationStore'
 import { requestRunConfigSnapshot } from './runConfigSnapshot'
 
 // The Run configuration sheet's data-path binding (#187) — a headless container mounted inside the
@@ -25,15 +26,25 @@ export function RunConfigData(): null {
   useEffect(() => {
     // Request once per open. Guarded so the StrictMode double-invoke fires exactly one request.
     //
-    // #491 dropped the active-conversation dependency: the request is bare and its reply is
-    // daemon-wide, so there is no id to resolve first. That also removes the old failure shape
-    // where a sheet opened before the active conversation resolved would fire nothing at all.
+    // #946 restored the active-conversation dependency #491 had dropped, because the daemon stopped
+    // answering an unnamed request with anything but zeroes on 2026-08-20. The store is read
+    // NON-REACTIVELY, through `getState()` at call time (the idiom runConfigLive.ts already uses for
+    // its sibling stores inside callbacks): this leaf subscribes to nothing, so a conversation switch
+    // never re-renders it and the render body stays free of store reads. Reading at call time is also
+    // what makes the id correct — this effect runs on the sheet's own mount, which happens after
+    // `activateConversation` has recorded the conversation the sheet is about to describe.
+    //
+    // No sheet-opened-too-early failure returns with it: `requestRunConfigSnapshot` sends nothing
+    // when nothing is addressable, rather than sending a request that would wipe the held snapshot.
     //
     // No "subscribe first" ordering to preserve any more: the app-level listener (#810) has been live
     // since App mounted, so it is already listening when this request goes out.
     if (requested.current) return
     requested.current = true
-    requestRunConfigSnapshot(window.pyry.sendCommand)
+    requestRunConfigSnapshot(
+      window.pyry.sendCommand,
+      activeConversationStore.getState().activeConversation?.id ?? null
+    )
   }, [])
 
   return null

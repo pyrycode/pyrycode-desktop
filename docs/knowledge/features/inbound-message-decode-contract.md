@@ -36,6 +36,7 @@ export type InboundDaemonMessage =
   | { kind: 'background-task-roster'; backgroundTaskRoster: BackgroundTaskRosterPayload }  // #566, additive
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }  // #884, additive — ships dormant, no consumer arm yet
   | { kind: 'question-dismissed'; questionDismissed: QuestionDismissedPayload }  // #894, additive — ships dormant, no consumer arm yet
+  | { kind: 'slash-command-list'; slashCommandList: SlashCommandListPayload }  // #936, additive — ships dormant, no consumer arm yet
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/
@@ -44,7 +45,7 @@ export type InboundDaemonMessage =
 //                            `modal_dismissed`/`tool_result`/`conversation_created`/`session_transition`/
 //                            `session_settings_updated`/`background_task_started`/
 //                            `background_task_updated`/`background_task_roster`/`question_shown`/
-//                            `question_dismissed`
+//                            `question_dismissed`/`slash_command_list`
 //                            envelope, fully narrowed (`screen_snapshot` was modeled here #180-#622;
 //                            removed, now falls to the unmodeled `default` arm)
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
@@ -227,6 +228,22 @@ traffic that exists. `outcome` is likewise carried verbatim, never enum-checked,
 `ModalDismissedPayload.outcome` is. Unknown extra keys (a planted `conversation_id` in the test suite)
 are tolerated but not copied — the returned object holds exactly the three known fields, which is also
 what keeps a stray correlation key from riding into a consumer that would then hold two.
+
+**Extended a twenty-second time by [#936](https://github.com/pyrycode/pyrycode-desktop/issues/936),
+additively.** `slash_command_list` → `{ kind: 'slash-command-list', slashCommandList:
+SlashCommandListPayload }` via `parseSlashCommandListPayload` + the new row narrower `parseSlashCommand`
+— the decode half of the [slash-command-list wire types](slash-command-list-wire-types.md) vocabulary
+(#935). Structurally `parseBackgroundTaskRosterPayload`'s shape exactly (an `isRecord` guard, a required
+`conversation_id`, `Array.isArray` + `raw.map` over the rows, a plain `requireNumber` for the dropped
+count), trap included: `commands: null` fails the whole frame closed while a row's own
+`truncated_fields: null` is a valid value. One new helper: `requireStringArray`, the never-`null` sibling
+of `requireStringArrayOrNull` (added by [#564](../codebase/564.md)) — needed because a row's `aliases`
+must reject exactly the `null` that its own `truncated_fields`, one field over, accepts.
+`requireStringArrayOrNull` is now a one-line delegation to it (`null` → `null`, else
+`requireStringArray`), behaviour-identical and covered by the existing #564–#566 tests.
+[#937](https://github.com/pyrycode/pyrycode-desktop/issues/937) has since claimed the decoded menu with
+a `case 'slash-command-list':` in `daemonConnection.ts`'s inbound switch, emitting it onward as the
+`slashCommandList` `DaemonEvent` arm.
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 

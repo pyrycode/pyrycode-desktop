@@ -244,7 +244,34 @@ restates the same split a second time, since it is the last typed surface before
 `daemonConnection.ts`'s inbound switch now has a `case 'question-dismissed':` (#895), emitting the
 `questionDismissed` `DaemonEvent` arm; it still ships with no renderer store reading it, the same
 dormancy `question_shown` carried through #885 — see [Daemon event channel — the sealed
-union](daemon-event-channel-sealed-union.md). See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
+union](daemon-event-channel-sealed-union.md).
+
+[#936](https://github.com/pyrycode/pyrycode-desktop/issues/936) added a twenty-second kind,
+`slash_command_list` → `slash-command-list` — the fail-closed decode of the workspace's slash-command
+menu into the [slash-command-list wire types](slash-command-list-wire-types.md) vocabulary
+([#935](https://github.com/pyrycode/pyrycode-desktop/issues/935)), which had shipped dormant. Two new
+parsers, the file's first two-level nesting since `question_shown` (#884):
+`parseSlashCommandListPayload` (`isRecord` guard, a required `conversation_id`, an `Array.isArray` check
+on `commands` mapped through the row parser, a plain `requireNumber` for `dropped_commands`) clones
+`parseBackgroundTaskRosterPayload`'s shape exactly, trap included — within one frame `commands: null`
+fails closed (`Array.isArray(null)` is `false`) while a row's own `truncated_fields: null` is a valid
+value. `parseSlashCommand` narrows the row's five fields and needed one new helper, `requireStringArray`
+— the never-`null` sibling of `requireStringArrayOrNull` (now a one-line delegation to it) — because a
+row's `aliases` must reject exactly the `null` that `truncated_fields`, one field over, accepts.
+Deliberately absent from `parseSlashCommand`: any charset/identifier check on `name` (one measured name
+is `__remote-workflow`), any length check on any of the four strings, and any trim/normalise/strip — they
+are carried verbatim, since they are **workspace-authored** text (a lower trust tier than the
+claude-authored strings `model_list`/`question_shown` carry) that the daemon bounds but does not
+sanitize, and `0x0a` is the only sub-`0x20` byte measured across the capture's 51 entries. Nothing
+cross-checks `dropped_commands` against `commands.length`, and nothing caps the entry count — two
+producer cuts feed the number and either can fire first.
+[#937](https://github.com/pyrycode/pyrycode-desktop/issues/937) has since claimed this arm — a
+`case 'slash-command-list':` in `daemonConnection.ts`'s inbound switch emits the decoded value onward as
+the `slashCommandList` `DaemonEvent` arm, a fresh named-field literal built at the emit rather than a
+spread of this decode's payload. See [Daemon event channel — the sealed
+union](daemon-event-channel-sealed-union.md). Architect self-review PASS.
+
+See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
 and [edge cases and limits](inbound-message-decode-limits.md) for the type union, the decode/log detail,
 and the fail-closed edge cases respectively.
 
@@ -355,3 +382,9 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
 - [Daemon-event bridge](daemon-event-bridge.md) / [#19](../codebase/19.md) + [Session store](session-store.md) / [#2](../codebase/2.md) + [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md) — the renderer half that dedupes by `message_id` and preserves arrival order.
 - [Noise relay driver](noise-relay-driver.md) / [#50](../codebase/50.md) — surfaces the `message{plaintext}` event this decodes.
 - Daemon/mobile peer (QMD `pyrycode-docs`): `internal/protocol` v1 messaging structs (#272 — `MessageChunkPayload.Messages` reuses `MessagePayload`, "same shape as `message.payload`, multiple") + `protocol-mobile.md` § application message types — the Go side that emits the `message` / `message_chunk` envelopes this narrows.
+- [Slash-command-list wire types](slash-command-list-wire-types.md) — the
+  `SlashCommandListPayload`/`WireSlashCommand` vocabulary ([#935](https://github.com/pyrycode/pyrycode-desktop/issues/935))
+  [#936](https://github.com/pyrycode/pyrycode-desktop/issues/936) decodes into the twenty-second kind
+  above and [#937](https://github.com/pyrycode/pyrycode-desktop/issues/937) carries onward as a
+  `DaemonEvent` arm; [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) is the still-unclaimed
+  renderer consumer, the Actions-menu alias match.

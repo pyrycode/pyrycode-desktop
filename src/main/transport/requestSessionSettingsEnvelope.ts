@@ -1,49 +1,68 @@
-// The bare `request_session_settings` builder: it serializes the outbound "ask" for the daemon's
+// The `request_session_settings` builder: it serializes the outbound "ask" for one conversation's
 // current run configuration — the session id to address a change to, the model / effort / yolo in
 // force, and the context-window occupancy (#491). A sibling to requestDebugBundleEnvelope.ts,
 // following the same one-concern-per-file split the module already uses.
 //
-// It is the BARE control frame, NOT the payload-carrying sendMessageEnvelope: the daemon's reply is
-// daemon-wide, so there is no conversation_id or any other field a client could use to select
-// another session's data. That also means it cannot be rejected with `conversation.not_found`.
+// It CARRIES A PAYLOAD, like dequeueMessageEnvelope.ts and unlike its bare neighbours: a single
+// conversation_id the daemon resolves to a session (pyrycode#1586 minted the field, pyrycode#1610
+// taught the handler to read it; SSOT internal/protocol/settings.go). The frame was genuinely bare
+// until 2026-08-20 and this file asserted that as fact for two weeks after it stopped being true,
+// which is the whole of #945: an unnamed request addresses nothing, so the daemon answered every one
+// with a zero-valued session_settings and the run-config sheet had no session id to write back to.
+// The id is client-owned — sourced from the client's own conversation state, never off the network.
+// Naming an unhosted or unbound conversation is still answered with that zero reply rather than an
+// error frame, so this frame remains unrejectable: there is no `conversation.not_found` for it.
 //
 // MAIN-PROCESS ONLY. It imports codec.ts (Node `Buffer`). Never re-export it through any renderer
 // barrel — the raw bytes must stay out of the web layer.
 import { encodeEnvelope } from './codec'
-import type { Envelope } from '../../shared/wire/types'
+import type { Envelope, RequestSessionSettingsPayload } from '../../shared/wire/types'
 
 /**
  * Inputs the consumer (createDaemonConnection.requestSessionSettings) supplies — the envelope id
- * counter and the wall clock. Kept explicit (not read from globals) so the builder is pure and
- * trivially unit-testable, exactly like buildRequestDebugBundle.
+ * counter, the wall clock, and the conversation to ask about. Kept explicit (not read from globals)
+ * so the builder is pure and trivially unit-testable, exactly like buildRequestDebugBundle.
  */
 export interface RequestSessionSettingsInput {
   /** The request_session_settings Envelope's numeric id (the consumer's id counter). */
   id: number
   /** RFC3339 timestamp (the consumer's clock) — never read from the wall clock here. */
   ts: string
+  /**
+   * The conversation to ask about. Absent → `conversation_id: ''` on the wire, which names nothing
+   * and draws the zero reply.
+   *
+   * Still optional after #946, and no longer because anything sends nothing: the renderer command now
+   * REQUIRES a payload and `requestRunConfigSnapshot` declines to send at all when it has no
+   * addressable id, so in production this is always supplied. It stays optional because the whole
+   * main-side chain — the onCommand switch's `command.payload?.conversation_id` through
+   * `DaemonConnection.requestSessionSettings(conversationId?)` — is typed that way, and tightening it
+   * would buy no behaviour change. The `?? ''` normalisation below is what keeps an omitted id honest
+   * on the wire for any caller that still omits one.
+   */
+  conversationId?: string
 }
 
 /**
- * Build the `request_session_settings` early-data bytes: a bare Envelope, serialized to UTF-8 via
- * encodeEnvelope.
+ * Build the `request_session_settings` early-data bytes: an Envelope wrapping a one-field
+ * conversation_id payload, serialized to UTF-8 via encodeEnvelope.
  *
- * The daemon never reads Payload for this bare control type (it is intercepted before dispatch and
- * ignores any attached bytes), so it tolerates an absent, `{}`, or `null` payload. The binding
- * constraint is the desktop's OWN decodeEnvelope, which requires a present `payload`, and
- * Envelope.payload is required. So we emit a present-but-empty `payload: {}`, NOT an omission —
- * `{}` (not `null`) upholds the module's "never emit null on the wire" posture. Identical reasoning
- * to buildRequestDebugBundle; do not "fix" this to an omission.
+ * The daemon's field has no `omitempty`, so absent and empty are the same case for it and the key is
+ * ALWAYS emitted — a present string, never omitted and never `null` (the module's "never emit null
+ * on the wire" posture). The `?? ''` normalisation lives here rather than in the caller so the
+ * present-always invariant is provable in this module's own test, against real codec bytes.
  *
- * MAY throw WireEncodeError in principle (encodeEnvelope's contract), but a fixed-shape ~90-byte
- * empty-payload envelope can never exceed MAX_PLAINTEXT_BYTES; the sole caller catches anyway.
+ * MAY throw WireEncodeError in principle (encodeEnvelope's contract), but a fixed-shape ~110-byte
+ * envelope plus one client-owned conversation id can never approach MAX_PLAINTEXT_BYTES; the sole
+ * caller catches anyway, so an over-cap id would fail closed as a dropped send.
  */
 export function buildRequestSessionSettings(input: RequestSessionSettingsInput): Uint8Array {
+  const payload: RequestSessionSettingsPayload = { conversation_id: input.conversationId ?? '' }
   const envelope: Envelope = {
     id: input.id,
     type: 'request_session_settings',
     ts: input.ts,
-    payload: {}
+    payload
   }
   return encodeEnvelope(envelope)
 }

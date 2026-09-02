@@ -133,6 +133,11 @@ function encodeSlashCommandList(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 903, type: 'slash_command_list', ts: FIXED_TS, payload })
 }
 
+/** A `model_list` envelope's plaintext bytes, wrapping an arbitrary payload (#972). */
+function encodeModelList(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 907, type: 'model_list', ts: FIXED_TS, payload })
+}
+
 /** A `question_dismissed` envelope's plaintext bytes, wrapping an arbitrary payload (#894). */
 function encodeQuestionDismissed(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 902, type: 'question_dismissed', ts: FIXED_TS, payload })
@@ -560,6 +565,107 @@ const SLASH_COMMAND_LIST_ZERO = {
 
 /** One well-formed command row, for building single-row reject cases without restating the menu. */
 const ONE_COMMAND = SLASH_COMMAND_LIST.commands[1]
+
+/**
+ * A fully-populated, well-formed model_list payload (#972). Lifted from the daemon's committed fixture
+ * (`internal/protocol/testdata/model_list.json`) through #971's `types.test.ts` block, character for
+ * character, so the two files cannot drift into two hand-written guesses of one upstream file. Five rows
+ * in claude's own order, ONE reporting a cut `value` beside four reporting `null`, ONE publishing an
+ * empty `effort_levels` beside four publishing five levels, and a NON-ZERO `dropped_models` whose sum
+ * with the list length is the menu's true size.
+ *
+ * `resolved_model` is the literal `<unmeasured>` on four of the five rows, ANGLE BRACKETS INCLUDED: Go's
+ * encoder escapes `<`/`>`/`&` on the wire, so the escaping is a transport artefact and the decoded value
+ * holds the raw characters — the exact byte a render sink is tempted by, in a field this frame's type
+ * names as claude-authored. Haiku's row is the only one carrying a real identifier, which is why
+ * `resolved_model` may not be treated as one merely because a row makes it look like one.
+ *
+ * THE FIXTURE DOES NOT SATISFY THE PRODUCER'S OWN INVARIANT — upstream caps entries at ten and cuts only
+ * the overflow, so a non-zero `dropped_models` should arrive beside exactly ten rows, and these bytes
+ * carry five. It pins SHAPE, not live traffic. Nothing may derive the cap from a list length.
+ */
+const MODEL_LIST = {
+  conversation_id: 'c1',
+  models: [
+    {
+      resolved_model: '<unmeasured>',
+      value: 'default',
+      display_name: 'Default (recommended)',
+      effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supports_auto_mode: true,
+      truncated_fields: null
+    },
+    {
+      resolved_model: '<unmeasured>',
+      value: 'opus[1m]',
+      display_name: 'Opus (1M context)',
+      effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supports_auto_mode: true,
+      truncated_fields: null
+    },
+    {
+      resolved_model: '<unmeasured>',
+      value: 'claude-fable-5[1m]',
+      display_name: 'Fable',
+      effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supports_auto_mode: true,
+      truncated_fields: ['value']
+    },
+    {
+      resolved_model: '<unmeasured>',
+      value: 'sonnet',
+      display_name: 'Sonnet',
+      effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supports_auto_mode: true,
+      truncated_fields: null
+    },
+    {
+      resolved_model: 'claude-haiku-4-5-20251001',
+      value: 'haiku',
+      display_name: 'Haiku',
+      effort_levels: [],
+      supports_auto_mode: false,
+      truncated_fields: null
+    }
+  ],
+  dropped_models: 2
+}
+
+/**
+ * The daemon's second committed fixture (`model_list_empty.json`, #972): an EMPTY menu — the POSITIVE
+ * STATEMENT that claude offered nothing, and the case that must stay distinguishable from a frame that
+ * never arrived. Note this is NOT the argument behind an empty `effort_levels`, which is a COLLAPSE:
+ * one frame states three different positions on empty, and a reader who assumes one gets two wrong.
+ */
+const MODEL_LIST_EMPTY = {
+  conversation_id: 'c1',
+  models: [],
+  dropped_models: 0
+}
+
+/**
+ * The daemon's third committed fixture (`model_list_zero.json`, #972): one all-zero row, the only route
+ * that reaches all six WireModelOption keys at once — a frame with no entries reaches none of them.
+ * Every empty here is a VALUE: no key on either struct carries `omitempty`, which is why every string on
+ * this frame goes through requireString and none through requireNonEmptyString.
+ */
+const MODEL_LIST_ZERO = {
+  conversation_id: '',
+  models: [
+    {
+      resolved_model: '',
+      value: '',
+      display_name: '',
+      effort_levels: [],
+      supports_auto_mode: false,
+      truncated_fields: null
+    }
+  ],
+  dropped_models: 0
+}
+
+/** One well-formed model row, for building single-row reject cases without restating the menu. */
+const ONE_MODEL = MODEL_LIST.models[1]
 
 /**
  * A fully-populated, well-formed question_dismissed payload (#894). The nonce matches QUESTION_SHOWN's,
@@ -4183,6 +4289,446 @@ describe('parseInboundMessage — slash_command_list fail-closed (#936)', () => 
   })
 })
 
+describe('parseInboundMessage — model_list recognition (#972, additive)', () => {
+  it('narrows a full frame into { kind: model-list } carrying all three fields (AC1)', () => {
+    expect(parseInboundMessage(encodeModelList(MODEL_LIST))).toEqual({
+      kind: 'model-list',
+      modelList: MODEL_LIST
+    })
+  })
+
+  it("extracts every field on every row distinctly, in the WIRE's own order (AC1)", () => {
+    // The core AC1 assertion, per-field across the rows (the slash_command_list / background_task_roster
+    // idiom): a ROW SWAP fails the ordered arrays, a DROPPED FIELD fails its own array, and a FLATTENED
+    // or MERGED effort_levels / truncated_fields fails the last two — which is why the fixture's rows
+    // carry different effort-list lengths and different truncated_fields shapes.
+    const result = parseInboundMessage(encodeModelList(MODEL_LIST))
+    expect(result?.kind).toBe('model-list')
+    if (result?.kind === 'model-list') {
+      const { modelList: list } = result
+      expect(list.conversation_id).toBe('c1')
+      expect(list.models.map((m) => m.value)).toEqual([
+        'default',
+        'opus[1m]',
+        'claude-fable-5[1m]',
+        'sonnet',
+        'haiku'
+      ])
+      expect(list.models.map((m) => m.display_name)).toEqual([
+        'Default (recommended)',
+        'Opus (1M context)',
+        'Fable',
+        'Sonnet',
+        'Haiku'
+      ])
+      expect(list.models.map((m) => m.resolved_model)).toEqual(
+        MODEL_LIST.models.map((m) => m.resolved_model)
+      )
+      // Per row and NOT hoisted: each row's own effort list, in the wire's order.
+      expect(list.models.map((m) => m.effort_levels)).toEqual([
+        ['low', 'medium', 'high', 'xhigh', 'max'],
+        ['low', 'medium', 'high', 'xhigh', 'max'],
+        ['low', 'medium', 'high', 'xhigh', 'max'],
+        ['low', 'medium', 'high', 'xhigh', 'max'],
+        []
+      ])
+      // `false` is a VALUE — claude refuses `auto` permission mode per model — never an absence.
+      expect(list.models.map((m) => m.supports_auto_mode)).toEqual([true, true, true, true, false])
+      expect(list.models[2].truncated_fields).toEqual(['value'])
+      expect(list.models.filter((m) => m.truncated_fields === null)).toHaveLength(4)
+      // dropped_models decodes as a NUMBER, never a string, and is carried rather than recomputed.
+      expect(list.dropped_models).toBe(2)
+      expect(typeof list.dropped_models).toBe('number')
+      // The menu's TRUE size, which is the whole reason the count is carried.
+      expect(list.models.length + list.dropped_models).toBe(7)
+    }
+  })
+
+  it('carries every string byte-for-byte — nothing is trimmed, normalised or re-encoded (AC1)', () => {
+    // The pin against a future "sanitize / normalise at the decoder" change. These strings are
+    // CLAUDE-AUTHORED, a HIGHER trust tier than the workspace-authored strings the slash_command_list arm
+    // carries, and the daemon bounds them without sanitizing them. The escaping is owed at the render
+    // sink, which is a later slice's, not this one's.
+    const result = parseInboundMessage(encodeModelList(MODEL_LIST))
+    if (result?.kind === 'model-list') {
+      const [dflt, opus, fable, , haiku] = result.modelList.models
+      // Raw angle brackets: Go's encoder escapes `<`/`>`/`&` on the wire, so the DECODED value holds the
+      // literal characters. Four of the five rows carry it, so `resolved_model` is not an identifier
+      // merely because Haiku's row makes it look like one.
+      expect(dflt.resolved_model).toBe('<unmeasured>')
+      expect(haiku.resolved_model).toBe('claude-haiku-4-5-20251001')
+      expect(result.modelList.models.filter((m) => m.resolved_model === '<unmeasured>')).toHaveLength(
+        4
+      )
+      // `value` is the ARGUMENT you pass, NOT a dated identifier and NOT parseable: a literal, a bare
+      // alias, or a bracketed variant. The brackets survive intact — a decoder that stripped them would
+      // silently change which model the operator gets.
+      expect(opus.value).toBe('opus[1m]')
+      expect(fable.value).toBe('claude-fable-5[1m]')
+      expect(dflt.display_name).toBe('Default (recommended)')
+    }
+  })
+
+  it('decodes an EMPTY models array — "claude offered nothing", never dropped (AC2)', () => {
+    // The AC2 signal case, and what it DISTINGUISHES: this decodes to a VALUE, so a consumer can tell "a
+    // menu arrived and it is empty" from "no menu was observed at all" (the `null` an unmodeled type
+    // returns, asserted at the end of this block).
+    const decoded = parseInboundMessage(encodeModelList(MODEL_LIST_EMPTY))
+    expect(decoded).not.toBeNull()
+    expect(decoded).toEqual({ kind: 'model-list', modelList: MODEL_LIST_EMPTY })
+    if (decoded?.kind === 'model-list') {
+      expect(decoded.modelList.models).toEqual([])
+      // `0` is a VALUE, never consulted for truthiness: the Go field has no `omitempty`.
+      expect(decoded.modelList.dropped_models).toBe(0)
+    }
+  })
+
+  it('decodes an EMPTY effort_levels to [] — never absent, never a rejection (AC2)', () => {
+    // ONE FRAME, THREE POSITIONS ON EMPTY. `models: []` above is a POSITIVE STATEMENT; this one is a
+    // COLLAPSE — upstream folds claude's absent, its `null` and its empty list into a single `[]`
+    // deliberately, because a client's behaviour is identical for all three. So there is no absent form
+    // to model here and nothing may decode it as optional.
+    const decoded = parseInboundMessage(encodeModelList(MODEL_LIST))
+    if (decoded?.kind === 'model-list') {
+      expect(decoded.modelList.models[4].effort_levels).toEqual([])
+      expect(decoded.modelList.models[4]).toHaveProperty('effort_levels')
+      expect(decoded.modelList.models[4].effort_levels).not.toBeNull()
+    }
+  })
+
+  it('decodes the all-zero row — empty strings are ordinary values, not absences (AC2)', () => {
+    // The daemon's third fixture, and the only route that reaches all six keys at once. Every string on
+    // this frame goes through requireString and NONE through requireNonEmptyString: an empty
+    // conversation_id, resolved_model, value or display_name is legal traffic, so the attachment_stored
+    // argument for the tighter helper does not transfer here.
+    const decoded = parseInboundMessage(encodeModelList(MODEL_LIST_ZERO))
+    expect(decoded).toEqual({ kind: 'model-list', modelList: MODEL_LIST_ZERO })
+    if (decoded?.kind === 'model-list') {
+      const row = decoded.modelList.models[0]
+      expect(decoded.modelList.conversation_id).toBe('')
+      expect(row.resolved_model).toBe('')
+      expect(row.value).toBe('')
+      expect(row.display_name).toBe('')
+      expect(row.effort_levels).toEqual([])
+      expect(row.supports_auto_mode).toBe(false)
+      expect(row.truncated_fields).toBeNull()
+    }
+  })
+
+  it('keeps a row truncated_fields of null as null while one naming effort_levels survives (AC4)', () => {
+    // The reading rule this arm exists to make sound: `effort_levels` collapses claude's ABSENT and EMPTY
+    // lists into the identical `[]`, so a `truncated_fields` NAMING `effort_levels` is the ONLY signal
+    // separating "cut to nothing, or shortened" from "this model exposes no effort control", and must be
+    // read as UNKNOWN. Reached through a bare cast an omitted key would decode to `undefined`, and
+    // `row.truncated_fields?.includes('effort_levels')` would then be falsy for exactly the reason `null`
+    // is — silently removing an effort control the model actually supports. Asserted through the
+    // predicate, not just round-tripped.
+    const cutLevels = {
+      ...MODEL_LIST,
+      models: [
+        { ...ONE_MODEL, effort_levels: [], truncated_fields: ['effort_levels'] },
+        { ...ONE_MODEL, effort_levels: [], truncated_fields: null }
+      ]
+    }
+    const decoded = parseInboundMessage(encodeModelList(cutLevels))
+    expect(decoded).toEqual({ kind: 'model-list', modelList: cutLevels })
+    if (decoded?.kind === 'model-list') {
+      const [cut, none] = decoded.modelList.models
+      const levelsAreKnownEmpty = (m: (typeof decoded.modelList.models)[number]): boolean =>
+        m.effort_levels.length === 0 && !(m.truncated_fields ?? []).includes('effort_levels')
+      expect(levelsAreKnownEmpty(cut)).toBe(false)
+      expect(levelsAreKnownEmpty(none)).toBe(true)
+      // `null` is PRESERVED, never normalised to `[]` — nil and `[]` say the identical thing upstream and
+      // no consumer branches on it, so flattening one into the other would invent a distinction the wire
+      // does not carry (AC4).
+      expect(none.truncated_fields).toBeNull()
+      expect(none.truncated_fields?.includes('effort_levels')).toBeUndefined()
+      // Both rows read `[]` for effort_levels — which is the whole point: they are told apart ONLY by
+      // truncated_fields.
+      expect(cut.effort_levels).toEqual([])
+      expect(none.effort_levels).toEqual([])
+    }
+  })
+
+  it('carries a cut value through intact — the field a client sends BACK (AC1)', () => {
+    // A `value` cut mid-token (`claude-fable-5[1m]` → `claude-fable-5`) stays alphanumeric, stays inside
+    // the daemon's length rule, and is ACCEPTED on the way back by `validModel`, which is a
+    // charset-and-length rule rather than a membership check against the published list. The operator
+    // would pick one row and get a different model, with no error frame anywhere on the path. So a cut
+    // row is load-bearing data to carry through with its report intact, never something to validate away
+    // here — which is why no charset or length check exists on any string in this arm.
+    const cutValue = {
+      ...MODEL_LIST,
+      models: [{ ...ONE_MODEL, value: 'claude-fable-5', truncated_fields: ['value'] }]
+    }
+    const decoded = parseInboundMessage(encodeModelList(cutValue))
+    expect(decoded).toEqual({ kind: 'model-list', modelList: cutValue })
+    if (decoded?.kind === 'model-list') {
+      const row = decoded.modelList.models[0]
+      expect(row.value).toBe('claude-fable-5')
+      expect(row.truncated_fields).toEqual(['value'])
+    }
+  })
+
+  it('carries dropped_models verbatim beside ANY list length — no cross-check, no cap (AC1)', () => {
+    // The producer's TEN-ENTRY CAP is a daemon-side producer cap, not a wire constant: it may change
+    // without any change to this contract, so nothing here may hardcode it, treat a list of exactly ten
+    // as a signal, or derive it from anything but `dropped_models`. An empty list beside a non-zero count
+    // is the sharpest case, and the committed fixture itself carries five rows beside `2`.
+    const droppedEverything = { ...MODEL_LIST_EMPTY, dropped_models: 40 }
+    expect(parseInboundMessage(encodeModelList(droppedEverything))).toEqual({
+      kind: 'model-list',
+      modelList: droppedEverything
+    })
+    // And the other side of it: no client-invented entry cap. MAX_PLAINTEXT_BYTES already bounds the
+    // frame, and `.map` allocates from the array that ACTUALLY arrived rather than from the claimed count.
+    const many = {
+      ...MODEL_LIST,
+      models: Array.from({ length: 30 }, (_, i) => ({ ...ONE_MODEL, value: `m-${i}` })),
+      dropped_models: 0
+    }
+    const decoded = parseInboundMessage(encodeModelList(many))
+    if (decoded?.kind === 'model-list') {
+      expect(decoded.modelList.models).toHaveLength(30)
+    }
+  })
+
+  it('does NOT narrow the truncated_fields elements to a closed set (no client-side allowlist)', () => {
+    // Each frame's cut-field vocabulary is its own set; a client allowlist would fail-close a valid future
+    // frame (the parseSlashCommand / parseBackgroundTask rule verbatim).
+    const futureName = {
+      ...MODEL_LIST,
+      models: [{ ...ONE_MODEL, truncated_fields: ['value', 'some_future_field'] }]
+    }
+    expect(parseInboundMessage(encodeModelList(futureName))).toEqual({
+      kind: 'model-list',
+      modelList: futureName
+    })
+  })
+
+  it('does NOT narrow the effort_levels elements to the five levels claude returns today', () => {
+    // The DIRECTION HAZARD, and it is upstream's rather than this repo's to fix: the daemon's INBOUND
+    // `validEffort` enum is closed at five levels while `validModel` was widened, so a level claude adds
+    // in future is published here and refused inbound. Closing the set at this decoder would fail-close
+    // the published row too, losing the evidence a consumer needs to handle the refusal.
+    const futureLevel = {
+      ...MODEL_LIST,
+      models: [{ ...ONE_MODEL, effort_levels: ['low', 'ultra'] }]
+    }
+    expect(parseInboundMessage(encodeModelList(futureLevel))).toEqual({
+      kind: 'model-list',
+      modelList: futureLevel
+    })
+  })
+
+  it('drops unknown server keys at the FRAME level, keeping exactly the three known fields (AC5)', () => {
+    // The pointed extra is a hoisted `truncated_fields` — the field this payload deliberately does NOT
+    // have, since a cut is a property of one row and rides that row — plus a `turn_id` this frame never
+    // carries either (it rides a control_response and opens no turn).
+    const withExtras = { ...MODEL_LIST, truncated_fields: ['models'], turn_id: 'turn-1' }
+    expect(parseInboundMessage(encodeModelList(withExtras))).toEqual({
+      kind: 'model-list',
+      modelList: MODEL_LIST
+    })
+  })
+
+  it('drops unknown server keys at the ROW level, keeping exactly the six known fields (AC5)', () => {
+    // Tolerated rather than rejected: a server-added key is forward-compat, not a defect. Not copied
+    // through either, which is what keeps the fresh literal prototype-safe without a reject list.
+    const withRowExtras = {
+      ...MODEL_LIST,
+      models: [{ ...ONE_MODEL, description: 'unused', supportsFastMode: true, dropped_models: 9 }]
+    }
+    expect(parseInboundMessage(encodeModelList(withRowExtras))).toEqual({
+      kind: 'model-list',
+      modelList: { ...MODEL_LIST, models: [ONE_MODEL] }
+    })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — model_list fail-closed (#972)', () => {
+  // EVERY criterion here means THROWS, never "returns null". The two signals are distinguishable only at
+  // this boundary — `null` says the envelope type is not claimed, a throw says a CLAIMED type arrived
+  // malformed — and downstream cannot tell them apart, since daemonConnection catches the throw and drops
+  // the frame unlogged. A `toBeNull()` assertion would be testing a different thing.
+
+  it('throws when the payload is not a record (AC3)', () => {
+    for (const payload of ['nope', ['a'], null, 7, true]) {
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when conversation_id is absent or a non-string (AC3)', () => {
+    const missing: Record<string, unknown> = { ...MODEL_LIST }
+    delete missing.conversation_id
+    expect(() => parseInboundMessage(encodeModelList(missing))).toThrow(WireDecodeError)
+    for (const value of [42, null, { a: 1 }, ['c1']]) {
+      const payload = { ...MODEL_LIST, conversation_id: value }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when models is null — the trap: a ROW truncated_fields null is a VALUE, this is not', () => {
+    // The asymmetry, in one frame. `Array.isArray(null)` is `false`, which is what fails this closed,
+    // while the per-row `truncated_fields: null` above decodes to `null` and is preserved. The daemon
+    // settles it: MarshalJSON normalises a nil `models` to `[]` so an empty menu never serialises as
+    // null, and deliberately does NOT normalise a row's truncated_fields the same way.
+    expect(() => parseInboundMessage(encodeModelList({ ...MODEL_LIST, models: null }))).toThrow(
+      WireDecodeError
+    )
+  })
+
+  it('throws when models is OMITTED or any non-array (AC3)', () => {
+    const missing: Record<string, unknown> = { ...MODEL_LIST }
+    delete missing.models
+    expect(() => parseInboundMessage(encodeModelList(missing))).toThrow(WireDecodeError)
+    for (const value of ['x', 7, {}, true]) {
+      const payload = { ...MODEL_LIST, models: value }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when dropped_models is OMITTED — an absence is not a zero (AC3)', () => {
+    // Paired with the `dropped_models: 0` case above: the Go field has no `omitempty`, so the key is
+    // always on the wire and an absent one is a real defect rather than a valid zero.
+    const payload: Record<string, unknown> = { ...MODEL_LIST }
+    delete payload.dropped_models
+    expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when dropped_models arrives as a JSON string, never coercing it (AC3)', () => {
+    for (const value of ['2', null, true, {}, []]) {
+      const payload = { ...MODEL_LIST, dropped_models: value }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('fails the WHOLE frame closed when any single row is not a record (AC3)', () => {
+    // Row 1 is valid; the second is not. Nothing partial is returned — the point is that row 1 does not
+    // survive either, so no half-populated menu can reach a consumer.
+    for (const badRow of ['not-an-object', 7, null, ['nested'], true]) {
+      const payload = { ...MODEL_LIST, models: [ONE_MODEL, badRow] }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any per-row required string is absent — one bad row fails the frame (AC3)', () => {
+    for (const field of ['resolved_model', 'value', 'display_name'] as const) {
+      const row: Record<string, unknown> = { ...ONE_MODEL }
+      delete row[field]
+      const payload = { ...MODEL_LIST, models: [ONE_MODEL, row] }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any per-row required string is a non-string (AC3)', () => {
+    for (const field of ['resolved_model', 'value', 'display_name'] as const) {
+      for (const value of [42, null, { a: 1 }, ['x'], true]) {
+        const payload = { ...MODEL_LIST, models: [{ ...ONE_MODEL, [field]: value }] }
+        expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+      }
+    }
+  })
+
+  it('rejects an effort_levels of null on the very row whose truncated_fields names it (AC3)', () => {
+    // Same shape, OPPOSITE contracts, two fields apart, in a single frame: `truncated_fields` may be
+    // `null`, `effort_levels` may not. Reaching for the nullable helper here would quietly admit a `null`
+    // the wire never sends, and WireModelOption would then be lying about the type of its own field.
+    const payload = {
+      ...MODEL_LIST,
+      models: [{ ...ONE_MODEL, effort_levels: null, truncated_fields: ['effort_levels'] }]
+    }
+    expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when effort_levels is OMITTED or any non-array (AC3)', () => {
+    const row: Record<string, unknown> = { ...ONE_MODEL }
+    delete row.effort_levels
+    expect(() => parseInboundMessage(encodeModelList({ ...MODEL_LIST, models: [row] }))).toThrow(
+      WireDecodeError
+    )
+    for (const value of ['low', 7, { 0: 'low' }, true]) {
+      const payload = { ...MODEL_LIST, models: [{ ...ONE_MODEL, effort_levels: value }] }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when effort_levels holds a non-string element — one bad element fails the frame (AC3)', () => {
+    const bad: unknown[] = [['low', 7], [null], [{ level: 'low' }], [['nested']], ['low', true]]
+    for (const value of bad) {
+      const payload = { ...MODEL_LIST, models: [{ ...ONE_MODEL, effort_levels: value }] }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when supports_auto_mode is absent or not a boolean — never coerced (AC3)', () => {
+    // The check is on the TYPE, never truthiness: `false` is a valid value (claude refuses `auto` for
+    // this model), so a truthiness test would read a legitimate `false` as an absence. The pointed cases
+    // are the string `'true'` and the numbers `0`/`1`, which a coercing decoder would wave through.
+    const row: Record<string, unknown> = { ...ONE_MODEL }
+    delete row.supports_auto_mode
+    expect(() => parseInboundMessage(encodeModelList({ ...MODEL_LIST, models: [row] }))).toThrow(
+      WireDecodeError
+    )
+    for (const value of ['true', 'false', 0, 1, null, {}, []]) {
+      const payload = { ...MODEL_LIST, models: [{ ...ONE_MODEL, supports_auto_mode: value }] }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a row truncated_fields key is OMITTED — an absence is not a null (AC3)', () => {
+    // NULLABLE IS NOT OPTIONAL: an omitted key is `undefined`, neither `null` nor an array, and it fails
+    // closed. This is the rejection that keeps the cut-effort_levels reading rule sound downstream —
+    // `?.includes(...)` reads `undefined` exactly the way it reads `null`.
+    const row: Record<string, unknown> = { ...ONE_MODEL }
+    delete row.truncated_fields
+    expect(() => parseInboundMessage(encodeModelList({ ...MODEL_LIST, models: [row] }))).toThrow(
+      WireDecodeError
+    )
+  })
+
+  it('throws when a row truncated_fields is neither an array nor null (AC3)', () => {
+    for (const value of ['value', 7, { value: true }, true]) {
+      const payload = { ...MODEL_LIST, models: [{ ...ONE_MODEL, truncated_fields: value }] }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a row truncated_fields holds a non-string element (AC3)', () => {
+    const bad: unknown[] = [['value', 7], [null], [{ name: 'value' }], [['nested']]]
+    for (const value of bad) {
+      const payload = { ...MODEL_LIST, models: [{ ...ONE_MODEL, truncated_fields: value }] }
+      expect(() => parseInboundMessage(encodeModelList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws on an oversized model_list plaintext even when the JSON is valid', () => {
+    // No per-row or per-menu length check exists here by design — the frame-level guard in
+    // parseInboundMessage is the client's only bound, it fires ahead of decodeEnvelope and ahead of every
+    // narrower, and a client-side mirror of the daemon's own limits would be a second place the bound is
+    // decided, able to disagree silently.
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 907,
+        type: 'model_list',
+        ts: FIXED_TS,
+        payload: {
+          conversation_id: 'c1',
+          models: [{ ...ONE_MODEL, display_name: 'x'.repeat(MAX_PLAINTEXT_BYTES) }],
+          dropped_models: 0
+        }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — attachment_stored recognition (#964, additive)', () => {
   it('narrows a full attachment_stored into { kind: attachment-stored } (AC1)', () => {
     expect(parseInboundMessage(encodeAttachmentStored(ATTACHMENT_STORED))).toEqual({
@@ -5314,6 +5860,70 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a model_list content-free, never a model / label / level / id (#972)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONVERSATION = 'secret-conversation-id'
+    const SECRET_RESOLVED = 'secret-resolved-model'
+    const SECRET_VALUE = 'secret-model-value'
+    // A newline-bearing display name. Unlike the sibling arm, the never-into-a-log rule here rests on the
+    // CONTRACT rather than on a measurement: no control byte is measured in these short claude-authored
+    // labels, but the daemon BOUNDS AND DOES NOT SANITIZE them, so a control byte is PERMITTED rather
+    // than excluded — and this JSON-lines log is one the operator can ship off-box in a debug bundle.
+    const SECRET_DISPLAY = 'secret-display-name\n{"event":"forged"}'
+    const SECRET_LEVEL = 'secret-effort-level'
+    const SECRET_CUT = 'secret-cut-field'
+    const plaintext = encodeModelList({
+      conversation_id: SECRET_CONVERSATION,
+      models: [
+        {
+          resolved_model: SECRET_RESOLVED,
+          value: SECRET_VALUE,
+          display_name: SECRET_DISPLAY,
+          effort_levels: [SECRET_LEVEL],
+          supports_auto_mode: true,
+          truncated_fields: [SECRET_CUT]
+        }
+      ],
+      dropped_models: 4
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('model_list')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set. Deliberately NO `count` of models even though DiagnosticEvent
+    // carries the field: how many models claude offers for a session is itself a fact about that session
+    // (the background_task_roster / model_announced posture, not message_chunk's).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [
+      SECRET_CONVERSATION,
+      SECRET_RESOLVED,
+      SECRET_VALUE,
+      SECRET_DISPLAY,
+      SECRET_LEVEL,
+      SECRET_CUT
+    ]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+    // The forged-record fragment specifically: one line in, one line out.
+    expect(lines[0]).not.toContain('forged')
+  })
+
+  it('does NOT log on a malformed model_list throw path (#972)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeModelList({ ...MODEL_LIST, models: [{ ...ONE_MODEL, effort_levels: null }] }),
+        log
+      )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('does NOT log on a malformed question_shown throw path (#884)', () => {
     const { log, lines } = captureLog()
     expect(() =>
@@ -5829,6 +6439,70 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
       let err: unknown = null
       try {
         parseInboundMessage(encodeSlashCommandList(payload))
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(WireDecodeError)
+      const message = (err as Error).message
+      for (const leak of leaks) {
+        expect(message).not.toContain(leak)
+      }
+    }
+  })
+
+  it('never echoes a model_list field into the thrown message (#972, AC5)', () => {
+    // The message reaches a caller's catch — daemonConnection catches WireDecodeError — so a value
+    // interpolated here could ride into the log this decoder is otherwise careful never to write, which
+    // is the same exposure the content-free log test pins from the other side. Each case breaks ONE field
+    // while every sibling carries a distinctive sentinel.
+    const sentinels = {
+      conversation_id: 'secret-conversation',
+      resolved_model: 'secret-resolved',
+      value: 'secret-value',
+      display_name: 'secret-display',
+      level: 'secret-level',
+      cut: 'secret-cut-field'
+    }
+    const row = {
+      resolved_model: sentinels.resolved_model,
+      value: sentinels.value,
+      display_name: sentinels.display_name,
+      effort_levels: [sentinels.level],
+      supports_auto_mode: true,
+      truncated_fields: [sentinels.cut]
+    }
+    const leaks = Object.values(sentinels)
+    const cases: unknown[] = [
+      // Broken at the row level, the deepest one, one field at a time, all sentinels present and valid.
+      {
+        conversation_id: sentinels.conversation_id,
+        models: [{ ...row, effort_levels: null }],
+        dropped_models: 0
+      },
+      {
+        conversation_id: sentinels.conversation_id,
+        models: [{ ...row, truncated_fields: 7 }],
+        dropped_models: 0
+      },
+      {
+        conversation_id: sentinels.conversation_id,
+        models: [{ ...row, resolved_model: 42 }],
+        dropped_models: 0
+      },
+      {
+        conversation_id: sentinels.conversation_id,
+        models: [{ ...row, supports_auto_mode: 'true' }],
+        dropped_models: 0
+      },
+      // Broken at the frame level, with every row still valid.
+      { conversation_id: sentinels.conversation_id, models: [row], dropped_models: '0' },
+      { conversation_id: sentinels.conversation_id, models: null, dropped_models: 0 }
+    ]
+
+    for (const payload of cases) {
+      let err: unknown = null
+      try {
+        parseInboundMessage(encodeModelList(payload))
       } catch (e) {
         err = e
       }

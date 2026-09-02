@@ -62,6 +62,8 @@ import type {
   WireQuestionOption,
   SlashCommandListPayload,
   WireSlashCommand,
+  ModelListPayload,
+  WireModelOption,
   AttachmentStoredPayload
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
@@ -275,6 +277,25 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * at the render sink; nothing consumes this arm yet (the IPC carry is #937, the Actions-menu match #681,
  * and daemonConnection's inbound switch has no catch-all, so the menu stops here until claimed).
  *
+ * The `model-list` kind (#972) carries the decoded ModelListPayload — the IDENTITIES claude will run as
+ * for one conversation, where its sibling `slash-command-list` inventories the VERBS. Drawn from the same
+ * `initialize` control reply, so like that one it rides a `control_response`, opens and closes no turn,
+ * and is a SNAPSHOT that REPLACES a reader's view of the menu rather than a delta. The fail-closed decode
+ * here (a required `conversation_id`, a never-null `models` array narrowed per row, a
+ * carried-not-recomputed `dropped_models`) is the boundary this slice defends, and it is the ONLY
+ * sanctioned route to the type — a bare cast would hand a `.map` a non-array and would silently invert
+ * the cut-`effort_levels` reading rule.
+ *
+ * ONE FRAME STATES THREE DIFFERENT POSITIONS ON EMPTY, and a reader who assumes one gets two wrong: an
+ * empty `models` is a POSITIVE STATEMENT that claude offered nothing, an empty `effort_levels` is a
+ * COLLAPSE of claude's absent / null / empty into one value, and `truncated_fields` is exempt from
+ * normalisation entirely so its `null` is preserved. Every string on a row — and every `effort_levels`
+ * element — is UNTRUSTED CLAUDE-AUTHORED text that crossed the subprocess trust boundary, a HIGHER trust
+ * tier than `slash-command-list`'s workspace-authored strings but untrusted all the same, carried
+ * verbatim and owed escaping at the render sink. Nothing consumes this arm yet (the IPC carry, the store
+ * and the run-configuration rows are the slices below this one, and daemonConnection's inbound switch has
+ * no catch-all), so the menu stops here until claimed.
+ *
  * The `attachment-stored` kind (#964) carries the decoded AttachmentStoredPayload — the upload leg's ONE
  * POSITIVE TERMINAL, and the frame that lets a finished transfer resolve instead of spinning forever.
  * The fail-closed decode here (a single required NON-EMPTY string) is the boundary this slice defends.
@@ -332,6 +353,7 @@ export type InboundDaemonMessage =
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }
   | { kind: 'question-dismissed'; questionDismissed: QuestionDismissedPayload }
   | { kind: 'slash-command-list'; slashCommandList: SlashCommandListPayload }
+  | { kind: 'model-list'; modelList: ModelListPayload }
   | { kind: 'attachment-stored'; attachmentStored: AttachmentStoredPayload }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
@@ -1631,6 +1653,130 @@ function parseSlashCommandListPayload(payload: unknown): SlashCommandListPayload
 }
 
 /**
+ * Narrow one opaque row into a WireModelOption (#972) — one identity claude will accept for this
+ * conversation. Fail-closed like parseSlashCommand, whose five-field shape this scales to six: an
+ * isRecord guard, three required strings, a required boolean, and the SAME-SHAPED-OPPOSITE-CONTRACT
+ * array pair — `effort_levels` through requireStringArray (never `null`), `truncated_fields` through
+ * requireStringArrayOrNull (`null` is a VALID VALUE meaning nothing was cut for this row). Returns a
+ * fresh six-field literal, so unknown server-added keys are tolerated (forward-compat) but NOT copied
+ * through, which also makes it prototype-pollution-safe.
+ *
+ * EVERY STRING GOES THROUGH requireString, NONE THROUGH requireNonEmptyString, and that is a decision
+ * rather than an oversight. The daemon's committed all-zero fixture is LEGAL TRAFFIC: no key on either
+ * struct carries `omitempty`, so an empty `resolved_model`, `value` or `display_name` is a real value.
+ * The attachment_stored argument for the tighter helper — an empty id is what a truncated frame looks
+ * like — does not transfer to a display label.
+ *
+ * `supports_auto_mode` is checked on the TYPE, never truthiness: claude refuses `auto` permission mode
+ * per model, and an absent key in claude's own reply decodes daemon-side to `false`, so `false` is the
+ * CORRECT reading rather than a missing one. A coercing decoder would wave through the string `'true'`.
+ *
+ * FOUR CHECKS THAT DELIBERATELY DO NOT EXIST HERE, each of which would fail-close valid traffic:
+ *
+ *   - NO charset, identifier or parseability check on `value`. It is the ARGUMENT you pass, not a dated
+ *     identifier: the measured entries are `default`, `opus[1m]`, `claude-fable-5[1m]`, `sonnet` and
+ *     `haiku` — a literal, a bare alias, or a bracketed variant — so splitting one on `-` to derive a
+ *     family yields nothing usable and no consumer may try.
+ *   - NO length check on any of the three strings. The daemon bounds them at construction and
+ *     parseInboundMessage's MAX_PLAINTEXT_BYTES guard backstops the frame; a third bound here would be a
+ *     client-invented one to keep in agreement (the parseSlashCommand posture).
+ *   - NO trim, normalise, strip or re-encode. The strings are CLAUDE-AUTHORED — they crossed the
+ *     subprocess trust boundary, a HIGHER trust tier than parseSlashCommand's workspace-authored ones —
+ *     and the daemon bounds them WITHOUT sanitizing them, so they stay untrusted, model-influenced text
+ *     all the way here. `resolved_model` arrives as a literal `<unmeasured>` on four of the committed
+ *     fixture's five rows, angle brackets included, which is exactly the byte a render sink is tempted
+ *     by; the escaping is owed at that sink, and it is a later slice's.
+ *   - NO closed set on either array's elements. For `truncated_fields` that is parseSlashCommand's rule
+ *     verbatim. For `effort_levels` it also answers a DIRECTION HAZARD: the daemon's INBOUND
+ *     `validEffort` enum is closed at the five levels claude returns today while `validModel` was
+ *     widened, so a level claude adds later is published here and refused inbound — closing the set at
+ *     this decoder would discard the very evidence a consumer needs to handle that refusal.
+ *
+ * A CUT `value` IS LOAD-BEARING DATA, not decoration, and it is why the no-validation posture above is
+ * not merely inherited: `value` is the one field a client sends BACK, and `validModel` is a
+ * charset-and-length rule rather than a membership check against the published list — so a `value` cut
+ * mid-token (`claude-fable-5[1m]` → `claude-fable-5`) stays inside the rule and is ACCEPTED. The operator
+ * picks one row and gets a different model, with no error frame anywhere on the path. Carrying the cut
+ * text and its `truncated_fields` report intact is the only thing that lets a consumer say so.
+ *
+ * Its messages name the failure CATEGORY only and never the row INDEX: every string here is untrusted
+ * text, and an index would be a weak oracle over the menu that buys nothing.
+ */
+function parseModelOption(payload: unknown): WireModelOption {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed model option')
+  }
+  const resolved_model = requireString(payload, 'resolved_model')
+  const value = requireString(payload, 'value')
+  const display_name = requireString(payload, 'display_name')
+  const effort_levels = requireStringArray(payload, 'effort_levels')
+  const supports_auto_mode = requireBoolean(payload, 'supports_auto_mode')
+  const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
+  return {
+    resolved_model,
+    value,
+    display_name,
+    effort_levels,
+    supports_auto_mode,
+    truncated_fields
+  }
+}
+
+/**
+ * Narrow an opaque payload into a ModelListPayload (#972) — every identity claude will accept for one
+ * conversation, carried in ONE frame. The structural twin of parseSlashCommandListPayload, and its shape
+ * is copied deliberately: an isRecord guard, a required `conversation_id`, the inline
+ * Array.isArray-then-`raw.map` over the rows, and a plain requireNumber for the dropped count.
+ *
+ * THE SAME TRAP AS THE SIBLING'S, and it is invisible in the code below: within THIS ONE FRAME
+ * `models: null` FAILS CLOSED while a ROW's `truncated_fields: null` is a VALID VALUE returned as `null`.
+ * `Array.isArray(null)` is `false`, which is precisely what fails the first closed, and an omitted key
+ * (`undefined`) fails the same way. The daemon settles the asymmetry: MarshalJSON normalises a nil
+ * `models` to `[]` so an empty menu never serialises as `null`, and deliberately does NOT normalise a
+ * row's `truncated_fields` the same way, because nil and `[]` say the identical thing there.
+ *
+ * An EMPTY `models` array is VALID and decodes to `[]` — the POSITIVE STATEMENT that claude offered
+ * nothing, which a consumer must keep distinguishable from the `null` an unobserved frame yields. Note
+ * that this is NOT the argument behind a row's empty `effort_levels`, which is a COLLAPSE rather than a
+ * statement: the two read alike within one frame and mean different things. Order is preserved from the
+ * wire (claude's own, truncated from the tail). One bad row throws the whole frame closed rather than
+ * yielding a partial menu — a half-populated model menu is the outcome this narrower exists to prevent.
+ *
+ * `dropped_models` decodes through plain requireNumber, correct PRECISELY BECAUSE the Go field has no
+ * `omitempty`: the key is always written, so `0` is a genuine value carried as `0` and never
+ * truthiness-tested, while an absent key is a real defect. NOTHING CROSS-CHECKS IT AGAINST
+ * `models.length` AND NOTHING CAPS THE ENTRY COUNT. The producer's ten-entry cap is a DAEMON-SIDE
+ * PRODUCER CAP rather than a wire constant — it may change without any change to this contract — so a
+ * client must never hardcode it, treat a list of exactly ten as a signal, or derive it from anything but
+ * this field; `models.length + dropped_models` is the menu's true size, not something to reconcile. The
+ * committed fixture does not even satisfy the producer's own stated invariant (five rows beside a count
+ * of two), because it pins shape rather than capturing live traffic. Nor is the number range-checked:
+ * JSON carries no NaN or Infinity, so `typeof === 'number'` is complete against the wire, and a client
+ * rule about which numbers are plausible would be a second place the count's validity is decided. The
+ * frame cannot arrive unbounded regardless, since MAX_PLAINTEXT_BYTES gates the plaintext before any
+ * parse and `raw.map` allocates from the array that ACTUALLY arrived rather than from the claimed count.
+ *
+ * Returns a fresh three-field literal; unknown server-added keys are tolerated but not copied through —
+ * including a HOISTED `truncated_fields`, which this frame deliberately does not have (a cut is a
+ * property of one row and rides that row). Its messages name the failure CATEGORY only: a
+ * `conversation_id` correlates a conversation, and every string on a row is untrusted claude-authored
+ * text.
+ */
+function parseModelListPayload(payload: unknown): ModelListPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed model_list payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const raw = payload.models
+  if (!Array.isArray(raw)) {
+    throw new WireDecodeError('malformed models list')
+  }
+  const models = raw.map(parseModelOption)
+  const dropped_models = requireNumber(payload, 'dropped_models')
+  return { conversation_id, models, dropped_models }
+}
+
+/**
  * Narrow an opaque payload into an AttachmentStoredPayload (#964) — the upload leg's one positive
  * terminal. The shape of parseQuestionDismissedPayload minus two fields: an isRecord guard, then the
  * single required key, returning a fresh one-field literal so unknown server-added keys are tolerated
@@ -2188,6 +2334,43 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'slash-command-list', slashCommandList }
+    }
+    case 'model_list': {
+      // Narrow BEFORE logging so a malformed frame (a `models: null`, an omitted `dropped_models`, an
+      // `effort_levels: null`, a non-boolean `supports_auto_mode`, one bad row) throws first and leaves
+      // no record. NOTHING decoded is logged. The rule is the sibling arm's, but ITS ARGUMENT IS NOT:
+      // `slash_command_list` rests the never-into-a-log clause on a MEASURED `0x0a` across 51
+      // workspace-authored entries, and these strings are CLAUDE-AUTHORED — a different and higher trust
+      // tier, with no control byte measured in these short labels. The clause holds here on the CONTRACT
+      // instead: the daemon bounds these strings and states plainly that it does not sanitize them, so a
+      // control byte is PERMITTED rather than excluded, and a decoded value reaching this JSON-lines log
+      // (which the operator can ship off-box in a debug bundle) would be a forgery primitive on exactly
+      // the same footing. Transcribing the sibling's measurement here would be a false claim about this
+      // frame. Only the frame's byte length + one-way hash, the existing content-free field set (no new
+      // DiagnosticEvent field, so #131's renderer pin is untouched). DELIBERATELY NO `count` of models:
+      // DiagnosticEvent already carries the field, so emitting it would cost nothing structurally and it
+      // is omitted on purpose, because how many models claude offers for a session is itself a fact about
+      // that session (the background_task_roster / model_announced posture, not message_chunk's).
+      // Strictly safer than the `default:` arm this replaces for the type, which logged a WIRE-SUPPLIED
+      // `envelope.type`; the code here is a static literal.
+      //
+      // The narrowing makes the SHAPE trusted; it does not make the CONTENT trusted, and the type system
+      // carries no signal for that (a `string` is a `string`). `conversation_id` is an outbound
+      // routing/scoping key, not a nonce and not a capability, and it is kept out of the log all the
+      // same. Two obligations land on the consumers below rather than here: a `display_name` index must
+      // be a `Map` and never `index[row.display_name] = row`, where a `__proto__` label writes through to
+      // Object.prototype; and no model menu may BLOCK on this frame, whose delivery window is narrow and
+      // lossy. Nothing consumes this arm yet: the IPC carry, the store and the run-configuration rows are
+      // the slices below this one, and daemonConnection's inbound switch has no catch-all, so the menu
+      // stops here until claimed.
+      const modelList = parseModelListPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'model_list',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'model-list', modelList }
     }
     case 'attachment_stored': {
       // Narrow BEFORE logging so a malformed frame (a non-record payload, a missing / non-string /

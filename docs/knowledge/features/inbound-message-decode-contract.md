@@ -37,6 +37,7 @@ export type InboundDaemonMessage =
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }  // #884, additive — ships dormant, no consumer arm yet
   | { kind: 'question-dismissed'; questionDismissed: QuestionDismissedPayload }  // #894, additive — ships dormant, no consumer arm yet
   | { kind: 'slash-command-list'; slashCommandList: SlashCommandListPayload }  // #936, additive — ships dormant, no consumer arm yet
+  | { kind: 'model-list'; modelList: ModelListPayload }          // #972, additive — ships dormant, no consumer arm yet
 
 // Decode + route + narrow one decrypted app-message plaintext:
 //  • InboundDaemonMessage  — a `message`/`message_chunk`/bundle/`error`/
@@ -45,7 +46,7 @@ export type InboundDaemonMessage =
 //                            `modal_dismissed`/`tool_result`/`conversation_created`/`session_transition`/
 //                            `session_settings_updated`/`background_task_started`/
 //                            `background_task_updated`/`background_task_roster`/`question_shown`/
-//                            `question_dismissed`/`slash_command_list`
+//                            `question_dismissed`/`slash_command_list`/`model_list`
 //                            envelope, fully narrowed (`screen_snapshot` was modeled here #180-#622;
 //                            removed, now falls to the unmodeled `default` arm)
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
@@ -262,6 +263,23 @@ must reject exactly the `null` that its own `truncated_fields`, one field over, 
 [#937](https://github.com/pyrycode/pyrycode-desktop/issues/937) has since claimed the decoded menu with
 a `case 'slash-command-list':` in `daemonConnection.ts`'s inbound switch, emitting it onward as the
 `slashCommandList` `DaemonEvent` arm.
+
+**Extended a twenty-fourth time by [#972](https://github.com/pyrycode/pyrycode-desktop/issues/972),
+additively.** `model_list` → `{ kind: 'model-list', modelList: ModelListPayload }` via
+`parseModelListPayload` + the new row narrower `parseModelOption` — the decode half of the
+[model-list wire types](model-list-wire-types.md) vocabulary (#971), `slash_command_list`'s sibling from
+the same `initialize` reply. `parseModelOption` is `parseSlashCommand`'s five-field shape scaled to six
+(three `requireString` calls, `requireStringArray` for `effort_levels`, `requireBoolean` for
+`supports_auto_mode`, `requireStringArrayOrNull` for `truncated_fields`); `parseModelListPayload` clones
+`parseSlashCommandListPayload`'s shape exactly, trap included — `models: null` fails the whole frame
+closed (`Array.isArray(null)` is `false`) while a row's own `truncated_fields: null` is a valid value.
+No new helper: both array checkers already existed, added by [#564](../codebase/564.md) and
+[#936](https://github.com/pyrycode/pyrycode-desktop/issues/936). Every string on this frame goes through
+`requireString`, never `requireNonEmptyString` — the daemon's all-zero fixture is legal traffic, since
+neither struct carries `omitempty` on any key. Full account, including the trust-tier argument that
+does **not** transfer from `slash_command_list`'s measured-`0x0a` evidence, in [Extension
+history](inbound-message-decode-history.md). Ships dormant: `daemonConnection.ts`'s inbound switch has
+no case for `'model-list'` yet.
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 

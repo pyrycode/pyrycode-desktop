@@ -5,10 +5,14 @@ import {
   sendMessageCommand,
   answerModalCommand,
   cancelModalCommand,
+  answerQuestionsCommand,
+  refuseQuestionsCommand,
   dequeueMessageCommand,
   interruptCommand,
   type RendererCommand,
   type AnswerModalCommandPayload,
+  type AnswerQuestionsCommandPayload,
+  type RefuseQuestionsCommandPayload,
   type NotifyPayload
 } from './commands'
 import type {
@@ -85,6 +89,51 @@ describe('answerModalCommand / cancelModalCommand (#236)', () => {
     // enforces it, so this line must stay a compile error.
     // @ts-expect-error answer_token is not assignable to AnswerModalCommandPayload (Omit-excluded).
     answerModalCommand({ modal_id: 'md-1', option_id: 'opt-1', answer_token: 'nope' })
+  })
+})
+
+describe('answerQuestionsCommand / refuseQuestionsCommand (#920)', () => {
+  it('wraps batch id + ordered entries into an answerQuestions command, fields unchanged (no token minted here)', () => {
+    const fields: AnswerQuestionsCommandPayload = {
+      question_batch_id: 'qb-1',
+      answers: [
+        { question_index: 0, values: ['yes'] },
+        { question_index: 1, values: ['a', 'b'] }
+      ]
+    }
+
+    const command = answerQuestionsCommand(fields)
+
+    // Discriminant comes from the module, not a bare literal a rename could silently pass.
+    expect(command).toEqual({ type: 'answerQuestions', payload: fields })
+    if (command.type === 'answerQuestions') {
+      // Verbatim pass-through: no field remap, and no answer_token — that is minted main-side
+      // (daemonConnection.answerQuestions), never in this pure renderer-side constructor.
+      expect(command.payload).toBe(fields)
+    }
+  })
+
+  it('wraps a batch id alone into a refuseQuestions command, fields unchanged (no token minted here)', () => {
+    const fields: RefuseQuestionsCommandPayload = { question_batch_id: 'qb-1' }
+
+    const command = refuseQuestionsCommand(fields)
+
+    expect(command).toEqual({ type: 'refuseQuestions', payload: fields })
+    if (command.type === 'refuseQuestions') {
+      // The refusal frame carries answer_token too (unlike modal_cancel, which carries modal_id
+      // alone) — so this payload type Omit-excludes it exactly as the answer's does.
+      expect(command.payload).toBe(fields)
+    }
+  })
+
+  it('cannot carry an answer_token on either question command type (AC1: neither payload can express one)', () => {
+    // Compile-time proof both payload types are Omit-excluded of answer_token — BOTH frames carry a
+    // token on the wire, so both mints are main-side. The excess-property check fires on the object
+    // literal; typecheck (the build gate) enforces it, so these lines must stay compile errors.
+    // @ts-expect-error answer_token is not assignable to AnswerQuestionsCommandPayload (Omit-excluded).
+    answerQuestionsCommand({ question_batch_id: 'qb-1', answers: [], answer_token: 'nope' })
+    // @ts-expect-error answer_token is not assignable to RefuseQuestionsCommandPayload (Omit-excluded).
+    refuseQuestionsCommand({ question_batch_id: 'qb-1', answer_token: 'nope' })
   })
 })
 
@@ -680,5 +729,164 @@ describe('isRendererCommand', () => {
     const t = 'notify'
     expect(isRendererCommand({ type: t, payload: { kind: 42 } })).toBe(false)
     expect(isRendererCommand({ type: t, payload: { kind: null } })).toBe(false)
+  })
+
+  it('accepts a well-formed answerQuestions command over a mixed batch (#920)', () => {
+    // The file's FIRST structured payload: `answers` is an array of objects, so the guard recurses
+    // rather than stopping at Array.isArray. Mixed batch — entry 0 single-value, entry 1 multi-value
+    // (the multi_select case) — in batch order, though question_index is what actually selects.
+    const payload: AnswerQuestionsCommandPayload = {
+      question_batch_id: 'qb-1',
+      answers: [
+        { question_index: 0, values: ['yes'] },
+        { question_index: 1, values: ['a', 'b'] }
+      ]
+    }
+    const command: RendererCommand = answerQuestionsCommand(payload)
+    expect(isRendererCommand(command)).toBe(true)
+  })
+
+  it('accepts an answerQuestions carrying a smuggled answer_token and extra keys — structural minimum (#920)', () => {
+    // The #236 posture, unchanged: the guard deliberately does not reject a smuggled token or an extra
+    // key, at either level. The main-side sender's fresh-literal construction is what makes them lose,
+    // and it rebuilds each ENTRY too — proved in daemonConnection.test.ts, not here.
+    expect(
+      isRendererCommand({
+        type: 'answerQuestions',
+        payload: {
+          question_batch_id: 'qb-1',
+          answer_token: 'smuggled',
+          answers: [{ question_index: 0, values: ['yes'], conversation_id: 'c-evil' }]
+        },
+        extra: 1
+      })
+    ).toBe(true)
+  })
+
+  it('accepts an answerQuestions with an empty answers array and empty strings — shape, not contract (#920)', () => {
+    // An empty `answers` is OUT OF CONTRACT upstream (a refusal says it better, which is why
+    // question_refused is its own type) — but this is a SHAPE guard and does not adjudicate that. Same
+    // for an empty-string batch id or value: the guard checks type, never emptiness, so it does not
+    // over-reject a legal wire string.
+    expect(
+      isRendererCommand({ type: 'answerQuestions', payload: { question_batch_id: '', answers: [] } })
+    ).toBe(true)
+    expect(
+      isRendererCommand({
+        type: 'answerQuestions',
+        payload: { question_batch_id: 'qb-1', answers: [{ question_index: 0, values: [''] }] }
+      })
+    ).toBe(true)
+  })
+
+  it('accepts an answerQuestions whose question_index is negative or huge — that bound is the resolver’s (#920)', () => {
+    // Deliberately NOT range-checked here: upstream's answerVerdict range-checks every index before it
+    // subscripts and rejects a bad answer totally. A second copy client-side would be a second bound to
+    // keep in agreement with the batch (the DequeueMessagePayload/queued_msg_id posture).
+    const t = 'answerQuestions'
+    const mk = (question_index: number): unknown => ({
+      type: t,
+      payload: { question_batch_id: 'qb-1', answers: [{ question_index, values: ['v'] }] }
+    })
+    expect(isRendererCommand(mk(-1))).toBe(true)
+    expect(isRendererCommand(mk(2 ** 62))).toBe(true)
+  })
+
+  it('rejects an answerQuestions with a missing/null payload or a missing/non-string batch id (#920)', () => {
+    const t = 'answerQuestions'
+    expect(isRendererCommand({ type: t })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: null })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { answers: [] } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { question_batch_id: 42, answers: [] } })).toBe(
+      false
+    )
+    expect(isRendererCommand({ type: t, payload: { question_batch_id: null, answers: [] } })).toBe(
+      false
+    )
+  })
+
+  it('rejects an answerQuestions whose answers is missing or not an array (#920)', () => {
+    const t = 'answerQuestions'
+    const mk = (answers: unknown): unknown => ({ type: t, payload: { question_batch_id: 'qb-1', answers } })
+    expect(isRendererCommand({ type: t, payload: { question_batch_id: 'qb-1' } })).toBe(false)
+    expect(isRendererCommand(mk(null))).toBe(false)
+    expect(isRendererCommand(mk('[]'))).toBe(false)
+    // An array-LIKE object is rejected: Array.isArray is exact, so a length+index duck cannot pass.
+    expect(isRendererCommand(mk({ 0: { question_index: 0, values: ['v'] }, length: 1 }))).toBe(false)
+  })
+
+  it('rejects an answerQuestions whose entry is malformed — the recursion is the point (#920)', () => {
+    // A shallow Array.isArray check would let every one of these through to JSON.stringify and put a
+    // type-lie on the wire. Each is one field of one entry.
+    const t = 'answerQuestions'
+    const mk = (entry: unknown): unknown => ({
+      type: t,
+      payload: { question_batch_id: 'qb-1', answers: [entry] }
+    })
+    expect(isRendererCommand(mk(null))).toBe(false)
+    expect(isRendererCommand(mk('nope'))).toBe(false)
+    expect(isRendererCommand(mk([]))).toBe(false)
+    expect(isRendererCommand(mk({ values: ['v'] }))).toBe(false) // no question_index
+    expect(isRendererCommand(mk({ question_index: '0', values: ['v'] }))).toBe(false)
+    expect(isRendererCommand(mk({ question_index: 0 }))).toBe(false) // no values
+    expect(isRendererCommand(mk({ question_index: 0, values: 'v' }))).toBe(false)
+    expect(isRendererCommand(mk({ question_index: 0, values: [42] }))).toBe(false)
+    expect(isRendererCommand(mk({ question_index: 0, values: [null] }))).toBe(false)
+  })
+
+  it('rejects an answerQuestions whose answers or values array has a HOLE (#920)', () => {
+    // The case that distinguishes `for…of` from Array.prototype.every: `every` SKIPS holes, so a sparse
+    // array passes it while JSON.stringify emits `null` for the hole — a null inside a declared
+    // string[]. `for…of` goes through the iterator, which yields undefined for a hole, and the typeof
+    // check then rejects it. Sparse arrays survive structured clone, so this is reachable over IPC.
+    const holedValues: unknown[] = new Array(2)
+    holedValues[1] = 'a'
+    expect(
+      isRendererCommand({
+        type: 'answerQuestions',
+        payload: {
+          question_batch_id: 'qb-1',
+          answers: [{ question_index: 0, values: holedValues }]
+        }
+      })
+    ).toBe(false)
+
+    const holedAnswers: unknown[] = new Array(2)
+    holedAnswers[1] = { question_index: 1, values: ['a'] }
+    expect(
+      isRendererCommand({
+        type: 'answerQuestions',
+        payload: { question_batch_id: 'qb-1', answers: holedAnswers }
+      })
+    ).toBe(false)
+  })
+
+  it('accepts a well-formed refuseQuestions command with a batch id string (#920)', () => {
+    // The single-id sibling, an exact clone of the cancelModal guard with the key changed. A
+    // structurally-extra field (a smuggled answer_token included) is harmless — the main-side fresh
+    // literal drops it.
+    const payload: RefuseQuestionsCommandPayload = { question_batch_id: 'qb-1' }
+    const command: RendererCommand = refuseQuestionsCommand(payload)
+    expect(isRendererCommand(command)).toBe(true)
+    expect(
+      isRendererCommand({
+        type: 'refuseQuestions',
+        payload: { question_batch_id: 'qb-1', answer_token: 'smuggled' },
+        extra: 1
+      })
+    ).toBe(true)
+    // Type, not emptiness — an empty batch id is a valid wire string the daemon polices.
+    expect(isRendererCommand({ type: 'refuseQuestions', payload: { question_batch_id: '' } })).toBe(
+      true
+    )
+  })
+
+  it('rejects a refuseQuestions with a missing/null payload or a missing/non-string batch id (#920)', () => {
+    const t = 'refuseQuestions'
+    expect(isRendererCommand({ type: t })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: null })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: {} })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { question_batch_id: 42 } })).toBe(false)
+    expect(isRendererCommand({ type: t, payload: { question_batch_id: null } })).toBe(false)
   })
 })

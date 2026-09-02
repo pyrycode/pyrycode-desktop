@@ -127,6 +127,11 @@ function encodeQuestionShown(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 901, type: 'question_shown', ts: FIXED_TS, payload })
 }
 
+/** A `slash_command_list` envelope's plaintext bytes, wrapping an arbitrary payload (#936). */
+function encodeSlashCommandList(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 903, type: 'slash_command_list', ts: FIXED_TS, payload })
+}
+
 /** A `question_dismissed` envelope's plaintext bytes, wrapping an arbitrary payload (#894). */
 function encodeQuestionDismissed(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 902, type: 'question_dismissed', ts: FIXED_TS, payload })
@@ -451,6 +456,91 @@ const QUESTION_SHOWN_ZERO = {
 
 /** One well-formed question, for building single-question reject cases without restating the batch. */
 const ONE_QUESTION = QUESTION_SHOWN.questions[0]
+
+/**
+ * A fully-populated, well-formed slash_command_list payload (#936). Lifted from the daemon's committed
+ * fixture (`internal/protocol/testdata/slash_command_list.json`) through #935's `types.test.ts` block,
+ * character for character, so the two files cannot drift into two hand-written guesses of one upstream
+ * file. Five rows in claude's own order, ONE reporting a cut `description` beside four reporting `null`,
+ * and a NON-ZERO `dropped_commands` whose sum with the list length is the menu's true size.
+ *
+ * `claude-api`'s description is ABRIDGED, the one departure #935 also took: the fixture's is 1,145 bytes
+ * of prose, none of it contract-bearing, and the stand-in keeps both byte-level properties measured on
+ * the real string — an embedded newline (`0x0a` is the ONLY sub-`0x20` byte anywhere across the capture's
+ * 51 entries' four string fields) and a non-ASCII rune.
+ *
+ * Adversarial by the DAEMON's own choice: `model`'s hint is a raw `<model>` (Go's encoder escapes
+ * `<`/`>`/`&` on the wire, so the decoded value holds the literal angle brackets — the exact byte a render
+ * sink is tempted by), and the alias lists differ in length across rows so a flattened or reordered
+ * `aliases` fails the round-trip.
+ */
+const SLASH_COMMAND_LIST = {
+  conversation_id: 'c1',
+  commands: [
+    {
+      name: 'claude-api',
+      argument_hint: '',
+      description: 'Reference for the Claude API — model ids, pricing, params.\nTRIGGER — read first.',
+      aliases: [],
+      truncated_fields: ['description']
+    },
+    {
+      name: 'clear',
+      argument_hint: '[name]',
+      description:
+        'Start a new session with empty context; previous session stays on disk (resumable with /resume)',
+      aliases: ['reset', 'new'],
+      truncated_fields: null
+    },
+    {
+      name: 'config',
+      argument_hint: 'key=value',
+      description: 'Set a setting by key',
+      aliases: ['settings'],
+      truncated_fields: null
+    },
+    {
+      name: 'model',
+      argument_hint: '<model>',
+      description: 'Set the AI model for Claude Code',
+      aliases: [],
+      truncated_fields: null
+    },
+    {
+      name: 'usage',
+      argument_hint: '',
+      description: "Show session cost, plan usage, and what's contributing to your limits",
+      aliases: ['cost', 'stats'],
+      truncated_fields: null
+    }
+  ],
+  dropped_commands: 2
+}
+
+/**
+ * The daemon's second committed fixture (`slash_command_list_empty.json`, #936): an EMPTY menu — the
+ * positive statement that claude offered nothing, and the case that must stay distinguishable from a
+ * frame that never arrived.
+ */
+const SLASH_COMMAND_LIST_EMPTY = {
+  conversation_id: 'c1',
+  commands: [],
+  dropped_commands: 0
+}
+
+/**
+ * The daemon's third committed fixture (`slash_command_list_zero.json`, #936): one all-zero row, which is
+ * the only route that reaches all five WireSlashCommand keys at once — a frame with no entries reaches
+ * none of them. Every empty here is a VALUE: no key on either struct carries `omitempty`.
+ */
+const SLASH_COMMAND_LIST_ZERO = {
+  conversation_id: '',
+  commands: [{ name: '', argument_hint: '', description: '', aliases: [], truncated_fields: null }],
+  dropped_commands: 0
+}
+
+/** One well-formed command row, for building single-row reject cases without restating the menu. */
+const ONE_COMMAND = SLASH_COMMAND_LIST.commands[1]
 
 /**
  * A fully-populated, well-formed question_dismissed payload (#894). The nonce matches QUESTION_SHOWN's,
@@ -3628,6 +3718,387 @@ describe('parseInboundMessage — question_dismissed fail-closed (#894)', () => 
   })
 })
 
+describe('parseInboundMessage — slash_command_list recognition (#936, additive)', () => {
+  it('narrows a full frame into { kind: slash-command-list } carrying all three fields (AC1)', () => {
+    expect(parseInboundMessage(encodeSlashCommandList(SLASH_COMMAND_LIST))).toEqual({
+      kind: 'slash-command-list',
+      slashCommandList: SLASH_COMMAND_LIST
+    })
+  })
+
+  it('extracts every field on every row distinctly, in the WIRE\'s own order (AC1)', () => {
+    // The core AC1 assertion, per-field across the rows (the background_task_roster idiom): a ROW SWAP
+    // fails the ordered arrays, a DROPPED FIELD fails its own array, and a FLATTENED or MERGED aliases /
+    // truncated_fields fails the last two — which is why the fixture's rows carry different alias-list
+    // lengths and different truncated_fields shapes.
+    const result = parseInboundMessage(encodeSlashCommandList(SLASH_COMMAND_LIST))
+    expect(result?.kind).toBe('slash-command-list')
+    if (result?.kind === 'slash-command-list') {
+      const { slashCommandList: list } = result
+      expect(list.conversation_id).toBe('c1')
+      expect(list.commands.map((c) => c.name)).toEqual([
+        'claude-api',
+        'clear',
+        'config',
+        'model',
+        'usage'
+      ])
+      expect(list.commands.map((c) => c.argument_hint)).toEqual([
+        '',
+        '[name]',
+        'key=value',
+        '<model>',
+        ''
+      ])
+      expect(list.commands.map((c) => c.description)).toEqual(
+        SLASH_COMMAND_LIST.commands.map((c) => c.description)
+      )
+      // Per row and NOT hoisted: each row's own alias list, in the wire's order.
+      expect(list.commands.map((c) => c.aliases)).toEqual([
+        [],
+        ['reset', 'new'],
+        ['settings'],
+        [],
+        ['cost', 'stats']
+      ])
+      expect(list.commands[0].truncated_fields).toEqual(['description'])
+      expect(list.commands.filter((c) => c.truncated_fields === null)).toHaveLength(4)
+      // dropped_commands decodes as a NUMBER, never a string.
+      expect(list.dropped_commands).toBe(2)
+      expect(typeof list.dropped_commands).toBe('number')
+    }
+  })
+
+  it('carries all four strings and every alias byte-for-byte — nothing is trimmed or re-encoded (AC2)', () => {
+    // The pin against a future "sanitize / normalise at the decoder" change. These strings are
+    // WORKSPACE-AUTHORED, a lower trust tier than the claude-authored strings the neighbouring arms
+    // carry, and the daemon bounds them without sanitizing them. Rewriting one here would make the two
+    // ends disagree about what the command is CALLED; the escaping is owed at the render sink (#681).
+    const result = parseInboundMessage(encodeSlashCommandList(SLASH_COMMAND_LIST))
+    if (result?.kind === 'slash-command-list') {
+      const [claudeApi, clear, , model] = result.slashCommandList.commands
+      // An embedded newline and a non-ASCII rune, both measured on the real capture. `0x0a` is the only
+      // sub-`0x20` byte that occurs, and it is exactly what would let a workspace author forge a log
+      // record were any decoded value ever logged.
+      expect(claudeApi.description).toBe(
+        'Reference for the Claude API — model ids, pricing, params.\nTRIGGER — read first.'
+      )
+      expect(claudeApi.description).toContain('\n')
+      // Raw angle brackets: Go's encoder escapes `<`/`>`/`&` on the wire, so the decoded value holds the
+      // literal characters.
+      expect(model.argument_hint).toBe('<model>')
+      expect(clear.aliases).toEqual(['reset', 'new'])
+    }
+  })
+
+  it('carries a name outside any identifier charset — no charset validation belongs here (AC2)', () => {
+    // One measured name in the capture is `__remote-workflow`. A client that identifier-checked a name
+    // would fail-close a valid frame; nothing here may key a cache or a lookup path by one either.
+    const oddName = {
+      ...SLASH_COMMAND_LIST,
+      commands: [{ ...ONE_COMMAND, name: '__remote-workflow' }]
+    }
+    expect(parseInboundMessage(encodeSlashCommandList(oddName))).toEqual({
+      kind: 'slash-command-list',
+      slashCommandList: oddName
+    })
+  })
+
+  it('decodes an EMPTY commands array — "claude offered nothing", never dropped (AC3)', () => {
+    // The AC3 signal case, and what it DISTINGUISHES: this decodes to a VALUE, so a consumer can tell
+    // "a menu arrived and it is empty" from "no menu was observed at all" (the `null` an unmodeled type
+    // returns, asserted at the end of this block).
+    const decoded = parseInboundMessage(encodeSlashCommandList(SLASH_COMMAND_LIST_EMPTY))
+    expect(decoded).not.toBeNull()
+    expect(decoded).toEqual({
+      kind: 'slash-command-list',
+      slashCommandList: SLASH_COMMAND_LIST_EMPTY
+    })
+    if (decoded?.kind === 'slash-command-list') {
+      expect(decoded.slashCommandList.commands).toEqual([])
+      // `0` is a VALUE, never consulted for truthiness: the Go field has no `omitempty`.
+      expect(decoded.slashCommandList.dropped_commands).toBe(0)
+    }
+  })
+
+  it('carries dropped_commands verbatim beside ANY list length — no cross-check, no cap (AC1)', () => {
+    // Two producer cuts feed the count — an entry cap and a frame-level byte bound, both cutting from the
+    // tail — and the byte bound can fire BEFORE the entry cap is reached. So a non-zero count arrives
+    // beside any number of entries, list length is no evidence of completeness, and nothing here may
+    // reconcile the two. An empty list with a non-zero count is the sharpest case.
+    const droppedEverything = { ...SLASH_COMMAND_LIST_EMPTY, dropped_commands: 51 }
+    expect(parseInboundMessage(encodeSlashCommandList(droppedEverything))).toEqual({
+      kind: 'slash-command-list',
+      slashCommandList: droppedEverything
+    })
+    // And the other side of it: no client-invented entry cap. The daemon owns that bound and the count is
+    // workspace- and version-dependent (51 measured in one repository, 74 in another).
+    const many = {
+      ...SLASH_COMMAND_LIST,
+      commands: Array.from({ length: 60 }, (_, i) => ({ ...ONE_COMMAND, name: `cmd-${i}` })),
+      dropped_commands: 0
+    }
+    const decoded = parseInboundMessage(encodeSlashCommandList(many))
+    if (decoded?.kind === 'slash-command-list') {
+      expect(decoded.slashCommandList.commands).toHaveLength(60)
+    }
+  })
+
+  it('keeps a row truncated_fields of null as null while one naming aliases survives intact (AC4)', () => {
+    // The reading rule this arm exists to make sound: `aliases` collapses claude's ABSENT and EMPTY lists
+    // into the identical `[]`, so a `truncated_fields` naming `aliases` is the ONLY signal separating
+    // "cut to nothing" from "none" and must be read as UNKNOWN. Reached through a bare cast an omitted
+    // key would decode to `undefined`, and `row.truncated_fields?.includes('aliases')` would then be
+    // falsy for exactly the reason `null` is — silently inverting the rule and greying out a command that
+    // works. Asserted through the predicate, not just round-tripped.
+    const cutAliases = {
+      ...SLASH_COMMAND_LIST,
+      commands: [
+        { ...ONE_COMMAND, aliases: [], truncated_fields: ['aliases'] },
+        { ...ONE_COMMAND, aliases: [], truncated_fields: null }
+      ]
+    }
+    const decoded = parseInboundMessage(encodeSlashCommandList(cutAliases))
+    expect(decoded).toEqual({ kind: 'slash-command-list', slashCommandList: cutAliases })
+    if (decoded?.kind === 'slash-command-list') {
+      const [cut, none] = decoded.slashCommandList.commands
+      expect(cut.truncated_fields?.includes('aliases')).toBe(true)
+      expect(none.truncated_fields).toBeNull()
+      expect(none.truncated_fields?.includes('aliases')).toBeUndefined()
+      // Both rows read `[]` for aliases — which is the whole point: the two are told apart ONLY by
+      // truncated_fields.
+      expect(cut.aliases).toEqual([])
+      expect(none.aliases).toEqual([])
+    }
+  })
+
+  it('decodes the all-zero row — an empty hint and an empty aliases are ordinary values', () => {
+    // The daemon's third fixture, and the only route that reaches all five keys at once. `argument_hint`
+    // is empty on 33 of the capture's 51 entries, so `''` is the ORDINARY case, never missing data.
+    const decoded = parseInboundMessage(encodeSlashCommandList(SLASH_COMMAND_LIST_ZERO))
+    expect(decoded).toEqual({
+      kind: 'slash-command-list',
+      slashCommandList: SLASH_COMMAND_LIST_ZERO
+    })
+    if (decoded?.kind === 'slash-command-list') {
+      const row = decoded.slashCommandList.commands[0]
+      expect(row.argument_hint).toBe('')
+      expect(row.aliases).toEqual([])
+      expect(row.truncated_fields).toBeNull()
+      expect(decoded.slashCommandList.conversation_id).toBe('')
+    }
+  })
+
+  it('does NOT narrow the truncated_fields elements to a closed set (no client-side allowlist)', () => {
+    // Each frame's cut-field vocabulary is its own set; a client allowlist would fail-close a valid
+    // future frame (the parseBackgroundTask rule verbatim).
+    const futureName = {
+      ...SLASH_COMMAND_LIST,
+      commands: [{ ...ONE_COMMAND, truncated_fields: ['name', 'some_future_field'] }]
+    }
+    expect(parseInboundMessage(encodeSlashCommandList(futureName))).toEqual({
+      kind: 'slash-command-list',
+      slashCommandList: futureName
+    })
+  })
+
+  it('drops unknown server keys at the FRAME level, keeping exactly the three known fields', () => {
+    // The pointed extra is a hoisted `truncated_fields` — the field this payload deliberately does NOT
+    // have, since a cut is a property of one row — plus a `turn_id` this frame never carries either (it
+    // rides a control_response and opens no turn).
+    const withExtras = {
+      ...SLASH_COMMAND_LIST,
+      truncated_fields: ['commands'],
+      turn_id: 'turn-1'
+    }
+    expect(parseInboundMessage(encodeSlashCommandList(withExtras))).toEqual({
+      kind: 'slash-command-list',
+      slashCommandList: SLASH_COMMAND_LIST
+    })
+  })
+
+  it('drops unknown server keys at the ROW level, keeping exactly the five known fields', () => {
+    const withRowExtras = {
+      ...SLASH_COMMAND_LIST,
+      commands: [{ ...ONE_COMMAND, task_id: 'task_01ABC', dropped_commands: 9 }]
+    }
+    expect(parseInboundMessage(encodeSlashCommandList(withRowExtras))).toEqual({
+      kind: 'slash-command-list',
+      slashCommandList: { ...SLASH_COMMAND_LIST, commands: [ONE_COMMAND] }
+    })
+  })
+
+  it('still returns null for a well-formed envelope of another unmodeled type (no widening)', () => {
+    const bytes = encodeEnvelope({ id: 1, type: 'ack', ts: FIXED_TS, payload: {} })
+    expect(parseInboundMessage(bytes)).toBeNull()
+  })
+})
+
+describe('parseInboundMessage — slash_command_list fail-closed (#936)', () => {
+  it('throws when commands is null — the trap: a ROW truncated_fields null is a VALUE, this is not', () => {
+    // The asymmetry, in one frame. `Array.isArray(null)` is `false`, which is what fails this closed,
+    // while the per-row `truncated_fields: null` above decodes to `null` and is preserved. The daemon
+    // settles it: MarshalJSON normalises a nil `commands` to `[]` so an empty menu never serialises as
+    // null, and deliberately does NOT normalise a row's truncated_fields the same way.
+    expect(() =>
+      parseInboundMessage(encodeSlashCommandList({ ...SLASH_COMMAND_LIST, commands: null }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('throws when the commands key is OMITTED — an absence is not an empty menu (AC3/AC5)', () => {
+    const payload: Record<string, unknown> = { ...SLASH_COMMAND_LIST }
+    delete payload.commands
+    expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when commands is any non-array (AC5)', () => {
+    for (const value of ['x', 7, {}, true]) {
+      const payload = { ...SLASH_COMMAND_LIST, commands: value }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when conversation_id is absent or a non-string (AC5)', () => {
+    const missing: Record<string, unknown> = { ...SLASH_COMMAND_LIST }
+    delete missing.conversation_id
+    expect(() => parseInboundMessage(encodeSlashCommandList(missing))).toThrow(WireDecodeError)
+    for (const value of [42, null, { a: 1 }]) {
+      const payload = { ...SLASH_COMMAND_LIST, conversation_id: value }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when dropped_commands is OMITTED — an absence is not a zero (AC1/AC5)', () => {
+    // Paired with the `dropped_commands: 0` case above: the Go field has no `omitempty`, so the key is
+    // always on the wire and an absent one is a real defect rather than a valid zero.
+    const payload: Record<string, unknown> = { ...SLASH_COMMAND_LIST }
+    delete payload.dropped_commands
+    expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when dropped_commands arrives as a JSON string, never coercing it (AC5)', () => {
+    for (const value of ['2', null, true, {}, []]) {
+      const payload = { ...SLASH_COMMAND_LIST, dropped_commands: value }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('fails the WHOLE frame closed when any single row is not a record (AC5)', () => {
+    // Row 1 is valid; the second is not. Nothing partial is returned — the point is that row 1 does not
+    // survive either.
+    for (const badRow of ['not-an-object', 7, null, ['nested']]) {
+      const payload = { ...SLASH_COMMAND_LIST, commands: [ONE_COMMAND, badRow] }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any per-row required string is absent — one bad row fails the frame (AC5)', () => {
+    for (const field of ['name', 'argument_hint', 'description'] as const) {
+      const row: Record<string, unknown> = { ...ONE_COMMAND }
+      delete row[field]
+      const payload = { ...SLASH_COMMAND_LIST, commands: [ONE_COMMAND, row] }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when any per-row required string is a non-string (AC5)', () => {
+    for (const field of ['name', 'argument_hint', 'description'] as const) {
+      for (const value of [42, null, { a: 1 }, ['x']]) {
+        const payload = { ...SLASH_COMMAND_LIST, commands: [{ ...ONE_COMMAND, [field]: value }] }
+        expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+      }
+    }
+  })
+
+  it('rejects an aliases of null on the very row whose truncated_fields is [aliases] (AC4)', () => {
+    // Same shape, opposite contracts, ONE FIELD APART, in a single frame: `truncated_fields` may be
+    // `null`, `aliases` may not. Reaching for the nullable helper on `aliases` would quietly admit a
+    // `null` the wire never sends, and WireSlashCommand would then be lying about its own field.
+    const payload = {
+      ...SLASH_COMMAND_LIST,
+      commands: [{ ...ONE_COMMAND, aliases: null, truncated_fields: ['aliases'] }]
+    }
+    expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+  })
+
+  it('throws when aliases is OMITTED or any non-array (AC5)', () => {
+    const row: Record<string, unknown> = { ...ONE_COMMAND }
+    delete row.aliases
+    expect(() =>
+      parseInboundMessage(encodeSlashCommandList({ ...SLASH_COMMAND_LIST, commands: [row] }))
+    ).toThrow(WireDecodeError)
+    for (const value of ['reset', 7, { 0: 'reset' }, true]) {
+      const payload = { ...SLASH_COMMAND_LIST, commands: [{ ...ONE_COMMAND, aliases: value }] }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when aliases holds a non-string element — one bad element fails the whole frame (AC5)', () => {
+    const bad: unknown[] = [['reset', 7], [null], [{ name: 'reset' }], [['nested']]]
+    for (const value of bad) {
+      const payload = { ...SLASH_COMMAND_LIST, commands: [{ ...ONE_COMMAND, aliases: value }] }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a row truncated_fields key is OMITTED — an absence is not a null (AC5)', () => {
+    // Nullable is NOT optional: an omitted key is `undefined`, neither `null` nor an array, and it fails
+    // closed. This is the rejection that keeps the cut-aliases reading rule sound downstream.
+    const row: Record<string, unknown> = { ...ONE_COMMAND }
+    delete row.truncated_fields
+    expect(() =>
+      parseInboundMessage(encodeSlashCommandList({ ...SLASH_COMMAND_LIST, commands: [row] }))
+    ).toThrow(WireDecodeError)
+  })
+
+  it('throws when a row truncated_fields is neither an array nor null (AC5)', () => {
+    for (const value of ['description', 7, { description: true }, true]) {
+      const payload = {
+        ...SLASH_COMMAND_LIST,
+        commands: [{ ...ONE_COMMAND, truncated_fields: value }]
+      }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a row truncated_fields holds a non-string element (AC5)', () => {
+    const bad: unknown[] = [['description', 7], [null], [{ name: 'aliases' }]]
+    for (const value of bad) {
+      const payload = {
+        ...SLASH_COMMAND_LIST,
+        commands: [{ ...ONE_COMMAND, truncated_fields: value }]
+      }
+      expect(() => parseInboundMessage(encodeSlashCommandList(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when a slash_command_list payload is not an object (AC5)', () => {
+    expect(() => parseInboundMessage(encodeSlashCommandList('nope'))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeSlashCommandList(['a']))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeSlashCommandList(null))).toThrow(WireDecodeError)
+  })
+
+  it('throws on an oversized slash_command_list plaintext even when the JSON is valid', () => {
+    // No per-row or per-menu length check exists here by design — the frame-level guard is the client's
+    // only bound, and a client-side mirror of the daemon's entry cap would fail-close a valid frame the
+    // day the daemon raises it. The whole measured 51-entry menu is 14,277 bytes of compact UTF-8.
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        id: 903,
+        type: 'slash_command_list',
+        ts: FIXED_TS,
+        payload: {
+          conversation_id: 'c1',
+          commands: [{ ...ONE_COMMAND, description: 'x'.repeat(MAX_PLAINTEXT_BYTES) }],
+          dropped_commands: 0
+        }
+      })
+    )
+    expect(bytes.length).toBeGreaterThan(MAX_PLAINTEXT_BYTES)
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+})
+
 describe('parseInboundMessage — fail-closed (AC4)', () => {
   it('throws WireDecodeError on decode-level failures inherited from the codec', () => {
     const cases: Uint8Array[] = [
@@ -4513,6 +4984,71 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a slash_command_list content-free, never a name / hint / description / alias / id (#936)', () => {
+    const { log, lines } = captureLog()
+    const SECRET_CONVERSATION = 'secret-conversation-id'
+    const SECRET_NAME = 'secret-command-name'
+    const SECRET_HINT = 'secret-argument-hint'
+    // A newline-bearing description: `0x0a` is the only sub-0x20 byte measured on this frame's strings,
+    // and these are WORKSPACE-AUTHORED — so a description reaching this JSON-lines log would hand its
+    // author a log-forgery primitive in a file the operator can ship off-box in a debug bundle.
+    const SECRET_DESCRIPTION = 'secret-description\n{"event":"forged"}'
+    const SECRET_ALIAS = 'secret-alias'
+    const SECRET_CUT = 'secret-cut-field'
+    const plaintext = encodeSlashCommandList({
+      conversation_id: SECRET_CONVERSATION,
+      commands: [
+        {
+          name: SECRET_NAME,
+          argument_hint: SECRET_HINT,
+          description: SECRET_DESCRIPTION,
+          aliases: [SECRET_ALIAS],
+          truncated_fields: [SECRET_CUT]
+        }
+      ],
+      dropped_commands: 4
+    })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('slash_command_list')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set. Deliberately NO `count` of commands even though DiagnosticEvent
+    // carries the field: how many verbs a workspace offers is itself a fact about the repository the user
+    // has open (the background_task_roster / modal_shown posture, not message_chunk's).
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    for (const secret of [
+      SECRET_CONVERSATION,
+      SECRET_NAME,
+      SECRET_HINT,
+      SECRET_DESCRIPTION,
+      SECRET_ALIAS,
+      SECRET_CUT
+    ]) {
+      expect(lines[0]).not.toContain(secret)
+    }
+    // The forged-record fragment specifically: one line in, one line out.
+    expect(lines[0]).not.toContain('forged')
+  })
+
+  it('does NOT log on a malformed slash_command_list throw path (#936)', () => {
+    const { log, lines } = captureLog()
+    expect(() =>
+      parseInboundMessage(
+        encodeSlashCommandList({
+          ...SLASH_COMMAND_LIST,
+          commands: [{ ...ONE_COMMAND, aliases: null }]
+        }),
+        log
+      )
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('does NOT log on a malformed question_shown throw path (#884)', () => {
     const { log, lines } = captureLog()
     expect(() =>
@@ -4971,6 +5507,63 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
       let err: unknown = null
       try {
         parseInboundMessage(encodeQuestionDismissed(payload))
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(WireDecodeError)
+      const message = (err as Error).message
+      for (const leak of leaks) {
+        expect(message).not.toContain(leak)
+      }
+    }
+  })
+
+  it('never echoes a slash_command_list field into the thrown message (#936, AC5)', () => {
+    // The message reaches a caller's catch — daemonConnection catches WireDecodeError — so a value
+    // interpolated here could ride into the log this decoder is otherwise careful never to write, which
+    // is the same log-forgery exposure the content-free log test pins from the other side. Each case
+    // breaks ONE field while every sibling carries a distinctive sentinel.
+    const sentinels = {
+      conversation_id: 'secret-conversation',
+      name: 'secret-name',
+      argument_hint: 'secret-hint',
+      description: 'secret-description',
+      alias: 'secret-alias',
+      cut: 'secret-cut-field'
+    }
+    const row = {
+      name: sentinels.name,
+      argument_hint: sentinels.argument_hint,
+      description: sentinels.description,
+      aliases: [sentinels.alias],
+      truncated_fields: [sentinels.cut]
+    }
+    const leaks = Object.values(sentinels)
+    const cases: unknown[] = [
+      // Broken at the row level, the deepest one, one field at a time, all sentinels present and valid.
+      {
+        conversation_id: sentinels.conversation_id,
+        commands: [{ ...row, aliases: null }],
+        dropped_commands: 0
+      },
+      {
+        conversation_id: sentinels.conversation_id,
+        commands: [{ ...row, truncated_fields: 7 }],
+        dropped_commands: 0
+      },
+      {
+        conversation_id: sentinels.conversation_id,
+        commands: [{ ...row, name: 42 }],
+        dropped_commands: 0
+      },
+      // Broken at the frame level, with every row still valid.
+      { conversation_id: sentinels.conversation_id, commands: [row], dropped_commands: '0' }
+    ]
+
+    for (const payload of cases) {
+      let err: unknown = null
+      try {
+        parseInboundMessage(encodeSlashCommandList(payload))
       } catch (e) {
         err = e
       }

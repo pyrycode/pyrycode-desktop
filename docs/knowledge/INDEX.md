@@ -470,11 +470,13 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   and `0x0a` is the only sub-`0x20` byte measured across the capture, so a workspace author logging a
   description could forge a log record. No bounds modelled (entry cap and per-field caps are the
   daemon's, `MAX_PLAINTEXT_BYTES` already bounds the frame). Declaration only at ship — no decoder, no
-  narrowing, no consumer; #936 (decode) and #681 (Actions-menu alias match) are both blocked on the
+  narrowing, no consumer; #936 (decode) and #681 (Actions-menu alias match) were both blocked on the
   type only, since the daemon's producer (#2001–#2009) already shipped ahead of both. Architect
   self-review PASS (three SHOULD-FIX doc-comment amendments applied: the aliases-reading rule holds
   only on a validated frame, a `name` is meant to travel back inbound as message text, and the log
-  clause's sharper reason on this path).
+  clause's sharper reason on this path). **#936 has since landed** the fail-closed decode into
+  [inbound message decode](features/inbound-message-decode.md)'s `slash-command-list` arm (ships
+  dormant, IPC carry #937); #681 remains the one still blocked.
 - [Question resolution envelope](features/question-resolution-envelope.md) — the **outbound** half of
   the question vertical, mirroring [modal resolution envelope](features/modal-resolution-envelope.md)
   seam for seam (#235 is this one's twin): `EnvelopeType` gains `'question_answer'`/`'question_refused'`

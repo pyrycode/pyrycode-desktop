@@ -140,24 +140,30 @@ decrypted envelope before any parse, against 14,277 bytes of compact UTF-8 for t
 
 `src/shared/wire/**` — no React, no DOM, no IPC. Types are erased at compile time; the emitted
 JavaScript for `types.ts` is byte-unchanged by this slice. Every field being required is load-bearing:
-it leaves #936's fail-closed narrower no optional key to wave through, so a missing field is a reject
+it left #936's fail-closed narrower no optional key to wave through, so a missing field is a reject
 by construction. A required field is still only a promise the wire has not kept until it is checked —
-reach this type through #936's narrower, never a bare `as SlashCommandListPayload` on
-`Envelope.payload`, which would hand a `.map` a non-array from a malformed frame and would silently
-invert the cut-aliases reading rule above.
+reach this type through #936's narrower ([inbound message decode](inbound-message-decode.md)), never a
+bare `as SlashCommandListPayload` on `Envelope.payload`, which would hand a `.map` a non-array from a
+malformed frame and would silently invert the cut-aliases reading rule above.
 
-Nothing decodes, narrows, emits, stores or renders this yet:
+Decodes and narrows now, but is still unclaimed by any consumer:
 
-- **#936** owns the fail-closed decode into a typed inbound arm, the same shape
-  [question-shown wire types](question-shown-wire-types.md)'s decode took.
+- **#936** (landed) added the `slash-command-list` inbound arm — `parseSlashCommandListPayload` +
+  `parseSlashCommand`, plus a new helper, `requireStringArray`, the never-`null` sibling of
+  `requireStringArrayOrNull` (which now delegates to it for the `null` case) — needed because `aliases`
+  must reject the `null` that `truncated_fields`, one field over on the same row, accepts. Ships dormant:
+  `daemonConnection.ts`'s inbound switch has no catch-all, so the decoded menu stops at the arm's return.
+  See [inbound message decode](inbound-message-decode.md).
 - **#681** owns the Actions-menu match against both `name` and `aliases`, the first consumer that must
-  not resolve a menu entry by rendering an unescaped `name`.
+  not resolve a menu entry by rendering an unescaped `name`, and the first to actually read the frame
+  #936 now decodes.
 
 ## Edge cases and limitations
 
 - Unlike `question_shown`'s producer, this frame's arrives to traffic that already exists: #2001–#2007
-  landed upstream ahead of both desktop consumers, so #936 and #681 are blocked on the type only, not
-  on a daemon dependency.
+  landed upstream ahead of both desktop consumers, so #936 and #681 were blocked on the type only, not
+  on a daemon dependency. #936 has since landed the decode; #681 (the Actions-menu alias match) is the
+  one still blocked, now on the decoded arm rather than the type.
 - `Envelope.type` is `EnvelopeType | string` (open) and no exhaustive switch exists over it today, so
   this widening is non-breaking. The `EnvelopeType` membership test in `types.test.ts` is what would
   otherwise miss a dropped member — without it, a decode/re-encode round-trip passes silently on an
@@ -201,6 +207,11 @@ radius.
 
 ## Related
 
+- [Inbound message decode](inbound-message-decode.md) — [#936](https://github.com/pyrycode/pyrycode-desktop/issues/936)'s
+  fail-closed decode of this vocabulary into the `slash-command-list` inbound arm; ships dormant awaiting
+  [#937](https://github.com/pyrycode/pyrycode-desktop/issues/937)'s IPC carry.
+- `docs/specs/architecture/936-slash-command-list-decode.md` — the decode slice's architecture spec,
+  including its security review (verdict: PASS, builder self-review).
 - [Question-shown wire types](question-shown-wire-types.md) — the shape this ticket follows: nested
   row declared before its payload, doc comment carrying provenance and traps, shipped dormant ahead of
   its decoder. Its `SlashCommand`/`ModelOption` contrast names the daemon's Go type this ticket

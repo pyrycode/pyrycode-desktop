@@ -133,21 +133,39 @@ export type EnvelopeType =
   // reader's view rather than a delta amending it — receiving one neither opens nor closes a turn, and
   // it carries no `turn_id`.
   //
-  // THE DELIVERY WINDOW IS NARROWER THAN "EMITTED" SUGGESTS, and it is the fact a consumer otherwise
-  // gets wrong. What the daemon runs on a schedule is an ASK, not a delivery: one `initialize`
-  // exchange per claude child spawn, emitted to whatever interactive connections exist at that
-  // instant. Three losses sit between that emit and a client — no conversation is routed yet (the
-  // daemon spawns its first child eagerly at startup, and that child's menu is lost UNCONDITIONALLY,
-  // so a client attaching to an already-running daemon was never sent one), the session is busy (the
-  // frame is classed droppable at fan-in, nothing is retried, and no error frame says a menu was
-  // lost), and the emitting child is not the active conversation's bound session (a session rotation
-  // starts a new child, and therefore a new ask, but does NOT deliver a fresh menu). There is NO
-  // connect-time snapshot and NO WAY TO ASK FOR ONE; only a RECONNECTING client whose cursor predates
-  // the frame is replayed it, which recovers nothing for a first attach. **NEVER BLOCK A MODEL MENU ON
-  // THIS FRAME** — render a usable UI without one rather than waiting for a frame that may never
-  // arrive. SSOT pyrycode docs/protocol-mobile.md § model_list / internal/protocol/interactive.go;
-  // shape declared by pyrycode#1704, fixtures and section by #1705, mapping by #1848, producer by
-  // #1849, proven end to end by #1845.
+  // THE DELIVERY WINDOW HAS TWO LANES, and a consumer that knows only the live one gets this frame
+  // wrong. On the LIVE LANE what the daemon runs on a schedule is an ASK, not a delivery: one
+  // `initialize` exchange per claude child spawn, emitted to whatever interactive connections exist at
+  // that instant. Three losses sit between that emit and a client — no conversation is routed yet (the
+  // daemon spawns its first child eagerly at startup, and that child's menu is lost UNCONDITIONALLY),
+  // the session is busy (the frame is classed droppable at fan-in, nothing is retried, and no error
+  // frame says a menu was lost), and the emitting child is not the active conversation's bound session
+  // (a rotation starts a new child, and therefore a new ask, but does NOT deliver a fresh menu).
+  //
+  // The second lane is a CONNECT-TIME SNAPSHOT. The daemon's `reconcileModelLists` fires from its
+  // handshake tail on EVERY handshake — gated only on the negotiated interactive flag and a wired
+  // `RetainedModelLists` seam — and unicasts the retained set to the just-opened conn, so a FIRST
+  // attach is not hopeless and this frame arrives in two shapes a reader must handle. At connect it is
+  // a BURST of N payloads, one per conversation whose bound session holds a list, delivered OUTSIDE any
+  // turn; it is enumerate-all rather than keyed to "this conn's conversation" (a relay session carries
+  // no conversation id), ARCHIVED conversations contribute, and the order is the daemon's registry
+  // insertion order and is NOT a contract. On the live lane it is single frames, subject to the three
+  // losses above. The reconciled frame carries NO `event_id`, deliberately: that keeps it out of the
+  // daemon's turn-event replay ring and makes the reconnect `last_event_id` dedup INERT for it, so a
+  // store deduping on event id will double-apply or drop it. CORRELATE ON `conversation_id` — the
+  // envelope's own `id` is a fixed `1` upstream and explicitly non-load-bearing.
+  //
+  // **STILL NEVER BLOCK A MODEL MENU ON THIS FRAME.** The snapshot narrows the gap rather than closing
+  // it: only a session actually HOLDING a list contributes, and the eagerly-spawned bootstrap child has
+  // no conversation record, so it contributes on neither lane. Render a usable UI without one rather
+  // than waiting for a frame that may never arrive.
+  //
+  // SSOT internal/protocol/interactive.go plus the daemon's `reconcileModelLists` and
+  // `RetainedModelLists` — NOT docs/protocol-mobile.md § model_list, whose live prose still says this
+  // frame has no connect-time snapshot and is deliberately absent from the Mode B list; that file's
+  // 2026-09-02 changelog entry names both claims stale and is the current half. Shape declared by
+  // pyrycode#1704, fixtures and section by #1705, mapping by #1848, producer by #1849, proven end to
+  // end by #1845; the connect-time reconcile by #1863.
   | 'model_list'
   // The workspace's slash-command inventory (#935) — a conversation-scoped MENU rather than a turn
   // event: it rides a `control_response` from the same `initialize` reply `model_list` is drawn from,
@@ -155,8 +173,8 @@ export type EnvelopeType =
   // view rather than a delta amending it. Same v2 gating as the question family above and likewise
   // absent from the daemon's `v1TypeSet`, so an old client never receives it. Its sibling `model_list`
   // rides the same reply and IS modelled on this side (#971), the member directly above: that one
-  // inventories the IDENTITIES claude will run as, this one the VERBS the working
-  // directory will accept. SSOT pyrycode docs/protocol-mobile.md § slash_command_list /
+  // inventories the IDENTITIES claude will run as, this one the VERBS the working directory will
+  // accept. SSOT pyrycode docs/protocol-mobile.md § slash_command_list /
   // internal/protocol/interactive.go; type declared by pyrycode#1726, shape by #1727, fixtures and
   // section by #1718, and emitted by the #2001–#2007 family (#2003 on the live lane, #2004–#2007 on
   // connect) — NOT by #1720, which the published section still names and which was abandoned.

@@ -82,6 +82,10 @@ neighbours' form: v2 outbound (binary → phone), interactive-capability-gated, 
 `v1TypeSet` so an old client never receives it, a conversation-scoped snapshot rather than a turn
 event, and the SSOT trail.
 
+> **⚠️ The paragraph below is SUPERSEDED — see [§ Revisions](#revisions), 2026-09-02.** Its final two
+> sentences are false: a connect-time snapshot *does* exist. The text is left standing rather than
+> rewritten so the audit trail shows what was designed and what corrected it.
+
 The member comment additionally records the **delivery window**, because it is the fact a consumer
 will otherwise get wrong and the ticket body does not carry it: what the daemon runs on a schedule is
 an *ask*, not a delivery. Three losses sit between emit and client — no conversation routed yet (the
@@ -410,3 +414,59 @@ the same commit as the code that departs.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+### 2026-09-02 — the delivery window has two lanes, not one
+
+**Driven by:** the verifier's MUST FIX on [PR #978](https://github.com/pyrycode/pyrycode-desktop/pull/978#issuecomment-5514649580).
+
+**What was wrong.** § 1 above, and the `'model_list'` member comment it prescribed, concluded that
+*"there is no connect-time snapshot and no way to ask for one; only a reconnecting client with a
+cursor predating the frame is replayed it."* That is false against the daemon tree. The claim was
+copied from `docs/protocol-mobile.md` § `model_list`, which is the **stale half** of that file: its
+own `2026-09-02` changelog entry names § `model_list`'s *"no connect-time snapshot today"* and its
+*"deliberately absent from the Mode B list"* as both stale, records that the reconcile and its
+enumeration landed and *"neither ever reached this file"*, and states that the Go comments carrying
+the same false claims were left standing on purpose because no ticket owned them. The ticket body
+contradicted the section directly (*"connect-time delivery at pyrycode#1867"*), and the body was right.
+
+**How the correction was derived.** From the daemon's code rather than its prose, which is what the
+sibling frame's own correction did:
+
+- `internal/relay/v2session_seams.go` → `RetainedModelLists`, documented there as the third **Mode B**
+  reconcile seam alongside `OutstandingModals` and `OutstandingQueues`.
+- `cmd/pyry/relay.go` → `RetainedModelLists: w.retainedModelLists`, and `cmd/pyry/main.go` →
+  `retainedModelLists(convReg, pool)`. Wired end to end, not a nil stub.
+- `internal/relay/v2session_modelreconcile.go` → `reconcileModelLists`, called from
+  `internal/relay/v2session_handshake.go`'s `handleNoiseInit` success tail on **every** handshake,
+  gated only on the negotiated interactive flag and a non-nil seam.
+- `cmd/pyry/session_model_list.go` → `retainedModelLists` for the enumeration's own semantics.
+
+**The new contract, as stated at the type.** The live lane and its three loss points were **verified
+still accurate** and are kept. What replaces the false conclusion:
+
+1. A **connect-time snapshot exists**: the retained set is unicast to the just-opened conn on every
+   interactive handshake, so a *first* attach is reached, not only a reconnecting one.
+2. It arrives as a **burst of N payloads outside any turn** — enumerate-all, one per conversation
+   whose bound session holds a list, because a relay session carries no conversation id to key on.
+   **Archived conversations contribute**, and the order is the daemon's registry insertion order and
+   is **not** a contract.
+3. The reconciled frame carries **no `event_id`**, deliberately: it is kept out of the turn-event
+   replay ring, which makes `forwardEnvelope`'s `last_event_id` dedup **inert** for it. A store
+   deduping on event id will double-apply or drop it.
+4. **Correlate on `conversation_id`.** The envelope's own `id` is a fixed `1` upstream and explicitly
+   non-load-bearing.
+
+**What did not change.** *Never block a model menu on this frame* survives, on narrower and now
+correct grounds: the snapshot reaches only a session actually **holding** a list, and the eagerly
+spawned bootstrap child has no conversation record, so it contributes on neither lane. No type, no
+field, no fixture and no test changed — the correction is doc-comment only. The SSOT trail at the
+member now points at the two daemon symbols and **warns the reader off** § `model_list`'s live prose,
+naming the changelog as the current half, so the next slice does not re-import the same false claim.
+
+**Why this was a blocker rather than a nit.** For a vocabulary-only slice the documented contract *is*
+the deliverable, and four slices are written against this docblock. Items 2–4 are exactly the facts a
+decode/IPC/store author needs and the old paragraph denied or omitted all three. It also asserted an
+**absence**, which needs more evidence than a presence does — and the evidence pointed the other way
+in both the ticket body and the daemon's own changelog.

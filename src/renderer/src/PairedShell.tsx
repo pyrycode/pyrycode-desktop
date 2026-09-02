@@ -30,6 +30,7 @@ import { activeConversationStore } from './store/activeConversationStore'
 import { announcedModelStore } from './store/announcedModelStore'
 import { conversationLastReadStore } from './store/conversationLastReadStore'
 import { conversationTimelineStore } from './store/conversationTimelineStore'
+import { modelListStore } from './store/modelListStore'
 import { sessionIdStore } from './store/sessionIdStore'
 import { sessionStore } from './store/sessionStore'
 import { slashCommandListStore } from './store/slashCommandListStore'
@@ -71,12 +72,12 @@ const activateDeps: ActivateConversationDeps = {
  * #531: the store wiring for the pairing-ended clear, module scope for the same reason as
  * `activateDeps` above — each effect reaches its singleton through `getState()` inside the arrow body,
  * so nothing is dereferenced at module load, nothing is read during render, and the object closes over
- * no per-render value. `sessionStore`, `announcedModelStore` and `slashCommandListStore` appear here and
- * nowhere else in this
- * file; PairedShell still subscribes to no store at all and stays server-renderable. #593 widened the
- * set with the announced running model, #779 with the per-conversation read marks and #955 with the
- * published slash-command menus, and because both call sites below pass this one object, each was a
- * single edit rather than two — which is the whole reason the clear lives in the shared helper. The two
+ * no per-render value. `sessionStore`, `announcedModelStore`, `slashCommandListStore` and
+ * `modelListStore` appear here and nowhere else in this file; PairedShell still subscribes to no store
+ * at all and stays server-renderable. #593 widened the set with the announced running model, #779 with
+ * the per-conversation read marks, #955 with the published slash-command menus and #977 with the
+ * published model menus, and because both call sites below pass this one object, each was a single
+ * edit rather than two — which is the whole reason the clear lives in the shared helper. The two
  * paths are NOT symmetric: unpair unmounts this shell, while pair-another-server transitions
  * `pairServer` → `list` inside it, so a store dropped by one and not the other would latch on exactly
  * the path a remount cannot rescue.
@@ -107,6 +108,11 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // DIRECTLY, the `clearAllLastRead` shape below, and for the same reason — there is no sampling or
   // gating branch to keep in one tested place, because the store method takes nothing at all.
   clearAllSlashCommandLists: () => slashCommandListStore.getState().clearAllSlashCommandLists(),
+  // #977: every conversation's published MODEL menu, dropped as one, the same shape and for the same
+  // reason as its twin above — the store method takes nothing at all, so there is no sampling or
+  // gating branch to keep in one tested place. Adding it to THIS object is what makes both
+  // pairing-change paths below drop it; neither call site needed an edit.
+  clearAllModelLists: () => modelListStore.getState().clearAllModelLists(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
   // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
   // #776 persists the marks. It reaches its store DIRECTLY rather than through

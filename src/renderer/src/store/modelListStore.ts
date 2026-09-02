@@ -14,9 +14,10 @@
 // → hook → selector structure and its copy-on-write `ReadonlyMap`, and like it — and unlike
 // `backgroundTaskRosterStore` — it has NO `connected`-edge reset and must never gain one: a reconnect
 // to the same daemon does not invalidate a published list, and nothing on this path could re-fetch one.
-// The pairing-scoped clear is #977's, landing in `clearPairingScopedState`'s injected dep set rather
-// than at either call site (the #588 → #593 and #954 → #955 precedent); this slice ships the store
-// shape that clear will attach to and none of the clear itself.
+// The pairing-scoped clear (`clearAllModelLists`, #977) lands in `clearPairingScopedState`'s injected
+// dep set rather than at either call site (the #588 → #593 and #954 → #955 precedent), so both
+// pairing-change paths drop every conversation's list by construction and neither this store nor the
+// bridge decides the lifetime.
 //
 // A SNAPSHOT, NEVER A DELTA. Each arriving frame REPLACES that conversation's list wholesale — nothing
 // merges, appends or reconciles against the previous one — because the frame states which models
@@ -131,18 +132,23 @@ export interface ModelListState {
   lists: ReadonlyMap<string, ModelListEntry>
 }
 
-/** Store shape = state + the write path. The mutation lives here and NOT on `ModelListState`, so the
- *  selector — typed against the state-only interface — cannot see it and `initialModelListState` stays
- *  assignable.
+/** Store shape = state + the write path + the pairing-boundary clear. Both mutations live here and NOT
+ *  on `ModelListState`, so the selector — typed against the state-only interface — cannot see either
+ *  and `initialModelListState` stays assignable.
  *
- *  There is deliberately NO clear here yet. #977 adds the pairing-boundary one, nullary and total in
- *  the `clearAllSlashCommandLists` / `clearAllTimelines` shape, reached only through
- *  `clearPairingScopedState`'s injected dep set — that is the entry point this shape exists to receive,
- *  and it is why the DI factory, the singleton and this type are three separate exports. There is
- *  likewise no per-conversation drop: nothing has asked for one, and a `conversationDeleted` arm here
- *  would be a second lifetime to keep in agreement with #977's. */
+ *  `clearAllModelLists` (#977) is NULLARY BY DESIGN, the `clearAllSlashCommandLists` /
+ *  `clearAllTimelines` property, and against these rows it is the sharpest case for it: a pairing
+ *  ending invalidates EVERY conversation's list at once, so "takes no conversation id at all" is a
+ *  property of this signature that `tsc` enforces rather than a test, and no daemon-supplied id can
+ *  craft a list of CLAUDE-AUTHORED identities that survives the boundary. It carries `All` so the blast
+ *  radius is legible at the CALL SITE rather than only here, which matters where it is actually
+ *  invoked — among the nine keys of `ClearPairingScopedStateDeps`, its only entry point, and the reason
+ *  the DI factory, the singleton and this type are three separate exports. There is deliberately no
+ *  per-conversation drop beside it: nothing has asked for one, and a `conversationDeleted` arm here
+ *  would be a second lifetime to keep in agreement with this one. */
 export type ModelListStore = ModelListState & {
   setModelList: (snapshot: ModelListSnapshot) => void
+  clearAllModelLists: () => void
 }
 
 export const initialModelListState: ModelListState = { lists: new Map() }
@@ -186,7 +192,32 @@ export function createModelListStore(init: ModelListState = initialModelListStat
           droppedModels: snapshot.droppedModels
         })
         return { lists: next }
-      })
+      }),
+    // THE PAIRING BOUNDARY (#977), reached only through `clearPairingScopedState`'s injected dep set
+    // and never from a call site or a bridge arm — keeping it out of `modelListBridge` is what makes it
+    // daemon-UNREACHABLE, so no arriving event can invoke it. Two halves, each doing something the
+    // other cannot, both inherited verb for verb from `clearAllSlashCommandLists`:
+    //
+    //   - It returns `initialModelListState` BY REFERENCE rather than `{ lists: new Map() }`, so every
+    //     cleared state holds the SAME `lists` object and a whole-map selector is `Object.is`-true
+    //     across two clears from different starting states. That return makes the copy-on-write above
+    //     LOAD-BEARING rather than stylistic: this constant is module-shared, so a writer that ever
+    //     mutated `s.lists` in place would poison it and every instance that had cleared would then
+    //     hand ONE PAIRING'S claude-authored rows to the next, with no type error. `clearAllActivity`
+    //     pays a fresh `Map` to sidestep that hazard; this store keeps the reference and pins the
+    //     invariant with a test instead.
+    //   - The `size === 0` guard is NOT the `clearAllLastRead` guard, which exists to suppress a
+    //     redundant `localStorage.setItem`: nothing here reaches disk and there is no side effect to
+    //     suppress. It is the `clearAllTimelines` guard, and it buys the stronger half of idempotence —
+    //     returning the state OBJECT makes zustand's `Object.is(next, state)` short-circuit fire, so a
+    //     redundant clear wakes NO listener at all. `set(initialModelListState)` unguarded would still
+    //     allocate a fresh state object and only the selectors would short-circuit.
+    //
+    // Unconditional beyond that guard, and total: no id, no filter, no branch that could let one
+    // conversation's list outlive the pairing that published it. NOTHING IS LOGGED — not even a
+    // content-free count of what was dropped (see the header; a count would be the first crack in a
+    // no-diagnostic property that has to be total to be worth anything).
+    clearAllModelLists: () => set((s) => (s.lists.size === 0 ? s : initialModelListState))
   }))
 }
 

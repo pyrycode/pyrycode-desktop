@@ -83,11 +83,13 @@ export function translateSlashCommandList(event: DaemonEvent): SlashCommandListS
  * ONE ARM IN, ONE SETTER OUT — there is deliberately no `connected` branch and no branch of any other
  * kind, which is the half of `backgroundTaskRosterBridge` this path must NOT copy. That bridge's
  * reset is the sole enforcement of ITS AC5 and is why its store is absent from
- * `clearPairingScopedState`; this store's lifetime is the opposite case on both counts and belongs to
- * #955, which adds the pairing-scoped clear to that helper's dep set (the #588 → #593 precedent). A
+ * `clearPairingScopedState`; this store's lifetime is the opposite case on both counts, so #955 put its
+ * clear in that helper's dep set instead (the #588 → #593 precedent) and NONE of it reaches this file. A
  * reconnect to the same daemon in the same working directory does not invalidate a published menu, so
  * clearing on `connected` would blank a correct value that nothing on this path can re-fetch — there
- * is no request half.
+ * is no request half. Now that the clear exists, keeping it out of here is what keeps it
+ * daemon-UNREACHABLE: no event arriving on this subscription can invoke it, and it takes no
+ * conversation id, so nothing the daemon says can steer which menus survive a pairing change.
  *
  * The `snapshot !== null` guard (not `if (snapshot)` and emphatically not `if (snapshot.commands.length)`)
  * is deliberate: it mirrors announcedModelBridge's `announced !== null`. A snapshot object is truthy

@@ -8,13 +8,14 @@
 // A dedicated keyed store in the `backgroundTaskRosterStore` posture (#573), which is this frame's
 // structural relative on the wire too — one conversation id, a row list and a frame-level drop
 // count. It mirrors that store's DI-factory → singleton → hook → selector structure and its
-// copy-on-write `ReadonlyMap`. What it deliberately does NOT mirror is that store's LIFETIME: there
-// is no `resetMenus`, no `connected` branch feeding one, and no entry in `clearPairingScopedState`.
-// The roster's reset branch is the sole enforcement of ITS AC5, which is why it is absent from that
-// helper; this store's lifetime question is a different one and belongs to #955, which follows the
-// #588 → #593 precedent (ship the holder dormant, add the clear to `clearPairingScopedState`'s dep
-// set rather than at a call site). Building a clear here is what would push this slice past three
-// production files.
+// copy-on-write `ReadonlyMap`. What it deliberately does NOT mirror is that store's LIFETIME. The
+// roster's `connected`-edge reset is the sole enforcement of ITS AC5, which is why it is absent from
+// `clearPairingScopedState`; this store lands on the OPPOSITE answer to both halves of that helper's
+// discriminator ("does a reconnect to the SAME daemon need to clear it?"), so #955 gave it exactly one
+// lifetime and put it there: `clearAllSlashCommandLists`, in that helper's injected dep set and reached
+// from neither pairing-change call site directly. There is still no `connected` branch anywhere on this
+// path and there must never be one — a reconnect to the same daemon in the same working directory does
+// not invalidate a published menu, and nothing here could re-fetch one.
 //
 // A SNAPSHOT, NEVER A DELTA. Each arriving frame REPLACES that conversation's list wholesale —
 // nothing merges, appends, or reconciles against the previous one — because the frame states what
@@ -36,11 +37,11 @@
 // self-inflicted spin.
 //
 // GROWTH, stated rather than defended: one entry per distinct `conversationId` seen since launch,
-// each holding one frame's rows, with no clear in this slice. Each frame is already capped upstream,
-// so the bound is entries × frame cap — a flooding relay costs one bounded entry per distinct id
-// rather than an unbounded append per frame. `conversationActivityStore` (#748) and `queueStore`
-// ship the identical posture, and #955 lands the clear. No speculative eviction policy is built for
-// a failure nobody has observed.
+// each holding one frame's rows, dropped wholesale when the pairing ends. Each frame is already capped
+// upstream, so the bound is entries × frame cap — a flooding relay costs one bounded entry per distinct
+// id rather than an unbounded append per frame, and #955's clear now returns that to zero at every
+// pairing change. `conversationActivityStore` (#748) and `queueStore` ship the identical posture. No
+// speculative eviction policy is built for a failure nobody has observed.
 //
 // SECURITY: `name`, `argument_hint`, `description` and EVERY STRING IN `aliases` are
 // WORKSPACE-AUTHORED — whoever wrote the repository wrote them. That is a LOWER trust tier than the
@@ -57,8 +58,11 @@
 // the user. There is deliberately no diagnostic anywhere in this store. This slice has no DOM sink,
 // so the plain-text-never-HTML discipline is inherited and discharged by #940's render slice, which
 // also owes a React `key` scheme that is not `name`. Nothing here is persisted, and nothing may be:
-// web storage would outlive the pairing that scoped the menu and defeat #955's clear before it is
-// written.
+// web storage would outlive the pairing that scoped the menu, and now that #955's clear EXISTS the
+// consequence is sharper than it was while the clear was still owed — a persisted copy would survive
+// a clear that ran, so every in-memory assertion would stay green while the previous workspace's verbs
+// were re-hydrated at the next launch. The clear is memory-only because there is nothing else to reach:
+// `createSlashCommandListStore` takes no storage port, unlike `createConversationLastReadStore`.
 import { createStore } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 import type { WireSlashCommand } from '@shared/wire/types'
@@ -121,11 +125,22 @@ export interface SlashCommandListState {
   menus: ReadonlyMap<string, SlashCommandListEntry>
 }
 
-/** Store shape = state + the single mutation entry point. The mutation lives here and NOT on
- *  `SlashCommandListState`, so the selector — typed against the state-only interface — cannot see it
- *  and `initialSlashCommandListState` stays assignable. */
+/** Store shape = state + the write path + the pairing-boundary clear. Both mutations live here and NOT
+ *  on `SlashCommandListState`, so the selector — typed against the state-only interface — cannot see
+ *  either and `initialSlashCommandListState` stays assignable.
+ *
+ *  `clearAllSlashCommandLists` (#955) is NULLARY BY DESIGN, the `clearAllTimelines` / `clearAllLastRead`
+ *  property: a pairing ending invalidates EVERY conversation's menu at once, so "takes no conversation
+ *  id at all" is a property of this signature that `tsc` enforces rather than a test, and no
+ *  daemon-supplied id can craft a menu that survives the boundary. It carries `All` for the reason
+ *  `clearAllActivity` documents — the blast radius is legible at the CALL SITE rather than only in a
+ *  docstring — which matters where it is actually invoked, among the eight keys of
+ *  `ClearPairingScopedStateDeps`. There is deliberately NO per-conversation drop beside it: nothing has
+ *  asked for one, and a `conversationDeleted` arm here would be a second lifetime to keep in agreement
+ *  with this one. */
 export type SlashCommandListStore = SlashCommandListState & {
   setSlashCommandList: (snapshot: SlashCommandListSnapshot) => void
+  clearAllSlashCommandLists: () => void
 }
 
 export const initialSlashCommandListState: SlashCommandListState = { menus: new Map() }
@@ -172,7 +187,31 @@ export function createSlashCommandListStore(
           droppedCommands: snapshot.droppedCommands
         })
         return { menus: next }
-      })
+      }),
+    // THE PAIRING BOUNDARY (#955), reached only through `clearPairingScopedState`'s injected dep set
+    // and never from a call site or a bridge arm. Two halves, each doing something the other cannot:
+    //
+    //   - It returns `initialSlashCommandListState` BY REFERENCE rather than `{ menus: new Map() }` —
+    //     the `clearAllLastRead` return, not the `clearAllTimelines` one — so every cleared state holds
+    //     the SAME `menus` object and a whole-map selector is `Object.is`-true across two clears from
+    //     different starting states. That return makes the copy-on-write above LOAD-BEARING: this
+    //     constant is module-shared, so a writer that ever mutated `s.menus` in place would poison it
+    //     and every instance that had cleared would then hand back one workspace's rows to the next
+    //     pairing, with no type error. `clearAllActivity` pays a fresh `Map` to sidestep that hazard;
+    //     this store keeps the reference and pins the invariant with a test instead.
+    //   - The `size === 0` guard is NOT the `clearAllLastRead` guard, which exists to suppress a
+    //     redundant `localStorage.setItem`: nothing here reaches disk and there is no side effect to
+    //     suppress. It is the `clearAllTimelines` guard, and it buys the stronger half of idempotence —
+    //     returning the state OBJECT makes zustand's `Object.is(next, state)` short-circuit fire, so a
+    //     redundant clear wakes NO listener at all. `set(initialSlashCommandListState)` unguarded would
+    //     still allocate a fresh state object and only the selectors would short-circuit.
+    //
+    // Unconditional beyond that guard, and total: no id, no filter, no branch that could let one
+    // conversation's menu outlive the pairing that published it. NOTHING IS LOGGED — not even a
+    // content-free count of what was dropped (see the header; a count would be the first crack in a
+    // no-diagnostic property that has to be total to be worth anything).
+    clearAllSlashCommandLists: () =>
+      set((s) => (s.menus.size === 0 ? s : initialSlashCommandListState))
   }))
 }
 

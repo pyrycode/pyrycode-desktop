@@ -223,6 +223,81 @@ describe('slashCommandListStore', () => {
     expect(initialSlashCommandListState.menus.size).toBe(0)
   })
 
+  it('clears EVERY conversation’s menu at once, each reading back as absent (#955 AC1, AC3)', () => {
+    const store = createSlashCommandListStore()
+    store
+      .getState()
+      .setSlashCommandList({ conversationId: 'conv-1', commands: [clear], droppedCommands: 2 })
+    store.getState().setSlashCommandList({
+      conversationId: 'conv-2',
+      commands: [claudeApi, remoteWorkflow],
+      droppedCommands: 0
+    })
+
+    store.getState().clearAllSlashCommandLists()
+
+    expect(store.getState().menus.size).toBe(0)
+    // ABSENT, not an observed-empty entry: the selector's two readings stay apart across the clear,
+    // so a surface that has not yet been told anything about the new pairing reads UNKNOWN rather
+    // than "the new daemon published nothing".
+    expect(selectSlashCommandListFor('conv-1')(store.getState())).toBeNull()
+    expect(selectSlashCommandListFor('conv-2')(store.getState())).toBeNull()
+    // By reference, not a fresh empty map: every cleared state holds the SAME `menus`, so a
+    // whole-map selector is `Object.is`-true across two clears from different starting states.
+    expect(store.getState().menus).toBe(initialSlashCommandListState.menus)
+  })
+
+  it('clearing an already-clear store notifies NO subscriber (#955 AC4)', () => {
+    const store = createSlashCommandListStore()
+    const stateBefore = store.getState()
+    let notified = 0
+    const unsubscribe = store.subscribe(() => {
+      notified += 1
+    })
+
+    store.getState().clearAllSlashCommandLists()
+    unsubscribe()
+
+    // The state OBJECT comes straight back, so zustand's `Object.is(next, state)` short-circuit
+    // fires and no listener runs at all. That is what the `size === 0` guard buys and a bare
+    // `set(initialSlashCommandListState)` would not: it would allocate a new state object, and only
+    // a SELECTOR would then short-circuit. A raw subscriber is the only shape that tells the two
+    // apart, which is why this asserts through one.
+    expect(store.getState()).toBe(stateBefore)
+    expect(notified).toBe(0)
+  })
+
+  it('the clear never poisons the shared initial state, and leaves the store usable (#955 AC1)', () => {
+    // The hazard `clearAllActivity` pays a fresh `Map` to avoid and this store answers by test:
+    // `initialSlashCommandListState.menus` is module-shared, so a writer that ever mutated held
+    // state in place would leak one pairing's workspace-authored rows into every store instance
+    // that had cleared — with no type error and no other failing test.
+    const first = createSlashCommandListStore()
+    first
+      .getState()
+      .setSlashCommandList({ conversationId: 'conv-1', commands: [clear], droppedCommands: 1 })
+    first.getState().clearAllSlashCommandLists()
+
+    expect(initialSlashCommandListState.menus.size).toBe(0)
+
+    const second = createSlashCommandListStore()
+    expect(second.getState().menus.size).toBe(0)
+    expect(selectSlashCommandListFor('conv-1')(second.getState())).toBeNull()
+
+    // A cleared store is empty, not wedged: the next pairing's first frame lands normally and lands
+    // only under its own key.
+    second
+      .getState()
+      .setSlashCommandList({ conversationId: 'conv-9', commands: [compact], droppedCommands: 0 })
+
+    expect(selectSlashCommandListFor('conv-9')(second.getState())).toEqual({
+      commands: [compact],
+      droppedCommands: 0
+    })
+    expect(second.getState().menus.size).toBe(1)
+    expect(initialSlashCommandListState.menus.size).toBe(0)
+  })
+
   it('accepts a seeded initial state (the DI factory)', () => {
     const store = createSlashCommandListStore({
       menus: new Map([['conv-1', { commands: [clear], droppedCommands: 3 }]])

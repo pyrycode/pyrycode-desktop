@@ -800,15 +800,14 @@ export interface ToolUsePayload {
  * Inbound `tool_result` event (daemon → client). Mirrors the daemon's ToolResultPayload field-for-field
  * (pyrycode #607 / ADR 025, protocol-mobile.md), wire order `conversation_id, turn_id, tool_use_id,
  * is_error, result_summary, result_detail` — all written by a current daemon (no `omitempty` on any of
- * them; only `result_detail` is optional HERE, and only because an older daemon predates it). The
- * outcome half of the tool-call
- * enrichment on the v2 interactive stream (ADR 0008): it resolves an existing `toolCall` timeline item
- * in place, correlated by `tool_use_id`, NOT a new row. `is_error` is a required boolean whose `false`
- * is a value (success), never an absence (the `yolo` #180 convention) — the daemon pins `is_error: false`
- * exactly (no `omitempty`). `result_summary` is an untrusted daemon-supplied string carried as opaque
- * display text (like `input_summary` #217, `stop_reason` #199, `cwd` #139) — decoded, never interpreted;
- * its DOM sink is the render slice (#230), which must render it as plain text, never HTML. `tool_use_id`
- * is the correlation key. See #229.
+ * them; only `result_detail` is optional HERE, and only because an older daemon predates it). The outcome
+ * half of the tool-call enrichment on the v2 interactive stream (ADR 0008): it resolves an existing
+ * `toolCall` timeline item in place, correlated by `tool_use_id`, NOT a new row. `is_error` is a required
+ * boolean whose `false` is a value (success), never an absence (the `yolo` #180 convention) — the daemon
+ * pins `is_error: false` exactly (no `omitempty`). `result_summary` is an untrusted daemon-supplied string
+ * carried as opaque display text (like `input_summary` #217, `stop_reason` #199, `cwd` #139) — decoded,
+ * never interpreted; its DOM sink is the render slice (#230), which must render it as plain text, never
+ * HTML. `tool_use_id` is the correlation key. See #229.
  *
  * `result_detail` (#773, daemon-side pyrycode#2024) is the OPTIONAL sixth field: a short précis of the
  * call's STRUCTURED outcome — `"265 lines"`, `"110 of 1676 lines"` — composed by the daemon from the

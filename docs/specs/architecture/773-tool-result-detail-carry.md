@@ -150,12 +150,14 @@ One new reject branch, in `optionalString`: a present, non-string `result_detail
 **dropping the whole frame** without emitting and without throwing. That is the fail-closed posture the
 rest of the payload already has, and AC2's second half.
 
-**No length cap on the field, deliberately.** The inbound bound is `maxPayload` on the `ws` socket in
-`relayConnection` — the relay's per-message limit, which caps the outer frame and so transitively bounds
-the decrypted envelope. `MAX_PLAINTEXT_BYTES` is *not* that bound: it is enforced on the encode side in
-`encodeEnvelope`, and `decodeEnvelope` applies no inbound cap, so no code comment on this path may claim
-otherwise. With a real socket-level bound in place, a client-invented per-field cap would only
-fail-close a valid future frame (the no-cross-validate posture, ADR 0002).
+**No length cap on the field, deliberately.** The nearest inbound bound is `parseInboundMessage`'s own
+frame-level `MAX_PLAINTEXT_BYTES` guard (65519), applied to the inbound plaintext **before**
+`decodeEnvelope` and therefore before any per-type narrower runs — the same guard the other narrowers in
+`inboundMessage.ts` cite, `optionalStringMap` included. `decodeEnvelope` itself size-checks nothing,
+which is precisely why that guard sits in `parseInboundMessage`; `maxPayload` on the `ws` socket in
+`relayConnection` is the outer socket-level bound behind it, not the nearer one. With the frame already
+bounded before the narrower is reached, a client-invented per-field cap would only fail-close a valid
+future frame (the no-cross-validate posture, ADR 0002).
 
 The decode still runs **before** the diagnostic log, so a frame malformed only in this new field leaves
 no log record at all. The `tool_result` log stays the content-free `code`/`bytes`/`hash` set: the new
@@ -219,6 +221,27 @@ own event constructors, no new test double.
    `requireStringArrayOrNull` on the same reasoning. It shares the map helper's message *category*,
    which is the part worth reusing.
 
+**2026-09-02, after verifier review — the no-length-cap justification named the wrong bound. No design
+or behaviour change; the conclusion was right, the stated mechanism was not.**
+
+3. **`parseInboundMessage` DOES apply `MAX_PLAINTEXT_BYTES` to the inbound plaintext**, before
+   `decodeEnvelope` and so before any per-type narrower runs. The Security review's `[Network & I/O]`
+   finding asserted the opposite — that the constant is encode-only and `maxPayload` on the relay socket
+   is the real inbound bound — and `## Error handling` and the `optionalString` docblock inherited it.
+   All three now name the guard that exists, with the socket bound described as the outer one behind it.
+
+   The error was half-true, which is what made it survive a review pass built to catch exactly this. The
+   true half: `decodeEnvelope` really does size-check nothing, and the `MAX_PLAINTEXT_BYTES` hits in
+   `src/main/transport/*Envelope.ts` really are all outbound builders. The false half: the inbound guard
+   is not in either place — it is in `parseInboundMessage` itself, the very function whose narrowers were
+   being reasoned about, and a grep read as a file-name survey walked straight past it. The neighbouring
+   `optionalStringMap` docblock stated the correct mechanism forty lines above the new one the whole time;
+   ten docblocks in that file cite the guard correctly. **The check that would have caught it: when a
+   docblock's claim contradicts its immediate neighbour, the neighbour is the evidence, not the prose —
+   read the guard's own code before asserting a bound does not exist.** Asserting an absence ("that
+   constant is *not* the bound") demands strictly more evidence than asserting a presence, and this pass
+   spent less.
+
 ## Security review
 
 **Verdict:** PASS
@@ -255,12 +278,12 @@ exists on the inbound path. Both are recorded as findings below.
   and never travels back — so this adds nothing to the untrusted-to-trusted direction.
 - **[Cryptographic primitives]** Not applicable: no RNG, no key, no nonce, no handshake code, and the
   value is never compared against anything, so the `timingSafeEqual` question does not arise.
-- **[Network & I/O]** MUST-NOT-SHIP claim caught and corrected. My working assumption was that
-  `MAX_PLAINTEXT_BYTES` caps the inbound frame upstream of the decode; it does not. That constant is
-  enforced only on the **encode** side in `encodeEnvelope`, and `decodeEnvelope` applies no inbound cap.
-  The real inbound bound is `maxPayload` on the `ws` socket in `relayConnection`. The conclusion holds —
-  no client-invented per-field length cap — but the plan now names the mechanism that exists, so the
-  implementation does not put a false claim into a code comment the next reader trusts.
+- **[Network & I/O]** No client-invented per-field length cap, and the bound that makes one redundant is
+  `parseInboundMessage`'s frame-level `MAX_PLAINTEXT_BYTES` guard (65519), applied to the inbound
+  plaintext before `decodeEnvelope` and so before any narrower runs. `maxPayload` on the `ws` socket in
+  `relayConnection` is the outer socket-level bound behind it. *(Corrected 2026-09-02 after review — this
+  finding originally asserted the opposite, that `MAX_PLAINTEXT_BYTES` was encode-only and the socket was
+  the only inbound bound. See `## Revisions`; the conclusion never changed, only the named mechanism.)*
 - **[Error messages, logs, telemetry]** No MUST FIX, three checks. (a) The new `WireDecodeError`
   interpolates only the client-owned `field` constant; a test asserts the exact message and that no
   probe value appears in it. (b) The `tool_result` diagnostic record stays the content-free

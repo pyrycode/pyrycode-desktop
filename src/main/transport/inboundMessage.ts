@@ -519,9 +519,13 @@ function optionalStringMap(
  *
  *  Deliberately NO length cap and NO alphabet check, even though the upstream declaration says this
  *  field's producer only ever formats decoded integers. That describes an honest producer, not a wire
- *  guarantee, and the inbound bound that actually exists is `maxPayload` on the relay socket — a
- *  client-invented per-field rule would only fail-close a valid future frame (the parseQueuedItem
- *  no-cross-validate posture, ADR 0002).
+ *  guarantee — but the bound that makes a cap here redundant is the same one every other narrower in
+ *  this file cites: parseInboundMessage's frame-level MAX_PLAINTEXT_BYTES guard (65519), applied to the
+ *  plaintext BEFORE decodeEnvelope and so before any narrower runs (decodeEnvelope itself size-checks
+ *  nothing, which is why that guard is where it is). `maxPayload` on the relay socket in
+ *  relayConnection is the outer socket-level bound behind it, not the nearer one. A client-invented
+ *  per-field rule would only fail-close a valid future frame (the parseQueuedItem no-cross-validate
+ *  posture, ADR 0002).
  *
  *  Shares optionalStringMap's message category rather than `missing required field:`, which for an
  *  optional field is actively misleading since an absent key is the one case that does NOT throw. It

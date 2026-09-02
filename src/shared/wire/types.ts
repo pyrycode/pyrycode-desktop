@@ -122,6 +122,18 @@ export type EnvelopeType =
   // TypeQuestionRefused; declared by pyrycode#1983, resolved by #1990/#1991, gated by #1986.
   | 'question_answer'
   | 'question_refused'
+  // The workspace's slash-command inventory (#935) — a conversation-scoped MENU rather than a turn
+  // event: it rides a `control_response` from the same `initialize` reply `model_list` is drawn from,
+  // so receiving one neither opens nor closes a turn, and it is a SNAPSHOT that replaces a reader's
+  // view rather than a delta amending it. Same v2 gating as the question family above and likewise
+  // absent from the daemon's `v1TypeSet`, so an old client never receives it. Its sibling `model_list`
+  // rides the same reply and is NOT modelled on this side, so there is no local precedent to copy from
+  // it: that one inventories the IDENTITIES claude will run as, this one the VERBS the working
+  // directory will accept. SSOT pyrycode docs/protocol-mobile.md § slash_command_list /
+  // internal/protocol/interactive.go; type declared by pyrycode#1726, shape by #1727, fixtures and
+  // section by #1718, and emitted by the #2001–#2007 family (#2003 on the live lane, #2004–#2007 on
+  // connect) — NOT by #1720, which the published section still names and which was abandoned.
+  | 'slash_command_list'
   | 'list_conversations'
   | 'conversations'
   | 'recent_workspaces'
@@ -1226,6 +1238,145 @@ export interface QuestionAnswerPayload {
 export interface QuestionRefusedPayload {
   question_batch_id: string
   answer_token: string
+}
+
+/**
+ * ONE ROW of a `slash_command_list` (daemon → client). Mirrors the daemon's `SlashCommand`
+ * field-for-field (SSOT pyrycode docs/protocol-mobile.md § slash_command_list,
+ * internal/protocol/interactive.go), wire order `name, argument_hint, description, aliases,
+ * truncated_fields` — all always present (no `omitempty` on any of them). The per-entry key set is
+ * COMPLETE and measured, not assumed: against the capture
+ * internal/e2e/realclaude/testdata/initialize_control_v2.1.239.json those four are claude's entire
+ * per-entry vocabulary, 42 of the 51 entries carrying the first three and the other 9 all four.
+ *
+ * NAMED `WireSlashCommand`, NOT `SlashCommand`, deliberately — twice over, so the prefix is not read
+ * as decoration. `Wire` is this cluster's prefix for a nested row whose bare name is generic enough to
+ * be wanted again downstream (`WireQuestion`, `WireQuestionOption`, `WireModalOption`), and both
+ * consumers will want one: #936's decode and #681's Actions-menu match. And `QuestionShownPayload`'s
+ * doc comment above names `SlashCommand` as the DAEMON's Go type; leaving the bare name unclaimed here
+ * keeps that reference — and the identical one in
+ * docs/knowledge/features/question-shown-wire-types.md — pointing where it always did.
+ *
+ * `argument_hint` is ALWAYS PRESENT and EMPTY ON 33 OF THE CAPTURE'S 51 ENTRIES, so an empty hint is
+ * the ordinary case rather than missing data. `name` carries no leading `/` and is NOT AN IDENTIFIER —
+ * one measured name is `__remote-workflow` — so no charset assumption belongs in a client and nothing
+ * may key a cache, a memo or a lookup path by it. `description` is a one-line summary except when it
+ * is not one line; see the security note below.
+ *
+ * `aliases` IS A PLAIN ARRAY AND NEVER `string[] | null`, but NOT for `commands`' reason, and the
+ * asymmetry is upstream's rather than an accident (both normalisations live in interactive.go, each
+ * with its own argument). For `commands`, `[]` is a POSITIVE STATEMENT. Here `[]` is a COLLAPSE, and
+ * that is measured: claude never sends `"aliases": []` — zero of the 51 entries carry an empty array,
+ * 42 omit the key and 9 carry a non-empty one — so an entry with no aliases and an entry with the key
+ * absent are the same statement, and the wire states ONE position for both rather than making every
+ * row branch on absent-versus-empty to match an alias.
+ *
+ * **A CUT `aliases` IS UNKNOWABLE FROM `aliases` ALONE — the one place that collapse costs a reader.**
+ * Because absent and empty arrive as the same `[]`, a `truncated_fields` NAMING `aliases` is the ONLY
+ * signal separating "cut to nothing" from "none", and it must be read as UNKNOWN, never as *no
+ * aliases*. Reading it as "none" greys out a working command: the desktop Actions menu's own `reset`
+ * entry is an ALIAS of `clear` and not a command name (#681), and 11 aliases span 9 of the 51 entries.
+ * **That rule is only sound on a VALIDATED frame**, which is the trap this type cannot close on its
+ * own: reached through a bare `as` on `Envelope.payload`, a frame whose `truncated_fields` key is
+ * absent yields `undefined`, and `row.truncated_fields?.includes('aliases')` is then falsy for exactly
+ * the reason `null` is — the reader concludes nothing was cut and reads `[]` as "none", the one wrong
+ * answer this paragraph exists to prevent. NULLABLE IS NOT OPTIONAL; go through #936's narrower.
+ *
+ * `truncated_fields` names THIS ROW'S OWN cut fields (`name`, `argument_hint`, `description`,
+ * `aliases` — the wire names), and `null` means NOTHING WAS CUT for this row, a distinct value from
+ * `[]` and never to be collapsed into it. Each row reports its own: there is no hoisted or flattened
+ * list anywhere on this frame. This is `BackgroundTask.truncated_fields` exactly, including the trap
+ * that within one payload `commands: null` is out of contract while a row's `truncated_fields: null`
+ * is a valid value — the daemon's marshaller normalises the first and deliberately not the second. The
+ * element vocabulary is a plain `string[]` and is NOT narrowed to those four names, for the reason
+ * `BackgroundTask` records: each frame's set is its own, and a closed one would fail-close a valid
+ * future frame. A cut here is real rather than theoretical — the longest measured description is 1,145
+ * bytes against a mean of 207, and 10 of 51 exceed 256.
+ *
+ * SECURITY — `name`, `argument_hint`, `description` and EVERY STRING IN `aliases` are
+ * WORKSPACE-AUTHORED: whoever wrote the repository wrote them. That is a LOWER trust tier than the
+ * claude-authored strings `model_list` and `QuestionShownPayload` carry, not a restatement of it. The
+ * daemon BOUNDS THEM AND DOES NOT SANITIZE THEM — nothing on the path strips control characters or
+ * terminal escape sequences — so they stay untrusted text all the way here and THE RENDER BOUNDARY
+ * THAT OWES THE SANITIZATION IS THIS CLIENT'S. Safe to render as inert, escaped, length-bounded text;
+ * never into a raw-markup sink (no `innerHTML`, no `dangerouslySetInnerHTML`), an attribute, a URL, a
+ * filename, a cache key, a lookup path, or a log (CLAUDE.md's daemon-text ruling in full). The log
+ * clause bites harder on THIS path than on its neighbours and the reason is measured: `0x0a` is the
+ * ONLY sub-`0x20` byte anywhere across the 51 entries' four string fields, so the control character
+ * that actually occurs is the one that splits a log line — logging a description would let a workspace
+ * author forge log records, and a type-ahead row assuming one line per description will not get one.
+ */
+export interface WireSlashCommand {
+  name: string
+  argument_hint: string
+  description: string
+  aliases: string[]
+  truncated_fields: string[] | null
+}
+
+/**
+ * Inbound `slash_command_list` event (daemon → client). Mirrors the daemon's SlashCommandListPayload
+ * field-for-field (same SSOT), wire order `conversation_id, commands, dropped_commands` — all always
+ * present (no `omitempty`). The slash commands claude will accept for this conversation IN THIS
+ * WORKING DIRECTORY, drawn from the `commands` array of the same `initialize` control reply
+ * `model_list` comes from: that one inventories the IDENTITIES claude will run as, this one the VERBS.
+ *
+ * **Wire vocabulary only.** Nothing decodes, narrows, stores or renders this yet — the fail-closed
+ * parse is #936, the Actions-menu alias match #681. Upstream's producer landed ahead of both (#2001
+ * maps it, #2002 bounds it, #2003 emits it on the live interactive lane, #2004–#2007 retain and
+ * reconcile it on connect), so unlike `question_shown` this shape arrives to traffic that already
+ * exists.
+ *
+ * `commands` IS A PLAIN ARRAY AND NEVER `WireSlashCommand[] | null`: the daemon's `MarshalJSON`
+ * normalises a nil slice to `[]`, and `omitempty` is deliberately out because eliding the key would
+ * erase the frame's point. AN EMPTY `[]` IS A POSITIVE STATEMENT THAT CLAUDE OFFERED NOTHING, so a
+ * client decoding into a non-optional array type never has to branch on null. Note the contrast with
+ * `QuestionShownPayload.questions`, whose empty array is OUT OF CONTRACT and means a producer bug —
+ * the two read alike and say opposite things.
+ *
+ * **`dropped_commands` IS COUNTED AND CARRIED, so `commands.length + dropped_commands` IS THE MENU'S
+ * TRUE SIZE.** The published section still states the opposite twice — "nothing counts it", and an
+ * explicit instruction not to read that sum — and that prose is STALE: the decode's entry cap and its
+ * count landed upstream in #1826, and #2002 adds its own frame-level cut to the same field rather than
+ * recomputing it, so the number arrives already summed over both. The doc correction is pyrycode#2010,
+ * still open at 2026-09-02; the section's two FIELD TABLES remain SSOT throughout, its status prose is
+ * not. A COUNT is carried rather than a name because a name-only report loses HOW MANY were lost;
+ * per-row text cuts are a property of one row and ride that row's own `truncated_fields`, so there is
+ * deliberately no hoisted `truncated_fields` here. `dropped_commands: 0` is a VALUE, never consulted
+ * for truthiness — the key is always written, so an absent one is a real defect rather than a valid
+ * zero.
+ *
+ * **THE COUNT IS WORKSPACE- AND VERSION-DEPENDENT, so no client may cache one**, assume a floor, or
+ * treat a small list as an error: 51 entries against claude 2.1.239 in one repository, 74 hand-counted
+ * against 2.1.220 in another. That variation is the feature's whole point. No bound is modelled here
+ * for `BackgroundTaskRosterPayload`'s reason — the enforcement is the daemon's, and a second copy
+ * would be a second bound to keep in agreement — and the frame cannot arrive unbounded regardless:
+ * MAX_PLAINTEXT_BYTES caps the decrypted envelope before any parse, against 14,277 bytes of compact
+ * UTF-8 for the whole measured 51.
+ *
+ * NOT A TURN-STREAM ITEM: it rides a `control_response`, opens and closes no turn, and carries no
+ * `turn_id`. It is a SNAPSHOT that REPLACES a reader's view of the menu, never a delta amending it.
+ * Hence it keeps `conversation_id` — daemon state keyed by id — which is an OUTBOUND routing/scoping
+ * key only, exactly as `modal_shown`'s and `question_shown`'s are, granting no inbound capability. It
+ * is not a nonce: nothing here is unguessable and nothing here is a secret.
+ *
+ * THE FRAME IS A REPORT, NEVER A CONTROL INPUT — with one amendment a client needs, because the
+ * unqualified rule reads as forbidding the feature. A client IS meant to send a `name` BACK, as the
+ * text of an ordinary message, since sending the slash command is the point. Publishing a name does
+ * not make it trusted: it arrives inbound as ordinary message text, on a path that does not treat it
+ * as a command vocabulary and does not consult this list, and no field here reaches a child process as
+ * an argv element. This frame DECLARES NO INBOUND VERB.
+ *
+ * Every field being required is load-bearing: it leaves #936's fail-closed narrower no optional key to
+ * wave through, so a missing field is a reject by construction. **A required field is still only a
+ * promise the wire has not kept until it is checked** — reach this type through that narrower, never a
+ * bare `as SlashCommandListPayload` on `Envelope.payload`, which would hand a `.map` a non-array from
+ * a malformed frame and would silently invert `WireSlashCommand`'s cut-aliases rule above.
+ */
+export interface SlashCommandListPayload {
+  conversation_id: string
+  commands: WireSlashCommand[]
+  dropped_commands: number
 }
 
 /**

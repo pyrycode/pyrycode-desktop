@@ -172,6 +172,17 @@ const EMPTY_QUESTION_SELECTION: QuestionSelection = {
   otherTicked: false
 }
 
+/**
+ * The empty batch map, handed out by `selectBatchSelections` for a batch nobody has picked in.
+ *
+ * `EMPTY_QUESTION_SELECTION`'s mechanism one nesting level up, for its reason: `useStore` compares
+ * the selector's RESULT under `Object.is`, so a fresh `new Map()` per call would differ on every
+ * render and spin the panel forever. Not exported, for that constant's reason — a consumer needs the
+ * selector, not the sentinel. Safe to hand out because nothing mutates a held map: `withSelection`
+ * clones before every write.
+ */
+const EMPTY_BATCH_SELECTIONS: ReadonlyMap<number, QuestionSelection> = new Map()
+
 /** The named empty baseline — the factory's default and what `reconnected` returns, so `picks` has a
  *  stable reference across repeated clears (the `clearAllLastRead` posture). Safe because this map is
  *  only ever REPLACED: every write below clones before it sets. Not exported, because nothing outside
@@ -387,3 +398,33 @@ export const selectQuestionSelection =
   (questionBatchId: string, questionIndex: number) =>
   (s: QuestionPicksState): QuestionSelection =>
     selectionIn(s, questionBatchId, questionIndex)
+
+/**
+ * The WHOLE batch's picks — every question the operator has touched, in one read (#922).
+ *
+ * **The read the answer path needs and the per-question selector cannot serve.** The panel draws one
+ * question at a time, so `selectQuestionSelection` is the right shape for the ROWS; but deciding
+ * whether Continue may send requires every question at once, and so does assembling the frame. Both
+ * come from the one call, which is what keeps the button's state and the payload's contents from ever
+ * disagreeing (`resolveQuestionAnswers`).
+ *
+ * The factory shape and stability contract are `selectQuestionSelection`'s, unchanged. A picked batch
+ * answers with the held inner map BY REFERENCE — `withSelection` clones on write, so a write to any
+ * other batch carries this one across untouched and the panel does not re-render for a sibling's
+ * pick. An untouched batch answers with the shared empty map above rather than `undefined`, so the
+ * consumer has no absent case to branch on and the result stays reference-stable across renders. Safe
+ * to call inline in a render with no `useMemo` for that reason.
+ *
+ * A hostile `questionBatchId` is an ordinary absent key: `Map.prototype.get('__proto__')` performs no
+ * prototype-chain lookup, which is the property `QuestionPicksState`'s docblock turns on, and this
+ * read inherits it rather than restating it.
+ *
+ * **The returned map may hold entries for question positions the batch no longer has**, and a
+ * consumer must iterate the QUESTIONS rather than these entries: `reduceQuestionBatches`' `shown` arm
+ * replaces a held batch in place and no arm here clears on a re-delivery, so a shortened batch leaves
+ * stale positions behind. `resolveQuestionAnswers` is where that is absorbed.
+ */
+export const selectBatchSelections =
+  (questionBatchId: string) =>
+  (s: QuestionPicksState): ReadonlyMap<number, QuestionSelection> =>
+    s.picks.get(questionBatchId) ?? EMPTY_BATCH_SELECTIONS

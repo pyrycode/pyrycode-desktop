@@ -179,9 +179,11 @@ defensive copy would read as a check it is not. Routed from a new pair of `Rende
 unlike `answerModal`'s `outstandingAnswers` (#248): the daemon emits no reply and no error envelope for
 a rejected question answer, so a window here would hold an entry nothing ever drains. `answer_token`
 matching, if it is ever added, wants plain `===`, not `crypto.timingSafeEqual` — confirmed unchanged by
-this slice: nothing on this path compares a token or a batch id to anything at all. The renderer
-controls on the question panel's action row that dispatch these commands are still a later slice —
-every control on that row remains inert as to answering until they land.
+this slice: nothing on this path compares a token or a batch id to anything at all. **Both renderer
+controls that dispatch these commands have since landed**: [#921](question-panel-cancel-refusal.md)
+wired Cancel to `refuseQuestions`, and [#922](question-panel-continue-answer.md) wired Continue to
+`answerQuestions`, assembling the `answers` array from the operator's picks through a gate that keeps an
+incomplete batch from ever reaching this builder.
 
 ## Edge cases and limitations
 
@@ -216,7 +218,9 @@ every control on that row remains inert as to answering until they land.
 - [Wire codec](wire-codec.md) — `encodeEnvelope`/`WireEncodeError`/`MAX_PLAINTEXT_BYTES`, unchanged by
   this slice.
 - [Conversation shell — question panel](conversation-shell-question-panel.md) — the render vertical
-  this slice's eventual consumer will wire the action row's Answer/Refuse controls into.
+  whose action row now wires both controls this envelope resolves: see
+  [Cancel refuses the batch](question-panel-cancel-refusal.md) and
+  [Continue answers the batch](question-panel-continue-answer.md).
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)
   — this slice mirrors a settled upstream contract and makes no desktop-side architectural choice of
   its own, so no new ADR was warranted.

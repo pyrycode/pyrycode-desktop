@@ -43,18 +43,25 @@ const selection = (over: Partial<QuestionSelection> = {}): QuestionSelection => 
   ...over
 })
 
+// `canAnswer` DEFAULTS TO TRUE — the answerable baseline, so every pre-#922 case above renders the row
+// exactly as it shipped and the gate is opt-in per case. The view holds no picks beyond the active
+// question's, so this is a prop rather than something derivable here: the container computes it from the
+// whole batch's selections through the one function that also builds the frame.
 const renderBatch = (
   questions: readonly Question[],
   activeIndex: number,
-  picked: QuestionSelection = selection()
+  picked: QuestionSelection = selection(),
+  canAnswer = true
 ): string =>
   renderToStaticMarkup(
     <QuestionPanelView
       questions={questions}
       activeIndex={activeIndex}
       selection={picked}
+      canAnswer={canAnswer}
       onQuestionSelected={() => {}}
       onCancel={() => {}}
+      onAnswer={() => {}}
       onOptionChosen={() => {}}
       onOtherChosen={() => {}}
       onOtherTextChanged={() => {}}
@@ -478,5 +485,56 @@ describe('QuestionPanelView', () => {
     const markup = render(question({ options: [twin, twin] }))
     expect(count(markup, /question-panel__option-label">Rust</g)).toBe(2)
     expect(count(markup, /question-panel__control--radio/g)).toBe(3)
+  })
+
+  // #922 — the gate. THE CONJUNCTION IS THE WHOLE POINT: the trailing control is one element in two
+  // roles, and only the Continue role is gated. Gating the element on batch completeness alone would
+  // disable Next on any incomplete batch, stranding the operator on question 1 with no way to reach
+  // question 2 to answer it — so the batch could never become complete and the panel would deadlock.
+  const actionsRowOf = (markup: string): string => markup.slice(markup.indexOf('question-panel__actions'))
+  const three = (): readonly Question[] => batch('Alpha', 'Beta', 'Gamma')
+
+  it('AC1: makes Continue unavailable on the last question while the batch is short an answer', () => {
+    const row = actionsRowOf(renderBatch(three(), 2, selection(), false))
+    expect(row).toContain(QUESTION_CONTINUE_COPY)
+    // React omits the attribute entirely for `disabled={false}`, so its PRESENCE is the assertion and
+    // the sibling cases below assert its absence — together they pin both directions of the branch.
+    expect(count(row, /disabled=""/g)).toBe(1)
+    // On the trailing button and nowhere else: Cancel and Previous are never gated on what has been
+    // picked, and a stray `disabled` on either would satisfy a bare `toContain`.
+    expect(row.indexOf('disabled=""')).toBeGreaterThan(row.indexOf(QUESTION_PREVIOUS_COPY))
+  })
+
+  it('AC1: makes Continue available the moment every question holds a value', () => {
+    const row = actionsRowOf(renderBatch(three(), 2, selection(), true))
+    expect(row).toContain(QUESTION_CONTINUE_COPY)
+    expect(row).not.toContain('disabled')
+  })
+
+  it('AC2: never gates stepping — Next stays available on a batch with nothing answered', () => {
+    // The deadlock case, asserted at BOTH stepping positions: the first question (no Previous) and a
+    // middle one (Previous present), each with `canAnswer` false.
+    for (const activeIndex of [0, 1]) {
+      const row = actionsRowOf(renderBatch(three(), activeIndex, selection(), false))
+      expect(row).toContain(QUESTION_NEXT_COPY)
+      expect(row).not.toContain(QUESTION_CONTINUE_COPY)
+      expect(row).not.toContain('disabled')
+    }
+  })
+
+  it('AC2: keeps the row one element across both roles, gated or not', () => {
+    // The class token names the design's FILLED TREATMENT slot, which is what does not vary — so
+    // counting it is how "one element in two roles" is observable in static markup at all. Two branched
+    // elements would reconcile as a REPLACEMENT and drop focus mid-row when stepping onto the last
+    // question; the count staying 1 in all four states is what rules that out.
+    for (const [activeIndex, canAnswer] of [
+      [0, false],
+      [0, true],
+      [2, false],
+      [2, true]
+    ] as const) {
+      const row = actionsRowOf(renderBatch(three(), activeIndex, selection(), canAnswer))
+      expect(count(row, /question-panel__continue/g)).toBe(1)
+    }
   })
 })

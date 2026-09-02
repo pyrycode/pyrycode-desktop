@@ -3,6 +3,7 @@ import {
   createQuestionPicksStore,
   questionPicksStore,
   selectQuestionSelection,
+  selectBatchSelections,
   type QuestionSelection
 } from './questionPicksStore'
 
@@ -499,6 +500,77 @@ describe('selectQuestionSelection', () => {
     })
 
     expect(selectionAt(store, BATCH, 0)).toBe(store.getState().picks.get(BATCH)?.get(0))
+  })
+})
+
+describe('selectBatchSelections (#922)', () => {
+  /** The whole-batch read, through the production surface. */
+  const batchAt = (
+    store: ReturnType<typeof createQuestionPicksStore>,
+    questionBatchId: string
+  ): ReadonlyMap<number, QuestionSelection> => selectBatchSelections(questionBatchId)(store.getState())
+
+  it('answers an untouched batch with an empty map, at a STABLE reference', () => {
+    const store = createQuestionPicksStore()
+    const first = batchAt(store, BATCH)
+    const second = batchAt(store, BATCH)
+
+    expect(first.size).toBe(0)
+    // The `selectQuestionSelection` mechanism, for its reason: `useStore` compares the selector's
+    // RESULT under `Object.is`, so a fresh `new Map()` per call would differ on every render and spin
+    // the panel forever. The container calls this inline in a render with no `useMemo`.
+    expect(first).toBe(second)
+    // The same constant answers a batch that exists no more and one that never existed.
+    store.getState().dispatch({
+      type: 'optionPicked',
+      questionBatchId: BATCH,
+      questionIndex: 0,
+      optionIndex: 1
+    })
+    expect(batchAt(store, OTHER_BATCH)).toBe(first)
+  })
+
+  it('answers a picked batch with the held inner map by reference, across a sibling write', () => {
+    const store = createQuestionPicksStore()
+    store.getState().dispatch({
+      type: 'optionPicked',
+      questionBatchId: BATCH,
+      questionIndex: 0,
+      optionIndex: 1
+    })
+    store.getState().dispatch({
+      type: 'otherTextChanged',
+      questionBatchId: BATCH,
+      questionIndex: 2,
+      text: 'Zig'
+    })
+
+    // Every question the operator has touched, in one read — which is what makes the batch-wide gate
+    // possible at all, since the panel draws one question at a time.
+    const held = batchAt(store, BATCH)
+    expect(held).toBe(store.getState().picks.get(BATCH))
+    expect(held.get(0)?.optionIndices).toEqual([1])
+    expect(held.get(2)?.otherText).toBe('Zig')
+
+    // `withSelection` clones on write, so a write to ANOTHER batch carries this one across by
+    // reference and the panel does not re-render for a sibling's pick.
+    store.getState().dispatch({
+      type: 'optionPicked',
+      questionBatchId: OTHER_BATCH,
+      questionIndex: 0,
+      optionIndex: 0
+    })
+    expect(batchAt(store, BATCH)).toBe(held)
+  })
+
+  it('treats a hostile batch id as an ordinary absent key, before any write', () => {
+    const store = createQuestionPicksStore()
+    // The `Map` property this read inherits from `selectQuestionSelection`: on a `Record` these would
+    // resolve up the prototype chain and read as present. A swap to `Record` is no type error, so this
+    // read-before-write is what catches one.
+    expect(batchAt(store, '__proto__').size).toBe(0)
+    expect(batchAt(store, 'constructor').size).toBe(0)
+    expect(batchAt(store, '').size).toBe(0)
   })
 })
 

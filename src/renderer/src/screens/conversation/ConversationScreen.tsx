@@ -69,12 +69,13 @@ import {
   questionBatchStore,
   selectBatchFor
 } from '../../store/questionBatchStore'
-import { refuseQuestionBatch } from './questionResolution'
+import { refuseQuestionBatch, answerQuestionBatch, resolveQuestionAnswers } from './questionResolution'
 import type { QuestionBatch } from '../../store/questionBatches'
 import {
   useQuestionPicksStore,
   questionPicksStore,
-  selectQuestionSelection
+  selectQuestionSelection,
+  selectBatchSelections
 } from '../../store/questionPicksStore'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
 import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
@@ -2574,6 +2575,17 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
   const selection = useQuestionPicksStore(
     selectQuestionSelection(batch.questionBatchId, activeIndex)
   )
+  // #922: the WHOLE batch's picks, beside the active question's. Two subscriptions to one store, and
+  // the narrow one is not redundant — it is what the rows are drawn from, and it stays because
+  // deriving it from the map below would need the picks store's deliberately-unexported empty
+  // sentinel. The wide read costs no extra render either: it already changes on every pick in this
+  // batch, so it is a superset of what the narrow one wakes on.
+  const selections = useQuestionPicksStore(selectBatchSelections(batch.questionBatchId))
+  // THE GATE AND THE PAYLOAD, FROM ONE CALL. `null` means some question in the batch holds no value:
+  // it renders Continue unavailable AND is what `answerQuestionBatch` refuses, so the button's state
+  // and the frame's contents cannot disagree. Computed inline in the render with no `useMemo` — it is
+  // a pure pass over one batch's questions, and memoising it would need a key derived from the picks.
+  const answers = resolveQuestionAnswers(batch.questions, selections)
   const at = {
     multiSelect: question.multiSelect,
     questionBatchId: batch.questionBatchId,
@@ -2591,6 +2603,18 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
       // nothing (the existing `dispatch` read below made the same call).
       onCancel={() =>
         refuseQuestionBatch(batch.questionBatchId, {
+          sendCommand: window.pyry.sendCommand,
+          dispatchPicks: dispatch,
+          dispatchBatch: questionBatchStore.getState().dispatch
+        })
+      }
+      // #922. The same three injected effects as the refusal above — one `QuestionResolveDeps` serves
+      // both exits — with the assembled entries in place of nothing. The id read is
+      // `batch.questionBatchId`, the value this leaf is keyed on upstream, so the batch answered is by
+      // construction the batch drawn.
+      canAnswer={answers !== null}
+      onAnswer={() =>
+        answerQuestionBatch(batch.questionBatchId, answers, {
           sendCommand: window.pyry.sendCommand,
           dispatchPicks: dispatch,
           dispatchBatch: questionBatchStore.getState().dispatch

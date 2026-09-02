@@ -1,4 +1,4 @@
-# Question panel (#906, option rows since #907, live since #912, header tabs since #915, step controls since #916, Cancel sends since #921)
+# Question panel (#906, option rows since #907, live since #912, header tabs since #915, step controls since #916, Cancel sends since #921, Continue sends since #922)
 
 Split out of [Conversation shell — modals](conversation-shell-modals.md) on 2026-09-02 to keep that
 document under the size cap. Part of [Conversation shell](conversation-shell.md); see that document for
@@ -19,7 +19,7 @@ shipping anything. #912 wires the panel to #911's store: the option rows and the
 click or a keystroke, and the picks survive a chat switch. #915 fills the title row with one tab per
 question the batch carries and lets a click choose which question the box draws — the batch's own header
 text, on a control keyed by array position rather than by that text, the failure mode `questionBatches.ts`
-and `WireQuestion`'s docblock each name by hand. #916 puts the same jump on the action row: a Previous button beside the header tabs' own jump, and a trailing button that reads Next until the operator reaches the last question. The send is still #853's.
+and `WireQuestion`'s docblock each name by hand. #916 puts the same jump on the action row: a Previous button beside the header tabs' own jump, and a trailing button that reads Next until the operator reaches the last question. #921 gives Cancel its send, and #922 gives the same trailing button its second role's send.
 
 **`useQuestionBridge()` mounts in `App.tsx`**, beside `useModalBridge`, unconditional and app-lifetime —
 not screen-scoped, because a batch is raised against a conversation the operator may not have open, the
@@ -134,10 +134,11 @@ would put untrusted text into an attribute, the ban `questionBatchStore.ts` stat
 derived from `header`, `question`, or the nonce `questionBatchId` either, which this slice never reads. The
 title row draws every question's header as a tab — see § Header tabs below — using the already-shipped
 `PyryMark` at `width={14} height={16}`, the composer status row's call verbatim, beside them. Cancel and
-Continue are both `<button type="button">` with no `disabled` — never greyed, since the panel sits on top
-of the composer and there is nothing to disable. Through #916 neither carried an `onClick` either; since
-[#921](question-panel-cancel-refusal.md) Cancel does, the row's first sending control, while Continue stays
-inert until #853's answer path.
+Continue are both `<button type="button">`; Cancel is never greyed, since the panel sits on top of the
+composer and there is nothing to disable there. Through #916 neither carried an `onClick` either; since
+[#921](question-panel-cancel-refusal.md) Cancel sends, and since
+[#922](question-panel-continue-answer.md) Continue does too — and is the one control on this panel that
+can be `disabled`, while short an answer on the last question. See that document for the gate.
 
 **Colours came from the Figma variables on node `347:6913`, never the generated fallbacks** (which print
 the light scheme, per `tokens.css`'s standing warning): Tertiary, On Background, Primary Container,
@@ -237,17 +238,19 @@ negative *because* of this render condition, so no `Math.max(0, …)` guards it;
 `Math.min(jumpedTo, questions.length - 1)` clamp (`QuestionPanelSlot`, unedited by this slice) still owns the
 other end. Neither handler can produce a state the other's guard would need to catch.
 
-**The trailing button is one element whose child and `onClick` vary, never two branched elements.** It reads
-`QUESTION_NEXT_COPY` with a handler on every question but the last, and `QUESTION_CONTINUE_COPY` with no
-handler at all on the last — inert-until-#853 by construction rather than by care. Verified in code review:
-the three action-row slots are a static array, so the trailing button always sits at the same child index
-regardless of whether Previous's slot is `null` or a button, and React matches it there across renders by
-that position — it is genuinely never remounted when Previous appears or disappears. The one real focus
-consequence, confirmed in review and left for #853 to answer alongside the adjacent hazard it already owned
-(the trailing label swapping under a stationary keyboard focus): Previous *itself* unmounts on its own
-activation — stepping from the second question to the first with the keyboard removes the just-activated
-button, dropping focus to `<body>`. That is the direct, correct consequence of "absent, not disabled," not a
-bug to fix here.
+**The trailing button is one element whose child and `onClick` vary, never two branched elements.** Through
+\#916 it read `QUESTION_NEXT_COPY` with a handler on every question but the last, and `QUESTION_CONTINUE_COPY`
+with no handler at all on the last — inert-until-#853 by construction rather than by care. Verified in code
+review: the three action-row slots are a static array, so the trailing button always sits at the same child
+index regardless of whether Previous's slot is `null` or a button, and React matches it there across renders
+by that position — it is genuinely never remounted when Previous appears or disappears. **[#922](
+question-panel-continue-answer.md) gave the Continue role its handler and its one `disabled` attribute** —
+see that document for the gate, which is a conjunction with the Continue role precisely so this element's
+Next role is never disabled. The one real focus consequence, confirmed in review and left open at the time
+for #922 alongside the adjacent hazard it already owned (the trailing label swapping under a stationary
+keyboard focus, unchanged by #922): Previous *itself* unmounts on its own activation — stepping from the
+second question to the first with the keyboard removes the just-activated button, dropping focus to
+`<body>`. That is the direct, correct consequence of "absent, not disabled," not a bug to fix.
 
 **CSS joins two existing selector lists rather than minting a treatment.** Read against `347:6888` on
 2026-09-02 (and independently re-confirmed by the verifier's own `get_variable_defs` read — byte-identical
@@ -484,4 +487,13 @@ to keep this document under the size cap. Through #916 the Actions row's Cancel 
 that document covers `questionResolution.ts`'s `refuseQuestionBatch`, the picks-first optimistic clear, the
 client-owned `outcome`/`source` constants, the `onCancel` wiring on `QuestionPanelView`/`QuestionPanelSlot`,
 and the security review.
+
+## Continue answers the batch (#922)
+
+Split out to [Question panel — Continue answers the batch](question-panel-continue-answer.md) on
+2026-09-02, the same move made for Cancel above. Through #916 the trailing button's Continue role carried
+no handler at all. That document covers `resolveQuestionAnswers` (the one function that is both the
+availability gate and the payload builder), `answerQuestionBatch`, the picks store's new
+`selectBatchSelections` read, the `canAnswer`/`onAnswer` props and the conjunction that keeps the button's
+Next role from ever being gated on completeness, the `:disabled` CSS treatment, and the security review.
 

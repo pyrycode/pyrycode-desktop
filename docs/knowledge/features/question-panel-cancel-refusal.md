@@ -23,7 +23,7 @@ sendCommand, dispatchPicks, dispatchBatch }` deps, so `refuseQuestionBatch(quest
 plain, deterministic function tested with spies rather than a DOM:
 
 ```ts
-export function refuseQuestionBatch(questionBatchId: string, deps: QuestionRefuseDeps): void {
+export function refuseQuestionBatch(questionBatchId: string, deps: QuestionResolveDeps): void {
   try {
     deps.sendCommand(refuseQuestionsCommand({ question_batch_id: questionBatchId }))
   } catch {
@@ -33,6 +33,11 @@ export function refuseQuestionBatch(questionBatchId: string, deps: QuestionRefus
   deps.dispatchBatch({ type: 'dismissed', questionBatchId, outcome: 'refused', source: 'client' })
 }
 ```
+
+**The deps interface is `QuestionRefuseDeps` as shipped here, renamed `QuestionResolveDeps` by
+[#922](question-panel-continue-answer.md)**, which added a second exit (`answerQuestionBatch`) over the
+same three effects. The fields are unchanged; only the name generalized to cover both, the
+`modalResolution.ts`'s `ModalResolveDeps` precedent for one interface across an answer and a cancel.
 
 Renderer specs here are static server renders with no DOM and nothing to click (AC3's "a throw out of the
 send bridge does not reach the render" is unreachable from a component test), so the guarded send had to
@@ -130,6 +135,9 @@ scope and not reachable through anything this slice adds.
 
 - [Question panel](conversation-shell-question-panel.md) — the parent document: the panel's frame,
   `ComposerSlot`/`QuestionPanelSlot`, header tabs (#915) and step controls (#916).
+- [Question panel — Continue answers the batch](question-panel-continue-answer.md) — the row's other
+  sending control (#922), which reuses this document's guarded-send and picks-first-clear shape verbatim
+  and renamed `QuestionRefuseDeps` to `QuestionResolveDeps` to serve both exits.
 - [Question-batch model](question-batch-model.md) — `refuseQuestionBatch` is the first local dispatcher of
   this model's `dismissed` arm on both `questionBatchStore` and `questionPicksStore`; see its § Types and
   § The picks store for the arm and the withdrawn `resolved`-memory prediction.

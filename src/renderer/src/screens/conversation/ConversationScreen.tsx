@@ -825,6 +825,26 @@ function TimelineRow({
 // capabilities, never resolved, opened, fetched or executed. The routed value is read exactly once, as
 // children: never a path, a filename, a cache key, a lookup key or an argument to anything.
 //
+// #856 ADDS THE FOURTH UNTRUSTED STRING TO THIS CHIP: `result.resultDetail`, the daemon's précis of what
+// a call returned. Same class as `resultSummary` and the picked input value, same posture — auto-escaped
+// React children of a <span> and nothing else — and it is the FIRST daemon string drawn OUTSIDE
+// .tool-row__left, which is what makes its CSS bound load-bearing rather than cosmetic: every other
+// untrusted run on this row is bounded by the left group's ellipsis, so an unbounded count would be the
+// one that can push the CLIENT'S OWN chevron past the chip's clip edge. conversation.css states that
+// bound on .tool-row__count and e2e/tool-row-toggle.spec.ts proves it. Four sinks this string makes newly
+// tempting are declined, each a MUST FIX if it ever appears:
+//   - NO title, a SEVENTH time, and now with a new pull: the count is the one run that ellipsizes at a
+//     cap, which makes `title={resultDetail}` ("hover for the whole thing") the obvious next edit. The
+//     answer is the same as it has been six times — the row OPENS and the body says what came back.
+//   - NO PARSING IT BACK INTO A NUMBER. "110 of 1676 lines" invites a parseInt, a percentage, a progress
+//     bar. It is a précis with unit words and interior spaces (#773 says so, and the daemon's own long
+//     tail is empty), so a number derived from it would be a CLIENT-owned claim about a DAEMON-owned
+//     value. Nothing reads its length either; the bound is CSS, not arithmetic.
+//   - NO aria-label and no data-*. The count joins the button's accessible name for free, as one more
+//     text child — which is correct and needs no attribute. Interpolating it into one is #697's shape.
+//   - NO log line for the count, for the fourth time: any useful one carries daemon text into a log,
+//     which ADR 0007's content-free rule and CLAUDE.md both forbid.
+//
 // Figma 155:558's chevron, exported verbatim from the design's icon asset (I155:558;134:4925). It points
 // RIGHT — the `›` the design draws at the header's trailing edge — and is the right-pointing sibling of
 // ComposerActionsMenu's CHEVRON_PATH: same family, same construction, same slight overflow past the
@@ -918,6 +938,37 @@ export function ToolRow({
           THE CHEVRON IS THE GROUP'S LAST CHILD. #856 inserts the result count BEFORE it. */}
       {result !== null && (
         <span className="tool-row__right">
+          {/* #856: the daemon's précis of what the call returned — "265 lines", "110 of 1676 lines".
+              A <span> and never Figma's <p>: a resolved chip is a real <button>, which admits phrasing
+              content only, so flow content in here is invalid HTML and a React DOM-nesting warning.
+              #854's ruling for the two group wrappers, one level down — the ELEMENT is chosen for
+              validity, the BOX for layout.
+
+              BOTH FALSY VALUES ARE NAMED, and that is the decision this ticket owns rather than a
+              verbose Boolean(). Absent means the WIRE omitted it (a daemon predating the field); '' means
+              this daemon looked and found no count — the right answer for a failed call and for the long
+              tail. Upstream keeps the two distinct on purpose and says so at every stage (the decoder,
+              the IPC event, the bridge, the reducer); THIS ROW is where they finally mean the same thing,
+              which is draw nothing, and the collapse should be legible at the one place that performs it.
+
+              `!== undefined`, NEVER `'resultDetail' in result`. Structured clone carries the key across
+              the IPC bridge whether or not the wire set it, so the `in` form is true for BOTH and would
+              silently collapse the distinction #773 paid to keep.
+
+              THIS INVERTS #855's RULE ON THE RUNS BESIDE IT, deliberately. There a bare `&&` would be a
+              bug, because '' means "draw the element with no text"; here '' means "there is no count",
+              so it must draw nothing. Same file, two opposite conventions, because the two values mean
+              opposite things.
+
+              NO GAP FALLS WHERE THIS ISN'T, for free: .tool-row__right's gap lands only BETWEEN two
+              children, so not rendering the element IS AC2 — no modifier class, no pending variant.
+              #854's "the whole group, not just the chevron" argument one level down again.
+
+              And no second predicate: the whole group is already gated on `result`, so a pending row has
+              no group to put a count in and the question does not arise there. */}
+          {result.resultDetail !== undefined && result.resultDetail !== '' && (
+            <span className="tool-row__count">{result.resultDetail}</span>
+          )}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
               own width/height, fill="currentColor" so it takes the ink from CSS, and aria-hidden so it
               adds no accessible name — the button's name stays exactly its two text runs (WCAG 2.5.3

@@ -130,3 +130,13 @@ Fakes over mocks throughout: the e2e drives the real decoder, IPC and reducer th
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-02
+
+## Revisions
+
+### 2026-09-02 — the bound moved from the count to the group
+
+**What changed.** § "The bound on the count" placed `max-width` on `.tool-row__count`. It is stated on `.tool-row__right` instead, and the count takes `flex: 0 1 auto; min-width: 0` (Figma says `shrink-0`) so it is the group's only shrink candidate while the chevron keeps `flex: 0 0 auto`.
+
+**What drove it.** Not a review finding — a CSS fact the plan got wrong. A percentage `max-width` resolves against the containing block, which for the count is `.tool-row__right`, whose own width depends on that count. The dependency is circular, so the percentage resolves against an indefinite size, behaves as `none` while the group's intrinsic size is computed, and bounds nothing: the group would still take its full content width and still push the chevron past the chip's clip edge. On the group the containing block is `.tool-row__chip`, whose `width: 100%` is definite, so 50% resolves.
+
+**The new contract.** `.tool-row__right` gains `max-width: 50%` and keeps `flex: 0 0 auto` — the clamp caps the group's *base* size without making it a shrink candidate, so #854's truncation chain is unchanged in both directions and an oversized tool name still ellipsizes the headline. The negative free space the clamp creates falls entirely on `.tool-row__count`, which ellipsizes. The security finding is addressed identically; only where the two declarations sit changed. Open question 2 (which percentage) is settled at 50%, and the e2e asserts the *property* — the chevron stays inside the clipped box and the count is what gives way — rather than the number.

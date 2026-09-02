@@ -1297,12 +1297,82 @@
 
    The group RENDERS ONLY ON A RESOLVED ROW (ConversationScreen.tsx), which is a markup fact rather than a
    CSS one and is why there is no pending variant here: an always-rendered empty group would still take
-   one side of the chip's gap and move a pending row's trailing edge. */
+   one side of the chip's gap and move a pending row's trailing edge.
+
+   #856 ADDS max-width AND NOTHING ELSE, and it is a security control rather than a nicety — found by that
+   ticket's plan-time security pass. Once the count lands here the group's content includes an unbounded
+   untrusted string; uncapped, a long enough `result_detail` gives this group a base size wider than the
+   chip, collapses .tool-row__left to nothing, and pushes the CHEVRON — client-owned chrome — past
+   .tool-row__chip's overflow: hidden edge, where it simply vanishes. That is the first time a
+   daemon-controlled string can displace the client's own affordance on this row: every other untrusted
+   run lives in the left group and is already bounded by its ellipsis.
+
+   flex: 0 0 auto IS UNCHANGED, and that is the point of capping HERE rather than making the group
+   shrinkable. max-width clamps this group's BASE size; it does not turn it into a shrink candidate, so
+   an oversized daemon-chosen tool name still ellipsizes the HEADLINE rather than squeezing the chevron —
+   the truncation chain above is intact in both directions. The negative free space the clamp creates
+   falls entirely on .tool-row__count, the group's only shrinkable child.
+
+   THE PERCENTAGE MUST BE STATED HERE, not on the count: this group's containing block is
+   .tool-row__chip, whose width: 100% is definite, so 50% resolves. On the count the containing block
+   would be THIS group, whose own width depends on that count — circular, so the percentage would resolve
+   against an indefinite size, behave as `none` during the group's intrinsic sizing, and bound nothing.
+
+   50% is a literal with its own precedent — .tool-row__body's percentage max-width, and the ruling on
+   .tool-row__result's max-height that a one-off bound sharing a precedent does not earn a token. Half
+   the header is where a trailing annotation stops annotating and starts being the row. The design's
+   longest example ("110 of 1676 lines") is an order of magnitude short of it even in the 800px minimum
+   window, so the cap is invisible in every real case and moves nothing the geometry tests measure. */
 .tool-row__right {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex: 0 0 auto;
+  max-width: 50%;
+}
+
+/* #856 — the result count (Figma 155:557), the trailing group's FIRST child, drawn 12px before the
+   chevron by the group's own gap. M3/body/medium IN FULL, the same four tokens .tool-row__summary takes
+   whole, because it is the same type step; the ink is Schemes/On Background, which maps to the surface
+   pair for the reason that rule already records rather than minting a second name for one colour.
+
+   flex: 0 0 auto + white-space: nowrap are the design's own shrink-0/whitespace-nowrap, and they are what
+   AC4 rests on: this run never shrinks and never wraps, so a thread's counts line up as a column of
+   TRAILING edges — the leading edge cannot line up, since the strings differ in width. A wrapped count
+   would also break the header's single line box.
+
+   NO min-width: 0 AND NO PART IN THE LEFT GROUP'S TRUNCATION CHAIN. .tool-row__right stays flex: 0 0 auto
+   and is not edited: an oversized daemon-chosen TOOL NAME must keep ellipsizing the headline rather than
+   squeezing this group, which is the property #854 states and pins with three width equalities.
+
+   flex: 0 1 auto WHERE FIGMA SAYS shrink-0, and the deviation is the whole security control — see the
+   group's own max-width above, which is the other half. `result_detail` is unbounded on the wire (the
+   decoder type-checks it, it does not length-check it, and parseInboundMessage's whole-message cap
+   leaves ample room). This run is the group's ONLY shrink candidate — the chevron beside it keeps
+   flex: 0 0 auto — so all of the negative free space the cap creates lands here and none of it on the
+   client's own affordance. In every real case the group is nowhere near its cap, free space is not
+   negative, nothing shrinks, and the rendered box is Figma's shrink-0 box exactly.
+
+   min-width: 0 + overflow + text-overflow + white-space are .tool-row__summary's four, for the same job
+   one group over: without min-width: 0 the automatic minimum floors this at its max-content width and
+   the shrink above cannot happen, which is link 2 of the truncation chain that rule writes out. nowrap
+   also keeps the count on the header's single line box, which is the design's own declaration.
+
+   THE ELLIPSIS IS A VISUAL CLIP, NOT A TRANSFORM: the DOM text node stays the verbatim string,
+   untrimmed and unreformatted (AC3), exactly as .tool-row__summary has always treated the headline.
+   Nothing here parses the count, measures its length in JavaScript, or turns it back into the number it
+   describes — the bound is the cascade, never arithmetic. */
+.tool-row__count {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-on-surface);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
 /* .status-row__chevron's two declarations plus the ink the design binds (Schemes/Primary, #9DCBFC, which

@@ -47,6 +47,26 @@ function toolResult(
   return { type: 'toolResult', turnId, toolUseId, isError, resultSummary }
 }
 
+/**
+ * A `toolResult` carrying the #773 structured-outcome detail. The sibling above stays the
+ * ABSENT-detail builder (a daemon predating pyrycode#2024).
+ */
+function toolResultWithDetail(
+  turnId: string,
+  toolUseId: string,
+  resultDetail: string,
+  isError = false
+): ThreadEvent {
+  return {
+    type: 'toolResult',
+    turnId,
+    toolUseId,
+    isError,
+    resultSummary: `ok ${toolUseId}`,
+    resultDetail
+  }
+}
+
 function turnEnd(turnId: string, stopReason = 'end_turn'): ThreadEvent {
   return { type: 'turnEnd', turnId, stopReason }
 }
@@ -217,6 +237,44 @@ describe('reduceTimeline — tool-result correlation', () => {
     const resolved = run([toolUse('A', 't1'), toolResult('A', 't1')])
     const dup = reduceTimeline(resolved, toolResult('A', 't1', true, 'second'))
     expect(dup).toBe(resolved)
+  })
+})
+
+describe('reduceTimeline — tool-result resultDetail (#773)', () => {
+  /** The resolved `toolCall` after one call and its correlated result. */
+  function resolvedCall(event: ThreadEvent): Extract<ThreadItem, { kind: 'toolCall' }> {
+    const state = run([toolUse('A', 't1', 'Read'), event])
+    return state.items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+  }
+
+  it('lands the value on the item BYTE-IDENTICAL, beside isError and resultSummary (AC1, AC4)', () => {
+    const call = resolvedCall(toolResultWithDetail('A', 't1', '110 of 1676 lines'))
+    expect(call.result).toEqual({
+      isError: false,
+      resultSummary: 'ok t1',
+      resultDetail: '110 of 1676 lines'
+    })
+  })
+
+  it('carries an EMPTY detail through as "", never collapsed into absent (AC3)', () => {
+    expect(resolvedCall(toolResultWithDetail('A', 't1', '')).result?.resultDetail).toBe('')
+  })
+
+  it('leaves the detail absent when the event carried none — a pre-#2024 daemon (AC2)', () => {
+    const call = resolvedCall(toolResult('A', 't1'))
+    expect(call.result?.resultDetail).toBeUndefined()
+    // The result is still filled: an absent detail is not a failed correlation.
+    expect(call.result).toEqual({ isError: false, resultSummary: 'ok t1' })
+  })
+
+  it('leaves the orphan and duplicate same-reference no-ops untouched (regression — fillResult unchanged)', () => {
+    const withCall = run([toolUse('A', 't1')])
+    expect(reduceTimeline(withCall, toolResultWithDetail('A', 'nope', '265 lines'))).toBe(withCall)
+
+    const resolved = run([toolUse('A', 't1'), toolResultWithDetail('A', 't1', '265 lines')])
+    expect(reduceTimeline(resolved, toolResultWithDetail('A', 't1', '999 lines'))).toBe(resolved)
+    const call = resolved.items[0] as Extract<ThreadItem, { kind: 'toolCall' }>
+    expect(call.result?.resultDetail).toBe('265 lines')
   })
 })
 

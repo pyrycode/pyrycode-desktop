@@ -968,13 +968,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // session store, folds this through `fillResult` to resolve the correlated `toolCall`'s
             // result in place — rebuilding a fresh ThreadEvent that omits the id, so it stops there until
             // #756 routes by it. `isError` is a boolean; `false` is a value.
+            // `resultDetail` (#773) is the sixth field, assigned UNCONDITIONALLY — `undefined` when the
+            // wire omitted it (a pre-pyrycode#2024 daemon). Never a conditional spread, which would fold
+            // an empty detail into absence: the two are carried distinctly all the way to the item, and
+            // the decision that both draw nothing belongs to the row (#856). Structured clone carries the
+            // key across with its `undefined` value, so the renderer-side contract is `=== undefined`,
+            // never `'resultDetail' in event`.
             emitDaemonEvent(sink, {
               type: 'toolResult',
               conversationId: inbound.toolResult.conversation_id,
               turnId: inbound.toolResult.turn_id,
               toolUseId: inbound.toolResult.tool_use_id,
               isError: inbound.toolResult.is_error,
-              resultSummary: inbound.toolResult.result_summary
+              resultSummary: inbound.toolResult.result_summary,
+              resultDetail: inbound.toolResult.result_detail
             })
             return
           case 'queue-state':

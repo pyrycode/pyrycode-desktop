@@ -534,6 +534,16 @@ export type DaemonEvent =
   // result in place — not the session store; that correlation stays on `toolUseId` alone. `isError` is a
   // boolean (`false` = success, a value); `resultSummary` is opaque daemon display text the render slice
   // (#230) must render as plain text. No token, key, or raw frame.
+  // `resultDetail` (#773) is the daemon's short précis of the call's STRUCTURED outcome — "265 lines",
+  // "110 of 1676 lines" — carried verbatim, unit words and interior spaces included, because a client
+  // cannot tell a read from a search without switching on a tool name. ABSENT means the WIRE omitted it
+  // (a pre-pyrycode#2024 daemon) — test `event.resultDetail === undefined`, never
+  // `'resultDetail' in event`, which structured clone makes true either way. Absence and `''` mean the
+  // same thing upstream (no count), but they are carried DISTINCTLY here: collapsing is lossy and buys
+  // nothing, and the decision that both draw nothing belongs to the render slice (#856), which owns that
+  // DOM sink. Untrusted daemon display text under the same plain-text-NEVER-HTML constraint as
+  // `resultSummary` — never parsed back into a number, never an attribute, a URL, a filename, a cache
+  // key, or a log line.
   | {
       type: 'toolResult'
       conversationId: string
@@ -541,6 +551,7 @@ export type DaemonEvent =
       toolUseId: string
       isError: boolean
       resultSummary: string
+      resultDetail?: string
     }
   // The queued-backlog arm (#292). Reuses the wire QueuedItem row type verbatim (the
   // conversationsReceived precedent) — snake_case, order preserved from the wire (enqueue order). Carries

@@ -191,6 +191,45 @@ describe('translateTimelineEvent — the two owned arms', () => {
     expect(translated).not.toBe(event)
   })
 
+  it('toolResult carries resultDetail onto the ThreadEvent, still dropping the id (#773)', () => {
+    const translated = translateTimelineEvent({
+      type: 'toolResult',
+      conversationId: 'conv-1',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      isError: false,
+      resultSummary: 'read 12 lines',
+      resultDetail: '110 of 1676 lines'
+    })
+    expect(translated).toEqual({
+      type: 'toolResult',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      isError: false,
+      resultSummary: 'read 12 lines',
+      resultDetail: '110 of 1676 lines'
+    })
+  })
+
+  it('toolResult keeps an EMPTY resultDetail as "", and an absent one absent (#773)', () => {
+    const base = {
+      type: 'toolResult',
+      conversationId: 'conv-1',
+      turnId: 'A',
+      toolUseId: 'tu-1',
+      isError: false,
+      resultSummary: 'ok'
+    } as const
+
+    const empty = translateTimelineEvent({ ...base, resultDetail: '' })
+    expect(empty?.type === 'toolResult' ? empty.resultDetail : 'unreachable').toBe('')
+
+    // Absent stays absent: assigned unconditionally, never through a conditional spread that would
+    // fold "" into absence — and read as `=== undefined`, never via `in`.
+    const absent = translateTimelineEvent(base)
+    expect(absent?.type === 'toolResult' ? absent.resultDetail : 'unreachable').toBeUndefined()
+  })
+
   it('sessionTransition → a sessionBoundary ThreadEvent carrying the render fields, dropping newSessionId', () => {
     const event: DaemonEvent = {
       type: 'sessionTransition',

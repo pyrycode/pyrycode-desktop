@@ -205,6 +205,20 @@ own event constructors, no new test double.
    the two narrow different types and #936 already split `requireStringArray` out of
    `requireStringArrayOrNull` for exactly this reason.
 
+## Revisions
+
+**2026-09-02, during implementation — both Open Questions resolved as leaned; no design change.**
+
+1. **The shared `TOOL_RESULT` fixture does NOT gain the key.** Left exactly as it was, which makes it
+   the pre-feature payload AC2 asks for — a daemon predating pyrycode#2024 — and lets the new
+   absent-decodes-clean test assert against it directly. Every pre-existing `toEqual` against the
+   fixture kept passing untouched, confirming the no-fixture-cascade prediction: 912 unrelated tests in
+   the four touched specs stayed green through the RED run.
+2. **`optionalString` landed as its own narrower beside `optionalStringMap`,** not folded into it. The
+   two narrow different types, and #936 had already split `requireStringArray` out of
+   `requireStringArrayOrNull` on the same reasoning. It shares the map helper's message *category*,
+   which is the part worth reusing.
+
 ## Security review
 
 **Verdict:** PASS

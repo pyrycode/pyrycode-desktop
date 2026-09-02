@@ -3069,6 +3069,97 @@ describe('createDaemonConnection — tool_result stream (#229)', () => {
     ])
   })
 
+  it('carries result_detail across IPC verbatim, unit words and interior spaces intact (#773)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: toolResultPlaintext({
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        tool_use_id: 'tu-1',
+        is_error: false,
+        result_summary: 'read 12 lines',
+        result_detail: '110 of 1676 lines'
+      })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'toolResult',
+        conversationId: 'conv-1',
+        turnId: 'turn-1',
+        toolUseId: 'tu-1',
+        isError: false,
+        resultSummary: 'read 12 lines',
+        resultDetail: '110 of 1676 lines'
+      }
+    ])
+  })
+
+  it('carries an EMPTY result_detail across as "", never collapsed into absent (#773)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: toolResultPlaintext({
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        tool_use_id: 'tu-1',
+        is_error: false,
+        result_summary: 'ok',
+        result_detail: ''
+      })
+    })
+
+    const [event] = emitted(sink).slice(before)
+    expect(event).toMatchObject({ type: 'toolResult', resultDetail: '' })
+  })
+
+  it('emits an absent resultDetail when the wire omitted the key (a pre-#2024 daemon, #773)', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: toolResultPlaintext({
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        tool_use_id: 'tu-1',
+        is_error: false,
+        result_summary: 'ok'
+      })
+    })
+
+    const [event] = emitted(sink).slice(before)
+    expect(event?.type).toBe('toolResult')
+    // Structured clone carries the key with an `undefined` VALUE across `webContents.send`, so the
+    // contract is `=== undefined` — never `'resultDetail' in event`, which is true either way.
+    expect(event?.type === 'toolResult' ? event.resultDetail : 'unreachable').toBeUndefined()
+  })
+
+  it('drops a tool_result whose result_detail is a non-string, without emitting (#773)', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: toolResultPlaintext({
+          conversation_id: 'conv-1',
+          turn_id: 'turn-1',
+          tool_use_id: 'tu-1',
+          is_error: false,
+          result_summary: 'ok',
+          result_detail: 265 // a number, not the formatted string → fail closed
+        })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+
   it('drops a malformed tool_result without emitting or throwing (fail-closed)', async () => {
     const { sink, drivers } = await connected()
     const before = sink.webContents.send.mock.calls.length

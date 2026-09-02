@@ -46,6 +46,12 @@ export interface FakeDaemon {
 // the client's deterministic swap signal (there is no rekey_ack). Pure module-load constant (#112).
 export const DEFAULT_REKEY_RESUME_MESSAGE: Uint8Array
 
+// A buildReplyFrames-shaped factory (#964, see § Attachment upload scaffolding): answers the completing
+// chunk of an attachment upload with one attachment_stored reply, silence otherwise.
+export function attachmentStoredReplyFrames(
+  completingIndex: number
+): (inboundPlaintext: Uint8Array) => Uint8Array[]
+
 export type FakeDaemonOutcome = { ok: true } | { ok: false; reason: FakeDaemonErrorReason }
 
 export type FakeDaemonErrorReason =
@@ -136,6 +142,51 @@ Both `handleReconnect` and `reconnectResendFrames`/`pushFrame` are **modal-agnos
 `Uint8Array` envelopes only. The modal specifics (a crafted `modal_shown` frame) live entirely in the
 consuming [#416](../codebase/416.md) e2e, so a future reconnect e2e for another slice (e.g. the queue
 store, [#197](../codebase/197.md)) can reuse this capability unchanged.
+
+## Attachment upload scaffolding (#964)
+
+Beyond the responder state machine above, the fake exports a standalone `buildReplyFrames` builder for
+proving the [attachment-stored decode](attachment-stored-wire-types.md) end to end. Unlike the
+rekey/reconnect capabilities, it needs no daemon state at all — the fake had **no attachment awareness
+before this ticket** (a grep for "attachment" in the file returned zero hits).
+
+```ts
+export function attachmentStoredReplyFrames(
+  completingIndex: number
+): (inboundPlaintext: Uint8Array) => Uint8Array[]
+```
+
+Passed straight into `FakeDaemonOptions.buildReplyFrames` (the existing per-inbound reply hook), it
+answers the way the real daemon does: decode the inbound plaintext; `[]` for anything that is not an
+`attachment_chunk`, and `[]` for a chunk whose `index` is not `completingIndex`; for the completing chunk,
+exactly one `attachment_stored` envelope whose `in_reply_to` is **that chunk envelope's id** and whose
+payload carries **that chunk's `attachment_id`**. A malformed inbound decodes to `[]` rather than
+throwing, so a decode failure inside the fake cannot masquerade as a daemon-side crash.
+
+**The caller names which chunk completes, and that parameter is the point, not a convenience.** Upstream's
+rule is that `in_reply_to` names the chunk whose *arrival* completed the transfer — not the highest index
+— since chunks are index-addressed and may be reassembled in any order. A fake that always answered the
+last chunk would let a consumer that predicts the final envelope id pass forever; naming a non-final
+completing index (the [attachment-stored](attachment-stored-wire-types.md) AC4 test uses chunk `0` of a
+two-chunk upload) makes that failure mode reachable. Every non-completing chunk of a healthy upload gets
+**no reply at all**, which is why the builder cannot simply answer every chunk.
+
+**Stateless by construction**, unlike the rest of this module's capability sections: the closure holds one
+number and no arrival set, so two transfers interleaving on one session cannot race here, and there is
+nothing to reset between tests. `ATTACHMENT_STORED_ID`/`ATTACHMENT_STORED_TS` are fixed constants —
+`in_reply_to` and the payload are the only fields the test inspects, so a wall-clock-free fake needs no
+counter or clock of its own here, mirroring `REKEY_REQUEST_ID`/`HELLO_ACK_ID`.
+
+Placed beside the fake rather than in the test file for `DEFAULT_REKEY_RESUME_MESSAGE`'s reason: the fake
+owns the daemon's side of the protocol, the test owns the assertions.
+
+**A revision corrected the AC4 test's synchronisation claim, not the builder.** The test originally
+asserted silence from the non-completing chunk on the strength of `whenSettled()` — but `settle` is
+first-wins and fires after **every** inbound's reply loop, so it resolves on the completing chunk and says
+nothing about the other one. The fixed version wraps `attachmentStoredReplyFrames(0)` in a counting
+delegate (verbatim delegation, no extra frame, no timing change) and waits on both chunks having been
+handled before asserting silence — the assertion now observes what it claims rather than inferring it from
+FIFO delivery.
 
 ## Test-file wall-clock deadline harness (`bounded`, #550, #931)
 
@@ -230,3 +281,4 @@ protects is vitest's, not the daemon's.
 - [#525 codebase notes](../codebase/525.md) — the last outbound-tagging gap #524 flagged as pre-existing: `sendNoise` gains a defaulted `OutboundInnerType` tag parameter so the three handshake replies carry `noise_resp` while the five non-handshake sites keep `noise_msg`, matching the real daemon's `TypeNoiseResp`/`TypeNoiseMsg` split. Behaviour-preserving today since the client still discards the inbound type; the fake is now correct ahead of #507's client change rather than drifted against it.
 - [#532 codebase notes](../codebase/532.md) / [Noise session](noise-session.md#rekey-window-routing-by-inner-frame-type-532) — the client-side rekey-desync fix #524/#525 set up: `pushFrame` now also serves in `awaiting-rekey-init` (§ above), the harness relaxation that let a test daemon emit the one frame kind the client-side fix needed to prove itself against. `driveClient.deliverFrame` was also threaded to pass the decoded inner type down to the real client session, where before it discarded `type` entirely and would have left the whole suite blind to the new client-side routing.
 - Cross-project prior art: pyrycode `fakerelay-harness.md` + the fake-phone peer (`internal/e2e`, #295 tree) — the same forwarder → fake-peer → consuming-test phasing; the desktop daemon deliberately drops the Go surface and ports only the structuring rationale.
+- [Attachment-stored wire types](attachment-stored-wire-types.md) — [#964](https://github.com/pyrycode/pyrycode-desktop/issues/964)'s decode this file's new `attachmentStoredReplyFrames` (§ above) proves end to end; [Attachment chunk envelope](attachment-chunk-envelope.md) (#860) is the real `buildAttachmentChunk`/`planAttachmentChunks` the AC4 test drives chunks through rather than hand-rolling them.

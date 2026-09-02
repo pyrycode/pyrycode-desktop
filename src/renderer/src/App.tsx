@@ -214,8 +214,8 @@ function App(): JSX.Element {
   // the list is pushed, never asked for, and delivery is best-effort, so a conversation with no menu
   // is a normal permanent state rather than something to retry. Ships dormant. Like AnnouncedModelData
   // and unlike BackgroundTaskRosterData it has no `connected` branch, because a reconnect to the same
-  // daemon in the same working directory does not invalidate a published menu; its pairing-scoped
-  // clear is #955's, not this leaf's.
+  // daemon in the same working directory does not invalidate a published menu; its pairing-scoped clear
+  // is clearPairingScopedState's (#955), not this leaf's.
   return (
     <>
       <ConversationListData />

@@ -220,9 +220,11 @@ describe('subscribeSlashCommandList', () => {
     const held = selectSlashCommandListFor('conv-1')(store.getState())
 
     // Pinned specifically. Copying backgroundTaskRosterBridge's `connected` reset would be wrong
-    // twice over: that branch is the sole enforcement of ITS AC5, and this store's lifetime — the
-    // pairing-scoped clear — is #955's slice. The held entry must survive a re-handshake byte for
-    // byte, and by reference, so nothing re-notifies a subscriber either.
+    // twice over: that branch is the sole enforcement of ITS AC5, and this store's pairing-scoped
+    // clear lives in `clearPairingScopedState` (#955), where a reconnect never reaches it. The held
+    // entry must survive a re-handshake byte for byte, and by reference, so nothing re-notifies a
+    // subscriber either. With that clear now shipped, this test is the half of the pair asserting it
+    // does NOT fire here — the other half is in clearPairingScopedState.test.ts.
     bridge.emit({ type: 'connected', ack })
     expect(selectSlashCommandListFor('conv-1')(store.getState())).toBe(held)
     expect(selectSlashCommandListFor('conv-1')(store.getState())).toEqual({

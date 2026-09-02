@@ -48,7 +48,10 @@ import type {
   WireQuestionOption,
   WireQuestion,
   QuestionShownPayload,
-  QuestionDismissedPayload
+  QuestionDismissedPayload,
+  QuestionAnswerEntry,
+  QuestionAnswerPayload,
+  QuestionRefusedPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -1191,5 +1194,86 @@ describe('question-dismissed wire vocabulary (#894)', () => {
     const modalSource: WireModalSource = 'timeout'
     const carriedOver: QuestionDismissedPayload['source'] = modalSource
     expect(carriedOver).toBe('timeout')
+  })
+})
+
+describe('outbound question wire vocabulary (#919)', () => {
+  // Values are lifted verbatim from the daemon's committed fixtures
+  // (internal/protocol/testdata/question_answer.json, question_refused.json), so a contract change
+  // shows up here. Unlike the question_dismissed block above there is no producer/fixture
+  // disagreement to work around: these two frames are the CLIENT's to emit, and the fixtures are the
+  // shape it must emit.
+
+  it('admits the question_answer and question_refused outbound envelope types', () => {
+    // Compile-time membership: these assign only if the members are part of EnvelopeType, and it is
+    // the only thing that catches a dropped one — `Envelope.type` is `EnvelopeType | string`, so a
+    // builder's `type: 'question_answer'` compiles green whether or not the member was ever added.
+    const answer: EnvelopeType = 'question_answer'
+    const refused: EnvelopeType = 'question_refused'
+    expect([answer, refused]).toEqual(['question_answer', 'question_refused'])
+  })
+
+  it('shapes QuestionAnswerPayload as { question_batch_id, answer_token, answers }', () => {
+    const payload: QuestionAnswerPayload = {
+      question_batch_id: 'qb-4c19',
+      answer_token: 'at-7f3d',
+      answers: [
+        { question_index: 0, values: ['Rewrite the parser'] },
+        { question_index: 1, values: ['Add a benchmark', 'Add a fuzz target'] }
+      ]
+    }
+    // Exact `toEqual` over PAIRWISE-DISTINCT ids: `question_batch_id` and `answer_token` are both
+    // plain `string`, so a transposition between them is invisible to tsc and only distinct values
+    // catch it.
+    expect(payload).toEqual({
+      question_batch_id: 'qb-4c19',
+      answer_token: 'at-7f3d',
+      answers: [
+        { question_index: 0, values: ['Rewrite the parser'] },
+        { question_index: 1, values: ['Add a benchmark', 'Add a fuzz target'] }
+      ]
+    })
+    // NO `conversation_id`, matching `ModalAnswerPayload`'s absence: the daemon resolves the batch id
+    // against its own outstanding-batch state and never trusts a client-asserted conversation.
+    expect(payload).not.toHaveProperty('conversation_id')
+  })
+
+  it('types answers as a plain non-optional array of entries keyed by index, never by label', () => {
+    // The array is never `| null`: upstream normalises a nil slice to `[]` in
+    // QuestionAnswerPayload.MarshalJSON precisely so a client's array type can be non-optional. The
+    // same holds for an entry's `values`.
+    const empty: QuestionAnswerPayload['answers'] = []
+    expect(empty).toEqual([])
+
+    // An entry names its question by INDEX — the security property this shape exists for. A
+    // `WireQuestionOption` carries no `id` and claude selects by `label`, so the reflex design would
+    // echo a claude-authored string back across the trust boundary; keying by index means no
+    // claude-authored byte travels inbound at all.
+    const entry: QuestionAnswerEntry = { question_index: 0, values: ['Rewrite the parser'] }
+    expect(entry).toEqual({ question_index: 0, values: ['Rewrite the parser'] })
+    expect(entry).not.toHaveProperty('label')
+
+    // A plain signed `number`, deliberately NOT range-checked by this wire type. The bound is the
+    // daemon resolver's (`answerVerdict`); a second copy here would be a second bound to keep in
+    // agreement. Upstream chose a signed int for the same reason — a uint would reject -1 at decode
+    // and still accept 1<<62.
+    const outOfRange: QuestionAnswerEntry = { question_index: -1, values: [] }
+    expect(outOfRange.question_index).toBe(-1)
+  })
+
+  it('shapes QuestionRefusedPayload as { question_batch_id, answer_token } — no answers', () => {
+    const payload: QuestionRefusedPayload = {
+      question_batch_id: 'qb-91ae',
+      answer_token: 'at-2c60'
+    }
+    expect(payload).toEqual({ question_batch_id: 'qb-91ae', answer_token: 'at-2c60' })
+    // It carries `answer_token` too, UNLIKE `modal_cancel`, which carries `modal_id` alone: a refusal
+    // is as replayable as an answer. Do not size this pair from the modal pair's asymmetry.
+    const modalCancel: ModalCancelPayload = { modal_id: 'mdl-7f3a' }
+    expect(modalCancel).not.toHaveProperty('answer_token')
+    // Its own type rather than an answer with an empty `answers`, so a reader routes on the frame's
+    // name rather than on a value's shape.
+    expect(payload).not.toHaveProperty('answers')
+    expect(payload).not.toHaveProperty('conversation_id')
   })
 })

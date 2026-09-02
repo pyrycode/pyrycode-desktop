@@ -111,6 +111,17 @@ export type EnvelopeType =
   // of on the frame's name. SSOT pyrycode docs/protocol-mobile.md § Question (v2) / internal/protocol
   // codes.go TypeQuestionDismissed; emitted by pyrycode#1973.
   | 'question_dismissed'
+  // The two frames that RESOLVE the batch above (#919) — the first OUTBOUND members of this family,
+  // everything above them being inbound. `question_answer` carries the operator's selections,
+  // `question_refused` says they declined to choose. Two types rather than one with an empty
+  // `answers`, mirroring `modal_cancel` beside `modal_answer` and following the precedent
+  // `question_dismissed` set: a distinct meaning gets a distinct type, so a reader routes on the
+  // frame's name rather than on a value's shape. Both are switch-intercepted daemon-side (upstream
+  // #1984) before dispatch.Route, exactly as `modal_answer` is. SSOT pyrycode
+  // docs/protocol-mobile.md § Question (v2) / internal/protocol codes.go TypeQuestionAnswer,
+  // TypeQuestionRefused; declared by pyrycode#1983, resolved by #1990/#1991, gated by #1986.
+  | 'question_answer'
+  | 'question_refused'
   | 'list_conversations'
   | 'conversations'
   | 'recent_workspaces'
@@ -1115,6 +1126,106 @@ export interface QuestionDismissedPayload {
   question_batch_id: string
   outcome: string
   source: string
+}
+
+/**
+ * One question's answer inside a `question_answer` — which question, and the values chosen for it.
+ * Mirrors the daemon `QuestionAnswerEntry` field-for-field (SSOT pyrycode docs/protocol-mobile.md
+ * § Question (v2), `internal/protocol` questions.go), both fields always present (no `omitempty`).
+ *
+ * **`question_index` names the question by INDEX into the batch's `questions` array — never by text,
+ * and that is the security property this whole shape exists for.** `WireQuestionOption` carries no
+ * `id` because claude's answer protocol selects an option by its `label`, so the reflex design echoes
+ * a claude-authored string back across the trust boundary; `QuestionShownPayload`'s provenance note
+ * states the rule this discharges — publishing a string outbound does not make it trusted when it
+ * returns. Keying by index means no claude-authored byte travels inbound at all, and the daemon
+ * builds the text-keyed map claude actually receives from its own parked copy of the batch.
+ *
+ * The wire key is `question_index` and not `index` because an entry quoted on its own must not read
+ * as "the index of this answer".
+ *
+ * **The index is carried, NEVER range-checked here or by the builder.** The bound is the daemon
+ * resolver's — upstream's `answerVerdict` range-checks every index before it subscripts (subscripting
+ * a parked batch out of range PANICS) and rejects a bad answer totally rather than partially. A
+ * second copy client-side would be a second bound to keep in agreement, the same reason
+ * `DequeueMessagePayload` polices no `queued_msg_id`. It is a plain signed `number` for upstream's
+ * reason: a uint would reject -1 at decode and still accept 1<<62, half-closing the door while
+ * turning a range problem into a decode-error surprise.
+ *
+ * `values` is a plain non-optional array (never `| null`): the daemon normalises a nil slice to `[]`
+ * in the entry's own `MarshalJSON` precisely so a client's array type can be non-optional. More than
+ * one value is the `multi_select` case; one is the ordinary one. They are OPERATOR-TYPED FREE TEXT
+ * and are never checked against the batch's offered labels — claude's contract permits free text
+ * anywhere and requires no value to be one of the labels, so a validator rejecting an unlisted value
+ * would reject a legal answer. An empty `values` selects nothing and is out of contract.
+ */
+export interface QuestionAnswerEntry {
+  question_index: number
+  values: string[]
+}
+
+/**
+ * Outbound `question_answer` request body (client → daemon) — the operator's selections resolving an
+ * outstanding `question_shown` batch. Mirrors the daemon's QuestionAnswerPayload field-for-field
+ * (same SSOT, declared pyrycode#1983, resolved #1991), wire order
+ * `question_batch_id, answer_token, answers` — all always present (no `omitempty`). The OUTBOUND
+ * counterpart to the inbound `question_shown`/`question_dismissed` above.
+ *
+ * **There is NO `conversation_id`, though `question_shown` carries one**, and here that absence is
+ * also the SECURITY property — `ModalAnswerPayload`'s, unchanged: the daemon resolves
+ * `question_batch_id` against its own outstanding-batch state and never trusts a client-asserted
+ * conversation. A shape carrying both would additionally admit a disagreeing pair someone has to
+ * adjudicate. Do not add one "for symmetry with the batch".
+ *
+ * `answer_token` is `ModalAnswerPayload`'s field verbatim, reasons included: a CLIENT-MINTED
+ * IDEMPOTENCY KEY whose uniqueness and stability matter and whose secrecy does NOT — it is not a
+ * credential and not the authorization, and the daemon's real dedup is the one-shot consume of
+ * `question_batch_id`. **The daemon never reads it on this path** — `modalResolverV2.AnswerQuestion`
+ * takes the batch id and the entries rather than the whole payload, expressly so it never holds a
+ * token it has no business reading. It is still a modelled, always-present field, minted main-side by
+ * the command slice and not here. Contrast `question_batch_id`, which IS a one-time unguessable
+ * nonce and must never reach a log.
+ *
+ * `answers` is ordered and is a plain non-optional array for `QuestionAnswerEntry.values`' reason (a
+ * nil slice normalises to `[]`). **ARRAY ORDER IS NOT THE CORRELATION**: a client emits entries in
+ * batch order, but `question_index` is what selects, so nothing may infer the question from an
+ * entry's array position. An empty `answers` is out of contract — it says nothing a refusal does not
+ * say better, which is why `question_refused` is its own type.
+ *
+ * **No bound is modelled on entry count or value length, because nothing enforces one.** The only
+ * operative limit is the transport's `MAX_PLAINTEXT_BYTES`, which bounds total bytes and not entry
+ * count; a payload over it is a fail-closed `WireEncodeError` out of `buildQuestionAnswer`, never a
+ * truncation — trimming would send the operator a different answer than the one they chose.
+ */
+export interface QuestionAnswerPayload {
+  question_batch_id: string
+  answer_token: string
+  answers: QuestionAnswerEntry[]
+}
+
+/**
+ * Outbound `question_refused` request body (client → daemon) — the operator declined to choose, so
+ * the batch resolves without any selection. Mirrors the daemon's QuestionRefusedPayload
+ * field-for-field (same SSOT, resolved pyrycode#1990), wire order `question_batch_id, answer_token`,
+ * both always present (no `omitempty`).
+ *
+ * Its OWN TYPE rather than a `QuestionAnswerPayload` with an empty `answers` or a nullable flag,
+ * mirroring `modal_cancel` beside `modal_answer`: a distinct meaning gets a distinct type, so a
+ * reader routes on the frame's name rather than on a value's shape, and nobody has to adjudicate
+ * "answered with nothing" against a genuine refusal.
+ *
+ * **It carries `answer_token`, UNLIKE `ModalCancelPayload`, which carries `modal_id` alone — do not
+ * size this pair from the modal pair's asymmetry.** A refusal is as replayable as an answer, and the
+ * daemon's dedup is the same one-shot consume of `question_batch_id`. Field for field with
+ * `QuestionAnswerPayload` minus `answers`, INCLUDING THE ABSENCE of `conversation_id`, for that
+ * type's reasons.
+ *
+ * **This frame carries NO FREE TEXT AT ALL**, which makes it the narrowest surface in the family:
+ * both fields are ids the client echoes back.
+ */
+export interface QuestionRefusedPayload {
+  question_batch_id: string
+  answer_token: string
 }
 
 /**

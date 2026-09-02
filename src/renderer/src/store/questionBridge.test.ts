@@ -357,12 +357,39 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
           }
         ],
         droppedCommands: 2
+      },
+      // The model menu (#973) is not an ask either, on identical grounds to its sibling above: the same
+      // `initialize` control reply, the same unsolicited direction, nothing outstanding and no answer to
+      // give. It publishes the IDENTITIES claude will accept where the sibling publishes the VERBS. Its
+      // consumer is the #974 store, and its no-op here is PERMANENT rather than dormant.
+      {
+        type: 'modelList',
+        conversationId: 'conv-1',
+        models: [
+          {
+            resolved_model: 'synth-model-a-2026',
+            value: 'synth-a',
+            display_name: 'Synthetic A',
+            effort_levels: ['low', 'high'],
+            supports_auto_mode: true,
+            truncated_fields: null
+          },
+          {
+            resolved_model: '<unmeasured>',
+            value: 'synth-b[1m]',
+            display_name: 'Synthetic B',
+            effort_levels: [],
+            supports_auto_mode: false,
+            truncated_fields: ['effort_levels']
+          }
+        ],
+        droppedModels: 2
       }
     ]
 
     // The count is asserted so a future arm silently dropped from this table cannot pass unnoticed:
-    // 42 union arms minus the 3 owned above.
-    expect(others).toHaveLength(39)
+    // 43 union arms minus the 3 owned above.
+    expect(others).toHaveLength(40)
     for (const event of others) expect(translateQuestionEvent(event)).toBeNull()
   })
 })

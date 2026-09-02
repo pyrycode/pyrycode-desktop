@@ -493,6 +493,49 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('modelList → null (consumed by the #974 model-list store, not the session store)', () => {
+    // PERMANENTLY a no-op, unlike its `slashCommandList` sibling above, which ships dormant: #974 has
+    // already committed to a dedicated subscriber, so this case will never flip the way `compacting` did
+    // at #496. Present for the assertNever guard, which is not a formality — it stringifies the WHOLE
+    // event into an Error message, so a missing case would put every claude-authored resolved model,
+    // value, display name and effort level there.
+    expect(
+      translateDaemonEvent({
+        type: 'modelList',
+        conversationId: 'conv-1',
+        models: [
+          {
+            resolved_model: 'synth-model-a-2026',
+            value: 'synth-a',
+            display_name: 'Synthetic A',
+            effort_levels: ['low', 'high'],
+            supports_auto_mode: true,
+            truncated_fields: null
+          },
+          {
+            resolved_model: '<unmeasured>',
+            value: 'synth-b[1m]',
+            display_name: 'Synthetic B',
+            effort_levels: ['medium'],
+            supports_auto_mode: false,
+            truncated_fields: ['effort_levels']
+          }
+        ],
+        droppedModels: 2
+      })
+    ).toBeNull()
+    // An EMPTY menu is a positive statement that claude offered nothing, not an absence — but it is no
+    // more a session action than a populated one, and this bridge draws no distinction the emit did not.
+    expect(
+      translateDaemonEvent({
+        type: 'modelList',
+        conversationId: 'conv-1',
+        models: [],
+        droppedModels: 0
+      })
+    ).toBeNull()
+  })
+
   it('unrecognizedMessage → null (consumed by the timeline render slice, not the session store)', () => {
     expect(
       translateDaemonEvent({

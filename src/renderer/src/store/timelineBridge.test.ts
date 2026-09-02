@@ -1080,6 +1080,45 @@ describe('subscribeTimeline', () => {
     expect(selectItems(store.getState())).toHaveLength(0)
   })
 
+  it('#973: a modelList daemon event creates NO timeline item (permanently, not dormantly)', () => {
+    const bridge = fakeBridge()
+    const store = createTimelineStore()
+    subscribeTimeline(bridge.onDaemonEvent, (e) => store.getState().dispatch(e))
+
+    const before = store.getState()
+    bridge.emit({
+      type: 'modelList',
+      conversationId: 'conv-1',
+      models: [
+        {
+          resolved_model: 'synth-model-a-2026',
+          value: 'synth-a',
+          display_name: 'Synthetic A',
+          effort_levels: ['low', 'high'],
+          supports_auto_mode: true,
+          truncated_fields: null
+        },
+        {
+          resolved_model: '<unmeasured>',
+          value: 'synth-b[1m]',
+          display_name: 'Synthetic B',
+          effort_levels: [],
+          supports_auto_mode: false,
+          truncated_fields: ['effort_levels']
+        }
+      ],
+      droppedModels: 2
+    })
+
+    // Both halves: the bridge filtered it out so no dispatch reached the reducer (same state ref), AND no
+    // chat row exists. Same wire facts as the sibling above — no turn_id, opens and closes no turn — so a
+    // published menu of identities is daemon STATE by the queueState rule (#720). Unlike that sibling
+    // this one is PERMANENT rather than dormant: #974 commits to a dedicated subscriber, so nothing in
+    // this switch will ever claim it.
+    expect(store.getState()).toBe(before)
+    expect(selectItems(store.getState())).toHaveLength(0)
+  })
+
   it('#564: a backgroundTaskStarted daemon event creates NO timeline item (ships dormant)', () => {
     const bridge = fakeBridge()
     const store = createTimelineStore()

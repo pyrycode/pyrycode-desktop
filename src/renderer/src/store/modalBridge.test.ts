@@ -293,6 +293,33 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
           }
         ],
         droppedCommands: 2
+      },
+      // the model menu ships PERMANENTLY no-op here (#973) — its consumer is the #974 store, which has
+      // already committed to a dedicated subscriber, so unlike the sibling directly above this case can
+      // never become an owned arm here. Nothing is waiting on an answer: this is the published set of
+      // identities claude will run as, not a permission prompt gating an action claude wants to take.
+      {
+        type: 'modelList',
+        conversationId: 'conv-1',
+        models: [
+          {
+            resolved_model: 'synth-model-a-2026',
+            value: 'synth-a',
+            display_name: 'Synthetic A',
+            effort_levels: ['low', 'high'],
+            supports_auto_mode: true,
+            truncated_fields: null
+          },
+          {
+            resolved_model: '<unmeasured>',
+            value: 'synth-b[1m]',
+            display_name: 'Synthetic B',
+            effort_levels: [],
+            supports_auto_mode: false,
+            truncated_fields: ['effort_levels']
+          }
+        ],
+        droppedModels: 2
       }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()

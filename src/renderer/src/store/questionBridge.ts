@@ -170,6 +170,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'modalDismissed':
     case 'modalAnswerRejected':
     case 'slashCommandList':
+    case 'modelList':
       // No question event. The session store, timeline store, conversation-list store, queue store,
       // relay-link store, background-task store, announced-model store and the modal store consume
       // these — not the question store.
@@ -187,6 +188,12 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
       // publishes the vocabulary of verbs claude will ACCEPT, unsolicited, with nothing outstanding and
       // no answer to give — the opposite direction from claude asking the operator to choose. Its
       // consumer is the #938 store, and its no-op is DORMANT rather than permanent.
+      //
+      // `modelList` (#973) joins it on identical grounds — the same `initialize` control reply, the same
+      // unsolicited direction, nothing outstanding and no answer to give; it publishes the IDENTITIES
+      // claude will accept where its sibling publishes the VERBS. The one difference is the disposition:
+      // its no-op here is PERMANENT, because #974 commits to a dedicated subscriber rather than leaving
+      // the choice open.
       return null
     default:
       return assertNever(event)

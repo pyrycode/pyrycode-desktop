@@ -157,6 +157,16 @@ export function translateModalEvent(event: DaemonEvent): ModalEvent | null {
       // which stringifies the WHOLE event into an Error message and would otherwise put every
       // workspace-authored string on the frame there.
       return null
+    case 'modelList':
+      // Not a modal event (#973): nothing is waiting on an answer, exactly as for the sibling above. The
+      // frame publishes the IDENTITIES claude will run as — a menu the operator MAY choose from,
+      // unsolicited and outstanding against nothing — where a modal is a permission prompt gating an
+      // action claude wants to take, resolved by `modal_answer` against `modal_id`. Its consumer is the
+      // #974 store, and unlike its sibling's this no-op is PERMANENT rather than dormant: #974 commits to
+      // a dedicated subscriber, so no case here will ever claim it. Present for the assertNever guard,
+      // which stringifies the WHOLE event into an Error message and would otherwise put every
+      // claude-authored string on the frame there.
+      return null
     default:
       return assertNever(event)
   }

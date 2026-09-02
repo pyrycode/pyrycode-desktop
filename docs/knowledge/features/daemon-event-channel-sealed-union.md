@@ -413,6 +413,58 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   dedicated subscriber over folding into an existing bridge. Nothing renders the store's held list yet;
   #940 and #681 are its first readers. See [Slash-command-list wire types](slash-command-list-wire-types.md)
   for the wire shape and [Inbound message decode](inbound-message-decode.md) for #936's decode.
+- **`modelList{conversationId,models,droppedModels}`**
+  ([#973](https://github.com/pyrycode/pyrycode-desktop/issues/973)) carries the daemon's published model
+  menu the last hop across IPC — the wire vocabulary
+  ([#971](https://github.com/pyrycode/pyrycode-desktop/issues/971)) and the fail-closed decode
+  ([#972](https://github.com/pyrycode/pyrycode-desktop/issues/972)) already existed; this arm is the
+  emit, structurally identical to `slashCommandList` above it: a fresh named-field literal built in
+  `daemonConnection`'s `case 'model-list':`, never `return event` and never a spread of the decoded
+  payload. Placed at the union's tail for `slashCommandList`'s own stated reason — the frame opens its
+  own family and has no wire-neighbour to sit beside. A **noun naming the snapshot**, not a `…Received`
+  participle: the union's `…Received` arms name a reply to a request this client made, and this frame is
+  unsolicited (it rides a `control_response` but is not correlated by this client's outstanding-request
+  memory).
+
+  Top-level fields are snake→camel (`conversation_id`→`conversationId`,
+  `dropped_models`→`droppedModels`); **the row type is reused verbatim** — `models: readonly
+  WireModelOption[]` stays snake_case (`resolved_model`, `value`, `display_name`, `effort_levels`,
+  `supports_auto_mode`, `truncated_fields`), the `queueState`/`conversationsReceived`/
+  `backgroundTaskRoster`/`questionShown`/`slashCommandList` nested-array precedent, since #972's
+  narrower already rebuilds every row as a fresh six-field literal. All three fields are required, never
+  optional — an assigned `undefined` survives the structured clone across this channel, so an optional
+  field would invent an absence case the daemon never produces. `droppedModels` is this frame's only
+  truncation report at the frame level (`models.length + droppedModels` is the menu's true size, cut
+  from the tail so the carried rows are claude's first N in his own order; `0` is a value, never
+  consulted for truthiness); each row's own `truncated_fields` names that row's own cut fields, `null`
+  distinct from `[]`, never hoisted or flattened. `models: []` is a positive statement that claude
+  offered nothing for that conversation, and must still emit exactly one event — the same posture
+  `slashCommandList`'s `commands: []` carries and the opposite of `questionShown`'s empty array, which is
+  out of contract.
+
+  **Exactly two other arms carry a field named `model`, and this one means a third thing.**
+  `runConfigReceived.model` is the per-session *override* (`''` = "inherited default, no override");
+  `modelAnnounced.model` is what claude announced *for the current turn*. This arm's rows are the
+  *menu* — what claude will accept, not what was chosen or what ran.
+
+  SECURITY: `resolved_model`, `value`, `display_name` and every string in `effort_levels` are
+  **claude-authored** — a *higher* trust tier than `slashCommandList`'s workspace-authored strings,
+  reachable by prompt injection in a way workspace text is not — bounded by the daemon and not
+  sanitized; the render slice owes the escaping (plain text only, never HTML, an attribute, a URL, a
+  filename, a cache key, or a log). The never-log clause rests on the *contract* here (the daemon bounds
+  and does not sanitize, so a control byte is permitted rather than excluded), not on a measurement —
+  `slashCommandList`'s `0x0a`-across-51-entries evidence is that sibling's and does not transfer.
+  `conversationId` is an outbound routing/scoping key, not a nonce, the same posture `modalShown` and
+  `questionShown` carry.
+
+  Ships dormant: consumed as a no-op by all four exhaustive bridges (`daemonEventBridge`,
+  `timelineBridge`, `modalBridge`, `questionBridge`), each documented **permanent** rather than
+  dormant — unlike `slashCommandList`'s cases, which shipped dormant because whether a future ticket
+  would subscribe through an existing bridge was still open. Here the consumer has already answered:
+  [#974](https://github.com/pyrycode/pyrycode-desktop/issues/974) commits to a dedicated subscriber in
+  the `announcedModelBridge`/`slashCommandListBridge` posture, so none of the four will ever own this
+  arm. See [Model-list wire types](model-list-wire-types.md) for the wire shape and [Inbound message
+  decode](inbound-message-decode.md) for #972's decode.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

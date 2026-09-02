@@ -7,14 +7,18 @@ Introduced in [#971](https://github.com/pyrycode/pyrycode-desktop/issues/971), d
 that point — nothing decoded, narrowed, stored or rendered it yet.
 [#972](https://github.com/pyrycode/pyrycode-desktop/issues/972) added the fail-closed decode (see
 [Inbound message decode](inbound-message-decode.md) and its [Extension
-history](inbound-message-decode-history.md)); nothing stores or renders it yet. Split from #561. SSOT is
+history](inbound-message-decode-history.md)).
+[#973](https://github.com/pyrycode/pyrycode-desktop/issues/973) carried the decoded value across IPC as
+the `modelList` arm of `DaemonEvent` (see [Daemon event channel — the sealed
+union](daemon-event-channel-sealed-union.md)); still nothing stores or renders it. Split from #561. SSOT is
 `pyrycode/pyrycode` `internal/protocol/interactive.go` (`ModelListPayload` / `ModelOption`); do not
 trust `docs/protocol-mobile.md` § `model_list` for the delivery window — see
 [§ Delivery window](#delivery-window-two-lanes) below. The run-configuration sheet's model rows and
 effort segments (`MODEL_CATALOG` / `EFFORT_LEVELS`, `RunConfigSections.tsx`) are still hardcoded
 guesses; replacing them with this frame is the slice family below this one, the same sequencing this
 repo used for [slash-command-list wire types](slash-command-list-wire-types.md) (#935 declared →
-\#936 decoded → #937 carried across IPC → #954 stored).
+\#936 decoded → #937 carried across IPC → #954 stored): here, #971 declared → #972 decoded → #973
+carried across IPC → the store slice is next, unbuilt.
 
 ## What it does
 
@@ -219,12 +223,16 @@ field is a reject by construction. A required field is still only a promise the 
 until it is checked — reach this type through that narrower once it exists, never a bare
 `as ModelListPayload` on `Envelope.payload`.
 
-The decode now exists ([#972](https://github.com/pyrycode/pyrycode-desktop/issues/972),
+The decode exists ([#972](https://github.com/pyrycode/pyrycode-desktop/issues/972),
 `parseModelListPayload` + `parseModelOption` in [Inbound message
-decode](inbound-message-decode.md)), but ships dormant — `daemonConnection.ts`'s inbound switch has no
-case for `'model-list'` yet. The IPC-carry, store and run-config slices that replace
-`MODEL_CATALOG`/`EFFORT_LEVELS` in `RunConfigSections.tsx` are below this one in the family, unbuilt as
-of this ticket.
+decode](inbound-message-decode.md)). The IPC carry landed at
+[#973](https://github.com/pyrycode/pyrycode-desktop/issues/973): `daemonConnection.ts`'s
+`case 'model-list':` emits the `modelList` arm of `DaemonEvent`, a fresh named-field literal with the
+rows reused verbatim (see [Daemon event channel — the sealed
+union](daemon-event-channel-sealed-union.md)), consumed as a permanent no-op by all four exhaustive
+renderer bridges. It still ships dormant — nothing stores or renders it. The store and run-config
+slices that replace `MODEL_CATALOG`/`EFFORT_LEVELS` in `RunConfigSections.tsx` are below this one in
+the family, unbuilt as of this ticket.
 
 ## Edge cases and limitations
 
@@ -281,7 +289,11 @@ radius.
 - [Inbound message decode](inbound-message-decode.md) / [Extension
   history](inbound-message-decode-history.md) — [#972](https://github.com/pyrycode/pyrycode-desktop/issues/972)
   is the decoder: `parseModelListPayload` + `parseModelOption`, the fail-closed narrowing this type's
-  required-fields posture exists to make possible. Ships dormant — no consumer arm yet.
+  required-fields posture exists to make possible.
+- [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) —
+  [#973](https://github.com/pyrycode/pyrycode-desktop/issues/973) carries the decoded value the rest of
+  the way across IPC as the `modelList` arm of `DaemonEvent`, consumed as a permanent no-op by all four
+  exhaustive renderer bridges; ships dormant, awaiting the store slice.
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)
   — "do not drift the wire types from the mobile contract without a matching daemon change"; this
   slice mirrors a settled upstream contract and makes no desktop-side architectural choice of its own.

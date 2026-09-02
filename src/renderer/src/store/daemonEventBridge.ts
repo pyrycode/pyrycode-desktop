@@ -208,6 +208,18 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // workspace-authored name, argument hint, description and alias on the frame there, embedded
       // newlines included. This case is what keeps them out of it.
       return null
+    case 'modelList':
+      // No session-store action: the #974 store holds the menu of identities claude will accept, not the
+      // session store — which holds no model-menu state at all. PERMANENTLY a no-op, NOT dormant like
+      // its `slashCommandList` sibling directly above, and the difference is that the consumer has
+      // already answered: #974 commits to a DEDICATED subscriber in the announcedModelBridge /
+      // backgroundTaskRosterBridge / slashCommandListBridge posture, so this case will never flip the way
+      // `compacting` did at #496. Present for the assertNever guard below, and that guard is NOT a
+      // formality here — it stringifies the WHOLE event into an Error message, so a missing case would
+      // put every claude-authored resolved model, value, display name and effort level on the frame
+      // there. That is a HIGHER trust tier than the sibling's workspace-authored strings. This case is
+      // what keeps them out of it.
+      return null
     default:
       return assertNever(event)
   }

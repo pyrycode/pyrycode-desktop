@@ -18,8 +18,9 @@ Effort section, daemon-published levels](conversation-shell-workspace-and-run-co
 Two consumers remain queued — the input footer's model and effort menus
 ([#683](https://github.com/pyrycode/pyrycode-desktop/issues/683)) and the permission-mode menu
 ([#682](https://github.com/pyrycode/pyrycode-desktop/issues/682)), which reads each row's
-`supports_auto_mode` to grey out a mode the running model refuses. The pairing-scoped clear is not in
-this slice — see § The pairing-scoped clear below.
+`supports_auto_mode` to grey out a mode the running model refuses.
+[#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) landed the store's pairing-scoped
+clear — see § The pairing-scoped clear below.
 
 ## What it does
 
@@ -109,20 +110,37 @@ repeated calls are `Object.is`-stable — `null` is a stable reference by constr
 needs no hoisted `EMPTY_*` constant unlike `queueStore`. There is deliberately no whole-map read
 surface: nothing iterates every conversation's list, so shipping one would ship an unread path.
 
-**No clear, no `connected` branch — and neither belongs here.** A reconnect to the same daemon does
+**The pairing-scoped clear (#977), and why it is not a `connected` reset.** A reconnect to the same daemon does
 not invalidate a published list, and there is no request half to re-fetch one with, so this store
 answers no on both halves of `clearPairingScopedState`'s discriminator the same way
-`slashCommandListStore` does. The pairing-scoped clear is
-[#977](https://github.com/pyrycode/pyrycode-desktop/issues/977)'s, following the #588 → #593 and
-\#954 → #955 precedent: it lands in `clearPairingScopedState`'s injected dep set, not at either call
-site and not in this store. This slice ships the store shape that clear will attach to
-(`clearAllModelLists`, nullary and total, is #977's export to add) and none of the clear itself.
+`slashCommandListStore` does — no `connected` reset, and never will be one. The other half,
+"does the pairing ending need to clear it", answers yes: `clearAllModelLists`, a nullary, whole-map
+method on `ModelListStore`, reached only through `clearPairingScopedState`'s injected dep set (never
+from a call site or a bridge arm — see [Paired shell](paired-shell.md)), following the #588 → #593
+and #954 → #955 precedent (ship the holder dormant, add the clear to the shared helper's dep set
+once #955's sequence repeats a third time). It returns `initialModelListState` **by reference**,
+guarded on `lists.size === 0` so a redundant clear wakes no subscriber at all — the `clearAllTimelines`
+guard, not `clearAllLastRead`'s: nothing here reaches disk, so there is no side effect to suppress,
+only the stronger idempotence that returning the state object buys. Because `setModelList` is
+copy-on-write, the by-reference return is load-bearing rather than stylistic: a writer that ever
+mutated `s.lists` in place would poison the module-shared constant and hand one pairing's
+claude-authored rows to the next, with no type error — pinned by test rather than paid for with a
+fresh `Map`.
+
+Nullary is sharper here than for its slash-command twin: the rows are claude-authored, so a clear
+taking a conversation id would let a daemon-supplied id steer which machine's model identities
+survive the boundary, and a retained list is actionable rather than merely stale — #975's sheet
+offers it, and picking a row sends a model argument the newly paired daemon rejects. Placed in
+`clearPairingScopedState` immediately after `deps.clearAllSlashCommandLists()` and before
+`deps.clearAllLastRead()` — the one ordering constraint, since `clearAllLastRead` is the only effect
+in that helper that reaches `localStorage` and so the only one that can throw; sequenced after it,
+such a throw would abort this clear and leave the ended pairing's model menu live for the sheet to
+offer. Pinned by an ordering test (`mock.invocationCallOrder`) rather than trusted from a comment.
 
 Growth is one entry per distinct `conversationId` seen since launch, each holding one frame's rows,
-dropped wholesale at the next pairing change (once #977 lands); each frame is already capped
-upstream by `MAX_PLAINTEXT_BYTES` before any parse, so the bound between clears is entries × frame
-cap. `slashCommandListStore`, `conversationActivityStore` and `queueStore` ship the identical
-posture.
+dropped wholesale at the next pairing change (#977); each frame is already capped upstream by
+`MAX_PLAINTEXT_BYTES` before any parse, so the bound between clears is entries × frame cap.
+`slashCommandListStore`, `conversationActivityStore` and `queueStore` ship the identical posture.
 
 **Exported symbols and `renderToStaticMarkup`.** Seeding a zustand singleton is invisible to a
 server render — the server renderer reads `getServerSnapshot()`, which zustand wires to the state
@@ -237,8 +255,9 @@ selectModelListFor(openId) / useModelListStore
   an index.
 - **Nothing here is persisted, and nothing may be.** `createModelListStore` takes no storage port,
   unlike `createConversationLastReadStore`. Web storage would outlive the pairing that scoped the
-  list, so a persisted copy would survive #977's future clear with every in-memory assertion still
-  green.
+  list and defeat the #977 clear: a persisted copy would survive a clear that ran, so every
+  in-memory assertion would stay green while the previous daemon's model identities were re-hydrated
+  at the next launch.
 - **No DOM sink in this slice.** The inert-escaped-length-bounded render discipline is inherited
   here; #975 discharged it for the Model rows and the running-model lookup, #976 discharged it for
   the effort segments. #683 and #682 still owe it.
@@ -247,6 +266,9 @@ selectModelListFor(openId) / useModelListStore
 
 ## Related
 
+- [Paired shell](paired-shell.md) — `clearAllModelLists`'s one production wiring, as the ninth
+  member of `clearPairingDeps`, and `clearPairingScopedState`'s ordering constraint (must run before
+  `clearAllLastRead`) this clear has to respect.
 - [Model-list wire types](model-list-wire-types.md) — the wire contract this store holds verbatim:
   `WireModelOption`'s trust tier, the three-positions-on-empty rule, and the `droppedModels` sum.
 - [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) — #973's

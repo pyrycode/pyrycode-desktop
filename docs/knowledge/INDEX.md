@@ -531,9 +531,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   decode** — `parseModelListPayload` + `parseModelOption` into [inbound message
   decode](features/inbound-message-decode.md)'s `model-list` arm, ships dormant, thirteen reject
   branches. **#973 has since carried it across IPC** as the `modelList` `DaemonEvent` arm, consumed
-  as a permanent no-op by all four exhaustive bridges. **#974 has since built the store** — see
-  below. The run-config slices that replace `RunConfigSections.tsx`'s hardcoded
-  `MODEL_CATALOG`/`EFFORT_LEVELS` are still to come.
+  as a permanent no-op by all four exhaustive bridges. **#974 has since built the store**, **#975 has
+  since deleted `RunConfigSections.tsx`'s hardcoded `MODEL_CATALOG`** and built the Model rows off it,
+  and **#976 has since deleted `EFFORT_LEVELS`** and built the Effort segments the same way — see
+  below.
 - [Model-list store](features/model-list-store.md) — the renderer data path catching #973's dormant
   `modelList` arm (#974): a keyed Zustand store
   (`createModelListStore`/`modelListStore`/`useModelListStore`) plus an independent, reactive-only
@@ -549,11 +550,14 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   never recomputed from `models.length`. The bridge's `default: null` (never `assertNever`) is
   called out as a **security control**, not a style choice: every `assertNever` guard in this repo
   stringifies the whole event into an `Error`, which would put claude-authored `display_name`/
-  `value`/`effort_levels` text into an error message. No `connected` branch and no clear — the
-  pairing-scoped clear is [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977)'s, landing
-  in `clearPairingScopedState`'s dep set per the #588→#593/#954→#955 precedent. Ships dormant:
-  #975/#976/#683/#682 are the queued readers. Self-review PASS, two SHOULD FIX mitigated by
-  construction (no per-row mapping) and by design (never logged).
+  `value`/`effort_levels` text into an error message. No `connected` branch, and never one. **#977 has
+  since landed the pairing-scoped clear**, `clearAllModelLists` — nullary and whole-map, in
+  `clearPairingScopedState`'s dep set (the ninth member) per the #588→#593/#954→#955 precedent, sharper
+  than its slash-command twin because the rows are claude-authored: a clear taking a conversation id
+  would let a daemon-supplied id steer which machine's model identities survive the boundary, and a
+  retained list is actionable rather than merely stale, since #975's sheet offers it and picking a row
+  sends a model argument the new daemon rejects. Sequenced before `clearAllLastRead`, the one effect in
+  that helper able to throw. #975/#976 are the shipped readers; #683/#682 remain queued.
 - [Slash command type-ahead — decision layer](features/conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--decision-layer-939)
   — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939), split from #694: the slash
   type-ahead's opening/filtering/completion decisions as a pure, DOM-free module,

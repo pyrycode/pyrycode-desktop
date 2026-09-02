@@ -157,17 +157,19 @@ src/renderer/src/
   helper in `activateConversation.test.ts` — see [#530 codebase notes](../codebase/530.md).
 - **`PairedShell.test.tsx` cannot exercise `clearPairingScopedState`'s wiring either, for the same
   reason** — its coverage is `nextPairedRoute` reducer assertions and the `:114` SSR test guarding the
-  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The eight-clear logic
+  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The nine-clear logic
   (four since #531, joined by `clearAnnouncedModel` at #593, `clearAllTimelines` at
   [#757](../codebase/757.md), `clearAllSlashCommandLists` at
-  [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), and `clearAllLastRead` at
+  [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), `clearAllModelLists` at
+  [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), and `clearAllLastRead` at
   [#779](conversation-last-read-store.md)) is unit-tested directly on the pure helper in
-  `clearPairingScopedState.test.ts`, including a dedicated regression case pinning #779's one ordering
-  constraint (`clearAllLastRead` after `clearAllTimelines`, and after #955 also after
-  `clearAllSlashCommandLists`, pinned by `mock.invocationCallOrder` rather than trusted from a comment).
+  `clearPairingScopedState.test.ts`, including dedicated regression cases pinning #779's and #977's
+  ordering constraints (`clearAllLastRead` after `clearAllTimelines`, after `clearAllSlashCommandLists`
+  since #955 and after `clearAllModelLists` since #977, each pinned by `mock.invocationCallOrder`
+  rather than trusted from a comment).
   One residual: the "clear runs before the route flips" ordering has no executable assertion after
   [#531](../codebase/531.md) removed the one `unpairAction.test.ts` case that pinned it — low-stakes
-  today since all eight writes are synchronous and batched into the same commit as the route change,
+  today since all nine writes are synchronous and batched into the same commit as the route change,
   but worth restoring the moment a jsdom harness lands (see [#531 codebase notes](../codebase/531.md)).
 
 ## Related
@@ -185,9 +187,10 @@ src/renderer/src/
 - [Push notifications](push-notifications.md) / [#393](../codebase/393.md) — the third `open` trigger, fired by clicking a push notification (main-local, not daemon-relayed)
 - [Workspace chip](conversation-shell-workspace-and-run-config.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
-- [Session store](session-store.md) — its `reset` action is one of the eight clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md) and [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955)); the store-backed messages otherwise survive plain navigation untouched
+- [Session store](session-store.md) — its `reset` action is one of the nine clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md), [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) and [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977)); the store-backed messages otherwise survive plain navigation untouched
 - [Announced-model store](announced-model-store.md) / [#593](../codebase/593.md) — `clearAnnouncedModel` is the fifth member of `clearPairingDeps`, added after the store shipped dormant at #588 and the deferred clear it flagged
 - [Slash-command-list store](slash-command-list-store.md) / [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) — `clearAllSlashCommandLists` is the eighth store added to `clearPairingDeps`, after the store shipped dormant at #954 following the same #588 → #593 precedent as the announced model; nullary and whole-map, reached only through this helper and never from a bridge arm or either call site, and sequenced to run before `clearAllLastRead` despite arriving after it
+- [Model-list store](model-list-store.md) / [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) — `clearAllModelLists` is the ninth store added to `clearPairingDeps`, after the store shipped dormant at #974 repeating the #588 → #593 / #954 → #955 sequence a third time; nullary and whole-map like its slash-command twin, and sharper because the rows are claude-authored — a clear taking a conversation id would let a daemon-supplied id steer which machine's model identities survive the boundary. Reached only through this helper, never a bridge arm or either call site; sequenced to run before `clearAllLastRead` despite arriving after it
 - [Conversation timeline holder](conversation-timeline-holder.md) / [#757](../codebase/757.md) —
   `clearAllTimelines` (the sixth member of `clearPairingDeps`) and `clearTimelineFor` (the fourth clear in
   `exitConversationDeps`), the keyed holder's first clears, both wired here immediately after each
@@ -195,8 +198,8 @@ src/renderer/src/
 - [Conversation last-read store](conversation-last-read-store.md) / [#779](https://github.com/pyrycode/pyrycode-desktop/pull/798) —
   `clearAllLastRead` (the seventh store added, and always the last to execute), the only member that
   reaches `localStorage` and the only one with an ordering constraint (after `clearAllTimelines` and,
-  since #955, after `clearAllSlashCommandLists` too — both strictly before `clearAllLastRead` runs,
-  last overall);
+  since #955, after `clearAllSlashCommandLists`, and since #977 after `clearAllModelLists` too — all
+  strictly before `clearAllLastRead` runs, last overall);
   see [§ The pairServer route](paired-shell-pair-server-route.md#the-pairserver-route-152) and [§ The last-read
   stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) above
 - [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the IPC boundary `onUnpaired` ultimately calls; [#531](../codebase/531.md) moved the session reset that used to run inside its first caller (`runUnpair`) to this file
@@ -254,6 +257,12 @@ src/renderer/src/
   verb for verb; nullary and whole-map like `clearAllTimelines`, and — despite arriving after
   `clearAllLastRead` — sequenced strictly before it, since `clearAllLastRead`'s "last overall" position
   is an execution constraint, not an arrival order.
+- [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) · Spec:
+  `docs/specs/architecture/977-drop-model-list-on-pairing-end.md` — widens `clearPairingScopedState`
+  to a ninth store, [`modelListStore`](model-list-store.md)'s `clearAllModelLists`, closing the
+  deferral #974 flagged and repeating the #588 → #593 / #954 → #955 sequence a third time; nullary and
+  whole-map, sharper than its slash-command twin because the rows are claude-authored rather than
+  workspace-authored, and sequenced strictly before `clearAllLastRead` for the same reason.
 - [#670 codebase notes](../codebase/670.md) · Spec: `docs/specs/architecture/670-two-pane-desktop-shell.md`
   — merges the `list`/`thread` arms into the two-pane desktop shell, adds `pairedShell.css` and
   `minWidth: 800` on the `BrowserWindow`, and (in a rework after a round-1 code-review FAIL) adds the

@@ -240,9 +240,10 @@ count), trap included: `commands: null` fails the whole frame closed while a row
 of `requireStringArrayOrNull` (added by [#564](../codebase/564.md)) — needed because a row's `aliases`
 must reject exactly the `null` that its own `truncated_fields`, one field over, accepts.
 `requireStringArrayOrNull` is now a one-line delegation to it (`null` → `null`, else
-`requireStringArray`), behaviour-identical and covered by the existing #564–#566 tests. Ships dormant:
-`daemonConnection.ts`'s inbound switch has no catch-all, so the decoded menu is simply unmatched until
-[#937](https://github.com/pyrycode/pyrycode-desktop/issues/937) claims it.
+`requireStringArray`), behaviour-identical and covered by the existing #564–#566 tests.
+[#937](https://github.com/pyrycode/pyrycode-desktop/issues/937) has since claimed the decoded menu with
+a `case 'slash-command-list':` in `daemonConnection.ts`'s inbound switch, emitting it onward as the
+`slashCommandList` `DaemonEvent` arm.
 
 The optional second parameter is the [content-free diagnostic logger](diagnostic-log.md) ([#130](../codebase/130.md)). Absent it, the module is silent and behaves exactly as before; injected, each of the two non-throwing outcomes leaves a content-free record (§ *Diagnostic logging*).
 

@@ -162,11 +162,15 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   has carried since #870/#871. `question`, `header`, and every option's `label`/`description` are
   claude-authored, unbounded and unsanitized — decoded is not sanitized, so the eventual render slice
   owns the escaping (plain text only, never HTML, an attribute, a URL, a filename, a cache key, or a
-  log). Consumed as a **permanent** no-op by all three exhaustive bridges — unlike `stallDetected`/
-  `apiRetry`/`compacting`/`connected` (each shipped dormant and later flipped to an owned arm), this
-  one cannot: its consumer, [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), is a
-  fourth independent subscriber on this channel (the `announcedModelBridge`/`queueBridge`/
+  log). Consumed as a **permanent** no-op by the three *other* exhaustive bridges
+  (`daemonEventBridge`/`timelineBridge`/`modalBridge`) — unlike `stallDetected`/`apiRetry`/`compacting`/
+  `connected` (each shipped dormant and later flipped to an owned arm), this one cannot: its consumer,
+  [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850), is `questionBridge`, which at the
+  time was a fourth independent subscriber on this channel (the `announcedModelBridge`/`queueBridge`/
   `backgroundTaskRosterBridge` shape), not a future case on session, timeline or modal state.
+  [#900](question-batch-model.md) later folded `questionBridge` itself into the exhaustive-`assertNever`
+  set, so the channel now has **four** exhaustive bridges, not three — three of them no-op this arm,
+  and the fourth (`questionBridge`) is where it does real work rather than nothing.
 - **`questionDismissed{questionBatchId,outcome,source}`**
   ([#895](https://github.com/pyrycode/pyrycode-desktop/issues/895)) carries the frame that retires the
   batch above — the wire vocabulary and fail-closed decode
@@ -196,7 +200,9 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   exclusively, this client sends no question answer at all (the outbound verb is upstream
   pyrycode#1907, unlanded), and a copied drain would search the *modal* correlation window with a
   `question_batch_id`, a cross-frame correlation-confusion path rather than a harmless no-op. Consumed
-  as a **permanent** no-op by all three exhaustive bridges, on the same #850 grounds as `questionShown`.
+  as a **permanent** no-op by the three *other* exhaustive bridges, on the same #850/#900 grounds as
+  `questionShown` above — `questionBridge` is the fourth exhaustive bridge and the one that does real
+  work for this arm.
 - **`toolResult{turnId,toolUseId,isError,resultSummary}`** ([#229](../codebase/229.md)) also maps to *no*
   `SessionAction`, consumed instead by the [conversation timeline store](conversation-timeline-store.md)'s
   bridge — the `timelineBridge`'s fifth owned arm, and the vertical's last transport slice. Unlike
@@ -357,8 +363,54 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   untrusted text of `model`'s kind, which it is not. The per-conversation consumer is #588 / #674, not yet
   built. Not deduped: the transport holds no state, so N daemon frames (including a verbatim repeat)
   produce N events — that repeat is what tells #588 the value is still current. Ships dormant no longer:
-  [the announced-model store (#588, shipped)](announced-model-store.md) is a fourth independent observer,
-  alongside the three exhaustive bridges, which keep their no-ops permanently.
+  [the announced-model store (#588, shipped)](announced-model-store.md) is an independent observer
+  alongside the exhaustive bridges, which keep their no-ops permanently — **four** of them as of
+  [#900](question-batch-model.md) (`daemonEventBridge`/`timelineBridge`/`modalBridge`/`questionBridge`),
+  not the three that existed when this arm shipped.
+- **`slashCommandList{conversationId,commands,droppedCommands}`**
+  ([#937](https://github.com/pyrycode/pyrycode-desktop/issues/937)) carries the workspace's
+  slash-command menu the last hop across IPC — the wire vocabulary
+  ([#935](https://github.com/pyrycode/pyrycode-desktop/issues/935)) and the fail-closed decode
+  ([#936](https://github.com/pyrycode/pyrycode-desktop/issues/936)) already existed; this arm is the
+  emit. Placed at the union's tail rather than beside its wire neighbours the question arms:
+  `questionShown` sits mid-file because it copies `modalShown`'s conversation-scoping shape and the two
+  families are read together, but this arm opens its own family and has no such neighbour. Its
+  structural relative is `backgroundTaskRoster` above — one id, the rows, and a drop count — and the
+  name follows that precedent: a noun naming the snapshot, not a past participle naming an occurrence,
+  and deliberately not `slashCommandsReceived` (the union's `…Received` arms name a reply to a request
+  this client made; this frame is unsolicited). A **snapshot, not a delta**: each frame replaces a
+  reader's view of the menu, and `commands: []` is a positive statement that claude offered nothing for
+  that conversation — unlike `questionShown`'s empty array, which is out of contract, the two read
+  alike and mean opposite things.
+
+  Top-level fields are snake→camel (`conversation_id`→`conversationId`,
+  `dropped_commands`→`droppedCommands`); **the row type is reused verbatim** —
+  `commands: readonly WireSlashCommand[]` stays snake_case (`argument_hint`, `truncated_fields`), the
+  `queueState`/`conversationsReceived`/`backgroundTaskRoster`/`questionShown` nested-array precedent,
+  since #936's narrower already stripped every row to its known fields. This family nests one level,
+  unlike `questionShown`'s two. All three fields are required, never optional — an assigned `undefined`
+  survives the structured clone across this channel, so an optional field would invent an absence case
+  the daemon never produces. `droppedCommands` is this frame's only truncation report at the frame level
+  (`commands.length + droppedCommands` is the menu's true size, `0` a value never consulted for
+  truthiness); each row's own `truncated_fields` names that row's own cut fields, `null` distinct from
+  `[]`, never hoisted or flattened. A `truncated_fields` naming `aliases` is the only signal separating
+  "cut to nothing" from "none" — reading it as "none" greys out a working command, since the Actions
+  menu's own `reset` entry is an alias of `clear`, not a command name (#681).
+
+  SECURITY: `name`, `argument_hint`, `description` and every string in `aliases` are
+  **workspace-authored** — a lower trust tier than the claude-authored strings
+  `modelAnnounced`/`questionShown` carry — bounded by the daemon and not sanitized; the render slice
+  owes the escaping (plain text only, never HTML, an attribute, a URL, a filename, a cache key, or a
+  log). `name` is not an identifier (one measured name is `__remote-workflow`). `conversationId` is an
+  outbound routing/scoping key, not a nonce, unlike `questionShown`'s `questionBatchId` — the never-log
+  rule applies here for log-forgery reasons (`0x0a` is the only sub-`0x20` byte measured across the
+  capture), not for secrecy.
+
+  Ships **dormant**: all four exhaustive bridges (`daemonEventBridge`, `timelineBridge`, `modalBridge`,
+  `questionBridge`) no-op it — dormant, not permanent like the two question arms, since whichever of
+  #938 (holds the list per conversation) or a dedicated fifth subscriber ends up consuming it is #938's
+  call, not this arm's. See [Slash-command-list wire types](slash-command-list-wire-types.md) for the
+  wire shape and [Inbound message decode](inbound-message-decode.md) for #936's decode.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

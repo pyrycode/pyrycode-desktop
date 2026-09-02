@@ -1618,14 +1618,38 @@
   display: none;
 }
 
-/* The input + send-button row — carries the composer's former horizontal layout.
+/* #951 — THE ROW IS THE MESSAGE BOX (Figma `Input large`, 347:6635). It was a bare flex row holding a
+   filled textarea beside a filled send disc; the drawing is ONE box holding the text with the control
+   tucked inside its right end, so the ground, the 6px corner and the 12px vertical padding move here and
+   the textarea goes transparent. The class did not change: three shipped specs pin it and #940 anchors
+   the type-ahead on it.
+
+   HORIZONTAL PADDING STAYS ON THE TEXTAREA, which is both what the node draws (the box is py-[12px] with
+   no horizontal padding; its `Text field` child is pl-[16px] pr-[56px] py-[4px]) and the only split that
+   works. .composer__send is absolutely positioned and an absolutely positioned box resolves `right`
+   against its containing block's PADDING box — with 12px of padding here, the drawing's `right: 4px`
+   would have to be written `right: -8px`. At 0 the padding box edge IS the border box edge and the
+   drawing's number is the declaration.
+
+   NO HEIGHT DECLARATION. The 52px is derived: 12 + 4 + 20 (one body-medium line at rows={1}) + 4 + 12.
+   The sibling rows (.composer-status, .composer__footer) declare theirs because they hold no intrinsic
+   content; this one does, and a declared height would be a second source of truth fighting the textarea
+   auto-grow the composer overview still lists as unbuilt.
+
+   gap IS DELETED, not left inert: once the control is out of flow this row has exactly one flex item, and
+   the type-ahead panel is position: absolute so it is not one either. align-items: flex-end stays — it is
+   what keeps the textarea at its content height instead of stretching.
 
    #940 — position: relative makes THIS ROW the slash-command type-ahead's anchor: .composer-options is
    absolutely positioned, so its `bottom: 100%` lands on the row's top edge (the panel opens above the
-   message box) and its negative `left` resolves against the row's left edge, which IS the message box's —
-   the textarea is this row's first flex item and the row carries no padding. Without this declaration both
-   would resolve against .conversation, the next positioned ancestor, and the panel would land somewhere in
-   the chat pane. The row also inherits the clamp's --composer-options-shift down to the panel.
+   message box) and its negative `left` resolves against the row's left edge, which IS the message box's.
+   Without this declaration both would resolve against .conversation, the next positioned ancestor, and
+   the panel would land somewhere in the chat pane. The row also inherits the clamp's
+   --composer-options-shift down to the panel.
+
+   NO overflow: hidden HERE, EVER. The panel is this row's last child at `bottom: 100%`, i.e. it paints
+   OUTSIDE the row's box; clipping the row to its new corner would erase the type-ahead outright. No
+   vitest spec can see that — the placement is measured only in Playwright.
 
    The row deliberately does NOT wear .composer-options-anchor, whose own comment anticipates this consumer:
    e2e/composer-options-clamp.spec.ts locates that class and relies on Playwright strict mode resolving
@@ -1636,12 +1660,44 @@
    panel 12px left of its anchor, so a row's LABEL lands flush with the message box's left edge while the
    box's own text starts 16px in (.composer__input's --space-4 padding). Those 4px are the price of not
    forking the panel's placement, and they stand: #934 closed on 2026-09-02 having settled the row, the cap
-   and the width bound by decision rather than by a drawing, and left this untouched. */
+   and the width bound by decision rather than by a drawing, and left this untouched. #951 left them
+   standing too, and did not merely leave them EQUIVALENT: with the horizontal split above, the 16px is
+   still the textarea's own --space-4, the same declaration this sentence has always named. The anchor
+   rect e2e/composer-options-clamp.spec.ts measures is unchanged in x and width (no border, no horizontal
+   padding, so the padding box edge is still the outer edge); it grew 4px in height, 48 → 52, which that
+   spec does not read. */
 .composer__row {
   position: relative;
   display: flex;
   align-items: flex-end;
-  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-radius: var(--radius-xs);
+}
+
+/* #951 — the box's ground: --color-on-primary at 41% (the node draws it rgba(0,51,85,0.41); the token is
+   #003355). A DEDICATED PSEUDO-ELEMENT AT `opacity`, not a color-mix() value — the house rule
+   .status-sheet-overlay__scrim records, "opacity is not a color literal". This exact colour at this exact
+   percentage already ships this way one region away, on .question-panel__other-field::before, which is
+   the same design idiom (`Input small`) one size down; .pairing-field::before is the same form again at
+   72%. color-mix() appears nowhere in this repo as a VALUE, only in three comments naming it as the form
+   declined, so introducing it here would fork the file's treatment of one colour for no visual
+   difference. Both forms satisfy what the rule actually protects — never the export's hex, always the
+   token's name.
+
+   inset: 0 resolves against the row's PADDING box, which with no horizontal padding and no border is the
+   whole 52px box; border-radius: inherit picks up --radius-xs above.
+
+   THE ONE CONSEQUENCE is .composer__input's `position: relative` below: a positioned pseudo-element paints
+   ABOVE non-positioned in-flow content, so without it this ground would cover the textarea. That is the
+   same line .pairing-field__row carries for the same reason. .composer__send and the type-ahead panel are
+   both already positioned and both later in DOM order, so they need nothing. */
+.composer__row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--color-on-primary);
+  border-radius: inherit;
+  opacity: 0.41;
 }
 
 /* Muted caption naming why the send control is unavailable while not connected (#31). Left padding
@@ -1761,40 +1817,80 @@
   flex: 0 0 auto;
 }
 
-/* min-width: 0 lets the input shrink below its content width on narrow windows. */
+/* #951 — the drawing's `Text field`, and no longer the box: the fill and the 28px corner moved to
+   .composer__row above, so this is transparent with no radius of its own and carries only the text's
+   inset and type. body-MEDIUM (14/20), down from body-large (16/24) — the node's own type.
+
+   min-width: 0 lets the input shrink below its content width on narrow windows.
+
+   position: relative puts the text above .composer__row::before; see that rule for why it is required
+   rather than decorative.
+
+   padding-right = the control's 48px + its 4px inset + 4px of clearance = the node's 56px, which is what
+   stops the text running under the button. 48px is a literal for the reason .composer__send's own width
+   is one two rules down: a control's own size is structural geometry, not spacing (the .composer__footer
+   / .composer-status / .conn-dot precedent in this file). --space-2 carries the two 4s. */
 .composer__input {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   box-sizing: border-box;
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-surface-container-high);
+  padding: var(--space-1) calc(48px + var(--space-2)) var(--space-1) var(--space-4);
+  background: none;
   color: var(--color-on-surface);
   border: none;
-  border-radius: var(--radius-lg);
   outline: none;
   resize: none;
   font-family: var(--font-sans);
-  font-size: var(--text-body-large-size);
-  line-height: var(--text-body-large-line);
-  letter-spacing: var(--text-body-large-tracking);
-  font-weight: var(--text-body-large-weight);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
 .composer__input::placeholder {
   color: var(--color-on-surface-variant);
 }
 
-.composer__input:focus-visible {
+/* #951 — THE SHIPPED FOCUS RING, MOVED FROM THE TEXTAREA TO THE BOX. Same treatment, same token, same
+   1px: only the element it paints on changed, and it had to. The textarea is now 28px tall inside a 52px
+   box, so its own outline would draw a bare rectangle floating inside the rounded box — visible, but
+   reading as an artefact rather than as "this box has focus". On the row it follows --radius-xs and is
+   the box's ring, which is what AC3 asks for.
+
+   :has() rather than :focus-within, and .question-panel__option:has(.question-panel__input:focus-visible)
+   is the shipped precedent for exactly this shape. :focus-within would also match while the SEND CONTROL
+   holds focus, stacking this ring around the box on top of the button's own :focus-visible ring two rules
+   down — two rings for one focused control. :has() names the textarea and nothing else.
+
+   .composer__input keeps `outline: none` above, so the UA ring is still suppressed and this is the whole
+   keyboard indicator for the message box. */
+.composer__row:has(.composer__input:focus-visible) {
   outline: 1px solid var(--color-outline);
 }
 
 /* #678 — the chrome BOTH variants of the composer's one control share (send and stop), with no modifier
-   class: the 48px M3 round icon button. The rules below already behave for the never-disabled stop
-   variant — :hover:not(:disabled) matches it and :disabled never does — which is why #678 deleted the
-   cloned .interrupt-button rule set that used to live here and added nothing. The 48px flex-centred box
-   centres the stop glyph's 28px at exactly the same optical weight as the send arrow's 22px. */
+   class: the 48px M3 icon button. The rules below already behave for the never-disabled stop variant —
+   :hover:not(:disabled) matches it and :disabled never does — which is why #678 deleted the cloned
+   .interrupt-button rule set that used to live here and added nothing. The 48px flex-centred box centres
+   both glyphs' 28px.
+
+   #951 — IT SITS INSIDE THE BOX NOW (Figma `Message input button`, 347:6440, at right: 4px in a 52px
+   box), so it is out of flow: absolutely positioned against .composer__row, whose padding box edge is its
+   border box edge, which is what lets `right` be the drawing's own 4px. `flex: 0 0 auto` went with the
+   move — an absolutely positioned box is not a flex item. top: 50% + translateY(-50%) centres it on
+   whatever height the box derives rather than restating half of 48px as an offset.
+
+   NO VISIBLE CONTAINER AT REST, which is what the M3 icon button's own Figma description specifies
+   ("until the button is interacted with, its container isn't visible") and why the filled
+   surface-container-high disc is gone. The glyph carries the whole affordance in --color-primary
+   (#9dcbfc by value; the token NAME, never the export's fallback hex — the standing rule in
+   .composer-status and .composer__context). The radius stays: it is what shapes the hover container. */
 .composer__send {
-  flex: 0 0 auto;
+  position: absolute;
+  right: var(--space-1);
+  top: 50%;
+  transform: translateY(-50%);
   width: 48px;
   height: 48px;
   display: flex;
@@ -1803,11 +1899,13 @@
   padding: 0;
   border: none;
   border-radius: var(--radius-full);
-  background: var(--color-surface-container-high);
-  color: var(--color-on-surface);
+  background: none;
+  color: var(--color-primary);
   cursor: pointer;
 }
 
+/* The interaction step the design leaves undrawn: the container appears on hover. Unchanged since #678 —
+   what changed is what it steps FROM, which is now nothing rather than surface-container-high. */
 .composer__send:hover:not(:disabled) {
   background: var(--color-surface-container);
 }
@@ -3858,10 +3956,13 @@
    around it would lose its left segment. The row is also the real click target now that it is a <label>,
    so outlining it is the honest indicator rather than a workaround.
 
-   :has() APPEARS NOWHERE ELSE IN THIS CODEBASE, and its one prior consideration (:488, the markdown list
-   rhythm) rejected it for protecting a distinction that container flattens by intent — not as a ban. Here
-   there is no other way to reach the row from the state of the input inside it, the renderer is one known
-   Chromium, and the alternative is a focus indicator a keyboard user cannot see. */
+   :has() APPEARED NOWHERE ELSE IN THIS CODEBASE WHEN #912 WROTE THIS, and its one prior consideration
+   (the markdown list rhythm, in .assistant-markdown's own comment) rejected it for protecting a
+   distinction that container flattens by intent — not as a ban. Here there is no other way to reach the
+   row from the state of the input inside it, the renderer is one known Chromium, and the alternative is a
+   focus indicator a keyboard user cannot see. #951 took this rule as the precedent for the message box's
+   own ring (.composer__row:has(.composer__input:focus-visible)), so the selector now has two consumers
+   and the same argument twice. */
 .question-panel__option:has(.question-panel__input:focus-visible) {
   outline: 1px solid var(--color-outline);
 }
@@ -4110,11 +4211,12 @@
    is this button's ENABLED fill rather than a different taste. Desktop is dark-only (ADR 0003), where
    --color-primary is #9dcbfc — a BRIGHT light blue. Muting only the content would put #c2c7cf on #9dcbfc:
    light on light, a label at roughly 1.3:1 that cannot be read, on a pill that still reads as the most
-   prominent and most available control in the row. The two precedents do not transfer because their
-   enabled fills are already neutral (--color-surface-container-high and --color-secondary-container), so
+   prominent and most available control in the row. The two precedents do not transfer because neither
+   sits on a bright enabled fill — .log-data__download's is --color-secondary-container, and #951 took
+   .composer__send's away entirely (it is transparent at rest now, with its glyph in --color-primary) — so
    there the content colour carries the whole signal. Here it cannot. --color-surface-container-high is
-   this stylesheet's own neutral control fill (.composer__send's background), which puts the muted label at
-   ~8.6:1 — legible, and unmistakably de-emphasized beside the outlined Cancel and Previous.
+   this stylesheet's own neutral control fill, which puts the muted label at ~8.6:1 — legible, and
+   unmistakably de-emphasized beside the outlined Cancel and Previous.
 
    Only the Continue ROLE is ever gated; the same element reading Next is never disabled, or an incomplete
    batch could not be stepped through to complete it. */

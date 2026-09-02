@@ -61,6 +61,29 @@ other guard checks `typeof value.field === 'string'` (accepting any string); thi
 guarantee that no daemon-relayed text can ride into an OS notification. Ships dormant — #392 is the
 not-yet-built consumer.
 
+The union grew a thirteenth and fourteenth member in
+[#920](https://github.com/pyrycode/pyrycode-desktop/issues/920): `answerQuestions`
+(`AnswerQuestionsCommandPayload{question_batch_id, answers}`) and `refuseQuestions`
+(`RefuseQuestionsCommandPayload{question_batch_id}`) — the question vertical's resolution pair,
+`Omit`-derived from the wire `QuestionAnswerPayload`/`QuestionRefusedPayload` with `answer_token`
+excluded, mirroring `AnswerModalCommandPayload`. Unlike the modal pair, **both** question frames carry
+`answer_token` on the wire, so both are `Omit`-derivatives and both mints are main-side. `answerQuestions`
+carries the union's **first structured payload** — `answers` is an array of `{ question_index, values }`
+objects, not a flat scalar row — so its guard, `isAnswerQuestionsPayload`, is the file's first to
+*recurse*: every sibling guard checks one level, this one validates each entry's fields too. **It
+iterates with `for…of`, never `Array.prototype.every`, and that is load-bearing, not style**: `every`
+skips holes, so a sparse `values` array would pass it while `JSON.stringify` still emits `null` for the
+hole — a `null` inside a declared `string[]`. `for…of` goes through the iterator, which yields
+`undefined` for a hole, and the `typeof` check then rejects it. Sparse arrays survive structured clone,
+so this is reachable over IPC, not theoretical. Both guards stay structural-minimum otherwise — a
+smuggled `answer_token`, at either the top level or on an entry, is not rejected here; the main-side
+sender's fresh-literal rebuild (deep, for `answerQuestions`) is what makes it lose. `refuseQuestions`'s
+guard, `isRefuseQuestionsPayload`, is an exact clone of `isCancelModalPayload` with the key renamed.
+Neither has a correlation window on the daemon-connection side: the daemon emits no reply for a
+rejected question answer, so there is nothing to correlate, unlike `answerModal`'s #248 push. See
+[question resolution envelope](question-resolution-envelope.md) for the wire contract and builders both
+drive.
+
 ## What it does
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge. `ipcRenderer` itself never crosses to the window.
@@ -198,6 +221,7 @@ sendCommand: (command: RendererCommand): void => {
 **Verdict: PASS** (architect self-review in the spec).
 
 - **The trust boundary is explicit and single:** `onCommand`, gated by `isRendererCommand`. This is the one place the command half must **not** copy the event half — the renderer is untrusted, so the boundary gets a real runtime guard. The guard is what makes the handler's `RendererCommand` type honest.
+- **The guard-then-rebuild pattern (validate at `isRendererCommand`, rebuild a fresh literal main-side before it touches a builder) depends on a property that is invisible in the code, not in either half by itself: structured clone.** A getter on a payload field that returned a benign value to the guard and a hostile one to the sender would defeat both halves of the net — but by the time `isRendererCommand` runs, the value has already crossed `ipcRenderer.send`/`ipcMain.on`, and structured clone materialises every accessor into a plain data property before it does. No accessor can survive that crossing to observe *which* read it is answering. Noted at [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920), the first command whose fresh-literal rebuild had to go two levels deep (an array of objects, not a flat row) to hold; worth restating wherever a payload-bearing command's security review leans on the pattern, since nothing in this file demonstrates the mechanism.
 - **AC5 (no secret crosses the bridge) is enforced by the type, not by convention.** `RendererCommand` references only `SendMessagePayload` (`conversation_id`, `message_id`, `text`) — no token/key/byte field. `HelloClientPayload` (`token`), `QrPayload` (`token`, `server_static_pubkey`), and `InnerFrameV2` (base64 `data`) are **not** members and must never become members — a developer cannot serialize a secret here because no member has a field to hold one.
 - **Narrow renderer capability.** The added surface is `sendCommand(RendererCommand)` on one channel; `COMMAND_CHANNEL` is hardcoded, `ipcRenderer` is never exposed, and the renderer cannot reach Node, the socket, or keys (none live there). Worst case for a compromised renderer: it sends well-formed messages **as the already-authenticated user** — inherent to being the client, bounded by the daemon's session auth (Noise + token), not a new hole #17 opens.
 - **No logging of payloads.** The receiver logs at most a fixed string on a dropped command; the preload sender logs nothing. `SendMessagePayload.text` crossing to main is the product (the message to send), not a leak — but must not be logged.
@@ -216,5 +240,6 @@ sendCommand: (command: RendererCommand): void => {
 - [#261 codebase notes](../codebase/261.md) — widened `setSessionSettings` with the top-level-sibling `changeId: string` field + its untrusted-boundary guard clause, the renderer-minted correlation key the [daemon connection](daemon-connection.md) matches replies against
 - [Interrupt envelope](interrupt-envelope.md) / [#306 codebase notes](../codebase/306.md) — the bare `interrupt` member this channel's union gained; unlike its daemon-reply-bearing siblings, the daemon sends no correlated reply at all — the turn-stopped signal rides the pre-existing `turn_state`/`turn_end` stream instead
 - [Push notifications](push-notifications.md) / [#391 codebase notes](../codebase/391.md) — the payload-carrying `notify` member + `isNotifyPayload` guard this channel's union gained; the first member whose payload type is main-local (not wire-derived) and whose guard checks closed-set membership rather than `typeof`
+- [Question resolution envelope](question-resolution-envelope.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920) — the `answerQuestions`/`refuseQuestions` members + their guards this channel's union gained, `Omit`-derived like `answerModal`'s but both token-excluded (unlike the modal pair); `isAnswerQuestionsPayload` is this file's first guard to recurse into a structured payload, and the first place the `for…of`-over-`every` hole distinction mattered. [Daemon connection](daemon-connection.md) is the consumer that mints `answer_token` for both.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

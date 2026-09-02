@@ -360,6 +360,17 @@ app.whenReady().then(() => {
         // Direct to the connection method, sends modal_cancel. Inert no-op when not connected (#236).
         connection.cancelModal(command.payload)
         return
+      case 'answerQuestions':
+        // Direct to the connection method (mirrors answerModal), no orchestrator. The method mints the
+        // answer_token main-side and sends question_answer. No reply is correlated — the daemon emits
+        // nothing for a rejected question answer. Inert no-op when not connected (#920).
+        connection.answerQuestions(command.payload)
+        return
+      case 'refuseQuestions':
+        // Direct to the connection method, sends question_refused. It mints a token too, unlike the
+        // cancelModal it otherwise mirrors. Inert no-op when not connected (#920).
+        connection.refuseQuestions(command.payload)
+        return
       case 'createConversation':
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a create request
         // has no consumer/reassembler. Sends create_conversation; the daemon replies with one

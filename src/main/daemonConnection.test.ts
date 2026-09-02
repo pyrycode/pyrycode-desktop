@@ -4344,6 +4344,254 @@ describe('createDaemonConnection — cancelModal (outbound modal_cancel, #236)',
   })
 })
 
+describe('createDaemonConnection — answerQuestions (outbound question_answer, #920)', () => {
+  const PAYLOAD = {
+    question_batch_id: 'qb-1',
+    answers: [
+      { question_index: 0, values: ['yes'] },
+      { question_index: 1, values: ['a', 'b'] }
+    ]
+  }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.answerQuestions(PAYLOAD)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one question_answer envelope with id 2, the fixed ts, and the minted token', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.answerQuestions(PAYLOAD)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('question_answer')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    // The main-side-minted answer_token lands alongside the passed-through fields, and entry order
+    // plus each entry's values order survive (array order is not the correlation, but it is preserved).
+    expect(envelope.payload).toEqual({
+      question_batch_id: 'qb-1',
+      answer_token: 'test-token',
+      answers: [
+        { question_index: 0, values: ['yes'] },
+        { question_index: 1, values: ['a', 'b'] }
+      ]
+    })
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.answerQuestions(PAYLOAD)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('mints a fresh answer_token per call — two answers carry two distinct tokens (anti-replay)', async () => {
+    let n = 0
+    const ctx = build({ mintToken: () => `tok-${(n += 1)}` })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    ctx.connection.answerQuestions(PAYLOAD)
+    ctx.connection.answerQuestions(PAYLOAD)
+
+    const first = decodeEnvelope(ctx.drivers[0].sent[0]).payload as { answer_token: string }
+    const second = decodeEnvelope(ctx.drivers[0].sent[1]).payload as { answer_token: string }
+    expect(first.answer_token).toBe('tok-1')
+    expect(second.answer_token).toBe('tok-2')
+    expect(first.answer_token).not.toBe(second.answer_token)
+  })
+
+  it('strips a smuggled token and extra keys at BOTH levels — the fresh literal rebuilds each entry', async () => {
+    const { connection, drivers } = await connected()
+
+    // A compromised renderer can smuggle past the structural-minimum guard at two depths: a top-level
+    // answer_token/extra key, AND an extra key on an ENTRY (the guard tolerates both). A shallow
+    // `answers: payload.answers` would carry the entry-level key onto the wire, since the builder
+    // serializes verbatim — this is the assertion that pins the DEEP rebuild.
+    connection.answerQuestions({
+      question_batch_id: 'qb-1',
+      answer_token: 'smuggled',
+      conversation_id: 'c-evil',
+      answers: [{ question_index: 0, values: ['yes'], conversation_id: 'c-evil' }]
+    } as unknown as typeof PAYLOAD)
+
+    const payload = decodeEnvelope(drivers[0].sent[0]).payload
+    expect(payload).toEqual({
+      question_batch_id: 'qb-1',
+      answer_token: 'test-token',
+      answers: [{ question_index: 0, values: ['yes'] }]
+    })
+    expect(JSON.stringify(payload)).not.toContain('smuggled')
+    expect(JSON.stringify(payload)).not.toContain('c-evil')
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.answerQuestions(PAYLOAD)).not.toThrow()
+  })
+
+  it('drops an over-cap answer whole and does NOT advance the envelope id (AC3, a live path)', async () => {
+    const { connection, drivers } = await connected()
+
+    // `values` are operator-typed free text and nothing bounds entry count or value length, so
+    // MAX_PLAINTEXT_BYTES is reachable in ordinary use — this is the answer path's LIVE failure, not a
+    // defensive branch. Fail closed: the send is dropped whole, never truncated (a trimmed answer would
+    // send a different choice than the operator made).
+    expect(() =>
+      connection.answerQuestions({
+        question_batch_id: 'qb-1',
+        answers: [{ question_index: 0, values: ['x'.repeat(MAX_PLAINTEXT_BYTES + 1)] }]
+      })
+    ).not.toThrow()
+    expect(drivers[0].sent).toHaveLength(0)
+
+    // The id did not advance: the next successful send still claims 2.
+    connection.answerQuestions(PAYLOAD)
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+  })
+
+  it('logs NOTHING on either the success or the over-cap path (AC4: no batch id, value or token)', async () => {
+    const cap = captureLog()
+    const ctx = build({ diagnosticLog: cap.log })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = cap.records.length
+
+    ctx.connection.answerQuestions(PAYLOAD)
+    ctx.connection.answerQuestions({
+      question_batch_id: 'qb-secret',
+      answers: [{ question_index: 0, values: ['x'.repeat(MAX_PLAINTEXT_BYTES + 1)] }]
+    })
+
+    // The caught object is dropped rather than read: its message could echo the batch nonce or an
+    // entry value, so neither the send nor the failure records anything.
+    expect(cap.records).toHaveLength(before)
+  })
+})
+
+describe('createDaemonConnection — refuseQuestions (outbound question_refused, #920)', () => {
+  const PAYLOAD = { question_batch_id: 'qb-1' }
+
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin, not a fail)', () => {
+    const { connection, drivers } = build()
+
+    expect(() => connection.refuseQuestions(PAYLOAD)).not.toThrow()
+    expect(drivers).toHaveLength(0)
+  })
+
+  it('after handshake-complete, forwards one question_refused envelope with id 2, the fixed ts, and the minted token', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.refuseQuestions(PAYLOAD)
+
+    expect(drivers[0].sent).toHaveLength(1)
+    const envelope = decodeEnvelope(drivers[0].sent[0])
+    expect(envelope.type).toBe('question_refused')
+    expect(envelope.id).toBe(2)
+    expect(envelope.ts).toBe(FIXED_TS)
+    // The refusal carries a token TOO, unlike modal_cancel which carries modal_id alone — do not size
+    // this pair from the modal pair's asymmetry. toEqual proves `answers` is not present.
+    expect(envelope.payload).toEqual({
+      question_batch_id: 'qb-1',
+      answer_token: 'test-token'
+    })
+  })
+
+  it('shares the one envelope-id counter with send (no second counter)', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
+    connection.refuseQuestions(PAYLOAD)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
+  })
+
+  it('mints a fresh answer_token per call — two refusals carry two distinct tokens (anti-replay)', async () => {
+    let n = 0
+    const ctx = build({ mintToken: () => `tok-${(n += 1)}` })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    ctx.connection.refuseQuestions(PAYLOAD)
+    ctx.connection.refuseQuestions(PAYLOAD)
+
+    const first = decodeEnvelope(ctx.drivers[0].sent[0]).payload as { answer_token: string }
+    const second = decodeEnvelope(ctx.drivers[0].sent[1]).payload as { answer_token: string }
+    expect(first.answer_token).toBe('tok-1')
+    expect(second.answer_token).toBe('tok-2')
+  })
+
+  it('strips a smuggled token and extra field — the sent payload is exactly the two modelled ids', async () => {
+    const { connection, drivers } = await connected()
+
+    connection.refuseQuestions({
+      question_batch_id: 'qb-1',
+      answer_token: 'smuggled',
+      answers: [{ question_index: 0, values: ['yes'] }]
+    } as unknown as typeof PAYLOAD)
+
+    expect(decodeEnvelope(drivers[0].sent[0]).payload).toEqual({
+      question_batch_id: 'qb-1',
+      answer_token: 'test-token'
+    })
+  })
+
+  it('does not throw out of the module when the driver sendMessage throws (parity #490)', async () => {
+    const { connection, drivers } = build({ throwOnSend: true })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+
+    expect(() => connection.refuseQuestions(PAYLOAD)).not.toThrow()
+  })
+
+  it('logs nothing on the send path (AC4: the batch id is a one-time nonce)', async () => {
+    const cap = captureLog()
+    const ctx = build({ diagnosticLog: cap.log })
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = cap.records.length
+
+    ctx.connection.refuseQuestions({ question_batch_id: 'qb-secret' })
+
+    expect(cap.records).toHaveLength(before)
+  })
+})
+
 describe('createDaemonConnection — requestDebugBundle (outbound debug-bundle request)', () => {
   const PAYLOAD: SendMessagePayload = {
     conversation_id: 'c1',

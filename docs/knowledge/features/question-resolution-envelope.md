@@ -161,19 +161,37 @@ covered when it is not.
 
 ## Configuration and usage
 
-**No consumer yet.** The command path that mints `answer_token` and calls these builders, and the
-renderer controls on the question panel's action row that trigger it, are later slices — every control
-on that row is inert as to answering until they land. `answer_token` matching wants plain `===`
-whenever the consumer lands, not `crypto.timingSafeEqual` — it is not a secret, and the anti-replay
-property is the daemon's one-shot consume of `question_batch_id`, exactly as for `modal_id`.
+**Consumer landed: [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920).**
+`daemonConnection.answerQuestions`/`refuseQuestions` (`src/main/daemonConnection.ts`) call the two
+builders directly — the `send`/`answerModal` inert no-op shape (`driver === null` → return; full-body
+`try {} catch {}`, never throws out of the module), sharing the module's single `nextEnvelopeId`
+counter. Both methods mint `answer_token` via the existing `mintToken` DI seam (default
+`crypto.randomUUID`, main-side), since **both question frames carry a token**, unlike the modal pair
+where only `modal_answer` does. `answerQuestions` builds a **fresh literal naming exactly the three
+modeled fields**, and the rebuild is **deep**: each `answers` entry is rebuilt as
+`{ question_index, values }` rather than passed through by reference, because `buildQuestionAnswer`
+serializes verbatim and a shallow `answers: payload.answers` would carry any extra key smuggled onto
+an *entry* — past the renderer-side guard — straight onto the wire. `values` itself rides without a
+copy: `JSON.stringify` serializes an array by index, so no own property on it can ride, and a
+defensive copy would read as a check it is not. Routed from a new pair of `RendererCommand` members
+(`answerQuestions`/`refuseQuestions`, [command channel](command-channel.md)) through
+`src/main/index.ts`'s `onCommand` switch — no orchestrator, direct dispatch. **No correlation window**,
+unlike `answerModal`'s `outstandingAnswers` (#248): the daemon emits no reply and no error envelope for
+a rejected question answer, so a window here would hold an entry nothing ever drains. `answer_token`
+matching, if it is ever added, wants plain `===`, not `crypto.timingSafeEqual` — confirmed unchanged by
+this slice: nothing on this path compares a token or a batch id to anything at all. The renderer
+controls on the question panel's action row that dispatch these commands are still a later slice —
+every control on that row remains inert as to answering until they land.
 
 ## Edge cases and limitations
 
 - **No decode path.** Both frames are outbound-only — there is nothing for `inboundMessage.ts` to
   parse here.
 - **No validation of `question_index` against the batch's `questions` length**, and none against
-  `values` against the offered options. That belongs to the (future) consumer, which holds the live
-  batch; the builder serializes whatever payload it is given.
+  `values` against the offered options — confirmed still true of the landed consumer. The renderer-side
+  guard (`isAnswerQuestionsPayload`) is a *shape* check only; upstream's `answerVerdict` owns every
+  bound (entry count, value length, index range, membership), and a second copy client-side would be a
+  second bound to keep in agreement with the batch.
 - **`answer_token` is not a secret**, same as `ModalAnswerPayload`'s. Its uniqueness and stability
   matter for idempotency; secrecy does not, and the daemon on this path never even reads it.
 - **Zero `EnvelopeType` consumer cascade.** No production code does an exhaustive `switch` over
@@ -189,6 +207,12 @@ property is the daemon's one-shot consume of `question_batch_id`, exactly as for
 - [Modal resolution envelope](modal-resolution-envelope.md) — this file's twin (#235), the structural
   clone both builders here follow seam for seam, including its answer/cancel-path split precedent
   (wire+builders → main-command wiring that mints the token → renderer consumer).
+- [Command channel](command-channel.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920)
+  — the `answerQuestions`/`refuseQuestions` `RendererCommand` members and their boundary guards, one of
+  which (`isAnswerQuestionsPayload`) is the file's first guard to recurse into a structured payload.
+- [Daemon connection](daemon-connection.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920)
+  — the `answerQuestions`/`refuseQuestions` methods that consume both builders here, mint
+  `answer_token` main-side, and deep-rebuild the `answers` array to net a smuggled entry-level field.
 - [Wire codec](wire-codec.md) — `encodeEnvelope`/`WireEncodeError`/`MAX_PLAINTEXT_BYTES`, unchanged by
   this slice.
 - [Conversation shell — question panel](conversation-shell-question-panel.md) — the render vertical

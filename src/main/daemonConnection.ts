@@ -45,6 +45,10 @@ import { buildSetSessionSettings } from './transport/setSessionSettingsEnvelope'
 import { buildDequeueMessage } from './transport/dequeueMessageEnvelope'
 import { buildInterrupt } from './transport/interruptEnvelope'
 import { buildModalAnswer, buildModalCancel } from './transport/modalResolutionEnvelope'
+import {
+  buildQuestionAnswer,
+  buildQuestionRefused
+} from './transport/questionResolutionEnvelope'
 import { parseInboundMessage, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
   createBundleReassembler,
@@ -72,7 +76,9 @@ import {
   type SetSessionSettingsPayload,
   type ModalAnswerPayload,
   type ModalCancelPayload,
-  type DequeueMessagePayload
+  type DequeueMessagePayload,
+  type QuestionAnswerPayload,
+  type QuestionRefusedPayload
 } from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
@@ -318,6 +324,38 @@ export interface DaemonConnection {
    * no-op when not connected. NEVER throws out of the module (parity #490).
    */
   cancelModal(payload: ModalCancelPayload): void
+  /**
+   * Resolve an outstanding `question_shown` batch with the operator's selections (#920): MINT a fresh
+   * client-side idempotency `answer_token` (main-side — the renderer holds no CSPRNG seam and never
+   * mints), fold it into a `question_answer` envelope alongside the `question_batch_id` and the ordered
+   * entries, and encrypt it onto the live session. `question_batch_id` is the sole correlation key, and
+   * it is a one-time unguessable nonce that must never reach a log.
+   *
+   * The `send` TWIN, not `requestDebugBundle`: a resolution has no consumer to fail, so it is an inert
+   * no-op when not connected (`driver === null` → return). The silence SELF-HEALS rather than stranding
+   * the operator — the daemon still holds the batch parked, and its connect-time reconcile re-asserts it
+   * as a fresh `question_shown` after the next handshake. A replayed answer is inert daemon-side (the
+   * one-shot consume of `question_batch_id`).
+   *
+   * NO CORRELATION WINDOW, deliberately, unlike `answerModal`'s #248 push: the daemon emits no reply and
+   * no error envelope for a rejected question answer, so there would be nothing to drain the entry.
+   *
+   * The entries are opaque here — no bound on entry count or value length, no range check on
+   * `question_index`, no membership check of a value against the batch's offered labels. Upstream's
+   * `answerVerdict` owns all of those. NEVER throws out of the module (parity #490); an over-cap
+   * plaintext is a LIVE path here, since `values` are operator-typed free text.
+   */
+  answerQuestions(payload: Omit<QuestionAnswerPayload, 'answer_token'>): void
+  /**
+   * Refuse an outstanding `question_shown` batch from the desktop (#920): the operator declined to
+   * choose, so the batch resolves without any selection. MINTS a fresh `answer_token` exactly as
+   * `answerQuestions` does — `question_refused` carries one on the wire, UNLIKE `modal_cancel`, which
+   * carries `modal_id` alone; do not size this pair from the modal pair's asymmetry. The `send` twin: an
+   * inert no-op when not connected, with the same self-healing silence. NEVER throws out of the module
+   * (parity #490); this frame carries two ids and no free text, so its own over-cap throw stays exotic
+   * and the catch is really there for `driver.sendMessage`.
+   */
+  refuseQuestions(payload: Omit<QuestionRefusedPayload, 'answer_token'>): void
   /**
    * Encrypt a bare `request_debug_bundle` control envelope onto the live session — asks the daemon
    * to begin streaming the current debug bundle back — and ARM a reassembler for the streamed reply
@@ -1726,6 +1764,71 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function answerQuestions(payload: Omit<QuestionAnswerPayload, 'answer_token'>): void {
+    // The send twin: inert no-op when not connected (see send's guard rationale). A resolution has no
+    // consumer to fail, and the silence self-heals — the daemon keeps the batch parked and its
+    // connect-time reconcile re-asserts it as a fresh question_shown after the next handshake.
+    if (driver === null) return
+    try {
+      // Mint the token into a FRESH literal naming exactly the three modeled fields — never a spread
+      // of `payload`. The rebuild is DEEP, and that is the point: `answers` is an array of OBJECTS, so
+      // a shallow `answers: payload.answers` would carry an extra key smuggled onto an ENTRY (past the
+      // structural-minimum guard) straight onto the wire, since buildQuestionAnswer serializes
+      // verbatim. Rebuilding each entry is what bounds the frame to the modeled fields at both depths.
+      //
+      // `values` is passed through without a copy, deliberately: JSON.stringify serializes an array BY
+      // INDEX, so no own property on it can ride, and a defensive copy would read as a check it is not.
+      const bytes = buildQuestionAnswer({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          question_batch_id: payload.question_batch_id,
+          answer_token: mintToken(),
+          answers: payload.answers.map((entry) => ({
+            question_index: entry.question_index,
+            values: entry.values
+          }))
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+      // NO correlation window push here, unlike answerModal's outstandingAnswers (#248): the daemon
+      // emits no reply and no error envelope for a rejected question answer, so an entry pushed here
+      // would be one nothing ever drains.
+    } catch {
+      // Never throw out of the module (parity #490). The over-cap WireEncodeError is a LIVE branch on
+      // this path, not a defensive one — `values` are operator-typed free text and nothing bounds entry
+      // count or value length. Fail closed: the send is dropped WHOLE, never truncated, because a
+      // trimmed answer would send a different choice than the operator made. The caught object is
+      // DROPPED — its message could echo the batch nonce or an entry value; no log, no event
+      // (classify-don't-forward, inherited #62).
+    }
+  }
+
+  function refuseQuestions(payload: Omit<QuestionRefusedPayload, 'answer_token'>): void {
+    // The send twin: inert no-op when not connected (see answerQuestions' rationale).
+    if (driver === null) return
+    try {
+      // Fresh literal naming only the batch id plus the token minted HERE — strips any smuggled extra
+      // field, and a smuggled answer_token loses to the minted one. The token is present because
+      // question_refused carries one, unlike modal_cancel.
+      const bytes = buildQuestionRefused({
+        id: nextEnvelopeId,
+        ts: now(),
+        payload: {
+          question_batch_id: payload.question_batch_id,
+          answer_token: mintToken()
+        }
+      })
+      nextEnvelopeId += 1 // advance only on a successful build — a dropped over-cap send keeps the id
+      driver.sendMessage(bytes)
+    } catch {
+      // Never throw out of the module (parity #490): two ids and no free text cannot realistically
+      // over-cap, so this is really driver.sendMessage's catch. The caught object is DROPPED — its
+      // message could echo the batch nonce (classify-don't-forward, inherited #62).
+    }
+  }
+
   function requestDebugBundle(consumer: BundleConsumer): void {
     // Not connected (before start(), mid-bootstrap, bootstrap-failed): fail the consumer terminally
     // so #118's command never hangs — the wire behaviour is still "send nothing," but the caller is
@@ -1832,6 +1935,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     setSessionSettings,
     answerModal,
     cancelModal,
+    answerQuestions,
+    refuseQuestions,
     requestDebugBundle
   }
 }

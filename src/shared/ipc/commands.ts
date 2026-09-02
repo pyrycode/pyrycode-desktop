@@ -28,7 +28,9 @@ import type {
   ChangeWorkspacePayload,
   CreateWorkspaceFolderPayload,
   SetSessionSettingsPayload,
-  DequeueMessagePayload
+  DequeueMessagePayload,
+  QuestionAnswerPayload,
+  QuestionRefusedPayload
 } from '../wire/types'
 
 /**
@@ -40,6 +42,27 @@ import type {
  * main-side composer.
  */
 export type AnswerModalCommandPayload = Omit<ModalAnswerPayload, 'answer_token'>
+
+/**
+ * The fields the renderer supplies to resolve an outstanding question batch with the operator's
+ * selections (#920): the `question_batch_id` + the ordered `answers` entries, DERIVED from the wire
+ * `QuestionAnswerPayload` with `answer_token` excluded, exactly as AnswerModalCommandPayload derives
+ * from ModalAnswerPayload — `Omit` ties the field names to the wire contract while making the
+ * token-exclusion a compile-time guarantee. The token is minted MAIN-side by
+ * daemonConnection.answerQuestions; the renderer holds no CSPRNG seam and this family's contract is
+ * that a token is never renderer-composed.
+ */
+export type AnswerQuestionsCommandPayload = Omit<QuestionAnswerPayload, 'answer_token'>
+
+/**
+ * The fields the renderer supplies to refuse an outstanding question batch (#920): the
+ * `question_batch_id` alone. **`question_refused` carries `answer_token` on the wire too — unlike
+ * `modal_cancel`, which carries `modal_id` alone — so this is an `Omit` derivative like the answer's,
+ * not a bare wire-type reuse like ModalCancelPayload's.** Do not size this pair from the modal pair's
+ * asymmetry. Written as an `Omit` rather than a hand-written one-field interface even though it
+ * collapses to one field, so an upstream field addition propagates here instead of diverging silently.
+ */
+export type RefuseQuestionsCommandPayload = Omit<QuestionRefusedPayload, 'answer_token'>
 
 /**
  * The closed set of push-notification kinds the renderer may ask main to raise (#391). A sealed
@@ -113,6 +136,13 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * ../wire/types, because it is a MAIN-LOCAL side-effect command that never reaches the transport. It
  * carries only the closed `kind` enum (`turn-complete` | `prompt`) — no free-text title/body, no id, no
  * secret — which main maps to a static copy table to raise an OS notification when the window is unfocused.
+ * and `answerQuestions` / `refuseQuestions` (#920), the question vertical's resolution pair, whose payloads
+ * are AnswerQuestionsCommandPayload (`question_batch_id` + the ordered `answers` entries) and
+ * RefuseQuestionsCommandPayload (`question_batch_id` alone) — BOTH `Omit`-derivatives, because unlike the
+ * modal pair BOTH question frames carry `answer_token` on the wire, so both mints are main-side
+ * (daemonConnection.answerQuestions / refuseQuestions). `answerQuestions` is the union's only STRUCTURED
+ * payload (an array of `{ question_index, values }` objects rather than a flat scalar row), which is why
+ * its guard recurses where every sibling checks one level.
  * No member
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
@@ -129,6 +159,8 @@ export type RendererCommand =
   | { type: 'requestRecentWorkspaces' }
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
   | { type: 'cancelModal'; payload: ModalCancelPayload }
+  | { type: 'answerQuestions'; payload: AnswerQuestionsCommandPayload }
+  | { type: 'refuseQuestions'; payload: RefuseQuestionsCommandPayload }
   | { type: 'createConversation'; payload: CreateConversationPayload }
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'archiveConversation'; payload: ArchiveConversationPayload }
@@ -170,6 +202,32 @@ export function answerModalCommand(fields: AnswerModalCommandPayload): RendererC
  */
 export function cancelModalCommand(fields: ModalCancelPayload): RendererCommand {
   return { type: 'cancelModal', payload: fields }
+}
+
+/**
+ * Wrap the operator's selections resolving an outstanding question batch (`question_batch_id` + the
+ * ordered `answers` entries) into a well-formed command (#920). Pure: it does NOT mint the
+ * `answer_token` — that needs randomness and lives main-side (daemonConnection.answerQuestions),
+ * exactly as answerModalCommand leaves its token to daemonConnection.answerModal. The `fields` type
+ * Omit-excludes the token, so a caller cannot even supply one here.
+ *
+ * The entries pass through opaque: nothing here checks a value against the batch's offered labels,
+ * bounds the array, or range-checks a `question_index`. Upstream's `answerVerdict` owns every one of
+ * those rules, and a second copy would be a second bound to keep in agreement with the batch.
+ */
+export function answerQuestionsCommand(fields: AnswerQuestionsCommandPayload): RendererCommand {
+  return { type: 'answerQuestions', payload: fields }
+}
+
+/**
+ * Wrap a question-batch refusal (`question_batch_id` only) into a well-formed command (#920) — the
+ * operator declined to choose, so the batch resolves without any selection. Pure; it does NOT mint the
+ * `answer_token`. Unlike cancelModalCommand, whose frame carries no token at all, the
+ * `question_refused` frame DOES carry one — hence the Omit-derivative payload type and the main-side
+ * mint, identical to the answer half.
+ */
+export function refuseQuestionsCommand(fields: RefuseQuestionsCommandPayload): RendererCommand {
+  return { type: 'refuseQuestions', payload: fields }
 }
 
 /**
@@ -223,6 +281,10 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isAnswerModalPayload(value.payload)
     case 'cancelModal':
       return 'payload' in value && isCancelModalPayload(value.payload)
+    case 'answerQuestions':
+      return 'payload' in value && isAnswerQuestionsPayload(value.payload)
+    case 'refuseQuestions':
+      return 'payload' in value && isRefuseQuestionsPayload(value.payload)
     case 'createConversation':
       return 'payload' in value && isCreateConversationPayload(value.payload)
     case 'promoteConversation':
@@ -293,6 +355,55 @@ function isAnswerModalPayload(value: unknown): value is AnswerModalCommandPayloa
 function isCancelModalPayload(value: unknown): value is ModalCancelPayload {
   if (typeof value !== 'object' || value === null) return false
   return 'modal_id' in value && typeof value.modal_id === 'string'
+}
+
+/** The untrusted renderer→main boundary guard for the answerQuestions payload (#920) — the question
+ *  vertical's boundary check (why the command half is security-sensitive). THE ONE GUARD IN THIS FILE
+ *  THAT RECURSES: every sibling validates a flat row of scalars, but `answers` is an array of objects,
+ *  and a shallow `Array.isArray` check would let `{ question_index: 'nope' }` through to the builder's
+ *  bare JSON.stringify and put a type-lie on the wire. So each entry is checked field by field.
+ *
+ *  **It iterates with `for…of`, never `Array.prototype.every` — that is load-bearing, not style.**
+ *  `every` SKIPS holes, so a sparse `values` would pass it while JSON.stringify emits `null` for the
+ *  hole, i.e. a `null` inside a declared `string[]`. `for…of` goes through the iterator, which yields
+ *  `undefined` for a hole, and the `typeof` check then rejects it. Sparse arrays survive structured
+ *  clone, so this is reachable over IPC rather than theoretical.
+ *
+ *  It bounds NOTHING: not entry count, not value length, not `question_index` against any batch, and
+ *  not a value against the batch's offered labels. Upstream's `answerVerdict` owns every one of those
+ *  (it range-checks before it subscripts and rejects a bad answer totally), and claude's contract
+ *  permits free text anywhere — so a validator rejecting an unlisted value would reject a legal answer.
+ *  This is a SHAPE guard. An empty `answers` is out of contract upstream but shape-valid here; the
+ *  guard does not adjudicate contract.
+ *
+ *  Structural minimum otherwise — a smuggled `answer_token`, or an extra key at either level, is not
+ *  rejected here: the main-side sender's fresh-literal construction rebuilds the payload AND each
+ *  entry, so both lose. Pure; never throws. */
+function isAnswerQuestionsPayload(value: unknown): value is AnswerQuestionsCommandPayload {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('question_batch_id' in value) || typeof value.question_batch_id !== 'string') return false
+  if (!('answers' in value) || !Array.isArray(value.answers)) return false
+  for (const entry of value.answers) {
+    if (typeof entry !== 'object' || entry === null) return false
+    if (!('question_index' in entry) || typeof entry.question_index !== 'number') return false
+    if (!('values' in entry) || !Array.isArray(entry.values)) return false
+    for (const v of entry.values) {
+      if (typeof v !== 'string') return false
+    }
+  }
+  return true
+}
+
+/** The untrusted renderer→main boundary guard for the refuseQuestions payload (#920). An exact clone of
+ *  isCancelModalPayload with the key changed: one present-and-string `question_batch_id` check — a
+ *  literal `null`, a missing key, and a non-string are all rejected. Checks TYPE, not emptiness (an
+ *  empty string passes; the daemon polices ids). The batch id is a one-time unguessable nonce, not a
+ *  secret to compare — no `timingSafeEqual` question arises here, since nothing on this path compares
+ *  it to anything. Structural minimum — a smuggled `answer_token` is not rejected here; the main-side
+ *  sender's fresh literal bounds the wire to the batch id plus the token IT mints. Pure; never throws. */
+function isRefuseQuestionsPayload(value: unknown): value is RefuseQuestionsCommandPayload {
+  if (typeof value !== 'object' || value === null) return false
+  return 'question_batch_id' in value && typeof value.question_batch_id === 'string'
 }
 
 /** The untrusted renderer→main boundary guard for the createConversation payload (#241) — the reason

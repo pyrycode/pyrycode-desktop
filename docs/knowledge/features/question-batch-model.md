@@ -366,8 +366,8 @@ Nothing landed on screen at first — the shape [#899](https://github.com/pyryco
 shipped in: a store landing with no consumer mounted. [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912)
 wired the panel to it, making the rows and the Other field respond, and proved the picks survive a
 conversation switch in a new `e2e/question-picks.spec.ts`, built on the same pattern
-`e2e/conversation-switch-remount.spec.ts` established for the composer's draft. See [Conversation shell —
-modals § Question panel](conversation-shell-modals.md#question-panel-906-option-rows-since-907-live-since-912)
+`e2e/conversation-switch-remount.spec.ts` established for the composer's draft. See [Question
+panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916)
 for the render-side design.
 
 ## Configuration and usage
@@ -376,9 +376,9 @@ for the render-side design.
 now mounts app-level in `App.tsx`, beside `useModalBridge`, and `ConversationScreen.tsx`'s `ComposerSlot`
 is the batch store's first reader — an outstanding batch for the conversation on screen draws the question
 panel in the composer's slot and covers the whole `.composer` with the native `hidden` attribute. See
-[Conversation shell — modals § Question
-panel](conversation-shell-modals.md#question-panel-906-option-rows-since-907-live-since-912) for the render
-vertical's design; this document still owns the model and the bridge underneath it. That slice drew the
+[Question
+panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916)
+for the render vertical's design; this document still owns the model and the bridge underneath it. That slice drew the
 panel's frame only — the title row, the question text, the separator, and an inert Cancel/Continue row —
 with the option rows landing in [#907](https://github.com/pyrycode/pyrycode-desktop/issues/907). #908 was
 meant to land the picks and the answer path together; it was split into
@@ -524,10 +524,10 @@ that a `connected` clears a pick made against a still-outstanding batch. The 9 e
   security review (verdict PASS).
 - `docs/specs/architecture/900-question-bridge.md` — the bridge's architecture spec, including its own
   security review (verdict PASS).
-- [Conversation shell — conversation surfaces and modals § Question
-  panel](conversation-shell-modals.md#question-panel-906) — the render vertical #906
-  built on this model and bridge: `ComposerSlot`, `QuestionPanelView`, and the composer's `covered` cover
-  mechanism.
+- [Question
+  panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916)
+  — the render vertical #906 built on this model and bridge: `ComposerSlot`, `QuestionPanelView`, and the
+  composer's `covered` cover mechanism.
 - `docs/specs/architecture/911-question-picks-store.md` — the picks store's architecture spec and its own
   security review (verdict PASS), including the mid-connection re-delivery finding handed to #853.
 - Split from [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850); the Zustand container

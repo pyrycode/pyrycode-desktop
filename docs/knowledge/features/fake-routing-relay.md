@@ -97,7 +97,9 @@ recursion to a private `dial()`, so no re-dial can extend the deadline the origi
 prior attempt-count-only ladder (`attemptsLeft = 5` × `DIAL_STALL_MS = 1500` = 7500ms) could out-run
 the test timeout regardless of how the descriptive `stalled` rejection was worded, since vitest killed
 the test first — the same shape [#550](../codebase/550.md) fixed on the sibling
-[fake daemon](fake-daemon.md)'s `fakeDaemon.test.ts`.
+[fake daemon](fake-daemon.md#test-file-wall-clock-deadline-harness-bounded-550-931)'s
+`fakeDaemon.test.ts`, later rolled out to that file's other 11 tests by #931 via an ambient per-test
+deadline rather than this file's per-call one.
 
 The stall path also swaps its `'error'` listener for a benign swallow before `terminate()`, rather than
 dropping it: under ws@8, `terminate()` on a still-`CONNECTING` socket takes the `abortHandshake`

@@ -5,10 +5,11 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
-  type Ref
+  type Ref,
+  type RefObject
 } from 'react'
 import { initialFocusedOptionIndex, resolveComposerOptionsKey } from './composerOptionsKeyboard'
-import { composerOptionsShiftPx } from './composerOptionsPlacement'
+import { composerOptionsMaxWidthPx, composerOptionsShiftPx } from './composerOptionsPlacement'
 
 // #838: the composer footer's shared options panel (Figma node 121:3879, "Options overlay") — ONE surface
 // for five queued consumers: #680 Actions, #682 permission mode, #683 model and effort, and #694's
@@ -31,6 +32,16 @@ import { composerOptionsShiftPx } from './composerOptionsPlacement'
 // `Accept edits` for `acceptEdits`; matching the current value on the display string would force both
 // tickets to invent a lookup. Ids are unique by caller contract: no runtime guard, because no such
 // failure has been observed and React's own `key` warning already surfaces a duplicate in dev.
+//
+// #940 SHARPENED `label`'s TRUST TIER. Until the slash-command type-ahead landed, every consumer passed a
+// client-owned constant here; that one passes WORKSPACE-AUTHORED text — a command name and its argument
+// hint, written by whoever wrote the repository claude is running in, bounded but NOT sanitized by the
+// daemon. So `label` may be untrusted, and the obligation lives with whatever renders it: an ordinary React
+// text child only, never dangerouslySetInnerHTML, never an attribute, a URL, a filename, a cache key, a
+// lookup path or a log (CLAUDE.md's daemon-text ruling). The row markup below is that boundary, and it is
+// the whole of it. A menu adding a second visible field inherits this paragraph rather than rediscovering
+// it — and #940 is also the precedent for NOT adding one: it carries a command description it deliberately
+// never passes here, so the string reaches no DOM sink at all (the product decision on #934).
 export interface ComposerOptionsPanelOption {
   id: string
   label: string
@@ -111,8 +122,10 @@ export function ComposerOptionsPanel({
             onClick={() => onSelect(option.id)}
           >
             {/* An ordinary React text child: auto-escaped, no dangerouslySetInnerHTML, and never an
-                attribute or URL sink. #694 feeds this workspace-authored command names, so this is
-                load-bearing per CLAUDE.md's daemon-text ruling. */}
+                attribute or URL sink. #940 feeds it workspace-authored command names and argument hints,
+                so it is load-bearing per CLAUDE.md's daemon-text ruling — and it stays ONE child, which is
+                what keeps the row's `white-space: nowrap` a complete answer to a name carrying the one
+                measured sub-0x20 byte. */}
             {option.label}
           </button>
         )
@@ -161,6 +174,127 @@ export function ComposerOptionsPanel({
 // otherwise touch. A third consumer is the moment to lift it out — conversation.css:1626-1628's "one
 // consumer is not a pattern" call.
 const useComposerOptionsLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
+
+/**
+ * The panel's WINDOW FIT: #847's right-edge clamp plus #940's window-relative width bound, measured
+ * together and written as two custom properties on the anchor.
+ *
+ * It was lifted out of `ComposerOptionsMenu` by #940 so the two hosts share one copy — what
+ * conversation.css's "one consumer is not a pattern" rule asks for now that there are two. The type-ahead
+ * anchors on the message box rather than on a footer button, so it could not reach the effect where it
+ * lived (it closed over that component's private refs), and the alternative was a second copy of a
+ * measure-and-write effect whose every hazard — the mandatory `px` unit, the `[active]`-only deps, the
+ * listener's lifecycle — is carried in prose rather than in a type. The clamp half is the shipped body
+ * moved verbatim, so `e2e/composer-options-clamp.spec.ts` stays its detector for both hosts.
+ *
+ * The width bound arrived in #940's rework, from the product decision on #934, and it is INERT for a host
+ * whose stylesheet does not read `--composer-options-max-width` — see the ordering note inside, which is
+ * the one place the two halves interact.
+ *
+ * `active` is the caller's "the panel is mounted right now" — `open` for the menu, a non-empty undismissed
+ * row list for the type-ahead. It is the SOLE dependency, deliberately: see the deps note inside.
+ */
+export function useComposerOptionsClamp({
+  anchorRef,
+  panelRef,
+  active
+}: {
+  anchorRef: RefObject<HTMLElement>
+  panelRef: RefObject<HTMLElement>
+  active: boolean
+}): void {
+  // #839 shipped the arithmetic (composerOptionsShiftPx) and the CSS hook (--composer-options-shift, read
+  // by `.composer-options`'s `left`) and left both dormant, because no anchor had a real x-position until
+  // a real footer button gave it one; #847 joined them. It lands in shared code rather than in a consumer:
+  // wiring it once is what stops #680, #682, #683 and #940 each re-deriving it.
+  //
+  // A LAYOUT effect, unlike the focus effect below, and that difference is the point: the panel must never
+  // paint at its unclamped position, so the correction has to land before paint. The focus effect's "focus
+  // is not a paint concern" reasoning does not transfer. The alias above is how this gets to be a layout
+  // effect without the server-render warning noise; see its comment.
+  //
+  // Deps are [active] and NOTHING else. Not `focusedIndex` — it changes on every arrow key and changes no
+  // measurement. Not `options` — a consumer building its array inline hands a fresh reference every render,
+  // which would churn an add/remove listener pair per render to re-measure something nothing asked for, and
+  // every shipped consumer's option list is fixed for the lifetime of one opening. The two REFS are stable
+  // objects and are correctly absent from the list.
+  useComposerOptionsLayoutEffect(() => {
+    if (!active) return
+    const apply = (): void => {
+      // Both nodes are attached whenever this runs — React sets refs before layout effects, and the panel
+      // mounts in the same commit that flips `active`. Checked anyway, the focus effect's posture: a
+      // missing node is a no-op, never a throw. No `!` and no cast.
+      const anchor = anchorRef.current
+      const panel = panelRef.current
+      if (!anchor || !panel) return
+      // Named fields, so the transposition that matters (`panelWidth` ↔ `windowWidth`) is impossible by
+      // inspection — composerOptionsPlacement.ts's whole reason for taking an object rather than three
+      // positionals.
+      const anchorLeft = anchor.getBoundingClientRect().left
+      const windowWidth = window.innerWidth
+
+      // #940's window-relative WIDTH BOUND, written BEFORE the panel is measured — and that order is the
+      // whole correctness of pairing the two. `offsetWidth` below reads the panel's laid-out width, so
+      // measuring first would feed the shift an UNBOUNDED width and pull a panel left by an overflow the
+      // bound is about to remove. Writing it first costs one forced style-and-layout pass per open (and
+      // per resize), inside a layout effect, before paint.
+      //
+      // It is written for EVERY host and consumed by whichever one's stylesheet reads the property: today
+      // only the type-ahead's `.composer__row .composer-options` does, and the three footer menus inherit
+      // a custom property no rule of theirs mentions, so their geometry is byte-for-byte what it was. That
+      // is deliberate rather than lazy — a bound of this shape applied to the Actions panel would squash it
+      // at the artificial widths e2e/composer-options-clamp.spec.ts drives, which is the detector for the
+      // shift and must keep measuring the shift.
+      anchor.style.setProperty(
+        '--composer-options-max-width',
+        `${composerOptionsMaxWidthPx({ anchorLeft, windowWidth })}px`
+      )
+
+      // `offsetWidth` is the recipe's chosen input: it rounds to an integer while the rect is fractional.
+      // For a host that consumes the bound above this now reads a width that already fits, so the shift is
+      // structurally 0 there and the panel is kept inside the window by its width rather than by a move —
+      // the clamp stays wired because it is one shared effect, and because it is what still catches the
+      // panel if that `max-width` declaration is ever dropped.
+      const shift = composerOptionsShiftPx({
+        anchorLeft,
+        panelWidth: panel.offsetWidth,
+        windowWidth
+      })
+      // THE UNIT IS NOT OPTIONAL. A bare number makes the whole `left` declaration invalid at
+      // computed-value time, dropping the panel to `left: auto` and its static position — which for an
+      // absolutely-positioned child of a flex container is the anchor's content-box start, 12px further
+      // INTO the overflow. Both composerOptionsPlacement.ts and conversation.css state this from their own
+      // sides; e2e/composer-options-clamp.spec.ts is the detector.
+      //
+      // Written imperatively on the anchor rather than hoisted into useState and passed as a `style` prop:
+      // the declarative form re-renders the whole subtree per resize event to write a value the DOM already
+      // holds, needs an `as CSSProperties` cast (CSSProperties has no index signature for custom
+      // properties), keeps a second source of truth, and breaks the shipped assertion in
+      // ComposerOptionsPanel.test.tsx, which pins the anchor's opening tag whole.
+      anchor.style.setProperty('--composer-options-shift', `${shift}px`)
+    }
+    apply()
+    // Re-measure on resize, so a window narrowed while the panel is open is corrected and a widened one
+    // RELEASES a shift it no longer needs. IDEMPOTENT BY CONSTRUCTION: the panel is `position: absolute`,
+    // so shifting it moves neither the anchor (an out-of-flow child is not a flex item) nor its own
+    // `max-content` width, and `window.innerWidth` is independent of both — every input is invariant under
+    // the shift, so a re-read converges instead of walking the panel further left. That is #839's stated
+    // reason for naming `anchorLeft` rather than the panel's own measured left; do not "improve" the inputs.
+    //
+    // The listener copies the outside-click effect's lifecycle verbatim: attached only while active, torn
+    // down by this cleanup when it goes false AND on unmount, so none outlives an open panel. The handler
+    // takes no event argument, so it needs no WindowEventMap read.
+    //
+    // Neither property is cleared. The listener goes; the values stay. The anchor outlives the panel, the
+    // panel that inherits them is unmounted, and the next open recomputes both before paint — so a stale
+    // value is inherited by nothing and displayed never, and clearing them would be two more statements
+    // defending an unobservable state.
+    window.addEventListener('resize', apply)
+    return () => {
+      window.removeEventListener('resize', apply)
+    }
+  }, [active])
+}
 
 export function ComposerOptionsMenu({
   options,
@@ -242,76 +376,10 @@ export function ComposerOptionsMenu({
     }
   }
 
-  // #847: keep the open panel inside the window's right edge. #839 shipped the arithmetic
-  // (composerOptionsShiftPx) and the CSS hook (--composer-options-shift, read by `.composer-options`'s
-  // `left`) and left both dormant, because no anchor had a real x-position until a real footer button gave
-  // it one; this joins them. It lands HERE, in the shared container, rather than in a consumer: the anchor
-  // and the panel refs are private to this component and there is no `style` prop, so a consumer could not
-  // set the property from outside even if it wanted to — and wiring it once is what stops #680, #682, #683
-  // and #694 each re-deriving it.
-  //
-  // A LAYOUT effect, unlike the focus effect below, and that difference is the point: the panel must never
-  // paint at its unclamped position, so the correction has to land before paint. The focus effect's "focus
-  // is not a paint concern" reasoning does not transfer. The alias above is how this gets to be a layout
-  // effect without the server-render warning noise; see its comment.
-  //
-  // Deps are [open] and NOTHING else. Not `focusedIndex` — it changes on every arrow key and changes no
-  // measurement. Not `options` — a consumer building its array inline hands a fresh reference every render,
-  // which would churn an add/remove listener pair per render to re-measure something nothing asked for, and
-  // every shipped and queued consumer's option list is fixed for the lifetime of one opening.
-  useComposerOptionsLayoutEffect(() => {
-    if (!open) return
-    const apply = (): void => {
-      // Both nodes are attached whenever this runs — React sets refs before layout effects, and the panel
-      // mounts in the same commit that flips `open`. Checked anyway, the focus effect's posture: a missing
-      // node is a no-op, never a throw. No `!` and no cast.
-      const anchor = anchorRef.current
-      const panel = panelRef.current
-      if (!anchor || !panel) return
-      // Named fields, so the transposition that matters (`panelWidth` ↔ `windowWidth`) is impossible by
-      // inspection — composerOptionsPlacement.ts:48-52's whole reason for taking an object rather than
-      // three positionals. These are exactly the three measurements its recipe names, `offsetWidth`
-      // included: it rounds to an integer while the rect is fractional, and that is the chosen input.
-      const shift = composerOptionsShiftPx({
-        anchorLeft: anchor.getBoundingClientRect().left,
-        panelWidth: panel.offsetWidth,
-        windowWidth: window.innerWidth
-      })
-      // THE UNIT IS NOT OPTIONAL. A bare number makes the whole `left` declaration invalid at
-      // computed-value time, dropping the panel to `left: auto` and its static position — which for an
-      // absolutely-positioned child of a flex container is the anchor's content-box start, 12px further
-      // INTO the overflow. Both composerOptionsPlacement.ts:33-35 and conversation.css:3342-3344 state this
-      // from their own sides; e2e/composer-options-clamp.spec.ts is the detector.
-      //
-      // Written imperatively on the anchor rather than hoisted into useState and passed as a `style` prop:
-      // the declarative form re-renders the whole subtree per resize event to write a value the DOM already
-      // holds, needs an `as CSSProperties` cast (CSSProperties has no index signature for custom
-      // properties), keeps a second source of truth, and breaks the shipped assertion at
-      // ComposerOptionsPanel.test.tsx:229, which pins the anchor's opening tag whole.
-      anchor.style.setProperty('--composer-options-shift', `${shift}px`)
-    }
-    apply()
-    // Re-measure on resize, so a window narrowed while the panel is open is corrected and a widened one
-    // RELEASES a shift it no longer needs. IDEMPOTENT BY CONSTRUCTION: the panel is `position: absolute`,
-    // so shifting it moves neither the anchor (an out-of-flow child is not a flex item) nor its own
-    // `max-content` width, and `window.innerWidth` is independent of both — every input is invariant under
-    // the shift, so a re-read converges instead of walking the panel further left. That is #839's stated
-    // reason for naming `anchorLeft` rather than the panel's own measured left; do not "improve" the inputs.
-    //
-    // The listener copies the outside-click effect's lifecycle verbatim: attached only while open, torn
-    // down by this cleanup on close AND on unmount, so none outlives an open menu. The handler takes no
-    // event argument, so it needs no WindowEventMap read (the reason the mousedown listener has one does
-    // not arise here).
-    //
-    // The property is deliberately NOT cleared on close. The listener goes; the value stays. The anchor is
-    // this component's own private <div>, the panel that inherits the value is unmounted, and the next open
-    // recomputes before paint — so a stale value is inherited by nothing and displayed never, and removing
-    // it would be a second statement defending an unobservable state.
-    window.addEventListener('resize', apply)
-    return () => {
-      window.removeEventListener('resize', apply)
-    }
-  }, [open])
+  // #847's right-edge clamp, now one shared hook (#940 lifted it out when the type-ahead became its
+  // second host). The refs it measures are still private to this component; what changed is that the
+  // measure-and-write body lives once, above.
+  useComposerOptionsClamp({ anchorRef, panelRef, active: open })
 
   // Move real DOM focus onto the focused row while the panel is open. Plain useEffect, not useLayoutEffect:
   // focus is not a paint concern, useLayoutEffect warns under renderToStaticMarkup, and #276's container

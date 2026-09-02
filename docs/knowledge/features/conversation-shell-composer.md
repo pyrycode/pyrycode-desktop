@@ -189,7 +189,7 @@ effort (#683), this ticket's context-usage reading, and attach (#685) — and at
 of them were blocked on daemon work that doesn't exist yet. #811 built the row itself and landed the one
 occupant that wasn't blocked; **no placeholder element and no disabled control for the rest**. **#680 is
 the first of the blocked four to land** — it needed no daemon work at all, only the already-shipped
-[options panel](conversation-shell-composer-options.md#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)
+[options panel](conversation-shell-composer-options-panel.md#composer-options-panel-838-placed-839-keyboard-driven-since-840-first-live-mount-since-680-right-edge-clamp-wired-since-847)
 — so two of the row's five slots are occupied today and three (#682, #683, #685) still stay empty:
 
 ```

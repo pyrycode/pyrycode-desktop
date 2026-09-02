@@ -51,6 +51,7 @@ import {
   COMPOSER_ERROR_CHIP_PREFIX_COPY
 } from './composerSend'
 import { ComposerActionsMenu } from './ComposerActionsMenu'
+import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
 import { isAtBottom } from './threadScrollPosition'
@@ -2414,7 +2415,21 @@ function Composer({
     if (sendText(text)) setText('')
   }
 
+  // #940: the slash-command type-ahead over the message box. It reads the composer's own `text` and
+  // writes a completion back through `setText` — no store write, no second send path, and `sendText`
+  // above is untouched. Its container owns the panel's element and the two refs the markup attaches.
+  const typeAhead = useSlashCommandTypeAhead({
+    text,
+    conversationId: activeConversationId,
+    onComplete: setText
+  })
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // #940: the open type-ahead sees the keystroke FIRST, and reports whether it consumed it. That one
+    // line is the whole of "Enter completes, it does not send": on a consumed key the composer returns
+    // before shouldSubmitOnKeyDown is consulted, so the send gate below is never reached. A second Enter
+    // meets a closed panel, is not consumed, and sends exactly as a typed message does.
+    if (typeAhead.handleKeyDown(event)) return
     // Enter sends; Shift+Enter inserts a newline; the Enter that commits an IME composition does
     // neither (#512). `isComposing` is on the DOM event, not React's synthetic one, so it is read
     // through `nativeEvent` — writing `event.isComposing` is a compile error, which is what keeps
@@ -2448,10 +2463,18 @@ function Composer({
           {hint}
         </p>
       )}
-      <div className="composer__row">
+      {/* #940: this row is the type-ahead's ANCHOR — its left edge is the message box's, and the panel
+          positions against it (`position: relative` in conversation.css) and inherits the clamp's
+          --composer-options-shift from it. It deliberately does NOT wear `.composer-options-anchor`,
+          even though that block was written for this consumer: e2e/composer-options-clamp.spec.ts
+          locates that class and relies on Playwright strict mode finding exactly one in the app, and the
+          class carries nothing this row does not already have or declare for itself. */}
+      <div className="composer__row" ref={typeAhead.anchorRef}>
         {/* The textarea stays enabled while not connected — the user may draft; only the send
-            control is gated (AC1). */}
+            control is gated (AC1). The ref is the type-ahead's: a row picked with the MOUSE moves focus
+            onto a button that then unmounts, so the completion hands focus back to the box. */}
         <textarea
+          ref={typeAhead.inputRef}
           className="composer__input"
           placeholder="Message…"
           rows={1}
@@ -2475,6 +2498,10 @@ function Composer({
           onSend={handleSubmit}
           onInterrupt={() => sendInterrupt({ sendCommand: window.pyry.sendCommand })}
         />
+        {/* #940: the panel, last child of its anchor. It is `position: absolute`, so it is not a flex
+            item of this row and moves neither the box nor the button; `null` when the type-ahead is
+            closed, which is every state but a matching slash fragment. */}
+        {typeAhead.panel}
       </div>
       {/* #811: the input footer row (Figma 110:3494), beneath the message box. An inline BEM child of
           .composer like __hint and __row above it — not a component: ComposerStatusArea is one because it

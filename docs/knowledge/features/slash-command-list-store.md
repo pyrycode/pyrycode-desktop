@@ -6,13 +6,16 @@ offering commands reads one live source of truth rather than asking for the list
 
 Introduced in #954, catching #937's dormant `slashCommandList` `DaemonEvent`
 arm — see [Slash-command-list wire types](slash-command-list-wire-types.md) for the wire contract
-this store holds. Shipped dormant: nothing renders the list yet.
-[#940](https://github.com/pyrycode/pyrycode-desktop/issues/940) (the type-ahead's mount) and
-[#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) (the Actions-menu grey-out) are its
-first readers — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939) landed the
-type-ahead's decision logic ahead of #940, but as a pure function taking the row list as a
-parameter, so it does not read this store either; see [Conversation shell — composer options
-panel](conversation-shell-composer-options.md#slash-command-type-ahead--decision-layer-939).
+this store holds. Shipped dormant, then read for the first time by
+[#940](https://github.com/pyrycode/pyrycode-desktop/issues/940), the slash-command type-ahead's
+mount over the message box — see [Conversation shell — composer options
+panel](conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--mount-940). It composes
+this store's `selectSlashCommandListFor` with
+[#939](https://github.com/pyrycode/pyrycode-desktop/issues/939)'s pure
+`slashCommandTypeAheadRows`, joined as `entry?.commands ?? null` so the store's `null`-vs-`[]`
+distinction survives into the decision layer.
+[#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) (the Actions-menu grey-out) is
+still unbuilt and remains this store's other queued reader.
 [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the store's
 pairing-scoped clear — see § The pairing-scoped clear below.
 
@@ -159,7 +162,7 @@ cleanup, so a StrictMode double-mount nets exactly one live listener.
 `<SlashCommandListData />` is the **tenth** headless leaf (count the JSX, not the comments —
 `RelayLinkData` landed without one). App-level is load-bearing, not conventional: the daemon
 publishes the menu from a conversation's `initialize` reply, so a frame can arrive for a
-conversation the user has never opened and long before #940 or #681 is ever mounted — a
+conversation the user has never opened and long before its panel is ever mounted — a
 screen-scoped listener would miss exactly the case the store exists for.
 
 ### Data flow
@@ -172,13 +175,15 @@ daemon → slash_command_list frame → #936 parseSlashCommandListPayload (fail-
                                      → translateSlashCommandList → setSlashCommandList
                                      → slashCommandListStore   [that conversation's menu replaced wholesale]
 
-selectSlashCommandListFor(openId) / useSlashCommandListStore   (read by #940 / #681, not yet built)
+selectSlashCommandListFor(openId) / useSlashCommandListStore
+  → entry?.commands ?? null → #939 slashCommandTypeAheadRows → #940 ComposerSlashCommandTypeAhead
 ```
 
 ## Configuration and usage
 
-- No import surface yet: `useSlashCommandListStore`/`selectSlashCommandListFor` have no consumer.
-  #940 and #681 are the first readers.
+- `useSlashCommandListStore`/`selectSlashCommandListFor` is read by #940's
+  `useSlashCommandTypeAhead` (`ComposerSlashCommandTypeAhead.tsx`), a `useMemo`-stable selector
+  keyed per conversation id. #681 (Actions-menu grey-out) remains an unbuilt second reader.
 - Mounted app-level in `src/renderer/src/App.tsx`, after `<RunConfigLiveData />`.
 - `commands` is a **display** array — its shape is not an invitation to iterate it as a work list
   something acts on. Nothing in this store or its bridge iterates it.
@@ -196,7 +201,8 @@ selectSlashCommandListFor(openId) / useSlashCommandListStore   (read by #940 / #
   the claude-authored text `announcedModelStore` and `questionBatchStore` hold. The daemon bounds
   them without sanitizing them. Held verbatim: never normalised, lowercased, trimmed, allow-listed
   or shape-checked. `name` is **not an identifier** (one measured name is `__remote-workflow`), so
-  nothing on this path — or #940's render keys — may key a cache, a memo or a lookup path by it.
+  nothing on this path may key a cache, a memo or a lookup path by it — #940's render keys are the
+  row's array index instead, never `name`.
 - **Nothing is ever logged on this path.** `0x0a` is the only sub-`0x20` byte across the capture's
   51 entries' four string fields, so the control character that actually occurs is the one that
   splits a log line, and a logged `description` would be a workspace author forging log records.
@@ -213,20 +219,19 @@ selectSlashCommandListFor(openId) / useSlashCommandListStore   (read by #940 / #
   reach.
 - **No DOM sink in this slice.** The plain-text-never-HTML discipline (`innerHTML` /
   `dangerouslySetInnerHTML` forbidden, never an attribute, a URL, a filename, a cache key or a
-  lookup path) is inherited here and discharged by #940's render slice.
-- **Nothing renders the list yet.** Shipped populated and unread through #954 — #940 (type-ahead
-  mount) and #681 (Actions-menu grey-out) are the first readers, and neither is built yet; #939
-  landed the type-ahead's decision logic without touching this store.
+  lookup path) is inherited here and discharged by #940's render slice — which, per #934's product
+  decision, renders `name` and `argument_hint` only; `description` reaches no DOM sink at all.
+- **The list is rendered, by #940 alone so far.** #681 (Actions-menu grey-out) is still queued.
 
 ## Related
 
 - [Slash-command-list wire types](slash-command-list-wire-types.md) — the wire contract this store
   holds verbatim: `WireSlashCommand`'s trust tier, the `aliases`-collapse trap, and the
   `droppedCommands` sum.
-- [Conversation shell — composer options panel](conversation-shell-composer-options.md#slash-command-type-ahead--decision-layer-939)
+- [Slash command type-ahead](conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--decision-layer-939)
   — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939)'s pure `slashCommandTypeAheadRows`/
-  `completeSlashCommand`, the decision logic #940 will feed from this store's
-  `selectSlashCommandListFor`.
+  `completeSlashCommand`, and [#940's mount](conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--mount-940)
+  that feeds them from this store's `selectSlashCommandListFor`.
 - [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) — #937's
   `slashCommandList` `DaemonEvent` arm and the four permanent bridge no-ops this store's bridge sits
   alongside as a fifth observer.

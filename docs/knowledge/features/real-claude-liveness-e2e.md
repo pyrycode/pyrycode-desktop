@@ -82,6 +82,11 @@ way. Adds the single-consumer `claudeModel` fixture option (see below) so this s
 under `claude-sonnet-5` rather than the tier's default `haiku` — the only model under which a live
 `AskUserQuestion` call has been measured in either tree, transcribed from the daemon-side twin
 `pyrycode#1987`.
+[#933](https://github.com/pyrycode/pyrycode-desktop/issues/933) added a second, independent
+declaration alongside `claudeModel` — `test.use({ requiredCapabilities: ['question'] })` — so this
+spec skips cleanly against a daemon built before pyrycode#2020 (which added the `question` capability
+string) rather than failing when the surface wait below deadlines with nothing to show for it. See
+§ Capability-gated skip below.
 
 ## How it works
 
@@ -121,6 +126,50 @@ correct outcome, not a hard failure:
   exists to catch).
 - A credential: `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` **plus** a readable operator
   `~/.claude.json` (read from the real `HOME`, before the daemon's HOME gets isolated).
+
+### Capability-gated skip — the one check that runs after the daemon exists
+
+[#933](https://github.com/pyrycode/pyrycode-desktop/issues/933) added a fourth, opt-in skip gate: a
+`real-*` spec can declare `test.use({ requiredCapabilities: [...] })` to skip — never fail — against
+a daemon whose `hello_ack` doesn't advertise a capability the spec needs. A spec that declares nothing
+(every spec but `real-claude-question-answer.spec.ts`) dials no probe and is gated exactly by the
+three checks above, byte for byte. Declaring one turns a stale daemon from a routed-to-a-builder test
+*failure* into a routed-to-the-operator environment *skip* — the same class as a missing credential —
+which matters because the dispatcher's real-claude gate can't tell "the code is wrong" from "the
+daemon predates this feature" any other way.
+
+The check necessarily runs **after** `waitForDaemonReady`, the one exception to this file's "skip
+before creating any resource" rule: reading what the daemon supports needs the daemon already
+running. The fixture's `try`/`finally` reaps the process group and both temp dirs on every exit path
+regardless, so this late skip leaks nothing.
+
+The mechanism, in `e2e/fixtures/daemonCapabilityGate.ts`:
+
+- `decideCapabilityGate(required, read)` is the whole judgement, pure and total, covered directly
+  under `npm test` — nothing in this repo can assert on its own Playwright skip. An empty `required`
+  short-circuits to "run" unconditionally, even given a failed read; that's the invariant that keeps
+  every pre-#933 spec's behavior unchanged.
+- `readDaemonCapabilities` drives one harness-side Noise handshake over the fake routing relay
+  (mirroring `daemonConnection`'s `loadDialConfig` field-for-field, with an ephemeral static key
+  instead of the persisted device keypair) and **advertises exactly the declared capabilities** — the
+  daemon's `negotiateCapabilities` returns the *intersection* of what's advertised with what it
+  supports, so a probe advertising nothing would read every capability as missing. It reuses the
+  fixture's own `pairFields` rather than minting a second device (the daemon's `Devices.Validate` is a
+  pure hash lookup that doesn't consume the token). It is total — it never throws or rejects — and
+  fails closed into a skip on a handshake error, a malformed ack, or a timeout, retrying a timed-out
+  attempt against an absolute deadline (not an attempt count) so the suite can never hang here; the
+  retry is load-bearing, not defensive, because the relay silently drops a client frame that beats the
+  daemon's `/v1/server` registration (the same race § Readiness describes for the app's own leg).
+- The skip reason names the missing capability, names the daemon as the stale thing, and carries a
+  concrete `go build -o ~/.local/bin/pyry ./cmd/pyry` (or `PYRY_BIN`) rebuild line, matching the
+  concreteness of the credential skip's own `security find-generic-password …` line. It is built only
+  from client-owned constants and from the spec's own `required` list — **never** from the daemon's
+  advertised strings, which are untrusted text that `ZeroExecutedGate` (`e2e/reporters/`) prints
+  verbatim into the operator's run log.
+
+`vitest.config.ts` and `playwright.config.ts` each gained one line so the pure decision could be unit
+tested beside the fixture it serves without Playwright trying to collect it: `.test.ts` under `e2e/`
+is vitest's, `.spec.ts` is Playwright's — a suffix invariant, not a directory one.
 
 ### Fixture chain and teardown
 
@@ -283,3 +332,6 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - [Loopback relay dev affordance](loopback-relay-affordance.md) / [#97](../codebase/97.md) +
   [Secret-backend dev affordance](secret-backend-affordance.md) / [#99](../codebase/99.md) — the two
   dev flags this scenario consumes without relaxing.
+- [#933](https://github.com/pyrycode/pyrycode-desktop/issues/933) — added the capability-gated skip
+  (`e2e/fixtures/daemonCapabilityGate.ts`) described above; `real-claude-question-answer.spec.ts`
+  is its first consumer, declaring `question`.

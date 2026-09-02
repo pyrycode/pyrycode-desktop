@@ -115,10 +115,14 @@ export interface QuestionPicksState {
  * `multiSelect` lives on `Question` in the other store and the two stay apart, so the distinction
  * arrives with the pick itself. Which form the panel sends is #912's wiring.
  *
- * There is no answer arm and no local dismissal: this family has no answer frame in the daemon
- * contract at all, so the daemon's `dismissed` is the only way a batch leaves the held set and there
- * is no optimistic path to keep in step — which is also why there is no `resolved` id-memory here
- * (the #510 lesson `questionBatches.ts` records).
+ * There is no answer arm — an answer clears through `dismissed` below like everything else. **THERE IS
+ * NOW A LOCAL DISMISSAL, THOUGH (#921):** `refuseQuestionBatch` dispatches the arm below when the
+ * operator hits Cancel, so the daemon's broadcast is no longer the only way a batch leaves the held
+ * set. It dispatches HERE FIRST and into the batch store second, the same order
+ * `subscribeQuestionBatches` uses, so the optimistic and daemon-driven clears cannot drift. There is
+ * still no `resolved` id-memory (the #510 lesson `questionBatches.ts` records, restated there on its
+ * new footing): the daemon re-asserts a batch only at connect time, and `reconnected` below already
+ * clears everything before that reconcile lands.
  */
 export type QuestionPickEvent =
   // SINGLE-SELECT. Replaces this question's option pick with exactly `[optionIndex]` AND clears

@@ -4,13 +4,13 @@ The renderer's held copy of **each conversation's published slash-command menu**
 unidirectional Zustand store fed by an independent, reactive-only headless bridge, so any surface
 offering commands reads one live source of truth rather than asking for the list itself.
 
-Introduced in [#954](../codebase/954.md), catching #937's dormant `slashCommandList` `DaemonEvent`
+Introduced in #954, catching #937's dormant `slashCommandList` `DaemonEvent`
 arm — see [Slash-command-list wire types](slash-command-list-wire-types.md) for the wire contract
 this store holds. Shipped dormant: nothing renders the list yet.
 [#940](https://github.com/pyrycode/pyrycode-desktop/issues/940) (the type-ahead) and
 [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) (the Actions-menu grey-out) are its
-first readers. The pairing-scoped clear is deferred to
-[#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), which is blocked by this ticket.
+first readers. [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the store's
+pairing-scoped clear — see § The pairing-scoped clear below.
 
 ## What it does
 
@@ -90,14 +90,26 @@ unlike `queueStore` this store needs no hoisted `EMPTY_*` constant. There is del
 whole-map read surface: nothing iterates every conversation's menu, so shipping one would ship an
 unread path.
 
-**No clear, no reset, no eviction in this slice.** Copying `backgroundTaskRosterStore`'s `connected`
-reset would be wrong on two counts: that branch is the sole enforcement of *its* AC5, and a
-reconnect to the same daemon in the same working directory does not invalidate a published menu —
-there is no request half to re-fetch it with anyway. This store's lifetime question is #955's,
-following the #588 → #593 precedent (ship the holder dormant, add the clear to
-`clearPairingScopedState`'s dep set rather than at a call site). Growth is one entry per distinct
-`conversationId` seen since launch, each holding one frame's rows; each frame is already capped
-upstream by `MAX_PLAINTEXT_BYTES` before any parse, so the bound is entries × frame cap.
+**The pairing-scoped clear (#955), and why it is not a `connected` reset.** Copying
+`backgroundTaskRosterStore`'s `connected` reset would be wrong on two counts: that branch is the sole
+enforcement of *its* AC5, and a reconnect to the same daemon in the same working directory does not
+invalidate a published menu — there is no request half to re-fetch it with anyway. The store answers
+**no** on both halves of `clearPairingScopedState`'s discriminator ("does a reconnect to the SAME
+daemon need to clear it?"), so the whole lifetime lives at the *other* edge: `clearAllSlashCommandLists`,
+a nullary, whole-map method on `SlashCommandListStore`, reached only through
+`clearPairingScopedState`'s injected dep set (never from a call site or a bridge arm — see
+[Paired shell](paired-shell.md)), following the #588 → #593 precedent (ship the holder dormant, add
+the clear to the shared helper's dep set). It returns `initialSlashCommandListState` **by reference**
+(the `clearAllLastRead` shape, not `clearAllTimelines`'s fresh `Map`), guarded on `menus.size === 0` so
+a redundant clear wakes no subscriber at all — the `clearAllTimelines` guard, not `clearAllLastRead`'s:
+nothing here reaches disk, so there is no side effect to suppress, only the stronger idempotence that
+returning the state object buys. Because `setSlashCommandList` is copy-on-write, the by-reference
+return is safe rather than a poisoning hazard, and that property is pinned by a dedicated invariant
+test rather than a defensive fresh `Map`.
+
+Growth is one entry per distinct `conversationId` seen since launch, each holding one frame's rows,
+dropped wholesale at every pairing change; each frame is already capped upstream by
+`MAX_PLAINTEXT_BYTES` before any parse, so the bound between clears is entries × frame cap.
 `conversationActivityStore` (#748) and `queueStore` ship the identical posture.
 
 ### The data path (`src/renderer/src/store/slashCommandListBridge.ts`)
@@ -125,7 +137,11 @@ text into an error message, since those guards `JSON.stringify` the whole event.
 
 **One arm in, one setter out — deliberately no `connected` branch and no branch of any other kind**,
 which is the one thing `backgroundTaskRosterBridge` is the wrong precedent for. That bridge's reset
-is the sole enforcement of its own AC5; this store's lifetime is the opposite case and belongs to \#955.
+is the sole enforcement of its own AC5; this store's lifetime is the opposite case, and #955 put its
+clear in `clearPairingScopedState`'s dep set instead — none of it reaches this file. Keeping the clear
+out of the bridge is what keeps it daemon-unreachable: no event arriving on this subscription can
+invoke it, and it takes no conversation id, so nothing the daemon says can steer which menus survive
+a pairing change.
 
 `SlashCommandListData(): null` is the thin React glue — a headless component (not a hook), so the
 subscription sits in its own leaf and never cascades a re-render into `App`. `window.pyry` is
@@ -186,7 +202,11 @@ selectSlashCommandListFor(openId) / useSlashCommandListStore   (read by #940 / #
 - **Nothing here is persisted, and nothing may be.** No `localStorage`, `sessionStorage` or
   IndexedDB — a "remember the menu across launches" optimisation would put workspace-authored text
   into renderer web storage that survives an unpair, outliving the pairing that scoped it, and would
-  defeat #955's clear before it is written.
+  defeat the #955 clear: a persisted copy would survive a clear that ran, so every in-memory
+  assertion would stay green while the previous workspace's verbs were re-hydrated at the next
+  launch. `createSlashCommandListStore` takes no storage port, unlike
+  `createConversationLastReadStore`, so the clear is memory-only because there is nothing else to
+  reach.
 - **No DOM sink in this slice.** The plain-text-never-HTML discipline (`innerHTML` /
   `dangerouslySetInnerHTML` forbidden, never an attribute, a URL, a filename, a cache key or a
   lookup path) is inherited here and discharged by #940's render slice.
@@ -206,5 +226,9 @@ selectSlashCommandListFor(openId) / useSlashCommandListStore   (read by #940 / #
   **not** copied from it: its `connected` reset branch.
 - [Announced-model store](announced-model-store.md) — the closer precedent for the bridge half: one
   owned arm, one injected setter, no reset branch, no request half, App-level headless leaf.
-- [Conversation activity store](conversation-activity-store.md) — ships the same no-clear-in-this-slice
-  posture, with its own clear deferred the same way.
+- [Conversation activity store](conversation-activity-store.md) — ships the same dormant-then-cleared
+  posture, but answers `clearPairingScopedState`'s discriminator the *other* way and is cleared at the
+  `connected` edge instead.
+- [Paired shell](paired-shell.md) — `clearAllSlashCommandLists`'s one production wiring, as the sixth
+  member of `clearPairingDeps`, and `clearPairingScopedState`'s ordering constraint (must run before
+  `clearAllLastRead`) this clear has to respect.

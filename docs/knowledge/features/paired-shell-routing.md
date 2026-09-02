@@ -299,13 +299,15 @@ AppView (route='conversation')
     clearPairingDeps.clearActiveConversation()                 ← #529, clears activeConversationStore
     clearPairingDeps.clearSessionId()                          ← #529, clears sessionIdStore
     clearPairingDeps.clearAnnouncedModel()                     ← #593, clears announcedModelStore
+    clearPairingDeps.clearAllSlashCommandLists()                ← #955, clears slashCommandListStore (every menu)
     clearPairingDeps.dispatchSession({type:'reset'})           ← #166, clears sessionStore
     clearPairingDeps.clearAllLastRead()                        ← #779, LAST — clears conversationLastReadStore
                                                                    (in memory AND on disk), after clearAllTimelines
                                                                    so #777's re-mint of the open conversation's
                                                                    mark is wiped rather than persisted
-    (unconditional — no id gate, unlike activateConversation above; the one ordering constraint among the
-     seven is clearAllLastRead after clearAllTimelines and last overall — see #779 above)
+    (unconditional — no id gate, unlike activateConversation above; the ordering constraints among the
+     eight are clearAllLastRead after clearAllTimelines and after clearAllSlashCommandLists, and last
+     overall — see #779 and #955 above)
 ```
 
 A `conversationCreated` daemon event reaches `dispatch({ type: 'open' })` independently of any row

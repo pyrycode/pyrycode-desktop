@@ -492,9 +492,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   the list, taken unconditionally and never recomputed from `commands.length`. Deliberately does
   **not** copy `backgroundTaskRosterBridge`'s `connected` reset branch: a reconnect to the same daemon
   in the same working directory does not invalidate a published menu, and there is no request half to
-  re-fetch one with. The pairing-scoped clear is [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955),
-  blocked by this ticket, following the #588 → #593 precedent. Ships dormant; #940 (type-ahead) and
-  #681 (Actions-menu grey-out) are its first readers. Builder self-review PASS.
+  re-fetch one with. [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the
+  pairing-scoped clear, `clearAllSlashCommandLists`, in `clearPairingScopedState`'s dep set, following
+  the #588 → #593 precedent. Ships dormant; #940 (type-ahead) and #681 (Actions-menu grey-out) are its
+  first readers. Builder self-review PASS.
 - [Question resolution envelope](features/question-resolution-envelope.md) — the **outbound** half of
   the question vertical, mirroring [modal resolution envelope](features/modal-resolution-envelope.md)
   seam for seam (#235 is this one's twin): `EnvelopeType` gains `'question_answer'`/`'question_refused'`

@@ -115,9 +115,36 @@ This section is the **single** authoritative record of real-claude gate state. R
 doc (`real-claude-liveness-e2e.md`), and the spec header point here instead of restating it — so the
 next state change updates one place, not four.
 
-## Automated coverage is deferred
+## Automated coverage: what the pipeline runs itself, and what stays manual
 
-There is **no automated live-*relay* e2e**, by design — pairing against the actual
+**Since 2026-09-02 the dispatcher runs the real-claude tier itself on this fork.** Before that date a `needs-real-claude` ticket parked in Inbox and waited for an operator to run the suite by hand. Parking and running are two separate dispatcher steps, and the running half is opt-in per fork through one setting in `pyrycode-desktop-agents/.env` — untracked, so no PR here can change it:
+
+```
+PYRY_REAL_CLAUDE_GATE_CMD="npm install --no-audit --no-fund >&2 && npm run build >&2 && npx playwright test --config playwright.real-claude.config.ts --reporter=json"
+PYRY_REAL_CLAUDE_GATE_FORMAT=playwright-json
+PYRY_REAL_CLAUDE_GATE_TIMEOUT_MS=1800000
+PYRY_REAL_CLAUDE_GATE_MIN_EXECUTED=10
+```
+
+Why each line is what it is:
+
+- **Install and build chatter goes to stderr on purpose.** The gate reads stdout and expects Playwright's JSON report alone. Its parser skips to the first `{`, but npm output ahead of the report can still defeat it, so the chatter is routed away rather than tolerated.
+- **The gate needs the per-test JSON reporter, not `e2e:real:gate`.** The repo's own gate script prints a human list. The dispatcher counts tests that ran a body, and it cannot count what it cannot read.
+- **The floor must equal the exact spec count on the branch, not an approximation.** These specs are discrete and countable. Set the floor below the true count and a run in which one spec skipped still clears it and reports a pass — the false green the whole mechanism exists to catch, reintroduced through the floor. The cost is a manual bump whenever a spec is added, so a PR that adds a `real-*` spec must say so.
+- **The floor is one-sided.** It answers "did enough tests run", never "did the right ones run". The 66-executed run described in § Current real-claude gate state cleared a floor of 10 with room to spare while running 56 fake-tier specs under the real-daemon config. A count above the floor is not evidence that the intended tier ran.
+
+**This fork cannot tell an inherited failure from a new one.** On a red run the gate is meant to re-run just the failing tests against the base commit, so a failure that already exists on `main` parks for the operator instead of being blamed on the branch. That comparison never runs here: the dispatcher's filter builder rejects any test name outside a conservative character set, and every Playwright name carries spaces and a `›` separator, so the filter is always refused ([agent-dispatcher#38](https://github.com/pyrycode/agent-dispatcher/issues/38)). While any spec in the tier is red, **every** gated ticket that reaches the gate is failed and sent back for rework for a fault it did not cause, and each one needs a hand correction. That is what happened to [#928](https://github.com/pyrycode/pyrycode-desktop/issues/928) on the first live run, for the pre-existing red later filed as [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941).
+
+**Three setup requirements nothing validates at configuration time:**
+
+- The repo needs an `error:real-claude-gate` label; the gate's park path applies it. This repo did not have one until 2026-09-02.
+- The credential must reach the command. Without it the suite exits 0 with everything skipped, and the floor is what turns that into a park rather than a pass.
+- The daemon the gate spawns comes from `PYRY_BIN` or `PATH`, so a stale `~/.local/bin/pyry` fails or skips any spec that needs a newer wire feature. Rebuild and reinstall it before restarting the dispatcher with the gate on, since the dispatcher reads its environment at startup. Since [#933](https://github.com/pyrycode/pyrycode-desktop/issues/933) a spec can declare the daemon capabilities it needs, and the fixture skips it with a reason naming the missing string when the daemon does not advertise them — see [real-claude-liveness-e2e.md](real-claude-liveness-e2e.md). The skip still counts against the floor, so a stale daemon parks the ticket rather than passing it.
+
+**What a verdict means.** A pass moves the ticket to In Documentation and strips `needs-real-claude`. A genuine failure sends it back with the rework label and keeps `needs-real-claude`, so it must pass the gate again after the fix. Anything the gate cannot trust — an inherited failure, nothing executed, an unreadable report, a run the outer clock killed — parks the ticket in Inbox with `error:real-claude-gate`, which excludes it from re-selection until a person clears the label. That clearing step is deliberately human.
+
+**The live-relay half stays manual, by design.**
+ There is **no automated live-*relay* e2e**, by design — pairing against the actual
 `pyrycode-relay.pyryco.de` relay needs operator credentials and network access the pipeline agents
 do not have, so that half stays manual, never under CI (consistent with the Phase-1/Phase-2 split
 and the mobile precedent). The current coverage is the automated fake-transport

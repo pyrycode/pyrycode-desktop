@@ -298,3 +298,18 @@ called — which is exactly the tripwire the ticket names.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-03
+
+## Revisions
+
+**2026-09-03 — Phase B, both Open Questions resolved; no design change.**
+
+1. **`realDeps()` stays positional.** It now takes nine store instances. Converting it to an options
+   object would rewrite three call sites for style alone, on a pre-existing shape this ticket was not
+   asked to touch — the § Scope Discipline answer. Kept as leaned in the plan.
+2. **No consumer broke on the widened `ModelListStore`.** Confirmed at `npm run build` (both `tsc`
+   projects clean) and by `RunConfigSections.test.tsx` (81 tests) and `PairedShell.test.tsx` (15)
+   passing untouched — selectors are typed against the state-only `ModelListState`, and that spec's
+   `vi.mock` derives its selector type from `ReturnType<typeof store.getState>`, so it adapted.
+
+The design in § Design shipped as written: placement beside `clearAllSlashCommandLists`, `size === 0`
+guard, by-reference return, nullary signature, and no code change in `modelListBridge.ts`.

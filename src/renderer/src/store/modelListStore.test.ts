@@ -316,4 +316,73 @@ describe('modelListStore', () => {
     })
     expect(selectModelListFor('conv-2')(store.getState())).toBeNull()
   })
+
+  it('clears EVERY conversation’s list at once, each reading back as absent (#977 AC1, AC2)', () => {
+    const store = createModelListStore()
+    store
+      .getState()
+      .setModelList({ conversationId: 'conv-1', models: [defaultRow, fable], droppedModels: 2 })
+    // The deliberately EMPTY one: "claude offered nothing for this conversation" was a statement
+    // about the daemon that just went away, so it goes with the populated one rather than being
+    // treated as already-clear.
+    store.getState().setModelList({ conversationId: 'conv-2', models: [], droppedModels: 0 })
+
+    store.getState().clearAllModelLists()
+
+    expect(store.getState().lists.size).toBe(0)
+    // ABSENT, not an observed-empty entry: the selector's two readings stay apart across the
+    // boundary, so a sheet that has not yet been told anything about the NEW pairing reads UNKNOWN
+    // rather than "the new daemon published nothing".
+    expect(selectModelListFor('conv-1')(store.getState())).toBeNull()
+    expect(selectModelListFor('conv-2')(store.getState())).toBeNull()
+    // By reference, not a fresh empty map: every cleared state holds the SAME `lists`, so a
+    // whole-map selector is `Object.is`-true across two clears from different starting states.
+    expect(store.getState().lists).toBe(initialModelListState.lists)
+  })
+
+  it('clearing an already-clear store notifies NO subscriber (#977 AC2)', () => {
+    const store = createModelListStore()
+    const stateBefore = store.getState()
+    let notified = 0
+    const unsubscribe = store.subscribe(() => {
+      notified += 1
+    })
+
+    store.getState().clearAllModelLists()
+    unsubscribe()
+
+    // The state OBJECT comes straight back, so zustand's `Object.is(next, state)` short-circuit
+    // fires and no listener runs at all. That is what the `size === 0` guard buys and a bare
+    // `set(initialModelListState)` would not: it would allocate a new state object, and only a
+    // SELECTOR would then short-circuit. A raw subscriber is the only shape that tells the two
+    // apart, which is why this asserts through one.
+    expect(store.getState()).toBe(stateBefore)
+    expect(notified).toBe(0)
+  })
+
+  it('the clear never poisons the shared initial state, and leaves the store usable (#977 AC1)', () => {
+    // The hazard the by-reference return makes possible and `setModelList`'s copy-on-write forecloses:
+    // `initialModelListState.lists` is module-shared, so a writer that ever mutated held state in
+    // place would leak ONE PAIRING'S claude-authored rows into every store instance that had cleared
+    // — with no type error and no other failing test.
+    const first = createModelListStore()
+    first.getState().setModelList({ conversationId: 'conv-1', models: [haiku], droppedModels: 1 })
+    first.getState().clearAllModelLists()
+
+    expect(initialModelListState.lists.size).toBe(0)
+
+    const second = createModelListStore()
+    expect(second.getState().lists.size).toBe(0)
+    expect(selectModelListFor('conv-1')(second.getState())).toBeNull()
+
+    // A cleared store is empty, not wedged: the next pairing's first frame lands normally and lands
+    // only under its own key.
+    second.getState().setModelList({ conversationId: 'conv-9', models: [defaultRow], droppedModels: 0 })
+
+    expect(selectModelListFor('conv-9')(second.getState())).toEqual({
+      models: [defaultRow],
+      droppedModels: 0
+    })
+    expect(selectModelListFor('conv-1')(second.getState())).toBeNull()
+  })
 })

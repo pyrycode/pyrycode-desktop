@@ -23,10 +23,12 @@ import {
   createSlashCommandListStore,
   selectSlashCommandListFor
 } from './store/slashCommandListStore'
+import { createModelListStore, selectModelListFor } from './store/modelListStore'
 import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
   ConversationCreatedPayload,
   MessagePayload,
+  WireModelOption,
   WireSlashCommand
 } from '@shared/wire/types'
 
@@ -59,6 +61,18 @@ const serverACommand: WireSlashCommand = {
   truncated_fields: null
 }
 
+/** One model server A's daemon published. CLAUDE-AUTHORED text, a HIGHER trust tier than the
+ *  workspace-authored verb above — and the reason a retained row is not merely stale: picking it on
+ *  server B sends a model argument server B validates and rejects. */
+const serverAModel: WireModelOption = {
+  resolved_model: '<unmeasured>',
+  value: 'opus[1m]',
+  display_name: 'Opus (server A only)',
+  effort_levels: ['low', 'medium', 'high'],
+  supports_auto_mode: true,
+  truncated_fields: null
+}
+
 function spyDeps(): {
   deps: ClearPairingScopedStateDeps
   dispatchTimeline: ReturnType<typeof vi.fn>
@@ -67,6 +81,7 @@ function spyDeps(): {
   clearSessionId: ReturnType<typeof vi.fn>
   clearAnnouncedModel: ReturnType<typeof vi.fn>
   clearAllSlashCommandLists: ReturnType<typeof vi.fn>
+  clearAllModelLists: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
   clearAllLastRead: ReturnType<typeof vi.fn>
 } {
@@ -76,6 +91,7 @@ function spyDeps(): {
   const clearSessionId = vi.fn()
   const clearAnnouncedModel = vi.fn()
   const clearAllSlashCommandLists = vi.fn()
+  const clearAllModelLists = vi.fn()
   const dispatchSession = vi.fn()
   const clearAllLastRead = vi.fn()
   return {
@@ -86,6 +102,7 @@ function spyDeps(): {
       clearSessionId,
       clearAnnouncedModel,
       clearAllSlashCommandLists,
+      clearAllModelLists,
       dispatchSession,
       clearAllLastRead
     },
@@ -95,6 +112,7 @@ function spyDeps(): {
     clearSessionId,
     clearAnnouncedModel,
     clearAllSlashCommandLists,
+    clearAllModelLists,
     dispatchSession,
     clearAllLastRead
   }
@@ -121,7 +139,7 @@ function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()
 }
 
 describe('clearPairingScopedState', () => {
-  it('performs all eight clears exactly once, with the exact reset actions (AC1, AC2)', () => {
+  it('performs all nine clears exactly once, with the exact reset actions (AC1, AC2)', () => {
     const {
       deps,
       dispatchTimeline,
@@ -130,6 +148,7 @@ describe('clearPairingScopedState', () => {
       clearSessionId,
       clearAnnouncedModel,
       clearAllSlashCommandLists,
+      clearAllModelLists,
       dispatchSession,
       clearAllLastRead
     } = spyDeps()
@@ -151,6 +170,11 @@ describe('clearPairingScopedState', () => {
     // dropped for every conversation at once, so no daemon-supplied conversation id can steer which
     // workspace's verbs survive the boundary.
     expect(clearAllSlashCommandLists).toHaveBeenCalledWith()
+    expect(clearAllModelLists).toHaveBeenCalledTimes(1)
+    // #977, the same nullary property as the three whole-map clears around it, and the sharpest case
+    // for it: the rows are CLAUDE-AUTHORED text, so a clear taking an id would let a daemon-supplied
+    // conversation id steer which machine's model menu survives the pairing boundary.
+    expect(clearAllModelLists).toHaveBeenCalledWith()
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllLastRead).toHaveBeenCalledTimes(1)
@@ -160,18 +184,19 @@ describe('clearPairingScopedState', () => {
     expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
-  it('the pairing-scoped set is exactly these eight stores', () => {
+  it('the pairing-scoped set is exactly these nine stores', () => {
     // The tripwire the no-divergence design rests on: both switch paths clear whatever this interface
-    // names, so a NINTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to compile
+    // names, so a TENTH pairing-scoped store added to `ClearPairingScopedStateDeps` fails to compile
     // here until it is added to the literal, and then fails this assertion until it is also asserted
-    // called above — rather than being silently declared and never invoked. #779 was the seventh and
-    // #955 the eighth, and each updated this pin, which is the intended cost of adding one; loosening
-    // it is not.
+    // called above — rather than being silently declared and never invoked. #779 was the seventh,
+    // #955 the eighth and #977 the ninth, and each updated this pin, which is the intended cost of
+    // adding one; loosening it is not.
     const { deps } = spyDeps()
 
     expect(Object.keys(deps).sort()).toEqual([
       'clearActiveConversation',
       'clearAllLastRead',
+      'clearAllModelLists',
       'clearAllSlashCommandLists',
       'clearAllTimelines',
       'clearAnnouncedModel',
@@ -192,6 +217,23 @@ describe('clearPairingScopedState', () => {
     clearPairingScopedState(deps)
 
     expect(clearAllSlashCommandLists.mock.invocationCallOrder[0]).toBeLessThan(
+      clearAllLastRead.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('the model-list clear runs BEFORE the one effect that can throw (#977)', () => {
+    // The same constraint as the case above, for the same reason and against a higher trust tier.
+    // `clearAllLastRead` is the only effect here with an external side effect (`localStorage`) and so
+    // the only one that can throw; placed last, a throw from it aborts nothing. Placed BEFORE the
+    // model-list clear, such a throw would abort it — leaving the ended pairing's CLAUDE-AUTHORED
+    // model menu live for #975's sheet to offer, so the operator picks a row the machine they are now
+    // talking to will reject. Position is otherwise free among the in-memory clears; this is the half
+    // that is not, and it is pinned by call order rather than left to the reading of a comment.
+    const { deps, clearAllModelLists, clearAllLastRead } = spyDeps()
+
+    clearPairingScopedState(deps)
+
+    expect(clearAllModelLists.mock.invocationCallOrder[0]).toBeLessThan(
       clearAllLastRead.mock.invocationCallOrder[0]
     )
   })
@@ -239,6 +281,15 @@ describe('clearPairingScopedState', () => {
     slashCommands
       .getState()
       .setSlashCommandList({ conversationId: 'a2', commands: [], droppedCommands: 0 })
+    // #977: and server A published a MODEL menu for more than one conversation too, from the same
+    // `initialize` replies — including conversations the operator never opened. The empty one is
+    // seeded deliberately: "claude offered nothing here" was a statement about server A, so it must
+    // not survive as a statement about server B.
+    const modelLists = createModelListStore()
+    modelLists
+      .getState()
+      .setModelList({ conversationId: 'a1', models: [serverAModel], droppedModels: 3 })
+    modelLists.getState().setModelList({ conversationId: 'a2', models: [], droppedModels: 0 })
 
     clearPairingScopedState(
       realDeps(
@@ -249,7 +300,8 @@ describe('clearPairingScopedState', () => {
         active,
         session,
         lastRead,
-        slashCommands
+        slashCommands,
+        modelLists
       )
     )
 
@@ -281,6 +333,13 @@ describe('clearPairingScopedState', () => {
     expect(slashCommands.getState().menus.size).toBe(0)
     expect(selectSlashCommandListFor('a1')(slashCommands.getState())).toBeNull()
     expect(selectSlashCommandListFor('a2')(slashCommands.getState())).toBeNull()
+    // #977, the same claim against the higher trust tier: NO entry survives — not the populated menu
+    // and not the deliberately empty one. Each reads back as ABSENT, so #975's Model rows and #976's
+    // Effort segments see UNKNOWN rather than offering server A's identities against server B, where
+    // picking one sends a model argument server B rejects.
+    expect(modelLists.getState().lists.size).toBe(0)
+    expect(selectModelListFor('a1')(modelLists.getState())).toBeNull()
+    expect(selectModelListFor('a2')(modelLists.getState())).toBeNull()
   })
 
   it('real stores: clearing an already-clear set is a no-op, timeline items by reference', () => {
@@ -297,10 +356,12 @@ describe('clearPairingScopedState', () => {
     const lastReadStorage = fakeLastReadStorage()
     const lastRead = createConversationLastReadStore(lastReadStorage.storage)
     const slashCommands = createSlashCommandListStore()
+    const modelLists = createModelListStore()
     const itemsBefore = timeline.getState().items
     const keyedStateBefore = keyedTimelines.getState()
     const lastReadStateBefore = lastRead.getState()
     const slashCommandStateBefore = slashCommands.getState()
+    const modelListStateBefore = modelLists.getState()
 
     clearPairingScopedState(
       realDeps(
@@ -311,7 +372,8 @@ describe('clearPairingScopedState', () => {
         active,
         session,
         lastRead,
-        slashCommands
+        slashCommands,
+        modelLists
       )
     )
 
@@ -333,6 +395,10 @@ describe('clearPairingScopedState', () => {
     // despite having no side effect to suppress: the state OBJECT comes straight back, so zustand
     // wakes no subscriber at all rather than only sparing the selectors.
     expect(slashCommands.getState()).toBe(slashCommandStateBefore)
+    // #977's contribution to the same claim, and the reason its clear carries the same `size === 0`
+    // guard: the state OBJECT comes straight back, so zustand wakes no subscriber at all rather than
+    // only sparing the selectors.
+    expect(modelLists.getState()).toBe(modelListStateBefore)
   })
 
   it('real stores: the marks clear runs AFTER the timeline clear, so the open conversation is not re-minted (AC1, AC2)', () => {
@@ -379,7 +445,8 @@ describe('clearPairingScopedState', () => {
         active,
         session,
         lastRead,
-        createSlashCommandListStore()
+        createSlashCommandListStore(),
+        createModelListStore()
       )
     )
     unsubscribe()
@@ -399,7 +466,8 @@ function realDeps(
   active: ReturnType<typeof createActiveConversationStore>,
   session: ReturnType<typeof createSessionStore>,
   lastRead: ReturnType<typeof createConversationLastReadStore>,
-  slashCommands: ReturnType<typeof createSlashCommandListStore>
+  slashCommands: ReturnType<typeof createSlashCommandListStore>,
+  modelLists: ReturnType<typeof createModelListStore>
 ): ClearPairingScopedStateDeps {
   return {
     dispatchTimeline: (event) => timeline.getState().dispatch(event),
@@ -408,6 +476,7 @@ function realDeps(
     clearSessionId: () => sessionId.getState().clearSessionId(),
     clearAnnouncedModel: () => announcedModel.getState().clearAnnouncedModel(),
     clearAllSlashCommandLists: () => slashCommands.getState().clearAllSlashCommandLists(),
+    clearAllModelLists: () => modelLists.getState().clearAllModelLists(),
     dispatchSession: (action) => session.getState().dispatch(action),
     clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }

@@ -89,13 +89,12 @@ export function translateModelList(event: DaemonEvent): ModelListSnapshot | null
  * ONE ARM IN, ONE SETTER OUT — there is deliberately no `connected` branch and no branch of any other
  * kind, which is the half of `backgroundTaskRosterBridge` this path must NOT copy. That bridge's reset
  * is the sole enforcement of ITS AC5 and is why its store is absent from `clearPairingScopedState`;
- * this store's lifetime is the opposite case on both counts, so #977 puts its clear in that helper's
+ * this store's lifetime is the opposite case on both counts, so #977 put its clear in that helper's
  * dep set instead (the #588 → #593 and #954 → #955 precedent) and none of it reaches this file. A
  * reconnect to the same daemon does not invalidate a published list, so clearing on `connected` would
  * blank a correct value that nothing on this path can re-fetch — there is no request half. Keeping the
- * clear out of here is also what will keep it daemon-UNREACHABLE: no event arriving on this
- * subscription can invoke it, so nothing the daemon says can steer which lists survive a pairing
- * change.
+ * clear out of here is also what keeps it daemon-UNREACHABLE: no event arriving on this subscription
+ * can invoke it, so nothing the daemon says can steer which lists survive a pairing change.
  *
  * The `snapshot !== null` guard (not `if (snapshot)` and emphatically not `if (snapshot.models.length)`)
  * is deliberate: it mirrors announcedModelBridge's `announced !== null`. A snapshot object is truthy

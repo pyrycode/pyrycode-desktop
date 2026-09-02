@@ -15,6 +15,7 @@ import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
 import { AnnouncedModelData } from './store/announcedModelBridge'
 import { ConversationActivityData } from './store/conversationActivityBridge'
 import { SlashCommandListData } from './store/slashCommandListBridge'
+import { ModelListData } from './store/modelListBridge'
 import { RunConfigLiveData } from './screens/conversation/runConfigLive'
 import { activeConversationStore, selectActiveConversation } from './store/activeConversationStore'
 import { routeForStatus, type AppRoute } from './appRoute'
@@ -216,6 +217,20 @@ function App(): JSX.Element {
   // and unlike BackgroundTaskRosterData it has no `connected` branch, because a reconnect to the same
   // daemon in the same working directory does not invalidate a published menu; its pairing-scoped clear
   // is clearPairingScopedState's (#955), not this leaf's.
+  // ModelListData (#974) is the ELEVENTH headless leaf and the leaf above's structural twin: it lands
+  // each unsolicited `modelList` frame into the per-conversation model-list store for the
+  // run-configuration sheet's model rows (#975) and effort segments (#976), the input footer's model
+  // and effort menus (#683), and the permission-mode menu (#682), which reads each row's
+  // `supports_auto_mode` to grey out a mode the running model refuses. Both frames ride the SAME
+  // `initialize` control reply — this one inventories the IDENTITIES claude will run as, that one the
+  // VERBS the working directory will accept — so the App-level rationale is identical and equally
+  // sharpened: a frame arrives for a conversation the operator may NEVER HAVE OPENED and long before
+  // any of the four consumers is mounted, and without this mount every other criterion still passes
+  // against an injected subscribe function while nothing ever writes the singleton. Reactive-only, no
+  // gate, no request half — the list is pushed, never asked for, and delivery is best-effort, so a
+  // conversation with no list is a normal permanent state rather than something to retry. Ships
+  // dormant. No `connected` branch, for the reason its twin has none; its pairing-scoped clear is
+  // clearPairingScopedState's (#977), not this leaf's.
   return (
     <>
       <ConversationListData />
@@ -228,6 +243,7 @@ function App(): JSX.Element {
       <ConversationActivityData />
       <RunConfigLiveData />
       <SlashCommandListData />
+      <ModelListData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

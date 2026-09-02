@@ -457,13 +457,13 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   `conversationId` is an outbound routing/scoping key, not a nonce, the same posture `modalShown` and
   `questionShown` carry.
 
-  Ships dormant: consumed as a no-op by all four exhaustive bridges (`daemonEventBridge`,
-  `timelineBridge`, `modalBridge`, `questionBridge`), each documented **permanent** rather than
-  dormant — unlike `slashCommandList`'s cases, which shipped dormant because whether a future ticket
-  would subscribe through an existing bridge was still open. Here the consumer has already answered:
-  [#974](https://github.com/pyrycode/pyrycode-desktop/issues/974) commits to a dedicated subscriber in
-  the `announcedModelBridge`/`slashCommandListBridge` posture, so none of the four will ever own this
-  arm. See [Model-list wire types](model-list-wire-types.md) for the wire shape and [Inbound message
+  Consumed as a no-op by all four exhaustive bridges (`daemonEventBridge`, `timelineBridge`,
+  `modalBridge`, `questionBridge`), each documented **permanent**: none of the four will ever own
+  this arm. Ships dormant no longer: [the model-list store (#974,
+  shipped)](model-list-store.md) is a fifth, independent observer catching this arm in the
+  `announcedModelBridge`/`slashCommandListBridge` posture. Nothing renders the store's held list
+  yet; #975, #976, #683 and #682 are its queued readers. See [Model-list wire
+  types](model-list-wire-types.md) for the wire shape and [Inbound message
   decode](inbound-message-decode.md) for #972's decode.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.

@@ -2357,17 +2357,64 @@
   min-width: 0;
 }
 
+/* #975 — both lines now carry DAEMON text of unbounded length rather than the catalog's short static
+   labels, so both take the .run-config__running-value pairing: min-width 0 plus overflow-wrap. That is
+   not decoration — a published label with no break opportunity would otherwise push the sheet into
+   horizontal overflow. Breaking is the right remedy rather than truncating, which would violate the
+   verbatim contract and re-introduce the ambiguity the cut marker exists to remove. */
 .run-config__model-name {
   margin: 0;
+  min-width: 0;
   color: var(--color-on-surface);
   font-size: var(--text-body-large-size);
   line-height: var(--text-body-large-line);
   letter-spacing: var(--text-body-large-tracking);
   font-weight: var(--text-body-large-weight);
+  overflow-wrap: anywhere;
 }
 
+/* Since #975 this line is the row's RESOLVED IDENTIFIER, not a hand-written descriptor. */
 .run-config__model-descriptor {
   margin: 0;
+  min-width: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+  overflow-wrap: anywhere;
+}
+
+/* #975 — the two non-populated readings and the daemon's two truncation reports. Separate rules rather
+   than one shared class, so a later slice can style them apart and so a test can prove WHICH state or
+   WHICH report rendered. NONE of the four is an error state and none takes --color-error: a list that
+   has not arrived is expected under best-effort delivery, an empty one is claude answering honestly,
+   and a truncation report is the daemon stating its own bound. All four wear the muted body-small set
+   the sheet already uses for its non-error asides (.run-config__running-unknown). */
+.run-config__model-unknown,
+.run-config__model-empty,
+.run-config__model-cut {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The two branch lines sit inside .run-config__model-list, which supplies the rows' 16px inset but not
+   a row's own 4px — matching the rows' text column, which starts past the 20px radio and its 12px gap,
+   would misalign a line that has no radio. The row padding is what they take instead. */
+.run-config__model-unknown,
+.run-config__model-empty {
+  padding: var(--space-2) var(--space-1);
+}
+
+/* The frame-level partial-list notice sits ABOVE the list wrapper, so it carries the wrapper's own
+   horizontal inset to align with the rows beneath it. */
+.run-config__model-partial {
+  margin: 0;
+  padding: var(--space-1) var(--space-4);
   color: var(--color-on-surface-variant);
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);

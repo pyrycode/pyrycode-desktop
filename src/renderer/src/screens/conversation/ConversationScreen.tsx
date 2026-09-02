@@ -333,8 +333,12 @@ export function ConversationScreen({
           {/* #187: the headless data path — requests a snapshot on open and holds Model/Effort/YOLO.
               Renders nothing (DOM order immaterial); #188 renders the held values here. */}
           <RunConfigData />
-          {/* #188: the read-only Model / Effort / YOLO sections, reading the held snapshot. */}
-          <RunConfigSections />
+          {/* #188: the read-only Model / Effort / YOLO sections, reading the held snapshot.
+              #975: the conversation id goes down as a prop off the `activeConversation` slice already
+              read above (the ComposerSlot / BackgroundTaskPanel idiom), because the Model rows now come
+              from the daemon-published model list, which is keyed by conversation id — not by the
+              session id the sheet already had in scope, which keys nothing in that map. */}
+          <RunConfigSections conversationId={activeConversation?.id ?? null} />
           {/* Log data is the last section ("beneath Context-window"); #182 prepends the
               Context-window section above it as it lands. */}
           <LogDataSection />

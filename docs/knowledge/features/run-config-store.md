@@ -300,25 +300,35 @@ daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,us
   when that is unaddressable — see § Conversation-keyed since 2026-08-20 above.
   `MILESTONE_CONVERSATION_ID` (`composerSend.ts`) is not read by this path.
 
-## Running model section (#560)
+## Running model section (#560, resolved onto the published rows by #975)
 
 `RunConfigView` gained a **sixth section**, `RunningModelSection`, rendered immediately *before*
 `ModelSection` — reading order is "what is running, then what you can switch to." It reads **no
 state from this store**: its data comes from the sibling [Announced-model
 store](announced-model-store.md) (`useAnnouncedModelStore(selectAnnouncedModel)`, a fourth read
-added to the `RunConfigSections` container alongside this store's `selectSnapshot`). It exists
-because this store's `snapshot.model` is the daemon's *persisted override*, which reads `''` /
-unmarked on a daemon where nothing was overridden — honest, but indistinguishable from broken; the
-new section answers what claude actually announced instead.
+added to the `RunConfigSections` container alongside this store's `selectSnapshot`) and, since
+\#975, a fifth: [Model-list store](model-list-store.md)'s published rows for the active
+conversation. It exists because this store's `snapshot.model` is the daemon's *persisted override*,
+which reads `''` / unmarked on a daemon where nothing was overridden — honest, but
+indistinguishable from broken; the section answers what claude actually announced instead.
 
-Resolution is an **exact-match lookup**, `runningCatalogEntry` — `MODEL_CATALOG.find((e) =>
-e.family === model)`, `===` only — deliberately not `matchedFamily`, the case-insensitive
-*substring* matcher `ModelSection` uses to mark the override row. A miss (the ordinary case today,
-since the catalog holds family words and claude announces full identifiers) renders the identifier
-verbatim; a hit renders the catalog's display name; no announcement yet renders an explicit
+At #560 ship time, resolution was an exact-match lookup against `MODEL_CATALOG`, four hardcoded
+family tokens. **#975 deleted the catalog** (see [Conversation shell — workspace and run
+configuration § Run configuration Model section](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975))
+and moved the lookup onto the daemon-published rows: `runningPublishedRow` (`RunConfigSections.tsx`)
+finds the row whose `value` is `===` the announced identifier — `value`, deliberately not
+`resolved_model`, because a row's `resolved_model` is routinely a superstring of its own `value`
+(`'haiku'` → `'claude-haiku-4-5-20251001'`), which would give the ticket's exactness guard an
+exception. A miss stays the ordinary case — claude echoes an identifier at least as specific as the
+one it was given, so it rarely equals a bare published `value` — and renders the identifier
+verbatim; a hit renders that row's `display_name`; no announcement yet renders an explicit
 not-yet-known line; a daemon-reported cut renders a sibling client-owned marker element, never text
-concatenated into the value. See [#560 codebase notes](../codebase/560.md) for the full render
-contract, the three-state table, and the forgery-resistance property.
+concatenated into the value. **Both branches are daemon-authored text now** — the hit path used to
+render a client-owned catalog name, so the code comment claiming "the two provenances never mix in
+one node" stopped being true and was rewritten in place rather than left standing; what still holds,
+and is the property that actually matters, is that only one JSX text position renders per branch.
+See [#560 codebase notes](../codebase/560.md) for the original three-state render contract and
+[#975 codebase notes](../codebase/975.md) for the rewrite.
 
 ## Edge cases and limitations
 
@@ -392,6 +402,9 @@ contract, the three-state table, and the forgery-resistance property.
 - [Announced-model store](announced-model-store.md) / [#560 codebase notes](../codebase/560.md) —
   the sixth section, `RunningModelSection`, added ahead of `ModelSection`; sources its own store,
   not this one — see § Running model section above.
+- [Model-list store](model-list-store.md) / [#975 codebase notes](../codebase/975.md) — deleted
+  `MODEL_CATALOG` and re-anchored `RunningModelSection`'s lookup and `ModelSection`'s rows onto the
+  daemon-published list; see § Running model section above.
 - **#810** — split the store's feed by lifetime: the app-lifetime subscription moved to the new
   `RunConfigLiveData` leaf, refreshed on the connected edge and each turn-end edge, so the figures
   are true whether or not the sheet has ever been opened; `RunConfigData` kept its per-open request

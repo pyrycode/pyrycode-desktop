@@ -111,6 +111,18 @@ different field.
   join is an **exact equality lookup**, never inference. **Any index built from this field must be a
   `Map`, never a plain object** — `display_name` is claude-authored, and a `__proto__` label written
   through `index[row.display_name] = row` reaches `Object.prototype`.
+  **This sentence reads two ways, and #975 is the ticket that had to settle it**: "the intended join"
+  parses either as *join on `display_name`* or as *display `display_name` after joining on something
+  else*. `resolved_model` sounds like the natural join field (an announcement and a `resolved_model`
+  are both concrete identifiers), and it is also the only field under which the lookup would ever
+  actually fire — but a row's own `resolved_model` is routinely a superstring of its own `value`
+  (`'haiku'` → `'claude-haiku-4-5-20251001'`), so joining on it gives #975's mandated
+  superstring-must-not-match guard an exception. **The shipped join key is `value`** — compared
+  `===`, never `resolved_model` — which keeps the guard exceptionless at the cost of a lookup that
+  stays mostly dormant (claude echoes an identifier at least as specific as the one it was given, so
+  it rarely equals a bare published `value`). `display_name` is what a *hit* renders, not what
+  either side compares. See [#975 codebase notes](../codebase/975.md) § Revisions for the full
+  argument.
 - `supports_auto_mode` is whether claude accepts `auto` permission mode for this model (#682: a
   client greys the option out on `false`). Absent in claude's reply decodes to `false`, the correct
   reading, not a missing one.
@@ -232,9 +244,13 @@ rows reused verbatim (see [Daemon event channel — the sealed
 union](daemon-event-channel-sealed-union.md)), consumed as a permanent no-op by all four exhaustive
 renderer bridges. [#974](https://github.com/pyrycode/pyrycode-desktop/issues/974) added the
 per-conversation store and its dedicated fifth-observer bridge — see [Model-list
-store](model-list-store.md) — but it still ships dormant, since nothing renders the held list yet.
-The run-config slices that replace `MODEL_CATALOG`/`EFFORT_LEVELS` in `RunConfigSections.tsx` (#975
-model rows, #976 effort segments) are still unbuilt, along with #683 and #682.
+store](model-list-store.md). [#975](https://github.com/pyrycode/pyrycode-desktop/issues/975) is the
+first render consumer: it deleted `MODEL_CATALOG`/`matchedFamily` from `RunConfigSections.tsx` and
+built the Model section's rows straight off the held entry — see [Conversation shell — workspace and
+run configuration § Run configuration Model section, daemon-published
+rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975).
+`EFFORT_LEVELS` (#976), the input footer's menus (#683) and the permission-mode menu (#682) are
+still unbuilt.
 
 ## Edge cases and limitations
 

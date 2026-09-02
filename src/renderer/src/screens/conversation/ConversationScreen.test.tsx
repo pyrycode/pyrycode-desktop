@@ -726,6 +726,12 @@ describe('Timeline — the streamed assistant text', () => {
     // `title` the natural next edit. Untrusted daemon text in an attribute — declined a seventh time.
     expect(markup).not.toContain('title=')
     expect(markup).not.toContain('aria-label')
+    // NO BARE `not.toContain('data-')` HERE, and the omission is deliberate rather than a gap: the chip
+    // legitimately carries data-thread-role="tool", so that assertion would fail on correct markup. What
+    // this case actually guards — the count reaching no attribute at all — is carried by the exact-bytes
+    // fragment above: it pins the span's whole attribute list to `class`, so a data-* sink on the count
+    // fails it. The `title`/`aria-label` pair stays because those two are the tempting sinks, not because
+    // they are the only ones checked.
   })
 
   it('draws no count on a pending row — there is no result to read one from (#856)', () => {

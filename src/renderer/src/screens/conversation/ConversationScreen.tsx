@@ -971,7 +971,8 @@ export function ToolRow({
           )}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
               own width/height, fill="currentColor" so it takes the ink from CSS, and aria-hidden so it
-              adds no accessible name — the button's name stays exactly its two text runs (WCAG 2.5.3
+              adds no accessible name — the button's name stays exactly its text runs, three of them
+              since #856 (the tool name, the headline, and now the count) (WCAG 2.5.3
               label-in-name, ComposerActionsMenu.tsx:81-83's reasoning for the same reason). NOT a
               shared component: three call sites, three different glyphs, and extracting one is a
               refactor this row does not need.

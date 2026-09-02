@@ -1336,15 +1336,6 @@
    whole, because it is the same type step; the ink is Schemes/On Background, which maps to the surface
    pair for the reason that rule already records rather than minting a second name for one colour.
 
-   flex: 0 0 auto + white-space: nowrap are the design's own shrink-0/whitespace-nowrap, and they are what
-   AC4 rests on: this run never shrinks and never wraps, so a thread's counts line up as a column of
-   TRAILING edges — the leading edge cannot line up, since the strings differ in width. A wrapped count
-   would also break the header's single line box.
-
-   NO min-width: 0 AND NO PART IN THE LEFT GROUP'S TRUNCATION CHAIN. .tool-row__right stays flex: 0 0 auto
-   and is not edited: an oversized daemon-chosen TOOL NAME must keep ellipsizing the headline rather than
-   squeezing this group, which is the property #854 states and pins with three width equalities.
-
    flex: 0 1 auto WHERE FIGMA SAYS shrink-0, and the deviation is the whole security control — see the
    group's own max-width above, which is the other half. `result_detail` is unbounded on the wire (the
    decoder type-checks it, it does not length-check it, and parseInboundMessage's whole-message cap

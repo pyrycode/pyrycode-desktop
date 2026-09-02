@@ -144,14 +144,13 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * (daemonConnection.answerQuestions / refuseQuestions). `answerQuestions` is the union's only STRUCTURED
  * payload (an array of `{ question_index, values }` objects rather than a flat scalar row), which is why
  * its guard recurses where every sibling checks one level.
- * And `requestSessionSettings` (#491), the union's ONLY member whose `payload` is OPTIONAL — it reuses
- * the wire RequestSessionSettingsPayload (a single REQUIRED `conversation_id` string — a routing id,
- * not a secret) to ask for one conversation's run configuration. It was a bare member until #945: the
- * daemon gained the field on 2026-08-20 (pyrycode#1586/#1610) and answers an unnamed request with a
- * zero-valued reply rather than an error, so a client still sending nothing degraded in silence. The
- * payload is optional only because the sole renderer sender still emits the bare literal; #946
- * supplies an id and tightens it to required. Its guard is therefore the union's only one that must
- * accept an ABSENT payload as well as a well-formed present one.
+ * And `requestSessionSettings`, which reuses the wire RequestSessionSettingsPayload (a single REQUIRED
+ * `conversation_id` string — a routing id, not a secret) to ask for one conversation's run
+ * configuration. It was a bare member until #945 and briefly an optional-payload one between #945 and
+ * #946: the daemon gained the field on 2026-08-20 (pyrycode#1586/#1610) and answers an unnamed request
+ * with a zero-valued reply rather than an error, so a client still sending nothing degraded in silence
+ * for two weeks (#941). The payload is REQUIRED since #946 — every sender resolves an id, and a bare
+ * send is a compile error here rather than a request that quietly addresses nothing.
  * No member
  * exposes a field that could hold a token, key, or raw frame (AC5) — the payload-bearing ones reuse only
  * wire types (or a token-excluded derivative), the bare ones carry nothing.
@@ -163,7 +162,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
 export type RendererCommand =
   | { type: 'sendMessage'; payload: SendMessagePayload }
   | { type: 'requestDebugBundle' }
-  | { type: 'requestSessionSettings'; payload?: RequestSessionSettingsPayload }
+  | { type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }
   | { type: 'requestConversations' }
   | { type: 'requestRecentWorkspaces' }
   | { type: 'answerModal'; payload: AnswerModalCommandPayload }
@@ -278,17 +277,13 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // Bare member: no payload to validate, so a well-formed `type` is complete acceptance.
       return true
     case 'requestSessionSettings':
-      // The union's ONLY optionally-payload-bearing member (#945): absent — or explicitly
-      // `undefined` — is the "names no conversation" shape the renderer still sends, and a present
-      // payload must be a well-formed conversation_id. Testing the VALUE for `undefined`, not just
-      // `'payload' in value`, is load-bearing: structured clone PRESERVES an explicitly-undefined
-      // property across the IPC bridge, so an `in`-only check would reject a caller that spreads an
-      // optional id and silently drop the command here.
-      return (
-        !('payload' in value) ||
-        value.payload === undefined ||
-        isRequestSessionSettingsPayload(value.payload)
-      )
+      // Payload-required since #946, so this collapses to the neighbours' idiom. Both of #945's
+      // acceptance arms are gone: an unnamed request addresses nothing and draws a zero-valued reply,
+      // which is the #941 regression, not a shape to keep accepting. The explicitly-`undefined` case
+      // is refused BY isRequestSessionSettingsPayload rather than by the `in` check — structured
+      // clone PRESERVES an explicitly-undefined property across the IPC bridge, so `'payload' in
+      // value` alone would pass one straight through to the wire.
+      return 'payload' in value && isRequestSessionSettingsPayload(value.payload)
     case 'requestConversations':
       // Bare member (#139): no payload to validate, so a well-formed `type` is complete acceptance.
       return true
@@ -576,10 +571,10 @@ function isSetSessionSettingsPayload(value: unknown): value is SetSessionSetting
  *  no layer polices; an out-of-range id is a daemon-side no-op). Structural minimum — a smuggled extra
  *  field is not rejected here; the main-side sender's fresh-literal construction bounds the wire to
  *  exactly these two fields. Pure; never throws. */
-/** The untrusted renderer→main boundary guard for the OPTIONAL requestSessionSettings payload (#945)
- *  — the reason this slice is security-sensitive. isRefuseQuestionsPayload with the key changed: one
- *  present-and-string `conversation_id` check, so a missing key, a literal `null`, and a non-string
- *  are all rejected. Checks TYPE, not emptiness — `''` passes, and the daemon polices ids: it answers
+/** The untrusted renderer→main boundary guard for the requestSessionSettings payload (#945, required
+ *  since #946). isRefuseQuestionsPayload with the key changed: one present-and-string
+ *  `conversation_id` check, so a missing key, a literal `null`, and a non-string are all rejected.
+ *  Checks TYPE, not emptiness — `''` passes, and the daemon polices ids: it answers
  *  a conversation it does not host, one bound to no live session, and one named `''` alike, with a
  *  zero-valued session_settings, never an error frame and never another session's values. The value
  *  is client-owned (the renderer's own conversation state, not network input) and reaches only

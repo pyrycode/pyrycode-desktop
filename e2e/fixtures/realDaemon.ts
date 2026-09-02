@@ -113,6 +113,15 @@ export type RealDaemonOptions = {
   // so without it a relayed modal renders but the "allow" is denied and the turn never completes. The
   // PTY path masked this second gate by never showing the modal at all. Default false = today.
   allowRemotePermissions: boolean
+  // #928 — the model claude is spawned on (`--model <value>`). The default 'haiku' is the value every
+  // real-* spec has run under since #252 and is preserved byte-for-byte; only the live question round trip
+  // overrides it. That spec needs a model that will actually reach for AskUserQuestion, and the ONLY model
+  // under which a live call has been measured in either tree is claude-sonnet-5 (the daemon side runs both
+  // its question gates under it deliberately, and records why: tool-selection reliability is worth more
+  // than the token delta, because a model that will not reach for the tool DEADLINES the surface wait
+  // instead of failing with a useful message). Not consumed in claude-less mode, where no post-`--` claude
+  // flag is passed at all.
+  claudeModel: string
 }
 
 export type RealDaemonFixtures = {
@@ -136,6 +145,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   skipPermissions: [true, { option: true }],
   interactiveRunner: ['', { option: true }],
   allowRemotePermissions: [false, { option: true }],
+  claudeModel: ['haiku', { option: true }],
 
   relay: async ({}, use) => {
     const relay = await startFakeRoutingRelay()
@@ -151,7 +161,15 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   },
 
   daemon: async (
-    { relay, spawnClaude, seedPromoted, skipPermissions, interactiveRunner, allowRemotePermissions },
+    {
+      relay,
+      spawnClaude,
+      seedPromoted,
+      skipPermissions,
+      interactiveRunner,
+      allowRemotePermissions,
+      claudeModel
+    },
     use,
     testInfo
   ) => {
@@ -325,8 +343,15 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         // claude turn ever runs, and the daemon appends `--session-id <uuid>` regardless.
         // `--dangerously-skip-permissions` is gated on `skipPermissions` (#432, default true): dropping it
         // makes a tool call block on a per-tool permission decision, surfacing the `modal_shown` under test.
+        // The `--model` value is `claudeModel` (#928, default 'haiku'): the flag and its position are
+        // unchanged, so a spec that overrides nothing spawns the exact argv it always has.
         ...(spawnClaude
-          ? ['--', '--model', 'haiku', ...(skipPermissions ? ['--dangerously-skip-permissions'] : [])]
+          ? [
+              '--',
+              '--model',
+              claudeModel,
+              ...(skipPermissions ? ['--dangerously-skip-permissions'] : [])
+            ]
           : [])
       ]
       // detached: true puts pyry + its claude grandchild in one process group so teardown reaps the whole

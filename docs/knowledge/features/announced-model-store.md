@@ -193,3 +193,6 @@ daemon system/init line → #587 transport decode → modelAnnounced{model, trun
 - [#714 codebase notes](../codebase/714.md) — widened the `modelAnnounced` emit to carry `conversationId`,
   the last arm in the transport-wide widening family; `translateModelAnnounced` still filters it out, so
   this store and its bridge are unaffected — the per-conversation consumer is #588 / #674, not yet built.
+- [Slash-command-list store](slash-command-list-store.md) — the closer structural read for its bridge
+  half: one owned arm, one injected setter, no reset branch, no request half, App-level headless leaf,
+  reused nearly verbatim from this store's `announcedModelBridge`.

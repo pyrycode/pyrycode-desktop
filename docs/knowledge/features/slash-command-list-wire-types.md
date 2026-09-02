@@ -159,17 +159,19 @@ Decodes, crosses IPC, and is still unclaimed by any renderer consumer:
   `assertNever`-guarded bridges (`daemonEventBridge`, `timelineBridge`, `modalBridge`, `questionBridge`)
   so each still compiles. Ships dormant: nothing renders the list yet. See [Daemon event channel — the
   sealed union](daemon-event-channel-sealed-union.md) for the arm's full field-by-field rationale.
-- **#938** will hold the list per conversation, and **#681** will match the Actions menu's entries
-  against both `name` and `aliases` — the first consumer that must not resolve a menu entry by
-  rendering an unescaped `name`, and the first to actually read the frame #936 decodes and #937 carries.
+- **#954** (landed) holds the list per conversation in a dedicated keyed store — see
+  [Slash-command-list store](slash-command-list-store.md). Ships dormant: nothing renders the list
+  yet. **#681** will match the Actions menu's entries against both `name` and `aliases`, and #940
+  will drive the type-ahead — the first consumers that must not resolve a menu entry by rendering an
+  unescaped `name`, and the first to actually read the frame #936 decodes and #937 carries.
 
 ## Edge cases and limitations
 
 - Unlike `question_shown`'s producer, this frame's arrives to traffic that already exists: #2001–#2007
   landed upstream ahead of both desktop consumers, so #936 and #681 were blocked on the type only, not
-  on a daemon dependency. #936 has since landed the decode and #937 the IPC carry, so #681 (the
-  Actions-menu alias match) is unblocked at the wire and IPC layers — it is now blocked, if at all, only
-  on whichever store #938 builds to hold the list.
+  on a daemon dependency. #936 has since landed the decode, #937 the IPC carry, and #954 the
+  per-conversation store — see [Slash-command-list store](slash-command-list-store.md) — so #681 (the
+  Actions-menu alias match) and #940 (the type-ahead) are unblocked at the wire, IPC and store layers.
 - `Envelope.type` is `EnvelopeType | string` (open) and no exhaustive switch exists over it today, so
   this widening is non-breaking. The `EnvelopeType` membership test in `types.test.ts` is what would
   otherwise miss a dropped member — without it, a decode/re-encode round-trip passes silently on an
@@ -217,9 +219,11 @@ radius.
   fail-closed decode of this vocabulary into the `slash-command-list` inbound arm.
 - [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) —
   [#937](https://github.com/pyrycode/pyrycode-desktop/issues/937)'s `slashCommandList` `DaemonEvent` arm,
-  the IPC carry of this decode; ships dormant awaiting [#938](https://github.com/pyrycode/pyrycode-desktop/issues/938)
-  (holds the list per conversation) or [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681)
-  (Actions-menu alias match).
+  the IPC carry of this decode.
+- [Slash-command-list store](slash-command-list-store.md) —
+  [#954](https://github.com/pyrycode/pyrycode-desktop/issues/954)'s per-conversation store and bridge that
+  catches the arm above; ships dormant awaiting [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681)
+  (Actions-menu alias match) or #940 (type-ahead) as its first readers.
 - `docs/specs/architecture/936-slash-command-list-decode.md` — the decode slice's architecture spec,
   including its security review (verdict: PASS, builder self-review).
 - `docs/specs/architecture/937-slash-command-list-ipc-arm.md` — the IPC-carry slice's architecture spec,

@@ -370,6 +370,9 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent
   describes: the `latestUpdate` nested type, the `setUpdatedTask` setter, the third bridge translator, and
   the trap in the `setRoster` rebuild branch (a field that "no roster row can report" is two different
   kinds, and picking the wrong kind is silent and untested by any pre-existing test).
+- [Slash-command-list store](slash-command-list-store.md) — the shape this store lent onward: keyed
+  `ReadonlyMap`, copy-on-write, `?? null` selector. That store deliberately did **not** copy this
+  store's `connected` reset branch, which is the sole enforcement of this store's own AC5.
 - [#581 codebase notes](../codebase/581.md) / [Conversation shell — Background-task
   panel](conversation-shell-turn-status.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583) — the store's first real reader: the shell of
   #568's panel (split three ways: #581 → #582 → #583), reading `selectRosterFor(conversationId)` and

@@ -448,6 +448,33 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   warns the eventual consumer (#895) not to read "decoded" as "sanitized". Also corrects the upstream
   shape fixture's `source: "timeout"` (pyrycode#1974, pre-producer) against the landed producer's actual
   pair (pyrycode#1973). Ships dormant; architect self-review PASS.
+- [Slash-command-list wire types](features/slash-command-list-wire-types.md) — the wire vocabulary for
+  the workspace's slash-command menu (#935): a new `slash_command_list` `EnvelopeType` member plus two
+  interfaces (`SlashCommandListPayload` → `WireSlashCommand[]`), mirroring the daemon's published
+  contract field for field, every field required (no `omitempty` on any of the eight keys). A
+  conversation-scoped **snapshot** riding a `control_response` from the same `initialize` reply
+  `model_list` comes from — `model_list` inventories the identities claude runs as, this frame the
+  verbs the working directory accepts; neither family is modelled from the other, and `model_list`
+  stays unmodelled on this side. Named `WireSlashCommand`, deliberately not `SlashCommand`, so the
+  daemon-Go-type reference in [question-shown wire types](features/question-shown-wire-types.md) stays
+  unambiguous. `commands` and `aliases` are both plain non-optional arrays for **different** reasons:
+  `commands: []` is a positive statement claude offered nothing, `aliases: []` is a **collapse** of
+  claude's absent and empty cases into one wire value (0 of the capture's 51 entries send `[]`, 42 omit
+  the key, 9 send a non-empty one) — so a `truncated_fields` naming `aliases` is the *only* signal
+  separating "cut to nothing" from "none", and reading a collapsed `[]` as "no aliases" greys out a
+  working command in #681's Actions menu (`reset` is an alias of `clear`, not a name). `dropped_commands`
+  IS counted and carried (`commands.length + dropped_commands` is the menu's true size) — the published
+  upstream section still says the opposite twice and is stale as of `0fe3c642` (2026-09-02); the open
+  correction is pyrycode#2010. Trust tier: the four string fields are workspace-authored (a lower tier
+  than claude-authored text), bounded but not sanitized — CLAUDE.md's full banned-sink ruling applies,
+  and `0x0a` is the only sub-`0x20` byte measured across the capture, so a workspace author logging a
+  description could forge a log record. No bounds modelled (entry cap and per-field caps are the
+  daemon's, `MAX_PLAINTEXT_BYTES` already bounds the frame). Declaration only at ship — no decoder, no
+  narrowing, no consumer; #936 (decode) and #681 (Actions-menu alias match) are both blocked on the
+  type only, since the daemon's producer (#2001–#2009) already shipped ahead of both. Architect
+  self-review PASS (three SHOULD-FIX doc-comment amendments applied: the aliases-reading rule holds
+  only on a validated frame, a `name` is meant to travel back inbound as message text, and the log
+  clause's sharper reason on this path).
 - [Question resolution envelope](features/question-resolution-envelope.md) — the **outbound** half of
   the question vertical, mirroring [modal resolution envelope](features/modal-resolution-envelope.md)
   seam for seam (#235 is this one's twin): `EnvelopeType` gains `'question_answer'`/`'question_refused'`

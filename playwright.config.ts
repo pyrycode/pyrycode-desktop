@@ -7,6 +7,13 @@ import { defineConfig } from '@playwright/test'
 // and no `npx playwright install` step.
 export default defineConfig({
   testDir: './e2e',
+  // `.spec.ts` ONLY. Playwright's default testMatch also collects `*.test.ts`, and since #933 there
+  // is one of those under e2e/ (the vitest cover for the capability-gate decision, kept beside the
+  // fixture that calls it). Without this it would be collected here too, where its `describe`/`it`
+  // are not Playwright's and the run would error at load time. This is one half of the suffix
+  // invariant — `.spec.ts` is Playwright's, `.test.ts` is vitest's — whose other half is the
+  // `include` glob in vitest.config.ts.
+  testMatch: /(^|\/)[^/]*\.spec\.ts$/,
   // Every `real-*` spec (starting with real-claude, #252) needs a real pyry daemon + real claude +
   // credentials the agent pipeline lacks; they run only under playwright.real-claude.config.ts
   // (`npm run e2e:real-claude`). A filename testIgnore is structural — it can't be forgotten the way a

@@ -86,7 +86,14 @@ test.use({
   // side runs both its question gates under it deliberately and records why: tool-selection reliability is
   // worth more than the token delta, because a model that will not reach for the tool DEADLINES the
   // surface wait below with no useful message instead of failing usefully.
-  claudeModel: QUESTION_MODEL
+  claudeModel: QUESTION_MODEL,
+  // #933 — this spec is unrunnable against a daemon that predates pyrycode#2020: without the
+  // `question` capability the daemon never broadcasts a batch, and the surface wait below deadlines.
+  // Declaring it makes that a SKIP naming the stale daemon, which parks the gate run in Inbox for the
+  // operator to rebuild `pyry` — rather than a failure routed back to a builder who cannot. This is
+  // the first and (today) only consumer of the option; every other real-* spec declares nothing and
+  // is gated on the `pyry` binary alone, exactly as before.
+  requiredCapabilities: ['question']
 })
 
 // --- Selectors (verbatim from real-claude.spec.ts) ---------------------------

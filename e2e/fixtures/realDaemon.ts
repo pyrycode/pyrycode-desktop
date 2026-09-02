@@ -15,6 +15,7 @@ import {
   startFakeRoutingRelay,
   type FakeRoutingRelay
 } from '../../src/main/transport/fakeRoutingRelay'
+import { decideCapabilityGate, readDaemonCapabilities } from './daemonCapabilityGate'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
 import type { QrPayload } from '../../src/shared/wire/types'
@@ -43,7 +44,10 @@ import type { QrPayload } from '../../src/shared/wire/types'
 // SKIP-GATING: the harness must SKIP cleanly (never FAIL) on a machine without the real stack. The daemon
 // fixture resolves `pyry` (always) plus `claude` / a credential (claude-spawning mode only) and calls
 // testInfo.skip on any miss BEFORE creating any resource — an unrun test is the correct outcome on the
-// agent machine (no daemon, no claude, no creds).
+// agent machine (no daemon, no claude, no creds). #933 adds the one exception to "before any
+// resource": a spec that declares `requiredCapabilities` is additionally gated on what the daemon
+// ADVERTISES, which can only be read from a daemon that is already running — see the note at that
+// skip. A spec declaring none never dials the probe and is gated exactly as it was.
 //
 // SECRET HYGIENE (the source spec carries a security-sensitive label): `pyry pair` stdout carries the
 // pairing token inside its payload, so it is NEVER echoed into an error — only the (content-free, #62)
@@ -122,6 +126,16 @@ export type RealDaemonOptions = {
   // instead of failing with a useful message). Not consumed in claude-less mode, where no post-`--` claude
   // flag is passed at all.
   claudeModel: string
+  // #933 — daemon capabilities this spec REQUIRES. Default `[]` gates the spec exactly as before:
+  // on the `pyry` binary alone, with no probe dialled at all. A non-empty list makes the fixture
+  // read the daemon's advertised set and SKIP when one is missing — a stale daemon is an
+  // environment fault (the same class as a missing credential), and only a skip routes it to the
+  // operator; a failure routes it to a builder who cannot rebuild a Go binary.
+  //
+  // The list is advertised to the daemon verbatim, because hello_ack carries the INTERSECTION of
+  // the client's advertised set with the daemon's supported one — a probe advertising nothing
+  // learns nothing. See e2e/fixtures/daemonCapabilityGate.ts.
+  requiredCapabilities: readonly string[]
 }
 
 export type RealDaemonFixtures = {
@@ -146,6 +160,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   interactiveRunner: ['', { option: true }],
   allowRemotePermissions: [false, { option: true }],
   claudeModel: ['haiku', { option: true }],
+  requiredCapabilities: [[], { option: true }],
 
   relay: async ({}, use) => {
     const relay = await startFakeRoutingRelay()
@@ -168,7 +183,8 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       skipPermissions,
       interactiveRunner,
       allowRemotePermissions,
-      claudeModel
+      claudeModel,
+      requiredCapabilities
     },
     use,
     testInfo
@@ -372,6 +388,29 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       }
 
       await waitForDaemonReady(child, socketPath)
+
+      // --- Capability gating (#933): the ONE skip that necessarily lands AFTER resource creation.
+      // Every skip above fires before anything is created, so a skip can never leak a resource. This
+      // one cannot: reading what the daemon SUPPORTS requires the daemon to be running. It is safe
+      // anyway — the `finally` below reaps the process group and both temp dirs on every exit path,
+      // skip included — but the ordering is the exception to this file's rule, so it is stated here
+      // rather than left to be rediscovered.
+      //
+      // No declared capabilities → no dial at all, so the nine specs predating this ticket run byte
+      // for byte as they did. The decision itself is pure and unit-tested (daemonCapabilityGate);
+      // the read fails closed into a skip and never throws, so it can neither fail a spec nor hang
+      // the suite.
+      if (requiredCapabilities.length > 0) {
+        const decision = decideCapabilityGate(
+          requiredCapabilities,
+          await readDaemonCapabilities({
+            relayUrl: relay.url,
+            pairFields,
+            advertise: requiredCapabilities
+          })
+        )
+        if (decision.skip) testInfo.skip(true, decision.reason)
+      }
 
       await use({ pairFields, workdir })
     } finally {

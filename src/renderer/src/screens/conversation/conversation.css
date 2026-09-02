@@ -3593,17 +3593,85 @@
   align-items: flex-start;
   gap: var(--space-3);
   overflow: hidden;
+  cursor: pointer;
+}
+
+/* #912 — the row's focus ring, ON THE ROW rather than on the control, and that placement is the point.
+   .question-panel__option carries overflow: hidden (above), which clips a DESCENDANT's outline but never
+   the element's own — and the control sits flush against the row's left content edge, so a ring drawn
+   around it would lose its left segment. The row is also the real click target now that it is a <label>,
+   so outlining it is the honest indicator rather than a workaround.
+
+   :has() APPEARS NOWHERE ELSE IN THIS CODEBASE, and its one prior consideration (:488, the markdown list
+   rhythm) rejected it for protecting a distinction that container flattens by intent — not as a ban. Here
+   there is no other way to reach the row from the state of the input inside it, the renderer is one known
+   Chromium, and the alternative is a focus indicator a keyboard user cannot see. */
+.question-panel__option:has(.question-panel__input:focus-visible) {
+  outline: 1px solid var(--color-outline);
+}
+
+/* #912 — the native control itself, visually hidden so the design's own chrome span beside it does the
+   drawing. The .composer-status__error-prefix recipe verbatim (clip-path, not the legacy clip: rect()).
+   Hidden, never `display: none` or `visibility: hidden`, which would take it out of the tab order and off
+   the accessibility tree — the two things this element exists to provide. It is reachable by pointer
+   through its wrapping <label>, and by keyboard directly. */
+.question-panel__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* #912 — the Other row's control wrapper. Only the CONTROL is a label on that row, never the whole row: a
+   <label> binds its first labelable descendant, so wrapping the row would make every click into the
+   free-text field toggle the tick. flex: 0 0 auto so it stays the control's own 20px against a field that
+   takes the rest. */
+.question-panel__other-control {
+  display: flex;
+  flex: 0 0 auto;
+  cursor: pointer;
 }
 
 /* The 20x20 control. box-sizing: border-box because this repo has no global reset (.composer__input's
    precedent) and the design's 20px is the OUTER size, 2px ring included; flex: 0 0 auto so a long label
-   never squeezes it out of round. Empty at rest — #908 adds the selector child. */
+   never squeezes it out of round. Centring is the Figma frame's own `items-center justify-center`, and it
+   is what places #912's Selector child: the child's size alone then fixes its inset, with no offsets to
+   keep in step. Empty until this question's position is picked. */
 .question-panel__control {
   flex: 0 0 auto;
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
   height: 20px;
   border: 2px solid var(--color-tertiary);
+}
+
+/* #912 — the radio's ticked Selector (347:6141 / 347:6478): a filled circle centred in the ring. 10px in a
+   16px content box lands it 3px inside the border, i.e. 5px from the control's outer edge — the design's
+   own inset, arrived at from the child's size rather than restated as an offset. Same token as the ring:
+   the Figma reads Schemes/Tertiary for both. */
+.question-panel__control-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--color-tertiary);
+}
+
+/* #912 — the checkbox's ticked Selector (347:6211 / 347:6773): the design's 12x12 tick frame, 2px inside
+   the 16px content box and so 4px from the outer edge, exactly as the design draws it. `color` rather than
+   `fill`: the glyph paints with currentColor on both fill and stroke (the PyryMark idiom), so one
+   declaration carries both. */
+.question-panel__control-tick {
+  width: 12px;
+  height: 12px;
+  color: var(--color-tertiary);
 }
 
 /* A 10px radius on a 20px box IS the circle, so the token says so rather than repeating the arithmetic. */
@@ -3680,7 +3748,7 @@
 
 /* The field itself: M3 body/small, clearing the UA's own border, ground and font the way .composer__input
    does. position: relative paints it above the tinted ground. The typed colour is on-surface — the design
-   draws only the placeholder, and #908 owns what is typed. */
+   draws only the placeholder, so the typed value's colour is this file's call rather than the Figma's. */
 .question-panel__other-input {
   position: relative;
   box-sizing: border-box;
@@ -3702,8 +3770,14 @@
   color: var(--color-primary-container);
 }
 
+/* outline-offset: -1px is #907's deferred fix, landing here because this is the slice where the field stops
+   being chrome and starts being focused for real. The ring is drawn OUTSIDE the border box by default, and
+   the field sits flush against .question-panel__option's content edge, whose overflow: hidden then clipped
+   its right and bottom segments. Drawing it one pixel inside puts the whole ring inside the clip. The row's
+   own bound stays untouched — it is the guard against a hostile wrapped string. */
 .question-panel__other-input:focus-visible {
   outline: 1px solid var(--color-outline);
+  outline-offset: -1px;
 }
 
 /* The rule (347:6543): a 1px block in the box's own border colour, full width. flex: 0 0 auto so the

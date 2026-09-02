@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createQuestionBatchStore, type QuestionBatchStore } from '../../store/questionBatchStore'
+import { createQuestionPicksStore, type QuestionPicksStore } from '../../store/questionPicksStore'
 import type { Question } from '../../store/questionBatches'
 
 // #906: the composer slot's container — does an outstanding batch put the panel where the composer was,
@@ -18,6 +19,17 @@ vi.mock('../../store/questionBatchStore', async (importActual) => ({
   ...(await importActual<typeof import('../../store/questionBatchStore')>()),
   useQuestionBatchStore: <T,>(selector: (s: QuestionBatchStore) => T): T =>
     selector(batchStore.getState())
+}))
+
+// #912: the same seam for the PICKS store, and it is owed for the same reason — questionPicksStore.ts's
+// `init` docblock names this file's ticket in it. `selectQuestionSelection` and the real singleton stay
+// untouched by the spread, so only the React binding is redirected.
+const picksStore = createQuestionPicksStore()
+
+vi.mock('../../store/questionPicksStore', async (importActual) => ({
+  ...(await importActual<typeof import('../../store/questionPicksStore')>()),
+  useQuestionPicksStore: <T,>(selector: (s: QuestionPicksStore) => T): T =>
+    selector(picksStore.getState())
 }))
 
 import { ComposerSlot } from './ConversationScreen'
@@ -47,8 +59,18 @@ const render = (conversationId: string | null): string =>
     <ComposerSlot conversationId={conversationId} phase="idle" onMessageSent={() => {}} />
   )
 
-// `reconnected` is the store's own clear-everything arm, so the reset needs no reach into internals.
-beforeEach(() => batchStore.getState().dispatch({ type: 'reconnected' }))
+// `reconnected` is each store's own clear-everything arm, so the reset needs no reach into internals.
+beforeEach(() => {
+  batchStore.getState().dispatch({ type: 'reconnected' })
+  picksStore.getState().dispatch({ type: 'reconnected' })
+})
+
+/** Record a pick under an explicit batch id — the two cases below differ only in which id they use. */
+const pick = (questionBatchId: string): void => {
+  picksStore
+    .getState()
+    .dispatch({ type: 'optionPicked', questionBatchId, questionIndex: 0, optionIndex: 0 })
+}
 
 describe('ComposerSlot', () => {
   it('renders the composer untouched when no batch is outstanding', () => {
@@ -115,5 +137,28 @@ describe('ComposerSlot', () => {
     const markup = render(OPEN)
     expect(markup).toContain('>First<')
     expect(markup).not.toContain('>Second<')
+  })
+
+  // #912 — the picks read. The view is proven against injected props in QuestionPanel.test.tsx; what only
+  // this file can prove is that the container hands it the RIGHT selection.
+  it('draws the panel against the picks held under the batch nonce', () => {
+    show(OPEN, [question('Language choice')])
+    pick(`batch-${OPEN}`)
+    const markup = render(OPEN)
+    expect(markup).toContain('question-panel__control-dot')
+    expect(markup).toContain('checked=""')
+  })
+
+  it('ignores picks keyed on the conversation id rather than the batch nonce', () => {
+    // THE SUBSTITUTION WOULD COMPILE CLEAN — both keys are `string`, and this container holds both. Keying
+    // on the conversation is also the WRONG semantics, not just the wrong value: a batch dismissed and
+    // immediately replaced for the same conversation would inherit the retired one's picks, which is the
+    // half of AC4 the nonce gives for free.
+    show(OPEN, [question('Language choice')])
+    pick(OPEN)
+    const markup = render(OPEN)
+    expect(markup).toContain('question-panel')
+    expect(markup).not.toContain('question-panel__control-dot')
+    expect(markup).not.toContain('checked=""')
   })
 })

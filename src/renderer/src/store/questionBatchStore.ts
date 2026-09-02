@@ -2,7 +2,7 @@
 // pure `reduceQuestionBatches` (#898), so a stream of `QuestionBatchEvent`s folds into `{ outstanding }`.
 // Pure renderer state — no IPC, no preload bridge, no transport. The question bridge (#900) dispatches
 // translated daemon events in; the panel slices read via the selectors — #906's frame first, then #907's
-// option rows and #908 / #853's answer path. Nothing mounts it here.
+// option rows, #912's live picks, and #853's answer path. Nothing mounts it here.
 //
 // A dedicated store, orthogonal to `sessionStore` / `timelineStore` / `runConfigStore` (Strangler Fig,
 // ADR 0009), cloning `modalStore.ts`'s DI-factory → singleton → hook → selectors structure. The
@@ -65,7 +65,7 @@ export function createQuestionBatchStore(init: QuestionBatchState = initialQuest
 }
 
 /** App-wide singleton — the one source of truth the question bridge (#900) dispatches into and the
- *  panel slices (#906, #907, #908 / #853) read.
+ *  panel slices (#906, #907, #912, #853) read.
  *
  *  NEVER ATTACH THIS TO `window` as a debug handle. `dispatch` is otherwise reachable only from module
  *  importers; a global would hand any injected script a live write path into renderer state. */

@@ -406,11 +406,13 @@ copy. Still no render — [#645](https://github.com/pyrycode/pyrycode-desktop/is
   rule applies here for log-forgery reasons (`0x0a` is the only sub-`0x20` byte measured across the
   capture), not for secrecy.
 
-  Ships **dormant**: all four exhaustive bridges (`daemonEventBridge`, `timelineBridge`, `modalBridge`,
-  `questionBridge`) no-op it — dormant, not permanent like the two question arms, since whichever of
-  #938 (holds the list per conversation) or a dedicated fifth subscriber ends up consuming it is #938's
-  call, not this arm's. See [Slash-command-list wire types](slash-command-list-wire-types.md) for the
-  wire shape and [Inbound message decode](inbound-message-decode.md) for #936's decode.
+  Ships dormant no longer: [the slash-command-list store (#954, shipped)](slash-command-list-store.md)
+  is a fifth, independent observer catching this arm in the `announcedModelBridge` posture, alongside
+  the four exhaustive bridges (`daemonEventBridge`, `timelineBridge`, `modalBridge`, `questionBridge`),
+  which keep their no-ops permanently — the call #937 left open, resolved in #954's favour of a
+  dedicated subscriber over folding into an existing bridge. Nothing renders the store's held list yet;
+  #940 and #681 are its first readers. See [Slash-command-list wire types](slash-command-list-wire-types.md)
+  for the wire shape and [Inbound message decode](inbound-message-decode.md) for #936's decode.
 - **The two unions stay separately declared, per layer.** `DaemonEvent` lives in `shared/ipc`, `SessionAction` in the renderer store. The 1:1 correspondence is a convenience for #19, **not a coupling** — the IPC contract can evolve independently of the store's action vocabulary.
 - **Members reuse the wire payload types verbatim** from `../wire/types` (imported by relative path — see below): `connected.ack` is `HelloAckPayload`, `messageReceived.message` is `MessagePayload`, `messagesReceived.messages` is a `MessagePayload[]`, `conversationsReceived.conversations` is a `readonly ConversationSummary[]`. No redefinition, no drift.
 - **`failed.error` is the wire `ErrorPayload`**, not the store's `ConnectionError`. The union stays wire-typed; #19 maps `ErrorPayload → ConnectionError` (a trivial field copy) at the store boundary. Transport-level failures with **no** wire envelope — silent Noise-handshake failure, dropped socket (detected in #4/#7) — are emitted by *synthesizing* a valid `ErrorPayload` (`{ code: 'transport' | 'handshake', message, retryable }`). See [ADR 0004](../decisions/0004-renderer-session-store-reducer-wire-types.md), which defined `ConnectionError` for exactly this.

@@ -475,8 +475,26 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   self-review PASS (three SHOULD-FIX doc-comment amendments applied: the aliases-reading rule holds
   only on a validated frame, a `name` is meant to travel back inbound as message text, and the log
   clause's sharper reason on this path). **#936 has since landed** the fail-closed decode into
-  [inbound message decode](features/inbound-message-decode.md)'s `slash-command-list` arm (ships
-  dormant, IPC carry #937); #681 remains the one still blocked.
+  [inbound message decode](features/inbound-message-decode.md)'s `slash-command-list` arm; **#937**
+  landed the IPC carry into `DaemonEvent`; **#954** landed the per-conversation store (see below).
+  #940 (type-ahead) and #681 (Actions-menu alias match) are the two still-blocked readers.
+- [Slash-command-list store](features/slash-command-list-store.md) — the renderer data path catching
+  #937's dormant `slashCommandList` arm (#954): a keyed Zustand store
+  (`createSlashCommandListStore`/`slashCommandListStore`/`useSlashCommandListStore`) plus an
+  independent, reactive-only bridge (`subscribeSlashCommandList`/`SlashCommandListData`, the tenth
+  App-level headless leaf), in the `announcedModelStore`/`announcedModelBridge` posture layered onto
+  `backgroundTaskRosterStore`'s keyed-map shape. Each frame **replaces** one conversation's menu
+  wholesale; `selectSlashCommandListFor` returns `?? null`, never `?? EMPTY_*`, so "no frame has
+  arrived" and "claude published an empty menu" read as distinct states through the store's own read
+  surface rather than only via the internal map. Rows are held **verbatim and by reference** — no
+  per-row mapping exists anywhere on this path, so a row's own `truncated_fields: null` never
+  collapses into `[]` and nothing is hoisted across rows — and `droppedCommands` is carried alongside
+  the list, taken unconditionally and never recomputed from `commands.length`. Deliberately does
+  **not** copy `backgroundTaskRosterBridge`'s `connected` reset branch: a reconnect to the same daemon
+  in the same working directory does not invalidate a published menu, and there is no request half to
+  re-fetch one with. The pairing-scoped clear is [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955),
+  blocked by this ticket, following the #588 → #593 precedent. Ships dormant; #940 (type-ahead) and
+  #681 (Actions-menu grey-out) are its first readers. Builder self-review PASS.
 - [Question resolution envelope](features/question-resolution-envelope.md) — the **outbound** half of
   the question vertical, mirroring [modal resolution envelope](features/modal-resolution-envelope.md)
   seam for seam (#235 is this one's twin): `EnvelopeType` gains `'question_answer'`/`'question_refused'`

@@ -14,6 +14,7 @@ import { RelayLinkData } from './store/relayLinkBridge'
 import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
 import { AnnouncedModelData } from './store/announcedModelBridge'
 import { ConversationActivityData } from './store/conversationActivityBridge'
+import { SlashCommandListData } from './store/slashCommandListBridge'
 import { RunConfigLiveData } from './screens/conversation/runConfigLive'
 import { activeConversationStore, selectActiveConversation } from './store/activeConversationStore'
 import { routeForStatus, type AppRoute } from './appRoute'
@@ -203,6 +204,18 @@ function App(): JSX.Element {
   // Unlike its neighbours it has a REQUEST half, because `session_settings` is reply-only: nothing pushes
   // it unsolicited, so a subscription alone would never see a second value. `RunConfigData` keeps its
   // per-open request inside the sheet and has lost its subscription to this leaf.
+  // SlashCommandListData (#954) is the TENTH headless leaf: it lands each unsolicited
+  // `slashCommandList` frame into the per-conversation slash-command store for the type-ahead (#940)
+  // and the Actions-menu grey-out (#681). Same App-level always-listening rationale, sharpened the
+  // way ConversationActivityData's is: the daemon publishes the menu from a conversation's
+  // `initialize` reply, so a frame arrives for a conversation the operator may NEVER HAVE OPENED and
+  // long before either consumer is mounted — a screen-scoped listener would miss exactly the case the
+  // store exists for. Reactive-only, no gate, and — unlike the leaf above — no request half at all:
+  // the list is pushed, never asked for, and delivery is best-effort, so a conversation with no menu
+  // is a normal permanent state rather than something to retry. Ships dormant. Like AnnouncedModelData
+  // and unlike BackgroundTaskRosterData it has no `connected` branch, because a reconnect to the same
+  // daemon in the same working directory does not invalidate a published menu; its pairing-scoped
+  // clear is #955's, not this leaf's.
   return (
     <>
       <ConversationListData />
@@ -214,6 +227,7 @@ function App(): JSX.Element {
       <AnnouncedModelData />
       <ConversationActivityData />
       <RunConfigLiveData />
+      <SlashCommandListData />
       <AppView
         route={route}
         onPaired={() => setRoute('conversation')}

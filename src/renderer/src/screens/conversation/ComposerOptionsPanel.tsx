@@ -9,7 +9,7 @@ import {
   type RefObject
 } from 'react'
 import { initialFocusedOptionIndex, resolveComposerOptionsKey } from './composerOptionsKeyboard'
-import { composerOptionsShiftPx } from './composerOptionsPlacement'
+import { composerOptionsMaxWidthPx, composerOptionsShiftPx } from './composerOptionsPlacement'
 
 // #838: the composer footer's shared options panel (Figma node 121:3879, "Options overlay") — ONE surface
 // for five queued consumers: #680 Actions, #682 permission mode, #683 model and effort, and #694's
@@ -33,22 +33,18 @@ import { composerOptionsShiftPx } from './composerOptionsPlacement'
 // tickets to invent a lookup. Ids are unique by caller contract: no runtime guard, because no such
 // failure has been observed and React's own `key` warning already surfaces a duplicate in dev.
 //
-// #940 SHARPENED THE TRUST TIER OF BOTH VISIBLE FIELDS. Until the slash-command type-ahead landed, every
-// consumer passed a client-owned constant here; that one passes WORKSPACE-AUTHORED text — a command name,
-// its argument hint and its description, written by whoever wrote the repository claude is running in,
-// bounded but NOT sanitized by the daemon. So `label` and `description` may both be untrusted, and the
-// obligation lives with whatever renders them: ordinary React text children only, never
-// dangerouslySetInnerHTML, never an attribute, a URL, a filename, a cache key, a lookup path or a log
-// (CLAUDE.md's daemon-text ruling). The row markup below is that boundary, and it is the whole of it. A
-// menu adding a third visible field inherits this paragraph rather than rediscovering it.
+// #940 SHARPENED `label`'s TRUST TIER. Until the slash-command type-ahead landed, every consumer passed a
+// client-owned constant here; that one passes WORKSPACE-AUTHORED text — a command name and its argument
+// hint, written by whoever wrote the repository claude is running in, bounded but NOT sanitized by the
+// daemon. So `label` may be untrusted, and the obligation lives with whatever renders it: an ordinary React
+// text child only, never dangerouslySetInnerHTML, never an attribute, a URL, a filename, a cache key, a
+// lookup path or a log (CLAUDE.md's daemon-text ruling). The row markup below is that boundary, and it is
+// the whole of it. A menu adding a second visible field inherits this paragraph rather than rediscovering
+// it — and #940 is also the precedent for NOT adding one: it carries a command description it deliberately
+// never passes here, so the string reaches no DOM sink at all (the product decision on #934).
 export interface ComposerOptionsPanelOption {
   id: string
   label: string
-  // #940: the second line of a two-part row, drawn after the label. OPTIONAL, and the option of the four
-  // shipped consumers is the absent one: a row without it renders `label` as the button's sole child,
-  // byte-for-byte what it rendered before this field existed. That is what makes the field additive
-  // rather than a fork of the surface, and this file's tests pin both branches.
-  description?: string
 }
 
 // Every prop is REQUIRED — the "a view that cannot answer is a bug" rule (ConversationScreen.tsx:2033).
@@ -125,24 +121,12 @@ export function ComposerOptionsPanel({
             aria-current={isCurrent ? 'true' : undefined}
             onClick={() => onSelect(option.id)}
           >
-            {/* Ordinary React text children: auto-escaped, no dangerouslySetInnerHTML, and never an
-                attribute or URL sink. #940 feeds these workspace-authored command names, hints and
-                descriptions, so this is load-bearing per CLAUDE.md's daemon-text ruling.
-
-                The BARE branch is not a shortcut: a row with no description renders `label` as the
-                button's only child, exactly as it did before the field existed, so the four shipped
-                consumers' markup — and this file's whole-attribute-run assertions — are untouched by
-                construction. The two-part branch wraps each part so the stylesheet can bound the
-                description's width without a second panel; the `nowrap` the row already carries is what
-                collapses a description's newline (the one measured sub-0x20 byte) into a space. */}
-            {option.description === undefined ? (
-              option.label
-            ) : (
-              <>
-                <span className="composer-options__name">{option.label}</span>
-                <span className="composer-options__description">{option.description}</span>
-              </>
-            )}
+            {/* An ordinary React text child: auto-escaped, no dangerouslySetInnerHTML, and never an
+                attribute or URL sink. #940 feeds it workspace-authored command names and argument hints,
+                so it is load-bearing per CLAUDE.md's daemon-text ruling — and it stays ONE child, which is
+                what keeps the row's `white-space: nowrap` a complete answer to a name carrying the one
+                measured sub-0x20 byte. */}
+            {option.label}
           </button>
         )
       })}
@@ -192,15 +176,20 @@ export function ComposerOptionsPanel({
 const useComposerOptionsLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
 
 /**
- * #847's right-edge clamp, LIFTED OUT OF `ComposerOptionsMenu` BY #940 so the two hosts share one copy.
+ * The panel's WINDOW FIT: #847's right-edge clamp plus #940's window-relative width bound, measured
+ * together and written as two custom properties on the anchor.
  *
- * The move is what conversation.css's "one consumer is not a pattern" rule asks for now that there are
- * two: #940's type-ahead anchors on the message box rather than on a footer button, so it could not reach
- * the effect where it lived — it closed over that component's private refs — and the alternative was a
- * second copy of a measure-and-write effect whose every hazard (the mandatory `px` unit, the `[active]`-
- * only deps, the listener's lifecycle) is carried in prose rather than in a type. The body below is moved
- * VERBATIM; only the refs it reads and the flag it gates on became parameters, so nothing about the
- * shipped behaviour changed and `e2e/composer-options-clamp.spec.ts` stays the detector — for both hosts.
+ * It was lifted out of `ComposerOptionsMenu` by #940 so the two hosts share one copy — what
+ * conversation.css's "one consumer is not a pattern" rule asks for now that there are two. The type-ahead
+ * anchors on the message box rather than on a footer button, so it could not reach the effect where it
+ * lived (it closed over that component's private refs), and the alternative was a second copy of a
+ * measure-and-write effect whose every hazard — the mandatory `px` unit, the `[active]`-only deps, the
+ * listener's lifecycle — is carried in prose rather than in a type. The clamp half is the shipped body
+ * moved verbatim, so `e2e/composer-options-clamp.spec.ts` stays its detector for both hosts.
+ *
+ * The width bound arrived in #940's rework, from the product decision on #934, and it is INERT for a host
+ * whose stylesheet does not read `--composer-options-max-width` — see the ordering note inside, which is
+ * the one place the two halves interact.
  *
  * `active` is the caller's "the panel is mounted right now" — `open` for the menu, a non-empty undismissed
  * row list for the type-ahead. It is the SOLE dependency, deliberately: see the deps note inside.
@@ -240,12 +229,36 @@ export function useComposerOptionsClamp({
       if (!anchor || !panel) return
       // Named fields, so the transposition that matters (`panelWidth` ↔ `windowWidth`) is impossible by
       // inspection — composerOptionsPlacement.ts's whole reason for taking an object rather than three
-      // positionals. These are exactly the three measurements its recipe names, `offsetWidth` included:
-      // it rounds to an integer while the rect is fractional, and that is the chosen input.
+      // positionals.
+      const anchorLeft = anchor.getBoundingClientRect().left
+      const windowWidth = window.innerWidth
+
+      // #940's window-relative WIDTH BOUND, written BEFORE the panel is measured — and that order is the
+      // whole correctness of pairing the two. `offsetWidth` below reads the panel's laid-out width, so
+      // measuring first would feed the shift an UNBOUNDED width and pull a panel left by an overflow the
+      // bound is about to remove. Writing it first costs one forced style-and-layout pass per open (and
+      // per resize), inside a layout effect, before paint.
+      //
+      // It is written for EVERY host and consumed by whichever one's stylesheet reads the property: today
+      // only the type-ahead's `.composer__row .composer-options` does, and the three footer menus inherit
+      // a custom property no rule of theirs mentions, so their geometry is byte-for-byte what it was. That
+      // is deliberate rather than lazy — a bound of this shape applied to the Actions panel would squash it
+      // at the artificial widths e2e/composer-options-clamp.spec.ts drives, which is the detector for the
+      // shift and must keep measuring the shift.
+      anchor.style.setProperty(
+        '--composer-options-max-width',
+        `${composerOptionsMaxWidthPx({ anchorLeft, windowWidth })}px`
+      )
+
+      // `offsetWidth` is the recipe's chosen input: it rounds to an integer while the rect is fractional.
+      // For a host that consumes the bound above this now reads a width that already fits, so the shift is
+      // structurally 0 there and the panel is kept inside the window by its width rather than by a move —
+      // the clamp stays wired because it is one shared effect, and because it is what still catches the
+      // panel if that `max-width` declaration is ever dropped.
       const shift = composerOptionsShiftPx({
-        anchorLeft: anchor.getBoundingClientRect().left,
+        anchorLeft,
         panelWidth: panel.offsetWidth,
-        windowWidth: window.innerWidth
+        windowWidth
       })
       // THE UNIT IS NOT OPTIONAL. A bare number makes the whole `left` declaration invalid at
       // computed-value time, dropping the panel to `left: auto` and its static position — which for an
@@ -272,10 +285,10 @@ export function useComposerOptionsClamp({
     // down by this cleanup when it goes false AND on unmount, so none outlives an open panel. The handler
     // takes no event argument, so it needs no WindowEventMap read.
     //
-    // The property is deliberately NOT cleared. The listener goes; the value stays. The anchor outlives the
-    // panel, the panel that inherits the value is unmounted, and the next open recomputes before paint — so
-    // a stale value is inherited by nothing and displayed never, and removing it would be a second
-    // statement defending an unobservable state.
+    // Neither property is cleared. The listener goes; the values stay. The anchor outlives the panel, the
+    // panel that inherits them is unmounted, and the next open recomputes both before paint — so a stale
+    // value is inherited by nothing and displayed never, and clearing them would be two more statements
+    // defending an unobservable state.
     window.addEventListener('resize', apply)
     return () => {
       window.removeEventListener('resize', apply)

@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { COMPOSER_OPTIONS_WINDOW_MARGIN_PX } from '../src/renderer/src/screens/conversation/composerOptionsPlacement'
 import type {
   SendMessagePayload,
   SlashCommandListPayload,
@@ -46,17 +47,31 @@ const FIXED_TS = '2026-09-02T12:00:00.000Z'
 const TYPE_AHEAD_LABEL = 'Slash commands'
 
 // The longest description measured across the capture's 51 entries is 1,145 bytes. Reproduced here as one
-// unbroken run, which is the hostile shape: no space to wrap at, so only the stylesheet's max-width plus
-// text-overflow can stop it taking the whole line and dragging the panel out of the window.
+// unbroken run, the hostile shape — no space to wrap at. Since #934's decision it is a NEGATIVE probe: the
+// panel does not render descriptions at all, so a string this size must reach no pixel and no measurement.
 const HOSTILE_DESCRIPTION = 'x'.repeat(1145)
+
+// A NAME long enough to exceed the window-relative width bound at the launch width, which is what makes
+// step 8's geometry assertion non-vacuous: every real command name here draws well under 200px, so a panel
+// of them would sit inside the bound however wrong the bound was. `name` is workspace-authored and the
+// daemon bounds it without sanitizing it, so this is a reachable row and not a constructed one.
+const HOSTILE_NAME = 'x'.repeat(400)
 
 function command(overrides: Partial<WireSlashCommand> & { name: string }): WireSlashCommand {
   return { argument_hint: '', description: '', aliases: [], truncated_fields: null, ...overrides }
 }
 
-// Three ordinary rows plus the hostile one, in claude's published order — `clear` and `compact` share the
-// `/c` prefix so the drive can narrow between them, and `model` carries an argument hint (33 of the 51
-// measured entries carry none, so both shapes are on screen).
+// Claude's published order, and every name below is chosen so the drive's three fragments select exactly
+// what each step names: `clear` and `compact` share the `/c` prefix so step 3 can narrow between them,
+// `model` carries an argument hint (33 of the 51 measured entries carry none, so both shapes are on
+// screen), and `memory` carries the hostile description.
+//
+// THE TEN FILLER ROWS ARE THE CAP'S FIXTURE — 15 rows for a bare `/`, against a panel that shows 10. Their
+// names contain no `c`, no `m` and no `x`, so not one of them can match `/c`, `/cl`, `/m` or `/x`: every
+// count this spec asserts is decided by the four rows above plus the hostile-name row, and adding filler
+// changed none of them.
+const FILLER_NAMES = ['one', 'two', 'three', 'four', 'five', 'zero', 'seven', 'eight', 'nine', 'ten']
+
 const COMMANDS: WireSlashCommand[] = [
   command({ name: 'clear', description: 'Clear conversation history and free up context' }),
   command({ name: 'compact', description: 'Clear conversation history but keep a summary in context' }),
@@ -65,7 +80,9 @@ const COMMANDS: WireSlashCommand[] = [
     argument_hint: '<model>',
     description: 'Set the AI model for Claude Code'
   }),
-  command({ name: 'memory', description: HOSTILE_DESCRIPTION })
+  command({ name: 'memory', description: HOSTILE_DESCRIPTION }),
+  command({ name: HOSTILE_NAME }),
+  ...FILLER_NAMES.map((name) => command({ name }))
 ]
 
 /** One unsolicited `slash_command_list` frame for the seeded conversation. Sealed via the production
@@ -136,11 +153,10 @@ test('typing a slash opens the published menu; Enter completes, a second Enter s
   daemon.pushFrame(slashCommandListFrame())
   await expect(panel).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
 
-  // Filtered to the two `/c` rows, in claude's published order, each carrying its description (AC2).
-  await expect(panel.getByRole('menuitem')).toHaveText([
-    '/clearClear conversation history and free up context',
-    '/compactClear conversation history but keep a summary in context'
-  ])
+  // Filtered to the two `/c` rows, in claude's published order (AC1) — and `toHaveText` is EXACT, so it is
+  // also the proof that a row is the name and nothing else: both of these commands carry a description in
+  // the pushed frame, and neither description is on screen (AC2, #934's decision).
+  await expect(panel.getByRole('menuitem')).toHaveText(['/clear', '/compact'])
   // The panel opens ABOVE the message box and against its left edge (AC1). The 12px is the shipped inset
   // .composer-options negates so a row's label lines up; asserted as an inequality, not a literal, so this
   // spec pins the RELATIONSHIP and composerOptionsPlacement.test.ts keeps the number.
@@ -183,23 +199,12 @@ test('typing a slash opens the published menu; Enter completes, a second Enter s
   expect(sent[0].text).toBe('/compact')
   await expect(box).toHaveValue('')
 
-  // --- 6. A hostile 1,145-byte description cannot push the panel out of the window (AC2, AC4). `/m`
-  // matches `model` and `memory` (the hostile row) on their names, and `compact` on the `m` inside it —
-  // three rows, and #939's two buckets reaching the panel in order: the prefix matches first, in claude's
-  // published order, then the contained one. ---
+  // --- 6. A hostile 1,145-byte description reaches no pixel (AC2). `/m` matches `model` and `memory` (the
+  // row carrying it) on their names, and `compact` on the `m` inside it — three rows, and #939's two
+  // buckets reaching the panel in order: the prefix matches first, in claude's published order, then the
+  // contained one. The exact `toHaveText` is the assertion: the hostile row draws as its bare name. ---
   await page.keyboard.type('/m')
-  await expect(panel.getByRole('menuitem')).toHaveCount(3)
-  await expect(panel.getByRole('menuitem').first()).toHaveText(
-    '/model <model>Set the AI model for Claude Code'
-  )
-  await expect(panel.getByRole('menuitem').last()).toContainText('/compact')
-  const [wideBox, viewportWidth] = await Promise.all([
-    panel.boundingBox(),
-    page.evaluate(() => window.innerWidth)
-  ])
-  if (!wideBox) throw new Error('the type-ahead panel is not laid out')
-  expect(wideBox.x).toBeGreaterThanOrEqual(0)
-  expect(wideBox.x + wideBox.width).toBeLessThanOrEqual(viewportWidth)
+  await expect(panel.getByRole('menuitem')).toHaveText(['/model <model>', '/memory', '/compact'])
 
   // --- 7. Escape closes and LEAVES THE TYPED TEXT ALONE (AC3) — the draft is the operator's, not the
   // panel's. ---
@@ -208,4 +213,33 @@ test('typing a slash opens the published menu; Enter completes, a second Enter s
   await expect(box).toHaveValue('/m')
   // Still nothing sent beyond the one deliberate send in step 5.
   expect(sent).toHaveLength(1)
+
+  // --- 8. THE CAP AND THE BOUND (AC4), against the whole published list. One Backspace leaves a bare `/`,
+  // which is an edit — so it re-opens the panel Escape dismissed — and matches every row. ---
+  await page.keyboard.press('Backspace')
+  await expect(box).toHaveValue('/')
+  await expect(panel.getByRole('menuitem')).toHaveCount(COMMANDS.length)
+
+  // The height caps at TEN rows and the rest is reached by scrolling — 10 × the row's 28px, plus the
+  // panel's own 2px bands, since a bounding box is the border box. Both halves asserted: a panel that
+  // merely stopped at the cap without scrolling would have lost the other five rows, which is the failure
+  // this criterion is about. The exact equality is what catches an off-by-one row in either direction, and
+  // it caught one — the stylesheet's max-height bounds the CONTENT box, so capping at 284 there left a
+  // sliver of the eleventh row on screen.
+  const fullBox = await panel.boundingBox()
+  if (!fullBox) throw new Error('the type-ahead panel is not laid out')
+  expect(Math.round(fullBox.height)).toBe(10 * 28 + 4)
+  expect(await panel.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true)
+
+  // And the width stops COMPOSER_OPTIONS_WINDOW_MARGIN_PX clear of the window's right edge. The hostile
+  // 400-character name draws far wider than any window, so the panel is at its bound and this pins the
+  // bound itself rather than the incidental width of a short list — the assertion is an equality against
+  // the measured innerWidth, not a `<=` that a narrow panel would satisfy for free. `composerOptions-
+  // MaxWidthPx` keeps the arithmetic; this proves it reaches the panel.
+  const viewportWidth = await page.evaluate(() => window.innerWidth)
+  expect(Math.round(fullBox.x + fullBox.width)).toBe(viewportWidth - COMPOSER_OPTIONS_WINDOW_MARGIN_PX)
+  // Anchored at the message box's left edge throughout: the bound caps the width, it never moves the panel.
+  const finalBoxBox = await box.boundingBox()
+  if (!finalBoxBox) throw new Error('the composer is not laid out')
+  expect(Math.abs(fullBox.x - finalBoxBox.x)).toBeLessThanOrEqual(16)
 })

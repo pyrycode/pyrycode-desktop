@@ -47,10 +47,26 @@ per-conversation command list, drawn on #838's shared options panel.
 label inset, type and colours, and sits in the desktop conversation pane
 ([node 102-4](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=102-4)). The three things that
 overlay does not settle — a two-part row carrying a description, a height cap with a scroll, and a width
-bound — are #934's to draw; **#934 was still open when this plan was written (checked 2026-09-02)**, so
-this slice ships against the ticket's written description, as the ticket directs. The visual-fidelity
-check is therefore against the inherited overlay's geometry (28px rows, 12px label inset, body-small
-type, the panel's `--color-on-primary-fixed` fill) and not against a node of this control's own.
+bound — were #934's to draw. **#934 closed on 2026-09-02 without a drawing, having settled all three by
+decision instead**, and those decisions are the design source for this control's own geometry:
+
+> 1. Hide the descriptions for now
+> 2. Show max 10 items
+> 3. Set max width to what fits the window with 40px margin to window edge
+>
+> — [#934](https://github.com/pyrycode/pyrycode-desktop/issues/934), 2026-09-02, reaching this ticket as
+> three MUST FIX findings on PR #959.
+
+So a row is the command name and its argument hint, the panel shows ten rows and scrolls past them, and
+its width may grow until its right edge is 40px clear of the window's. Everything else is still the
+inherited overlay's, and the visual-fidelity check is against that: 28px rows, the 12px label inset,
+body-small type, the panel's `--color-on-primary-fixed` fill. The three decisions above are drawn nowhere,
+so if the descriptions come back a drawing can be filed then — #934's own closing words.
+
+Reading #934's third point, stated so it can be corrected: the panel stays anchored at the message box's
+left edge and the 40px is measured from the *window's right edge*, since that is the only edge this panel
+can approach — the sidebar is fixed at 400px, so its left edge is a constant. The alternative reading,
+40px of margin on both sides, would bound a panel that cannot reach the left one.
 
 ## Context
 
@@ -464,3 +480,51 @@ existing caller), and no state machine.
   it shows three, because `compact` contains an `m` and #939 ranks contained matches into a second bucket
   behind the prefix ones. The spec now pins all three and their order, which turned a mistake into the
   proof that both buckets reach the panel.
+
+### 2026-09-02 — #934's product decision, as three MUST FIX findings on PR #959
+
+The plan above designed the row, the cap and the width bound against the ticket's written description,
+because #934 had no drawing. It was decided instead, one minute after the PR opened, and the decision
+differs from what shipped on all three points. **They are decisions, not review preferences**, and they
+supersede the corresponding paragraphs of § *Extending the panel surface, additively* and § *The clamp is
+lifted, not copied*; the quoted wording and the reading of its third point are now in § *Design source*.
+
+- **No descriptions. `ComposerOptionsPanelOption` loses the `description` field entirely** rather than
+  keeping it unused, and `ComposerOptionsPanel`'s row goes back to `{option.label}` as the button's sole
+  child — byte-for-byte the surface the four footer consumers shipped with, so this ticket now leaves the
+  shared view's markup unchanged. `slashCommandTypeAheadOptions` never reads `row.description`, which
+  makes the guarantee structural rather than stylistic: the string reaches no markup, no attribute and no
+  measurement, and of the four workspace-authored fields only `name` and `argument_hint` reach the DOM at
+  all. § *Untrusted text* and the plan's security review are narrowed, not weakened — the two fields that
+  do reach it are authored by the same party, and every measure there still applies to them. The two CSS
+  rules for the two-part row are gone, and with them the 320px bound the row used to carry.
+- **Ten rows, not eight** — `max-height: 280px`, which draws 284px tall. Two corrections the number itself
+  hides, both measured rather than reasoned: `max-height` bounds the *content* box under this repo's
+  absent `box-sizing` reset, so capping at 10 rows plus the panel's 2px bands left a 4px sliver of the
+  eleventh row on screen; and a flex item's default `flex-shrink: 1` meant fifteen rows in a capped column
+  **compressed to ~18px each instead of scrolling**, with `scrollHeight === clientHeight`. The rows now
+  carry `flex-shrink: 0`. The shipped 8-row version had the second bug and no assertion that could see it.
+- **The width bound is the window's, not a 320px description bound.** New arithmetic beside the shift, in
+  the module that already owns this screen's placement: `COMPOSER_OPTIONS_WINDOW_MARGIN_PX` and
+  `composerOptionsMaxWidthPx({ anchorLeft, windowWidth })`, a total function of the same measurements
+  `composerOptionsShiftPx` reads minus the panel's own width — which it must be, since this is the bound
+  the width is decided *by*. `useComposerOptionsClamp` writes it to `--composer-options-max-width` on the
+  anchor, and **writes it before it measures the panel**: `offsetWidth` reads the laid-out width, so the
+  old order would have fed the shift an unbounded width and pulled the panel left by an overflow the bound
+  removes. Consumed only by `.composer__row .composer-options`, so the three footer menus inherit a
+  property no rule of theirs reads — deliberate, because the same bound applied to the Actions panel would
+  squash it at the artificial widths `e2e/composer-options-clamp.spec.ts` drives, and that spec is the
+  shift's only detector.
+- **A consequence, stated because § *The clamp is lifted, not copied* claimed the opposite.** That section
+  argued the shift was "reachable arithmetic, not dead code" for this host, on the strength of a 320px
+  description pushing the panel past the window. With the bound now window-relative the panel can never
+  overflow, so **the shift is structurally 0 for the type-ahead** and the clamp is wired here because it is
+  one shared effect and because it still catches the panel if that `max-width` declaration is ever dropped.
+  AC4's "reusing the shipped clamp arithmetic" is met by the placement module, not by a non-zero shift.
+- **The e2e drive gained the two assertions these decisions need, and both are non-vacuous by
+  construction.** Ten filler rows (names free of `c`, `m` and `x`, so no existing count moves) put fifteen
+  rows behind a bare `/` for the cap, and a 400-character command name — reachable, since the daemon bounds
+  `name` without sanitizing it — makes the panel wide enough that the width bound actually binds, so the
+  right-edge assertion is an equality against the measured `innerWidth` rather than a `<=` a short panel
+  would satisfy for free. The descriptions are now proved absent instead of escaped: exact `toHaveText`
+  on rows whose commands carry them, and a unit test that a hostile description reaches no sink at all.

@@ -90,10 +90,12 @@ describe('slashCommandTypeAheadOptions', () => {
     expect(model.label).toBe('/model <model>')
   })
 
-  it('carries the description verbatim, empty ones included', () => {
-    const [clear, bare] = slashCommandTypeAheadOptions([CLEAR, command({ name: 'x' })])
-    expect(clear.description).toBe('Clear conversation history and free up context')
-    expect(bare.description).toBe('')
+  it('carries the description NOWHERE — the option has exactly an id and a label', () => {
+    // #934's decision: a row is the name and its hint. Asserted on the option's whole key set rather than
+    // on `description === undefined`, because the point is that no field carries the string onward under
+    // any name — this is the last place it could have.
+    const options = slashCommandTypeAheadOptions([CLEAR])
+    expect(Object.keys(options[0]).sort()).toStrictEqual(['id', 'label'])
   })
 
   it('identifies a row by its INDEX, never by its name — two rows may share one', () => {
@@ -112,15 +114,17 @@ describe('SlashCommandTypeAheadPanel', () => {
     expect(renderPanel([], 0)).toBe('')
   })
 
-  it('renders one row per command, carrying name, hint and description (AC2)', () => {
+  it('renders one row per command, carrying the name and its hint and NOTHING ELSE (AC2)', () => {
     const markup = renderPanel([CLEAR, MODEL], 0)
 
     expect(countOf(markup, 'class="composer-options__item')).toBe(2)
-    expect(markup).toContain('<span class="composer-options__name">/clear</span>')
-    expect(markup).toContain(
-      '<span class="composer-options__description">Clear conversation history and free up context</span>'
-    )
-    expect(markup).toContain('<span class="composer-options__name">/model &lt;model&gt;</span>')
+    // The label is the button's sole child, exactly as the four footer consumers' rows are — the row
+    // markup this ticket leaves behind is byte-for-byte the shipped one.
+    expect(markup).toContain('>/clear</button>')
+    expect(markup).toContain('>/model &lt;model&gt;</button>')
+    // And the description reaches no sink: not as text, not as an attribute, not at all (#934).
+    expect(markup).not.toContain('Clear conversation history')
+    expect(markup).not.toContain('Set the AI model')
   })
 
   it('opens on the shared panel surface, named for a type-ahead rather than a menu', () => {
@@ -134,10 +138,8 @@ describe('SlashCommandTypeAheadPanel', () => {
 
     expect(countOf(markup, 'aria-current="true"')).toBe(1)
     expect(countOf(markup, 'composer-options__item--current')).toBe(1)
-    // The marked row is the SECOND one — the modifier and the name travel together.
-    expect(markup).toMatch(
-      /composer-options__item--current"[^>]*><span class="composer-options__name">\/model/
-    )
+    // The marked row is the SECOND one — the modifier and the label travel together.
+    expect(markup).toMatch(/composer-options__item--current"[^>]*>\/model/)
   })
 
   it('keeps every row out of the tab order — focus never leaves the message box', () => {
@@ -147,18 +149,38 @@ describe('SlashCommandTypeAheadPanel', () => {
     expect(countOf(markup, 'tabindex="0"')).toBe(0)
   })
 
-  it('escapes workspace-authored text and lets none of it reach a markup sink', () => {
+  it('escapes the workspace-authored text it DOES render — the name and the argument hint', () => {
+    // Both fields ride in one label, and both are written by whoever wrote the repository claude runs in.
     const hostile = command({
-      name: 'evil',
-      description: '<img src=x onerror="alert(1)">\nsecond line'
+      name: '<img src=x onerror="alert(1)">',
+      argument_hint: '<script>alert(2)</script>'
     })
     const markup = renderPanel([hostile], 0)
 
     expect(markup).toContain('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;')
+    expect(markup).toContain('&lt;script&gt;')
     expect(markup).not.toContain('<img')
+    expect(markup).not.toContain('<script')
     // A bare not.toContain('src=') would pass vacuously; this matches the `="` only an HTML sink produces.
     expect(markup).not.toMatch(/\son[a-z]+="/i)
     expect(markup).not.toContain('alert(1)"')
+  })
+
+  it('lets a workspace-authored DESCRIPTION reach no DOM sink at all (#934)', () => {
+    // The stronger property the decision to hide descriptions buys: not "escaped", but absent. Probed with
+    // a string that would be visible however it leaked — as text, inside an attribute, or as the newline
+    // that is the one sub-0x20 byte measured across the capture's four string fields.
+    const hostile = command({
+      name: 'memory',
+      description: '<img src=x onerror="alert(1)">\nsecond line'
+    })
+    const markup = renderPanel([hostile], 0)
+
+    expect(markup).toContain('/memory')
+    expect(markup).not.toContain('img')
+    expect(markup).not.toContain('alert')
+    expect(markup).not.toContain('second line')
+    expect(markup).not.toContain('\n')
   })
 })
 

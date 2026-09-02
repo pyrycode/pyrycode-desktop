@@ -112,3 +112,44 @@ export function composerOptionsShiftPx(metrics: ComposerOptionsPlacementMetrics)
 
   return Math.max(0, overflowPastWindow)
 }
+
+/**
+ * How much clear space the panel must leave between its right edge and the window's, in CSS pixels.
+ *
+ * #940's product decision, taken on #934 (2026-09-02): "set max width to what fits the window with 40px
+ * margin to window edge". Read as — and the reading is recorded in #940's plan, where it can be corrected
+ * — the panel stays anchored at its host's left edge and may grow until its right edge sits this far
+ * inside the window's right edge.
+ *
+ * A margin rather than the window edge itself, unlike `composerOptionsShiftPx`'s boundary above, and the
+ * two are not in competition: that one RELOCATES a panel whose width is already decided, this one bounds
+ * the width so it never gets there. A host that consumes both is bounded by this and therefore never
+ * shifted — see the note in `useComposerOptionsClamp`.
+ */
+export const COMPOSER_OPTIONS_WINDOW_MARGIN_PX = 40
+
+/**
+ * The widest the panel may be drawn, in CSS pixels, and still leave COMPOSER_OPTIONS_WINDOW_MARGIN_PX clear
+ * of the window's right edge from its resting left position.
+ *
+ * The same measurements `composerOptionsShiftPx` reads, MINUS the panel's own width — which is the point:
+ * this is the bound the width is decided by, so it cannot be a function of it. Declared as a `Pick` of the
+ * shared metrics rather than as its own pair of numbers, so the named-field discipline above, and the
+ * transposition it exists to prevent, covers both functions under one contract.
+ *
+ * Floored at zero, and the floor is about CSS rather than about arithmetic: a negative `max-width` is an
+ * invalid length, so the whole declaration would be dropped at computed-value time and the panel would
+ * silently lose its bound — the same class of failure as the shift's missing unit, from the other side.
+ * Zero is unreachable above the app's 800px minimum: the leftmost resting edge is 456 (see below), and
+ * 800 - 40 - 456 = 304. One `Math.max`, not a branch.
+ *
+ * No LEFT half, for `composerOptionsShiftPx`'s reason verbatim: the sidebar is `flex: 0 0 400px` and never
+ * shrinks, so the panel's resting left edge is a constant at every window width.
+ */
+export function composerOptionsMaxWidthPx(
+  metrics: Pick<ComposerOptionsPlacementMetrics, 'anchorLeft' | 'windowWidth'>
+): number {
+  const restingLeft = metrics.anchorLeft - COMPOSER_OPTIONS_LABEL_INSET_PX
+
+  return Math.max(0, metrics.windowWidth - COMPOSER_OPTIONS_WINDOW_MARGIN_PX - restingLeft)
+}

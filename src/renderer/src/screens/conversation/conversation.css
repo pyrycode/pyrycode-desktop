@@ -1635,7 +1635,8 @@
    One visible consequence, recorded rather than corrected: .composer-options' shipped `left` pulls the
    panel 12px left of its anchor, so a row's LABEL lands flush with the message box's left edge while the
    box's own text starts 16px in (.composer__input's --space-4 padding). Those 4px are the price of not
-   forking the panel's placement; #934 is the ticket that can settle it with a drawing. */
+   forking the panel's placement, and they stand: #934 closed on 2026-09-02 having settled the row, the cap
+   and the width bound by decision rather than by a drawing, and left this untouched. */
 .composer__row {
   position: relative;
   display: flex;
@@ -3505,58 +3506,64 @@
   background: var(--color-on-primary);
 }
 
-/* #940 — the type-ahead's three additions to this surface. All SCOPED to .composer__row, the message
-   box's anchor, so the four footer menus render exactly as they did: this control's list is the only one
-   that can run to 51 entries or carry a description, and one of its two treatments has a cost the footer
-   menus must not pay (below). Not a second overlay and not a modifier prop on the shared view — the host
-   is the discriminator, and it costs one descendant selector.
+/* #940 — the type-ahead's additions to this surface, all SCOPED to .composer__row, the message box's
+   anchor, so the four footer menus render exactly as they did: this control's list is the only one that
+   can run to 51 entries, and both of its treatments have a cost those menus must not pay (below). Not a
+   second overlay and not a modifier prop on the shared view — the host is the discriminator, and it costs
+   one descendant selector. No z-index, for #838's stated reason.
 
-   THE CAP AND THE SCROLL. 228px is 8 rows of 28px plus the panel's own 2px bands, which is a bound rather
-   than a measurement — #934 is the ticket that can replace it with one. overflow-y makes the panel a
-   scroll container, and THAT is the cost the footer menus must not pay: a scroll container clips at its
-   PADDING box, and this panel's horizontal padding is 0, so the left and right pixel of a row's
-   :focus-visible outline would be cut. Harmless here (this control never moves DOM focus into a row, so
-   that outline never paints from the keyboard) and a real regression there (every close path of
+   THE CAP AND THE SCROLL. Ten rows is the product decision taken on #934 (2026-09-02), replacing this
+   ticket's own first guess of eight. 280px is 10 × the row's 28px and NOT 284: max-height bounds the
+   CONTENT box under this repo's absent box-sizing reset (the ruling .composer-options__item's own height
+   cites), so the panel draws 284px tall with its 2px bands and shows exactly ten rows. Adding the bands
+   here instead would leave a 4px sliver of the eleventh row visible under the tenth — measured, not
+   reasoned. overflow-y makes
+   the panel a scroll container, and THAT is one cost the footer menus must not pay: a scroll container
+   clips at its PADDING box, and this panel's horizontal padding is 0, so the left and right pixel of a
+   row's :focus-visible outline would be cut. Harmless here (this control never moves DOM focus into a row,
+   so that outline never paints from the keyboard) and a real regression there (every close path of
    ComposerOptionsMenu moves focus through those rows). The vertical edges survive either way — the 2px
    band is wider than the 1px outline.
 
-   The panel's `width: max-content` survives unchanged: it is bounded by the description's own max-width
-   below, and whatever width results is kept inside the window by #847's clamp, which this control wires
-   through the same shared hook the Actions menu does. */
+   THE WIDTH BOUND IS THE WINDOW'S, also #934's decision: the panel stays anchored at the message box's
+   left edge and may grow until its right edge is 40px clear of the window's right edge. It is a SECURITY
+   bound as much as a visual one — `name` and `argument_hint` are workspace-authored and the daemon bounds
+   them without sanitizing them, so `width: max-content` against a hostile name would otherwise take the
+   whole line. The value cannot be written in CSS: it is the distance from this panel's resting left edge
+   to the window's, which no ancestor expresses, so composerOptionsMaxWidthPx measures it and
+   useComposerOptionsClamp writes --composer-options-max-width onto the anchor before paint. `none` is the
+   fallback, which is the property's own initial value, so a host that never runs that effect is exactly
+   where it was. That is the other cost the footer menus must not pay: the same bound applied to the
+   Actions panel would squash it at the artificial widths e2e/composer-options-clamp.spec.ts drives, and
+   that spec is the shift's only detector.
+
+   The panel's `width: max-content` survives unchanged and is what makes the bound a MAXIMUM: a short list
+   is still exactly as wide as its longest row. */
 .composer__row .composer-options {
-  max-height: 228px;
+  max-width: var(--composer-options-max-width, none);
+  max-height: 280px;
   overflow-y: auto;
 }
 
-/* The name (with its argument hint) — the part the user is picking, so it never shrinks and never
-   ellipsizes. flex: 0 0 auto against a description that yields first. */
-.composer-options__name {
-  flex: 0 0 auto;
-}
+/* The two things a row must do inside a CAPPED, BOUNDED panel that a row in a footer menu never has to.
 
-/* The description — what makes 51 entries usable rather than a wall of names, and the one field a hostile
-   workspace could stretch the panel with. THE max-width IS A SECURITY BOUND as much as a visual one: the
-   longest description measured across the capture's 51 entries is 1,145 bytes, the daemon bounds these
-   strings without sanitizing them, and `width: max-content` on the panel would otherwise take the whole
-   line. 320px is that bound; overflow: hidden + text-overflow: ellipsis is what makes the row honour it
-   instead of overflowing, and min-width: 0 is what lets a flex item shrink below its content at all.
+   flex-shrink: 0 IS WHAT MAKES THE CAP ABOVE A SCROLL. A flex item's default flex-shrink is 1, so 15 rows
+   in a 280px column do not overflow it — they COMPRESS, each to ~18px, and the panel then reports
+   scrollHeight === clientHeight and scrolls nothing. The row's `height: 28px` is not a floor on its own;
+   this is. Measured against a real window by e2e/slash-command-type-ahead.spec.ts, which asserts both the
+   capped height and that the list actually scrolls, precisely because the first of those passes on its own
+   while the rows are silently squashed.
 
-   The row's inherited white-space: nowrap does the other half of the job: `0x0a` is the only sub-0x20 byte
-   measured across those entries' four string fields, and nowrap collapses it to a space rather than letting
-   a description with a newline become a two-line row inside a 28px box.
-
-   --color-on-surface-variant is this stylesheet's muted-caption role (.composer__hint, .background-task-
-   panel__no-change) rather than a new token: ~9.7:1 against the panel's --color-on-primary-fixed fill,
-   comfortably past AA, and visibly secondary beside the name's --color-primary. Colour by token NAME, never
-   a hex — desktop is dark-only (ADR 0003), the standing rule in .composer-status and .status-row. */
-.composer-options__description {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 320px;
-  margin-left: var(--space-2);
+   overflow: hidden CLIPS a row longer than the bounded panel rather than letting it scroll the panel
+   sideways: the panel becomes a scroll container on BOTH axes the moment overflow-y is set, so without
+   this one hostile name would hand it a horizontal scrollbar. Clipped, not ellipsized — the row is a flex
+   container and text-overflow applies to block containers, so an ellipsis here would be a declaration that
+   reads as a promise and renders as nothing. The row's inherited white-space: nowrap keeps it to the one
+   line being clipped, which is also what collapses the `0x0a` a hostile name may carry (the only sub-0x20
+   byte measured across the capture's 51 entries). */
+.composer__row .composer-options__item {
+  flex-shrink: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--color-on-surface-variant);
 }
 
 /* Hover is declared AFTER --current and the two have equal specificity (0,2,0), so source order decides

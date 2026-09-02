@@ -43,11 +43,16 @@ import { slashCommandTypeAheadRows, completeSlashCommand } from './slashCommandT
 // SECURITY. `name`, `argument_hint`, `description` and every alias are WORKSPACE-AUTHORED — a lower trust
 // tier than claude's own words — and the daemon bounds them without sanitizing them. This module is the
 // render boundary that owes the sanitization, and it discharges it as: ordinary React text children only
-// (the panel's row markup), a width bound in the stylesheet so the longest measured description (1,145
-// bytes) cannot stretch the panel, a row identity that is an INDEX rather than a name, and NO DIAGNOSTIC
-// ANYWHERE — no console call, no thrown error carrying a row, not even a content-free one. `0x0a` is the
-// only sub-0x20 byte measured across the capture's 51 entries' four string fields, so the control
-// character that actually occurs is the one that splits a log line.
+// (the panel's row markup), a row identity that is an INDEX rather than a name, a width bound in the
+// stylesheet that is the window's own (below), and NO DIAGNOSTIC ANYWHERE — no console call, no thrown
+// error carrying a row, not even a content-free one. `0x0a` is the only sub-0x20 byte measured across the
+// capture's 51 entries' four string fields, so the control character that actually occurs is the one that
+// splits a log line.
+//
+// The DESCRIPTION is not rendered at all — the product decision taken on #934 — so of those four fields
+// only `name` and `argument_hint` reach the DOM, through the one label expression in
+// `slashCommandTypeAheadOptions`. That is a narrowing of this module's exposure and not a substitute for
+// any of the measures above: the two fields that do reach it are authored by exactly the same party.
 
 /**
  * The panel's accessible name, and the e2e locator that finds it.
@@ -103,8 +108,15 @@ export function slashCommandTypeAheadStateFor(
 }
 
 /**
- * The published rows as panel options: `/name` with the argument hint after it, the description beside it,
- * and the row's INDEX as its identity.
+ * The published rows as panel options: `/name` with the argument hint after it, and the row's INDEX as its
+ * identity.
+ *
+ * THE DESCRIPTION IS NOT PASSED ON, and its absence is the product decision taken on #934 (2026-09-02)
+ * rather than an omission: a row carries the command name and its argument hint, and the description stays
+ * out of the DOM entirely. That makes this function the whole of the answer — the field is read from no
+ * row here, so it reaches no markup, no attribute and no measurement downstream, and the strictest reading
+ * of "workspace-authored text this control renders" covers `name` and `argument_hint` only. If the
+ * descriptions come back, they come back with a drawing behind them.
  *
  * THE ID IS THE INDEX AND NEVER THE NAME, which is `slashCommandListStore`'s stated obligation on this
  * slice and closes a real failure rather than a stylistic one: `name` is workspace-authored, is not an
@@ -117,17 +129,13 @@ export function slashCommandTypeAheadStateFor(
  * copy to keep in agreement. The emptiness test is `!== ''`, literal and untrimmed, matching
  * `completeSlashCommand`'s — the two must agree about which rows are hinted, and the daemon bounds that
  * field without sanitizing it, so normalising a hint of `" "` would be normalisation nothing asked for.
- *
- * The description is passed through VERBATIM, empty ones included: an always-present field keeps the row
- * markup one shape, and an empty span draws nothing.
  */
 export function slashCommandTypeAheadOptions(
   rows: readonly WireSlashCommand[]
 ): readonly ComposerOptionsPanelOption[] {
   return rows.map((row, index) => ({
     id: String(index),
-    label: row.argument_hint === '' ? `/${row.name}` : `/${row.name} ${row.argument_hint}`,
-    description: row.description
+    label: row.argument_hint === '' ? `/${row.name}` : `/${row.name} ${row.argument_hint}`
   }))
 }
 
@@ -233,8 +241,10 @@ export function useSlashCommandTypeAhead({
   const rows = slashCommandTypeAheadRows(text, entry?.commands ?? null)
   const open = rows.length > 0 && !state.dismissed
 
-  // #847's clamp, through the hook this ticket lifted out of ComposerOptionsMenu. The panel's own
-  // max-width bounds it; this keeps whatever width results inside the window at the 800px minimum.
+  // The panel's window fit, through the hook this ticket lifted out of ComposerOptionsMenu. This control
+  // is the one host that consumes BOTH halves: the width bound (#934's decision — the panel may grow until
+  // it is 40px clear of the window's right edge) is what keeps this list inside the window at the 800px
+  // minimum, and #847's shift is then structurally 0 here because a bounded panel never overflows.
   useComposerOptionsClamp({ anchorRef, panelRef, active: open })
 
   // Keep the highlighted row in view. The panel caps its height and scrolls (conversation.css), and

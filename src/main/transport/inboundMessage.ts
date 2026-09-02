@@ -59,7 +59,9 @@ import type {
   QuestionShownPayload,
   QuestionDismissedPayload,
   WireQuestion,
-  WireQuestionOption
+  WireQuestionOption,
+  SlashCommandListPayload,
+  WireSlashCommand
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
@@ -260,6 +262,17 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * A `modal_shown` also carries a `conversation_id` (pyrycode#1065, #870) — decoded here, then dropped
  * at the emit until #871 carries it across IPC. BOTH renderer bridges no-op these arms; the real
  * consumer is the modal store + bridge (#223).
+ *
+ * The `slash-command-list` kind (#936) carries the decoded SlashCommandListPayload — the verbs the
+ * workspace will accept for one conversation, where `model_list` inventories the identities claude will
+ * run as. A conversation-scoped SNAPSHOT that REPLACES a reader's view of the menu, never a delta; it
+ * rides a `control_response`, so it opens and closes no turn. The fail-closed decode here (a required
+ * `conversation_id`, a never-null `commands` array narrowed per row, a carried-not-recomputed
+ * `dropped_commands`) is the boundary this slice defends, and it is the ONLY sanctioned route to the
+ * type — a bare cast would hand a `.map` a non-array and would silently invert the cut-aliases reading
+ * rule. All four strings on a row are UNTRUSTED WORKSPACE-AUTHORED text carried verbatim, owed escaping
+ * at the render sink; nothing consumes this arm yet (the IPC carry is #937, the Actions-menu match #681,
+ * and daemonConnection's inbound switch has no catch-all, so the menu stops here until claimed).
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
@@ -302,6 +315,7 @@ export type InboundDaemonMessage =
   | { kind: 'modal-dismissed'; modalDismissed: ModalDismissedPayload }
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }
   | { kind: 'question-dismissed'; questionDismissed: QuestionDismissedPayload }
+  | { kind: 'slash-command-list'; slashCommandList: SlashCommandListPayload }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -371,15 +385,43 @@ function requireStringOrNull(payload: Record<string, unknown>, field: string): s
  *  validation of the names: `truncated_fields` names this frame's own wire fields today, and a
  *  client-side allowlist would fail-close a valid future frame (the parseQueuedItem no-cross-validate
  *  posture). The message names the field only — an element could echo a wire field name, and the values
- *  it describes are untrusted. */
+ *  it describes are untrusted.
+ *
+ *  Since #936 the array half of that check is requireStringArray below, and this is the `null` gate in
+ *  front of it: identical messages, identical fresh-array result. The split exists because
+ *  `slash_command_list`'s `aliases` needs the array check WITHOUT the null admission — see that helper
+ *  for why admitting one there would be wrong. */
 function requireStringArrayOrNull(
   payload: Record<string, unknown>,
   field: string
 ): string[] | null {
+  return payload[field] === null ? null : requireStringArray(payload, field)
+}
+
+/** Narrow one required, NON-nullable string-ARRAY field off the payload — a `string[]`, and nothing else
+ *  — or fail closed with a category-only message. requireStringArrayOrNull minus the one thing its name
+ *  promises, split out for `slash_command_list`'s `aliases` (#936), which is the first field on this wire
+ *  that is an array of bare strings AND never `null`.
+ *
+ *  The two live one field apart on the SAME row and carry OPPOSITE contracts: a `WireSlashCommand`'s
+ *  `truncated_fields` may be a literal `null` (nothing was cut) while its `aliases` may not — the daemon
+ *  normalises a nil alias slice to `[]` and deliberately does not do the same for the cut list. Reaching
+ *  for the nullable helper on `aliases` is the reflex to resist: it would quietly admit a `null` the wire
+ *  never sends, and WireSlashCommand would then be lying about the type of its own field.
+ *
+ *  An EMPTY array is VALID. For `aliases` it is not an absence but a COLLAPSE — claude never emits an
+ *  empty alias list, so an absent-aliases row and an empty-aliases row arrive as the identical `[]`, and
+ *  the row's own `truncated_fields` naming `aliases` is the only thing that separates "cut to nothing"
+ *  from "none". That reading rule is only sound because an OMITTED `truncated_fields` fails closed here
+ *  rather than decoding to `undefined`, which `?.includes(...)` would read as falsy exactly the way it
+ *  reads a `null`.
+ *
+ *  Same posture as the nullable sibling otherwise: one bad element throws the WHOLE payload closed, the
+ *  result is a FRESH array (so array-borne extra properties cannot ride along), no closed-set validation
+ *  of the element values, and the message names the client-owned `field` constant only — an element is
+ *  untrusted workspace-authored text. */
+function requireStringArray(payload: Record<string, unknown>, field: string): string[] {
   const value = payload[field]
-  if (value === null) {
-    return null
-  }
   if (!Array.isArray(value)) {
     throw new WireDecodeError(`missing required field: ${field}`)
   }
@@ -1401,6 +1443,97 @@ function parseQuestionDismissedPayload(payload: unknown): QuestionDismissedPaylo
 }
 
 /**
+ * Narrow one opaque row into a WireSlashCommand (#936) — one verb the workspace will accept. Fail-closed
+ * like parseBackgroundTask, whose four-field shape this scales to five: an isRecord guard, three required
+ * strings, then the SAME-SHAPED-OPPOSITE-CONTRACT pair one field apart — `aliases` through
+ * requireStringArray (never `null`), `truncated_fields` through requireStringArrayOrNull (`null` is a
+ * VALID VALUE meaning nothing was cut). Returns a fresh five-field literal, so unknown server-added keys
+ * are tolerated (forward-compat) but NOT copied through, which also makes it prototype-pollution-safe.
+ *
+ * FOUR CHECKS THAT DELIBERATELY DO NOT EXIST HERE, each of which would fail-close valid traffic:
+ *
+ *   - NO charset or identifier validation on `name`. One measured name is `__remote-workflow`, so a name
+ *     is not an identifier and nothing downstream may key a cache, a memo or a lookup path by one either.
+ *   - NO length check on any of the four strings. The daemon bounds them at construction and
+ *     parseInboundMessage's MAX_PLAINTEXT_BYTES guard backstops the frame; a third bound here would be a
+ *     client-invented one to keep in agreement (the parseQuestionShownPayload / requireNumber posture).
+ *   - NO trim, normalise, strip or re-encode. The strings are WORKSPACE-AUTHORED — whoever wrote the
+ *     repository wrote them, a LOWER trust tier than the claude-authored strings the question/model arms
+ *     carry — and the daemon bounds them without sanitizing them. They are carried VERBATIM, embedded
+ *     newlines included (`0x0a` is the only sub-`0x20` byte measured across the capture's 51 entries).
+ *     Rewriting a `name` here would make the two ends disagree about what the command is CALLED; the
+ *     escaping is owed at the render boundary (#681), which is this client's, not the daemon's.
+ *   - NO closed set on the `truncated_fields` element names (parseBackgroundTask's rule verbatim).
+ *
+ * An EMPTY `argument_hint` is ORDINARY DATA — empty on 33 of the capture's 51 entries — so nothing may
+ * read `''` as missing. Its messages name the failure CATEGORY only and never the row INDEX: every field
+ * here is untrusted text, a `description` can carry a newline and forge a log record if one ever reaches
+ * a log, and an index would be a weak oracle over the menu that buys nothing.
+ */
+function parseSlashCommand(payload: unknown): WireSlashCommand {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed slash command')
+  }
+  const name = requireString(payload, 'name')
+  const argument_hint = requireString(payload, 'argument_hint')
+  const description = requireString(payload, 'description')
+  const aliases = requireStringArray(payload, 'aliases')
+  const truncated_fields = requireStringArrayOrNull(payload, 'truncated_fields')
+  return { name, argument_hint, description, aliases, truncated_fields }
+}
+
+/**
+ * Narrow an opaque payload into a SlashCommandListPayload (#936) — the whole slash-command menu for one
+ * conversation, carried in ONE frame. The structural twin of parseBackgroundTaskRosterPayload, and its
+ * shape is copied deliberately: an isRecord guard, a required `conversation_id`, the inline
+ * Array.isArray-then-`raw.map` over the rows, and a plain requireNumber for the dropped count.
+ *
+ * THE SAME TRAP AS THE ROSTER'S, and it is invisible in the code below: within THIS ONE FRAME
+ * `commands: null` FAILS CLOSED while a ROW's `truncated_fields: null` is a VALID VALUE returned as
+ * `null`. `Array.isArray(null)` is `false`, which is precisely what fails the first closed, and an omitted
+ * key (`undefined`) fails the same way. The daemon settles the asymmetry: MarshalJSON normalises a nil
+ * `commands` to `[]` so an empty menu never serialises as `null`, and deliberately does NOT normalise a
+ * row's `truncated_fields` the same way, because nil and `[]` say the identical thing there.
+ *
+ * An EMPTY `commands` array is VALID and decodes to `[]` — the POSITIVE STATEMENT that claude offered
+ * nothing, which a consumer must keep distinguishable from the `null` an unobserved frame yields. Note
+ * the contrast with parseQuestionShownPayload, whose empty array is OUT OF CONTRACT: the two read alike
+ * and say opposite things. Order is preserved from the wire (claude's own). One bad row throws the whole
+ * frame closed rather than yielding a partial menu.
+ *
+ * `dropped_commands` decodes through plain requireNumber, correct PRECISELY BECAUSE the Go field has no
+ * `omitempty`: the key is always written, so `0` is a genuine value carried as `0` and never
+ * truthiness-tested, while an absent key is a real defect. NOTHING CROSS-CHECKS IT AGAINST
+ * `commands.length` AND NOTHING CAPS THE ENTRY COUNT. Two producer cuts feed the number — an entry cap
+ * and a frame-level byte bound, both cutting from the tail — and the byte bound can fire BEFORE the entry
+ * cap is reached, so a non-zero count arrives beside ANY number of entries and list length is no evidence
+ * of completeness. `commands.length + dropped_commands` is the menu's true size, not something to
+ * reconcile. The count is also workspace- and version-dependent by design (51 entries measured in one
+ * repository, 74 in another), so a client-side entry cap would fail-close valid traffic rather than
+ * defend anything; the frame cannot arrive unbounded regardless, since MAX_PLAINTEXT_BYTES gates the
+ * plaintext before any parse and `raw.map` allocates from the array that ACTUALLY arrived rather than
+ * from the claimed count.
+ *
+ * Returns a fresh three-field literal; unknown server-added keys are tolerated but not copied through —
+ * including a HOISTED `truncated_fields`, which this frame deliberately does not have (a cut is a
+ * property of one row and rides that row). Its messages name the failure CATEGORY only: a
+ * `conversation_id` correlates a conversation, and every string on a row is untrusted workspace text.
+ */
+function parseSlashCommandListPayload(payload: unknown): SlashCommandListPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed slash_command_list payload')
+  }
+  const conversation_id = requireString(payload, 'conversation_id')
+  const raw = payload.commands
+  if (!Array.isArray(raw)) {
+    throw new WireDecodeError('malformed commands list')
+  }
+  const commands = raw.map(parseSlashCommand)
+  const dropped_commands = requireNumber(payload, 'dropped_commands')
+  return { conversation_id, commands, dropped_commands }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), an `assistant_delta` → `assistant-delta` and
@@ -1885,6 +2018,37 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'question-dismissed', questionDismissed }
+    }
+    case 'slash_command_list': {
+      // Narrow BEFORE logging so a malformed frame (a `commands: null`, an omitted `dropped_commands`, an
+      // `aliases: null`, one bad row) throws first and leaves no record. NOTHING decoded is logged, and
+      // on this frame that rule bites harder than on its neighbours: the four strings on every row are
+      // WORKSPACE-AUTHORED — whoever wrote the repository wrote them, a LOWER trust tier than the
+      // claude-authored strings the question arms carry — and `0x0a` is the only sub-`0x20` byte measured
+      // across the capture's 51 entries, so an author who can put a newline in a `description` holds a
+      // log-forgery primitive the moment any decoded value reaches this JSON-lines log (which the
+      // operator can ship off-box in a debug bundle). Only the frame's byte length + one-way hash, the
+      // existing content-free field set (no new DiagnosticEvent field, so #131's renderer pin is
+      // untouched). DELIBERATELY NO `count` of commands: DiagnosticEvent already carries the field, so
+      // emitting it would cost nothing structurally and it is omitted on purpose, because how many verbs
+      // a workspace offers is itself a fact about the repository the user has open (the
+      // background_task_roster / modal_shown posture, not message_chunk's). Strictly safer than the
+      // `default:` arm this replaces for the type, which logged a WIRE-SUPPLIED `envelope.type`; the code
+      // here is a static literal.
+      //
+      // The narrowing makes the SHAPE trusted; it does not make the CONTENT trusted, and the type system
+      // carries no signal for that (a `string` is a `string`). `conversation_id` is an outbound
+      // routing/scoping key, not a nonce and not a capability, and it is kept out of the log all the same.
+      // Nothing consumes this arm yet: the IPC carry is #937, the Actions-menu alias match #681, and
+      // daemonConnection's inbound switch has no catch-all, so the menu stops here until claimed.
+      const slashCommandList = parseSlashCommandListPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'slash_command_list',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'slash-command-list', slashCommandList }
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

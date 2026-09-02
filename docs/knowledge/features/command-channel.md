@@ -84,6 +84,26 @@ rejected question answer, so there is nothing to correlate, unlike `answerModal`
 [question resolution envelope](question-resolution-envelope.md) for the wire contract and builders both
 drive.
 
+The union's `requestSessionSettings` member (#491, bare from the start and not previously called out
+in this growth log) gained an **optional** payload in
+[#945](https://github.com/pyrycode/pyrycode-desktop/issues/945):
+`{ type: 'requestSessionSettings'; payload?: RequestSessionSettingsPayload }`, reusing the new wire
+`RequestSessionSettingsPayload{conversation_id}` type. It is the union's **only** member whose
+`payload` is optional rather than required-when-present — every other payload-bearing member above
+always carries one. Its guard, added to the same `isRendererCommand` switch, accepts three shapes: an
+absent `payload` (the shape every caller still sends), an explicitly `undefined` `payload` (structured
+clone preserves an explicitly-`undefined` property crossing `ipcRenderer.send`, so testing the
+**value**, not just `'payload' in value`, is load-bearing — an `in`-only check would reject a caller
+that spreads an optional id and silently drop the command at the boundary), or a present
+`{ conversation_id: string }` — type checked, not emptiness, since `''` is a real value the daemon
+itself polices. The daemon made the frame conversation-keyed on 2026-08-20 (pyrycode#1586/#1610); this
+slice threads the capability through `src/main/`/`src/shared/` only — the sole renderer sender,
+[Run configuration store](run-config-store.md)'s `requestRunConfigSnapshot`, still sends no id, so the
+payload stays optional until [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946) supplies
+one and tightens it to required. See [Run configuration store § Conversation-keyed since
+2026-08-20](run-config-store.md#conversation-keyed-since-2026-08-20-945946) for the daemon-side
+degradation contract.
+
 ## What it does
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries only wire payload types, so no token, key, or raw byte can cross the bridge. `ipcRenderer` itself never crosses to the window.
@@ -241,5 +261,6 @@ sendCommand: (command: RendererCommand): void => {
 - [Interrupt envelope](interrupt-envelope.md) / [#306 codebase notes](../codebase/306.md) — the bare `interrupt` member this channel's union gained; unlike its daemon-reply-bearing siblings, the daemon sends no correlated reply at all — the turn-stopped signal rides the pre-existing `turn_state`/`turn_end` stream instead
 - [Push notifications](push-notifications.md) / [#391 codebase notes](../codebase/391.md) — the payload-carrying `notify` member + `isNotifyPayload` guard this channel's union gained; the first member whose payload type is main-local (not wire-derived) and whose guard checks closed-set membership rather than `typeof`
 - [Question resolution envelope](question-resolution-envelope.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920) — the `answerQuestions`/`refuseQuestions` members + their guards this channel's union gained, `Omit`-derived like `answerModal`'s but both token-excluded (unlike the modal pair); `isAnswerQuestionsPayload` is this file's first guard to recurse into a structured payload, and the first place the `for…of`-over-`every` hole distinction mattered. [Daemon connection](daemon-connection.md) is the consumer that mints `answer_token` for both.
+- [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings` member's sole consumer, and the conversation-keying correction that gave it this file's only optional payload.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) · [ADR 0004 — Renderer session store: reducer + sealed actions + wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#17 codebase notes](../codebase/17.md) · Spec: `docs/specs/architecture/17-typed-command-channel.md` · [#168 codebase notes](../codebase/168.md) · Spec: `docs/specs/architecture/168-debug-bundle-ipc-contract.md`

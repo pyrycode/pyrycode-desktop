@@ -32,11 +32,15 @@
 // the key in its own slot table, whereas `obj[id] = true` would hand a daemon-supplied `__proto__` to
 // `Object.prototype`'s setter. Log-free by construction — no `console.*` on any branch, matching
 // conversationActivityBridge.ts:35-39: the only value a diagnostic here could carry is that id, and the
-// renderer console is readable by anything that can open DevTools (#126). The one outbound is the existing
-// bare `{ type: 'requestSessionSettings' }` literal, so the renderer→main surface this adds is a fixed
-// constant. Nothing here touches keys, sockets, ipcRenderer or raw frames.
+// renderer console is readable by anything that can open DevTools (#126). The one outbound is a
+// `requestSessionSettings` naming the ACTIVE conversation (#946) — a client-owned id read from this app's
+// own conversation state, used as an object VALUE in a payload the main process rebuilds from scratch,
+// never as a key, a path, or a log field. `event.conversationId` never reaches it: the refresh seam is
+// nullary, so the edge cannot address the request. Nothing here touches keys, sockets, ipcRenderer or raw
+// frames.
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
+import { activeConversationStore } from '../../store/activeConversationStore'
 import { runConfigStore } from '../../store/runConfigStore'
 import { sessionIdStore } from '../../store/sessionIdStore'
 import { isTurnRunning } from './ConversationScreen'
@@ -72,10 +76,13 @@ import { requestRunConfigSnapshot, subscribeRunConfig } from './runConfigSnapsho
  * touches a prototype setter. `event.state` is `WireTurnState` and `isTurnRunning` takes `TurnPhase` — the
  * same literal union declared on both sides of the boundary, so this assigns with no cast.
  *
- * The result is DAEMON-WIDE, carrying no id: `requestSessionSettings` is bare and its reply daemon-wide
- * (#491), so there is nothing to filter against and nothing to match a reply to. A turn ending in ANY
- * conversation is a turn-end edge here — filtering to the active conversation would leave the figures
- * stale exactly when another conversation was the one spending the window.
+ * The EDGE SET stays daemon-wide, and #946 deliberately did not narrow it: a turn ending in ANY
+ * conversation is a turn-end edge here, because filtering to the active conversation would leave the
+ * figures stale exactly when another conversation was the one spending the window. That is an argument
+ * about WHEN to refresh. What the request then ASKS ABOUT is a separate question, and since 2026-08-20 it
+ * has a different answer: a `session_settings` reply describes exactly one conversation's session, so the
+ * request names the ACTIVE conversation — whichever conversation's turn edge triggered it. The result
+ * here stays a bare boolean precisely so `event.conversationId` cannot leak into that id.
  *
  * `default: false` — not an `assertNever` — because ignoring the rest is the intended, permanent behaviour
  * here (`toRunConfigSnapshot`'s filter idiom). Total over the sealed union, so no daemon-controlled string
@@ -106,8 +113,10 @@ export function createRunConfigRefreshTrigger(): (event: DaemonEvent) => boolean
  * edge. Returns the unsubscribe handle (the daemonEventBridge off-handle idiom) so the React binding can
  * use it as its effect cleanup. The listener only dispatches — it never throws into React.
  *
- * `refresh` takes no argument, matching `requestConversationList`'s seam: the request is bare, so there is
- * nothing for a call site to pass and nothing it could wrongly pass.
+ * `refresh` takes no argument, and after #946 that is a GUARANTEE rather than an incidental fit: the
+ * request now names a conversation, and the one it must name is the active one, never the one whose turn
+ * just ended. A nullary seam makes passing the edge's `conversationId` a type error instead of a judgement
+ * call at the binding. The id is resolved in `RunConfigLiveData`'s arrow, at call time.
  *
  * A SECOND listener beside `subscribeRunConfig`, deliberately not a widening of it. The two touch disjoint
  * state and can never cross-fire (an event is never both a `runConfigReceived` and an edge), which is the
@@ -159,12 +168,20 @@ export function RunConfigLiveData(): null {
   }, [])
 
   useEffect(() => {
-    // Re-request on each true edge. `window.pyry.sendCommand` is dereferenced only when the arrow runs (an
-    // edge fired), never during render, so the server-render-to-empty-markup invariant is unaffected. A
-    // duplicate — a sheet-open request landing alongside an edge-driven one — needs no designing around:
-    // the reply is a whole-snapshot replace, so it is idempotent.
+    // Re-request on each true edge, naming the conversation the sheet describes (#946) — read
+    // non-reactively at call time, the same `getState()` shape this module already uses for its sibling
+    // stores, so this leaf still subscribes to nothing. `window.pyry.sendCommand` and the store are both
+    // touched only when the arrow runs (an edge fired), never during render, so the
+    // server-render-to-empty-markup invariant is unaffected. An edge arriving with no conversation active
+    // — a `connected` edge before the first open, typically — sends nothing rather than a request whose
+    // zero reply would wipe the held snapshot. A duplicate, a sheet-open request landing alongside an
+    // edge-driven one, needs no designing around: the reply is a whole-snapshot replace, so it is
+    // idempotent.
     return subscribeRunConfigRefresh(window.pyry.onDaemonEvent, () =>
-      requestRunConfigSnapshot(window.pyry.sendCommand)
+      requestRunConfigSnapshot(
+        window.pyry.sendCommand,
+        activeConversationStore.getState().activeConversation?.id ?? null
+      )
     )
   }, [])
 

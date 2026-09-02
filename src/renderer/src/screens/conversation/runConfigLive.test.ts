@@ -189,7 +189,13 @@ describe('subscribeRunConfigRefresh', () => {
     expect(refresh).toHaveBeenCalledTimes(2)
   })
 
-  it('takes no arguments into refresh — the request is daemon-wide, with no id to filter on', () => {
+  // The seam stays nullary after #946, but for an inverted reason. The request is no longer
+  // daemon-wide: it names the ACTIVE conversation. What keeps the seam empty is that the id is
+  // resolved at the binding rather than carried from the edge — the edge set is deliberately still
+  // daemon-wide (a turn ending in any conversation is a valid edge, since another conversation may
+  // be the one spending the window), so `event.conversationId` must be structurally incapable of
+  // reaching the request. A nullary `refresh` is what makes that a type-level guarantee.
+  it('takes no arguments into refresh — the id comes from the active conversation, not the edge (#946)', () => {
     const bridge = fakeBridge()
     const refresh = vi.fn()
     subscribeRunConfigRefresh(bridge.onDaemonEvent, refresh)

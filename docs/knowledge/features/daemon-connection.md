@@ -141,10 +141,14 @@ conversation-keyed on 2026-08-20 (pyrycode#1586/#1610, an unnamed request now si
 zero-valued reply instead of an error): the id is forwarded verbatim to
 `buildRequestSessionSettings`, which owns the "absent → `conversation_id: ''`" normalisation, so this
 method still holds no novel encode logic of its own. The never-log discipline in the catch block is
-unchanged and is now load-bearing for a real payload field, not just an empty one. The sole caller,
-`requestRunConfigSnapshot`, still passes no id —
-[#946](https://github.com/pyrycode/pyrycode-desktop/issues/946) is the slice that sources one from the
-renderer's own conversation state. See [Run configuration store § Conversation-keyed since
+unchanged and is now load-bearing for a real payload field, not just an empty one.
+[#946](https://github.com/pyrycode/pyrycode-desktop/issues/946) is the slice that made the sole
+caller, `requestRunConfigSnapshot`, actually pass one — sourced from the renderer's own active
+conversation state, or declined to send at all when none is addressable. The signature here stays
+`conversationId?: string`: tightening it to required would buy no behaviour change once the sole
+caller already resolves a real id before calling, so #946 left this method and
+`buildRequestSessionSettings`'s `?? ''` normalisation untouched. See [Run configuration store §
+Conversation-keyed since
 2026-08-20](run-config-store.md#conversation-keyed-since-2026-08-20-945946) for the daemon-side
 contract.
 
@@ -225,7 +229,7 @@ never crosses to the renderer.
 - [Debug-bundle orchestrator](debug-bundle-orchestrator.md) / [#169](../codebase/169.md) — the composition-root consumer that calls `requestDebugBundle(consumer)` from the `onCommand` switch.
 - [Screen snapshot fetch](screen-snapshot-fetch.md) / [#180](../codebase/180.md) — the `requestSnapshot(payload)` method added to this factory (the `send` twin, not `requestDebugBundle`'s consumer-failing twin) and the payload-carrying `buildRequestSnapshot` builder it drove, both removed by [#620](../codebase/620.md); the `case 'message'` consumer's content-minimisation emit removed by [#621](../codebase/621.md); the `snapshot` inbound kind and its decode removed by [#622](../codebase/622.md) — no piece of this feature survives on this factory today.
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the `requestConversations()` method added to this factory (another `send` twin, but bare like `requestDebugBundle`'s builder), the `buildListConversations` builder it drives, and the `conversations` inbound kind + verbatim (no-drop) emit in the `case 'message'` consumer arm.
-- [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings(conversationId?)` method added to this factory, and the conversation-keying correction that gave it a real parameter.
+- [Run configuration store](run-config-store.md) / [#491](https://github.com/pyrycode/pyrycode-desktop/issues/491), widened [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) — the `requestSessionSettings(conversationId?)` method added to this factory, the conversation-keying correction that gave the signature a real parameter, and [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946), which made the sole caller actually pass one.
 - [Conversation timeline store](conversation-timeline-store.md) / [#214](../codebase/214.md) — the `turn-state` inbound kind + the new `case 'turn-state'` consumer emit (`conversation_id` dropped, `state` carried), feeding the timeline bridge's `phase`. No new method on this factory — `turn_state` is inbound-only, unlike `requestSnapshot`/`requestConversations`.
 - [#315 codebase notes](../codebase/315.md) — the `stall` inbound kind + the new `case 'stall'` consumer emit, at ship time a fresh **nullary** `{ type: 'stallDetected' }` literal (`conversation_id`, the payload's only field, was dropped — nothing else to carry). Not `assertNever`-guarded in this inner switch; the round-trip test is the guard. No new method on this factory — `stall` is inbound-only, and onset-only (no request/reply pair, no clearing frame). [#732 codebase notes](../codebase/732.md) — widened the emit to carry `conversationId`, copied by name from the decoded payload, replacing the arm's "nullary ⇒ nothing can ride it" doc claim with the daemon-asserted-routing-key argument #724 established for `turnState`.
 - [#492 codebase notes](../codebase/492.md) — the `api-retry` inbound kind + the new `case 'api-retry'` consumer emit, a fresh **non-nullary** `{ type: 'apiRetry', active, current, total }` literal copied by name from the already-decoded payload (never a spread) — `conversation_id` dropped, the only field this arm does drop. Unlike `stall`, NOT onset-only and NOT deduped: the dispatch is stateless per frame, so N daemon frames (including a repeated rising edge as the count climbs) produce N events. Not `assertNever`-guarded in this inner switch; the round-trip test is the guard. No new method on this factory — `api_retry` is inbound-only. Ships dormant; the render slice #493 is the first consumer.

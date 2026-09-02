@@ -90,22 +90,48 @@ describe('toRunConfigSnapshot', () => {
 })
 
 describe('requestRunConfigSnapshot', () => {
-  it('fires exactly one bare requestSessionSettings (#491)', () => {
+  it('fires exactly one requestSessionSettings naming the given conversation (#946)', () => {
     const sendCommand = vi.fn()
-    requestRunConfigSnapshot(sendCommand)
+    requestRunConfigSnapshot(sendCommand, 'conv-1')
     expect(sendCommand).toHaveBeenCalledTimes(1)
-    expect(sendCommand).toHaveBeenCalledWith({ type: 'requestSessionSettings' })
+    expect(sendCommand).toHaveBeenCalledWith({
+      type: 'requestSessionSettings',
+      payload: { conversation_id: 'conv-1' }
+    })
   })
 
-  // #491 removed the conversation-id argument entirely. The old route asked for a screen snapshot,
-  // which the daemon validated against a conversation and rejected as conversation_not_found for an
-  // unknown one — so a sheet opened before the active conversation resolved fired nothing at all.
-  // The reply here is daemon-wide, so there is nothing to resolve and nothing to reject.
-  it('carries no conversation id or payload of any kind', () => {
+  // The daemon has answered only the conversation a request names since 2026-08-20
+  // (pyrycode#1586/#1610), and answers an unnamed one with a zero-valued reply rather than an error
+  // frame. #945 gave the frame the field; this asserts the renderer fills it and carries nothing
+  // else — the key sets, not just the shape, so an extra field cannot slip onto the wire unnoticed.
+  it('carries the conversation id and nothing else (#946)', () => {
     const sendCommand = vi.fn()
-    requestRunConfigSnapshot(sendCommand)
+    requestRunConfigSnapshot(sendCommand, 'conv-1')
     const command = sendCommand.mock.calls[0][0]
-    expect(Object.keys(command)).toEqual(['type'])
+    expect(Object.keys(command)).toEqual(['type', 'payload'])
+    expect(Object.keys(command.payload)).toEqual(['conversation_id'])
+  })
+
+  // AC2, and the ONLY proof of this branch anywhere: the real-daemon spec seeds and opens a promoted
+  // conversation, so an active one always exists there, and no renderer spec in this repo can run an
+  // effect to drive the two mount sites. A request that names nothing draws the zero reply, and
+  // `setSnapshot` replaces the WHOLE snapshot — so sending one would wipe held values that the reply
+  // could never have improved. Not sending is the fix; there is nothing to degrade to.
+  it('sends nothing when no conversation is active (#946)', () => {
+    const sendCommand = vi.fn()
+    requestRunConfigSnapshot(sendCommand, null)
+    expect(sendCommand).not.toHaveBeenCalled()
+  })
+
+  // The same unresolvable request spelled differently: '' serialises to the identical frame and draws
+  // the identical zero reply, so it carries the identical wipe hazard. One falsy check covers both
+  // because it is one failure, not two. The IPC-boundary guard (isRequestSessionSettingsPayload)
+  // deliberately still ACCEPTS '' — it checks type, not emptiness; refusing to send an unaddressable
+  // id is this helper's job, not the boundary's.
+  it('sends nothing for an empty conversation id (#946)', () => {
+    const sendCommand = vi.fn()
+    requestRunConfigSnapshot(sendCommand, '')
+    expect(sendCommand).not.toHaveBeenCalled()
   })
 })
 

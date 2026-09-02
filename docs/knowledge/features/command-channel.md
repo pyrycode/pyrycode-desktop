@@ -85,24 +85,36 @@ rejected question answer, so there is nothing to correlate, unlike `answerModal`
 drive.
 
 The union's `requestSessionSettings` member (#491, bare from the start and not previously called out
-in this growth log) gained an **optional** payload in
-[#945](https://github.com/pyrycode/pyrycode-desktop/issues/945):
-`{ type: 'requestSessionSettings'; payload?: RequestSessionSettingsPayload }`, reusing the new wire
-`RequestSessionSettingsPayload{conversation_id}` type. It is the union's **only** member whose
-`payload` is optional rather than required-when-present — every other payload-bearing member above
-always carries one. Its guard, added to the same `isRendererCommand` switch, accepts three shapes: an
-absent `payload` (the shape every caller still sends), an explicitly `undefined` `payload` (structured
-clone preserves an explicitly-`undefined` property crossing `ipcRenderer.send`, so testing the
-**value**, not just `'payload' in value`, is load-bearing — an `in`-only check would reject a caller
-that spreads an optional id and silently drop the command at the boundary), or a present
-`{ conversation_id: string }` — type checked, not emptiness, since `''` is a real value the daemon
-itself polices. The daemon made the frame conversation-keyed on 2026-08-20 (pyrycode#1586/#1610); this
-slice threads the capability through `src/main/`/`src/shared/` only — the sole renderer sender,
-[Run configuration store](run-config-store.md)'s `requestRunConfigSnapshot`, still sends no id, so the
-payload stays optional until [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946) supplies
-one and tightens it to required. See [Run configuration store § Conversation-keyed since
+in this growth log) reuses the wire `RequestSessionSettingsPayload{conversation_id}` type and carries
+a **required** payload: `{ type: 'requestSessionSettings'; payload: RequestSessionSettingsPayload }`.
+The daemon made the frame conversation-keyed on 2026-08-20 (pyrycode#1586/#1610), answering an unnamed
+request with a silent zero-valued reply rather than an error; [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945)
+threaded the capability through `src/main/`/`src/shared/` with the payload **optional**, because the
+sole renderer sender still sent no id; [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946)
+supplied a real one — [Run configuration store](run-config-store.md)'s `requestRunConfigSnapshot` now
+resolves the active conversation at both call sites — and tightened the payload back to required. Its
+guard collapsed to the neighbours' idiom, `'payload' in value && isRequestSessionSettingsPayload(value.payload)`:
+an absent or explicitly-`undefined` `payload` is now refused **by value**, inside
+`isRequestSessionSettingsPayload`, rather than accepted as a second shape — structured clone still
+preserves an explicitly-`undefined` property crossing `ipcRenderer.send`, so the `'payload' in value`
+half alone would let one through; `isRequestSessionSettingsPayload` is what closes it. The payload
+guard itself is unchanged: type checked, not emptiness, since `''` is a real value the daemon itself
+polices. See [Run configuration store § Conversation-keyed since
 2026-08-20](run-config-store.md#conversation-keyed-since-2026-08-20-945946) for the daemon-side
-degradation contract.
+degradation contract this closes.
+
+**Tightening a payload from optional back to required needs a compile-time proof, not just a runtime
+guard test (#946).** `isRendererCommand` rejecting a bare literal at runtime proves the guard; it does
+not prove the *type* forbids one. `src/shared/**/*` is inside `tsconfig.node.json`'s include, so
+`commands.test.ts` carries a `@ts-expect-error` assertion beside the runtime one — the
+`src/shared/wire/types.test.ts` idiom — and `TS2578: Unused '@ts-expect-error' directive` makes the
+proof self-invalidating if the field is ever relaxed back to optional. One trap in writing that
+assertion: **a comment line whose first token is `@ts-expect-error` is a directive wherever it sits in
+the block**, so a prose sentence *about* the directive placed on the line above it (e.g. explaining
+why the assertion exists) is itself parsed as a second directive — and because it precedes the real
+one, it is the one that suppresses nothing, surfacing as `TS2578` pointing at the prose line while the
+working directive one line below reads clean. Never open an explanatory comment line with the literal
+string `@ts-expect-error`.
 
 ## What it does
 

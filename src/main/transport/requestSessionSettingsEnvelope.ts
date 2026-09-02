@@ -30,7 +30,15 @@ export interface RequestSessionSettingsInput {
   ts: string
   /**
    * The conversation to ask about. Absent → `conversation_id: ''` on the wire, which names nothing
-   * and draws the zero reply. Optional only until #946 gives the renderer an id to supply.
+   * and draws the zero reply.
+   *
+   * Still optional after #946, and no longer because anything sends nothing: the renderer command now
+   * REQUIRES a payload and `requestRunConfigSnapshot` declines to send at all when it has no
+   * addressable id, so in production this is always supplied. It stays optional because the whole
+   * main-side chain — the onCommand switch's `command.payload?.conversation_id` through
+   * `DaemonConnection.requestSessionSettings(conversationId?)` — is typed that way, and tightening it
+   * would buy no behaviour change. The `?? ''` normalisation below is what keeps an omitted id honest
+   * on the wire for any caller that still omits one.
    */
   conversationId?: string
 }

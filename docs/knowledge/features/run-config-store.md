@@ -66,29 +66,28 @@ request this store's own callers send names none, so the sheet quietly lost the 
 confirm the running model for about two weeks of real operator use before
 [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941) traced the regression to this frame.
 
-The fix is split in two, deliberately, because it crosses a wire-capability question and a
+The fix landed in two slices, deliberately, because it crossed a wire-capability question and a
 where-does-the-id-come-from question:
 
-- **[#945](https://github.com/pyrycode/pyrycode-desktop/issues/945)** threads the capability through
-  `src/main/` and `src/shared/` only. The wire gains `RequestSessionSettingsPayload{conversation_id:
+- **[#945](https://github.com/pyrycode/pyrycode-desktop/issues/945)** threaded the capability through
+  `src/main/` and `src/shared/` only. The wire gained `RequestSessionSettingsPayload{conversation_id:
   string}` (mirroring the daemon struct field-for-field, no `omitempty` — the key is always on the
   wire, `''` meaning "names nothing" rather than an absence); the `requestSessionSettings`
-  `RendererCommand` member gains an optional payload carrying it; and `buildRequestSessionSettings`
-  normalises an absent id to `conversation_id: ''`. **This store's own callers are untouched.**
-  `requestRunConfigSnapshot` (`runConfigSnapshot.ts`) and the refresh-triggered request in
-  `runConfigLive.ts` still send no id — it now serialises as `conversation_id: ''` instead of an
-  omitted payload, and draws exactly the same zero-valued reply as before. Production behaviour does
-  not change.
-- **[#946](https://github.com/pyrycode/pyrycode-desktop/issues/946)** is the renderer slice: sourcing a
-  real id from this store's own conversation state and supplying it through
-  `requestRunConfigSnapshot`. That is the change that makes the sheet show real values again, and the
-  one `e2e/real-daemon-session-settings.spec.ts` is red until it lands.
+  `RendererCommand` member gained an optional payload carrying it; and `buildRequestSessionSettings`
+  normalised an absent id to `conversation_id: ''`. This store's own callers were untouched in that
+  slice — `requestRunConfigSnapshot` (`runConfigSnapshot.ts`) and the refresh-triggered request in
+  `runConfigLive.ts` still sent no id, serialising as `conversation_id: ''` instead of an omitted
+  payload, drawing exactly the same zero-valued reply as before. Production behaviour did not change.
+- **[#946](https://github.com/pyrycode/pyrycode-desktop/issues/946)** is the renderer slice: both call
+  sites now resolve `activeConversationStore.getState().activeConversation?.id ?? null` at call time
+  and pass it through `requestRunConfigSnapshot`, which declines to send at all when nothing is
+  addressable. This is the change that makes the sheet show real values again, and
+  `e2e/real-daemon-session-settings.spec.ts` is green against a real `pyry` daemon as of this slice —
+  see § How it works below for the current shape of both sites.
 
-Every "bare"/"daemon-wide" statement elsewhere in this document below this point describes the request
-as it stood before 2026-08-20 — read it as history, not current wire shape. Where a statement also
-still describes what this store's own callers send today (an unnamed request, now spelled
-`conversation_id: ''` rather than an omitted payload), a parenthetical says so; the outcome — a
-zero-valued reply — is unchanged either way until #946 lands.
+Every "bare"/"daemon-wide" statement elsewhere in this document below this point that is not corrected
+inline describes the request as it stood before 2026-08-20 — read it as history, not current wire
+shape.
 
 ## What it does
 
@@ -150,11 +149,14 @@ toSnapshotSessionId(event: DaemonEvent): string | null
 // session to address") held verbatim, never coerced to null — the `!== null` write-gate (below)
 // preserves it, matching sessionIdBridge's discipline.
 
-requestRunConfigSnapshot(sendCommand): void
-// Fires one requestSessionSettings command with no id (#491) — still true after #945, which only
-// gave the *wire frame* the capability to carry one. Serialises to conversation_id: '' since #945
-// (was an omitted payload before), drawing the same zero-valued reply either way until #946 supplies
-// a real id. Inline typed literal, no shared constructor.
+requestRunConfigSnapshot(sendCommand, conversationId): void
+// conversationId is REQUIRED (string | null), not optional (#946) — a caller that forgets to resolve
+// one must be a compile error, not a silent unnamed request. Sends nothing at all for an
+// unaddressable id (null or ''), under one falsy check: either serialises to the identical zero-reply
+// frame, and setSnapshot's whole-object replace means a request that could only draw zeroes would
+// wipe a held real snapshot instead of leaving it alone. An addressable id sends exactly
+// { type: 'requestSessionSettings', payload: { conversation_id } }. Inline typed literal, no shared
+// constructor.
 
 subscribeRunConfig(onDaemonEvent, setSnapshot, setSessionId): () => void
 // One listener feeds BOTH setters from the SAME event: onDaemonEvent(event => {
@@ -189,13 +191,20 @@ effect, never during render, so it server-renders to empty markup without a brid
 Since #810 it owns **only** the request half — the subscription moved app-level (see § Live outside
 the sheet below):
 
-- **Request** — `requestRunConfigSnapshot(window.pyry.sendCommand)`, guarded by a `useRef(false)`
-  one-shot flag so the effect (which has no symmetric "un-request" cleanup) fires the request
-  exactly once even under the StrictMode dev double-invoke. A genuine close→reopen is a *new*
-  component instance with a fresh ref, so it re-requests — exactly one request per open. #491 dropped
-  the old active-conversation dependency, so a sheet opened before any conversation resolved no
-  longer fires nothing at all. There is no "subscribe before request" ordering left to preserve here:
-  the app-level listener (#810) has been live since `App` mounted, well before any sheet opens.
+- **Request** — `requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)`, guarded by a
+  `useRef(false)` one-shot flag so the effect (which has no symmetric "un-request" cleanup) fires the
+  request exactly once even under the StrictMode dev double-invoke. A genuine close→reopen is a *new*
+  component instance with a fresh ref, so it re-requests — exactly one request per open.
+  `conversationId` is read **non-reactively**, `activeConversationStore.getState().activeConversation?.id
+  ?? null` at call time (#946) — the same `getState()`-inside-a-callback idiom `runConfigLive.ts` already
+  used for its sibling stores — so this leaf still subscribes to nothing and its render body stays free
+  of store reads. It is correct because the effect runs on the sheet's own mount, which happens after
+  `activateConversation` has already recorded the conversation the sheet is about to describe. A sheet
+  opened before any conversation has ever resolved now sends nothing (`requestRunConfigSnapshot`'s
+  no-addressable-id branch) rather than the pre-#946 unnamed request that drew a zero reply — strictly
+  fewer wasted frames, no behaviour regression. There is no "subscribe before request" ordering left to
+  preserve here: the app-level listener (#810) has been live since `App` mounted, well before any sheet
+  opens.
 
 ### Live outside the sheet (#810)
 
@@ -228,14 +237,22 @@ helpers plus a headless leaf) supplies both:
   lifetime conversation count). It is a `Set`, never a plain object keyed by the daemon-supplied id —
   `obj[id] = …` would hand a hostile `__proto__` to a prototype setter.
 - **`subscribeRunConfigRefresh(onDaemonEvent, refresh)`** — wraps one trigger instance around
-  `onDaemonEvent`, calling `refresh` (`() => requestRunConfigSnapshot(sendCommand)`) on each `true`
-  edge.
+  `onDaemonEvent`, calling `refresh` (a nullary `() => void`) on each `true` edge. `RunConfigLiveData`'s
+  own arrow is `() => requestRunConfigSnapshot(sendCommand, activeConversationStore.getState().activeConversation?.id
+  ?? null)` (#946) — the same non-reactive `getState()` read `RunConfigData` uses, resolved fresh on
+  every edge.
 
-The refresh request names no conversation either, matching the read (unchanged by #945 — see §
-Conversation-keyed since 2026-08-20), so a turn ending in *any* conversation is a valid edge —
-filtering to the active conversation would leave the figures stale exactly when another conversation
-was the one spending the window. This reasoning is about *when* to refresh, not what the reply
-contains, so it holds regardless of the wire capability change.
+**The edge set and the request's addressee are two separate questions, and #946 answers only the
+second.** The edge set stays daemon-wide and untouched: a turn ending in *any* conversation is a valid
+edge, because filtering to the active conversation would leave the figures stale exactly when another
+conversation was the one spending the window — `createRunConfigRefreshTrigger` is not touched by
+\#946, and its `refresh` seam stays nullary so `event.conversationId` is structurally incapable of
+reaching the request. What changed is which conversation the *resulting* request names: since the
+reply describes exactly one conversation's session and carries no correlation id, and the sheet shows
+the active conversation, the request names the **active** one — whichever conversation's turn edge
+triggered it, never the edge's own id. An edge firing with no conversation active (a `connected` edge
+before the first sheet open, typically) now sends nothing, matching `RunConfigData`'s branch, rather
+than the pre-#946 unnamed request.
 
 The trigger reads the edge off the **event stream**, not off `useSessionStore` + a `useRef` the way
 `conversationListBridge`'s connected-edge guard does. This repo's renderer specs are static server
@@ -278,11 +295,9 @@ daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,us
   `import { useRunConfigStore, selectSnapshot } from '@renderer/store/runConfigStore'`.
 - **Mount point:** `src/renderer/src/screens/conversation/ConversationScreen.tsx`, inside
   `<StatusSheet>` — `RunConfigData` (write) first, `RunConfigSections` (read, #188) second.
-- **No conversation id, still.** Since #491 the fetch names nothing; since
-  [#945](https://github.com/pyrycode/pyrycode-desktop/issues/945) that is
-  `conversation_id: ''` on the wire rather than an omitted payload, and draws the same zero-valued
-  reply either way — see § Conversation-keyed since 2026-08-20.
-  [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946) is what supplies a real one.
+- **Names the active conversation, since #946.** Both request sites resolve
+  `activeConversationStore.getState().activeConversation?.id ?? null` at call time and send nothing
+  when that is unaddressable — see § Conversation-keyed since 2026-08-20 above.
   `MILESTONE_CONVERSATION_ID` (`composerSend.ts`) is not read by this path.
 
 ## Running model section (#560)
@@ -315,12 +330,14 @@ contract, the three-state table, and the forgery-resistance property.
   because the sheet closed first — it lands in the store exactly as any edge-driven reply would.
 - **No correlation.** Any `session_settings` reply that arrives is decoded and emitted
   unconditionally — safe because the *reply* schema (`SessionSettingsPayload`) carries no
-  `conversation_id`, or any other correlation id, to disambiguate at all. #945 gave the *request* a
-  `conversation_id`; the reply shape is untouched, so this holds exactly as before. It also means a
-  future per-conversation request (#946) will still need this same no-correlation acceptance, or its
-  own correlation scheme, since nothing on the reply says which request it answers. A duplicate reply
-  (sheet-open landing alongside an edge-driven request) is simply idempotent, since `setSnapshot`
-  always replaces the whole snapshot.
+  `conversation_id`, or any other correlation id, to disambiguate at all. #945/#946 gave the *request*
+  a `conversation_id`; the reply shape is untouched, so this still holds exactly as before — the
+  per-conversation request #946 shipped relies on this same no-correlation acceptance, since nothing
+  on the reply says which request it answers. This is why the request always names the *active*
+  conversation rather than, say, the edge's own conversation: whichever id goes out is the one whose
+  values land, unconditionally, whenever the reply arrives. A duplicate reply (sheet-open landing
+  alongside an edge-driven request) is simply idempotent, since `setSnapshot` always replaces the
+  whole snapshot.
 - **A daemon that flaps `turn_state` costs one request per genuine transition, not per re-assertion**
   — the per-conversation `Set` in `createRunConfigRefreshTrigger` absorbs re-asserted phases (#810).
   If a real daemon is ever observed flapping transitions rapidly enough to matter, a debounce belongs
@@ -393,11 +410,12 @@ contract, the three-state table, and the forgery-resistance property.
 - **[#945](https://github.com/pyrycode/pyrycode-desktop/issues/945)** — root-cause slice 1 of
   [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941): threaded a `conversation_id` onto
   the wire `request_session_settings` frame (main/shared only) after the daemon made it conversation-
-  keyed on 2026-08-20, silently degrading every unnamed request to a zero-valued reply since. This
-  store's own callers are unchanged and still send no id. See § Conversation-keyed since 2026-08-20
-  above. [#946](https://github.com/pyrycode/pyrycode-desktop/issues/946) is the renderer slice that
-  actually supplies one.
+  keyed on 2026-08-20, silently degrading every unnamed request to a zero-valued reply since.
+- **[#946](https://github.com/pyrycode/pyrycode-desktop/issues/946)** — root-cause slice 2, and the
+  slice that closed [#941](https://github.com/pyrycode/pyrycode-desktop/issues/941): both this store's
+  request sites now resolve the active conversation and supply it, and the payload #945 left optional
+  is required since. See § Conversation-keyed since 2026-08-20 above.
 - [Command channel](command-channel.md) — the `requestSessionSettings` `RendererCommand` member's
-  optional payload and `isRequestSessionSettingsPayload` guard, gained in #945.
+  payload (optional from #945, required since #946) and its `isRequestSessionSettingsPayload` guard.
 - [Daemon connection](daemon-connection.md) — hosts `requestSessionSettings(conversationId?)`, the
   connection method this store's data path calls into.

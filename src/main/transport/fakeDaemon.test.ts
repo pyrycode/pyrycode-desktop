@@ -619,14 +619,27 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     // Chunk 0 completes the set — the EARLIER envelope id, deliberately not the last. A consumer keying
     // on a predicted FINAL envelope id would find nothing here, which is the whole point: `in_reply_to`
     // names whichever chunk closed the set, and chunks may be reassembled in any order.
+    //
+    // The wrapper only COUNTS inbounds: it delegates verbatim, adds no frame and changes no timing, and
+    // exists so the "chunk 1 drew no reply" assertion below can wait on chunk 1 actually being handled
+    // rather than on a proxy for it.
+    let notifyWaiter = (): void => {}
+    let chunksHandled = 0
+    const answerCompletingChunk = attachmentStoredReplyFrames(0)
     const { forwarderUrl, whenReady, daemon } = await standUp({
-      buildReplyFrames: attachmentStoredReplyFrames(0)
+      buildReplyFrames: (inbound) => {
+        const frames = answerCompletingChunk(inbound)
+        chunksHandled += 1
+        notifyWaiter()
+        return frames
+      }
     })
     const { initiator, events, waiter } = await driveClient({
       forwarderUrl,
       remoteStaticPublicKey: daemon.staticPublicKey,
       hello: buildTestHello()
     })
+    notifyWaiter = waiter.notify
     await whenReady()
     await waiter.wait(() => events.some((e) => e.type === 'handshake-complete'))
 
@@ -650,10 +663,15 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     })
 
     // Chunk 1 drew NO reply at all — every non-completing chunk of a healthy upload is answered by
-    // silence, so exactly one frame comes back for the two sent. Settled after the second inbound, so
-    // a second reply would already have arrived by now.
-    expect(await daemon.whenSettled()).toEqual({ ok: true })
+    // silence, so exactly one frame comes back for the two sent. Silence only proves that once chunk 1
+    // has actually been HANDLED, which is why the count above is what this waits on. whenSettled()
+    // cannot stand in for it: settle() is FIRST-WINS and handleTransport calls it after every inbound's
+    // reply loop, so it resolves on chunk 0 — the completing one — and says nothing about chunk 1. Per
+    // makeWaiter's resolve-on-timeout contract the assertion, not the wait, is the oracle.
+    await waiter.wait(() => chunksHandled === 2)
+    expect(chunksHandled, 'both chunks must reach the fake before silence proves anything').toBe(2)
     expect(events.filter((e) => e.type === 'message')).toHaveLength(1)
+    expect(await daemon.whenSettled()).toEqual({ ok: true })
     expect(events.some((e) => e.type === 'error')).toBe(false)
   })
 

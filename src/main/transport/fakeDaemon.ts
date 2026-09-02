@@ -96,6 +96,12 @@ const HELLO_ACK_TS = '2026-01-01T00:00:00Z'
 const REKEY_REQUEST_ID = 2
 const REKEY_REQUEST_TS = '2026-01-01T00:00:00Z'
 
+// Fixed, deterministic framing for the `attachment_stored` reply attachmentStoredReplyFrames builds
+// (mirrors HELLO_ACK_ID/TS). Only `in_reply_to` and the payload carry meaning there; `id`/`ts` are
+// required by the codec but inspected by nothing, so fixed values keep the fake wall-clock-free.
+const ATTACHMENT_STORED_ID = 7001
+const ATTACHMENT_STORED_TS = '2026-01-01T00:00:00Z'
+
 // The default post-rekey "resume" frame: a fixed `message` envelope the daemon seals under the NEW
 // send cipher immediately after its swap. There is no `rekey_ack`, so this frame — decrypting under
 // the client's fresh recv cipher — is the deterministic client-side signal that the client finished
@@ -163,10 +169,6 @@ export function attachmentStoredReplyFrames(
     ]
   }
 }
-
-/** Deterministic id/ts for the fake's `attachment_stored` reply — the file's no-wall-clock convention. */
-const ATTACHMENT_STORED_ID = 7001
-const ATTACHMENT_STORED_TS = '2026-01-01T00:00:00Z'
 
 /** Config for one fake daemon. Test-only; nothing is persisted, no real credential is read. */
 export interface FakeDaemonOptions {

@@ -45,6 +45,7 @@ import type {
   QueueStatePayload,
   DequeueMessagePayload,
   AttachmentChunkPayload,
+  AttachmentStoredPayload,
   WireQuestionOption,
   WireQuestion,
   QuestionShownPayload,
@@ -1528,5 +1529,65 @@ describe('slash-command-list wire vocabulary (#935)', () => {
     expect(missingTruncated.name).toBe('usage')
     expect(missingDropped.conversation_id).toBe('c1')
     expect(missingCommands.conversation_id).toBe('c1')
+  })
+})
+
+describe('attachment-stored wire vocabulary (#964)', () => {
+  // The id below is lifted VERBATIM from the daemon's committed fixture
+  // (internal/protocol/testdata/attachment_stored.json, whose whole envelope reads
+  // `{"id":815,"type":"attachment_stored","ts":…,"payload":{"attachment_id":"3f2a1c40-…"},"in_reply_to":814}`)
+  // and from the round-trip literal in TestAttachmentStoredPayload_WireKeys, so a contract change shows
+  // up here as a fixture diff rather than as a disagreement between two hand-written guesses.
+
+  it('admits the attachment_stored inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType, and it is the
+    // only thing in the tree that catches a dropped one — `Envelope.type` is `EnvelopeType | string`,
+    // so both the decoder's `case 'attachment_stored':` and the fake daemon's
+    // `encodeEnvelope({ type: 'attachment_stored' })` compile green whether or not the member was ever
+    // added, and a decode/re-encode round-trip passes silently on an unknown string.
+    const stored: EnvelopeType = 'attachment_stored'
+    expect(stored).toBe('attachment_stored')
+  })
+
+  it('shapes AttachmentStoredPayload as { attachment_id } — one key, and every absence a decision', () => {
+    const payload: AttachmentStoredPayload = {
+      attachment_id: '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67'
+    }
+    expect(payload).toEqual({ attachment_id: '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67' })
+    expect(Object.keys(payload)).toEqual(['attachment_id'])
+
+    // The absences are the contract, not an oversight, and the daemon pins the key set two-sidedly
+    // (TestAttachmentStoredPayload_WireKeys) so drift surfaces upstream as a failing test rather than as
+    // a review note. NO size / sha256 / total_chunks: the client sent all three and they were checked
+    // against the assembled bytes before this frame could be emitted, so echoing them confirms nothing.
+    expect(payload).not.toHaveProperty('size')
+    expect(payload).not.toHaveProperty('sha256')
+    expect(payload).not.toHaveProperty('total_chunks')
+    // NO filename and no host path or directory component — § Error codes already forbids
+    // `attachment.storage_failed` from disclosing the daemon's layout, and a SUCCESS frame leaking what
+    // the FAILURE frame is guarded against would undo that mitigation from the other side.
+    expect(payload).not.toHaveProperty('filename')
+    // NO conversation_id, for AttachmentChunkPayload's reason: the upload landed in the conversation the
+    // authenticated session is already on, so a client cannot steer bytes by naming another one.
+    expect(payload).not.toHaveProperty('conversation_id')
+  })
+
+  it('carries the transfer id in the PAYLOAD, with correlation left to the envelope', () => {
+    // The one key is the whole correlation story this side can act on. `in_reply_to` rides the ENVELOPE
+    // (`Envelope.in_reply_to`, 814 in the fixture above) and names the chunk WHOSE ARRIVAL COMPLETED THE
+    // TRANSFER — not the highest index, and not predictable, since chunks may be reassembled in any
+    // order. So the payload deliberately does not repeat it, and a consumer matching on a guessed
+    // envelope id never resolves.
+    // @ts-expect-error `attachment_id` is required — no omitempty daemon-side, so an absent key is a
+    // real defect rather than a valid zero
+    const missingId: AttachmentStoredPayload = {}
+    expect(missingId).toEqual({})
+
+    // A plain `string`, deliberately NOT a validated or branded id type. Upstream publishes a canonical
+    // lowercase-UUIDv4 shape (conversations.ValidID's), but that rule binds the side that MINTS ids —
+    // this client's own outbound leg — not the decode of a value this client originated. A second copy
+    // of the shape rule here would fail-close valid traffic the moment the two disagreed.
+    const notCanonical: AttachmentStoredPayload['attachment_id'] = 'ATT-1'
+    expect(notCanonical).toBe('ATT-1')
   })
 })

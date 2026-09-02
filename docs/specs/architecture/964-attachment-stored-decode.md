@@ -160,3 +160,21 @@ No design change; all three resolved as planned, recorded here so the resolution
 3. **No `daemonConnection` change** — confirmed by `npm run build`. Both typecheck projects pass with the new union member unconsumed, so the inbound switch has no `assertNever` and forces nothing. The file is untouched.
 
 One test-authoring correction, not a design departure: the prototype-safety test initially asserted `Object.getPrototypeOf(Object.prototype)`, a tautology that says nothing about the decode. It now asserts read-back under the exact key — `hasOwnProperty` plus the string's value — which is what actually proves a `__proto__` id survives as an ordinary own property.
+
+### 2026-09-02 — Testing strategy corrected: the wire vocabulary needs its own block (verifier MUST FIX)
+
+**The plan's Testing strategy named only `inboundMessage.test.ts` and `fakeDaemon.test.ts`, and that was the defect** — this slice also ships two new symbols in `src/shared/wire/types.ts`, and it left `src/shared/wire/types.test.ts` untouched. The omission originated here rather than in the implementation, so it is corrected here.
+
+`Envelope.type` is `EnvelopeType | string`, so nothing else in the tree catches a dropped union member: `case 'attachment_stored':` in `parseInboundMessage` and `encodeEnvelope({ type: 'attachment_stored' })` in `attachmentStoredReplyFrames` both take the literal as a plain `string` and compile green with or without it, and a decode/re-encode round-trip passes silently on an unknown type. All three precedents the plan names as nearest — `attachment_chunk`, `question_dismissed`, `slash_command_list` — shipped this block, and two of the package overviews write the reason down.
+
+**Added to Testing strategy — `src/shared/wire/types.test.ts`,** a sibling block in ticket order at the end of the file, with values lifted verbatim from the daemon's committed `internal/protocol/testdata/attachment_stored.json`:
+
+- Compile-time membership: `const stored: EnvelopeType = 'attachment_stored'`, which assigns only if the member exists.
+- Exact shape: `toEqual` plus `Object.keys` on a typed `AttachmentStoredPayload` literal, and `not.toHaveProperty` on each of the five deliberate absences (`size`, `sha256`, `total_chunks`, `filename`, `conversation_id`) — the key set the daemon pins two-sidedly in `TestAttachmentStoredPayload_WireKeys`.
+- `attachment_id` is required (`@ts-expect-error` on an empty literal — no `omitempty` daemon-side, so an absent key is a defect rather than a valid zero), and is a plain `string` deliberately not narrowed to the canonical lowercase-UUIDv4 shape, since that rule binds the minting side.
+
+### 2026-09-02 — AC4's silence assertion now observes chunk 1, rather than inferring it (verifier SHOULD FIX)
+
+No design change; the `completingIndex` fake and its `toHaveLength(1)` assertion stand. What was wrong was the *justification*: the test claimed `whenSettled()` synchronised chunk 1. It does not. `settle` in `startFakeDaemon` is first-wins and `handleTransport` calls it after **every** inbound's reply loop, so it resolves on chunk 0 — the completing one — and says nothing about chunk 1. The assertion was in practice safe only on a timing argument about FIFO delivery, which is not what the comment claimed.
+
+The test now wraps `attachmentStoredReplyFrames(0)` in a counting delegate (verbatim delegation — no extra frame, no timing change) and waits on `chunksHandled === 2` through the file's existing `makeWaiter`, whose resolve-on-timeout contract leaves the `expect` as the oracle. Silence from chunk 1 is now asserted only after chunk 1 has demonstrably been handled. Revision 2 above is unaffected: its claim about `[]` neither stalling `whenSettled` nor sending a frame was, and remains, correct.

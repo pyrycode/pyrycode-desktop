@@ -657,6 +657,93 @@ describe('Timeline — the streamed assistant text', () => {
     expect(expanded).toContain('tool-row__result')
   })
 
+  // #856 — the result count, the trailing group's FIRST child. The unit tier owns which element exists
+  // in which state and what it contains; where it sits on screen (a column of trailing edges, an
+  // unchanged row height) is geometry and lives in e2e/tool-row-toggle.spec.ts.
+  //
+  // The four cases above are this ticket's regression baseline UNEDITED: every one of their fixtures
+  // omits `resultDetail`, so the chip RESOLVED_CHIP_HEAD pins IS the absent-count chip, byte for byte.
+  // That is why the constant did not move — leaving it fixed is a stronger assertion than rewriting it.
+
+  // The daemon's own example (#773). A précis with a unit word and interior spaces, never a bare number.
+  const RESULT_DETAIL = '110 of 1676 lines'
+
+  // The with-count chip's trailing group, as one contiguous fragment: the count element must sit
+  // IMMEDIATELY after the group opens and IMMEDIATELY before the chevron, so a stray sibling between
+  // them, or the two swapped, fails here rather than being caught only by a rendered geometry.
+  const COUNTED_RIGHT_GROUP =
+    '<span class="tool-row__right">' +
+    `<span class="tool-row__count">${RESULT_DETAIL}</span>` +
+    '<svg class="tool-row__chevron"'
+
+  it('draws the count before the chevron in the trailing group (#856 AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '184 lines', resultDetail: RESULT_DETAIL })}
+      />
+    )
+    expect(markup).toContain(COUNTED_RIGHT_GROUP)
+  })
+
+  it('draws no count element at all when the detail is absent (#856 AC2)', () => {
+    // Not an empty one: `.tool-row__right`'s gap falls only BETWEEN children, so "no gap where one
+    // would be" follows from not rendering the element — no modifier class, no pending variant.
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} />
+    )
+    expect(markup).not.toContain('tool-row__count')
+    expect(markup).toContain('<span class="tool-row__right"><svg class="tool-row__chevron"')
+  })
+
+  it('renders an empty detail byte-identically to an absent one (#856 AC2)', () => {
+    // The strongest available form of "both draw the same thing, which is nothing": whole-markup
+    // equality, not two not.toContain assertions that would also pass on two different renders.
+    //
+    // Upstream keeps absent and '' distinct on purpose (#773) — the decoder, the IPC event, the bridge
+    // and the reducer each carry them separately. THIS ROW is where they finally mean the same thing,
+    // and the collapse happens in ToolRow's predicate and nowhere else.
+    const absent = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} />
+    )
+    const empty = renderToStaticMarkup(
+      <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines', resultDetail: '' })} />
+    )
+    expect(empty).toBe(absent)
+  })
+
+  it('draws the count verbatim as escaped children, untrimmed and never an attribute (#856 AC3)', () => {
+    // Leading and trailing spaces SURVIVE: the count is drawn verbatim, so nothing trims, parses or
+    // reformats it. No apostrophes in the fixture (renderToStaticMarkup escapes ' → &#x27;).
+    const hostile = '  <b>110</b> of 1676 lines  '
+    const markup = renderToStaticMarkup(
+      <ToolRow
+        item={toolItem({ isError: false, resultSummary: '184 lines', resultDetail: hostile })}
+      />
+    )
+    expect(markup).toContain('<span class="tool-row__count">  &lt;b&gt;110&lt;/b&gt; of 1676 lines  </span>')
+    expect(markup).not.toContain('<b>110</b>')
+    // "110 of 1676 lines" invites a tooltip carrying the whole count, and a cap that ellipsizes makes
+    // `title` the natural next edit. Untrusted daemon text in an attribute — declined a seventh time.
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('aria-label')
+    // NO BARE `not.toContain('data-')` HERE, and the omission is deliberate rather than a gap: the chip
+    // legitimately carries data-thread-role="tool", so that assertion would fail on correct markup. What
+    // this case actually guards — the count reaching no attribute at all — is carried by the exact-bytes
+    // fragment above: it pins the span's whole attribute list to `class`, so a data-* sink on the count
+    // fails it. The `title`/`aria-label` pair stays because those two are the tempting sinks, not because
+    // they are the only ones checked.
+  })
+
+  it('draws no count on a pending row — there is no result to read one from (#856)', () => {
+    // Not a second predicate: `.tool-row__right` is gated on the same `result` binding, so a pending
+    // row has no trailing group at all and the count question does not arise there.
+    const markup = renderToStaticMarkup(
+      <ToolRow item={toolItem(null)} />
+    )
+    expect(markup).not.toContain('tool-row__count')
+    expect(markup).not.toContain('tool-row__right')
+  })
+
   it('renders inputSummary unchanged when input is absent (AC4)', () => {
     const markup = renderToStaticMarkup(
       <ToolRow item={toolItem({ isError: false, resultSummary: '184 lines' })} />

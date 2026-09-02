@@ -475,8 +475,44 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   self-review PASS (three SHOULD-FIX doc-comment amendments applied: the aliases-reading rule holds
   only on a validated frame, a `name` is meant to travel back inbound as message text, and the log
   clause's sharper reason on this path). **#936 has since landed** the fail-closed decode into
-  [inbound message decode](features/inbound-message-decode.md)'s `slash-command-list` arm (ships
-  dormant, IPC carry #937); #681 remains the one still blocked.
+  [inbound message decode](features/inbound-message-decode.md)'s `slash-command-list` arm; **#937**
+  landed the IPC carry into `DaemonEvent`; **#954** landed the per-conversation store (see below).
+  #681 (Actions-menu alias match) is still blocked; **#939** (below) landed the type-ahead's decision
+  logic as the first reader, and #940 still owes the mount.
+- [Conversation shell — composer options panel](features/conversation-shell-composer-options.md#slash-command-type-ahead--decision-layer-939)
+  — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939), split from #694: the slash
+  type-ahead's opening/filtering/completion decisions as a pure, DOM-free module,
+  `slashCommandTypeAhead.ts`, the `composerOptionsKeyboard.ts` shape. `slashCommandTypeAheadRows(text,
+  commands)` encodes the open state as the returned row array itself — no separate flag, so "open with
+  zero rows" is unrepresentable — via one anchored regex (`/^\/(\S*)$/`) plus a three-bucket rank
+  (`prefix`/`contained`/`unknown`) concatenated rather than sorted, preserving claude's published
+  order within each bucket by construction. Transposes the wire type's cut-`aliases` rule unchanged:
+  a row whose `truncated_fields` names `aliases` is a *maybe*, trailing every genuine match but
+  surviving alone rather than closing the panel. `completeSlashCommand(command)` returns the
+  canonical name (even for an alias match) plus exactly one trailing space iff `argument_hint !== ''`
+  — the two rules agree by construction, since a hinted completion's trailing space is itself a
+  closing fragment. No log call and no throw anywhere (both functions total); rows returned by
+  reference, array identity not a contract. Ships dormant — no store read, no mount; #940 composes it
+  with `ComposerOptionsPanel`/`resolveComposerOptionsKey`. Architect self-review PASS, no findings.
+- [Slash-command-list store](features/slash-command-list-store.md) — the renderer data path catching
+  #937's dormant `slashCommandList` arm (#954): a keyed Zustand store
+  (`createSlashCommandListStore`/`slashCommandListStore`/`useSlashCommandListStore`) plus an
+  independent, reactive-only bridge (`subscribeSlashCommandList`/`SlashCommandListData`, the tenth
+  App-level headless leaf), in the `announcedModelStore`/`announcedModelBridge` posture layered onto
+  `backgroundTaskRosterStore`'s keyed-map shape. Each frame **replaces** one conversation's menu
+  wholesale; `selectSlashCommandListFor` returns `?? null`, never `?? EMPTY_*`, so "no frame has
+  arrived" and "claude published an empty menu" read as distinct states through the store's own read
+  surface rather than only via the internal map. Rows are held **verbatim and by reference** — no
+  per-row mapping exists anywhere on this path, so a row's own `truncated_fields: null` never
+  collapses into `[]` and nothing is hoisted across rows — and `droppedCommands` is carried alongside
+  the list, taken unconditionally and never recomputed from `commands.length`. Deliberately does
+  **not** copy `backgroundTaskRosterBridge`'s `connected` reset branch: a reconnect to the same daemon
+  in the same working directory does not invalidate a published menu, and there is no request half to
+  re-fetch one with. [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the
+  pairing-scoped clear, `clearAllSlashCommandLists`, in `clearPairingScopedState`'s dep set, following
+  the #588 → #593 precedent. Ships dormant; #940 (type-ahead mount) and #681 (Actions-menu grey-out)
+  are its first readers — #939 (above) landed the type-ahead's decisions as a pure function taking the
+  row list as a parameter, so it does not read this store either. Builder self-review PASS.
 - [Question resolution envelope](features/question-resolution-envelope.md) — the **outbound** half of
   the question vertical, mirroring [modal resolution envelope](features/modal-resolution-envelope.md)
   seam for seam (#235 is this one's twin): `EnvelopeType` gains `'question_answer'`/`'question_refused'`

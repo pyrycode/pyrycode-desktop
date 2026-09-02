@@ -168,17 +168,25 @@ call site, and stays out of the transport's `connected` edge for the opposite re
 accurate.
 [#757](../codebase/757.md) added a sixth, [conversation timeline holder](conversation-timeline-holder.md)'s
 `clearAllTimelines` — every retained per-conversation thread, not just the flat store's.
-**[#779](conversation-last-read-store.md) added a seventh and last**,
+**[#779](conversation-last-read-store.md) added a seventh**,
 [`conversationLastReadStore`'s `clearAllLastRead`](conversation-last-read-store.md#how-it-works) — how far
 the operator had read into each conversation, persisted to `localStorage` since #776 and therefore the one
-member of this set that reaches disk. Its position is not interchangeable with the other six: it must run
+member of this set that reaches disk. Its position is not interchangeable with the rest: it must run
 **after** `clearAllTimelines`, because that clear synchronously notifies [#777's open-conversation
 listener](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777), which at that instant still sees the ended
 pairing's conversation as open, finds its timeline slice already gone, and re-mints a persisted `0` mark for
 it — running the marks clear afterwards wipes that re-mint in memory and on disk before this function
-returns. It must also run **last** among all seven, because it is the only one with an external side effect
+returns. It must also run **last** of all, because it is the only one with an external side effect
 (`localStorage.setItem`) and therefore the only one that can throw; placed earlier, a throw would abort
 `clearSessionId` and leave server A's session id live and addressable while the operator is on server B.
+[#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) later added an eighth,
+[`slashCommandListStore`'s `clearAllSlashCommandLists`](slash-command-list-store.md) — every
+conversation's published slash-command menu, nullary and whole-map like `clearAllTimelines`. Despite
+arriving after `clearAllLastRead`, it is sequenced strictly *before* it: `clearAllLastRead`'s "last of
+all" position is an execution constraint tied to its throw risk, not an arrival order, so every store
+added after it — this one included — still has to land ahead of it in the call sequence. Skipping that
+would let a `localStorage` throw from `clearAllLastRead` abort `clearAllSlashCommandLists`, leaving
+server A's workspace-authored verb menu live for #681 to grey entries against.
 The two paths are not symmetric and that's why both need their own wrap rather than one shared
 remount-driven reset: unpair flips the app-level route to `pairing`, unmounting `PairedShell`
 entirely, while pair-another-server transitions `pairServer` → `list` *inside* this shell

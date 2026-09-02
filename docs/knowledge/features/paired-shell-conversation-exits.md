@@ -49,20 +49,24 @@ export function exitActiveConversation(deps: ExitActiveConversationDeps, convers
   `conversationDeleted` unconditionally on decode with no `in_reply_to` correlation state threaded
   (#375's deliberate decision — the bare `id` is self-sufficient). The fail-direction is safe: every
   move the gate triggers is a clear.
-- **Clear, then navigate — four stores, not `clearPairingScopedState`'s seven.** `dispatchTimeline({
+- **Clear, then navigate — four stores, not `clearPairingScopedState`'s eight.** `dispatchTimeline({
   type: 'reset' })` → `clearTimelineFor(conversationId)` ([#757](../codebase/757.md)) →
   `clearActiveConversation()` → `clearSessionId()`, then `navigateToList()` last, so no observer sees the
   Channel List rendered against the deleted discussion's thread state. The pairing has **not** ended here
   — the daemon connection is alive and the operator lands on a working Channel List — so `sessionStore`'s
-  reset and `announcedModelStore`'s clear (both in `clearPairingScopedState`'s seven) are deliberately
+  reset and `announcedModelStore`'s clear (both in `clearPairingScopedState`'s eight) are deliberately
   excluded: resetting the session store would blank a live connection status into a false disconnected
-  state, and the announced model is daemon-scoped, not conversation-scoped. `clearAllTimelines` is
-  excluded the same way — it is the pairing-boundary clear, and this helper drops one conversation's slice
-  rather than every one. [`conversationLastReadStore`'s `clearAllLastRead`](conversation-last-read-store.md)
-  (#779) is excluded for the identical reason: the marks are pairing-scoped, not conversation-scoped, so a
-  conversation being deleted or archived leaves the operator's other chats live and their marks meaningful.
-  `queueStore` is excluded too — the queued backlog is selected by matching the
-  active conversation id, and a `null` active id yields the stable empty backlog via the existing `''`
+  state, and the announced model is daemon-scoped, not conversation-scoped.
+  [`slashCommandListStore`'s `clearAllSlashCommandLists`](slash-command-list-store.md) (#955) is excluded
+  for the same reason again: a published menu is daemon-scoped, not conversation-scoped, and one
+  conversation being deleted says nothing about whether the workspace's verb menu is still valid.
+  `clearAllTimelines` is excluded the same way — it is the pairing-boundary clear, and this helper drops
+  one conversation's slice rather than every one. [`conversationLastReadStore`'s
+  `clearAllLastRead`](conversation-last-read-store.md) (#779) is excluded for the identical reason: the
+  marks are pairing-scoped, not conversation-scoped, so a conversation being deleted or archived leaves
+  the operator's other chats live and their marks meaningful. `queueStore` is excluded too — the queued
+  backlog is selected by matching the active conversation id, and a `null` active id yields the stable
+  empty backlog via the existing `''`
   sentinel, so no stale queued row can render regardless.
 - **Idempotent by construction.** After a successful exit `activeConversation` is `null`, so a second
   delivery of the same id fails the gate — no flag, no guard.

@@ -237,6 +237,13 @@ clears, and the composer returns with its draft intact. The capture narrows to
 diff, or a failure diagnostic — the same rule [Cancel](question-panel-cancel-refusal.md) established,
 unchanged.
 
+This spec proves the click and the outbound frame against a scripted `daemon.pushFrame` — it cannot
+show a real claude ever receiving or reading the answers. [#928](real-claude-liveness-e2e.md) closed
+that gap: `e2e/real-claude-question-answer.spec.ts` drives the same panel against a real `pyry` +
+real `claude`, with no outbound-frame capture available (the daemon is a separate process behind the
+content-blind relay), so its proof is claude's own next reply naming the chosen label before any
+unchosen one — see that doc's sibling entry for the non-vacuity argument.
+
 ## Security review: PASS
 
 Builder self-review. The two SHOULD-FIX findings are both addressed in the design above rather than

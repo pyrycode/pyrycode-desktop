@@ -59,12 +59,42 @@ running, which cannot happen without the allow. Adds a single-consumer `skipPerm
 option (default `true` = current args byte-for-byte) that drops `--dangerously-skip-permissions` for
 this spec alone, mirroring the #439 `seedPromoted` single-consumer precedent.
 
+[#928](../codebase/928.md), the fourth sibling, is `e2e/real-claude-question-answer.spec.ts` — the
+real-stack net over the whole question vertical, whose fake-tier twin is
+`e2e/question-answer-continue.spec.ts` (#922, see
+[conversation-shell-question-panel.md](conversation-shell-question-panel.md)). It clones #432's
+structure — same fixture trio, same DOM-only assertion posture — but is the first sibling on this
+tier whose proof cannot rest on a tool side-effect: the trigger forbids claude from writing code or
+using any other tool, so what must be shown (the answers map reaching claude) is observable only in
+what claude says next. It asserts reply content, deliberately against #432's closing instruction not
+to — that instruction assumed a tool effect to fall back on, which this slice does not have. The
+non-vacuity argument is `expectNamesChoiceFirst`: the spec always clicks the **last** offered
+`.question-panel__option-label` of every question in the batch (stepping the whole batch via the
+panel's own trailing Next/Continue control, never just the first), then asserts the post-answer
+continuation names that label **before** any of the question's unchosen labels, case-insensitively —
+a claude that never read the answers can still restate its own question, but a restatement lists
+labels in offer order, where the chosen one was deliberately put last. Two real-stack failure modes
+this spec exists to catch are invisible to #922's fake tier: the per-device remote-permission opt-in
+(pyrycode#702) defaults to deny and leaves a denied batch silently outstanding, and a rejected answer
+is silent by design (no reply, no error envelope, no `question_dismissed`) — both read from the
+window as indistinguishable from a send that never left, since the panel clears optimistically either
+way. Adds the single-consumer `claudeModel` fixture option (see below) so this spec alone can run
+under `claude-sonnet-5` rather than the tier's default `haiku` — the only model under which a live
+`AskUserQuestion` call has been measured in either tree, transcribed from the daemon-side twin
+`pyrycode#1987`.
+
 ## How it works
 
 ### Gated out of the default run
 
-`playwright.config.ts` adds `testIgnore: /real-claude\.spec\.ts$/`, so `npm run e2e` (what the agent
-pipeline runs) never loads this spec. It runs only via its own command and config:
+`playwright.config.ts` excludes every `real-*.spec.ts` file via `testIgnore`, so `npm run e2e` (what
+the agent pipeline runs) never loads this spec. The pattern is `/(^|\/)real-[^/]*\.spec\.ts$/` —
+anchored to a path boundary and held inside one filename segment (#928; previously the unanchored
+`/real-.*\.spec\.ts$/`, whose `.*` could span `/` and matched every spec in the tree when an
+*ancestor directory* happened to be named `real-…`, as the dispatcher's own `real-claude-gate-<N>`
+worktree is — see § Current real-claude gate state in the [live e2e runbook](live-e2e-runbook.md) for
+the run that found it). `playwright.real-claude.config.ts`'s `testMatch` carries the identical
+pattern and the two must stay byte-for-byte the same. It runs only via its own command and config:
 
 ```bash
 npm run e2e:real-claude   # = npm run build && playwright test --config playwright.real-claude.config.ts
@@ -140,6 +170,10 @@ validated UUID. Field-for-field port of `pyrycode#854`'s `seedBootstrapRegistry`
 -pyry-relay=<relay.url>/v1/server
 -- --model haiku --dangerously-skip-permissions
 ```
+
+The `--model` value is a single-consumer `claudeModel` fixture option (#928; default `'haiku'`,
+preserved byte-for-byte for every spec that doesn't override it). `real-claude-question-answer.spec.ts`
+is the one consumer that overrides it, to `claude-sonnet-5` — see the sibling entry above.
 
 env: `PYRY_ALLOW_INSECURE_RELAY=1` (lets the daemon dial a loopback `ws://` relay) and
 `PYRY_MOBILE_V2=1` (enables the v2 mobile leg + structured reply stream — without it no
@@ -232,6 +266,14 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
 - [#432 codebase notes](../codebase/432.md) — the third tier sibling
   (`real-claude-permission-modal.spec.ts`); the real-stack liveness net over the permission-modal
   chain, contrasted with the fake-stack twin #426.
+- [#928 codebase notes](../codebase/928.md) — the fourth tier sibling
+  (`real-claude-question-answer.spec.ts`); the real-stack liveness net over the question-answer
+  vertical, contrasted with the fake-stack twin #922. Added the single-consumer `claudeModel` fixture
+  option and, as a fallout fix, anchored both configs' `real-*` filename patterns to a path boundary.
+- [Conversation shell — question panel](conversation-shell-question-panel.md) — the panel surface
+  `real-claude-question-answer.spec.ts` (#928) drives by structure only
+  (`.question-panel__option-label`, `.question-panel__continue`, `.question-panel__labels`); its
+  fake-stack twin `e2e/question-answer-continue.spec.ts` (#922) is what first proved that surface.
 - [Live e2e runbook](live-e2e-runbook.md) / [#13](../codebase/13.md) — the manual, live-**relay**
   operator gate; this scenario automates the real-daemon+real-claude half but still uses a local relay,
   so it does not replace the live-relay verification.

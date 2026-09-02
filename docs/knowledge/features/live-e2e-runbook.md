@@ -71,23 +71,39 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Last run: 2026-07-26 — 8 passed / 0 failed, the first-ever full green.** 37.9s against a
-freshly-built `pyry`, and 40.0s re-run against the installed production binary. The umbrella ticket
-for the red specs, [desktop#483](https://github.com/pyrycode/pyrycode-desktop/issues/483), closed
-2026-07-26.
+**Last run: 2026-09-02 — the tier grew to 10 specs and holds green.** The ninth interactive spec,
+`e2e/real-claude-question-answer.spec.ts` (#928), landed and passed on its first live execution
+against `claude-sonnet-5` — the round trip from a real `AskUserQuestion` batch through the panel back
+to a resumed turn, previously proven only against a scripted `daemon.pushFrame`
+([question-panel-continue-answer.md](question-panel-continue-answer.md)).
 
-What changed: the daemon's production interactive runner has been **stream-json** since 2026-07-24 —
-claude is driven over a structured stdin/stdout stream, not a PTY. All four interactive real-claude
-specs (send/stream, interrupt, permission-modal, queue-drop) migrated onto the stream runner in
-[#490](https://github.com/pyrycode/pyrycode-desktop/pull/490) (merged). The four claude-less
-`real-daemon-*` specs were already green and are unchanged.
+**That same run surfaced a routing bug in the tier partition itself**, unrelated to the spec's own
+liveness proof. The dispatcher's gate on the landing commit came back red with 2 failures out of **66
+executed**, against a tier that holds 10. Both `playwright.config.ts`'s `testIgnore` and
+`playwright.real-claude.config.ts`'s `testMatch` matched `/real-.*\.spec\.ts$/` against the
+**absolute** file path, and `.*` spans `/` — so the pattern matched every spec in the tree whenever
+any *ancestor directory* was named `real-…`, which the dispatcher's own `real-claude-gate-<N>`
+worktree always is. Both reported failures were specs that had no business being collected under this
+config at all: one was a fake-tier spec caught only by the path bug and never actually broken, the
+other a pre-existing failure on `real-daemon-session-settings.spec.ts` (filed as
+[desktop#941](https://github.com/pyrycode/pyrycode-desktop/issues/941), reproduced against
+`origin/main` and structurally unrelated to #928's change). The inverse direction was the more
+dangerous half: in that same worktree the default config's `testIgnore` would have ignored all 66
+specs and exited 0 on a suite that never ran. Both patterns are now
+`/(^|\/)real-[^/]*\.spec\.ts$/` — anchored to a path boundary, held inside one filename segment — so
+the partition depends on the filename alone, which is what both configs always claimed. Verified by
+`playwright test --list` under both configs in a throwaway ordinarily-named worktree, where the fix is
+a no-op: 10 tests under the real-claude config, 56 under the default, unchanged from before.
 
-The last red was **queue-drop**, fixed by pyrycode#1199. It was a drain race, not a missing message:
-the stream runner returns on write, so the queued backlog emptied at pipe speed and the observation
-window closed before the spec could see the queue. With the drain race fixed, the spec holds.
-
-The PTY-era diagnosis previously recorded here — `DetectModalClass` returning Unknown on the live
-session buffer — is **historical**. It described the PTY runner's modal detection, which the
+Prior state, retained as history: the daemon's production interactive runner has been **stream-json**
+since 2026-07-24 — claude is driven over a structured stdin/stdout stream, not a PTY. The four
+interactive real-claude specs that existed at the time (send/stream, interrupt, permission-modal,
+queue-drop) migrated onto the stream runner in
+[#490](https://github.com/pyrycode/pyrycode-desktop/pull/490) (merged), first going fully green
+2026-07-26 (8 passed / 0 failed) after the last red, **queue-drop**, was fixed by pyrycode#1199 (a
+drain race, not a missing message). The four claude-less `real-daemon-*` specs were already green
+throughout. The PTY-era diagnosis previously recorded here — `DetectModalClass` returning Unknown on
+the live session buffer — is historical: it described the PTY runner's modal detection, which the
 stream-json migration made moot for this gate.
 
 **Silent-skip warning:** without `claude`, `pyry`, or the credential (`ANTHROPIC_API_KEY`, or

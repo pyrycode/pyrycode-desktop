@@ -3831,12 +3831,13 @@
   gap: var(--space-4);
 }
 
-/* The two buttons share everything but their fill. A <button> needs an explicit type reset because the UA
-   stylesheet gives form controls their own font, and the row's labels are M3 body/small at the emphasized
-   weight. The labels are client-owned constants, so white-space: nowrap cannot be blown out by daemon
-   text (.composer__context's ruling). No `outline: none` — with the composer covered, these and #907's
-   Other field are the only focusable controls on the panel, so their focus ring is load-bearing. */
+/* The three buttons share everything but their fill. A <button> needs an explicit type reset because the
+   UA stylesheet gives form controls their own font, and the row's labels are M3 body/small at the
+   emphasized weight. The labels are client-owned constants, so white-space: nowrap cannot be blown out by
+   daemon text (.composer__context's ruling). No `outline: none` — with the composer covered, these and
+   #907's Other field are the only focusable controls on the panel, so their focus ring is load-bearing. */
 .question-panel__cancel,
+.question-panel__previous,
 .question-panel__continue {
   flex: 0 0 auto;
   border-radius: var(--radius-xs);
@@ -3850,17 +3851,27 @@
 }
 
 /* Outlined: 7px vertical padding plus the 1px border is the design's own border-box compensation against
-   Continue's 8px and no border, so the two buttons come out the same height under this repo's absent
+   the filled button's 8px and no border, so all three come out the same height under this repo's absent
    global box-sizing reset. 7px is a literal because it is structural geometry rather than spacing, and it
-   is off the 4px grid by construction — the .composer__footer height precedent. */
-.question-panel__cancel {
+   is off the 4px grid by construction — the .composer__footer height precedent.
+
+   PREVIOUS JOINS THIS RULE RATHER THAN MINTING ONE (#916). Checked against 347:6888 on 2026-09-02, the
+   design gives it Cancel's treatment with no property changed — same Background fill, same 1px Primary
+   border, same Primary text, same 16/7 padding — so a `.question-panel__previous` rule of its own would be
+   a copy that can drift, not a treatment. It is a separate CLASS from Cancel only so the markup does not
+   name a Previous button after a different action. */
+.question-panel__cancel,
+.question-panel__previous {
   padding: 7px var(--space-4);
   border: 1px solid var(--color-primary);
   background: var(--color-surface);
   color: var(--color-primary);
 }
 
-/* Filled: Schemes/Primary carrying On Primary, and no border, hence the 8px padding above. */
+/* Filled: Schemes/Primary carrying On Primary, and no border, hence the 8px padding above. The class name
+   is the design's filled TREATMENT slot (347:6692), not a claim about the copy — since #916 that button
+   reads Next on every question but the last. Left unrenamed deliberately: the treatment is what does not
+   vary, and QuestionPanel.tsx's action row carries the reasoning. */
 .question-panel__continue {
   padding: var(--space-2) var(--space-4);
   border: none;

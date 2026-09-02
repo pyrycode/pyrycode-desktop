@@ -2,11 +2,14 @@ import { PyryMark } from '../../theme/PyryMark'
 import type { Question } from '../../store/questionBatches'
 import type { QuestionPickEvent, QuestionSelection } from '../../store/questionPicksStore'
 
-// #906 / #907 / #912 / #915: the pure view half of the question vertical's render slice (Figma node
+// #906 / #907 / #912 / #915 / #916: the pure view half of the question vertical's render slice (Figma node
 // 347:6913, the single-question instance). #906 drew the panel's chrome — the title row, the bordered box
 // with the question's own text, the separator, and an inert Cancel / Continue row — #907 filled the box's
-// middle band with one row per offered option, #912 made those rows and the Other field respond, and #915
-// filled the title row with one tab per question in the batch (347:6829) and made them jump between them.
+// middle band with one row per offered option, #912 made those rows and the Other field respond, #915
+// filled the title row with one tab per question in the batch (347:6829) and made them jump between them,
+// and #916 put the same jump on the action row as Previous plus a trailing button that reads Next until
+// the last question. NOTHING HERE ANSWERS YET: every control on the action row is still inert as to
+// sending, which is #853's.
 //
 // The pure view / store-bound container split is #224's, built on #177's dialog precedent: this file is
 // markup-in-props-out and server-render-testable from injected fixtures, while the store read lives in
@@ -56,12 +59,20 @@ import type { QuestionPickEvent, QuestionSelection } from '../../store/questionP
 
 // Client-owned copy, in the app's own voice — deliberately constants rather than JSX literals, so the
 // line between what the client says and what claude says is visible in the source of a file that renders
-// both. Neither button dispatches anything (#853 sends the assembled answer; the rows below only record
-// it), and neither is `disabled`: the panel sits ON TOP of the composer, so there is nothing to disable
-// and no disabled state to draw. The inert-buttons posture is #224's, so the answer path lands on a
-// stable surface.
+// both. NO BUTTON ON THIS ROW SENDS ANYTHING (#853 sends the assembled answer; the rows below only record
+// it) — since #916 two of them step the batch, which is navigation and not an answer, and Continue on the
+// last question is as inert as it was. None is `disabled`: the panel sits ON TOP of the composer, so there
+// is nothing to disable and no disabled state to draw. The inert-buttons posture is #224's, so the answer
+// path lands on a stable surface.
 export const QUESTION_CANCEL_COPY = 'Cancel'
 export const QUESTION_CONTINUE_COPY = 'Continue'
+// The two stepping labels (#916), constants for the same reason. Previous is the middle instance Figma
+// hides in the single-question panel (347:6888); NEXT IS NOT IN THE DESIGN AT ALL — the trailing instance
+// reads Continue everywhere in the file, because a static frame cannot express a label that depends on
+// position, so this string is #916's own decision rather than a design read. Both are client-owned, which
+// is what lets each button's accessible name be its own visible text with no attribute anywhere.
+export const QUESTION_PREVIOUS_COPY = 'Previous'
+export const QUESTION_NEXT_COPY = 'Next'
 // The Other row's field copy (347:6386), a constant for the same reason: it sits in the one attribute pair
 // this component writes, so the line between client-owned and claude-authored text has to be visible here.
 export const QUESTION_OTHER_PLACEHOLDER_COPY = 'Other. Type something.'
@@ -179,7 +190,7 @@ function QuestionTick(): JSX.Element {
  * THE TITLE ROW HOLDS TABS AND NOTHING ELSE. The Figma's `Question labels` row (347:6829) is five
  * `Question label` instances wrapping onto two lines and NO button: #906's note here — and the matching
  * one in conversation.css — put Previous in this row, and both were wrong. Figma puts Previous in the
- * middle of the Actions row (347:6657), which is #916's, not this slice's.
+ * middle of the Actions row (347:6657), which is where #916 built it; see that row below.
  */
 export function QuestionPanelView({
   questions,
@@ -206,6 +217,12 @@ export function QuestionPanelView({
   // Read ONCE, so every read below — the question's text, its options, its variant — is the same question
   // the active tab names. No `!` and no guard: the container clamps the index into range before it arrives.
   const question = questions[activeIndex]
+  // The step controls' two conditions (#916), derived here rather than inline at the row so each is read
+  // once and named — `isLastQuestion` decides BOTH the trailing button's copy and whether it carries a
+  // handler, and those two must never disagree. Neither reads anything claude authored: one is a
+  // client-owned integer, the other an array length.
+  const canStepBack = activeIndex > 0
+  const isLastQuestion = activeIndex === questions.length - 1
   // The ONLY difference between the two option variants (347:6696 Single / 347:6698 Multiple): same row
   // geometry, same 8px gap, same label-over-description stack, a differently-cornered control — and, since
   // #912, a differently-shaped Selector inside it and a different native input type.
@@ -379,13 +396,41 @@ export function QuestionPanelView({
             to a screen reader that this line does not represent. */}
         <div className="question-panel__separator" aria-hidden="true" />
         <div className="question-panel__actions">
-          {/* Cancel leads, Continue trails, right-aligned (347:6657). type="button" on both so neither
-              can ever submit an ancestor form. Their accessible name is their visible text. */}
+          {/* Cancel leads, Previous sits in the middle, the filled button trails, right-aligned
+              (347:6657). type="button" on all three so none can ever submit an ancestor form. Each one's
+              accessible name is its own visible text, and all three strings are client-owned constants. */}
           <button type="button" className="question-panel__cancel">
             {QUESTION_CANCEL_COPY}
           </button>
-          <button type="button" className="question-panel__continue">
-            {QUESTION_CONTINUE_COPY}
+          {/* ABSENT ON THE FIRST QUESTION, NEVER `disabled` — the header tabs' call one row up, for the
+              same reason: with nowhere to step back to, a focusable control is a new tab stop in front of
+              the operator for no gesture. It is also what keeps a one-question batch's row byte-identical
+              to what #906 shipped, which is the acceptance criterion in AC1's second sentence.
+              `activeIndex - 1` can never be negative BECAUSE of this condition, which is why no
+              `Math.max(0, …)` guards it — the container's clamp covers the other end (see
+              QuestionPanelSlot), so between the two the index cannot leave the list. */}
+          {canStepBack ? (
+            <button
+              type="button"
+              className="question-panel__previous"
+              onClick={() => onQuestionSelected(activeIndex - 1)}
+            >
+              {QUESTION_PREVIOUS_COPY}
+            </button>
+          ) : null}
+          {/* ONE ELEMENT WHOSE LABEL AND HANDLER VARY, never two branched elements, and the difference is
+              observable. Two branches reconcile as a REPLACEMENT, so stepping onto the last question from
+              the keyboard would drop focus mid-row; one element keeps the focus where the operator put it.
+              The class stays `__continue` even though the copy no longer always does: it names the design's
+              FILLED TREATMENT slot (347:6692), which is what does not vary.
+              STILL INERT AS TO ANSWERING on the last question, and by construction rather than by care —
+              there it carries no handler at all. #853 is the slice that sends. */}
+          <button
+            type="button"
+            className="question-panel__continue"
+            onClick={isLastQuestion ? undefined : () => onQuestionSelected(activeIndex + 1)}
+          >
+            {isLastQuestion ? QUESTION_CONTINUE_COPY : QUESTION_NEXT_COPY}
           </button>
         </div>
       </div>

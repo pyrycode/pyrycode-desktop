@@ -54,7 +54,9 @@ import type {
   QuestionAnswerPayload,
   QuestionRefusedPayload,
   WireSlashCommand,
-  SlashCommandListPayload
+  SlashCommandListPayload,
+  WireModelOption,
+  ModelListPayload
 } from './types'
 
 describe('wire protocol constants', () => {
@@ -1589,5 +1591,319 @@ describe('attachment-stored wire vocabulary (#964)', () => {
     // of the shape rule here would fail-close valid traffic the moment the two disagreed.
     const notCanonical: AttachmentStoredPayload['attachment_id'] = 'ATT-1'
     expect(notCanonical).toBe('ATT-1')
+  })
+})
+
+describe('model-list wire vocabulary (#971)', () => {
+  // Values are transcribed VERBATIM from the daemon's three committed fixtures
+  // (internal/protocol/testdata/model_list{,_empty,_zero}.json), so a contract change shows up as a
+  // fixture diff rather than as a disagreement between two hand-written guesses. Unlike the #935 block
+  // above, there are NO departures here: nothing is abridged and nothing is hand-authored, because
+  // every arm this frame needs is present in the committed bytes.
+
+  it('admits the model_list inbound envelope type', () => {
+    // Compile-time membership: this assigns only if the member is part of EnvelopeType, and it is the
+    // only thing that catches a dropped one — `Envelope.type` is `EnvelopeType | string`, so a later
+    // decode's `case 'model_list':` compiles green whether or not the member was ever added.
+    const list: EnvelopeType = 'model_list'
+    expect(list).toBe('model_list')
+  })
+
+  it('shapes WireModelOption as { resolved_model, value, display_name, effort_levels, supports_auto_mode, truncated_fields }', () => {
+    // The populated fixture's FIRST row. Its `resolved_model` arrives as a RAW `<unmeasured>`: the
+    // committed bytes carry `<unmeasured>` because Go's encoder escapes `<`, `>` and `&`, so
+    // the escaping is a transport artefact and the decoded value holds the literal angle brackets — the
+    // exact byte a render sink would be tempted by, in a field the type's SECURITY note names as
+    // claude-authored. It is also the reason `resolved_model` may not be treated as an identifier
+    // merely because other rows make it look like one.
+    const option: WireModelOption = {
+      resolved_model: '<unmeasured>',
+      value: 'default',
+      display_name: 'Default (recommended)',
+      effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supports_auto_mode: true,
+      truncated_fields: null
+    }
+    expect(option).toEqual({
+      resolved_model: '<unmeasured>',
+      value: 'default',
+      display_name: 'Default (recommended)',
+      effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supports_auto_mode: true,
+      truncated_fields: null
+    })
+    expect(option.resolved_model).toBe('<unmeasured>')
+    expect(Object.keys(option)).toHaveLength(6)
+  })
+
+  it('shapes ModelListPayload as { conversation_id, models, dropped_models }', () => {
+    // The populated fixture (model_list.json): five rows in claude's own order, one reporting a cut
+    // `value` beside four reporting `null`, one publishing an EMPTY `effort_levels`, and a NON-ZERO
+    // `dropped_models`.
+    const payload: ModelListPayload = {
+      conversation_id: 'c1',
+      models: [
+        {
+          resolved_model: '<unmeasured>',
+          value: 'default',
+          display_name: 'Default (recommended)',
+          effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          supports_auto_mode: true,
+          truncated_fields: null
+        },
+        {
+          resolved_model: '<unmeasured>',
+          value: 'opus[1m]',
+          display_name: 'Opus (1M context)',
+          effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          supports_auto_mode: true,
+          truncated_fields: null
+        },
+        {
+          resolved_model: '<unmeasured>',
+          value: 'claude-fable-5[1m]',
+          display_name: 'Fable',
+          effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          supports_auto_mode: true,
+          truncated_fields: ['value']
+        },
+        {
+          resolved_model: '<unmeasured>',
+          value: 'sonnet',
+          display_name: 'Sonnet',
+          effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          supports_auto_mode: true,
+          truncated_fields: null
+        },
+        {
+          resolved_model: 'claude-haiku-4-5-20251001',
+          value: 'haiku',
+          display_name: 'Haiku',
+          effort_levels: [],
+          supports_auto_mode: false,
+          truncated_fields: null
+        }
+      ],
+      dropped_models: 2
+    }
+    expect(payload.conversation_id).toBe('c1')
+    // Array order IS claude's own, carried through unchanged.
+    expect(payload.models.map((m) => m.value)).toEqual([
+      'default',
+      'opus[1m]',
+      'claude-fable-5[1m]',
+      'sonnet',
+      'haiku'
+    ])
+    // `value` is the ARGUMENT you pass, not a dated identifier and NOT parseable: a literal
+    // (`default`), a bare alias (`sonnet`), or a bracketed variant. Splitting on `-` to derive a family
+    // is the tempting mistake, and it yields nothing usable on either shape — asserted rather than only
+    // commented, because it is the rule a consumer is most likely to break.
+    expect(payload.models[1].value).toBe('opus[1m]')
+    expect(payload.models[0].value.split('-')).toEqual(['default'])
+    expect(payload.models[2].value.split('-')[0]).toBe('claude')
+    // `display_name` is the intended join against a per-turn `model_announced` identifier — NOT
+    // `resolved_model`, which is `<unmeasured>` on four of the five rows here and so joins nothing.
+    expect(payload.models[4].resolved_model).toBe('claude-haiku-4-5-20251001')
+    expect(payload.models.filter((m) => m.resolved_model === '<unmeasured>')).toHaveLength(4)
+    // `dropped_models` IS COUNTED AND CARRIED, so this arithmetic yields the menu's true size.
+    expect(payload.dropped_models).toBe(2)
+    expect(payload.models.length + payload.dropped_models).toBe(7)
+    // THE FIXTURE DOES NOT SATISFY THE PRODUCER'S OWN INVARIANT, and pinning that is the point of this
+    // assertion. Upstream states the producer caps entries at TEN and cuts only the overflow, so a
+    // non-zero `dropped_models` always arrives beside exactly ten rows — yet these committed bytes
+    // carry five. It is a SHAPE fixture, not a live capture. Nothing may derive the cap from a list
+    // length, treat a list of exactly ten as a signal, or hardcode ten: the cap is daemon-side and may
+    // change without any change to this contract.
+    expect(payload.models.length).toBe(5)
+    // A cut is per row and each row reports its OWN. There is no hoisted or flattened list on the
+    // payload, so a reader grepping the frame for one finds nothing.
+    expect(payload).not.toHaveProperty('truncated_fields')
+    expect(payload.models[2].truncated_fields).toEqual(['value'])
+    expect(payload.models.filter((m) => m.truncated_fields === null)).toHaveLength(4)
+    // Haiku's row is the all-at-once case in the LIVE data: the only real `resolved_model`, the only
+    // empty `effort_levels`, and the only `supports_auto_mode: false`. `false` is a VALUE — claude
+    // refuses `auto` permission mode per model, and an absent key in claude's reply decodes to `false`,
+    // which is the correct reading rather than a missing one.
+    expect(payload.models[4].effort_levels).toEqual([])
+    expect(payload.models[4].supports_auto_mode).toBe(false)
+    expect(payload.models.filter((m) => m.supports_auto_mode)).toHaveLength(4)
+  })
+
+  it('admits an EMPTY models array — a positive statement, never a null branch', () => {
+    // The daemon's second fixture (model_list_empty.json). `models` is a plain non-optional array
+    // because ModelListPayload.MarshalJSON normalises a nil slice to [], so no consumer branches on
+    // null, and an empty list IS in contract: it says claude offered nothing. `0` is a VALUE, never
+    // consulted for truthiness — the key is always written, so an absent one is a real defect.
+    const emptyMenu: ModelListPayload = {
+      conversation_id: 'c1',
+      models: [],
+      dropped_models: 0
+    }
+    expect(emptyMenu.models).toEqual([])
+    expect(emptyMenu.dropped_models).toBe(0)
+    expect(emptyMenu.models.length + emptyMenu.dropped_models).toBe(0)
+  })
+
+  it('admits the ZERO-VALUE row — empty strings, an empty effort_levels and a null truncated_fields', () => {
+    // The daemon's third fixture (model_list_zero.json): one all-zero row, which is the only route to
+    // WireModelOption's six keys at once, since a frame carrying no entries reaches none of them.
+    const zero: ModelListPayload = {
+      conversation_id: '',
+      models: [
+        {
+          resolved_model: '',
+          value: '',
+          display_name: '',
+          effort_levels: [],
+          supports_auto_mode: false,
+          truncated_fields: null
+        }
+      ],
+      dropped_models: 0
+    }
+    expect(zero).toEqual({
+      conversation_id: '',
+      models: [
+        {
+          resolved_model: '',
+          value: '',
+          display_name: '',
+          effort_levels: [],
+          supports_auto_mode: false,
+          truncated_fields: null
+        }
+      ],
+      dropped_models: 0
+    })
+    // '' is a VALUE, never a vanished key: the daemon sets no `omitempty` on any of the nine keys
+    // across the two structs, so an empty `display_name` is a real value rather than an absence.
+    expect(zero.models[0].display_name).toBe('')
+    expect(zero.models[0].effort_levels).toEqual([])
+    expect(zero.models[0].truncated_fields).toBeNull()
+  })
+
+  it('reads a cut effort_levels as UNKNOWN — truncated_fields is the only signal that [] is not "none"', () => {
+    // THE READING RULE, pinned as a predicate rather than left in prose. `effort_levels` collapses
+    // claude's ABSENT, its `null` and its EMPTY list into one `[]` — Haiku's live entry omits
+    // `supportedEffortLevels` entirely and a client's behaviour is identical for all three (no effort
+    // control) — which spares every row an optional-array branch and costs a reader exactly here: with
+    // the list cut, `[]` no longer says "none". This is WireSlashCommand's cut-`aliases` hazard
+    // transposed onto a different field, and reading a cut list as "none" silently removes an effort
+    // control the model actually supports.
+    const cutLevels: WireModelOption = {
+      resolved_model: '<unmeasured>',
+      value: 'sonnet',
+      display_name: 'Sonnet',
+      effort_levels: [],
+      supports_auto_mode: true,
+      truncated_fields: ['effort_levels']
+    }
+    const levelsAreKnownEmpty = (m: WireModelOption): boolean =>
+      m.effort_levels.length === 0 && !(m.truncated_fields ?? []).includes('effort_levels')
+    expect(levelsAreKnownEmpty(cutLevels)).toBe(false)
+    expect(levelsAreKnownEmpty({ ...cutLevels, truncated_fields: null })).toBe(true)
+    // A cut naming some OTHER field says nothing about the levels, so the rule keys on the NAME and
+    // never on the mere presence of a cut.
+    expect(levelsAreKnownEmpty({ ...cutLevels, truncated_fields: ['value'] })).toBe(true)
+
+    // A CUT `value` STILL PASSES THE DAEMON'S INBOUND RULE, which is why `truncated_fields` is
+    // load-bearing rather than decoration on this frame specifically. `validModel` is a
+    // charset-and-length rule, not a membership check against the published list, so the fixture's cut
+    // `claude-fable-5[1m]` row would send back a value that is still alphanumeric and still inside 64
+    // bytes — accepted, and selecting a DIFFERENT model, with no error frame anywhere on the path.
+    const cutValue: WireModelOption = {
+      resolved_model: '<unmeasured>',
+      value: 'claude-fable-5',
+      display_name: 'Fable',
+      effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supports_auto_mode: true,
+      truncated_fields: ['value']
+    }
+    const valueIsSendable = (m: WireModelOption): boolean => !(m.truncated_fields ?? []).includes('value')
+    expect(valueIsSendable(cutValue)).toBe(false)
+    expect(valueIsSendable({ ...cutValue, truncated_fields: null })).toBe(true)
+  })
+
+  it('pins every field as REQUIRED — omitting one is a compile-time error', () => {
+    // The no-drift pin, and the load-bearing one: all-required is what will leave the decode slice's
+    // fail-closed narrower no optional key to wave through. If any field were ever relaxed to optional,
+    // its directive below would stop erroring and fail this file at compile time.
+
+    // @ts-expect-error `resolved_model` is required — no omitempty daemon-side, and '' is a value
+    const missingResolved: WireModelOption = {
+      value: 'sonnet',
+      display_name: 'Sonnet',
+      effort_levels: [],
+      supports_auto_mode: false,
+      truncated_fields: null
+    }
+    // @ts-expect-error `value` is required — the one field a client sends back, never elided
+    const missingValue: WireModelOption = {
+      resolved_model: '',
+      display_name: 'Sonnet',
+      effort_levels: [],
+      supports_auto_mode: false,
+      truncated_fields: null
+    }
+    // @ts-expect-error `display_name` is required — the intended join key, and empty is a value
+    const missingDisplayName: WireModelOption = {
+      resolved_model: '',
+      value: 'sonnet',
+      effort_levels: [],
+      supports_auto_mode: false,
+      truncated_fields: null
+    }
+    // @ts-expect-error `effort_levels` is required and non-optional — nil is normalised to [], never
+    // elided, and modelling it optional would invent an absent/empty distinction the wire does not carry
+    const missingLevels: WireModelOption = {
+      resolved_model: '',
+      value: 'sonnet',
+      display_name: 'Sonnet',
+      supports_auto_mode: false,
+      truncated_fields: null
+    }
+    // @ts-expect-error `supports_auto_mode` is required — `false` is a value, not an absence
+    const missingAutoMode: WireModelOption = {
+      resolved_model: '',
+      value: 'sonnet',
+      display_name: 'Sonnet',
+      effort_levels: [],
+      truncated_fields: null
+    }
+    // @ts-expect-error `truncated_fields` is required — NULLABLE is not the same as OPTIONAL, and an
+    // absent key would decode to `undefined`, which a `?.includes('effort_levels')` reads as "nothing cut"
+    const missingTruncated: WireModelOption = {
+      resolved_model: '',
+      value: 'sonnet',
+      display_name: 'Sonnet',
+      effort_levels: [],
+      supports_auto_mode: false
+    }
+    // @ts-expect-error `conversation_id` is required — the routing key every interactive event carries
+    const missingConversation: ModelListPayload = {
+      models: [],
+      dropped_models: 0
+    }
+    // @ts-expect-error `models` is required and non-optional — nil is normalised to [], never elided
+    const missingModels: ModelListPayload = {
+      conversation_id: 'c1',
+      dropped_models: 0
+    }
+    // @ts-expect-error `dropped_models` is required — the key is always written, so an absent one is a
+    // real defect rather than a valid zero
+    const missingDropped: ModelListPayload = {
+      conversation_id: 'c1',
+      models: []
+    }
+    expect(missingResolved.value).toBe('sonnet')
+    expect(missingValue.display_name).toBe('Sonnet')
+    expect(missingDisplayName.value).toBe('sonnet')
+    expect(missingLevels.value).toBe('sonnet')
+    expect(missingAutoMode.value).toBe('sonnet')
+    expect(missingTruncated.value).toBe('sonnet')
+    expect(missingConversation.dropped_models).toBe(0)
+    expect(missingModels.conversation_id).toBe('c1')
+    expect(missingDropped.conversation_id).toBe('c1')
   })
 })

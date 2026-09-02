@@ -474,8 +474,8 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   contract field for field, every field required (no `omitempty` on any of the eight keys). A
   conversation-scoped **snapshot** riding a `control_response` from the same `initialize` reply
   `model_list` comes from — `model_list` inventories the identities claude runs as, this frame the
-  verbs the working directory accepts; neither family is modelled from the other, and `model_list`
-  stays unmodelled on this side. Named `WireSlashCommand`, deliberately not `SlashCommand`, so the
+  verbs the working directory accepts; neither family is modelled from the other. `model_list` is now
+  modelled too, by [#971](features/model-list-wire-types.md). Named `WireSlashCommand`, deliberately not `SlashCommand`, so the
   daemon-Go-type reference in [question-shown wire types](features/question-shown-wire-types.md) stays
   unambiguous. `commands` and `aliases` are both plain non-optional arrays for **different** reasons:
   `commands: []` is a positive statement claude offered nothing, `aliases: []` is a **collapse** of
@@ -499,6 +499,36 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   landed the IPC carry into `DaemonEvent`; **#954** landed the per-conversation store (see below).
   #681 (Actions-menu alias match) is still blocked; **#939** (below) landed the type-ahead's decision
   logic as the first reader, and **#940** (below) landed the mount.
+- [Model-list wire types](features/model-list-wire-types.md) — the wire vocabulary for the daemon's
+  model inventory (#971), `model_list`'s sibling above: a new `model_list` `EnvelopeType` member,
+  placed immediately before `slash_command_list`, plus two interfaces (`ModelListPayload` →
+  `WireModelOption[]`), mirroring the daemon's published contract field for field, every field required
+  (no `omitempty` on any of the nine keys). One frame states three different positions on an empty
+  array — `models: []` is a positive statement claude offered nothing, `effort_levels: []` is a
+  **collapse** of claude's absent/`null`/empty cases into one wire value (a cut is unknowable except
+  via a `truncated_fields` naming `effort_levels`, the sibling's cut-`aliases` hazard transposed), and
+  `truncated_fields` alone is exempt from normalisation and stays nullable. `value` is the argument a
+  client sends back on `set_session_settings` and is re-validated inbound by a charset-and-length-only
+  `validModel` rather than trusted — a `value` truncated mid-token still passes and silently selects a
+  different model, which is why `truncated_fields` is load-bearing rather than decoration. Trust tier
+  is **higher** than `slash_command_list`'s: `resolved_model`/`value`/`display_name`/`effort_levels`
+  are claude-authored, not workspace-authored, so the never-a-log clause rests on the daemon's
+  bounds-but-does-not-sanitize contract rather than on a transcribed measurement (the sibling's
+  measured `0x0a`-across-51-entries evidence does not transfer to these short model labels). The
+  producer's ten-entry cap is reported via `dropped_models`, not a wire constant, and the committed
+  fixture (five rows, `dropped_models: 2`) does not satisfy the producer's own stated ten-entry
+  invariant — it pins shape, not live traffic. **Delivery window has two lanes**, corrected mid-review
+  (verifier MUST FIX on PR #978): a live-lane *ask* (three loss points: unrouted bootstrap child, busy
+  session, session rotation) plus a **connect-time snapshot** the first draft wrongly said did not
+  exist — a Mode B reconcile (`reconcileModelLists`/`RetainedModelLists`) unicasts a burst of N
+  payloads (one per conversation holding a list, archived included, no `event_id` so
+  `last_event_id` dedup is inert, correlate on `conversation_id`) to every interactive handshake, not
+  only a reconnecting client's. `docs/protocol-mobile.md` § `model_list` is the stale half on this
+  point; its own changelog names the claim stale. "Never block a model menu on this frame" still holds,
+  on narrower grounds. Vocabulary only — nothing decodes, narrows, stores or renders it; the decode/IPC/
+  store/run-config slices that replace `RunConfigSections.tsx`'s hardcoded `MODEL_CATALOG`/
+  `EFFORT_LEVELS` are still to come. Architect self-review PASS, one rework pass (delivery-window MUST
+  FIX, doc-comment only, no type/field/fixture/test changed).
 - [Slash command type-ahead — decision layer](features/conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--decision-layer-939)
   — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939), split from #694: the slash
   type-ahead's opening/filtering/completion decisions as a pure, DOM-free module,

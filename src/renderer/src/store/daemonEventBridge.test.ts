@@ -452,6 +452,47 @@ describe('translateDaemonEvent — debug-bundle events produce no session action
     ).toBeNull()
   })
 
+  it('slashCommandList → null (consumed by the #938 slash-command store, not the session store)', () => {
+    // Ships DORMANT rather than permanently no-op, unlike the two question arms above: #938 has not
+    // decided whether it subscribes here or stands up its own bridge, so this case may yet flip the way
+    // `compacting` did at #496. Present for the assertNever guard, which is not a formality — it
+    // stringifies the WHOLE event into an Error message, so a missing case would put every
+    // workspace-authored name, hint, description and alias there.
+    expect(
+      translateDaemonEvent({
+        type: 'slashCommandList',
+        conversationId: 'conv-1',
+        commands: [
+          {
+            name: 'synth-compact',
+            argument_hint: '[instructions]',
+            description: 'Synthetic row: nothing was cut for this one.',
+            aliases: [],
+            truncated_fields: null
+          },
+          {
+            name: 'synth-clear',
+            argument_hint: '',
+            description: 'Synthetic row: the cut-aliases reading rule.',
+            aliases: ['synth-reset'],
+            truncated_fields: ['aliases']
+          }
+        ],
+        droppedCommands: 2
+      })
+    ).toBeNull()
+    // An EMPTY menu is a positive statement that claude offered nothing, not an absence — but it is no
+    // more a session action than a populated one, and this bridge draws no distinction the emit did not.
+    expect(
+      translateDaemonEvent({
+        type: 'slashCommandList',
+        conversationId: 'conv-1',
+        commands: [],
+        droppedCommands: 0
+      })
+    ).toBeNull()
+  })
+
   it('unrecognizedMessage → null (consumed by the timeline render slice, not the session store)', () => {
     expect(
       translateDaemonEvent({

@@ -267,6 +267,32 @@ describe('translateModalEvent — every other arm returns null (the inverse filt
         questionBatchId: 'qb_01HZY',
         outcome: 'unanswered',
         source: 'no_answer'
+      },
+      // the slash-command menu ships DORMANT here (#937) — its consumer is the #938 store, not the
+      // modal store. Nothing is waiting on an answer: this is a published vocabulary the operator may
+      // choose to type, not a permission prompt gating an action claude wants to take. Unlike the two
+      // question arms above, this no-op is dormant rather than permanent — #938 has not yet decided
+      // which subscriber claims it.
+      {
+        type: 'slashCommandList',
+        conversationId: 'conv-1',
+        commands: [
+          {
+            name: 'synth-compact',
+            argument_hint: '[instructions]',
+            description: 'Synthetic row: nothing was cut for this one.',
+            aliases: [],
+            truncated_fields: null
+          },
+          {
+            name: 'synth-clear',
+            argument_hint: '',
+            description: 'Synthetic row: the cut-aliases reading rule.',
+            aliases: ['synth-reset'],
+            truncated_fields: ['aliases']
+          }
+        ],
+        droppedCommands: 2
       }
     ]
     for (const event of others) expect(translateModalEvent(event)).toBeNull()

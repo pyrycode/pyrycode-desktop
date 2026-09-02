@@ -1186,6 +1186,48 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               source: inbound.questionDismissed.source
             })
             return
+          case 'slash-command-list':
+            // The slash-command menu data path (#937) — the verbs claude will accept for this
+            // conversation, decoded fail-closed by #936. An UNSOLICITED daemon report: it rides a
+            // `control_response` but is not correlated by this client's outstanding-request memory, so
+            // it is emitted unconditionally on decode. snake→camel at the TOP LEVEL only
+            // (`conversation_id`→`conversationId`, `dropped_commands`→`droppedCommands`); `commands` is
+            // reused VERBATIM and passes across BY REFERENCE, the `questions` / `tasks` / `queued`
+            // precedent — parseSlashCommand already stripped every row to its five known fields, so
+            // there is nothing to drop and no per-row mapping to write. Do not "fix" that into a `.map`:
+            // the fresh-literal rule below governs the EVENT OBJECT, and deep-remapping the rows would
+            // break the verbatim-row rule instead.
+            //
+            // A fresh literal naming three fields, never a spread of the decoded payload, so a decoder
+            // that later grows a field cannot smuggle it across IPC.
+            //
+            // Every field is read BARE — no `??`, no `|| 0`, no optional handling. The decode requires
+            // all three, so a missing or wrong-typed one drops the whole line upstream of this emit; a
+            // `?? ''` here would turn that fail-closed drop into a silent misattribution, filing a menu
+            // against the wrong conversation, and a `|| 0` on the count would turn a real defect into a
+            // plausible zero. NOTHING RECOMPUTES OR CROSS-CHECKS `droppedCommands` AGAINST
+            // `commands.length`: the two disagree by design, their sum is the menu's true size, and only
+            // the daemon knows it.
+            //
+            // NO log call, and deliberately no `count` of commands either. #936's decode already emitted
+            // the content-free record, and this leg is the one place on the path where a
+            // workspace-authored `description` could reach a sink — `0x0a` is the only sub-`0x20` byte
+            // measured across the capture's 51 entries, so an author who can write one holds a
+            // log-forgery primitive against a JSON-lines file the operator can ship off-box. How many
+            // verbs a workspace offers is itself a fact about the repository the user has open.
+            //
+            // The #938 store consumes this; all four exhaustive bridges no-op it dormantly meanwhile.
+            // The four strings on every row are untrusted WORKSPACE-authored text — a lower trust tier
+            // than the claude-authored strings the question arms carry — and decoded is not sanitized:
+            // the render slice owes the escaping. Not compile-forced (this inner switch has no
+            // assertNever) — the round-trip tests guard this emit.
+            emitDaemonEvent(sink, {
+              type: 'slashCommandList',
+              conversationId: inbound.slashCommandList.conversation_id,
+              commands: inbound.slashCommandList.commands,
+              droppedCommands: inbound.slashCommandList.dropped_commands
+            })
+            return
         }
         return
       }

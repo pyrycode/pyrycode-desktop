@@ -346,6 +346,11 @@ function questionDismissedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'question_dismissed', ts: FIXED_TS, payload })
 }
 
+/** A `slash_command_list` plaintext, wrapping an arbitrary payload (#937). */
+function slashCommandListPlaintext(payload: unknown): Uint8Array {
+  return encodeEnvelope({ id: 3, type: 'slash_command_list', ts: FIXED_TS, payload })
+}
+
 /** A `conversation_created` plaintext, wrapping an arbitrary payload (#241). */
 function conversationCreatedPlaintext(payload: unknown): Uint8Array {
   return encodeEnvelope({ id: 3, type: 'conversation_created', ts: FIXED_TS, payload })
@@ -5990,6 +5995,239 @@ describe('createDaemonConnection — question_dismissed stream (#895)', () => {
       drivers[0].emit({
         type: 'message',
         plaintext: questionDismissedPlaintext({ ...DISMISSAL, source: null })
+      })
+    ).not.toThrow()
+    expect(sink.webContents.send.mock.calls.length).toBe(before)
+  })
+})
+
+describe('createDaemonConnection — slash_command_list stream (#937)', () => {
+  /** Reach the connected window: start, let the bootstrap build the driver, complete the handshake. */
+  async function connected(): Promise<ReturnType<typeof build>> {
+    const ctx = build()
+    ctx.connection.start()
+    await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    return ctx
+  }
+
+  /** A four-row menu, SYNTHETIC throughout — no real repository path and no real command name, because
+   *  a failing `toEqual` prints the whole object into CI output (Security review 7c). Each row is here
+   *  for one property the ACs pin: a `truncated_fields: null`, a description carrying both an embedded
+   *  newline and a non-ASCII rune, a `truncated_fields` naming `aliases` beside a non-empty `aliases`,
+   *  and the all-zero row that is the only shape reaching an empty `argument_hint` and an empty
+   *  `aliases` at once. `dropped_commands` is 2 against 4 carried rows, so nothing can pass by
+   *  recomputing one from the other. */
+  const MENU = {
+    conversation_id: 'conv-9c1d',
+    commands: [
+      {
+        name: 'synth-compact',
+        argument_hint: '[instructions]',
+        description: 'Synthetic row: nothing was cut for this one.',
+        aliases: [],
+        truncated_fields: null
+      },
+      {
+        name: 'synth-review',
+        argument_hint: '',
+        description: 'Synthetic row: first line\nsecond line — ünïcode ✓',
+        aliases: [],
+        truncated_fields: ['description']
+      },
+      {
+        name: 'synth-clear',
+        argument_hint: '',
+        description: 'Synthetic row: the cut-aliases reading rule.',
+        aliases: ['synth-reset', 'synth-wipe'],
+        truncated_fields: ['aliases']
+      },
+      {
+        name: '__synth-zero',
+        argument_hint: '',
+        description: '',
+        aliases: [],
+        truncated_fields: null
+      }
+    ],
+    dropped_commands: 2
+  }
+
+  it('emits three camelCase top-level fields with the rows verbatim, in wire order', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: slashCommandListPlaintext(MENU) })
+
+    // One exact toEqual covering AC1, AC3 and AC4 at once. The top level is snake→camel
+    // (`conversation_id`→`conversationId`, `dropped_commands`→`droppedCommands`); each row is reused
+    // VERBATIM, so `argument_hint` and `truncated_fields` stay snake_case. `toEqual` distinguishes
+    // `null` from `undefined` and from an absent key, so the two `truncated_fields: null` rows are
+    // pinned by value here and not merely by shape.
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'slashCommandList',
+        conversationId: 'conv-9c1d',
+        commands: [
+          {
+            name: 'synth-compact',
+            argument_hint: '[instructions]',
+            description: 'Synthetic row: nothing was cut for this one.',
+            aliases: [],
+            truncated_fields: null
+          },
+          {
+            name: 'synth-review',
+            argument_hint: '',
+            description: 'Synthetic row: first line\nsecond line — ünïcode ✓',
+            aliases: [],
+            truncated_fields: ['description']
+          },
+          {
+            name: 'synth-clear',
+            argument_hint: '',
+            description: 'Synthetic row: the cut-aliases reading rule.',
+            aliases: ['synth-reset', 'synth-wipe'],
+            truncated_fields: ['aliases']
+          },
+          {
+            name: '__synth-zero',
+            argument_hint: '',
+            description: '',
+            aliases: [],
+            truncated_fields: null
+          }
+        ],
+        droppedCommands: 2
+      }
+    ])
+  })
+
+  it('carries truncated_fields: null as null, and a cut naming aliases beside a non-empty aliases', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    drivers[0].emit({ type: 'message', plaintext: slashCommandListPlaintext(MENU) })
+
+    const event = emitted(sink).slice(before)[0]
+    // Narrow rather than cast — the arm's own discriminant does the work, so no `as` is needed to read
+    // a row.
+    if (event.type !== 'slashCommandList') throw new Error('expected a slashCommandList arm')
+
+    // AC3, explicitly: `null` is the value, never `undefined` and never an absent key. Asserted by
+    // VALUE and deliberately NOT with `toHaveProperty` or an `in` check — this channel is
+    // `webContents.send`, so structured clone preserves an assigned `undefined` as a present key, and a
+    // presence check would read true on a row carrying nothing.
+    expect(event.commands[0].truncated_fields).toBe(null)
+    expect(event.commands[3].truncated_fields).toBe(null)
+
+    // The reading-rule row: `truncated_fields` naming `aliases` must arrive intact, because it is the
+    // ONLY signal separating "cut to nothing" from "none" — `aliases: []` says both. Here it rides
+    // beside a NON-empty `aliases`, the shape that proves the two fields cross independently.
+    expect(event.commands[2].truncated_fields).toEqual(['aliases'])
+    expect(event.commands[2].aliases).toEqual(['synth-reset', 'synth-wipe'])
+
+    // Both measured byte-level properties of a real description survive the crossing (AC3).
+    expect(event.commands[1].description).toContain('\n')
+    expect(event.commands[1].description).toContain('ünïcode')
+  })
+
+  it('emits exactly the four modeled properties, never a spread of the decoded payload', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // An extra key planted at BOTH levels — the payload and a row. This family nests one level, unlike
+    // the question batch's three, so the smuggling surface is two wide.
+    drivers[0].emit({
+      type: 'message',
+      plaintext: slashCommandListPlaintext({
+        ...MENU,
+        smuggled_payload: 'must-not-cross',
+        commands: [{ ...MENU.commands[0], smuggled_row: 'must-not-cross' }]
+      })
+    })
+
+    const events = emitted(sink).slice(before)
+    expect(Object.keys(events[0]).sort()).toEqual([
+      'commands',
+      'conversationId',
+      'droppedCommands',
+      'type'
+    ])
+    expect(JSON.stringify(events)).not.toContain('must-not-cross')
+  })
+
+  it('carries dropped_commands verbatim — 0 is a value, and nothing recomputes it from the entries', async () => {
+    const { sink, drivers } = await connected()
+
+    // Zero against four carried rows: a count consulted for truthiness, or defaulted with `|| 0`,
+    // reaches green here anyway — which is why the non-zero case below shares the assertion.
+    const beforeZero = emitted(sink).length
+    drivers[0].emit({
+      type: 'message',
+      plaintext: slashCommandListPlaintext({ ...MENU, dropped_commands: 0 })
+    })
+    const zero = emitted(sink).slice(beforeZero)[0]
+    if (zero.type !== 'slashCommandList') throw new Error('expected a slashCommandList arm')
+    expect(zero.droppedCommands).toBe(0)
+    expect(zero.commands).toHaveLength(4)
+
+    // Three dropped against ONE carried row. The two numbers disagree on purpose: an emit that
+    // recomputed the count from `commands.length`, or cross-checked the pair and "corrected" one, lands
+    // on 1 rather than 3 and reddens here. The menu's true size is 1 + 3, and only the daemon knows it.
+    const beforeMany = emitted(sink).length
+    drivers[0].emit({
+      type: 'message',
+      plaintext: slashCommandListPlaintext({
+        ...MENU,
+        commands: [MENU.commands[0]],
+        dropped_commands: 3
+      })
+    })
+    const many = emitted(sink).slice(beforeMany)[0]
+    if (many.type !== 'slashCommandList') throw new Error('expected a slashCommandList arm')
+    expect(many.droppedCommands).toBe(3)
+    expect(many.commands).toHaveLength(1)
+  })
+
+  it('emits an empty menu as an empty list, distinguishable from no frame at all', async () => {
+    const { sink, drivers } = await connected()
+    const before = emitted(sink).length
+
+    // `commands: []` is a POSITIVE STATEMENT that claude offered nothing — the opposite of
+    // `question_shown`'s empty array, which is out of contract. It must cross, never be coalesced away
+    // as "no news": asserting the slice has exactly one element is what separates an empty menu from a
+    // dropped frame (AC3).
+    drivers[0].emit({
+      type: 'message',
+      plaintext: slashCommandListPlaintext({ ...MENU, commands: [], dropped_commands: 0 })
+    })
+
+    expect(emitted(sink).slice(before)).toEqual([
+      {
+        type: 'slashCommandList',
+        conversationId: 'conv-9c1d',
+        commands: [],
+        droppedCommands: 0
+      }
+    ])
+  })
+
+  it('drops a malformed slash_command_list (aliases: null) without emitting or throwing', async () => {
+    const { sink, drivers } = await connected()
+    const before = sink.webContents.send.mock.calls.length
+
+    // `aliases` is the field whose contract forbids null while its `truncated_fields` neighbour one row
+    // over permits it — the branch a reader pattern-matching off the sibling waves through. Asserted on
+    // the raw send-call count rather than on `emitted()`, so a non-event send would still be caught
+    // (AC2).
+    expect(() =>
+      drivers[0].emit({
+        type: 'message',
+        plaintext: slashCommandListPlaintext({
+          ...MENU,
+          commands: [{ ...MENU.commands[0], aliases: null }]
+        })
       })
     ).not.toThrow()
     expect(sink.webContents.send.mock.calls.length).toBe(before)

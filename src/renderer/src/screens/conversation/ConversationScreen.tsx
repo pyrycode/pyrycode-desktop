@@ -2468,7 +2468,7 @@ function Composer({
  * re-renders the panel without waking the composer this slot is covering. `batch.questions[…]` is read
  * there with no guard and no `!`: `reduceQuestionBatches` returns state unchanged when `questions` is empty
  * — the guard sits before the match — so `[]` never reaches `outstanding`, even though the wire type admits
- * it. A batch carrying several draws its first; stepping through them is still deferred.
+ * it. WHICH of them is drawn has been the operator's choice since #915; see the slot below.
  *
  * A fragment, not a wrapper element: the conversation column's flex layout is unchanged, and the panel
  * takes the slot the collapsed composer vacates.
@@ -2487,20 +2487,34 @@ export function ComposerSlot({
   )
   return (
     <>
-      {batch && <QuestionPanelSlot batch={batch} />}
+      {/* KEYED ON THE NONCE (#915), which is a remount instruction and not decoration. The slot holds the
+          question the operator is looking at in component state, and it stays mounted while ANY batch is
+          up — so a batch retired and replaced by a different one for this conversation would otherwise
+          carry the retired batch's position into a list that never had it. React strips `key` from props,
+          so the unguessable value reaches no attribute, no DOM node and no log; it only tells React to
+          rebuild the leaf, which re-seeds its state to the first question. Same-nonce RE-DELIVERY keeps
+          this key unchanged by design — see the clamp in QuestionPanelSlot, which is what covers it. */}
+      {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
       <Composer phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined} />
     </>
   )
 }
 
-/** The question a batch carrying several draws. Named rather than a bare `0` because it is the SAME index
- *  in two places below — the question read and the picks key — and a silent disagreement between them would
- *  render one question's rows against another's selection. Stepping through a batch is still deferred. */
+/** The question a batch OPENS on, and since #915 that is all it is: the seed for the slot's own state, not
+ *  the only question the panel can draw. The two-places warning it used to carry now belongs to
+ *  `activeIndex` below, which is still read once and used twice — the question read and the picks key —
+ *  because a silent disagreement there would render one question's rows against another's selection. */
 const FIRST_QUESTION_INDEX = 0
 
 /**
- * #912: the panel's own store-bound container — the picks half of the #224 split, and the seam where a
- * gesture on a row becomes a store event.
+ * #912 / #915: the panel's own store-bound container — the picks half of the #224 split, and the seam where
+ * a gesture on a row (or, since #915, on a header tab) becomes a store event or a jump.
+ *
+ * THE JUMP IS PANEL-LOCAL COMPONENT STATE, never a new arm on the picks store, and the asymmetry with the
+ * picks is the point. What must survive a chat switch is the PICKS, and they already do because they live
+ * outside the pane `PairedShell` keys on the conversation id (#670) — so this leaf remounts on a switch and
+ * the batch re-opens on its first question, which is intended rather than a gap to defend. Putting the index
+ * in the store instead would widen its event union and every clearing arm for nothing observable.
  *
  * A SEPARATE LEAF FROM `ComposerSlot`, MOUNTED ONLY WHILE A BATCH IS UP, rather than a picks read added
  * beside the batch read above. Hooks cannot be conditional, so reading the picks store in `ComposerSlot`
@@ -2528,19 +2542,33 @@ const FIRST_QUESTION_INDEX = 0
  * so there is no local dismissal and no optimistic path to keep in step.
  */
 export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Element {
-  const question = batch.questions[FIRST_QUESTION_INDEX]
+  const [jumpedTo, setJumpedTo] = useState(FIRST_QUESTION_INDEX)
+  // CLAMPED, AND THIS IS A CRASH GUARD RATHER THAN TIDINESS. `jumpedTo` is component state; the batch is
+  // store state; they move independently. A same-nonce `question_shown` re-delivery REPLACES the held batch
+  // in place (reduceQuestionBatches' `shown` arm, latest wins), so the nonce key upstream does not change,
+  // this leaf does not remount, and a re-delivery carrying fewer questions than the operator has jumped past
+  // would read `batch.questions[jumpedTo]` as undefined and throw out of the render — on a frame the daemon
+  // controls and the reducer explicitly supports. `questions` is never empty (the reducer's guard sits
+  // before the match), so `length - 1` is always a valid position.
+  // COMPUTED ONCE and used twice below, which is FIRST_QUESTION_INDEX's old warning in its new home: the
+  // question read and the picks key must be the same value. A `?? questions[0]` fallback would look like the
+  // same fix and be the wrong one — it renders one question's rows against another question's selection.
+  const activeIndex = Math.min(jumpedTo, batch.questions.length - 1)
+  const question = batch.questions[activeIndex]
   const selection = useQuestionPicksStore(
-    selectQuestionSelection(batch.questionBatchId, FIRST_QUESTION_INDEX)
+    selectQuestionSelection(batch.questionBatchId, activeIndex)
   )
   const at = {
     multiSelect: question.multiSelect,
     questionBatchId: batch.questionBatchId,
-    questionIndex: FIRST_QUESTION_INDEX
+    questionIndex: activeIndex
   }
   const dispatch = questionPicksStore.getState().dispatch
   return (
     <QuestionPanelView
-      question={question}
+      questions={batch.questions}
+      activeIndex={activeIndex}
+      onQuestionSelected={setJumpedTo}
       selection={selection}
       onOptionChosen={(optionIndex) => dispatch(optionPickEventFor({ ...at, optionIndex }))}
       onOtherChosen={() => dispatch(otherPickEventFor(at))}
@@ -2548,7 +2576,7 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
         dispatch({
           type: 'otherTextChanged',
           questionBatchId: batch.questionBatchId,
-          questionIndex: FIRST_QUESTION_INDEX,
+          questionIndex: activeIndex,
           text
         })
       }

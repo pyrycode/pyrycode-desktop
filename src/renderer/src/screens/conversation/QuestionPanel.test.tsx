@@ -41,18 +41,36 @@ const selection = (over: Partial<QuestionSelection> = {}): QuestionSelection => 
   ...over
 })
 
-const render = (q: Question, picked: QuestionSelection = selection()): string =>
+const renderBatch = (
+  questions: readonly Question[],
+  activeIndex: number,
+  picked: QuestionSelection = selection()
+): string =>
   renderToStaticMarkup(
     <QuestionPanelView
-      question={q}
+      questions={questions}
+      activeIndex={activeIndex}
       selection={picked}
+      onQuestionSelected={() => {}}
       onOptionChosen={() => {}}
       onOtherChosen={() => {}}
       onOtherTextChanged={() => {}}
     />
   )
 
+/** The one-question batch, which is every pre-#915 case: same panel, and the row draws a bare label. */
+const render = (q: Question, picked: QuestionSelection = selection()): string =>
+  renderBatch([q], 0, picked)
+
 const count = (markup: string, pattern: RegExp): number => markup.match(pattern)?.length ?? 0
+
+/** Just the title row's labels, so a tab assertion cannot be satisfied by the Cancel/Continue buttons or by
+ *  anything inside the bordered box below. */
+const labelsRow = (markup: string): string =>
+  markup.slice(
+    markup.indexOf('question-panel__labels'),
+    markup.indexOf('question-panel__box')
+  )
 
 describe('QuestionPanelView', () => {
   it('draws the header in the title row and the question in the box', () => {
@@ -275,6 +293,100 @@ describe('QuestionPanelView', () => {
     for (const sentinel of ['HEADER', 'QUESTION', 'LABEL', 'DESCRIPTION']) {
       expect(count(markup, new RegExp(`${sentinel}-SENTINEL`, 'g'))).toBe(1)
     }
+  })
+
+  // #915 — the header tabs. `question-panel__labels` (the ROW) shares a prefix with
+  // `question-panel__label` (a TAB), so every count below anchors on the class token's own boundary.
+  const tabCount = (markup: string): number => count(markup, /question-panel__label[" ]/g)
+
+  const batch = (...headers: string[]): Question[] =>
+    headers.map((header, index) =>
+      question({ header, question: `Body of ${header}`, multiSelect: index % 2 === 1 })
+    )
+
+  it('draws one tab per question, in the batch’s own order, carrying each header', () => {
+    const markup = renderBatch(batch('Alpha', 'Beta', 'Gamma'), 0)
+    expect(tabCount(markup)).toBe(3)
+    expect(markup).toContain('>Alpha<')
+    expect(markup).toContain('>Beta<')
+    expect(markup).toContain('>Gamma<')
+    expect(markup.indexOf('>Alpha<')).toBeLessThan(markup.indexOf('>Beta<'))
+    expect(markup.indexOf('>Beta<')).toBeLessThan(markup.indexOf('>Gamma<'))
+  })
+
+  it('marks exactly one tab active and every other inactive', () => {
+    const markup = renderBatch(batch('Alpha', 'Beta', 'Gamma'), 1)
+    // The two treatments are asserted together so neither can stand in for the other: aria-current is the
+    // non-visual half (the states differ only in colour, which a screen reader cannot hear), the modifier
+    // class is the drawn half.
+    expect(count(markup, /aria-current="true"/g)).toBe(1)
+    expect(count(markup, /question-panel__label--inactive/g)).toBe(2)
+    // On the SECOND tab: everything before it in document order belongs to the first.
+    expect(markup.indexOf('aria-current')).toBeGreaterThan(markup.indexOf('>Alpha<'))
+    expect(markup.indexOf('aria-current')).toBeLessThan(markup.indexOf('>Gamma<'))
+  })
+
+  it('draws the active question’s own text, options and control variant', () => {
+    const markup = renderBatch(
+      [
+        question({ header: 'Alpha', question: 'The first body' }),
+        question({
+          header: 'Beta',
+          question: 'The second body',
+          multiSelect: true,
+          options: [{ label: 'Swift', description: 'apple' }]
+        })
+      ],
+      1
+    )
+    expect(markup).toContain('The second body')
+    expect(markup).not.toContain('The first body')
+    expect(markup).toContain('>Swift<')
+    expect(markup).not.toContain('>Rust<')
+    // AC3's last clause: the jumped-to question brings its OWN row style, not the one the panel opened with.
+    expect(markup).toContain('question-panel__control--checkbox')
+    expect(markup).not.toContain('question-panel__control--radio')
+  })
+
+  it('offers no jump affordance at all for a one-question batch', () => {
+    // AC4. A focusable control that re-selects the question already on screen is not "unchanged", so the
+    // single label stays the shipped <span> — scoped to the labels row, since Cancel/Continue are buttons.
+    const row = labelsRow(render(question()))
+    expect(tabCount(row)).toBe(1)
+    expect(row).not.toContain('<button')
+    expect(row).not.toContain('aria-current')
+    expect(row).not.toContain('question-panel__label--inactive')
+  })
+
+  it('keys the tabs by position, so two byte-identical headers stay two tabs', () => {
+    // The observable consequence of `key={index}` (a React key is invisible in static markup). Keying by
+    // `header` is the failure questionBatches.ts and WireQuestion each name by hand — claude-authored text
+    // in a lookup path — and it would collapse these two rows into one.
+    const markup = renderBatch(batch('Language choice', 'Language choice'), 0)
+    expect(tabCount(markup)).toBe(2)
+    expect(count(markup, />Language choice</g)).toBe(2)
+  })
+
+  it('puts no claude-authored header into an attribute, across every tab', () => {
+    // The one-question version of this above cannot see a tab row at all. Each header must appear EXACTLY
+    // once, as element content: an attribute copy — `title`, `aria-label`, a `data-*` — would make it two.
+    // NOT the `batch()` helper: its bodies echo the header, which would make each sentinel legitimately
+    // appear twice and hide the very duplication this test is looking for.
+    const markup = renderBatch(
+      [question({ header: 'HEADER-ONE' }), question({ header: 'HEADER-TWO' })],
+      0
+    )
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('data-')
+    expect(markup).not.toContain('id=')
+    expect(count(markup, /HEADER-ONE/g)).toBe(1)
+    expect(count(markup, /HEADER-TWO/g)).toBe(1)
+  })
+
+  it('escapes a hostile header in an inactive tab too', () => {
+    const markup = renderBatch(batch('Alpha', '<img src=x onerror=alert(1)>'), 0)
+    expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(markup).not.toContain('<img')
   })
 
   it('draws two options that are byte-identical', () => {

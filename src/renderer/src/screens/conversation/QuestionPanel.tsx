@@ -2,10 +2,11 @@ import { PyryMark } from '../../theme/PyryMark'
 import type { Question } from '../../store/questionBatches'
 import type { QuestionPickEvent, QuestionSelection } from '../../store/questionPicksStore'
 
-// #906 / #907 / #912: the pure view half of the question vertical's render slice (Figma node 347:6913, the
-// single-question instance). #906 drew the panel's chrome — the title row, the bordered box with the
-// question's own text, the separator, and an inert Cancel / Continue row — #907 filled the box's
-// middle band with one row per offered option, and #912 made those rows and the Other field respond.
+// #906 / #907 / #912 / #915: the pure view half of the question vertical's render slice (Figma node
+// 347:6913, the single-question instance). #906 drew the panel's chrome — the title row, the bordered box
+// with the question's own text, the separator, and an inert Cancel / Continue row — #907 filled the box's
+// middle band with one row per offered option, #912 made those rows and the Other field respond, and #915
+// filled the title row with one tab per question in the batch (347:6829) and made them jump between them.
 //
 // The pure view / store-bound container split is #224's, built on #177's dialog precedent: this file is
 // markup-in-props-out and server-render-testable from injected fixtures, while the store read lives in
@@ -76,6 +77,15 @@ export const QUESTION_OTHER_TICK_COPY = 'Other'
 // a time, so a single fixed group is both sufficient and unambiguous. Inert on the checkbox variant, where
 // `name` carries no grouping semantics and there is no form to submit into.
 const QUESTION_OPTION_GROUP_NAME = 'question-panel-option'
+// A header tab's classes, shared by both states (#915) — the inactive one appends its own modifier. The
+// typography class is the SAME one the single label wears, so the one-question row is unchanged by
+// construction and the only new colour in the stylesheet is the inactive tab's.
+//
+// NO role="tablist"/"tab" HERE, and the omission is a decision. A conforming tab widget needs aria-controls
+// pointing at the panel's `id` — a generated DOM id in a component whose test asserts no `id=` reaches the
+// markup at all — plus a roving tabindex and an arrow-key contract. Plain buttons carrying aria-current give
+// the same affordance with none of that: this row is a set of jump controls, not a tab panel.
+const QUESTION_TAB_CLASS = 'question-panel__label question-panel__label--tab'
 
 /**
  * Which pick arm a question's shape wants for an OPTION row — `optionPicked` (replace) for a single-select
@@ -153,8 +163,12 @@ function QuestionTick(): JSX.Element {
 }
 
 /**
- * One outstanding question's frame. Takes the question itself, never the batch: a batch carrying several
- * draws its first, and choosing which is the container's job, so this view has no index to get wrong.
+ * The outstanding batch's frame. #915 gave this view the whole ordered LIST plus the position showing, in
+ * place of #906's single `question`: the title row needs every header at once, and the box needs exactly
+ * one of them, so a view holding only the chosen question could not draw the row. The box reads
+ * `questions[activeIndex]` ONCE, so the tabs and the box cannot point at different questions — and the
+ * container keys the picks on that same index (see `QuestionPanelSlot`, which also owns the clamp keeping
+ * it in range).
  *
  * NO EMPTY BRANCH AND NO NULL PROP, deliberately. `reduceQuestionBatches` returns state unchanged when
  * `questions` is empty — the guard sits before the match, so an empty re-delivery leaves a live batch
@@ -162,28 +176,36 @@ function QuestionTick(): JSX.Element {
  * ships a `question_shown_empty.json` fixture. A defensive empty-state render here would defend a failure
  * mode the store makes unreachable.
  *
- * The title row draws exactly ONE label. The Figma's `Question labels` row (347:6829) has five slots and
- * a Previous control; in the single-question instance four labels and Previous are hidden, so there is no
- * tab SWITCHING here and no Previous — but the row itself is drawn, because omitting it would diverge
- * from the locked design.
+ * THE TITLE ROW HOLDS TABS AND NOTHING ELSE. The Figma's `Question labels` row (347:6829) is five
+ * `Question label` instances wrapping onto two lines and NO button: #906's note here — and the matching
+ * one in conversation.css — put Previous in this row, and both were wrong. Figma puts Previous in the
+ * middle of the Actions row (347:6657), which is #916's, not this slice's.
  */
 export function QuestionPanelView({
-  question,
+  questions,
+  activeIndex,
   selection,
+  onQuestionSelected,
   onOptionChosen,
   onOtherChosen,
   onOtherTextChanged
 }: {
-  question: Question
+  questions: readonly Question[]
+  activeIndex: number
   selection: QuestionSelection
+  onQuestionSelected: (questionIndex: number) => void
   // BOTH CHOSEN-CALLBACKS ARE VARIANT-NEUTRAL, deliberately. Picking and ticking are one gesture from this
   // view's side; which store arm it becomes is the container's call, through optionPickEventFor /
-  // otherPickEventFor above. So this view holds no arm to transpose — and no `questionIndex` either, since
-  // the container closes over it, leaving this component no index it could get wrong.
+  // otherPickEventFor above. So this view holds no arm to transpose — and neither callback carries a
+  // question index, even now that the view knows one: `activeIndex` selects what is DRAWN, while which
+  // question a pick is recorded against stays the container's single read, so the two cannot drift apart.
   onOptionChosen: (optionIndex: number) => void
   onOtherChosen: () => void
   onOtherTextChanged: (text: string) => void
 }): JSX.Element {
+  // Read ONCE, so every read below — the question's text, its options, its variant — is the same question
+  // the active tab names. No `!` and no guard: the container clamps the index into range before it arrives.
+  const question = questions[activeIndex]
   // The ONLY difference between the two option variants (347:6696 Single / 347:6698 Multiple): same row
   // geometry, same 8px gap, same label-over-description stack, a differently-cornered control — and, since
   // #912, a differently-shaped Selector inside it and a different native input type.
@@ -217,10 +239,45 @@ export function QuestionPanelView({
             difference is not visible. */}
         <PyryMark className="question-panel__mark" width={14} height={16} />
         <div className="question-panel__labels">
-          {/* The batch's own header, in the row's Active treatment. DRAWN, never keyed on: a tab keyed by
-              `header` is the exact "untrusted text in a lookup path" this family names, and with one
-              label there is no list and so no key at all. */}
-          <span className="question-panel__label">{question.header}</span>
+          {/* ONE QUESTION DRAWS A BARE <span>, AND THAT IS THE WHOLE POINT OF BRANCHING ON THE COUNT. With
+              nothing to jump to, a focusable control that re-selects the question already on screen is not
+              "unchanged from today" — it is a new tab stop in front of the operator for no gesture. So the
+              single-label render stays #906's markup exactly, and the row grows controls only once there
+              is somewhere to go. */}
+          {questions.length === 1 ? (
+            <span className="question-panel__label">{questions[0].header}</span>
+          ) : (
+            questions.map((tab, index) => (
+              // KEYED BY POSITION, for the option rows' reason one nesting level down and stated by hand in
+              // both questionBatches.ts and WireQuestion's docblock: `header` is claude-authored, so
+              // `key={tab.header}` is untrusted text in a lookup path — the single most likely mistake in
+              // this family, and the one a tab row reaches for first. The array is claude's own order and
+              // is never re-keyed, so the index is the honest identity, and two headers claude words
+              // identically stay two tabs.
+              // A <button>, NEVER an <a href>: a link is the URL sink these strings must never reach, and
+              // `header` is exactly what would fill it. type="button" so no tab can submit an ancestor
+              // form, matching Cancel and Continue. Its accessible name is its own visible text — the
+              // React-children path `header` is already on — so there is no aria-label and no
+              // aria-labelledby (which would need a generated id and make the value a DOM lookup key).
+              <button
+                type="button"
+                key={index}
+                className={
+                  index === activeIndex
+                    ? QUESTION_TAB_CLASS
+                    : `${QUESTION_TAB_CLASS} question-panel__label--inactive`
+                }
+                // The design's two states differ in COLOUR ALONE, which a screen reader cannot hear. The
+                // ComposerOptionsPanel / RunConfigSections idiom carries the same meaning non-visually;
+                // `undefined` omits the attribute rather than emitting aria-current="false" on every other
+                // tab. Client-owned constants, which is what lets them be attributes at all.
+                aria-current={index === activeIndex ? 'true' : undefined}
+                onClick={() => onQuestionSelected(index)}
+              >
+                {tab.header}
+              </button>
+            ))
+          )}
         </div>
       </div>
       <div className="question-panel__box">

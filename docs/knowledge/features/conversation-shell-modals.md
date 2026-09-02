@@ -130,7 +130,7 @@ tokens, or raw bytes (the guarantee was defended upstream by #248). See [#248 co
 notes](../codebase/248.md) for the transport half and [#249 codebase notes](../codebase/249.md) for the
 full render design, testing strategy, and lessons learned.
 
-## Question panel (#906, option rows since #907, live since #912)
+## Question panel (#906, option rows since #907, live since #912, header tabs since #915)
 
 The render vertical's frame slice, over the model and bridge documented in [Question-batch
 model](question-batch-model.md): `questionBatchStore` (#899) held the batches and `useQuestionBridge`
@@ -143,7 +143,10 @@ nothing responds to a click. #908, meant to land the picks and the answer path t
 [#911](https://github.com/pyrycode/pyrycode-desktop/issues/911) (the picks store) and this ticket's sibling
 [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912); #908 itself closed as not planned, never
 shipping anything. #912 wires the panel to #911's store: the option rows and the Other field respond to a
-click or a keystroke, and the picks survive a chat switch. The send is still #853's.
+click or a keystroke, and the picks survive a chat switch. #915 fills the title row with one tab per
+question the batch carries and lets a click choose which question the box draws — the batch's own header
+text, on a control keyed by array position rather than by that text, the failure mode `questionBatches.ts`
+and `WireQuestion`'s docblock each name by hand. The send is still #853's.
 
 **`useQuestionBridge()` mounts in `App.tsx`**, beside `useModalBridge`, unconditional and app-lifetime —
 not screen-scoped, because a batch is raised against a conversation the operator may not have open, the
@@ -158,7 +161,7 @@ const batch = useQuestionBatchStore((s) =>
 )
 return (
   <>
-    {batch && <QuestionPanelSlot batch={batch} />}
+    {batch && <QuestionPanelSlot key={batch.questionBatchId} batch={batch} />}
     <Composer phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined} />
   </>
 )
@@ -170,15 +173,24 @@ no `useMemo`: `useStore` compares the selector's *result* under `Object.is`, and
 by reference, per the store's own ruling against memoising anything claude-authored into a lookup path.
 `ComposerSlot` itself never indexes into `batch.questions` any more (#912) — see `QuestionPanelSlot` below.
 
-**`QuestionPanelSlot({ batch })`** (#912, `ConversationScreen.tsx`, exported) is a separate leaf mounted only
-on the `batch &&` branch, and it is the picks store's only reader:
+**The `key={batch.questionBatchId}` is #915's, and it is a remount instruction, not decoration.** The slot
+holds the operator's current tab in component state (below) and stays mounted while *any* batch is up, so a
+different batch replacing the panel for this conversation would otherwise inherit the retired batch's
+position into a question list that never had it. The nonce as `key` makes React discard and rebuild the
+leaf, which reseeds that state to the first question — React's own prescribed reset, one level above #670's
+same shape. React strips `key` from props, so the value reaches no attribute, no DOM node and no log. A
+same-nonce re-delivery (the daemon re-sending `question_shown` for a batch still outstanding) leaves this key
+unchanged by design — that case is the clamp's job, inside `QuestionPanelSlot`, not this key's.
+
+**`QuestionPanelSlot({ batch })`** (#912, header tabs since #915, `ConversationScreen.tsx`, exported) is a
+separate leaf mounted only on the `batch &&` branch, and it is the picks store's only reader:
 
 ```ts
-const FIRST_QUESTION_INDEX = 0 // named: the SAME index feeds the question read and the picks key below
-
-const question = batch.questions[FIRST_QUESTION_INDEX]
+const [jumpedTo, setJumpedTo] = useState(FIRST_QUESTION_INDEX)
+const activeIndex = Math.min(jumpedTo, batch.questions.length - 1)
+const question = batch.questions[activeIndex]
 const selection = useQuestionPicksStore(
-  selectQuestionSelection(batch.questionBatchId, FIRST_QUESTION_INDEX)
+  selectQuestionSelection(batch.questionBatchId, activeIndex)
 )
 const dispatch = questionPicksStore.getState().dispatch
 ```
@@ -189,13 +201,28 @@ re-rendering the message box it is covering. A leaf that exists only while the p
 and keeps a pick re-rendering the panel alone. **The key is `batch.questionBatchId`, never
 `conversationId`** — a substitution that would compile clean. The nonce is what makes a fresh batch
 replacing a dismissed one (same conversation) read a fresh empty selection with no clearing effect to get
-right and no stale pick reachable; keyed on the conversation, the new batch would inherit the old one's
-picks. `batch.questions[FIRST_QUESTION_INDEX]` is read with no guard and no `!` — `reduceQuestionBatches`
-never lets an empty `questions` array reach `outstanding`, so the index always exists; a batch with several
-draws its first, and stepping through the rest is still deferred (#907's original note, unchanged).
+right and no stale pick reachable, and, since #915, a fresh first question too (the `key` on this leaf,
+above); keyed on the conversation, the new batch would inherit the old one's picks and the old one's tab.
 `dispatch` is read off the store rather than through a hook, since it is a stable function on a singleton
 and subscribing to it would buy nothing. Neither `dismissed` nor `reconnected` is dispatched here —
 `questionBridge` already drives both, over its one daemon-event subscription, picks-first.
+
+**`jumpedTo` is #915's, and `activeIndex`'s clamp is a crash guard, not tidiness.** `jumpedTo` is
+panel-local `useState`, deliberately not a new arm on the picks store: what must survive a chat switch is
+the picks, and they already do, because they live outside the pane `PairedShell` keys on the conversation id
+(#670) — so this leaf remounts on a switch and reopens on the first question, which is intended rather than
+a gap, and putting the index in the store instead would widen its event union and every clearing arm for
+nothing observable. `jumpedTo` and `batch.questions` are two independent pieces of state, though: a
+same-nonce `question_shown` re-delivery replaces the held batch **in place** (`reduceQuestionBatches`'
+`shown` arm, latest wins), so the `key` above does not change, this leaf does not remount, and an operator
+sitting past the end of a shorter re-delivered list would read `batch.questions[jumpedTo]` as `undefined` and
+throw out of the render — on a frame the daemon controls and the reducer explicitly supports. `activeIndex =
+Math.min(jumpedTo, batch.questions.length - 1)` closes that, and is computed **once** and read **twice** —
+the question and the picks key — which is `FIRST_QUESTION_INDEX`'s old two-places warning in its new home: a
+silent disagreement between those two reads would render one question's rows against another's selection. A
+`?? questions[0]` fallback would look like the same fix and be the wrong one, for that reason.
+`batch.questions` is never empty (`reduceQuestionBatches`' guard sits before the match, so `[]` never reaches
+`outstanding`), so the clamp always yields a valid position.
 
 **`Composer` gained a required `covered: boolean` prop**, rendering `<div className="composer"
 hidden={covered}>`. The native `hidden` attribute is the whole mechanism — one attribute that hides the
@@ -213,21 +240,27 @@ of specificity, so without this rule the attribute is a no-op for layout — the
 under the panel — and only its accessibility half works, silently, which is the trap: it looks fine on
 screen and is broken for a keyboard.
 
-**`QuestionPanelView({ question, selection, onOptionChosen, onOtherChosen, onOtherTextChanged })`**
+**`QuestionPanelView({ questions, activeIndex, selection, onQuestionSelected, onOptionChosen, onOtherChosen, onOtherTextChanged })`**
 (`QuestionPanel.tsx`) is the pure, exported view — the #224 split, testable by `renderToStaticMarkup` from
-injected fixtures. `selection: QuestionSelection` and the three callbacks are #912's; the view stays
-variant-neutral (single-select replace and multi-select accumulate are one gesture from its side), so it
-holds no `multiSelect` branch that could pick the wrong store arm — see § Option rows below for where that
-choice is made. `question.header` and
-`question.question` are claude-authored and render as plain React children only, auto-escaped, never
-`dangerouslySetInnerHTML`. **No `title` attribute on the clamped question text** — the reflex accompaniment
-to a single-line ellipsis clamp, and the one trap the component invites, since it would put untrusted text
-into an attribute, the ban `questionBatchStore.ts` states by name. No `data-*` derived from `header`,
-`question`, or the nonce `questionBatchId` either, which this slice never reads. The title row draws
-exactly one label (`347:6829`'s other four slots and Previous are hidden in the single-question instance)
-using the already-shipped `PyryMark` at `width={14} height={16}`, the composer status row's call verbatim.
-Cancel and Continue are `<button type="button">` with no `onClick` and no `disabled` — inert, not greyed,
-since the panel sits on top of the composer and there is nothing to disable.
+injected fixtures. Through #912 it took a single `question`, "by design" — its own docblock said "choosing
+which is the container's job, so this view has no index to get wrong." #915 is what gives it the list and a
+position, widening that shape rather than violating the note: the title row needs every header at once, and
+the box needs exactly one of them, so `question = questions[activeIndex]` is read **once**, inside the view,
+so the tabs and the box cannot point at different questions — `QuestionPanelSlot` (above) computes the same
+`activeIndex` once and uses it as the picks key too. `selection: QuestionSelection` and the three #912
+callbacks stay unchanged in shape; the view stays variant-neutral (single-select replace and multi-select
+accumulate are one gesture from its side) and holds no `multiSelect` branch that could pick the wrong store
+arm — see § Option rows below for where that choice is made — and neither callback carries a question index,
+even now that the view knows one: which question a pick is recorded against is still the container's single
+read. `question.header` and `question.question` are claude-authored and render as plain React children
+only, auto-escaped, never `dangerouslySetInnerHTML`. **No `title` attribute on the clamped question text** —
+the reflex accompaniment to a single-line ellipsis clamp, and the one trap the component invites, since it
+would put untrusted text into an attribute, the ban `questionBatchStore.ts` states by name. No `data-*`
+derived from `header`, `question`, or the nonce `questionBatchId` either, which this slice never reads. The
+title row draws every question's header as a tab — see § Header tabs below — using the already-shipped
+`PyryMark` at `width={14} height={16}`, the composer status row's call verbatim, beside them. Cancel and
+Continue are `<button type="button">` with no `onClick` and no `disabled` — inert, not greyed, since the
+panel sits on top of the composer and there is nothing to disable.
 
 **Colours came from the Figma variables on node `347:6913`, never the generated fallbacks** (which print
 the light scheme, per `tokens.css`'s standing warning): Tertiary, On Background, Primary Container,
@@ -236,6 +269,79 @@ Primary, Background and On Primary resolve onto the existing `--color-tertiary`/
 defines Background = Surface. Two new tokens, `--text-body-medium-weight-emphasized` and
 `--text-body-small-weight-emphasized` (both `500`), were minted for the question text and the button
 labels rather than a `font-weight: 500` literal at the call site.
+
+### Header tabs (#915)
+
+The title row (`347:6829`) went from one static `<span>` per #906 to `questions.map(…)` inside the same
+`.question-panel__labels`, and count is what decides the element: `questions.length === 1` still draws
+`<span className="question-panel__label">{questions[0].header}</span>` — byte-identical to #906's markup, so
+the one-question batch is unchanged by construction — and two or more draws every header, the active one
+included, as `<button type="button">`. AC4 reads as an affordance requirement, not only a paint one: with
+nowhere to jump, a focusable control that re-selects the question already on screen would be a new tab stop
+for no gesture, so the single-question case stays inert rather than becoming a one-item button row.
+
+**Keyed by array position, never by `header`.** `header` is claude-authored, and a tab keyed on it is the
+lookup-path failure `questionBatches.ts` and `WireQuestion`'s docblock each name by hand as this family's
+likeliest mistake — a tab row is where it is reached for the first time, one level above the option rows'
+same reasoning. The array is claude's own order and is never re-keyed, so the index is the honest identity;
+two byte-identical headers still draw two tabs. A tab's accessible name is its own visible text — no
+`aria-label`, no `aria-labelledby` (which would need a generated `id` and turn the value into a DOM lookup
+key), no `title`, no `data-*` — keeping `header` on the same React-children path the option rows already put
+it on. A `<button>`, never an `<a href>`: a link is the URL sink these strings must never reach.
+
+**Active vs inactive is `aria-current`, not colour alone.** The active tab carries `aria-current="true"`;
+`undefined` — never `"false"` — on every other one, the `ComposerOptionsPanel`/`RunConfigSections` idiom, so
+the design's colour-only state difference (`--color-tertiary` active, `--color-primary-container` inactive)
+is also non-visual. `QUESTION_TAB_CLASS = 'question-panel__label question-panel__label--tab'` carries the
+shipped Active typography and colour for both states; `--inactive` appends the one new colour. No
+`role="tablist"`/`"tab"`: a conforming tab widget needs `aria-controls` pointing at the panel's `id` — a
+generated DOM id, in a component whose test asserts none reaches the markup — plus a roving tabindex and an
+arrow-key contract. Plain buttons plus `aria-current` give the same jump affordance without minting any of
+that.
+
+**CSS.** `.question-panel__labels` itself needed no change — it already wrapped at the design's 8px row /
+16px column rhythm, drawn for a five-slot row that had only ever held one. `.question-panel__label--tab` is
+the `.conversation__unpair` bare-text-button recipe minus its pill (no padding, no border, transparent
+ground, `cursor: pointer`, `font-family: var(--font-sans)`, `text-align: left`) plus the repo's
+`:focus-visible { outline: 1px solid var(--color-outline) }`; `.question-panel__label--inactive` sets
+`color: var(--color-primary-container)` and nothing else, the only new colour this slice mints. One
+deliberate divergence from the generated Figma code: its slots are `white-space: nowrap`, dropped here — the
+shipped `word-break: break-word` on `.question-panel__label` is kept instead, since an unbounded hostile
+header under `nowrap` would push the row's width out; `word-break` holds the layout while still matching the
+mock for any ordinary header.
+
+**Two in-repo comments had misplaced Previous into this row** — one here in `QuestionPanel.tsx`, one in
+`conversation.css` — both written against #906's single-question instance and both wrong once checked against
+Figma on 2026-09-02: `347:6829` holds five `Question label` instances and no button at all. Previous is the
+middle button of the Actions row (`347:6657`), and is #916's, not this row's; both comments were corrected in
+this slice.
+
+**Concurrency was the one security finding, MUST-FIX on the first pass.** `jumpedTo`/`activeIndex` is
+component state, `batch.questions` is store state, and they move independently; the fix is the `key` +
+clamp pair described under `QuestionPanelSlot` above, driven in Playwright (a same-nonce re-delivery
+shortening the list while the operator sits on the last question) rather than left to inspection, since a
+static render can never leave the seeded index. Everything else reviewed clean: no new IPC surface, every tab
+is `type="button"` matching Cancel/Continue so none can act as a submit control, and nothing in this family
+logs — a "which tab did we draw?" diagnostic would be the one line putting the nonce and claude's text in a
+sink together. **Accepted, not fixed:** the row's render cost went from O(1) (one question, whatever the
+batch held) to O(N) tabs, so a hostile daemon inside the session can make the row as tall as the frame cap
+(`MAX_FRAME_BYTES`) allows; truncating would violate AC1's "do not cap," so `word-break: break-word` — closing
+the one geometry escape a single header could still cause — is the mitigation taken instead of a count limit.
+
+**Testing.** `QuestionPanel.test.tsx` server-renders the widened view from injected fixtures: one tab per
+question in batch order carrying each `header`; exactly one `aria-current="true"` and the rest carrying none;
+a non-zero `activeIndex` drawing that question's own text, options and control variant; the one-question
+batch drawing a single `<span>` with no `<button>` and no `--inactive` anywhere; two byte-identical headers
+drawing two tabs; and the existing escaping/no-attribute assertions extended to the multi-tab render.
+`composerSlot.test.tsx` keeps its first-question first-paint assertion and gains a tab-per-question one.
+`e2e/question-picks.spec.ts` gained a third arc unreachable from a static render: a two-question batch (Q1
+single-select, Q2 multi-select) — pick in Q1, click Q2's tab, see its own text and checkbox rows, tick and
+type there, jump back and find Q1's radio pick and Other text intact, forward again and find Q2's intact —
+then a same-nonce re-delivery carrying one question while the operator sits on Q2, proving the clamp: the
+panel keeps standing, now under a single non-button label. The stale-DOM-`checked` question the architecture
+doc left open **did not reproduce**: both directions of arc 3 read their own store state on every hop, so no
+`key` was added to the options list, which would have defended a failure mode that never occurred. Arcs 1 and
+2 gained one assertion each that the one-question row holds no button.
 
 ### Option rows (#907, live since #912)
 

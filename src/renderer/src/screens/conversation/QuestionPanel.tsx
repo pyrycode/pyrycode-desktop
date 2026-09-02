@@ -2,14 +2,14 @@ import { PyryMark } from '../../theme/PyryMark'
 import type { Question } from '../../store/questionBatches'
 import type { QuestionPickEvent, QuestionSelection } from '../../store/questionPicksStore'
 
-// #906 / #907 / #912 / #915 / #916: the pure view half of the question vertical's render slice (Figma node
-// 347:6913, the single-question instance). #906 drew the panel's chrome — the title row, the bordered box
-// with the question's own text, the separator, and an inert Cancel / Continue row — #907 filled the box's
-// middle band with one row per offered option, #912 made those rows and the Other field respond, #915
-// filled the title row with one tab per question in the batch (347:6829) and made them jump between them,
-// and #916 put the same jump on the action row as Previous plus a trailing button that reads Next until
-// the last question. NOTHING HERE ANSWERS YET: every control on the action row is still inert as to
-// sending, which is #853's.
+// #906 / #907 / #912 / #915 / #916 / #921: the pure view half of the question vertical's render slice
+// (Figma node 347:6913, the single-question instance). #906 drew the panel's chrome — the title row, the
+// bordered box with the question's own text, the separator, and an inert Cancel / Continue row — #907
+// filled the box's middle band with one row per offered option, #912 made those rows and the Other field
+// respond, #915 filled the title row with one tab per question in the batch (347:6829) and made them jump
+// between them, and #916 put the same jump on the action row as Previous plus a trailing button that reads
+// Next until the last question. #921 GAVE CANCEL THE ROW'S FIRST SENDING HANDLER: it refuses the batch and
+// clears the panel. Continue is still inert as to answering — the answer path is #853's remaining slice.
 //
 // The pure view / store-bound container split is #224's, built on #177's dialog precedent: this file is
 // markup-in-props-out and server-render-testable from injected fixtures, while the store read lives in
@@ -59,11 +59,11 @@ import type { QuestionPickEvent, QuestionSelection } from '../../store/questionP
 
 // Client-owned copy, in the app's own voice — deliberately constants rather than JSX literals, so the
 // line between what the client says and what claude says is visible in the source of a file that renders
-// both. NO BUTTON ON THIS ROW SENDS ANYTHING (#853 sends the assembled answer; the rows below only record
-// it) — since #916 two of them step the batch, which is navigation and not an answer, and Continue on the
-// last question is as inert as it was. None is `disabled`: the panel sits ON TOP of the composer, so there
-// is nothing to disable and no disabled state to draw. The inert-buttons posture is #224's, so the answer
-// path lands on a stable surface.
+// both. SINCE #921 EXACTLY ONE BUTTON ON THIS ROW SENDS: Cancel refuses the batch. Previous and Next step
+// it, which is navigation and not an answer, and Continue on the last question is as inert as it was
+// (#853 sends the assembled answer; the rows below only record it). None is `disabled`: the panel sits ON
+// TOP of the composer, so there is nothing to disable and no disabled state to draw. The inert-buttons
+// posture is #224's, so the answer path lands on a stable surface.
 export const QUESTION_CANCEL_COPY = 'Cancel'
 export const QUESTION_CONTINUE_COPY = 'Continue'
 // The two stepping labels (#916), constants for the same reason. Previous is the middle instance Figma
@@ -197,6 +197,7 @@ export function QuestionPanelView({
   activeIndex,
   selection,
   onQuestionSelected,
+  onCancel,
   onOptionChosen,
   onOtherChosen,
   onOtherTextChanged
@@ -205,6 +206,13 @@ export function QuestionPanelView({
   activeIndex: number
   selection: QuestionSelection
   onQuestionSelected: (questionIndex: number) => void
+  // THE ROW'S ONE SENDING GESTURE (#921), and variant-neutral like the two chosen-callbacks below: this
+  // view knows a refusal was asked for and nothing about what it becomes. It carries NO batch id even
+  // though the container holds one — which batch a refusal is recorded against stays the container's
+  // single read, exactly as `activeIndex` selects what is DRAWN while the pick's question index stays
+  // its read, so the two cannot drift apart. Required rather than optional, so `tsc` forces the one
+  // call site to supply it and an unwired Cancel cannot ship green a second time.
+  onCancel: () => void
   // BOTH CHOSEN-CALLBACKS ARE VARIANT-NEUTRAL, deliberately. Picking and ticking are one gesture from this
   // view's side; which store arm it becomes is the container's call, through optionPickEventFor /
   // otherPickEventFor above. So this view holds no arm to transpose — and neither callback carries a
@@ -398,8 +406,15 @@ export function QuestionPanelView({
         <div className="question-panel__actions">
           {/* Cancel leads, Previous sits in the middle, the filled button trails, right-aligned
               (347:6657). type="button" on all three so none can ever submit an ancestor form. Each one's
-              accessible name is its own visible text, and all three strings are client-owned constants. */}
-          <button type="button" className="question-panel__cancel">
+              accessible name is its own visible text, and all three strings are client-owned constants.
+              #921 GAVE CANCEL ITS HANDLER AND CHANGED NOTHING ELSE ABOUT IT: the design read confirms the
+              row's treatment is unchanged, so there is no new class, no new attribute and no
+              conversation.css edit. The handler is passed straight through rather than wrapped in an
+              arrow — there is no argument to supply, and nothing derived from the batch may reach an
+              attribute here (the panel's standing rule for `questionBatchId`, a one-time nonce this file
+              still never reads at all). The view's spec asserts this button's markup is byte-identical to
+              what #906 shipped, which is what makes "the handler leaks nothing" structural. */}
+          <button type="button" className="question-panel__cancel" onClick={onCancel}>
             {QUESTION_CANCEL_COPY}
           </button>
           {/* ABSENT ON THE FIRST QUESTION, NEVER `disabled` — the header tabs' call one row up, for the

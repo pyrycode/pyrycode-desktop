@@ -64,7 +64,12 @@ import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
 import { QuestionPanelView, optionPickEventFor, otherPickEventFor } from './QuestionPanel'
-import { useQuestionBatchStore, selectBatchFor } from '../../store/questionBatchStore'
+import {
+  useQuestionBatchStore,
+  questionBatchStore,
+  selectBatchFor
+} from '../../store/questionBatchStore'
+import { refuseQuestionBatch } from './questionResolution'
 import type { QuestionBatch } from '../../store/questionBatches'
 import {
   useQuestionPicksStore,
@@ -2537,9 +2542,20 @@ const FIRST_QUESTION_INDEX = 0
  * is where the single-versus-multi distinction is told to the store. `dispatch` is read off the store rather
  * than through a hook: it is a stable function on a singleton, so subscribing to it would buy nothing.
  *
- * NEITHER `dismissed` NOR `reconnected` IS DISPATCHED HERE. `questionBridge` already drives both, over one
- * daemon-event subscription fanning out to both stores, picks-first — and this family has no answer frame,
- * so there is no local dismissal and no optimistic path to keep in step.
+ * `reconnected` IS NOT DISPATCHED HERE — `questionBridge` drives it from the transport's own
+ * (re)handshake, which this container cannot see. `dismissed` NOW IS (#921), and this slot is the FIRST
+ * thing in the family to raise one locally: Cancel refuses the batch and clears it optimistically, so the
+ * daemon's own broadcast is no longer the only exit. The bridge still owns the remote path; both go
+ * through `refuseQuestionBatch`'s and `subscribeQuestionBatches`' shared picks-first order, so the local
+ * and remote clears cannot drift. The daemon's `question_dismissed` arriving afterwards is an unknown-id
+ * no-op in both stores, returning the same state reference, so nothing further re-renders.
+ *
+ * THE SEND ITSELF IS NOT INLINE HERE, and that is what makes it testable at all. Renderer specs in this
+ * repo are static server renders with no DOM and nothing to click, so a guarded send written into this
+ * closure would put "a throwing bridge still clears the panel" out of vitest's reach entirely. It lives in
+ * `refuseQuestionBatch` (the `modalResolution` / `composerSend` seam) with plain-spy coverage, and this
+ * container stays thin glue. `window.pyry` is dereferenced only inside the click closure — interaction
+ * time, never render — so the container's smoke render still touches no bridge.
  */
 export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Element {
   const [jumpedTo, setJumpedTo] = useState(FIRST_QUESTION_INDEX)
@@ -2569,6 +2585,17 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
       questions={batch.questions}
       activeIndex={activeIndex}
       onQuestionSelected={setJumpedTo}
+      // #921. The id read is `batch.questionBatchId` — the same value this leaf is keyed on upstream, so
+      // the batch refused is by construction the batch drawn. Both stores' `dispatch` are read off their
+      // singletons rather than through a hook: each is a stable function, so subscribing would buy
+      // nothing (the existing `dispatch` read below made the same call).
+      onCancel={() =>
+        refuseQuestionBatch(batch.questionBatchId, {
+          sendCommand: window.pyry.sendCommand,
+          dispatchPicks: dispatch,
+          dispatchBatch: questionBatchStore.getState().dispatch
+        })
+      }
       selection={selection}
       onOptionChosen={(optionIndex) => dispatch(optionPickEventFor({ ...at, optionIndex }))}
       onOtherChosen={() => dispatch(otherPickEventFor(at))}

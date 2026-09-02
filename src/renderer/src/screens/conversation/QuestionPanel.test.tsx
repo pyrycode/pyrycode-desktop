@@ -54,6 +54,7 @@ const renderBatch = (
       activeIndex={activeIndex}
       selection={picked}
       onQuestionSelected={() => {}}
+      onCancel={() => {}}
       onOptionChosen={() => {}}
       onOtherChosen={() => {}}
       onOtherTextChanged={() => {}}
@@ -81,15 +82,23 @@ describe('QuestionPanelView', () => {
     expect(markup).toContain('Which of these three programming languages should you learn next?')
   })
 
-  it('renders an inert Cancel / Continue row above no dispatch', () => {
+  it('renders the Cancel / Continue row, with Cancel drawn exactly as #906 shipped it', () => {
     const markup = render(question())
     expect(markup).toContain(QUESTION_CANCEL_COPY)
     expect(markup).toContain(QUESTION_CONTINUE_COPY)
-    // Two buttons, both type="button" (never a submit), and no handler reaches the markup — the inert
-    // posture #224 took so #853's answer path lands on a stable surface. `disabled` is deliberately
-    // ABSENT: the panel sits on top of the composer, so there is no disabled state to draw.
+    // Two buttons, both type="button" (never a submit), and no handler reaches the markup. `disabled` is
+    // deliberately ABSENT: the panel sits on top of the composer, so there is no disabled state to draw.
     expect(count(markup, /<button type="button"/g)).toBe(2)
     expect(markup).not.toContain('disabled')
+    // #921 — THE ASSERTION IS THE NEGATIVE, and it is the only visual claim this slice owes: Cancel gained
+    // a handler and the design read (347:6657) confirms its treatment is unchanged, so the rendered button
+    // must be byte-identical to #906's. A static server render never emits `onClick`, so this cannot prove
+    // the wiring — that is e2e/question-cancel-refuses.spec.ts's — but it DOES prove nothing leaked into an
+    // attribute, which is the failure this panel guards against everywhere else (the batch id is a
+    // one-time nonce and this file still never reads it at all).
+    expect(markup).toContain(
+      `<button type="button" class="question-panel__cancel">${QUESTION_CANCEL_COPY}</button>`
+    )
   })
 
   it('draws the separator and the pyry mark, both decorative', () => {

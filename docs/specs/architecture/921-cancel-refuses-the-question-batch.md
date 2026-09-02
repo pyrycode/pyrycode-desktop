@@ -257,6 +257,24 @@ nothing outside it, which § A1's floor rule says to merge back. Split depth was
 (parent #853, no grandparent), so a split was genuinely on the table and is declined on the
 measurement, not on the depth cap.
 
+## Revisions
+
+**2026-09-02 — implementation.** No design change; both open questions resolved as predicted, and the
+implementation matches the design above as written.
+
+1. **`onCancel` in the view spec** — a no-op sufficed, confirming the expectation. A static server
+   render emits no `onClick` and fires nothing, so the wiring assertion stayed e2e's and the spec's
+   own added claim is the negative one (Cancel's markup is byte-identical to #906's).
+2. **e2e ordering** — the local clear landed before the captured frame, as expected. Both are asserted
+   under auto-waiting / `expect.poll` rather than in a fixed order, so the spec does not depend on it.
+
+One implementation-time detail worth carrying, since it is invisible until `tsc` runs and the plan's
+testing strategy prescribes the seed that triggers it: seeding `createQuestionPicksStore` with a
+nested `Map` literal holding two selections that differ in `otherTicked` needs the outer map annotated
+`new Map<string, ReadonlyMap<number, QuestionSelection>>(…)`. Inferred, `tsc` narrows the value type
+to the first entry's `otherTicked: false` and rejects the second entry's `true` — a confusing error
+that names the property rather than the inference.
+
 ## Security review
 
 **Verdict:** PASS

@@ -73,10 +73,17 @@ export interface QuestionBatch {
  * The renderer-local, sealed input union the reducer consumes. camelCase and defined here (not
  * imported from `src/shared/wire`); #900's bridge maps the wire-shaped `DaemonEvent` arms into these.
  *
- * There is NO answer arm, and that absence is the contract rather than an oversight: this family has
- * (as yet) no answer frame in the daemon contract at all (upstream pyrycode#1907 is where one would
- * land). So nothing dismisses a batch locally — the daemon's `dismissed` is the only way a batch
- * leaves the held set. See `QuestionBatchState` for what that buys.
+ * There is NO answer arm, and that absence is the contract rather than an oversight: an answer resolves
+ * a batch through the `dismissed` arm below like everything else, so this union needs no third clearing
+ * shape.
+ *
+ * **THE DAEMON IS NO LONGER THE ONLY THING THAT DISMISSES A BATCH (#921).** #919/#920 landed the
+ * `question_refused` frame and the command that sends it, and `refuseQuestionBatch` is the first LOCAL
+ * caller of the `dismissed` arm: Cancel refuses the outstanding batch and clears it optimistically. It
+ * reuses this arm unwidened, supplying CLIENT-OWNED constants for `outcome`/`source` that sit outside
+ * both the producer's landed pair and `WireModalSource` — see that helper for why `'local'` in
+ * particular would be the wrong value. See `QuestionBatchState` for why a `resolved` memory still does
+ * not follow from that.
  */
 export type QuestionBatchEvent =
   | {
@@ -120,13 +127,18 @@ export type QuestionBatchEvent =
  * `resolved: readonly string[]` slice (#195) and cloning it here would be the natural reflex. Do not.
  * That memory exists because the modal client answers OPTIMISTICALLY — `answerModal` dispatches
  * `dismissed` locally even when the send is swallowed by a downed transport — so it can hold an id the
- * daemon does not consider resolved. This vertical has no answer frame at all, so nothing dismisses a
- * batch locally, the daemon's `dismissed` is the only exit, and the daemon does not re-send a batch it
- * has already retired. `resolved` would defend a failure that CANNOT OCCUR here, and #510 is the
- * record of what that costs when it outlives its justification: the retained id suppressed the
- * daemon's legitimate re-delivery, and an operator's explicit Allow decayed into a timeout deny. When
- * the answer path lands, that slice arrives with it — the way the modal vertical added `rejected` /
- * `rejectionDismissed` in #249.
+ * daemon does not consider resolved. **THIS VERTICAL NOW RESOLVES OPTIMISTICALLY TOO (#921) AND STILL
+ * DOES NOT WANT ONE**, so the earlier prediction here — that `resolved` arrives with the answer path,
+ * on the modal vertical's #195/#249 precedent — is withdrawn rather than merely deferred. The premise
+ * has changed; the conclusion has not, and it now rests on the daemon's re-delivery schedule instead of
+ * on the absence of a local caller: the daemon re-asserts a batch ONLY AT CONNECT TIME, and both this
+ * store and `questionPicksStore` already clear on `reconnected` BEFORE that reconcile installs
+ * anything. So there is no mid-connection re-delivery for a memory to suppress. What a `resolved` slice
+ * would actually do is outlive the reconnect and swallow the daemon's legitimate re-assertion of a
+ * batch whose refusal never left the machine — and #510 is the record of that exact cost in the modal
+ * family: the retained id suppressed a legitimate re-delivery, and an operator's explicit Allow decayed
+ * into a timeout deny. A batch reappearing after a swallowed send is the HONEST outcome here: the
+ * refusal did not land, so the ask is still live.
  */
 export interface QuestionBatchState {
   outstanding: readonly QuestionBatch[]

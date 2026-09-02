@@ -61,7 +61,8 @@ import type {
   WireQuestion,
   WireQuestionOption,
   SlashCommandListPayload,
-  WireSlashCommand
+  WireSlashCommand,
+  AttachmentStoredPayload
 } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 
@@ -273,6 +274,21 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * rule. All four strings on a row are UNTRUSTED WORKSPACE-AUTHORED text carried verbatim, owed escaping
  * at the render sink; nothing consumes this arm yet (the IPC carry is #937, the Actions-menu match #681,
  * and daemonConnection's inbound switch has no catch-all, so the menu stops here until claimed).
+ *
+ * The `attachment-stored` kind (#964) carries the decoded AttachmentStoredPayload — the upload leg's ONE
+ * POSITIVE TERMINAL, and the frame that lets a finished transfer resolve instead of spinning forever.
+ * The fail-closed decode here (a single required NON-EMPTY string) is the boundary this slice defends.
+ *
+ * **IT DELIBERATELY CARRIES NO `inReplyTo`, and that absence is the design.** Three kinds above DO carry
+ * one — `daemon-error`, `session-settings`, `session-settings-updated` — because for those the envelope
+ * id IS the correlation. Here it is not: `Envelope.in_reply_to` names the chunk WHOSE ARRIVAL COMPLETED
+ * THE TRANSFER, not the highest index, and since chunks are index-addressed and may be reassembled in any
+ * order, a client cannot predict which of its envelope ids that will be. Surfacing it would hand the
+ * consumer a plausible-looking match key that SILENTLY NEVER FIRES. Omitting it makes "match on the
+ * payload's attachment_id" structural rather than advisory — the only correlation handle a consumer can
+ * reach is the one that works. A consumer that later needs the envelope id must argue for it on its own
+ * ticket. Nothing consumes this arm yet: the send driver is #861, and daemonConnection's inbound switch
+ * has no catch-all, so it stops here until claimed.
  */
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
@@ -316,6 +332,7 @@ export type InboundDaemonMessage =
   | { kind: 'question-shown'; questionShown: QuestionShownPayload }
   | { kind: 'question-dismissed'; questionDismissed: QuestionDismissedPayload }
   | { kind: 'slash-command-list'; slashCommandList: SlashCommandListPayload }
+  | { kind: 'attachment-stored'; attachmentStored: AttachmentStoredPayload }
 
 /** True iff `value` is a non-null, non-array object — the structural minimum for a wire payload.
  *  A small local copy: codec's `isRecord` is not exported, and duplicating it keeps this the edge
@@ -329,6 +346,35 @@ function requireString(payload: Record<string, unknown>, field: string): string 
   const value = payload[field]
   if (typeof value !== 'string') {
     throw new WireDecodeError(`missing required field: ${field}`)
+  }
+  return value
+}
+
+/**
+ * Narrow one required string field that must ALSO be non-empty, or fail closed with a category-only
+ * message. A SIBLING of requireString (#964), never a replacement for it, and the distinction is the
+ * whole reason this exists as its own function rather than a tightened `requireString`.
+ *
+ * requireString polices TYPE and accepts `''`, which is correct at every one of its call sites and
+ * LOAD-BEARING at some: an empty `argument_hint` is ordinary data on 33 of the 51 measured
+ * slash-command rows, and `question_dismissed` decodes an all-empty payload because an empty string
+ * there is a VALUE, not an absence. Tightening requireString in place would fail-close valid traffic
+ * on both.
+ *
+ * This helper is for the opposite case — a field where the empty string is a DISTINCT FAILURE MODE —
+ * and the reason is upstream's rather than a style preference. Every key is optional to Go's
+ * `encoding/json`, so a truncated or hostile payload decodes daemon-side to the ZERO VALUE and arrives
+ * here with the field present, typed, and empty. Through requireString that yields a SUCCESS NAMING
+ * NOTHING: an `attachment_stored` whose `attachment_id` is `''` matches no transfer a client ever
+ * started, so a consumer resolves nothing while the decode reports success. Fail it closed instead.
+ *
+ * DO NOT swap this in elsewhere "for consistency" — each field's emptiness rule is its own, and the two
+ * arms named above read alike and say the opposite thing.
+ */
+function requireNonEmptyString(payload: Record<string, unknown>, field: string): string {
+  const value = requireString(payload, field)
+  if (value.length === 0) {
+    throw new WireDecodeError(`empty required field: ${field}`)
   }
   return value
 }
@@ -1585,6 +1631,47 @@ function parseSlashCommandListPayload(payload: unknown): SlashCommandListPayload
 }
 
 /**
+ * Narrow an opaque payload into an AttachmentStoredPayload (#964) — the upload leg's one positive
+ * terminal. The shape of parseQuestionDismissedPayload minus two fields: an isRecord guard, then the
+ * single required key, returning a fresh one-field literal so unknown server-added keys are tolerated
+ * (forward-compat) but NOT copied through, which also makes it prototype-pollution-safe.
+ *
+ * THE ONE FIELD GOES THROUGH requireNonEmptyString, NOT requireString, and that is the only interesting
+ * line here. A truncated or hostile frame decodes daemon-side to the zero value, so `attachment_id: ''`
+ * is the shape a bad frame actually takes; accepting it would yield a success naming no transfer. See
+ * the helper's own block for why requireString is right everywhere else and wrong here.
+ *
+ * WHAT IS DELIBERATELY NOT CHECKED, each of which would fail-close valid traffic:
+ *
+ *   - NO shape validation on the id. Upstream publishes a canonical lowercase UUIDv4, where lowercase is
+ *     load-bearing because the id becomes a directory name and only a lowercase alphabet keeps the
+ *     id-to-directory mapping injective on a case-insensitive filesystem (APFS is one by default). That
+ *     rule binds the side that MINTS ids — the outbound leg — not this one. Here the contract is
+ *     recognise-or-ignore against ids this client itself chose, so re-validating the shape of a value we
+ *     originated buys nothing and fail-closes a valid frame the moment the two copies disagree.
+ *   - NO length check (the parseSlashCommand posture): the daemon bounds the field at construction and
+ *     parseInboundMessage's MAX_PLAINTEXT_BYTES guard backstops the whole frame ahead of this call, so a
+ *     third bound here would be a client-invented one to keep in agreement.
+ *   - NO reject list for `__proto__` / `constructor` / `prototype`. This function builds no container
+ *     FROM the value — RESERVED_MAP_KEYS exists because optionalStringMap keys an object by wire strings,
+ *     which is a different hazard — and a fresh literal plus JSON.parse are both prototype-safe. The
+ *     obligation lands on the CONSUMER (#861): look the id up in a `Map` keyed by ids this client minted,
+ *     never as `pending[id]` on a plain object, where `__proto__` reads back a truthy Object.prototype
+ *     and resolves a transfer that does not exist.
+ *
+ * Its message names the failure CATEGORY and the static field name only. The id is not a secret — upstream
+ * states plainly that receiving this frame is not a capability — but daemonConnection catches
+ * WireDecodeError into a caller that may log it, so a value echoed here would ride into that log.
+ */
+function parseAttachmentStoredPayload(payload: unknown): AttachmentStoredPayload {
+  if (!isRecord(payload)) {
+    throw new WireDecodeError('malformed attachment_stored payload')
+  }
+  const attachment_id = requireNonEmptyString(payload, 'attachment_id')
+  return { attachment_id }
+}
+
+/**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
  * `debug_bundle_done` / `error` → `daemon-error`, #116), an `assistant_delta` → `assistant-delta` and
@@ -2101,6 +2188,43 @@ export function parseInboundMessage(
         hash: hashPlaintext(plaintext)
       })
       return { kind: 'slash-command-list', slashCommandList }
+    }
+    case 'attachment_stored': {
+      // Narrow BEFORE logging so a malformed frame (a non-record payload, a missing / non-string /
+      // EMPTY `attachment_id`) throws first and leaves no record. The empty case is the one worth
+      // naming: it is what a truncated or hostile frame actually looks like, since every key is
+      // optional to Go's encoding/json, and a plain requireString would let it through as a success
+      // naming no transfer.
+      //
+      // NOTHING DECODED IS LOGGED, and here that is a decision rather than an inherited rule. Upstream
+      // states this payload is SAFE TO LOG WHOLE — it carries none of `filename` / `sha256` / `data`,
+      // the three `attachment_chunk` may never log — but that is a statement about the FRAME, not a
+      // licence to widen DiagnosticEvent, which would disturb the renderer pin at #131. The id is
+      // omitted even though `code` and `count` already exist and would cost nothing structurally: it is
+      // the client's OWN id, so logging it buys a correlation handle this client already holds, at the
+      // cost of putting a per-upload identifier into a JSON-lines log the operator can ship off-box in a
+      // debug bundle. Only the frame's byte length + one-way hash, the existing content-free field set.
+      // Strictly safer than the `default:` arm this replaces for the type, which logged a WIRE-SUPPLIED
+      // `envelope.type` capped at MAX_LOGGED_TYPE_CHARS; the code here is a static literal.
+      //
+      // `envelope.in_reply_to` IS DELIBERATELY NOT PROPAGATED — the one place the contrast with the
+      // `error` arm below matters. There the numeric id is the correlation and is carried; here it names
+      // whichever chunk closed the set, which no client can predict, so carrying it would offer a match
+      // key that silently never fires. The union member's own comment has the full argument.
+      //
+      // The narrowing makes the SHAPE trusted; it does not make the CONTENT trusted. A compromised
+      // daemon picks this string, and all this arm verifies is `typeof === 'string'` plus non-emptiness.
+      // The consumer (#861) owes the recognise-or-ignore lookup — in a `Map` keyed by ids this client
+      // MINTED, never as `pending[id]` on a plain object — and must not read the reply's arrival as
+      // proof every chunk was sent: a relay is content-blind but on-path, so it may reorder.
+      const attachmentStored = parseAttachmentStoredPayload(envelope.payload)
+      diagnosticLog?.event({
+        event: 'inbound-decoded',
+        code: 'attachment_stored',
+        bytes: plaintext.length,
+        hash: hashPlaintext(plaintext)
+      })
+      return { kind: 'attachment-stored', attachmentStored }
     }
     case 'error':
       // Now MODELED (#116): a single daemon `error` reply terminates an in-flight bundle request.

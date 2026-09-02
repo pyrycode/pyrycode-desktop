@@ -10,6 +10,12 @@ frame, #1753 the 45000-byte stride, #1751 the client-facing contract). The consu
 `attachment_id`, reads a file, and actually sends is [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861) —
 **not started**; this slice ships unreferenced.
 
+[#964](https://github.com/pyrycode/pyrycode-desktop/issues/964) added the **answer**: the fail-closed
+decode of `attachment_stored`, the upload's one positive terminal, into a typed [inbound
+message](inbound-message-decode.md) arm — see [Attachment-stored wire
+types](attachment-stored-wire-types.md). It is a distinct frame, not a decode of `attachment_chunk`
+itself; the "No inbound decode" edge case below, scoped to `attachment_chunk`, still holds.
+
 ## What it does
 
 Two pure, main-process-only modules plus a wire-type addition:
@@ -149,8 +155,10 @@ id-counter and clock, catching `WireEncodeError` to drop an over-cap send.
 - **No `attachment_id` minting.** It is a caller-supplied input, never generated here — minting is
   state and this module has none, and the id is explicitly not a capability (not secret, not
   unguessable), so there is nothing for a random generator to buy.
-- **No inbound decode.** `inboundMessage.ts` is untouched. The retrieval direction reuses this same
-  frame, but decoding and reassembling it — index-addressed, any order — is a later slice.
+- **No inbound decode of `attachment_chunk` itself.** The retrieval direction reuses this same frame,
+  but decoding and reassembling it — index-addressed, any order — is a later slice. `inboundMessage.ts`
+  is no longer untouched overall: [#964](attachment-stored-wire-types.md) added the decode of
+  `attachment_stored`, the sibling reply frame, which is a different `EnvelopeType` member entirely.
 - **A source-purity test can match its own disclaimer.** A test that greps a module's source for the
   literal string `'console.'` to prove it never logs will also match a header comment that names that
   string while explaining the module *doesn't* call it. `attachmentChunkPlan.ts`'s header was worded
@@ -168,3 +176,7 @@ id-counter and clock, catching `WireEncodeError` to drop an over-cap send.
 - [Question-shown wire types](question-shown-wire-types.md) — the other wire-vocabulary-only slice
   that reuses this doc's "documented, not validated" bound discipline (#883), shipped unreferenced
   ahead of its consumer for the same reason.
+- [Attachment-stored wire types](attachment-stored-wire-types.md) — the **consumer** half (#964): the
+  `attachment_stored` reply frame and its fail-closed decode into [inbound message
+  decode](inbound-message-decode.md). Still ships unreferenced downstream — the same send-driver
+  consumer, #861, claims both halves.

@@ -271,6 +271,22 @@ the `slashCommandList` `DaemonEvent` arm, a fresh named-field literal built at t
 spread of this decode's payload. See [Daemon event channel — the sealed
 union](daemon-event-channel-sealed-union.md). Architect self-review PASS.
 
+[#964](https://github.com/pyrycode/pyrycode-desktop/issues/964) added a twenty-third kind,
+`attachment_stored` → `attachment-stored` — the upload leg's one positive terminal, into the
+[attachment-stored wire types](attachment-stored-wire-types.md) vocabulary. `parseAttachmentStoredPayload`
+is `parseQuestionDismissedPayload`'s shape minus two fields, but its single field goes through a new
+helper, `requireNonEmptyString`, not `requireString` — a sibling, not a replacement, since every key is
+optional to Go's `encoding/json` and a truncated frame decodes daemon-side to `{"attachment_id": ""}`,
+which plain `requireString` would pass as a success naming no transfer. The kind deliberately carries no
+`inReplyTo`: correlation rides the payload's `attachment_id`, not the envelope's `in_reply_to`, which
+names whichever chunk closed the set — not the highest index, and not predictable — so surfacing it would
+hand a consumer a match key that silently never fires. Content-free-logged as `inbound-decoded(code:
+'attachment_stored')` before the `default` branch, narrowed before logging so a malformed frame leaves no
+record. Ships dormant and unclaimed, the same shape `question_shown`/`slash_command_list` shipped: the
+consumer arm below has no case for `'attachment-stored'` yet, and `daemonConnection.ts`'s inbound switch
+has no catch-all, so the send driver, [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861)
+(not started), is the first intended consumer.
+
 See [public contract](inbound-message-decode-contract.md), [internals](inbound-message-decode-internals.md),
 and [edge cases and limits](inbound-message-decode-limits.md) for the type union, the decode/log detail,
 and the fail-closed edge cases respectively.
@@ -388,3 +404,8 @@ Ticket carries `security-sensitive`; the architect's security-review verdict is 
   above and [#937](https://github.com/pyrycode/pyrycode-desktop/issues/937) carries onward as a
   `DaemonEvent` arm; [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) is the still-unclaimed
   renderer consumer, the Actions-menu alias match.
+- [Attachment-stored wire types](attachment-stored-wire-types.md) — the twenty-third additive extension:
+  the `attachment_stored` kind, `parseAttachmentStoredPayload`, and the file's newest field narrower,
+  `requireNonEmptyString`. [Attachment chunk envelope](attachment-chunk-envelope.md) (#860) is the
+  producer half this decodes the answer to; [#861](https://github.com/pyrycode/pyrycode-desktop/issues/861)
+  (send driver, not started) is the first intended consumer of both.

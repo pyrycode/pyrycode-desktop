@@ -16,9 +16,13 @@ import { startFakeRelayForwarder, type FakeRelayForwarder } from './fakeRelayFor
 import {
   startFakeDaemon,
   DEFAULT_REKEY_RESUME_MESSAGE,
+  attachmentStoredReplyFrames,
   type FakeDaemon,
   type FakeDaemonOptions
 } from './fakeDaemon'
+import { buildAttachmentChunk } from './attachmentChunkEnvelope'
+import { parseInboundMessage } from './inboundMessage'
+import type { AttachmentChunkPayload } from '../../shared/wire/types'
 import { createNoiseSession, type NoiseSession, type NoiseSessionEvent } from './noiseSession'
 import { createRelayConnection, type RelayEvent, type RelayConnection } from './relayConnection'
 import { loadNoiseLib } from './noiseLib'
@@ -594,6 +598,81 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
     expect(received.map((e) => bytes(e.plaintext))).toEqual(frames.map(bytes))
     expect(events.some((e) => e.type === 'error')).toBe(false)
     expect(await daemon.whenSettled()).toEqual({ ok: true })
+  })
+
+  it('answers the COMPLETING chunk with an attachment_stored the client decodes (#964, AC4)', async () => {
+    // The upload leg end to end over the real stack — real createNoiseSession client, real forwarder,
+    // real ciphers, real envelope builder — proving a finished transfer can now resolve instead of
+    // spinning forever. Before this slice the reply's type was absent from EnvelopeType, so
+    // parseInboundMessage fell through to its content-free catch-all and returned null.
+    const ATTACHMENT_ID = '3f2a1c40-9b7e-4d16-a5c3-0e8f1b2d4a67'
+    const chunk = (index: number): AttachmentChunkPayload => ({
+      attachment_id: ATTACHMENT_ID,
+      index,
+      total_chunks: 2,
+      filename: 'holiday.png',
+      mime_type: 'image/png',
+      size: 6,
+      sha256: 'a'.repeat(64),
+      data: base64StdEncode(new Uint8Array([1, 2, 3]))
+    })
+    // Chunk 0 completes the set — the EARLIER envelope id, deliberately not the last. A consumer keying
+    // on a predicted FINAL envelope id would find nothing here, which is the whole point: `in_reply_to`
+    // names whichever chunk closed the set, and chunks may be reassembled in any order.
+    //
+    // The wrapper only COUNTS inbounds: it delegates verbatim, adds no frame and changes no timing, and
+    // exists so the "chunk 1 drew no reply" assertion below can wait on chunk 1 actually being handled
+    // rather than on a proxy for it.
+    let notifyWaiter = (): void => {}
+    let chunksHandled = 0
+    const answerCompletingChunk = attachmentStoredReplyFrames(0)
+    const { forwarderUrl, whenReady, daemon } = await standUp({
+      buildReplyFrames: (inbound) => {
+        const frames = answerCompletingChunk(inbound)
+        chunksHandled += 1
+        notifyWaiter()
+        return frames
+      }
+    })
+    const { initiator, events, waiter } = await driveClient({
+      forwarderUrl,
+      remoteStaticPublicKey: daemon.staticPublicKey,
+      hello: buildTestHello()
+    })
+    notifyWaiter = waiter.notify
+    await whenReady()
+    await waiter.wait(() => events.some((e) => e.type === 'handshake-complete'))
+
+    // Hand-built payloads rather than planAttachmentChunks(): the planner's 45000-byte MANDATED STRIDE
+    // is the daemon's admission rule, which this fake does not enforce, and a faithful two-chunk plan
+    // would push ~90KB of base64 through the wasm cipher to prove nothing this test is about. The real
+    // builder stays in the loop, which is what matters for the envelope shape.
+    initiator.sendMessage(buildAttachmentChunk({ id: 41, ts: '2026-01-01T00:00:05Z', payload: chunk(0) }))
+    initiator.sendMessage(buildAttachmentChunk({ id: 42, ts: '2026-01-01T00:00:06Z', payload: chunk(1) }))
+
+    await waiter.wait(() => events.some((e) => e.type === 'message'))
+    const reply = events.find((e) => e.type === 'message')
+    expect(reply, 'the completing chunk must draw an attachment_stored').toBeDefined()
+
+    // The decoded terminal-success names the transfer by the id BOTH chunks carried (AC4). No
+    // `inReplyTo` rides along: the envelope field said which frame this answers, and only the payload
+    // says which transfer it concludes.
+    expect(parseInboundMessage((reply as { plaintext: Uint8Array }).plaintext)).toEqual({
+      kind: 'attachment-stored',
+      attachmentStored: { attachment_id: ATTACHMENT_ID }
+    })
+
+    // Chunk 1 drew NO reply at all — every non-completing chunk of a healthy upload is answered by
+    // silence, so exactly one frame comes back for the two sent. Silence only proves that once chunk 1
+    // has actually been HANDLED, which is why the count above is what this waits on. whenSettled()
+    // cannot stand in for it: settle() is FIRST-WINS and handleTransport calls it after every inbound's
+    // reply loop, so it resolves on chunk 0 — the completing one — and says nothing about chunk 1. Per
+    // makeWaiter's resolve-on-timeout contract the assertion, not the wait, is the oracle.
+    await waiter.wait(() => chunksHandled === 2)
+    expect(chunksHandled, 'both chunks must reach the fake before silence proves anything').toBe(2)
+    expect(events.filter((e) => e.type === 'message')).toHaveLength(1)
+    expect(await daemon.whenSettled()).toEqual({ ok: true })
+    expect(events.some((e) => e.type === 'error')).toBe(false)
   })
 
   it('initiates a rekey: the real client swaps and resumes messaging under the new keys (AC2, AC3)', async () => {

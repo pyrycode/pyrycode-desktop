@@ -159,6 +159,23 @@ export type EnvelopeType =
   // session context, so a client cannot steer bytes into another conversation's directory by naming
   // one. Do not add one "for clarity". SSOT pyrycode #1752 / docs/protocol-mobile.md § Attachments.
   | 'attachment_chunk'
+  // The upload leg's ONE POSITIVE TERMINAL (#964) — the transfer completed, its claims were checked,
+  // and the bytes are on the host under the id the client chose. BINARY → CLIENT ONLY, which is the
+  // whole difference from the frame it answers: `attachment_chunk` rides both legs, this one does not.
+  // It is the single positive terminal for the WHOLE transfer, NOT a report that the storage step alone
+  // succeeded — six other `attachment.*` error codes terminate an upload, and this is their one
+  // counterpart. Before it a client that uploaded was told what went wrong on every failure path and got
+  // SILENCE on the one that worked. It is a REPLY, correlated by the envelope's `in_reply_to`, and that
+  // field names THE CHUNK WHOSE ARRIVAL COMPLETED THE TRANSFER — not the one with the highest index.
+  // Chunks are index-addressed and may be reassembled in any order, so the completing chunk is whichever
+  // closed the set and a client CANNOT PREDICT which of its envelope ids that will be; every other chunk
+  // of a healthy upload gets no reply at all. That is why AttachmentStoredPayload also carries the
+  // attachment id: the envelope field says which frame this answers, the payload says which transfer it
+  // concludes, and only the second is a value the client chose and can look up. SSOT pyrycode
+  // docs/protocol-mobile.md § Attachments / internal/protocol codes.go TypeAttachmentStored — read that
+  // section's SHAPE prose, not its STATUS prose, which still says nothing emits this and went stale
+  // hours after it was written. Declared by pyrycode#1895, emitted by #1897, observed by #1898.
+  | 'attachment_stored'
   | 'ack'
   | 'error'
 
@@ -1799,6 +1816,66 @@ export interface AttachmentChunkPayload {
   sha256: string
   /** This chunk's raw bytes as standard PADDED base64 (Go base64.StdEncoding). */
   data: string
+}
+
+/**
+ * The upload leg's SUCCESS REPLY (daemon → client, #964). Mirrors the daemon's AttachmentStoredPayload
+ * field-for-field (SSOT pyrycode docs/protocol-mobile.md § Attachments, internal/protocol/attachments.go);
+ * no `omitempty` and no MarshalJSON there, so the single key is always present in the one direction this
+ * frame travels. Do not drift it without a matching daemon change. See ADR 0002.
+ *
+ * ONE FIELD, AND THE ID IS THE CLIENT'S OWN, echoed back. Nothing daemon-side mints an attachment id —
+ * the client supplies it on every chunk and storage keys by it — so "tie the reply to the upload" and
+ * "name the attachment that was stored" are the same value, carried once.
+ *
+ * WHAT IS DELIBERATELY ABSENT, since every omission is a decision and the daemon pins the key set with a
+ * two-sided wire-key test (`TestAttachmentStoredPayload_WireKeys`) so this is checked rather than reviewed:
+ *
+ *   - NO `size`, `sha256` or `total_chunks`. The client sent all three and they were checked against the
+ *     assembled bytes before this frame could be emitted; echoing them back confirms nothing a client
+ *     could act on.
+ *   - NO host path, directory component or on-disk filename. § Error codes already forbids
+ *     `attachment.storage_failed` from carrying the host path or the underlying filesystem error, either
+ *     of which discloses the daemon's layout — a SUCCESS frame leaking what the FAILURE frame is guarded
+ *     against would undo that mitigation from the other side. The stored filename is out for its own
+ *     reason too: the daemon's sanitiser produces a name that is neither unique nor an identifier
+ *     (distinct client names collide, and a case-insensitive host folds them further), so echoing it
+ *     would hand a client something it cannot rely on.
+ *   - NO `conversation_id`, for AttachmentChunkPayload's reason: the upload landed in the conversation
+ *     the authenticated session is already on, and a client holding the transfer already knows it.
+ *
+ * Do NOT add any of them "for clarity".
+ *
+ * CORRELATION IS THE SUBTLE PART. This is a reply carried by the envelope's `in_reply_to`, which names
+ * the chunk WHOSE ARRIVAL COMPLETED THE TRANSFER — not the highest index, and not predictable, since
+ * chunks may be reassembled in any order. A consumer that matches only on a guessed envelope id NEVER
+ * RESOLVES. Match on `attachment_id`; see the EnvelopeType member's comment for the full rule.
+ *
+ * SECURITY — receiving this frame IS NOT A CAPABILITY. The id is not secret, not unguessable, and never
+ * the only thing between a caller and a file; it is echoed to exactly the authenticated session that
+ * uploaded the bytes, so disclosure widens nothing. Carrying none of `filename` / `sha256` / `data`, this
+ * payload is — unlike `attachment_chunk` — safe to log whole. That is a statement about THE FRAME, not a
+ * licence: this client keeps the id out of its own diagnostic log anyway (see inboundMessage's arm).
+ *
+ * TWO CONSUMER OBLIGATIONS, because decoding makes the SHAPE trusted and never the CONTENT — a
+ * compromised daemon inside the session picks this string:
+ *
+ *   - A client receiving an id it does not recognise IGNORES THE FRAME and concludes nothing. Recognition
+ *     means a lookup against ids THIS CLIENT MINTED — in a `Map`, NEVER as an index into a plain object.
+ *     `attachment_id: "__proto__"` read back as `pending[id]` yields Object.prototype, which is truthy,
+ *     resolving a transfer that does not exist.
+ *   - NOT A CAPABILITY and NEVER RESOLVED INTO A FILESYSTEM PATH (AttachmentChunkPayload's rule verbatim,
+ *     and it binds harder here: the id is a directory name on the DAEMON side, so the natural mistake is
+ *     to treat it as one on this side too). The canonical lowercase-UUIDv4 shape upstream publishes binds
+ *     the side that MINTS ids — the outbound leg — not this one; the decode deliberately does not
+ *     re-validate the shape of a value this client originated.
+ */
+export interface AttachmentStoredPayload {
+  /** The attachment that was stored: the client's own id, repeated on every chunk of the upload and
+   *  echoed back here; <= ATTACHMENT_ID_MAX_BYTES. A client matches on it and concludes nothing when it
+   *  does not recognise the value. NOT a capability — not secret, not unguessable, and never resolved
+   *  into a filesystem path. */
+  attachment_id: string
 }
 
 export interface BackfillSincePayload {

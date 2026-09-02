@@ -418,6 +418,24 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `MAX_PLAINTEXT_BYTES` is the sole, inherited backstop. Nothing sends, reads a file, or mints an
   `attachment_id` — both modules main-process-only, unreferenced until #861 (send driver, not started).
   Architect self-review PASS.
+- [Attachment-stored wire types](features/attachment-stored-wire-types.md) — the **consumer** half of
+  the attachment wire contract (#964, split from #961): the `attachment_stored` `EnvelopeType` member +
+  one-field `AttachmentStoredPayload` (`attachment_id` only — no `size`/`sha256`/`total_chunks`/
+  `filename`/`conversation_id`, all deliberate absences), plus the fail-closed decode into a new
+  [inbound message decode](features/inbound-message-decode.md) arm. Correlation is the subtle part:
+  the envelope's `in_reply_to` names the chunk whose *arrival* completed the transfer, not the highest
+  index, so the new `InboundDaemonMessage` arm deliberately carries no `inReplyTo` — matching on the
+  payload's `attachment_id` is the only correlation handle that works. The decode's one field goes
+  through a new helper, `requireNonEmptyString`, not `requireString`, because every key is optional to
+  Go's `encoding/json` and a truncated frame decodes daemon-side to `{"attachment_id": ""}`, which
+  `requireString` would pass as a success naming no transfer. No shape validation on the id (upstream's
+  canonical-lowercase-UUIDv4 rule binds the minting side, not this one); the trust-boundary finding
+  (bare `pending[id]` access on `attachment_id: "__proto__"` returns a truthy `Object.prototype`) is
+  recorded as a consumer obligation (#861: use a `Map`) rather than a fourth reject branch. New
+  fake-daemon scaffolding, `attachmentStoredReplyFrames(completingIndex)`, answers one chunk with the
+  reply and silences the rest, deliberately naming a non-final completing chunk so a consumer that
+  predicts the last envelope id fails the AC4 test. Ships unreferenced; #861 (not started) is the first
+  consumer of both wire halves. Architect self-review PASS.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

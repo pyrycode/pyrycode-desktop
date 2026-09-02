@@ -126,6 +126,34 @@ single-writer, push-after-send discipline). `changeId` is renderer-minted and **
 Run-config controls ([#257](https://github.com/pyrycode/pyrycode-desktop/issues/257)). See [session
 settings send](session-settings-send.md) for the full contract.
 
+**`answerQuestions(payload)`/`refuseQuestions(payload)` were added in
+[#920](https://github.com/pyrycode/pyrycode-desktop/issues/920)** — the resolution half of the question
+vertical, one dial after [#919](https://github.com/pyrycode/pyrycode-desktop/issues/919) landed the
+builders with no caller. Both are **`send` twins, not `answerModal`'s consumer-failing twin**: a
+resolution has no consumer to fail, so each is an inert no-op when `driver === null`, sharing the one
+`nextEnvelopeId` counter, never throwing (parity #490). Both mint a fresh `answer_token` via the
+existing `mintToken` seam — **unlike the modal pair, both question frames carry a token**, so both
+methods mint, where only `answerModal` does on its side. `answerQuestions` builds a fresh literal
+naming the three modeled fields, and the rebuild is **deep**: each `answers` entry is rebuilt as
+`{ question_index, values }` rather than passed through by reference, because `buildQuestionAnswer`
+serializes the payload verbatim and a shallow `answers: payload.answers` would carry any extra key
+smuggled onto an *entry* — past the renderer-side `isAnswerQuestionsPayload` guard — straight onto the
+wire; `values` itself rides without a copy, since `JSON.stringify` serializes an array by index and no
+own property on it can ride along. `refuseQuestions` builds a two-field literal (`question_batch_id`
+plus the token it mints) — unlike `cancelModal`, which carries no token at all, because
+`question_refused` carries one on the wire. **Neither pushes onto `outstandingAnswers` or any other
+correlation map**: the daemon emits no reply and no error envelope for a rejected question answer, so a
+window here would hold an entry nothing ever drains — the deliberate omission `answerModal`'s #248
+correlation doesn't have. The over-cap `WireEncodeError` out of `buildQuestionAnswer` is a **live**
+catch here, not defensive — `values` are operator-typed free text and nothing bounds entry count or
+value length — while `refuseQuestions`'s own over-cap path stays exotic (two ids, no free text); both
+catches drop the caught object without logging it, since its message could echo the batch nonce or an
+entry value. The renderer buttons that dispatch these are a later slice; every control on the question
+panel's action row stays inert as to answering until they land. See [question resolution
+envelope](question-resolution-envelope.md) for the wire contract and builders, and [command
+channel](command-channel.md) for the `answerQuestions`/`refuseQuestions` `RendererCommand` members and
+guards that route here via `src/main/index.ts`'s `onCommand` switch.
+
 **`case 'session-transition'` was added in [#254](../codebase/254.md)** — no new outbound method;
 `session_transition` is inbound-only, the daemon-initiated session-boundary marker. Unlike
 `conversation-created`'s verbatim passthrough, this arm emits a **fresh literal carrying only
@@ -189,6 +217,7 @@ never crosses to the renderer.
 - [#261 codebase notes](../codebase/261.md) — the `pendingSettings` correlation map, the rewritten `case 'session-settings-updated'`, and the `dial()` reset (see § Set-session-settings confirmed-round-trip correlation above). No new method on this factory — widens `setSessionSettings`'s signature and rewrites one existing case.
 - [#269 codebase notes](../codebase/269.md) — the rewritten `case 'daemon-error':` precedence gate (see § Set-session-settings rejected correlation above): correlates against the same `pendingSettings` map first, closing the orphan #261 left open, and skips both the reassembler `fail` and the #248 modal FIFO `shift` on a match. No new method on this factory — rewrites one existing case.
 - [#248 codebase notes](../codebase/248.md) — the `outstandingAnswers` FIFO correlation window added to this factory (see § Modal-answer rejection correlation above), the new `modalAnswerRejected` emit from the existing `case 'daemon-error':` arm, and the drain hooked into the existing `case 'modal-dismissed':` arm. No new method on this factory — the correlation rides the two pre-existing `answerModal`/inbound-message seams.
+- [Question resolution envelope](question-resolution-envelope.md) / [#920](https://github.com/pyrycode/pyrycode-desktop/issues/920) — the `answerQuestions(payload)`/`refuseQuestions(payload)` methods added to this factory (both `send` twins that mint `answer_token` main-side, unlike the modal pair where only the answer half mints), the two builders they drive, and the deliberate absence of a correlation window (the daemon emits nothing for a rejected question answer). [Command channel](command-channel.md) is the `RendererCommand` pair + guards that route here.
 - [#564 codebase notes](../codebase/564.md) — the `background-task-started` inbound kind + the new `case 'background-task-started'` consumer emit, a fresh **non-nullary** six-field literal copied by name (never a spread). The one arm in this switch that **keeps** `conversation_id` instead of dropping it — the frame carries no `turn_id` and opens/closes no turn, so it is daemon state (the `queueState` #720 rule), not a turn-stream item. Not `assertNever`-guarded in this inner switch; the round-trip test is the guard. No new method on this factory — `background_task_started` is inbound-only. Ships dormant; [the roster store (#573)](../codebase/573.md) consumes only the `background_task_roster` arm below, not this one — this arm stays dormant, awaiting #574. First of three sibling frame slices (#565/#566 follow).
 - [#565 codebase notes](../codebase/565.md) — the `background-task-updated` inbound kind + the new `case 'background-task-updated'` consumer emit, a fresh **non-nullary** four-field literal copied by name (never a spread) — the subset twin of the arm above, `conversation_id` likewise **kept**. Deliberately performs **no join** against `backgroundTaskStarted`: ordering is claude's, not the daemon's, so an update for a task this connection never saw opened still emits rather than buffering. Not `assertNever`-guarded in this inner switch; the round-trip test is the guard. No new method on this factory — `background_task_updated` is inbound-only. Ships dormant; [the roster store (#573)](../codebase/573.md) consumes only the `background_task_roster` arm below, not this one — this arm stays dormant, awaiting #574. Second of three sibling frame slices (#566 follows).
 - [#566 codebase notes](../codebase/566.md) — the `background-task-roster` inbound kind + the new `case 'background-task-roster'` consumer emit, a fresh **non-nullary** three-field literal copied by name (never a spread) — the **aggregate peer** of the two arms above, `conversation_id` likewise **kept**. `tasks` passes the already-narrowed row array through **by reference**, snake_case (the `queue-state` nested-array precedent, no per-row re-literal). Deliberately stateless in a *different* way from the arm above: that one tempted a join, this one tempts a **diff** — the family has no terminal event, so holding the previous roster to compute what disappeared looks like the obvious next step and is explicitly forbidden here (the only mutable state the leg would gain, keyed by an attacker-influenceable `task_id`); an empty roster following a non-empty one still emits rather than being suppressed. Not `assertNever`-guarded in this inner switch; the round-trip test is the guard. No new method on this factory — `background_task_roster` is inbound-only. Ships dormant no longer: [the background-task-roster store (#573, shipped)](../codebase/573.md) is the first consumer, holding the `tasks`/`droppedTasks` rows verbatim by reference, keyed by `conversationId`. Third and last of the sibling frame slices.

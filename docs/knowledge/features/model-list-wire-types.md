@@ -14,11 +14,11 @@ union](daemon-event-channel-sealed-union.md)); still nothing stores or renders i
 `pyrycode/pyrycode` `internal/protocol/interactive.go` (`ModelListPayload` / `ModelOption`); do not
 trust `docs/protocol-mobile.md` § `model_list` for the delivery window — see
 [§ Delivery window](#delivery-window-two-lanes) below. The run-configuration sheet's model rows and
-effort segments (`MODEL_CATALOG` / `EFFORT_LEVELS`, `RunConfigSections.tsx`) are still hardcoded
-guesses; replacing them with this frame is the slice family below this one, the same sequencing this
-repo used for [slash-command-list wire types](slash-command-list-wire-types.md) (#935 declared →
-\#936 decoded → #937 carried across IPC → #954 stored): here, #971 declared → #972 decoded → #973
-carried across IPC → the store slice is next, unbuilt.
+effort segments — `MODEL_CATALOG` and `EFFORT_LEVELS`, both formerly hardcoded in
+`RunConfigSections.tsx` — are now built from this frame: #975 deleted the former, #976 the latter. The
+same sequencing this repo used for [slash-command-list wire types](slash-command-list-wire-types.md)
+(#935 declared → #936 decoded → #937 carried across IPC → #954 stored) played out here too: #971
+declared → #972 decoded → #973 carried across IPC → #974 stored → #975/#976 rendered.
 
 ## What it does
 
@@ -249,8 +249,11 @@ first render consumer: it deleted `MODEL_CATALOG`/`matchedFamily` from `RunConfi
 built the Model section's rows straight off the held entry — see [Conversation shell — workspace and
 run configuration § Run configuration Model section, daemon-published
 rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975).
-`EFFORT_LEVELS` (#976), the input footer's menus (#683) and the permission-mode menu (#682) are
-still unbuilt.
+[#976](https://github.com/pyrycode/pyrycode-desktop/issues/976) is the second: it deleted
+`EFFORT_LEVELS` and built the Effort section's segments off the same held entry, joined by the same
+`value`-equality helper (renamed `publishedRowFor`) — see [§ Run configuration Effort section,
+daemon-published levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976).
+The input footer's menus (#683) and the permission-mode menu (#682) remain unbuilt.
 
 ## Edge cases and limitations
 

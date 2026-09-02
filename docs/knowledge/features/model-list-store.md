@@ -11,12 +11,15 @@ the first consumer landed at [#975](https://github.com/pyrycode/pyrycode-desktop
 deleted `MODEL_CATALOG` and built the run-configuration sheet's Model rows (and re-anchored the
 running-model lookup) straight off this store — see [Conversation shell — workspace and run
 configuration § Run configuration Model section, daemon-published rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975).
-Three consumers remain queued — the sheet's effort segments
-([#976](https://github.com/pyrycode/pyrycode-desktop/issues/976)), the input footer's model and
-effort menus ([#683](https://github.com/pyrycode/pyrycode-desktop/issues/683)), and the
-permission-mode menu ([#682](https://github.com/pyrycode/pyrycode-desktop/issues/682)), which
-reads each row's `supports_auto_mode` to grey out a mode the running model refuses. The
-pairing-scoped clear is not in this slice — see § The pairing-scoped clear below.
+[#976](https://github.com/pyrycode/pyrycode-desktop/issues/976) followed, deleting the sheet's other
+hardcoded vocabulary — `EFFORT_LEVELS` — and building the Effort section's segments off the same held
+entry, joined by the same `value`-equality rule (renamed `publishedRowFor`) — see [§ Run configuration
+Effort section, daemon-published levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976).
+Two consumers remain queued — the input footer's model and effort menus
+([#683](https://github.com/pyrycode/pyrycode-desktop/issues/683)) and the permission-mode menu
+([#682](https://github.com/pyrycode/pyrycode-desktop/issues/682)), which reads each row's
+`supports_auto_mode` to grey out a mode the running model refuses. The pairing-scoped clear is not in
+this slice — see § The pairing-scoped clear below.
 
 ## What it does
 
@@ -37,7 +40,7 @@ posture `slashCommandList`'s `commands: []` carries — held exactly like a popu
 `effort_levels: []` is a **collapse** of absent/`null`/empty into one wire value, not a positive
 statement — deliberately not the same argument. A row's `truncated_fields` is exempt from
 normalisation entirely, so `null` and `[]` are distinct there. Carrying all three faithfully is
-what lets #976 build the effort segments without re-deriving them, and specifically what lets it
+what let #976 build the effort segments without re-deriving them, and specifically what lets it
 read a `truncated_fields` naming `effort_levels` as *unknown* rather than as *none* — the only
 signal separating a cut list from a model that exposes no effort control.
 
@@ -192,16 +195,16 @@ daemon → model_list frame → #972 parseModelListPayload (fail-closed) →
                                      → modelListStore   [that conversation's menu replaced wholesale]
 
 selectModelListFor(openId) / useModelListStore
-  → #975 model rows (shipped) / #976 effort segments / #683 footer menus / #682 permission-mode menu
+  → #975 model rows (shipped) / #976 effort segments (shipped) / #683 footer menus / #682 permission-mode menu
 ```
 
 ## Configuration and usage
 
 - Mounted app-level in `src/renderer/src/App.tsx`, after `<SlashCommandListData />`.
-- `useModelListStore`/`selectModelListFor` are read since #975, by `RunConfigSections`
+- `useModelListStore`/`selectModelListFor` are read since #975/#976, by `RunConfigSections`
   (`src/renderer/src/screens/conversation/RunConfigSections.tsx`), which takes the active
   conversation id as a prop rather than reading `sessionIdStore` — a session id keys nothing in
-  this store's map. #976, #683 and #682 remain queued readers.
+  this store's map. #683 and #682 remain queued readers.
 
 ## Edge cases and limitations
 
@@ -237,10 +240,10 @@ selectModelListFor(openId) / useModelListStore
   list, so a persisted copy would survive #977's future clear with every in-memory assertion still
   green.
 - **No DOM sink in this slice.** The inert-escaped-length-bounded render discipline is inherited
-  here; #975 discharged it for the Model rows and the running-model lookup, #976 owes it for the
-  effort segments.
-- **The store's held list renders since #975** (`ModelSection` and `RunningModelSection` in
-  `RunConfigSections.tsx`). #976, #683 and #682 remain unbuilt.
+  here; #975 discharged it for the Model rows and the running-model lookup, #976 discharged it for
+  the effort segments. #683 and #682 still owe it.
+- **The store's held list renders since #975/#976** (`ModelSection`, `RunningModelSection` and
+  `EffortSection` in `RunConfigSections.tsx`). #683 and #682 remain unbuilt.
 
 ## Related
 
@@ -261,7 +264,10 @@ selectModelListFor(openId) / useModelListStore
   daemon-published rows](conversation-shell-workspace-and-run-config.md#run-configuration-model-section-daemon-published-rows-975)
   / [Run configuration store § Running model section](run-config-store.md#running-model-section-560-resolved-onto-the-published-rows-by-975)
   — the first consumer, #975: deleted `MODEL_CATALOG`, built the Model rows off this store's held
-  entry, and re-anchored the running-model lookup onto a row's `value`.
+  entry, and re-anchored the running-model lookup onto a row's `value`. [§ Run configuration Effort
+  section, daemon-published levels](conversation-shell-workspace-and-run-config.md#run-configuration-effort-section-daemon-published-levels-976)
+  — the second consumer, #976: deleted `EFFORT_LEVELS` and built the Effort segments off the same
+  held entry, joined by the same `value`-equality rule.
 - `docs/specs/architecture/974-model-list-store.md` — the full architecture spec, including the
   self-review (verdict: PASS) with two SHOULD FIX findings mitigated by construction (no per-row
   mapping exists) and by design decision (never logged).

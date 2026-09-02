@@ -36,8 +36,14 @@ import { contextUsagePercent } from './contextUsage'
 // is the whole AC5 gate at the view layer, since the container withholds the handler until a session id
 // exists (sessionIdStore, #259).
 
-// #975 — the RUNNING model's lookup, re-anchored on the daemon-published rows now that MODEL_CATALOG
-// is gone. String equality only: no toLowerCase, no includes, no startsWith, no trim, no regex.
+// #975 — the published-row lookup, re-anchored on the daemon-published rows now that MODEL_CATALOG is
+// gone. String equality only: no toLowerCase, no includes, no startsWith, no trim, no regex.
+//
+// #976 GAVE IT A SECOND CALLER AND THAT IS WHY IT IS NAMED FOR THE RULE RATHER THAN FOR EITHER USE.
+// The two callers join DIFFERENT STRINGS through the SAME rule, and conflating the two inputs is the
+// easy mistake: `RunningModelSection` joins what claude ANNOUNCED for the running turn, while
+// `EffortSection` joins the SESSION's model — the same string the Model rows mark a row selected by.
+// One home for the rule is what keeps a substring match from creeping back into one of two copies.
 //
 // The key is `value` and nothing else. It is the field the deleted catalog lookup already compared —
 // `entry.family` was the token a row submitted, and `value` is the argument a row submits now — so the
@@ -52,7 +58,7 @@ import { contextUsagePercent } from './contextUsage'
 // The verbatim fallback is the correct outcome then — the operator sees the true running identifier
 // rather than a display name inferred from a resemblance. Widening this into a substring match to make
 // it fire more often would reintroduce exactly what #560 exists to stop.
-function runningPublishedRow(
+function publishedRowFor(
   models: ModelListEntry | null | undefined,
   model: string
 ): WireModelOption | undefined {
@@ -92,9 +98,19 @@ const RUN_CONFIG_RUNNING_UNKNOWN_COPY = 'Running model not yet known'
 // only the ATTRIBUTION differs, which position and the distinct classes already carry.
 const RUN_CONFIG_CUT_COPY = 'Truncated by the daemon'
 
-// The fixed accepted set (Figma 20:130); effort matches by exact equality, so '' / unknown marks
-// none — AC4's default.
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+// #976 — the Effort section's one client-owned sentence, the RUN_CONFIG_MODELS_EMPTY_COPY convention:
+// a POSITIVE statement that the selected model exposes no effort control, not an absence of
+// information. Client-owned and apostrophe-free — renderToStaticMarkup escapes ' → &#x27;. It contains
+// no level name, so it cannot satisfy a segment assertion by accident.
+//
+// There is deliberately NO second constant for the nothing-matched reading: that one renders the
+// session's effort VALUE and nothing else (see EffortSection).
+const RUN_CONFIG_EFFORT_EMPTY_COPY = 'No effort levels offered'
+
+// The field name `truncated_fields` uses to report this row's effort list as cut. A client-owned
+// literal compared against daemon strings by `Array.prototype.includes` — a linear scan by `===`, NOT
+// an index lookup, so no object is ever keyed by claude-authored text on this path.
+const EFFORT_LEVELS_FIELD = 'effort_levels'
 
 // AC4 error copy — field-scoped and client-owned. #269 strips the daemon message, so the surfaced copy
 // is derived from the rejected FIELD, not daemon text. Apostrophe-free by design: renderToStaticMarkup
@@ -135,7 +151,8 @@ function RunConfigError({ field }: { field: SettingsChange['field'] }): JSX.Elem
  * catch. NOT shaped like `errorField`: the store's `pending` is keyed by changeId so two fields can be
  * outstanding at once, and these three booleans are independent. Omitted ⇒ nothing is marked (AC5).
  *
- * `models` (#975) is the conversation's published model list — #974's HELD ENTRY, passed straight down
+ * `models` (#975, and #976's effort segments read the SAME prop rather than a second one) is the
+ * conversation's published model list — #974's HELD ENTRY, passed straight down
  * and never a derived array, which is what keeps the store's by-reference guarantees intact at the
  * render boundary. Optional, and its absence IS the `null` reading ("no frame has arrived"), the
  * `announced` prop's shape: that is what keeps this view server-renderable with no store and no mock.
@@ -163,8 +180,8 @@ export function RunConfigView({
   announced?: AnnouncedModel | null
   models?: ModelListEntry | null
 }): JSX.Element {
-  // #975: the submitted string is a published row's `value` VERBATIM — never normalised on the way out,
-  // which is the half of the round-trip this line owns.
+  // #975/#976: the submitted string is a published row's `value` — or, for effort, a published level —
+  // VERBATIM, never normalised on the way out, which is the half of the round-trip these lines own.
   const onModel = onChange ? (value: string): void => onChange({ field: 'model', value }) : undefined
   const onEffort = onChange ? (level: string): void => onChange({ field: 'effort', value: level }) : undefined
   const onYolo = onChange ? (next: boolean): void => onChange({ field: 'yolo', value: next }) : undefined
@@ -187,6 +204,8 @@ export function RunConfigView({
       />
       <EffortSection
         effort={effort}
+        model={model}
+        models={models}
         onSelect={onEffort}
         error={errorField === 'effort'}
         busy={pending?.effort}
@@ -235,7 +254,7 @@ function RunningModelSection({
   announced?: AnnouncedModel | null
   models?: ModelListEntry | null
 }): JSX.Element {
-  const row = announced ? runningPublishedRow(models, announced.model) : undefined
+  const row = announced ? publishedRowFor(models, announced.model) : undefined
   return (
     <>
       <p className="status-sheet__section-header">Running model</p>
@@ -379,41 +398,129 @@ function ModelSection({
   )
 }
 
+// #976 — THE SEGMENTS ARE THE SELECTED MODEL'S, and the hardcoded five are gone. Reasoning-effort
+// support is per model: measured live against claude 2.1.220 on 2026-08-21, Haiku publishes no levels
+// at all while the other rows publish all five, so a fixed strip offered Haiku five choices it cannot
+// use and asked the daemon for something it will not do.
+//
+// THE ROW IS THE SESSION'S MODEL, resolved by exact equality on `value` through publishedRowFor —
+// the same string and the same rule the Model rows above mark a row selected by. Not `announced.model`,
+// which is a different identifier for a different question, and not a family derived from `value`,
+// which is not parseable.
+//
+// FOUR INPUTS, THREE RENDERINGS:
+//
+//   no matching row (no frame yet, or the model matches nothing published)  → the current effort as text
+//   a row publishing levels                                                 → one segment per level
+//   a row publishing [] with no cut reported                                → the offers-none sentence
+//   a row publishing [] BESIDE A REPORTED CUT                               → the current effort as text
+//
+// The first collapse is deliberate and it is the OPPOSITE POSTURE to the Model section directly above,
+// whose header states THREE READINGS, NEVER TWO. That section keeps "no frame has arrived" and "claude
+// published an empty list" in different elements because it is arguing about a different field. Here
+// both mean the identical thing to the client — it has been told no level is accepted — so it offers
+// none and states the value the session is actually running. Do not carry the neighbour's rule across
+// by resemblance.
+//
+// THE FOURTH INPUT ROW IS A WRITTEN CONTRACT MUST, NOT AN INVENTED DISTINCTION. `effort_levels`
+// collapses absent, null and empty into one `[]`, so a `truncated_fields` naming it is the ONLY signal
+// separating "cut to nothing, or shortened" from "this model exposes no effort control", and it must
+// be read as UNKNOWN, never as *none* — read as *none*, a cut list silently removes a control the
+// model actually supports (WireModelOption's docblock; modelListStore's header names this section as
+// the reader that owes it).
+//
+// AND NEVER A FALLBACK. An absent, null or unmatched list must not mean "offer all five": that would
+// re-mint the vocabulary this slice deletes, in the one place it is being deleted from, and it would
+// pass every test the old five-value constant passed.
+//
+// SECURITY — this is the render boundary for every string in `effort_levels`. They are claude-authored,
+// unsanitized text that crossed the subprocess trust boundary (the daemon bounds and does not sanitize;
+// #972 made the SHAPE trusted and nothing more). Each reaches exactly one JSX text position, where
+// React escapes it. None reaches a raw-markup sink, an attribute, a URL, a filename, a cache key, a
+// lookup path or a log — and nothing on this path is logged at all. THE KEY IS THE ARRAY INDEX, the
+// Model section's decision unchanged and a security one rather than a style one: a key is a lookup
+// path, each frame REPLACES the list wholesale, and claude may legitimately publish a repeated level.
+//
+// The submitted level is the published string VERBATIM and is never repaired. That is a real change in
+// what this client sends — `set_session_settings.effort` used to carry a client-owned constant — and it
+// is the Model section's shipped posture applied to a second field. No client-side allowlist is added:
+// it would be a second copy of the vocabulary in the very place this ticket removes one. Upstream's
+// inbound `validEffort` is a CLOSED enum at the five measured levels while `validModel` was widened for
+// these rows, so a level claude adds later, or one cut mid-token, is published here and REFUSED on the
+// way back. That asymmetry is upstream's; the refusal surfaces through the shipped RunConfigError line
+// and #256's automatic rollback, which is the honest outcome and needs no defence here.
 function EffortSection({
   effort,
+  model,
+  models,
   onSelect,
   error,
   busy
 }: {
   effort: string
+  model: string
+  models?: ModelListEntry | null
   onSelect?: (level: string) => void
   error?: boolean
   busy?: boolean
 }): JSX.Element {
+  const row = publishedRowFor(models, model)
+  const levels = row?.effort_levels ?? []
+  // `null` and `[]` say the identical thing per the wire contract, so the test is membership rather
+  // than presence. Read PER FIELD: a report naming only `display_name` says nothing about this list.
+  const isCut = row?.truncated_fields?.includes(EFFORT_LEVELS_FIELD) ?? false
+  // The one place the collapse above is written down. A cut empty list is UNKNOWN, so it lands here
+  // beside the unmatched row rather than in the offers-none arm.
+  const nothingKnown = row === undefined || (levels.length === 0 && isCut)
   return (
     <>
       <p className="status-sheet__section-header">Effort</p>
-      {/* #558: the group, not a segment — the field's five controls are one field. */}
+      {/* #558: the group, not a segment — the field's controls are one field. #976 keeps the wrapper
+          and its marker in ALL THREE readings: an effort change can still be in flight when the
+          section has nothing to offer (the operator picks a level, then a model_list frame or a model
+          change empties the levels), so a pending effort must stay marked whatever is inside. The
+          RunConfigError <p> remains a SIBLING of this wrapper for the reason stated above it. */}
       <div className="run-config__effort" aria-busy={busy ? 'true' : undefined}>
-        {EFFORT_LEVELS.map((level) => {
-          const isSelected = level === effort
-          // aria-current is both the a11y marker and the CSS selection hook (no modifier class); the
-          // fill/outline styles key off `[aria-current='true']`. onSelect present ⇒ the segment is an
-          // operable button submitting its exact level (exact-match round-trip); absent ⇒ #188's inert
-          // segment.
-          return (
-            <span
-              className="run-config__effort-segment"
-              key={level}
-              aria-current={isSelected ? 'true' : undefined}
-              role={onSelect ? 'button' : undefined}
-              tabIndex={onSelect ? 0 : undefined}
-              onClick={onSelect ? () => onSelect(level) : undefined}
-            >
-              {level}
-            </span>
-          )
-        })}
+        {nothingKnown ? (
+          // The session's effort VALUE, alone in its own node with no client-owned prefix beside it —
+          // concatenating the two provenances into one node is what the cut-marker rationale forbids,
+          // and claude's own control displays these values lowercase and byte-identical, so there is
+          // no display convention to reproduce. An empty effort renders a present, empty line,
+          // inventing no distinction the snapshot does not carry.
+          <p className="run-config__effort-current">{effort}</p>
+        ) : levels.length === 0 ? (
+          <p className="run-config__effort-empty">{RUN_CONFIG_EFFORT_EMPTY_COPY}</p>
+        ) : (
+          levels.map((level, index) => {
+            // EXACT EQUALITY, and the whole of the selection rule: no substring, no prefix, no case
+            // fold, no trim. `high` is a substring of `xhigh` and a row publishes both, so a matcher
+            // that widened here would mark two segments. It is also the half of the round-trip this
+            // line owns — the segment submits its level verbatim, the optimistic overlay holds that
+            // same string, and this comparison re-selects the segment it came from.
+            const isSelected = level === effort
+            // aria-current is both the a11y marker and the CSS selection hook (no modifier class); the
+            // fill/outline styles key off `[aria-current='true']`. onSelect present ⇒ the segment is an
+            // operable button submitting its exact level; absent ⇒ #188's inert segment.
+            return (
+              <span
+                className="run-config__effort-segment"
+                key={index}
+                aria-current={isSelected ? 'true' : undefined}
+                role={onSelect ? 'button' : undefined}
+                tabIndex={onSelect ? 0 : undefined}
+                onClick={onSelect ? () => onSelect(level) : undefined}
+              >
+                {level}
+              </span>
+            )
+          })
+        )}
+        {/* The daemon's report that it cut THIS row's level list, in every reading: a shortened list
+            must not be presented as complete, and an empty-because-cut one says why it is offering
+            nothing. A SIBLING element holding a client-owned constant, never text concatenated into a
+            daemon-authored node — `{level}{isCut && ' (cut)'}` would fuse the two, and a level ending
+            in those same words would be indistinguishable from the sheet's own claim. */}
+        {isCut ? <p className="run-config__effort-cut">{RUN_CONFIG_CUT_COPY}</p> : null}
       </div>
       {error ? <RunConfigError field="effort" /> : null}
     </>

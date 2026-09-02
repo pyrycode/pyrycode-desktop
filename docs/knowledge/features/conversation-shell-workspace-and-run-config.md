@@ -325,9 +325,12 @@ switch off).
   added a fourth entry, `Fable 5` (family token `fable`), between Sonnet and Haiku. **Deleted outright
   by #975** — the catalog, `matchedFamily` and all four hardcoded rows are gone; see § Run
   configuration Model section, daemon-published rows (#975) below.
-- **Effort** — five fixed segments (`low`/`medium`/`high`/`xhigh`/`max`) matched by exact equality;
-  the current level carries `aria-current="true"`, which is both the accessibility marker and the
-  CSS hook (`[aria-current='true']`) for the filled-pill style — no parallel modifier class.
+- **Effort** — shipped at #188 as five fixed segments (`low`/`medium`/`high`/`xhigh`/`max`) matched by
+  exact equality; the current level carried `aria-current="true"`, both the accessibility marker and
+  the CSS hook (`[aria-current='true']`) for the filled-pill style — no parallel modifier class.
+  **Rewritten by #976** to offer the selected model's published levels instead — the five-value
+  constant is gone; see § Run configuration Effort section, daemon-published levels (#976) below. The
+  `aria-current` selection mechanism and its CSS hook are unchanged.
 - **YOLO** — a between-justified "Auto-accept tool calls" row with a switch rendered `role="switch"
   aria-checked={yolo} aria-readonly="true"`: honestly read-only (not focusable) until
   [#183](https://github.com/pyrycode/pyrycode-desktop/issues/183) drops `aria-readonly` and wires an
@@ -451,7 +454,9 @@ child of any arm, so an entry reporting drops beside zero carried rows still sho
 truthiness, since React renders a bare `0` as a text node.
 
 **The running-model lookup ([§ Running model section](run-config-store.md#running-model-section-560-resolved-onto-the-published-rows-by-975))
-moves onto these same rows.** `runningPublishedRow` joins claude's per-turn announcement
+moves onto these same rows.** `runningPublishedRow` (renamed `publishedRowFor` by
+[#976](https://github.com/pyrycode/pyrycode-desktop/issues/976), which gave it a second caller — see
+§ Run configuration Effort section, daemon-published levels below) joins claude's per-turn announcement
 (`announcedModelStore`) against a published row's `value` by exact equality — not `resolved_model`,
 which the wire contract's join prose excludes and which would give the exactness guard above an
 exception (Haiku's `resolved_model` is a superstring of its own `value`). The lookup stays mostly
@@ -476,6 +481,102 @@ CSS gained `.run-config__model-unknown`, `.run-config__model-empty`, `.run-confi
 lines carry unbounded daemon text instead of short static labels — the `.run-config__running-value`
 precedent. See [#975 codebase notes](../codebase/975.md) for the full design, the security review,
 and why the join key is `value` rather than `resolved_model`.
+
+## Run configuration Effort section, daemon-published levels (#976)
+
+The last hardcoded vocabulary in the sheet goes. `EFFORT_LEVELS`, the five-value constant
+(`low`/`medium`/`high`/`xhigh`/`max`) `EffortSection` rendered for every model, is deleted; the
+segments offered are now the *selected model's* published `effort_levels`, read off the same
+[Model-list store](model-list-store.md) entry the Model section reads. Reasoning-effort support is
+per model — measured live against claude 2.1.220 on 2026-08-21, Haiku publishes no levels at all while
+the other rows publish all five — so the fixed strip used to offer Haiku five choices it could not use
+and ask the daemon for something it would refuse.
+
+**The row is the session's model, not the running one.** `EffortSection` now takes `model` and
+`models` props and resolves its row via `publishedRowFor(models, model)` — the same helper and the
+same exact-equality-on-`value` rule `ModelSection` marks a row selected by, renamed from
+`runningPublishedRow` because #976 gave it a second caller. The two callers join **different strings**
+through the identical rule: `RunningModelSection` joins `announced.model` (what claude announced for
+the running turn), `EffortSection` joins the session's `model` (the same string `ModelSection` marks a
+row selected by). Conflating the two inputs is the mistake a shared name is meant to make visible.
+
+**Four inputs, three renderings** — the section's own `nothingKnown` guard is the one place this table
+is written down in code:
+
+| matched row | `effort_levels` | cut reported | renders |
+|---|---|---|---|
+| none (no list yet, or `model` matches no published row) | — | — | the session's current `effort` value, as plain text |
+| yes | non-empty | either | one segment per level, in published order |
+| yes | `[]` | no | `RUN_CONFIG_EFFORT_EMPTY_COPY`, "No effort levels offered" |
+| yes | `[]` | yes | the current-effort text — **not** the offers-none copy |
+
+The first and fourth rows render identically and that collapse is deliberate — the opposite posture to
+`ModelSection` directly above, which keeps "no frame has arrived" and "claude published an empty list"
+as different elements with different copy because it is arguing about a different field
+(`models: []` there is a *positive statement*). Here, no-list-yet and no-matching-row mean the
+identical thing to the client: it has not been told any level is accepted, so it offers none and
+states what the session is actually running instead of guessing. **The fourth row is a written
+contract MUST, not an invented distinction**: `effort_levels` collapses absent/`null`/empty into one
+`[]` (see [Model-list wire types](model-list-wire-types.md)), so a `truncated_fields` naming
+`effort_levels` is the *only* signal separating "cut to nothing, or shortened" from "this model exposes
+no effort control" — read as *none*, a cut list would silently remove a control the model actually
+supports. `modelListStore`'s header named this ticket as the reader that owed that distinction.
+
+**No fallback, ever.** An absent, `null` or unmatched `models` never means "offer all five" — that is
+the single failure the four-input table exists to forbid, and it would have re-minted the vocabulary
+this ticket deletes in the one place it is being deleted from.
+
+**The cut marker is a sibling, in every reading.** Whenever the matched row's `truncated_fields`
+includes `'effort_levels'` (`Array.prototype.includes`, a linear scan by `===` against a client-owned
+literal — not an index lookup, so no object is ever keyed by daemon text here), the section renders
+the sheet's shared `RUN_CONFIG_CUT_COPY` ("Truncated by the daemon") in its own sibling `<p>` — so a
+shortened non-empty list is not presented as complete, and an empty-because-cut one says why it is
+offering nothing.
+
+**Selection, keys and the round trip are unchanged in kind.** A segment is marked by exact equality
+against the session's `effort` value — no substring, prefix, case fold or trim; `high` is a substring
+of `xhigh` and a row can publish both, which is why the guard is exact equality and nothing looser.
+Pressing a segment submits the published level **verbatim**, never repaired, so the optimistic overlay
+holds the same string the next render compares against — the existing pending/rejection/rollback
+behaviour of the effort field (`aria-busy` on `.run-config__effort` in **all three** readings, the
+`RunConfigError` line staying a sibling of the busy wrapper, never a descendant) is untouched. The
+React `key` is the array index, not the level string, for the Model section's reason unchanged: a key
+is a lookup path, these are claude-authored strings, and a row may legitimately publish a repeated
+level.
+
+**Untrusted text, same boundary as the Model section.** Every string in `effort_levels` is
+claude-authored text that crossed the subprocess trust boundary, bounded by the daemon and not
+sanitized by it. Each level reaches exactly one JSX text position, escaped by React's default; none
+reaches an attribute, a URL, a filename, a cache key, a lookup path, or a log. **This ticket also
+changes what the client *sends*:** `set_session_settings.effort` stops carrying a client-owned constant
+and starts carrying a claude-authored string echoed back verbatim — the Model section's shipped
+posture applied to a second field. No client-side allowlist is added, deliberately: it would put a
+second copy of the vocabulary in the very place this ticket deletes one from. The daemon's inbound
+`validEffort` is a **closed** enum at the five measured levels while `validModel` was widened for these
+rows, so a level claude adds later, or one cut mid-token, is published and then **refused** on the way
+back — an asymmetry that is upstream's, surfaced honestly through the existing `RunConfigError`
+rejection line and the store's automatic rollback, never repaired or allow-listed client-side.
+
+CSS: `.run-config__effort` gained `flex-wrap: wrap` (a published level list is unbounded daemon text
+of unknown count, unlike the five short static words it used to hold, so it wraps inside the 400px
+sheet instead of overflowing it); `.run-config__effort-segment` gained `min-width: 0` and
+`overflow-wrap: anywhere` for the same reason. Three new classes —
+`.run-config__effort-current` (the current-effort line), `.run-config__effort-empty` (the offers-none
+copy) and `.run-config__effort-cut` (the cut marker) — join the shipped muted body-small group beside
+`.run-config__model-unknown`; none takes `--color-error`, since none of the three is an error state.
+
+The pre-#976 tests were written against the fixed five and correctly went red: one
+(`'always renders all five level labels'`) stated the removed contract and was deleted outright rather
+than repaired; the rest gained fixtures that publish real per-row levels (`PUBLISHED_ROWS` now carries
+the measured five on one row, a shorter distinct set on another, and `[]` on the Haiku-shaped row) so
+one fixture set serves all three readings. Two tests outside the ticket's own cascade went red for a
+reason worth remembering: `'leaves a marked control fully operable'` and `'alters no existing
+accessible name…'` drew their only `role="button"` and their only `aria-current` from the effort
+segments, so once the section stopped rendering unconditionally, both started depending on which
+fixture was passed — a class-name grep would not have found them, a `role="button"` grep would. See
+`docs/specs/architecture/976-effort-segments-from-published-levels.md` for the full design and the
+security review; the "no hardcoded label survives" assertion is written as a count rather than a list,
+to avoid re-typing the deleted five levels into the file that proves they are gone.
 
 ## Log data section (#72)
 

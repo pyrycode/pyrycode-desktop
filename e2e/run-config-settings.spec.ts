@@ -100,12 +100,20 @@ const REJECTED_MODEL = 'haiku'
 // count depends on that. The values cover the measured shapes: a bare alias, another bare alias, and a
 // bracketed variant that is emphatically not parseable. `resolved_model` differs from `value` on every
 // row, which is what makes the second-line assertion a claim about the right field.
+// #976 — each row publishes its OWN effort levels, and the three sets are deliberately different: the
+// baseline row carries the five measured levels, the row the spec switches TO carries a shorter subset
+// (so the model→effort dependency is observable rather than inferred), and the rejected row carries
+// none — the live-measured Haiku shape. Both `low` (the baseline) and `high` (the change) are in the
+// first two sets, which is what keeps the shipped effort round-trip below meaningful.
+const OPUS_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+const SONNET_LEVELS = ['low', 'high']
+
 const MODEL_ROWS: WireModelOption[] = [
   {
     value: 'opus[1m]',
     display_name: 'Wide context',
     resolved_model: 'claude-opus-5',
-    effort_levels: [],
+    effort_levels: OPUS_LEVELS,
     supports_auto_mode: true,
     truncated_fields: null
   },
@@ -113,7 +121,7 @@ const MODEL_ROWS: WireModelOption[] = [
     value: HAPPY_MODEL,
     display_name: 'Balanced pick',
     resolved_model: 'claude-sonnet-5',
-    effort_levels: [],
+    effort_levels: SONNET_LEVELS,
     supports_auto_mode: true,
     truncated_fields: null
   },
@@ -236,10 +244,12 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
   })
 
   // Per-control locators. `.run-config__model-row` (3, since #975 one per PUBLISHED row) and
-  // `.run-config__effort-segment` (5) are not unique, so scope by display text: model rows by their
+  // `.run-config__effort-segment` (one per level the SELECTED row publishes since #976, so the count
+  // CHANGES with the model) are not unique, so scope by display text: model rows by their
   // mutually-non-substring names — DAEMON-AUTHORED since #975, which is exactly what this spec now
   // proves reaches a pixel — effort segments by an ANCHORED regex (bare 'high' is a substring of
-  // 'xhigh', so `/^high$/` avoids the false match). The selected-model marker (radio,
+  // 'xhigh', so `/^high$/` avoids the false match; #976 makes that pair a published one rather than a
+  // client-owned one, so the rationale is needed more, not less). The selected-model marker (radio,
   // aria-label="Current model") is scoped WITHIN its row, never by class.
   const modelRow = (name: string) => page.locator('.run-config__model-row', { hasText: name })
   const selectedRadioIn = (name: string) =>
@@ -262,6 +272,15 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
   await expect(page.locator('.run-config__model-row')).toHaveCount(0)
+
+  // #976 AC3, in the same only-order-that-proves-it: with no list yet no row is matched, so the Effort
+  // section offers NO segment and states the session's current effort as text instead. A five-segment
+  // strip here would be the deleted hardcoded vocabulary surviving. The text also waits out the
+  // session_settings reply, so the baseline is real rather than assumed.
+  await expect(page.locator('.run-config__effort-current')).toHaveText(BASELINE_RUN_CONFIG.effort, {
+    timeout: ROUNDTRIP_TIMEOUT_MS
+  })
+  await expect(page.locator('.run-config__effort-segment')).toHaveCount(0)
 
   // The list arrives unsolicited — the daemon publishes it from the conversation's initialize reply,
   // so nothing the client sends provokes it. This is the one push this spec makes.
@@ -299,6 +318,11 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
     })
     .toBeGreaterThanOrEqual(1)
   await expect(selectedRadioIn(OPUS_ROW)).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
+  // #976 AC1 — the segments are exactly the levels the SELECTED row published, in the daemon's order.
+  // toHaveText is exact and ordered, so this is also the proof that no client-owned level survives
+  // beside them, and the current-effort line is gone now that a row was matched.
+  await expect(page.locator('.run-config__effort-segment')).toHaveText(OPUS_LEVELS)
+  await expect(page.locator('.run-config__effort-current')).toHaveCount(0)
   await expect(effortSegment('low')).toHaveAttribute('aria-current', 'true')
   await expect(yoloSwitch).toHaveAttribute('aria-checked', 'false')
   await expect(yoloSwitch).not.toHaveAttribute('aria-readonly', 'true')
@@ -315,6 +339,11 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
     .toBe(1)
   await expect(selectedRadioIn(SONNET_ROW)).toBeVisible()
   await expect(selectedRadioIn(OPUS_ROW)).toHaveCount(0)
+
+  // #976 AC1, THE TRANSITION THIS WHOLE SPEC EXISTS FOR and the one a static render cannot make: the
+  // model changed, so the segments became the NEW row's published set — shorter and different. A
+  // section still offering the previous row's five would pass every unit assertion and fail here.
+  await expect(page.locator('.run-config__effort-segment')).toHaveText(SONNET_LEVELS)
 
   // AC2 — effort: click the high segment (exactly one { session_id, effort } frame).
   await effortSegment('high').click()

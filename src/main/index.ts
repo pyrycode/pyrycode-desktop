@@ -336,8 +336,10 @@ app.whenReady().then(() => {
         return
       case 'requestSessionSettings':
         // Direct to the connection method (mirrors sendMessage), no facade — a run-config read
-        // has no orchestrator/consumer. Bare: no payload, because the reply is daemon-wide (#491).
-        connection.requestSessionSettings()
+        // has no orchestrator/consumer. The optional conversation id is unwrapped here rather than
+        // passing the payload object on: the connection takes the scalar, and the builder rebuilds a
+        // fresh literal, so no renderer-supplied key reaches the wire (#945).
+        connection.requestSessionSettings(command.payload?.conversation_id)
         return
       case 'requestConversations':
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a list request

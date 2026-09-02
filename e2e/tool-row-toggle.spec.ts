@@ -498,3 +498,207 @@ test('tool row: a described shell call starts at the hard left, an undescribed o
     expect(Math.abs(chip.height - pathChip.height)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
   }
 })
+
+// #856 — the result count, the trailing group's first child. A FOURTH sibling test with its own
+// launchPairedApp, for the reason the two above record: more rows on either of their pages would make
+// their bare `.tool-row` locators strict-mode-ambiguous.
+//
+// Everything asserted here is geometry, which is exactly the half renderToStaticMarkup structurally
+// cannot see. WHICH element exists in which state, what it contains, and that absent and empty render
+// byte-identically are pinned in ConversationScreen.test.tsx; what only a real window can prove is that
+// the counts land in a COLUMN whatever runs each row switched on (AC4), that adding the run did not make
+// any row taller (#855's lesson: a flex row's height tracks its tallest child's line box, and only
+// geometry catches a run that changes it), and that the CSS cap on an untrusted count actually holds.
+//
+// The counts are driven from `result_detail` ON THE WIRE, so this exercises the whole #773 carry —
+// decode → IPC → bridge → reducer → row — rather than just the render.
+
+const COUNT_DESCRIBED_ID = 'tool-use-856-described'
+const COUNT_UNDESCRIBED_ID = 'tool-use-856-undescribed'
+const COUNT_PATH_ID = 'tool-use-856-path'
+const COUNT_HOSTILE_ID = 'tool-use-856-hostile'
+
+// Three counts of visibly different widths — the point of AC4 is that their TRAILING edges line up, so
+// equal-width strings would pass a broken implementation. The middle one is the design's own example.
+const DESCRIBED_COUNT = '3 lines'
+const UNDESCRIBED_COUNT = '110 of 1676 lines'
+const PATH_COUNT = '265 lines'
+
+// The hostile control. `result_detail` is unbounded on the wire — the decoder type-checks it, it does not
+// length-check it — and without .tool-row__right's max-width this run is an unshrinkable nowrap string
+// that pushes the CHEVRON past the chip's clip edge, where the row's only visible affordance disappears.
+// No spaces, so nothing can wrap its way out of the measurement.
+const HOSTILE_COUNT = 'x'.repeat(400)
+
+/** A resolved result carrying the count (#773's optional sixth wire field). */
+function countedToolResultFrame(toolUseId: string, resultDetail: string): Uint8Array {
+  return encodeEnvelope({
+    id: PUSH_ENVELOPE_ID,
+    type: 'tool_result',
+    ts: FIXED_TS,
+    payload: {
+      conversation_id: SEEDED_ROW.id,
+      turn_id: 'turn-856',
+      tool_use_id: toolUseId,
+      is_error: false,
+      result_summary: 'one line of result text',
+      result_detail: resultDetail
+    }
+  })
+}
+
+test('tool row: the result count draws before the chevron and lines up down the thread', async ({
+  launchPairedApp
+}) => {
+  const { page, daemon } = await launchPairedApp()
+
+  const rows = page.locator('.tool-row')
+  const describedRow = rows.nth(0)
+  const undescribedRow = rows.nth(1)
+  const pathRow = rows.nth(2)
+  const hostileRow = rows.nth(3)
+
+  // AC4's "whatever else each row has switched on": a described shell call draws NO LEAD, an undescribed
+  // one draws NO SUBJECT, and the path call draws both — #855's three reachable header shapes, reused
+  // here rather than re-derived.
+  daemon.pushFrame(
+    routedToolUseFrame(COUNT_DESCRIBED_ID, 'Bash', {
+      description: SHELL_DESCRIPTION,
+      command: SHELL_COMMAND
+    })
+  )
+  daemon.pushFrame(routedToolUseFrame(COUNT_UNDESCRIBED_ID, 'Bash', { command: SHELL_COMMAND }))
+  daemon.pushFrame(routedToolUseFrame(COUNT_PATH_ID, 'read_file'))
+  daemon.pushFrame(routedToolUseFrame(COUNT_HOSTILE_ID, 'read_file'))
+  daemon.pushFrame(countedToolResultFrame(COUNT_DESCRIBED_ID, DESCRIBED_COUNT))
+  daemon.pushFrame(countedToolResultFrame(COUNT_UNDESCRIBED_ID, UNDESCRIBED_COUNT))
+  daemon.pushFrame(countedToolResultFrame(COUNT_PATH_ID, PATH_COUNT))
+  daemon.pushFrame(countedToolResultFrame(COUNT_HOSTILE_ID, HOSTILE_COUNT))
+
+  await expect(hostileRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(rows).toHaveCount(4)
+
+  // --- The carry, end to end: the count the wire sent is the count the row draws. The three header
+  // shapes each drew their own, which is also the proof no row picked up a neighbour's.
+  await expect(describedRow.locator('.tool-row__count')).toHaveText(DESCRIBED_COUNT)
+  await expect(undescribedRow.locator('.tool-row__count')).toHaveText(UNDESCRIBED_COUNT)
+  await expect(pathRow.locator('.tool-row__count')).toHaveText(PATH_COUNT)
+
+  // --- The design's type claim: the count is M3/body/medium in FULL and inked Schemes/On Background —
+  // the same step and the same ink the subject run beside it takes (Figma 155:557 against 155:556).
+  // Asserted COMPARATIVELY against that run rather than against hardcoded token values, #855's shape: a
+  // retune of the type scale must not turn this red, while a count given its own size or ink must.
+  async function typeOf(locator: Locator): Promise<Record<string, string>> {
+    return locator.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        fontFamily: style.fontFamily,
+        color: style.color,
+        fontSize: style.fontSize,
+        lineHeight: style.lineHeight,
+        letterSpacing: style.letterSpacing,
+        fontWeight: style.fontWeight
+      }
+    })
+  }
+  expect(await typeOf(pathRow.locator('.tool-row__count'))).toEqual(
+    await typeOf(pathRow.locator('.tool-row__summary'))
+  )
+
+  /** A row's chip metrics, read rather than hardcoded — the tokens behind them may be retuned. */
+  async function chipInsetsOf(
+    row: Locator
+  ): Promise<{ paddingRight: number; borderRight: number; contentWidth: number }> {
+    return row.locator('.tool-row__chip').evaluate((element) => {
+      const style = getComputedStyle(element)
+      const paddingRight = parseFloat(style.paddingRight)
+      return {
+        paddingRight,
+        borderRight: parseFloat(style.borderRightWidth),
+        contentWidth: element.clientWidth - parseFloat(style.paddingLeft) - paddingRight
+      }
+    })
+  }
+
+  // --- AC1, the half markup cannot reach: the count sits one group-gap before the chevron, and the pair
+  // is flush against the header's trailing edge (the chip's PADDING edge).
+  const groupGap = await pathRow
+    .locator('.tool-row__right')
+    .evaluate((element) => parseFloat(getComputedStyle(element).columnGap))
+  const pathCount = await boxOf(pathRow.locator('.tool-row__count'), 'the path row count')
+  const pathChevron = await boxOf(pathRow.locator('.tool-row__chevron'), 'the path row chevron')
+  expect(Math.abs(pathChevron.x - (pathCount.x + pathCount.width) - groupGap)).toBeLessThanOrEqual(
+    WIDTH_TOLERANCE_PX
+  )
+  const pathInsets = await chipInsetsOf(pathRow)
+  const pathChip = await boxOf(pathRow.locator('.tool-row__chip'), 'the path row chip')
+  const pathGroup = await boxOf(pathRow.locator('.tool-row__right'), 'the path row group')
+  const pathTrailingEdge =
+    pathChip.x + pathChip.width - pathInsets.paddingRight - pathInsets.borderRight
+  expect(Math.abs(pathTrailingEdge - (pathGroup.x + pathGroup.width))).toBeLessThanOrEqual(
+    WIDTH_TOLERANCE_PX
+  )
+
+  // --- AC4. The counts line up as a column of TRAILING edges — not leading ones, since the three
+  // strings are deliberately different widths and it is the trailing edge the group pins. This is the
+  // assertion that fails if a row's count drifts with its headline instead of hugging the row's edge.
+  const describedCount = await boxOf(describedRow.locator('.tool-row__count'), 'the described count')
+  const undescribedCount = await boxOf(
+    undescribedRow.locator('.tool-row__count'),
+    'the undescribed count'
+  )
+  const pathCountEdge = pathCount.x + pathCount.width
+  for (const [box, what] of [
+    [describedCount, 'the described row (no lead)'],
+    [undescribedCount, 'the undescribed row (no subject)']
+  ] as const) {
+    expect(
+      Math.abs(box.x + box.width - pathCountEdge),
+      `${what} count is not in the column`
+    ).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX)
+  }
+
+  // --- AC4's other half, and #855's lesson applied: adding a run must not change any row's height. The
+  // count is body-medium, the same step .tool-row__left's min-height floors at, so every chip stays the
+  // one-line 36px box — including the hostile row, whose nowrap count must not wrap onto a second line.
+  for (const [row, what] of [
+    [describedRow, 'the described row'],
+    [undescribedRow, 'the undescribed row'],
+    [hostileRow, 'the hostile-count row']
+  ] as const) {
+    const chip = await boxOf(row.locator('.tool-row__chip'), `${what} chip`)
+    expect(Math.abs(chip.height - pathChip.height), `${what} is a different height`).toBeLessThanOrEqual(
+      WIDTH_TOLERANCE_PX
+    )
+  }
+
+  // --- The security bound, proved rather than asserted in a comment. An unbounded count would give the
+  // trailing group a base size wider than the chip and push the chevron past .tool-row__chip's
+  // overflow: hidden edge; .tool-row__right's max-width caps the group and .tool-row__count's
+  // flex: 0 1 auto + min-width: 0 make the COUNT the only thing that gives way.
+  const hostileInsets = await chipInsetsOf(hostileRow)
+  const hostileChip = await boxOf(hostileRow.locator('.tool-row__chip'), 'the hostile row chip')
+  const hostileGroup = await boxOf(hostileRow.locator('.tool-row__right'), 'the hostile row group')
+  const hostileChevron = await boxOf(
+    hostileRow.locator('.tool-row__chevron'),
+    'the hostile row chevron'
+  )
+  // The chevron is still INSIDE the clipped box — the affordance survives a hostile count. Measured as
+  // a control with .tool-row__right's max-width removed: the chevron landed at x≈3474 against a trailing
+  // edge of 1051.5, i.e. 2.4k pixels outside the clip, gone. This assertion is the one that catches it.
+  const hostileTrailingEdge =
+    hostileChip.x + hostileChip.width - hostileInsets.paddingRight - hostileInsets.borderRight
+  expect(hostileChevron.x).toBeGreaterThanOrEqual(hostileChip.x)
+  expect(hostileChevron.x + hostileChevron.width).toBeLessThanOrEqual(
+    hostileTrailingEdge + WIDTH_TOLERANCE_PX
+  )
+  // The group obeyed its cap, and the count — not the chevron — is what gave way, ellipsized.
+  expect(hostileGroup.width).toBeLessThanOrEqual(hostileInsets.contentWidth / 2 + WIDTH_TOLERANCE_PX)
+  const countClipped = await hostileRow
+    .locator('.tool-row__count')
+    .evaluate((element) => element.scrollWidth > element.clientWidth)
+  expect(countClipped).toBe(true)
+  // And the headline is still readable beside it rather than collapsed to nothing.
+  const hostileLeft = await boxOf(hostileRow.locator('.tool-row__left'), 'the hostile row left group')
+  expect(hostileLeft.width).toBeGreaterThan(0)
+})

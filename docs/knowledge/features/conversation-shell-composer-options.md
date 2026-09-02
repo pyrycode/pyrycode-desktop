@@ -365,3 +365,102 @@ uncorrected because both files were outside this diff's touched paths, not becau
 disputed. **Whoever opens `composerOptionsPlacement.ts` for #682 or #683 should correct those four
 comments first** — they currently hand the next consumer a recipe for the wiring this ticket already
 built, in a shape review would reject a second time.
+
+### Slash command type-ahead — decision layer (#939)
+
+Split from #694, unblocked once [#935](slash-command-list-wire-types.md) declared `WireSlashCommand`.
+New file, `slashCommandTypeAhead.ts`, sibling to `composerOptionsKeyboard.ts` and built to its exact
+shape: framework-free, DOM-free, two exported functions, no component, no store read, no mount —
+`environment: 'node'` and no `@testing-library` mean nothing here can click, so everything the
+type-ahead *decides* had to become a total function a vitest spec can execute, leaving the render
+container (#940) thin enough to be correct by inspection. It composes *with*
+`resolveComposerOptionsKey`/`initialFocusedOptionIndex` rather than re-deciding any of their
+arrows-with-wrap, Enter-picks, Escape-dismisses or first-row-on-open behaviour; the one place they
+touch is that filtering narrows the list while the panel is open, which can leave a focused index
+addressing no row — `resolveComposerOptionsKey`'s `Enter` arm is already range-guarded for exactly
+that, by name, at `composerOptionsKeyboard.ts:121-122`.
+
+```ts
+function slashCommandTypeAheadRows(
+  text: string,
+  commands: readonly WireSlashCommand[] | null
+): readonly WireSlashCommand[]
+
+function completeSlashCommand(command: WireSlashCommand): string
+```
+
+**The returned row array *is* the open state — there is no separate `open` flag.** All six closed
+cases (empty text, a slash after any other character, a slash followed by whitespace, `commands ===
+null`, `commands: []`, a fragment nothing matches) return `[]` through the one encoding, making "open
+with zero rows" unrepresentable rather than merely guarded against — the same convention
+`ComposerOptionsMenu`'s consumers already use (`options.length` gates the panel). The one hazard: `[]`
+is truthy in JavaScript, so a container must write `rows.length > 0 && <panel/>`, never `rows.length
+&& …` or `rows && …`.
+
+**Opening** is one anchored regex, `/^\/(\S*)$/` — `\S` rather than a literal space so a tab or
+newline also closes the panel (a fragment is one unbroken run by construction), and JS's strict
+end-of-input `$` (unlike Python's) means a trailing newline closes rather than being silently
+trimmed. One rule covers all four of the parent ticket's requirements, because claude only intercepts
+a message that *begins* with a slash.
+
+**Filtering** ranks each row over its `name` and every visible alias into one of three buckets —
+`prefix`, `contained`, and `unknown` — concatenated in that fixed order rather than sorted, so
+claude's published order is preserved within each bucket by construction rather than by appeal to
+`Array.prototype.sort`'s stability guarantee. A row that merely contains the fragment in its `name`
+but prefixes it in a later alias still ranks `prefix` — the scan does not stop at the first hit.
+Case folding is `toLowerCase()`, never `toLocaleLowerCase()` (the Turkish-`i` trap), and nothing else
+is normalised; the `description` is never searched, so a fragment matching only prose can't hand the
+user a command whose name they never typed.
+
+**A row whose `truncated_fields` names `aliases` is the `unknown` bucket** — transposed unchanged
+from the wire type's own reading rule (see [Slash-command-list wire types § How it
+works](slash-command-list-wire-types.md#how-it-works)): `aliases: []` states nothing on its own,
+since claude never emits an empty alias array, so a row
+whose visible aliases fail to match is a *maybe*, not a non-match. It trails both real-match buckets
+(never outranks a genuine hit) but survives as the sole candidate when it is the only one, keeping the
+panel open rather than closed — the failure mode the user story names. The helper,
+`hasUnknownAliases`, is written `truncated_fields !== null && truncated_fields.includes('aliases')`
+with an explicit null test rather than `?.includes(…)`, because the optional-chaining form is the
+exact shape that silently inverts the rule on an unvalidated frame (an absent key reads `undefined`,
+equally falsy). This module depends on #936's fail-closed narrower for that reading to be sound at
+all — a bare `as WireSlashCommand[]` would make the check meaningless, not merely unsafe.
+
+**Completing** returns the canonical name with its leading slash, plus exactly one trailing space
+when `argument_hint !== ''` (a literal test, not trimmed) and none when it is empty — canonical even
+for a row matched only by an alias, so nothing downstream resolves an alias back, which is why
+`completeSlashCommand` takes the whole row rather than `(name, argumentHint)` (two same-typed strings
+transpose silently with no type error, `composerOptionsPlacement.ts`'s stated reason for the same
+shape). The name is copied verbatim — no escape, no trim, no case change — since it is
+workspace-authored text the daemon bounds but does not sanitize, landing in a controlled `<textarea>`
+value and nowhere else. **The two rules agree by construction**: a hinted completion ends in a space,
+and a slash followed by a space is closed, so the panel gets out of the way exactly when an argument
+is about to be typed — pinned as an executable property in the spec (feeding a completion straight
+back through `slashCommandTypeAheadRows`), not left as a comment. An un-hinted completion leaves the
+panel matching the row just picked; closing it on pick is left to #940's container rather than to this
+module.
+
+**Untrusted input, no sink.** `name`, `argument_hint`, `description` and every alias are
+workspace-authored — `__remote-workflow` (no identifier charset) and an embedded-newline,
+non-ASCII `description` are both in the fixture — matched and copied with no charset assumption. No
+`console.*` and no thrown error anywhere in the module: both functions are total, so there is no error
+path to leak a row through, and `0x0a` is the only sub-`0x20` byte measured across the wire type's
+whole capture, meaning a newline is the one control character a logged description could actually
+use to forge a log line. Rows are returned by reference — the store's own objects, never projected or
+copied — and the returned array's identity is deliberately not a contract; a future container must not
+`useEffect` on it.
+
+**Testing.** Co-located `slashCommandTypeAhead.test.ts`, `environment: 'node'`, AC-tagged
+`describe` blocks. Fixture rows are lifted from `src/shared/wire/types.test.ts`'s committed upstream
+values (`clear`'s `aliases: ['reset', 'new']` is the ticket's worked case) plus two hand-authored rows
+the ACs name outright: one `truncated_fields: ['aliases']` (no committed upstream fixture carries
+one), and `__remote-workflow` with an alias `Workflow` proving the case fold both directions. A
+totality sweep asserts every answer, for every text × list-shape combination, is an array drawn
+verbatim from the input with no duplicate — the property that makes #940's eventual `options[index]`
+lookup safe once this module has done the narrowing.
+
+**Ships dormant, same as every module in this cluster ahead of its consumer**: no store read, no
+mount, nothing imports it yet. #940 is the render slice — it composes this module with
+`ComposerOptionsPanel` and `resolveComposerOptionsKey`, feeds it `selectSlashCommandListFor(openId)`
+and the composer's own text, and decides where focus lands after a narrowing (this module's own
+docblock is explicit that that choice is the container's, not its). Security review (architect
+self-review) PASS, no findings — see `docs/specs/architecture/939-slash-command-type-ahead-decisions.md`.

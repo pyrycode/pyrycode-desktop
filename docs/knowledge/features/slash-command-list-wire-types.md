@@ -161,9 +161,14 @@ Decodes, crosses IPC, and is still unclaimed by any renderer consumer:
   sealed union](daemon-event-channel-sealed-union.md) for the arm's full field-by-field rationale.
 - **#954** (landed) holds the list per conversation in a dedicated keyed store — see
   [Slash-command-list store](slash-command-list-store.md). Ships dormant: nothing renders the list
-  yet. **#681** will match the Actions menu's entries against both `name` and `aliases`, and #940
-  will drive the type-ahead — the first consumers that must not resolve a menu entry by rendering an
-  unescaped `name`, and the first to actually read the frame #936 decodes and #937 carries.
+  yet. **#681** will match the Actions menu's entries against both `name` and `aliases`.
+- **#939** (landed) is the first code anywhere to actually read a `WireSlashCommand` row rather than
+  carry or hold one: `slashCommandTypeAheadRows`/`completeSlashCommand`, a pure decision pair — see
+  [Conversation shell — composer options panel](conversation-shell-composer-options.md#slash-command-type-ahead--decision-layer-939)
+  for the module. It takes the row list as a plain parameter rather than reading the store, so it
+  ships dormant too — no mount, no store subscription — and transposes this doc's cut-`aliases` rule
+  unchanged rather than deciding it. **#940** wires it to `selectSlashCommandListFor` and mounts it,
+  the first consumer that must not resolve a menu entry by rendering an unescaped `name`.
 
 ## Edge cases and limitations
 
@@ -223,11 +228,16 @@ radius.
 - [Slash-command-list store](slash-command-list-store.md) —
   [#954](https://github.com/pyrycode/pyrycode-desktop/issues/954)'s per-conversation store and bridge that
   catches the arm above; ships dormant awaiting [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681)
-  (Actions-menu alias match) or #940 (type-ahead) as its first readers.
+  (Actions-menu alias match) or #940 (type-ahead mount) as its first readers.
+- [Conversation shell — composer options panel](conversation-shell-composer-options.md#slash-command-type-ahead--decision-layer-939)
+  — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939)'s pure opening/filtering/completion
+  decisions over this row type, the first code anywhere to actually read one; still unmounted, pending #940.
 - `docs/specs/architecture/936-slash-command-list-decode.md` — the decode slice's architecture spec,
   including its security review (verdict: PASS, builder self-review).
 - `docs/specs/architecture/937-slash-command-list-ipc-arm.md` — the IPC-carry slice's architecture spec,
   including its security review (verdict: PASS, builder self-review).
+- `docs/specs/architecture/939-slash-command-type-ahead-decisions.md` — the type-ahead decision
+  layer's architecture spec, including its security review (verdict: PASS, builder self-review).
 - [Question-shown wire types](question-shown-wire-types.md) — the shape this ticket follows: nested
   row declared before its payload, doc comment carrying provenance and traps, shipped dormant ahead of
   its decoder. Its `SlashCommand`/`ModelOption` contrast names the daemon's Go type this ticket

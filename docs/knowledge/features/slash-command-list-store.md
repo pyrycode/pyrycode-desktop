@@ -7,9 +7,13 @@ offering commands reads one live source of truth rather than asking for the list
 Introduced in #954, catching #937's dormant `slashCommandList` `DaemonEvent`
 arm — see [Slash-command-list wire types](slash-command-list-wire-types.md) for the wire contract
 this store holds. Shipped dormant: nothing renders the list yet.
-[#940](https://github.com/pyrycode/pyrycode-desktop/issues/940) (the type-ahead) and
+[#940](https://github.com/pyrycode/pyrycode-desktop/issues/940) (the type-ahead's mount) and
 [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) (the Actions-menu grey-out) are its
-first readers. [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the store's
+first readers — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939) landed the
+type-ahead's decision logic ahead of #940, but as a pure function taking the row list as a
+parameter, so it does not read this store either; see [Conversation shell — composer options
+panel](conversation-shell-composer-options.md#slash-command-type-ahead--decision-layer-939).
+[#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the store's
 pairing-scoped clear — see § The pairing-scoped clear below.
 
 ## What it does
@@ -210,14 +214,19 @@ selectSlashCommandListFor(openId) / useSlashCommandListStore   (read by #940 / #
 - **No DOM sink in this slice.** The plain-text-never-HTML discipline (`innerHTML` /
   `dangerouslySetInnerHTML` forbidden, never an attribute, a URL, a filename, a cache key or a
   lookup path) is inherited here and discharged by #940's render slice.
-- **Nothing renders the list yet.** Shipped populated and unread through #954 — #940 (type-ahead)
-  and #681 (Actions-menu grey-out) are the first readers, and neither is built yet.
+- **Nothing renders the list yet.** Shipped populated and unread through #954 — #940 (type-ahead
+  mount) and #681 (Actions-menu grey-out) are the first readers, and neither is built yet; #939
+  landed the type-ahead's decision logic without touching this store.
 
 ## Related
 
 - [Slash-command-list wire types](slash-command-list-wire-types.md) — the wire contract this store
   holds verbatim: `WireSlashCommand`'s trust tier, the `aliases`-collapse trap, and the
   `droppedCommands` sum.
+- [Conversation shell — composer options panel](conversation-shell-composer-options.md#slash-command-type-ahead--decision-layer-939)
+  — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939)'s pure `slashCommandTypeAheadRows`/
+  `completeSlashCommand`, the decision logic #940 will feed from this store's
+  `selectSlashCommandListFor`.
 - [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) — #937's
   `slashCommandList` `DaemonEvent` arm and the four permanent bridge no-ops this store's bridge sits
   alongside as a fifth observer.

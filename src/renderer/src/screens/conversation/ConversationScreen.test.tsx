@@ -2207,16 +2207,53 @@ describe('ComposerSendButton — the composer send/stop control (#678)', () => {
     }
   })
 
-  it('swaps the glyph with the variant (the Figma stop glyph, 28×28)', () => {
-    // Assert on a distinguishing substring of the stop glyph's own coordinate space, not the whole path.
+  // #951 REWROTE THIS TEST, and the reason is the whole point of the ticket: both glyphs are now the
+  // same 28×28 export family, so `viewBox` — this test's original discriminator, asserted as ABSENT from
+  // the idle branch — no longer distinguishes anything. The discriminator moves to a substring of each
+  // path's own coordinates, and the shared 28×28 becomes an assertion in its own right below.
+  it('swaps the glyph with the variant (the two Figma glyphs)', () => {
     const running = renderToStaticMarkup(
       <ComposerSendButton isRunning={true} canSend={true} onSend={noop} onInterrupt={noop} />
     )
     const idle = renderToStaticMarkup(
       <ComposerSendButton isRunning={false} canSend={true} onSend={noop} onInterrupt={noop} />
     )
-    expect(running).toContain('viewBox="0 0 28 28"')
-    expect(idle).not.toContain('viewBox="0 0 28 28"')
+    // The stop glyph's knocked-out square, and the chevron's first stroke away from the disc. Both are
+    // substrings of their own subpath, never the whole `d` — a transcription diff in the disc the two
+    // share should not fail a test about which variant rendered.
+    expect(running).toContain('M10.5 8.75H17.5')
+    expect(running).not.toContain('M20.6172')
+    expect(idle).toContain('M20.6172')
+    expect(idle).not.toContain('M10.5 8.75H17.5')
+  })
+
+  // #951 AC2: the idle control draws `circle-chevron-up-solid-full` at the stop glyph's size. Before this
+  // ticket the send branch drew a bare 22px arrow in a 24-unit viewBox, so this is the assertion the
+  // redraw exists to satisfy.
+  it('draws both glyphs at the design 28×28 (#951)', () => {
+    for (const isRunning of [false, true]) {
+      const markup = renderToStaticMarkup(
+        <ComposerSendButton isRunning={isRunning} canSend={true} onSend={noop} onInterrupt={noop} />
+      )
+      expect(markup).toContain('viewBox="0 0 28 28"')
+      expect(markup).toContain('width="28"')
+      expect(markup).toContain('height="28"')
+    }
+  })
+
+  // The colour is the STYLESHEET's (.composer__send sets --color-primary) and reaches the glyph through
+  // currentColor. The Figma export ships the resolved #9DCBFC on its path; inlining that would hardcode
+  // one scheme's fallback hex, which is the standing rule this file's CSS states over and over. Static
+  // markup cannot see a stylesheet, so what is provable here is the NEGATIVE — no colour of its own —
+  // and the positive lives in e2e/composer-message-box.spec.ts.
+  it('takes both glyph colours from currentColor, never the export hex (#951)', () => {
+    for (const isRunning of [false, true]) {
+      const markup = renderToStaticMarkup(
+        <ComposerSendButton isRunning={isRunning} canSend={true} onSend={noop} onInterrupt={noop} />
+      )
+      expect(markup).toContain('fill="currentColor"')
+      expect(markup.toLowerCase()).not.toContain('#9dcbfc')
+    }
   })
 })
 

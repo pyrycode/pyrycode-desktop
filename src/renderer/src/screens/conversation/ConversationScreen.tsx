@@ -2267,17 +2267,22 @@ const INTERRUPT_LABEL = 'Stop the running turn'
 // interrupted" state — a second click is harmless (the daemon owes no reply) and a disable-after-click flag
 // would be new client state (AC2 forbids it); it simply stays until `phase` leaves the running set.
 //
-// Both variants share the .composer__send chrome with no modifier class — the 48px round pill whose
+// Both variants share the .composer__send chrome with no modifier class — the 48px control whose
 // :hover:not(:disabled) already behaves for a never-disabled button and whose :disabled never matches the
-// stop variant, so this ticket adds no CSS at all. The variants are distinguished in markup by aria-label
-// and glyph, which is exactly the seam the e2e locators already use. The stop glyph is Figma 114:3552's
-// `circle-stop-solid-full` exported verbatim at 28×28 (a disc with the square knocked out by the nonzero
-// fill rule — the two subpaths wind opposite ways, so do not "tidy" either one's direction). Its 28-unit
-// viewBox departs from this file's 24-unit habit deliberately: viewBox is only a coordinate space, the
-// rendered size comes from width/height, and rescaling the exported path by hand is transcription risk for
-// no gain. The send glyph is untouched at 24/22 — a filled disc needs more area than a thin arrow to read
-// at the same optical weight. Re-theming the send variant to circle-chevron-up-solid-full, and both glyphs
-// to --color-primary on an at-rest-invisible container as the Figma paints them, is one coherent follow-up.
+// stop variant. The variants are distinguished in markup by aria-label and glyph, which is exactly the
+// seam the e2e locators already use.
+//
+// #951 CLOSED THE FOLLOW-UP #678 NAMED HERE. Both glyphs are now the same export family at the same
+// 28×28: the stop is Figma 114:3552's `circle-stop-solid-full` and the send is 347:6440's
+// `circle-chevron-up-solid-full`, each a disc with its shape knocked out by the nonzero fill rule — the
+// two subpaths of each wind opposite ways, so do not "tidy" either one's direction. The 28-unit viewBox
+// departs from this file's 24-unit habit deliberately: viewBox is only a coordinate space, the rendered
+// size comes from width/height, and rescaling an exported path by hand is transcription risk for no gain.
+//
+// NEITHER PATH CARRIES A FILL OF ITS OWN. Both exports ship the resolved #9DCBFC; that is --color-primary's
+// value, and inlining it would hardcode the export's fallback hex — the rule stated over and over in
+// conversation.css. `fill="currentColor"` takes the colour from .composer__send instead, which is also
+// what makes the :disabled rule's muted content reach the glyph unchanged.
 export function ComposerSendButton({
   isRunning,
   canSend,
@@ -2320,13 +2325,13 @@ export function ComposerSendButton({
     >
       <svg
         className="composer__send-icon"
-        viewBox="0 0 24 24"
-        width="22"
-        height="22"
+        viewBox="0 0 28 28"
+        width="28"
+        height="28"
         fill="currentColor"
         aria-hidden="true"
       >
-        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8z" />
+        <path d="M14 28C21.7328 28 28 21.7328 28 14C28 6.26719 21.7328 0 14 0C6.26719 0 0 6.26719 0 14C0 21.7328 6.26719 28 14 28ZM20.6172 14.8203C21.1312 15.3344 21.1312 16.1656 20.6172 16.6742C20.1031 17.1828 19.2719 17.1883 18.7633 16.6742L14.0055 11.9164L9.24766 16.6742C8.73359 17.1883 7.90234 17.1883 7.39375 16.6742C6.88516 16.1602 6.87969 15.3289 7.39375 14.8203L13.0703 9.13281C13.5844 8.61875 14.4156 8.61875 14.9242 9.13281L20.6172 14.8203Z" />
       </svg>
     </button>
   )

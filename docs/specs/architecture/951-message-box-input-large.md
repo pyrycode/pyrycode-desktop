@@ -240,3 +240,30 @@ order, pinned in `ConversationScreen.test.tsx`.
 2. **Does the `::before` ground need any stacking help beyond `position: relative` on the textarea?** The
    painting order says no for the two already-positioned siblings. — *Resolve by looking at the running
    app / the spec's transparency assertions.*
+
+## Revisions
+
+### 2026-09-03 — the focus ring moves from the textarea to the box
+
+**What changed.** `.composer__input:focus-visible` is deleted and replaced by
+`.composer__row:has(.composer__input:focus-visible)`, same declaration and same `--color-outline` token.
+
+**Why.** Found while writing the CSS, not anticipated above. AC3 requires focus to "show a visible ring on
+the box", and until this ticket the textarea *was* the box, so the shipped rule satisfied that by accident
+of geometry. After the redraw the textarea is a 28px band inside a 52px box, so its own outline draws a
+bare rectangle floating inside the rounded box — visible, but reading as an artefact rather than as the
+box's focus state, and square where the box is rounded.
+
+**Why `:has()` and not `:focus-within`.** `:focus-within` also matches while `.composer__send` holds
+focus, which would stack a ring around the whole box on top of the button's own `:focus-visible` ring —
+two rings for one focused control. `:has()` names the textarea and nothing else. It is not a new idiom:
+`.question-panel__option:has(.question-panel__input:focus-visible)` (#912) is the same shape for the same
+reason, and that rule's own comment — which asserted `:has()` appears nowhere else in the codebase — is
+trued up in the same commit to name this second consumer.
+
+### 2026-09-03 — resolutions to the Open Questions
+
+1. **Yes, 52px.** Chromium derives exactly 52px for the box: 12 + 4 + 20 + 4 + 12, measured by
+   `e2e/composer-message-box.spec.ts`. No declared height was needed.
+2. **No further stacking help.** `position: relative` on `.composer__input` is the whole of it; the
+   control and the type-ahead panel are already positioned and already later in DOM order.

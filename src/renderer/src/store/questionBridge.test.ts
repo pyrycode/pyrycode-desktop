@@ -1,8 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { HelloAckPayload, MessagePayload, ErrorPayload, WireQuestion } from '@shared/wire/types'
-import { translateQuestionEvent, subscribeQuestionBatches } from './questionBridge'
+import type { QuestionBatchEvent } from './questionBatches'
+import {
+  translateQuestionEvent,
+  translateQuestionPickEvent,
+  subscribeQuestionBatches
+} from './questionBridge'
 import { createQuestionBatchStore, selectOutstandingBatches } from './questionBatchStore'
+import { createQuestionPicksStore, selectQuestionSelection } from './questionPicksStore'
 
 // Fixtures — plain wire-shaped data, mirroring modalBridge.test.ts. No transport involved.
 const ack: HelloAckPayload = {
@@ -371,14 +377,14 @@ describe('subscribeQuestionBatches', () => {
 
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
-    subscribeQuestionBatches(bridge.onDaemonEvent, vi.fn())
+    subscribeQuestionBatches(bridge.onDaemonEvent, vi.fn(), vi.fn())
     expect(bridge.subscribeCalls()).toBe(1)
   })
 
   it('dispatches a translated event for an owned arm', () => {
     const bridge = fakeBridge()
     const dispatch = vi.fn()
-    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch)
+    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch, vi.fn())
 
     bridge.emit(questionShown)
     expect(dispatch).toHaveBeenCalledTimes(1)
@@ -409,7 +415,7 @@ describe('subscribeQuestionBatches', () => {
   it('dispatches nothing for an unowned arm', () => {
     const bridge = fakeBridge()
     const dispatch = vi.fn()
-    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch)
+    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch, vi.fn())
 
     bridge.emit({ type: 'connecting' })
     expect(dispatch).not.toHaveBeenCalled()
@@ -417,7 +423,7 @@ describe('subscribeQuestionBatches', () => {
 
   it('returns the off handle from onDaemonEvent itself as the cleanup', () => {
     const bridge = fakeBridge()
-    const cleanup = subscribeQuestionBatches(bridge.onDaemonEvent, vi.fn())
+    const cleanup = subscribeQuestionBatches(bridge.onDaemonEvent, vi.fn(), vi.fn())
     // Identity, not merely call count: the React binding uses this as its effect cleanup, so it must be
     // the very handle the channel issued rather than a wrapper that could forget to unsubscribe.
     expect(cleanup).toBe(bridge.offs[0])
@@ -432,9 +438,9 @@ describe('subscribeQuestionBatches', () => {
     // React StrictMode runs mount → cleanup → mount. The hook's effect body is exactly this call and
     // its cleanup is exactly the returned handle, so driving the seam directly proves the hook's claim
     // without a DOM — which is why the seam is injectable in the first place.
-    const firstCleanup = subscribeQuestionBatches(bridge.onDaemonEvent, dispatch)
+    const firstCleanup = subscribeQuestionBatches(bridge.onDaemonEvent, dispatch, vi.fn())
     firstCleanup()
-    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch)
+    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch, vi.fn())
 
     expect(bridge.subscribeCalls()).toBe(2)
     expect(bridge.liveListeners()).toBe(1)
@@ -465,7 +471,11 @@ describe('subscribeQuestionBatches → the store, end to end (no React)', () => 
   it('a questionShown then a questionDismissed on the same id drives outstanding [1] → []', () => {
     const bridge = fakeBridge()
     const store = createQuestionBatchStore()
-    subscribeQuestionBatches(bridge.onDaemonEvent, (event) => store.getState().dispatch(event))
+    subscribeQuestionBatches(
+      bridge.onDaemonEvent,
+      (event) => store.getState().dispatch(event),
+      vi.fn()
+    )
 
     bridge.emit(questionShown)
     expect(selectOutstandingBatches(store.getState())).toHaveLength(1)
@@ -478,7 +488,11 @@ describe('subscribeQuestionBatches → the store, end to end (no React)', () => 
   it('a dismissal with an unknown id leaves the held batch standing', () => {
     const bridge = fakeBridge()
     const store = createQuestionBatchStore()
-    subscribeQuestionBatches(bridge.onDaemonEvent, (event) => store.getState().dispatch(event))
+    subscribeQuestionBatches(
+      bridge.onDaemonEvent,
+      (event) => store.getState().dispatch(event),
+      vi.fn()
+    )
 
     bridge.emit(questionShown)
     const before = selectOutstandingBatches(store.getState())
@@ -496,7 +510,11 @@ describe('subscribeQuestionBatches → the store, end to end (no React)', () => 
   it('a connected after a shown clears the held set, so the re-send is the sole repopulation truth', () => {
     const bridge = fakeBridge()
     const store = createQuestionBatchStore()
-    subscribeQuestionBatches(bridge.onDaemonEvent, (event) => store.getState().dispatch(event))
+    subscribeQuestionBatches(
+      bridge.onDaemonEvent,
+      (event) => store.getState().dispatch(event),
+      vi.fn()
+    )
 
     bridge.emit(questionShown)
     expect(selectOutstandingBatches(store.getState())).toHaveLength(1)
@@ -508,5 +526,187 @@ describe('subscribeQuestionBatches → the store, end to end (no React)', () => 
     // resolved while the client was away.
     bridge.emit(questionShown)
     expect(selectOutstandingBatches(store.getState())).toHaveLength(1)
+  })
+})
+
+describe('translateQuestionPickEvent — the clearing arms only (#911)', () => {
+  // Takes the ALREADY-TRANSLATED `QuestionBatchEvent`, deliberately not a `DaemonEvent`, so
+  // `translateQuestionEvent` stays this family's single reader of the daemon union.
+  const translatedDismissed: QuestionBatchEvent = {
+    type: 'dismissed',
+    questionBatchId: 'qb_01HZY',
+    outcome: 'unanswered',
+    source: 'no_answer'
+  }
+
+  it('dismissed → a fresh literal carrying ONLY the id', () => {
+    const picked = translateQuestionPickEvent(translatedDismissed)
+
+    expect(picked).toEqual({ type: 'dismissed', questionBatchId: 'qb_01HZY' })
+    // The key set, not just a loose match: `QuestionBatchEvent`'s dismissed arm is structurally
+    // ASSIGNABLE to the pick union's, since excess-property checking does not apply to a narrowed
+    // variable — so a `return event` would compile clean and silently carry `outcome`/`source` into
+    // a store that must never hold them. Only this assertion catches it.
+    expect(Object.keys(picked ?? {}).sort()).toEqual(['questionBatchId', 'type'])
+  })
+
+  it('an unrecognised source still translates — the arm is not enum-checked', () => {
+    // `source` is an opaque open string. Never `'timeout'` here: that value sits in upstream's
+    // shape fixture, minted before any producer existed, and reads as coverage while pinning
+    // traffic that does not exist.
+    const picked = translateQuestionPickEvent({
+      ...translatedDismissed,
+      outcome: 'something_new',
+      source: 'something_new'
+    })
+    expect(picked).toEqual({ type: 'dismissed', questionBatchId: 'qb_01HZY' })
+  })
+
+  it('reconnected → a payload-free reconnected', () => {
+    expect(translateQuestionPickEvent({ type: 'reconnected' })).toEqual({ type: 'reconnected' })
+  })
+
+  it('shown → null: there is no shown arm, so an untouched batch holds nothing', () => {
+    const shown = translateQuestionEvent(questionShown)
+    expect(shown).not.toBeNull()
+    expect(translateQuestionPickEvent(shown as QuestionBatchEvent)).toBeNull()
+  })
+})
+
+describe('subscribeQuestionBatches fans out to the picks store (#911, AC5)', () => {
+  function fakeBridge(): {
+    onDaemonEvent: ReturnType<typeof vi.fn>
+    emit: (e: DaemonEvent) => void
+    subscribeCalls: () => number
+  } {
+    let listener: ((e: DaemonEvent) => void) | undefined
+    const onDaemonEvent = vi.fn((l: (e: DaemonEvent) => void) => {
+      listener = l
+      return () => {
+        listener = undefined
+      }
+    })
+    return {
+      onDaemonEvent,
+      emit: (e) => listener?.(e),
+      subscribeCalls: () => onDaemonEvent.mock.calls.length
+    }
+  }
+
+  it('adds NO second subscriber on the daemon-event channel', () => {
+    const bridge = fakeBridge()
+    subscribeQuestionBatches(bridge.onDaemonEvent, vi.fn(), vi.fn())
+    // One channel subscription fanning out to two dispatches — the whole point of threading the
+    // picks store through the existing bridge rather than adding a fifth listener. Asserted rather
+    // than argued, because the bridge's docblock records the subscriber count as a considered number.
+    expect(bridge.subscribeCalls()).toBe(1)
+  })
+
+  it('one questionDismissed reaches BOTH stores, picks first', () => {
+    const bridge = fakeBridge()
+    const order: string[] = []
+    const dispatch = vi.fn(() => void order.push('batches'))
+    const dispatchPicks = vi.fn(() => void order.push('picks'))
+    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch, dispatchPicks)
+
+    bridge.emit(questionDismissed)
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'dismissed',
+      questionBatchId: 'qb_01HZY',
+      outcome: 'unanswered',
+      source: 'no_answer'
+    })
+    expect(dispatchPicks).toHaveBeenCalledWith({ type: 'dismissed', questionBatchId: 'qb_01HZY' })
+    // ORDER IS LOAD-BEARING. Zustand notifies subscribers synchronously inside `setState`, so the
+    // store written first has already woken every subscriber before the second write happens.
+    // Picks-first makes the intermediate state "batch still held, picks already cleared", which is
+    // indistinguishable from an untouched batch. Batch-first would expose a stale pick outliving its
+    // batch at an observable instant — precisely what this store exists to prevent.
+    expect(order).toEqual(['picks', 'batches'])
+  })
+
+  it('one connected reaches BOTH stores, picks first', () => {
+    const bridge = fakeBridge()
+    const order: string[] = []
+    const dispatch = vi.fn(() => void order.push('batches'))
+    const dispatchPicks = vi.fn(() => void order.push('picks'))
+    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch, dispatchPicks)
+
+    bridge.emit({ type: 'connected', ack })
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'reconnected' })
+    expect(dispatchPicks).toHaveBeenCalledWith({ type: 'reconnected' })
+    expect(order).toEqual(['picks', 'batches'])
+  })
+
+  it('a questionShown reaches the batch store only', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    const dispatchPicks = vi.fn()
+    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch, dispatchPicks)
+
+    bridge.emit(questionShown)
+
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(dispatchPicks).not.toHaveBeenCalled()
+  })
+
+  it('an unowned arm reaches neither', () => {
+    const bridge = fakeBridge()
+    const dispatch = vi.fn()
+    const dispatchPicks = vi.fn()
+    subscribeQuestionBatches(bridge.onDaemonEvent, dispatch, dispatchPicks)
+
+    bridge.emit({ type: 'connecting' })
+
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(dispatchPicks).not.toHaveBeenCalled()
+  })
+
+  it('end to end through both real stores (no React): a pick, then a dismissal, empties both', () => {
+    const bridge = fakeBridge()
+    const batches = createQuestionBatchStore()
+    const picks = createQuestionPicksStore()
+    subscribeQuestionBatches(
+      bridge.onDaemonEvent,
+      (event) => batches.getState().dispatch(event),
+      (event) => picks.getState().dispatch(event)
+    )
+
+    bridge.emit(questionShown)
+    // The operator picks, exactly as #912's panel will — the store is fed from the panel, never from
+    // the batch's arrival, so this is the only way a pick comes into being.
+    picks.getState().dispatch({
+      type: 'optionPicked',
+      questionBatchId: 'qb_01HZY',
+      questionIndex: 0,
+      optionIndex: 1
+    })
+    expect(selectQuestionSelection('qb_01HZY', 0)(picks.getState()).optionIndices).toEqual([1])
+
+    bridge.emit(questionDismissed)
+
+    expect(selectOutstandingBatches(batches.getState())).toHaveLength(0)
+    expect(selectQuestionSelection('qb_01HZY', 0)(picks.getState()).optionIndices).toEqual([])
+  })
+
+  it('a connected clears a pick made against a still-outstanding batch', () => {
+    const bridge = fakeBridge()
+    const picks = createQuestionPicksStore()
+    subscribeQuestionBatches(bridge.onDaemonEvent, vi.fn(), (event) =>
+      picks.getState().dispatch(event)
+    )
+
+    picks.getState().dispatch({
+      type: 'otherToggled',
+      questionBatchId: 'qb_01HZY',
+      questionIndex: 0
+    })
+    bridge.emit({ type: 'connected', ack })
+
+    // The daemon's connect-time re-send is the sole repopulation truth for the new connection, so a
+    // re-shown batch cannot inherit picks made before the reconnect.
+    expect(picks.getState().picks.size).toBe(0)
   })
 })

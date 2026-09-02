@@ -240,6 +240,133 @@ with per-subscription off handles (not the single captured listener `modalBridge
 because a single-listener fake cannot distinguish "the cleanup ran" from "the second mount overwrote the
 first," which is exactly AC5's claim.
 
+**Fans out to a second store since [#911](https://github.com/pyrycode/pyrycode-desktop/issues/911), with
+no fifth channel subscription.** `subscribeQuestionBatches` gained a required third parameter,
+`dispatchPicks: (event: QuestionPickEvent) => void` — required rather than optional so `tsc` enforces
+that every caller wires both stores, and there is exactly one production caller (`useQuestionBridge`,
+signature unchanged, so `App.tsx` needed no edit). A new `translateQuestionPickEvent(event:
+QuestionBatchEvent): QuestionPickEvent | null` takes the *already-translated* `QuestionBatchEvent`, never
+a raw `DaemonEvent`, so `translateQuestionEvent` stays this family's single reader of the daemon union —
+the new switch covers three arms (`dismissed` to `dismissed`, `connected`-derived `reconnected` to
+`reconnected`, `shown` to `null`) rather than forty-one. Each clearing literal is rebuilt by name rather
+than returned verbatim: `QuestionBatchEvent`'s `dismissed` arm is structurally assignable to
+`QuestionPickEvent`'s narrower one (excess-property checking does not apply to a narrowed variable), so
+`return event` would compile clean while silently carrying `outcome`/`source` into a store that must
+never hold them — caught only by the spec's exact key-set assertion, not by `toEqual`.
+
+**The picks dispatch runs first, before the batch dispatch, and the order is load-bearing.** Both run in
+the same synchronous listener turn, but zustand notifies subscribers synchronously inside `setState`, so
+whichever store is written first has already woken every subscriber before the second write happens.
+Picks-first makes the intermediate state "batch still held, picks already cleared" — indistinguishable
+from an untouched batch, and therefore always coherent. Batch-first would expose "batch gone, picks still
+held": a stale pick outliving its batch at an observable instant, which is precisely what the picks store
+exists to prevent. See § The picks store, below, for the store this feeds.
+
+### The picks store (`questionPicksStore.ts`)
+
+Introduced in [#911](https://github.com/pyrycode/pyrycode-desktop/issues/911), split from
+[#908](https://github.com/pyrycode/pyrycode-desktop/issues/908) (grandchild of
+[#851](https://github.com/pyrycode/pyrycode-desktop/issues/851)): what the **operator** has picked so far
+in an open batch, deliberately separate from the held-batch model above — this module never hangs picks
+off `QuestionBatch` and never reads `Question.multiSelect` back off it; which form a question uses
+arrives *with* the pick instead. Lives at `src/renderer/src/store/questionPicksStore.ts`, one file with
+the reducer inline — the repo's dominant store shape (`modalStore.ts`, `queueStore.ts`,
+`conversationLastReadStore.ts`) rather than a second `questionBatches.ts`-style split, since #898/#899
+were two files because they were two tickets, not because the house style requires it. It clones
+`questionBatchStore.ts`'s DI-factory -> singleton -> hook -> selectors shape.
+
+```ts
+interface QuestionSelection {
+  optionIndices: readonly number[]   // positions in that question's own `options`, ascending
+  otherText: string                  // held independently of `otherTicked`
+  otherTicked: boolean
+}
+interface QuestionPicksState { picks: ReadonlyMap<string, ReadonlyMap<number, QuestionSelection>> }
+
+type QuestionPickEvent =
+  | { type: 'optionPicked'; questionBatchId: string; questionIndex: number; optionIndex: number }   // single-select replace
+  | { type: 'optionToggled'; questionBatchId: string; questionIndex: number; optionIndex: number }  // multi-select accumulate
+  | { type: 'otherPicked'; questionBatchId: string; questionIndex: number }    // single-select: tick Other, clear options
+  | { type: 'otherToggled'; questionBatchId: string; questionIndex: number }   // multi-select: flip Other, leave options
+  | { type: 'otherTextChanged'; questionBatchId: string; questionIndex: number; text: string }
+  | { type: 'dismissed'; questionBatchId: string }
+  | { type: 'reconnected' }
+
+createQuestionPicksStore(init: QuestionPicksState = { picks: new Map() })  // vanilla createStore, DI seam
+questionPicksStore                                                        // app-wide singleton
+useQuestionPicksStore<T>(selector: (s: QuestionPicksStore) => T): T
+selectQuestionSelection(questionBatchId, questionIndex)                    // the one read surface
+```
+
+Keyed `questionBatchId -> questionIndex -> QuestionSelection`: a `ReadonlyMap` of `ReadonlyMap`s, not a
+`Record` and not an ordered array. The outer key is the same daemon-asserted one-time nonce
+`conversationLastReadStore` already keys a `Map` by, and that module's rationale transfers verbatim —
+`Map.prototype.get('__proto__')`/`.set('__proto__', …)` are ordinary own-key operations, so a hostile key
+is unremarkable *by construction*, not by validation. This is the family's one deliberate departure from
+ADR 0009's ordered-array-scanned-by-id: `outstanding` above holds display-ordered content, whereas this
+is a pure lookup with no order of its own, so neither of the array's two justifications (insertion order;
+selector returns the slice by reference) transfers. The inner map's `number` key has no hazard of any
+kind.
+
+**A pick is the option's position in `question.options`, never its label** — `QuestionOption` carries no
+`id` by design (#898: claude's answer protocol selects by `label`, so the label is the identity *on the
+wire*), and `QuestionPanelView` already draws its rows `key={index}` for the same reason — position is
+the client-side identity on both sides. Resolving a position back to a label at answer time is #853's
+job. The Other row is typed text plus a ticked flag rather than a sentinel index, since it is drawn
+inside the option list container but is not an entry in `question.options` (`QuestionPanel.tsx:128-144`).
+`otherText` is held independently of `otherTicked` in both shapes — clearing the tick leaves the text.
+
+**Seven arms named for behaviour, not a `multiSelect` boolean flag.** A boolean at the call site is
+invertible with no type error, so which form a question uses is told to this store *with* the pick,
+never read back off `Question.multiSelect` in the other store. `optionPicked` (single-select) replaces
+the option pick with exactly one position and clears `otherTicked`; `otherPicked` (single-select) is its
+Other-row mirror, ticking Other and clearing every option pick — the two are mutually exclusive, radio
+semantics. `optionToggled`/`otherToggled` (multi-select) each touch only their own field, so Other sits
+alongside ticked options rather than excluding them. `optionIndices` is held in ascending display order
+regardless of click order, so two tick sequences ending at the same set produce the same value — keeping
+the reducer's same-value guard honest — and #853 reads the answer list in claude's own display order
+rather than the operator's.
+
+**`dismissed` drops exactly the named batch, `reconnected` drops every batch — there is no `shown` arm.**
+A batch's picks come into being on the operator's first pick; an untouched batch holds nothing, so a
+re-shown batch cannot inherit stale picks across a *reconnect*. (The one gap this leaves — a
+**mid-connection** re-delivery of `question_shown` for a still-outstanding id with a different option
+list — is a named, accepted risk; see § Edge cases, below.) An unknown or already-cleared id is a
+same-state-reference no-op, mirroring `reduceQuestionBatches`' own clearing arms rather than inventing a
+local dismissal — this family has no answer frame yet, so the daemon's `dismissed` is the only way a
+batch leaves the held set, and there is no `resolved` id-memory here either (the same [#510](../codebase/510.md)
+lesson § Types above already cites).
+
+`selectQuestionSelection(questionBatchId, questionIndex)` answers with the held selection by reference, or
+a hoisted `EMPTY_QUESTION_SELECTION` constant for an untouched question — never `null`, since absent and
+all-empty are indistinguishable by construction (an emptied selection is left in the map rather than
+pruned: pruning would be a branch with no observable effect). The constant, not a fresh literal per call,
+is what keeps `useStore`'s `Object.is` result-compare from spinning a bound component on every render.
+
+**The exhaustiveness guard throws a content-free message**, departing from the sibling modules'
+`` `Unhandled …: ${JSON.stringify(event)}` `` form — a security-review finding, not a style choice.
+Interpolating this union would put `questionBatchId` (a one-time unguessable nonce) and `otherText`
+(operator-typed) into an `Error` message, which reaches a stack trace and any catch-and-log; the arm is
+compile-time unreachable, so the interpolation buys nothing the crash site's own stack does not already
+give. The sibling modules' existing guards are left exactly as they are — this is a lesson for the next
+module that clones the family's `assertNever`, not a retrofit.
+
+**The factory is load-bearing for the same reason as `questionBatchStore`'s.** Seeding the app singleton
+is invisible to `renderToStaticMarkup` (the server renderer reads `getServerSnapshot()`, wired to the
+state captured at store *creation*), so [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912)'s
+panel spec needs `vi.mock` over this module with `useQuestionPicksStore` bound to a per-file
+`createQuestionPicksStore(init)` instance. `dispatch` is synchronous with no `await`, so two dispatches
+cannot interleave and the same-value guard's check-then-act has no suspension point; the one named
+hazard, re-entrancy via zustand's synchronous subscriber notification inside `setState`, is unreachable
+as designed — the bridge dispatches from the preload event callback and the panel only reads. The
+singleton must never be attached to `window` as a debug handle, the same rule `questionBatchStore.ts`
+records.
+
+Nothing here lands on screen yet — the shape [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899)
+shipped in: a store landing with no consumer mounted. [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912)
+wires the panel to it and proves picks survive a conversation switch (`e2e/conversation-switch-remount.spec.ts`'s
+pattern, applied to this store).
+
 ## Configuration and usage
 
 [#906](https://github.com/pyrycode/pyrycode-desktop/issues/906) ends the dormant period: `useQuestionBridge`
@@ -250,7 +377,11 @@ attribute. See [Conversation shell — conversation surfaces and modals § Quest
 panel](conversation-shell-modals.md#question-panel-906) for the render vertical's design;
 this document still owns the model and the bridge underneath it. That slice draws the panel's frame only
 — the title row, the question text, the separator, and an inert Cancel/Continue row — with the option
-rows landing in #907 and the answer path in #908/#853.
+rows landing in [#907](https://github.com/pyrycode/pyrycode-desktop/issues/907) and the answer path in
+\#908/#853. [#911](https://github.com/pyrycode/pyrycode-desktop/issues/911) then added the operator's picks
+store (§ The picks store, above) beneath this render vertical — headless, no consumer mounted yet;
+[#912](https://github.com/pyrycode/pyrycode-desktop/issues/912) wires the panel to it and proves picks
+survive a conversation switch.
 
 ## Edge cases and limitations
 
@@ -304,6 +435,31 @@ rows landing in #907 and the answer path in #908/#853.
   IPC channel, no logger call and no comparison of any kind (`questionBatchId` matching stays
   `reduceQuestionBatches`' plain `===`, never `crypto.timingSafeEqual`); see
   `docs/specs/architecture/900-question-bridge.md` for the full review.
+- **The picks store's no-`shown`-arm design has one accepted gap: a *mid-connection* re-delivery.** A
+  compromised daemon could re-send `question_shown` for a still-outstanding `questionBatchId`, mid-
+  connection, with a different option list; `reduceQuestionBatches` replaces that batch in place, but
+  `questionPicksStore` has no `shown` arm, so the held positions survive and now address different
+  labels — the operator could see a pick ticked on a row they did not choose. Not fixed at this layer by
+  design: the ticket forecloses a `shown` arm (a batch's picks come into being only on the operator's
+  first pick), it needs a compromised daemon, and it is recoverable at
+  [#853](https://github.com/pyrycode/pyrycode-desktop/issues/853)'s answer-resolution step, which must
+  resolve a held position against the **currently held** option list and fail closed on an out-of-range
+  position rather than fall back to a neighbour. Holding positions rather than labels is what keeps this
+  store from making the gap worse. If defence in depth is wanted later, "a `shown` for a known id clears
+  that batch's picks" is the one-arm change. See `docs/specs/architecture/911-question-picks-store.md` §
+  Security review for the full finding.
+- **Security review (#911): PASS.** The picks store is structurally incapable of holding claude-authored
+  text — a `QuestionSelection` is two numbers, a boolean and one operator-typed string, and the only
+  daemon-asserted value in the state is `questionBatchId`, used as a `Map` key and never as content.
+  Nothing is persisted (a nonce in `localStorage` for state whose whole lifetime is one open question
+  would be worse than the `conversationLastReadStore` precedent it deliberately does not copy). Two
+  SHOULD-FIX findings were fixed in the design itself rather than left as follow-ups: the exhaustiveness
+  guards on both new switches (in `questionPicksStore.ts` and `questionBridge.ts`) throw content-free
+  messages instead of the family's usual `${JSON.stringify(event)}`, since that form would put the nonce
+  and the operator's typed text into an `Error` message; and the bridge's picks-before-batch dispatch
+  order closes the observable-intermediate-state gap described in § The bridge, above. See
+  `docs/specs/architecture/911-question-picks-store.md` § Security review for the full review, including
+  the mid-connection re-delivery finding above.
 
 ## Testing strategy
 
@@ -324,6 +480,25 @@ payload-free `reconnected`; an inverse-filter table over the other 38 `DaemonEve
 `toBeNull()`; `subscribeQuestionBatches` unit coverage; and an end-to-end pass through a real
 `createQuestionBatchStore()` and the seam (no React) proving shown → dismissed drives `outstanding`
 `[1] → []` and a `connected` after a `shown` clears the held set.
+
+`src/renderer/src/store/questionPicksStore.test.ts` (#911, 25 tests) — plain vitest, no DOM: single vs
+multi-select replace/accumulate, the Other tick clearing an option pick and vice versa in the
+single-select shape while the multi-select shape holds them alongside each other, `otherText` moving
+independently of `otherTicked` in both, two questions in one batch and two batches holding independent
+selections, ascending order held regardless of toggle sequence, `dismissed`/`reconnected` same-state-
+reference no-ops on an unknown/already-cleared id, copy-on-write across both map levels, DI isolation
+across two instances, and the selector returning the same `EMPTY_QUESTION_SELECTION` reference on repeat
+calls for an untouched question.
+
+`questionBridge.test.ts` gained coverage for `translateQuestionPickEvent` over all three
+`QuestionBatchEvent` arms — including an exact key-set assertion on the `dismissed` result proving
+`outcome`/`source` did not ride along, the trap a bare `toEqual` misses — and for
+`subscribeQuestionBatches`'s two-store fan-out: a `questionDismissed` and a `connected` each drive both
+dispatches with picks landing first, a `questionShown` drives only the batch dispatch, and
+`subscribeCalls() === 1` asserts the no-fifth-listener claim rather than arguing it. An end-to-end pass
+through both real stores (no React) proves a pick then a matching `questionDismissed` empties both, and
+that a `connected` clears a pick made against a still-outstanding batch. The 9 existing
+`subscribeQuestionBatches` call sites in the file took the new required `dispatchPicks` argument.
 
 ## Related
 
@@ -348,9 +523,14 @@ payload-free `reconnected`; an inverse-filter table over the other 38 `DaemonEve
   panel](conversation-shell-modals.md#question-panel-906) — the render vertical #906
   built on this model and bridge: `ComposerSlot`, `QuestionPanelView`, and the composer's `covered` cover
   mechanism.
+- `docs/specs/architecture/911-question-picks-store.md` — the picks store's architecture spec and its own
+  security review (verdict PASS), including the mid-connection re-delivery finding handed to #853.
 - Split from [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850); the Zustand container
   shipped in [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899) (§ The Zustand container,
   above); the `DaemonEvent` bridge shipped in
   [#900](https://github.com/pyrycode/pyrycode-desktop/issues/900) (§ The bridge, above), landing dormant;
   [#906](https://github.com/pyrycode/pyrycode-desktop/issues/906) mounted it and gave the store its first
-  reader (§ Configuration and usage, above) — the panel's frame only, with #907/#908 still to come.
+  reader (§ Configuration and usage, above) — the panel's frame only, with #907 shipping the option rows
+  and #911 (split from #908, § The picks store, above) shipping the operator's picks store, both still
+  headless until [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912) wires the panel to read
+  and write them.

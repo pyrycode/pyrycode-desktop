@@ -183,6 +183,22 @@ daemon, and weakening that is out of scope.
    binds when a close is pathologically slow, and giving up on a disposer is strictly better than hanging
    the worker. Confirm across the 10 isolated runs and the touched-scope suite.
 
+## Revisions
+
+**2026-09-02 — both Open Questions resolved during implementation. No design change.**
+
+1. *Does clamping `wait()` to `remainingMs()` turn a formerly-passing assertion red?* **No.** All 13 tests
+   are green, and the file ran green across 10 consecutive isolated runs. No test needed more than the
+   deadline allows, so the clamp never bound in practice — it only removes the *possibility* of summing
+   past it.
+2. *Is the teardown cap long enough for a normal `close()` under full-suite contention?* **Yes** at
+   `TEARDOWN_CAP_MS = 500`; it never bound across the touched-scope run or the 10 isolated runs.
+
+One implementation note worth recording, since it is the kind of thing the design section could not have
+predicted: `standUp`'s daemon wrapper is a spread-with-one-override, and an object spread silently drops
+nothing but also silently *adds* nothing — the mistake to avoid there is re-listing members by hand and
+forgetting one. Restricting the wrapper to a single overridden key keeps that failure mode unreachable.
+
 ## Security review
 
 **Verdict:** PASS

@@ -11,6 +11,13 @@
 // will ever claim them. This one owns exactly those two plus `connected`, and returns `null` for
 // everything else. This slice adds a bridge; it edits none of the three.
 //
+// IT NOW FEEDS TWO STORES OVER THE SAME ONE SUBSCRIPTION (#911). `questionPicksStore` holds what the
+// OPERATOR has picked so far and must be cleared exactly when a batch is, so `translateQuestionPickEvent`
+// re-shapes the two clearing arms of the already-translated `QuestionBatchEvent` and
+// `subscribeQuestionBatches` dispatches both. Deliberately NOT a fifth listener on the channel: the
+// subscriber count is a considered number, and a second listener would also leave the two stores' clear
+// ordering to registration order rather than to one explicit line.
+//
 // UNTRUSTED TEXT, CARRIED OPAQUELY. `Question.question`, `Question.header`, and every option's `label`
 // and `description` are CLAUDE-AUTHORED: they crossed the subprocess trust boundary and the daemon
 // NEITHER BOUNDS NOR SANITIZES them. This module is a SHAPE boundary, not a trust boundary — the
@@ -29,10 +36,27 @@ import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import { questionBatchStore } from './questionBatchStore'
 import type { Question, QuestionBatchEvent } from './questionBatches'
+import { questionPicksStore, type QuestionPickEvent } from './questionPicksStore'
 
 /** Compile-time exhaustiveness guard: a new DaemonEvent arm without a case is a type error. */
 function assertNever(event: never): never {
   throw new Error(`Unhandled daemon event: ${JSON.stringify(event)}`)
+}
+
+/**
+ * The same guard for `translateQuestionPickEvent`'s three-arm switch — a SEPARATE function, and
+ * deliberately not the one above.
+ *
+ * The message is CONTENT-FREE where `assertNever`'s interpolates, and that is a security-review
+ * finding rather than a style split. `JSON.stringify` of a `QuestionBatchEvent` is `questionBatchId`
+ * (a one-time unguessable nonce) plus the four claude-authored strings, and an `Error` message is a
+ * sink: it reaches a stack trace, a crash reporter, and anything that catches and logs. The arm is
+ * compile-time unreachable, so the interpolation buys nothing the crash site's own stack does not
+ * already give. `assertNever` above is left exactly as it is — sweeping it would be refactoring
+ * adjacent code.
+ */
+function assertNoPickArm(_event: never): never {
+  throw new Error('Unhandled question batch event')
 }
 
 /**
@@ -164,21 +188,73 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
 }
 
 /**
+ * Map one ALREADY-TRANSLATED `QuestionBatchEvent` to the `QuestionPickEvent` it produces, or `null`
+ * when it drives no pick state (#911). Owns the two CLEARING arms and nothing else.
+ *
+ * IT TAKES A `QuestionBatchEvent`, NOT A `DaemonEvent`, and that is the point: `translateQuestionEvent`
+ * stays this family's single reader of the daemon union, so this switch covers three arms rather than
+ * forty-one and a new `DaemonEvent` arm is a compile error in exactly one place.
+ *
+ * THE LITERAL IS REBUILT BY NAME, AND `return event` WOULD COMPILE. `QuestionBatchEvent`'s dismissed
+ * arm is structurally ASSIGNABLE to `QuestionPickEvent`'s — excess-property checking does not apply to
+ * a narrowed variable — so returning the event itself typechecks clean while silently carrying
+ * `outcome` and `source` into a store that must never hold them. The spec asserts the key set, which
+ * is the only guard.
+ *
+ * `shown` maps to `null`: THERE IS NO `shown` ARM in the picks store. A batch's picks come into being
+ * on the operator's first pick, so an untouched batch holds nothing and this store never mirrors the
+ * held batch's arrival. `reconnected` covers the daemon's connect-time re-send, so a re-shown batch
+ * cannot inherit picks across a reconnect.
+ */
+export function translateQuestionPickEvent(event: QuestionBatchEvent): QuestionPickEvent | null {
+  switch (event.type) {
+    case 'dismissed':
+      // Only the id crosses. `outcome` and `source` are dropped deliberately: the picks store clears
+      // on ANY dismissal regardless of cause, which is what satisfies the fail-closed reading rule at
+      // that layer — an unrecognised `source` means RESOLVED, CAUSE UNKNOWN, and never an answer.
+      return { type: 'dismissed', questionBatchId: event.questionBatchId }
+    case 'reconnected':
+      return { type: 'reconnected' }
+    case 'shown':
+      return null
+    default:
+      return assertNoPickArm(event)
+  }
+}
+
+/**
  * Subscribe via the injected `onDaemonEvent`; each owned arm translates to a `QuestionBatchEvent` and
  * is dispatched, every other arm no-ops. Returns the exact unsubscribe handle from `onDaemonEvent`
  * (the `subscribeModal` idiom) so the React binding can use it as its effect cleanup — the handle
  * itself, never a wrapper, which is what makes the double-mount guarantee below hold. Injecting
- * `onDaemonEvent` + `dispatch` keeps it React-free and unit-testable with plain spies, and it grants
- * no authority: a caller must already hold a write path to pass one in. The listener only translates +
- * dispatches — it never throws into React.
+ * `onDaemonEvent` + the two dispatches keeps it React-free and unit-testable with plain spies, and it
+ * grants no authority: a caller must already hold a write path to pass one in. The listener only
+ * translates + dispatches — it never throws into React.
+ *
+ * ONE CHANNEL SUBSCRIPTION FANNING OUT TO TWO STORES (#911), never a fifth listener: the bridge's own
+ * docblock above records why the subscriber count is a considered number. `dispatchPicks` is REQUIRED
+ * rather than optional so `tsc` enforces that every caller wires both stores; there is exactly one
+ * production caller, immediately below.
+ *
+ * THE PICKS DISPATCH RUNS FIRST, and the order is load-bearing. Both run in the same synchronous
+ * listener turn, but zustand notifies subscribers synchronously inside `setState`, so whichever store
+ * is written first has already woken every subscriber before the second write happens. Picks-first
+ * makes the intermediate state "batch still held, picks already cleared" — indistinguishable from an
+ * untouched batch, and therefore always coherent. Batch-first would expose "batch gone, picks still
+ * held": a stale pick outliving its batch at an observable instant, which is precisely what the picks
+ * store exists to prevent. The spec pins the order rather than leaving it to care.
  */
 export function subscribeQuestionBatches(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  dispatch: (event: QuestionBatchEvent) => void
+  dispatch: (event: QuestionBatchEvent) => void,
+  dispatchPicks: (event: QuestionPickEvent) => void
 ): () => void {
   return onDaemonEvent((event) => {
     const questionEvent = translateQuestionEvent(event)
-    if (questionEvent) dispatch(questionEvent)
+    if (!questionEvent) return
+    const pickEvent = translateQuestionPickEvent(questionEvent)
+    if (pickEvent) dispatchPicks(pickEvent)
+    dispatch(questionEvent)
   })
 }
 
@@ -192,12 +268,17 @@ export function subscribeQuestionBatches(
  * MOUNTED APP-LEVEL BY #906, beside `useModalBridge` — unconditional and for the app's lifetime, so a
  * batch raised against a conversation the operator is not looking at still lands in the store. It shipped
  * dormant here, the way #223 left `useModalBridge` unmounted for #224; #906 is the slice that mounts it.
+ *
+ * The signature is unchanged by #911's second store, so `App.tsx` is untouched: both dispatches are
+ * threaded through the ONE existing subscription above.
  */
 export function useQuestionBridge(): void {
   useEffect(
     () =>
-      subscribeQuestionBatches(window.pyry.onDaemonEvent, (event) =>
-        questionBatchStore.getState().dispatch(event)
+      subscribeQuestionBatches(
+        window.pyry.onDaemonEvent,
+        (event) => questionBatchStore.getState().dispatch(event),
+        (event) => questionPicksStore.getState().dispatch(event)
       ),
     []
   )

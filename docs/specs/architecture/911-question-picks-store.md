@@ -313,7 +313,7 @@ exact `toEqual` catches a transposition `tsc` cannot.
 - End to end through a real `createQuestionPicksStore()` and a real `createQuestionBatchStore()`: a
   pick then a `questionDismissed` on that id empties both.
 
-The 8 existing `subscribeQuestionBatches` call sites in that spec take the new required argument.
+The 9 existing `subscribeQuestionBatches` call sites in that spec take the new required argument.
 
 The `source: 'timeout'` value is never used in a fixture: it is upstream's shape fixture, minted
 before any producer existed, and reads as coverage while pinning traffic that does not exist.

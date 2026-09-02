@@ -362,26 +362,31 @@ as designed — the bridge dispatches from the preload event callback and the pa
 singleton must never be attached to `window` as a debug handle, the same rule `questionBatchStore.ts`
 records.
 
-Nothing here lands on screen yet — the shape [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899)
+Nothing landed on screen at first — the shape [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899)
 shipped in: a store landing with no consumer mounted. [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912)
-wires the panel to it and proves picks survive a conversation switch (`e2e/conversation-switch-remount.spec.ts`'s
-pattern, applied to this store).
+wired the panel to it, making the rows and the Other field respond, and proved the picks survive a
+conversation switch in a new `e2e/question-picks.spec.ts`, built on the same pattern
+`e2e/conversation-switch-remount.spec.ts` established for the composer's draft. See [Conversation shell —
+modals § Question panel](conversation-shell-modals.md#question-panel-906-option-rows-since-907-live-since-912)
+for the render-side design.
 
 ## Configuration and usage
 
 [#906](https://github.com/pyrycode/pyrycode-desktop/issues/906) ends the dormant period: `useQuestionBridge`
 now mounts app-level in `App.tsx`, beside `useModalBridge`, and `ConversationScreen.tsx`'s `ComposerSlot`
-is the store's first reader — an outstanding batch for the conversation on screen draws
-`QuestionPanelView` in the composer's slot and covers the whole `.composer` with the native `hidden`
-attribute. See [Conversation shell — conversation surfaces and modals § Question
-panel](conversation-shell-modals.md#question-panel-906) for the render vertical's design;
-this document still owns the model and the bridge underneath it. That slice draws the panel's frame only
-— the title row, the question text, the separator, and an inert Cancel/Continue row — with the option
-rows landing in [#907](https://github.com/pyrycode/pyrycode-desktop/issues/907) and the answer path in
-\#908/#853. [#911](https://github.com/pyrycode/pyrycode-desktop/issues/911) then added the operator's picks
-store (§ The picks store, above) beneath this render vertical — headless, no consumer mounted yet;
-[#912](https://github.com/pyrycode/pyrycode-desktop/issues/912) wires the panel to it and proves picks
-survive a conversation switch.
+is the batch store's first reader — an outstanding batch for the conversation on screen draws the question
+panel in the composer's slot and covers the whole `.composer` with the native `hidden` attribute. See
+[Conversation shell — modals § Question
+panel](conversation-shell-modals.md#question-panel-906-option-rows-since-907-live-since-912) for the render
+vertical's design; this document still owns the model and the bridge underneath it. That slice drew the
+panel's frame only — the title row, the question text, the separator, and an inert Cancel/Continue row —
+with the option rows landing in [#907](https://github.com/pyrycode/pyrycode-desktop/issues/907). #908 was
+meant to land the picks and the answer path together; it was split into
+[#911](https://github.com/pyrycode/pyrycode-desktop/issues/911) (the picks store, § The picks store, above)
+and [#912](https://github.com/pyrycode/pyrycode-desktop/issues/912), and closed as not planned without
+shipping anything of its own. #911 landed the picks store headless, no consumer mounted; #912 wired the
+panel to it, making the rows and the Other field respond. The answer path is still
+[#853](https://github.com/pyrycode/pyrycode-desktop/issues/853)'s.
 
 ## Edge cases and limitations
 

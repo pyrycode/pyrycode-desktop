@@ -63,8 +63,14 @@ import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
 import { LogDataSection } from './LogDataSection'
 import { PermissionModal } from './PermissionModal'
-import { QuestionPanelView } from './QuestionPanel'
+import { QuestionPanelView, optionPickEventFor, otherPickEventFor } from './QuestionPanel'
 import { useQuestionBatchStore, selectBatchFor } from '../../store/questionBatchStore'
+import type { QuestionBatch } from '../../store/questionBatches'
+import {
+  useQuestionPicksStore,
+  questionPicksStore,
+  selectQuestionSelection
+} from '../../store/questionPicksStore'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
 import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
 import {
@@ -2458,10 +2464,11 @@ function Composer({
  * `openConversationId`: an empty-string id stays an ordinary key rather than collapsing into "nothing
  * open" the way a truthiness test would.
  *
- * `batch.questions[0]` is read with no guard and no `!`. `reduceQuestionBatches` returns state unchanged
- * when `questions` is empty — the guard sits before the match — so `[]` never reaches `outstanding`, even
- * though the wire type admits it. A batch carrying several draws its first; stepping through them is
- * #907's.
+ * The BATCH read is this container's; the PICKS read is `QuestionPanelSlot`'s, one level down, so a pick
+ * re-renders the panel without waking the composer this slot is covering. `batch.questions[…]` is read
+ * there with no guard and no `!`: `reduceQuestionBatches` returns state unchanged when `questions` is empty
+ * — the guard sits before the match — so `[]` never reaches `outstanding`, even though the wire type admits
+ * it. A batch carrying several draws its first; stepping through them is still deferred.
  *
  * A fragment, not a wrapper element: the conversation column's flex layout is unchanged, and the panel
  * takes the slot the collapsed composer vacates.
@@ -2480,9 +2487,72 @@ export function ComposerSlot({
   )
   return (
     <>
-      {batch && <QuestionPanelView question={batch.questions[0]} />}
+      {batch && <QuestionPanelSlot batch={batch} />}
       <Composer phase={phase} onMessageSent={onMessageSent} covered={batch !== undefined} />
     </>
+  )
+}
+
+/** The question a batch carrying several draws. Named rather than a bare `0` because it is the SAME index
+ *  in two places below — the question read and the picks key — and a silent disagreement between them would
+ *  render one question's rows against another's selection. Stepping through a batch is still deferred. */
+const FIRST_QUESTION_INDEX = 0
+
+/**
+ * #912: the panel's own store-bound container — the picks half of the #224 split, and the seam where a
+ * gesture on a row becomes a store event.
+ *
+ * A SEPARATE LEAF FROM `ComposerSlot`, MOUNTED ONLY WHILE A BATCH IS UP, rather than a picks read added
+ * beside the batch read above. Hooks cannot be conditional, so reading the picks store in `ComposerSlot`
+ * would need a sentinel batch id for the no-batch case AND would subscribe the composer to pick traffic —
+ * every keystroke in the Other field re-rendering the message box it is covering. A leaf that only exists
+ * while the panel does needs no sentinel and keeps a pick re-rendering the panel alone.
+ *
+ * `selectQuestionSelection` IS CALLED INLINE, no `useMemo`, on the picks store's own explicit ruling:
+ * `useStore` compares the selector's RESULT under `Object.is`, and both of its branches (the held selection,
+ * or the shared empty constant) are reference-stable. `ComposerSlot`'s note above applies unchanged — a memo
+ * table keyed on anything claude-authored would be this family's named failure mode.
+ *
+ * **THE KEY IS `batch.questionBatchId`, NOT `conversationId`, and the substitution would compile clean.**
+ * The nonce is what makes AC4's second half hold for free: a batch dismissed and immediately replaced for
+ * the same conversation reads a FRESH empty selection, with no clearing effect to get wrong and no stale
+ * pick reachable. Keyed on the conversation, the new batch would inherit the old one's picks.
+ *
+ * The two `*PickEventFor` mappings are `QuestionPanelView`'s, deliberately: the view stays variant-neutral
+ * so it has no arm to transpose, and this container — which holds `multiSelect`, the nonce and the index —
+ * is where the single-versus-multi distinction is told to the store. `dispatch` is read off the store rather
+ * than through a hook: it is a stable function on a singleton, so subscribing to it would buy nothing.
+ *
+ * NEITHER `dismissed` NOR `reconnected` IS DISPATCHED HERE. `questionBridge` already drives both, over one
+ * daemon-event subscription fanning out to both stores, picks-first — and this family has no answer frame,
+ * so there is no local dismissal and no optimistic path to keep in step.
+ */
+export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Element {
+  const question = batch.questions[FIRST_QUESTION_INDEX]
+  const selection = useQuestionPicksStore(
+    selectQuestionSelection(batch.questionBatchId, FIRST_QUESTION_INDEX)
+  )
+  const at = {
+    multiSelect: question.multiSelect,
+    questionBatchId: batch.questionBatchId,
+    questionIndex: FIRST_QUESTION_INDEX
+  }
+  const dispatch = questionPicksStore.getState().dispatch
+  return (
+    <QuestionPanelView
+      question={question}
+      selection={selection}
+      onOptionChosen={(optionIndex) => dispatch(optionPickEventFor({ ...at, optionIndex }))}
+      onOtherChosen={() => dispatch(otherPickEventFor(at))}
+      onOtherTextChanged={(text) =>
+        dispatch({
+          type: 'otherTextChanged',
+          questionBatchId: batch.questionBatchId,
+          questionIndex: FIRST_QUESTION_INDEX,
+          text
+        })
+      }
+    />
   )
 }
 

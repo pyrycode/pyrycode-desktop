@@ -316,8 +316,10 @@ kind.
 **A pick is the option's position in `question.options`, never its label** — `QuestionOption` carries no
 `id` by design (#898: claude's answer protocol selects by `label`, so the label is the identity *on the
 wire*), and `QuestionPanelView` already draws its rows `key={index}` for the same reason — position is
-the client-side identity on both sides. Resolving a position back to a label at answer time is #853's
-job. The Other row is typed text plus a ticked flag rather than a sentinel index, since it is drawn
+the client-side identity on both sides. Resolving a position back to a label at answer time is
+[#922](question-panel-continue-answer.md)'s `resolveQuestionAnswers`, which also skips a position a
+same-nonce re-delivery has left out of range rather than throwing — see § Edge cases below. The Other
+row is typed text plus a ticked flag rather than a sentinel index, since it is drawn
 inside the option list container but is not an entry in `question.options` (`QuestionPanel.tsx:128-144`).
 `otherText` is held independently of `otherTicked` in both shapes — clearing the tick leaves the text.
 
@@ -329,8 +331,9 @@ Other-row mirror, ticking Other and clearing every option pick — the two are m
 semantics. `optionToggled`/`otherToggled` (multi-select) each touch only their own field, so Other sits
 alongside ticked options rather than excluding them. `optionIndices` is held in ascending display order
 regardless of click order, so two tick sequences ending at the same set produce the same value — keeping
-the reducer's same-value guard honest — and #853 reads the answer list in claude's own display order
-rather than the operator's.
+the reducer's same-value guard honest — and [#922](question-panel-continue-answer.md)'s
+`resolveQuestionAnswers` reads the answer list in claude's own display order rather than the operator's,
+with the Other value always last.
 
 **`dismissed` drops exactly the named batch, `reconnected` drops every batch — there is no `shown` arm.**
 A batch's picks come into being on the operator's first pick; an untouched batch holds nothing, so a
@@ -350,8 +353,11 @@ batch](question-panel-cancel-refusal.md) for the full design) is the
 first local dispatcher: Cancel sends the `question_refused` frame and clears both stores optimistically,
 dispatching here **first**, matching `subscribeQuestionBatches`' own picks-first order so the two paths
 cannot drift. The daemon's own `question_dismissed` for the same id arriving afterwards is the
-already-covered unknown-id no-op above. There is still no `resolved` id-memory (the same
-[#510](../codebase/510.md) lesson § Types above cites, restated there on its new footing).
+already-covered unknown-id no-op above. **[#922](question-panel-continue-answer.md)'s
+`answerQuestionBatch` is a second local dispatcher of this same arm**, `QUESTION_ANSWER_OUTCOME`/
+`QUESTION_ANSWER_SOURCE` in place of the refusal's pair, same picks-first order, same optimistic-clear
+posture. There is still no `resolved` id-memory (the same [#510](../codebase/510.md) lesson § Types
+above cites, restated there on its new footing).
 
 `selectQuestionSelection(questionBatchId, questionIndex)` answers with the held selection by reference, or
 a hoisted `EMPTY_QUESTION_SELECTION` constant for an untouched question — never `null`, since absent and
@@ -383,7 +389,7 @@ shipped in: a store landing with no consumer mounted. [#912](https://github.com/
 wired the panel to it, making the rows and the Other field respond, and proved the picks survive a
 conversation switch in a new `e2e/question-picks.spec.ts`, built on the same pattern
 `e2e/conversation-switch-remount.spec.ts` established for the composer's draft. See [Question
-panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921)
+panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921-continue-sends-since-922)
 for the render-side design.
 
 ## Configuration and usage
@@ -393,7 +399,7 @@ now mounts app-level in `App.tsx`, beside `useModalBridge`, and `ConversationScr
 is the batch store's first reader — an outstanding batch for the conversation on screen draws the question
 panel in the composer's slot and covers the whole `.composer` with the native `hidden` attribute. See
 [Question
-panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921)
+panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921-continue-sends-since-922)
 for the render vertical's design; this document still owns the model and the bridge underneath it. That slice drew the
 panel's frame only — the title row, the question text, the separator, and an inert Cancel/Continue row —
 with the option rows landing in [#907](https://github.com/pyrycode/pyrycode-desktop/issues/907). #908 was
@@ -404,8 +410,10 @@ shipping anything of its own. #911 landed the picks store headless, no consumer 
 panel to it, making the rows and the Other field respond.
 [#921](https://github.com/pyrycode/pyrycode-desktop/issues/921) gave the panel's Cancel button its first
 sending handler — it refuses the batch and clears both stores, see [Question panel — Cancel refuses the
-batch](question-panel-cancel-refusal.md). The answer path is still
-[#853](https://github.com/pyrycode/pyrycode-desktop/issues/853)'s.
+batch](question-panel-cancel-refusal.md). [#922](https://github.com/pyrycode/pyrycode-desktop/issues/922)
+gave the trailing button's Continue role the answer path: it assembles the operator's picks into the
+`question_answer` frame and sends it, see [Question panel — Continue answers the
+batch](question-panel-continue-answer.md).
 
 ## Edge cases and limitations
 
@@ -465,13 +473,14 @@ batch](question-panel-cancel-refusal.md). The answer path is still
   `questionPicksStore` has no `shown` arm, so the held positions survive and now address different
   labels — the operator could see a pick ticked on a row they did not choose. Not fixed at this layer by
   design: the ticket forecloses a `shown` arm (a batch's picks come into being only on the operator's
-  first pick), it needs a compromised daemon, and it is recoverable at
-  [#853](https://github.com/pyrycode/pyrycode-desktop/issues/853)'s answer-resolution step, which must
-  resolve a held position against the **currently held** option list and fail closed on an out-of-range
-  position rather than fall back to a neighbour. Holding positions rather than labels is what keeps this
-  store from making the gap worse. If defence in depth is wanted later, "a `shown` for a known id clears
-  that batch's picks" is the one-arm change. See `docs/specs/architecture/911-question-picks-store.md` §
-  Security review for the full finding.
+  first pick), and it needs a compromised daemon. **Resolved, not merely recoverable, at
+  [#922](question-panel-continue-answer.md)'s answer-resolution step**: `resolveQuestionAnswers` resolves
+  each held position against the **currently held** `options` array and skips — never falls back to a
+  neighbour, never throws — a position that no longer resolves; if that empties a question the whole
+  batch reads as incomplete and Continue stays unavailable rather than sending a hole. Holding positions
+  rather than labels is what keeps this store from making the gap worse. If defence in depth is wanted
+  later, "a `shown` for a known id clears that batch's picks" is the one-arm change. See
+  `docs/specs/architecture/911-question-picks-store.md` § Security review for the original finding.
 - **Security review (#911): PASS.** The picks store is structurally incapable of holding claude-authored
   text — a `QuestionSelection` is two numbers, a boolean and one operator-typed string, and the only
   daemon-asserted value in the state is `questionBatchId`, used as a `Map` key and never as content.
@@ -544,13 +553,16 @@ that a `connected` clears a pick made against a still-outstanding batch. The 9 e
 - `docs/specs/architecture/900-question-bridge.md` — the bridge's architecture spec, including its own
   security review (verdict PASS).
 - [Question
-  panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921)
+  panel](conversation-shell-question-panel.md#question-panel-906-option-rows-since-907-live-since-912-header-tabs-since-915-step-controls-since-916-cancel-sends-since-921-continue-sends-since-922)
   — the render vertical #906 built on this model and bridge: `ComposerSlot`, `QuestionPanelView`, and the
   composer's `covered` cover mechanism.
 - [Question panel — Cancel refuses the batch](question-panel-cancel-refusal.md) — `refuseQuestionBatch`
   (#921), the first local dispatcher of this model's `dismissed` arm.
+- [Question panel — Continue answers the batch](question-panel-continue-answer.md) — `answerQuestionBatch`
+  (#922), the second; `resolveQuestionAnswers` is where the mid-connection re-delivery finding below was
+  resolved.
 - `docs/specs/architecture/911-question-picks-store.md` — the picks store's architecture spec and its own
-  security review (verdict PASS), including the mid-connection re-delivery finding handed to #853.
+  security review (verdict PASS), including the mid-connection re-delivery finding resolved by #922.
 - Split from [#850](https://github.com/pyrycode/pyrycode-desktop/issues/850); the Zustand container
   shipped in [#899](https://github.com/pyrycode/pyrycode-desktop/issues/899) (§ The Zustand container,
   above); the `DaemonEvent` bridge shipped in

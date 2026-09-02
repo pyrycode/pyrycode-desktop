@@ -146,14 +146,14 @@ the nonzero fill rule to knock the square out into a hole; nothing in the markup
 reversing either subpath's winding silently yields a solid disc that still renders and still passes every
 markup assertion, failing only visually. **Do not "tidy" either subpath's direction.**
 
-**Colour and container are still a deliberate deviation, not yet closed.** Figma paints both variants'
-glyphs `--color-primary` on an M3 standard icon button whose container is invisible at rest; both
-variants here keep `currentColor` (`--color-on-surface`) on the permanent `--color-surface-container-high`
-pill, because re-theming only the stop half would fork the two variants of the control #678 exists to
-merge, and the ticket froze the send variant's theming. The full re-theme — both glyphs to
-`--color-primary`, the send glyph to `circle-chevron-up-solid-full`, the pill dropped to a hover/focus-only
-container — is one coherent follow-up, open as of #678 and needing a design ruling on whether the
-always-visible container is a deliberate desktop divergence before it is filed.
+**Colour and container closed, together with the box redraw.** The re-theme #678 deferred — both glyphs
+to `--color-primary`, the send glyph to `circle-chevron-up-solid-full`, the pill dropped to a
+hover/focus-only container — shipped in the redraw of the message box itself
+([Conversation shell — composer § Message box](conversation-shell-composer.md#message-box-951)), because
+in the drawing the control lives *inside* the box. Both variants now render `fill="currentColor"` at
+28×28 on a `background: none` control whose colour is `--color-primary`, with a
+`--color-surface-container` step on hover — the M3 icon button's own always-invisible-at-rest posture,
+not a desktop divergence.
 
 **One accepted behavioural consequence, not a defect** (code review, PR #804): because the stop variant is
 never disabled, a stray second activation now interrupts the turn the first one started, where under

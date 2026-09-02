@@ -179,6 +179,80 @@ Code review PASS (architect self-review) — see the ticket's own security revie
 attribute-sink analysis; both concluded no findings, on the strength of the "never destructures
 `status.error`" structural guarantee above.
 
+## Message box (#951)
+
+The message box itself, redrawn as the design's `Input large` (Figma `347:6635`) — chrome and glyph only,
+no behaviour change to sending, Enter handling, the send→stop switch (#678), the not-connected gate (#31),
+queueing, or the covered state (#906). Closes the glyph/colour follow-up #678 deferred (see
+[Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678)).
+
+**`.composer__row` *is* the box now**, not a bare flex row holding a filled textarea beside a filled send
+disc. It keeps its class — three shipped specs and #940's type-ahead anchor depend on it — and gains the
+ground, the 6px corner (`--radius-xs`) and 12px vertical padding (`--space-3`); the textarea
+(`.composer__input`) goes transparent and carries only the text's own type and inset. The box's 52px
+height is **derived, not declared**: 12 (row) + 4 + 20 (one body-medium line at `rows={1}`) + 4 (field) +
+12 (row) — a declared height would be a second source of truth fighting the textarea auto-grow
+[composer send](composer-send.md) still lists as unbuilt.
+
+**Horizontal padding stays on the textarea, not the row** — `.composer__input` carries 16px left / 56px
+right (`--space-4` / `calc(48px + --space-2)`), the row carries none. This is the only split that works:
+`.composer__send` is absolutely positioned against the row, and an absolutely positioned box resolves
+`right` against its containing block's *padding* box. With horizontal padding on the row, the drawing's
+`right: 4px` would have to be written as a negative offset; at zero the padding box edge is the border box
+edge, so `right: var(--space-1)` is the drawing's own number.
+
+**The translucent ground is a dedicated `::before` at `opacity`, not `color-mix()`.** `--color-on-primary`
+(`#003355`) at 41% is the house form for "a token at N%" — recorded on `.status-sheet-overlay__scrim`
+("opacity is not a color literal") and already shipped twice more at the same colour and percentage
+(`.question-panel__other-field::before`, the drawing's `Input small`) and at 72%
+(`.pairing-field__row`'s ground). `color-mix()` appears nowhere in this repo as a value, only in comments
+naming it as the form declined. The pseudo-element paints above non-positioned in-flow content, which is
+why `.composer__input` carries `position: relative` — the same line `.pairing-field__row` carries for the
+same reason.
+
+**The send control moved inside the box**: `position: absolute; right: var(--space-1); top: 50%;
+transform: translateY(-50%)`, out of the row's flex flow (so the row's old `gap` was deleted — one flex
+item left, nothing to space). At rest it now paints **no container** (`background: none`) with its glyph
+in `--color-primary` instead of a filled `--color-surface-container-high` disc — the M3 icon button's own
+always-invisible-at-rest posture, not a desktop divergence. The send variant's glyph changed to the
+`circle-chevron-up-solid-full` export at 28×28, matching the stop variant's existing size and export
+family; both glyphs are `fill="currentColor"`, no hardcoded `#9DCBFC`. `ComposerSendButton`'s own props,
+callbacks, `aria-label`s and disabled gate are untouched — see
+[composer send § 3](composer-send.md#3-the-controlled-composer--conversationscreentsx).
+
+**The focus ring moved from the textarea to the box**: `.composer__input:focus-visible` became
+`.composer__row:has(.composer__input:focus-visible)`, same token (`--color-outline`), same 1px. Once the
+textarea is a 28px band inside a 52px box, its own outline drew a bare rectangle floating inside the
+rounded corner rather than reading as the box's focus state. `:has()` rather than `:focus-within` —
+`:focus-within` also matches while the send control holds focus, which would stack the box's ring on top
+of the button's own `:focus-visible` ring. This is the pattern's **second** consumer;
+`.question-panel__option:has(.question-panel__input:focus-visible)` (#912) is the first, and its comment
+was trued up in the same commit to name both.
+
+**The #940 type-ahead anchor is unmoved**, on purpose: no `overflow: hidden` was added to `.composer__row`
+(the panel paints outside the row's box at `bottom: 100%`; clipping to the new corner would erase it, and
+no `node`-environment vitest spec can see that). The row gained no border and no horizontal padding, so
+the anchor rect `e2e/composer-options-clamp.spec.ts` measures is unchanged in x and width — it grew 4px in
+height only (48 → 52), which that spec does not read. The recorded 4px gap between the type-ahead's label
+and the box's own text inset ([type-ahead § the anchor](conversation-shell-composer-options-slash-type-ahead.md))
+stands on the same `--space-4` declaration it always named.
+
+**Two gaps the verifier flagged and left open, both non-blocking and carried to #890** (the one open
+ticket still touching this region) rather than fixed in #951:
+
+- **~46% of the box's height is not click-to-focus.** The 12px of vertical padding now lives on the row,
+  not the field, so a click in either 12px band (24 of the box's 52px, full width) hits a bare `<div>`
+  with no handler and does nothing — visible too, since the row declares no `cursor: text` and the cursor
+  drops to an arrow there. The fix, if picked up, is to move the 12px back onto `.composer__input` instead
+  of `.composer__row` (pixel-identical box, and the textarea fills it again).
+  \#890 or a follow-up should carry this if it isn't addressed sooner.
+- **The send control's hover step is now a ~1.008:1 non-step against the new ground.** The ground
+  composites to `rgb(9, 33, 49)`; the shipped `:hover:not(:disabled)` still steps to
+  `--color-surface-container` (`#1d2024`), which was a visible ~1.12:1 step against the old
+  `--color-surface-container-high` at-rest fill but reads as no luminance change at all against the new
+  translucent navy. `--color-surface-container-high` (the token the control already wore before this
+  ticket) restores a comparable step and is the likely fix.
+
 ## Composer footer row (#811)
 
 The desktop layout's fixed-height row **below** the message box (Figma `110:3494`, 780×20, the third

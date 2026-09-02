@@ -20,9 +20,11 @@ import type {
 // ONE test(), ONE launch, THREE ARCS, and the split is by SEMANTICS rather than convenience. A dismissal
 // clears that batch's picks (questionPicksStore's `dismissed` arm), so the arcs are sequenced such that the
 // clear only ever lands between them. Arc 1 is the single-select variant plus the chat switch; arc 2 is the
-// multi-select variant plus the composer-draft survival #906 left unproven; arc 3 (#915) is the first batch
-// carrying MORE THAN ONE question — the header tabs, the jump, and the picks surviving it in both
-// directions. BOTH variants are driven because
+// multi-select variant plus the composer-draft survival #906 left unproven; arc 3 (#915/#916) is the first
+// batch carrying MORE THAN ONE question — the header tabs, the jump, the STEP over that same index, and
+// the picks surviving both in both directions. The action row's THREE-button state is not here and cannot
+// be: a two-question batch has no question with both a previous and a next, so QuestionPanel.test.tsx owns
+// that one by static render. BOTH variants are driven because
 // neither proves the other: `optionPicked`/`optionToggled` carry identical payloads and differ only in the
 // `type` literal, so a transposed arm compiles clean and shows up ONLY as replace-instead-of-accumulate.
 //
@@ -86,6 +88,11 @@ const EDITOR_OPTIONS: WireQuestionOption[] = [
 // through Playwright's transform for two string literals.
 const OTHER_PLACEHOLDER = 'Other. Type something.'
 const OTHER_TICK = 'Other'
+// #916's action-row copy, spec-local for the same reason. Matched as BUTTON NAMES, which Playwright does
+// by case-insensitive substring — so none of them may contain another, nor either question header above.
+const PREVIOUS_COPY = 'Previous'
+const NEXT_COPY = 'Next'
+const CONTINUE_COPY = 'Continue'
 
 // Non-secret display literals, distinct from each other so a failure diagnostic names WHICH box held what.
 const OTHER_TEXT = 'Zig, if that counts'
@@ -136,7 +143,7 @@ function questionDismissedFrame(questionBatchId: string): Uint8Array {
   })
 }
 
-test('question panel: picks are live in both variants, survive a chat switch and a jump between the batch’s questions, and leave the draft alone', async ({
+test('question panel: picks are live in both variants, survive a chat switch and a jump or a step between the batch’s questions, and leave the draft alone', async ({
   launchPairedApp
 }) => {
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
@@ -159,6 +166,13 @@ test('question panel: picks are live in both variants, survive a chat switch and
   // the option rows (implicit <label>s, not buttons) out of the match.
   const labels = page.locator('.question-panel__label')
   const tab = (header: string) => page.getByRole('button', { name: header })
+  // #916. Scoped to the PANEL rather than the page: these carry client-owned copy in the app's own voice,
+  // and a page-wide role match is one shipped "Next" anywhere else in the shell away from matching two
+  // controls at once. The trailing button is addressed by CLASS, not by name, because its name is the
+  // thing under test — it reads Next on every question but the last.
+  const stepBack = panel.getByRole('button', { name: PREVIOUS_COPY })
+  const stepForward = panel.getByRole('button', { name: NEXT_COPY })
+  const trailing = panel.locator('.question-panel__continue')
 
   // ============ Arc 1 — the single-select variant and the chat switch ============
   daemon.pushFrame(questionShownFrame(BATCH_SINGLE, [wireQuestion()]))
@@ -338,6 +352,40 @@ test('question panel: picks are live in both variants, survive a chat switch and
   await expect(ticks).toHaveCount(3)
   await expect(otherField).toHaveValue(EDITOR_OTHER_TEXT)
 
+  // ---- #916 — stepping the same index with Previous and Next ----
+  // Standing on the LAST question, which is the only place the trailing button's copy flips. Read as a
+  // pair: Continue is showing AND no Next is reachable, so a row that drew both would fail here.
+  // NOTE the row's third state — Cancel, Previous and a trailing Next all at once — is unreachable from
+  // this arc by construction: a two-question batch has no question with both a previous and a next. It is
+  // proven by static render in QuestionPanel.test.tsx instead.
+  await expect(stepBack).toBeVisible()
+  await expect(trailing).toHaveText(CONTINUE_COPY)
+  await expect(stepForward).toHaveCount(0)
+
+  // AC2 — Previous draws the question BEFORE this one and moves the active tab to it. The picks read back
+  // here are the same ones the tab click asserted above, which is the point: stepping and jumping must be
+  // one gesture as far as the store is concerned, not two paths that can drift.
+  await stepBack.click()
+  await expect(panel).not.toContainText(EDITOR_QUESTION)
+  await expect(tab(LANGUAGE_HEADER)).toHaveAttribute('aria-current', 'true')
+  await expect(control('radio', 'Rust')).toBeChecked()
+  await expect(dots).toHaveCount(1)
+  await expect(otherField).toHaveValue(OTHER_TEXT)
+
+  // AC1's second sentence and AC3's first — on the FIRST question there is no Previous at all (absent, not
+  // disabled), and the trailing button reads Next rather than Continue.
+  await expect(stepBack).toHaveCount(0)
+  await expect(trailing).toHaveText(NEXT_COPY)
+
+  // AC3 — Next draws the FOLLOWING question and moves the tab; AC4 — the second question's three ticks and
+  // its own Other text come back intact, so a step in each direction has now preserved its own side.
+  await stepForward.click()
+  await expect(panel).toContainText(EDITOR_QUESTION)
+  await expect(tab(EDITOR_HEADER)).toHaveAttribute('aria-current', 'true')
+  await expect(control('checkbox', 'Helix')).toBeChecked()
+  await expect(ticks).toHaveCount(3)
+  await expect(otherField).toHaveValue(EDITOR_OTHER_TEXT)
+
   // THE CLAMP, and this is its only reachable proof: a static render never leaves the seeded index. A
   // SAME-NONCE re-delivery replaces the held batch in place, so the panel does not remount — and here it
   // arrives carrying fewer questions than the operator has jumped past. Unclamped, the slot reads
@@ -352,4 +400,10 @@ test('question panel: picks are live in both variants, survive a chat switch and
   // not merely present.
   await expect(control('radio', 'Rust')).toBeChecked()
   await expect(otherField).toHaveValue(OTHER_TEXT)
+  // #916 — one question is the first AND the last, so the action row is back to the two buttons #906
+  // shipped. The clamp lands the operator here from index 1, which is the one path that reaches this row
+  // WITHOUT the panel remounting: a stale Next surviving the shrink would show up right here.
+  await expect(stepBack).toHaveCount(0)
+  await expect(stepForward).toHaveCount(0)
+  await expect(trailing).toHaveText(CONTINUE_COPY)
 })

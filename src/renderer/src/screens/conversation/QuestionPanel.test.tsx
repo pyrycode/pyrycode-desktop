@@ -6,6 +6,8 @@ import {
   otherPickEventFor,
   QUESTION_CANCEL_COPY,
   QUESTION_CONTINUE_COPY,
+  QUESTION_PREVIOUS_COPY,
+  QUESTION_NEXT_COPY,
   QUESTION_OTHER_PLACEHOLDER_COPY,
   QUESTION_OTHER_TICK_COPY
 } from './QuestionPanel'
@@ -387,6 +389,76 @@ describe('QuestionPanelView', () => {
     const markup = renderBatch(batch('Alpha', '<img src=x onerror=alert(1)>'), 0)
     expect(markup).toContain('&lt;img src=x onerror=alert(1)&gt;')
     expect(markup).not.toContain('<img')
+  })
+
+  // #916 — the step controls. SCOPED TO THE ACTION ROW the way the tab cases are scoped to the labels row,
+  // and for the same reason: since #915 a tab is also a `<button type="button"`, so an unscoped button
+  // count would mix the two rows and read three where the design draws one tab and two actions. This is
+  // also the only place the all-three-visible state is reachable at all — the Playwright arc drives a
+  // two-question batch, where no question has both a previous and a next.
+  const actionsRow = (markup: string): string => markup.slice(markup.indexOf('question-panel__actions'))
+
+  it('draws Cancel, Previous and the trailing button in that order on a middle question', () => {
+    // AC1. Order is asserted by document position rather than by presence, because right-alignment makes
+    // a row in the wrong order look plausible in isolation.
+    const row = actionsRow(renderBatch(batch('Alpha', 'Beta', 'Gamma'), 1))
+    expect(count(row, /<button type="button"/g)).toBe(3)
+    expect(row.indexOf(QUESTION_CANCEL_COPY)).toBeLessThan(row.indexOf(QUESTION_PREVIOUS_COPY))
+    expect(row.indexOf(QUESTION_PREVIOUS_COPY)).toBeLessThan(row.indexOf(QUESTION_NEXT_COPY))
+    // Absent, never `disabled` — the panel covers the composer, so there is no disabled state to draw.
+    expect(row).not.toContain('disabled')
+  })
+
+  it('omits Previous on the first question of a batch, and reads Next there', () => {
+    // AC1 + AC3. The two halves are asserted together: a Previous that leaked onto the first question and
+    // a trailing button stuck on Continue are the two off-by-ones this render can carry.
+    const row = actionsRow(renderBatch(batch('Alpha', 'Beta', 'Gamma'), 0))
+    expect(count(row, /<button type="button"/g)).toBe(2)
+    expect(row).not.toContain(QUESTION_PREVIOUS_COPY)
+    expect(row).toContain(QUESTION_NEXT_COPY)
+    // The class token stays `__continue` (it names the design's filled slot); only the COPY varies, so the
+    // absence asserted here is of the word, not of the treatment.
+    expect(row).not.toContain(QUESTION_CONTINUE_COPY)
+  })
+
+  it('reads Continue on the last question, with Previous still beside it', () => {
+    const row = actionsRow(renderBatch(batch('Alpha', 'Beta', 'Gamma'), 2))
+    expect(count(row, /<button type="button"/g)).toBe(3)
+    expect(row).toContain(QUESTION_PREVIOUS_COPY)
+    expect(row).toContain(QUESTION_CONTINUE_COPY)
+    expect(row).not.toContain(QUESTION_NEXT_COPY)
+  })
+
+  it('leaves a one-question batch’s action row exactly as it shipped', () => {
+    // AC1's last clause, and the case where BOTH conditions fire at once: the only question is the first
+    // and the last, so either off-by-one alone would show up here as a Previous the design hides or as a
+    // Next on a batch with nowhere to go.
+    const row = actionsRow(render(question()))
+    expect(count(row, /<button type="button"/g)).toBe(2)
+    expect(row).toContain(QUESTION_CANCEL_COPY)
+    expect(row).toContain(QUESTION_CONTINUE_COPY)
+    expect(row).not.toContain(QUESTION_PREVIOUS_COPY)
+    expect(row).not.toContain(QUESTION_NEXT_COPY)
+  })
+
+  it('puts no claude-authored header into an attribute at a stepping index either', () => {
+    // The #915 version of this renders at index 0, where the row has no Previous. Re-run at a middle index
+    // so the three-button row is covered too: this slice adds two controls to a component whose whole job
+    // at this boundary is that nothing claude wrote ever leaves the React-children path.
+    const markup = renderBatch(
+      [
+        question({ header: 'HEADER-ONE' }),
+        question({ header: 'HEADER-TWO' }),
+        question({ header: 'HEADER-THREE' })
+      ],
+      1
+    )
+    expect(markup).not.toContain('title=')
+    expect(markup).not.toContain('data-')
+    expect(markup).not.toContain('id=')
+    for (const sentinel of ['HEADER-ONE', 'HEADER-TWO', 'HEADER-THREE']) {
+      expect(count(markup, new RegExp(sentinel, 'g'))).toBe(1)
+    }
   })
 
   it('draws two options that are byte-identical', () => {

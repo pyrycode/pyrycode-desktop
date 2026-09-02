@@ -2422,12 +2422,41 @@
   font-weight: var(--text-body-small-weight);
 }
 
-/* Effort (Figma 20:130): a row of five segment pills. gap 8 → --space-2; px 16 / py 4 →
-   --space-4 / --space-1. */
+/* Effort (Figma 20:130): a row of segment pills. gap 8 → --space-2; px 16 / py 4 →
+   --space-4 / --space-1.
+
+   #976 — the drawn five became the selected model's PUBLISHED levels, so the row's contents are
+   unbounded daemon text of unknown count rather than five short client-owned words, and it wraps
+   instead of overflowing the 400px sheet. The design draws no wrapped state because it draws exactly
+   five short labels; this is the same defensive pairing .run-config__model-name took when its label
+   stopped being the client's. */
 .run-config__effort {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-4);
+}
+
+/* #976 — the two non-segment readings and the row's own truncation report, on the muted body-small set
+   .run-config__model-unknown already uses. Separate rules so a test can prove WHICH one rendered, and
+   none takes --color-error: a model that exposes no effort control is claude answering honestly, an
+   unmatched row is expected under best-effort delivery, and a cut report is the daemon stating its own
+   bound. They sit INSIDE .run-config__effort, which already supplies the 16px inset, so they add none.
+   The current-effort line carries daemon-sourced text, hence the same overflow pairing as the
+   segments. */
+.run-config__effort-current,
+.run-config__effort-empty,
+.run-config__effort-cut {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+.run-config__effort-current {
+  overflow-wrap: anywhere;
 }
 
 /* One segment (Figma 20:131, unselected): 1px --color-outline outline, transparent,
@@ -2438,6 +2467,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* #976: a published level is unbounded claude-authored text, so a long one wraps inside its own pill
+     rather than pushing the row past the sheet. Truncating it is not an option — the label would then
+     misrepresent the argument the segment submits. */
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-outline);
   border-radius: var(--radius-xs);

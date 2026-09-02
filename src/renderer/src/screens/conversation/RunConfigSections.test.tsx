@@ -29,21 +29,30 @@ function modelRow(
 // on. The values cover the three measured shapes — a literal, a bracketed variant, a bare alias — and
 // deliberately include one that is a SUBSTRING of another row's resolved_model, so a substring matcher
 // reintroduced anywhere on this path fails a test rather than passing quietly.
+//
+// #976: each row also publishes its OWN effort levels, and the three sets are deliberately different
+// so one fixture serves all three of the Effort section's readings. Row 0's levels are not
+// reasoning-effort levels claude has ever published, which is what makes a surviving hardcoded
+// constant fail rather than coincide; row 1 carries the `high`/`xhigh` pair the substring guard needs;
+// row 2 publishes NONE, which is the live-measured Haiku shape and AC2's fixture.
 const PUBLISHED_ROWS: readonly WireModelOption[] = [
   modelRow({
     value: 'default',
     display_name: 'Recommended pick',
-    resolved_model: 'claude-sonnet-5'
+    resolved_model: 'claude-sonnet-5',
+    effort_levels: ['brisk', 'thorough']
   }),
   modelRow({
     value: 'opus[1m]',
     display_name: 'Wide context',
-    resolved_model: 'claude-opus-5'
+    resolved_model: 'claude-opus-5',
+    effort_levels: ['high', 'xhigh', 'max']
   }),
   modelRow({
     value: 'haiku',
     display_name: 'Quick tier',
-    resolved_model: 'claude-haiku-4-5-20251001'
+    resolved_model: 'claude-haiku-4-5-20251001',
+    effort_levels: []
   })
 ]
 
@@ -55,6 +64,7 @@ const CLAUDE_OFFERED_NOTHING: ModelListEntry = { models: [], droppedModels: 0 }
 
 const MODELS_UNKNOWN = 'Model list not yet known'
 const MODELS_EMPTY = 'No models offered'
+const EFFORT_EMPTY = 'No effort levels offered'
 const CUT = 'Truncated by the daemon'
 
 // No DOM harness (jsdom/Testing Library) — mirrors LogDataSection.test.tsx. RunConfigView is pure
@@ -389,10 +399,55 @@ describe('RunConfigView — Model rows render daemon text inertly (#975)', () =>
   })
 })
 
-describe('RunConfigView — Effort', () => {
-  it('marks exactly the current level with aria-current, the rest unmarked', () => {
-    for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
-      const markup = renderToStaticMarkup(<RunConfigView model="" effort={level} yolo={false} {...NO_USAGE} />)
+// #976: the segments ARE the selected model's published levels. EFFORT_LEVELS — the hardcoded five —
+// is gone, so every assertion here is a claim about daemon data reaching a pixel unchanged. The row is
+// resolved from the SESSION's model by exact equality on `value`, the same rule the Model section marks
+// a row selected by, and there is no fallback anywhere: an unmatched model offers NOTHING rather than
+// the old five, which is the single failure AC3 exists to forbid.
+describe('RunConfigView — Effort segments from the published levels (#976)', () => {
+  const base = { model: '', effort: '', yolo: false, ...NO_USAGE } as const
+  // The row with the richest set, and the one carrying the high/xhigh pair.
+  const WIDE = PUBLISHED_ROWS[1]
+  const OFFERS_NONE = PUBLISHED_ROWS[2]
+  const entryFor = (row: WireModelOption): ModelListEntry => ({ models: [row], droppedModels: 0 })
+  const cutRow = (levels: string[]): WireModelOption =>
+    modelRow({
+      value: 'cut',
+      display_name: 'Cut row',
+      effort_levels: levels,
+      truncated_fields: ['effort_levels']
+    })
+
+  it('renders one segment per published level of the selected row, in published order (AC1)', () => {
+    for (const row of [PUBLISHED_ROWS[0], WIDE]) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView {...base} model={row.value} models={PUBLISHED} />
+      )
+      // A COUNT, never a list of the five deleted literals: stating it as a list would re-type the
+      // banned vocabulary into the very file that polices its removal.
+      expect(markup.match(/run-config__effort-segment/g)?.length).toBe(row.effort_levels.length)
+      const positions = row.effort_levels.map((level) => markup.indexOf(`>${level}<`))
+      expect(positions.every((at) => at >= 0)).toBe(true)
+      expect([...positions]).toEqual([...positions].sort((a, b) => a - b))
+    }
+  })
+
+  it('follows the SELECTED model — a different row offers a different set (AC1)', () => {
+    const first = renderToStaticMarkup(
+      <RunConfigView {...base} model={PUBLISHED_ROWS[0].value} models={PUBLISHED} />
+    )
+    const second = renderToStaticMarkup(<RunConfigView {...base} model={WIDE.value} models={PUBLISHED} />)
+    expect(first).toContain(`>${PUBLISHED_ROWS[0].effort_levels[0]}<`)
+    expect(first).not.toContain(`>${WIDE.effort_levels[0]}<`)
+    expect(second).toContain(`>${WIDE.effort_levels[0]}<`)
+    expect(second).not.toContain(`>${PUBLISHED_ROWS[0].effort_levels[0]}<`)
+  })
+
+  it('marks the level EXACTLY equal to the session effort, and only that one (AC4)', () => {
+    for (const level of WIDE.effort_levels) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView {...base} model={WIDE.value} effort={level} models={PUBLISHED} />
+      )
       expect(segmentFor(markup, 'run-config__effort-segment', `>${level}<`)).toContain(
         'aria-current="true"'
       )
@@ -400,18 +455,163 @@ describe('RunConfigView — Effort', () => {
     }
   })
 
-  it('marks no segment for the empty effort (AC4 default) or an unknown value', () => {
-    for (const effort of ['', 'turbo']) {
-      const markup = renderToStaticMarkup(<RunConfigView model="" effort={effort} yolo={false} {...NO_USAGE} />)
+  it('marks nothing for the empty effort or a level this row does not publish (AC4)', () => {
+    for (const effort of ['', 'medium']) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView {...base} model={WIDE.value} effort={effort} models={PUBLISHED} />
+      )
       expect(markup).not.toContain('aria-current')
     }
   })
 
-  it('always renders all five level labels', () => {
-    const markup = renderToStaticMarkup(<RunConfigView model="" effort="" yolo={false} {...NO_USAGE} />)
-    for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
-      expect(markup).toContain(`>${level}<`)
+  it('does not mark `high` when the session effort is `xhigh` (the substring guard, AC4)', () => {
+    // The assertion that fails if a substring, prefix or case-folding matcher is ever introduced on
+    // this path — `high` is a substring of `xhigh` and the row publishes both.
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} model={WIDE.value} effort="xhigh" models={PUBLISHED} />
+    )
+    expect(segmentFor(markup, 'run-config__effort-segment', '>high<')).not.toContain('aria-current')
+    expect(segmentFor(markup, 'run-config__effort-segment', '>xhigh<')).toContain('aria-current="true"')
+    expect(markup.match(/aria-current="true"/g)?.length).toBe(1)
+  })
+
+  it('offers no segment and shows the current effort as text until a row is matched (AC3)', () => {
+    // Three ways in and ONE rendering: no prop, the null reading, and a list whose rows the session
+    // model matches none of. The client has been told no level is accepted in every case.
+    const cases = [{}, { models: NO_FRAME }, { models: PUBLISHED }]
+    for (const extra of cases) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView {...base} model="matches-no-published-row" effort="high" {...extra} />
+      )
+      expect(markup).not.toContain('run-config__effort-segment')
+      expect(markup).toContain('class="run-config__effort-current">high<')
+      // Not the model-offers-none sentence: the sheet has not been told this model offers none.
+      expect(markup).not.toContain(EFFORT_EMPTY)
     }
+  })
+
+  it('says the model offers none when it publishes an empty list with nothing cut (AC2)', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} model={OFFERS_NONE.value} effort="high" models={PUBLISHED} />
+    )
+    expect(markup).toContain(EFFORT_EMPTY)
+    // No segments, no disabled strip, and not AC3's line either — this is a positive statement about
+    // the model rather than an absence of information.
+    expect(markup).not.toContain('run-config__effort-segment')
+    expect(markup).not.toContain('run-config__effort-current')
+  })
+
+  it('reads an empty list beside a reported cut as UNKNOWN, never as none (AC2/AC3)', () => {
+    // The wire contract's MUST: a `truncated_fields` naming `effort_levels` is the ONLY signal
+    // separating "cut to nothing" from "this model exposes no effort control", because absent, null
+    // and empty all arrive as the same `[]`. Read as *none*, a cut list silently removes an effort
+    // control the model actually supports.
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} model="cut" effort="high" models={entryFor(cutRow([]))} />
+    )
+    expect(markup).not.toContain(EFFORT_EMPTY)
+    expect(markup).toContain('class="run-config__effort-current">high<')
+    expect(markup).not.toContain('run-config__effort-segment')
+    expect(markup).toContain(`class="run-config__effort-cut">${CUT}<`)
+  })
+
+  it('still offers a shortened list, marked cut rather than presented as complete', () => {
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} model="cut" effort="high" models={entryFor(cutRow(['high']))} />
+    )
+    expect(markup.match(/run-config__effort-segment/g)?.length).toBe(1)
+    expect(markup).toContain(`class="run-config__effort-cut">${CUT}<`)
+  })
+
+  it('reads the cut report PER FIELD — another field named leaves the offers-none reading (AC2)', () => {
+    const row = modelRow({
+      value: 'cut',
+      display_name: 'Cut row',
+      effort_levels: [],
+      truncated_fields: ['display_name']
+    })
+    const markup = renderToStaticMarkup(<RunConfigView {...base} model="cut" models={entryFor(row)} />)
+    expect(markup).toContain(EFFORT_EMPTY)
+    expect(markup).not.toContain('run-config__effort-cut')
+  })
+
+  it('renders hostile level text as inert escaped text', () => {
+    const row = modelRow({
+      value: 'hostile',
+      display_name: 'Hostile row',
+      effort_levels: ['<img src=x onerror="alert(1)">']
+    })
+    const markup = renderToStaticMarkup(
+      <RunConfigView {...base} model="hostile" models={entryFor(row)} onChange={(): void => undefined} />
+    )
+    // Attribute-SHAPED guards. `not.toContain('onerror=')` would pass vacuously: an escaped render
+    // keeps every character of the string and only the delimiters change.
+    expect(markup).not.toContain('<img')
+    expect(markup).not.toContain('src="')
+    expect(markup).not.toContain('href="')
+    expect(markup).not.toMatch(/\son[a-z]+="/)
+  })
+
+  it('puts no published level in a key, an attribute or any other non-text position', () => {
+    // React never serialises `key`, so a level-keyed list would be invisible here — the positive guard
+    // is that the segment's whole opening tag holds nothing daemon-authored at all.
+    const row = modelRow({
+      value: 'sentinel-model',
+      display_name: 'Sentinel row',
+      effort_levels: ['sentinel-level']
+    })
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        model="sentinel-model"
+        models={entryFor(row)}
+        onChange={(): void => undefined}
+      />
+    )
+    expect(tagWithClass(markup, 'run-config__effort-segment')).not.toContain('sentinel-level')
+    expect(markup).toContain('>sentinel-level<')
+  })
+
+  it('marks the group in EVERY reading, never a segment, with the alert still a sibling', () => {
+    // An effort change can be in flight when the section has nothing to offer — the operator picks a
+    // level, then a model_list frame or a model change empties the levels — so a pending effort stays
+    // marked in all three readings, and the rejection line stays OUTSIDE the busy wrapper in each.
+    const cases = [
+      { model: WIDE.value, models: PUBLISHED },
+      { model: OFFERS_NONE.value, models: PUBLISHED },
+      { model: 'matches-no-published-row', models: PUBLISHED }
+    ]
+    for (const each of cases) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView
+          {...base}
+          {...each}
+          errorField="effort"
+          pending={{ model: false, effort: true, yolo: false }}
+        />
+      )
+      const wrapper = tagWithClass(markup, 'run-config__effort')
+      expect(wrapper).toContain('aria-busy="true"')
+      expect(tagWithClass(markup, 'run-config__effort-segment')).not.toContain('aria-busy')
+      expect(markup).toContain('role="alert"')
+      expect(closedBefore(markup, wrapper, 'role="alert"')).toBe(true)
+    }
+  })
+
+  it('makes a segment operable only when a handler is present', () => {
+    const operable = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        model={WIDE.value}
+        models={PUBLISHED}
+        onChange={(): void => undefined}
+      />
+    )
+    const segment = tagWithClass(operable, 'run-config__effort-segment')
+    expect(segment).toContain('role="button"')
+    expect(segment).toContain('tabindex="0"')
+    const inert = renderToStaticMarkup(<RunConfigView {...base} model={WIDE.value} models={PUBLISHED} />)
+    expect(tagWithClass(inert, 'run-config__effort-segment')).not.toContain('role="button"')
   })
 })
 
@@ -522,7 +722,7 @@ describe('RunConfigView — interactive toggle (#257)', () => {
   it('makes rows/segments/switch operable when onChange is present (AC1/2/3)', () => {
     const markup = renderToStaticMarkup(
       <RunConfigView
-        model="haiku"
+        model="opus[1m]"
         effort="high"
         yolo={false}
         {...NO_USAGE}
@@ -536,21 +736,22 @@ describe('RunConfigView — interactive toggle (#257)', () => {
     // The YOLO switch drops aria-readonly and becomes operable (AC3).
     expect(markup).toContain('role="switch"')
     expect(markup).not.toContain('aria-readonly')
-    // Selection still reflects the passed values exactly as #188.
-    expect(segmentFor(markup, 'run-config__model-row', 'Quick tier')).toContain('Current model')
+    // Selection still reflects the passed values exactly as #188. #976: the model is the row that
+    // publishes `high`, because a segment exists only when the selected row published it.
+    expect(segmentFor(markup, 'run-config__model-row', 'Wide context')).toContain('Current model')
     expect(segmentFor(markup, 'run-config__effort-segment', '>high<')).toContain('aria-current="true"')
   })
 
   it('stays inert (identical to #188) when onChange is absent (AC5)', () => {
     const markup = renderToStaticMarkup(
-      <RunConfigView model="haiku" effort="high" yolo={true} {...NO_USAGE} models={PUBLISHED} />
+      <RunConfigView model="opus[1m]" effort="high" yolo={true} {...NO_USAGE} models={PUBLISHED} />
     )
     // No handler ⇒ literally today's read-only markup: no operable affordance, switch reads-only.
     expect(markup).not.toContain('role="button"')
     expect(markup).not.toContain('tabindex')
     expect(markup).toContain('aria-readonly="true"')
     // Selection markers unchanged.
-    expect(segmentFor(markup, 'run-config__model-row', 'Quick tier')).toContain('Current model')
+    expect(segmentFor(markup, 'run-config__model-row', 'Wide context')).toContain('Current model')
     expect(markup).toContain('aria-checked="true"')
   })
 })
@@ -605,7 +806,16 @@ describe('RunConfigView — pending marker (#558)', () => {
   })
 
   it('marks the effort group — the group, not an individual segment (AC1/AC3)', () => {
-    const markup = renderToStaticMarkup(<RunConfigView {...base} pending={{ ...NONE, effort: true }} />)
+    // #976: a fixture that actually publishes levels, so the segment half of this assertion has
+    // something to be true about rather than passing vacuously on an empty group.
+    const markup = renderToStaticMarkup(
+      <RunConfigView
+        {...base}
+        model="opus[1m]"
+        models={PUBLISHED}
+        pending={{ ...NONE, effort: true }}
+      />
+    )
     expect(markup.match(/aria-busy="true"/g)?.length).toBe(1)
     expect(tagWithClass(markup, 'run-config__effort')).toContain('aria-busy="true"')
     expect(tagWithClass(markup, 'run-config__effort-segment')).not.toContain('aria-busy')
@@ -650,6 +860,8 @@ describe('RunConfigView — pending marker (#558)', () => {
     const markup = renderToStaticMarkup(
       <RunConfigView
         {...base}
+        model="opus[1m]"
+        models={PUBLISHED}
         onChange={(): void => undefined}
         pending={{ model: true, effort: true, yolo: true }}
       />
@@ -664,7 +876,7 @@ describe('RunConfigView — pending marker (#558)', () => {
     const markup = renderToStaticMarkup(
       <RunConfigView
         {...base}
-        model="haiku"
+        model="opus[1m]"
         effort="high"
         yolo={true}
         models={PUBLISHED}
@@ -1029,11 +1241,14 @@ describe('RunConfigSections (container)', () => {
     expect(markup).not.toContain('% used')
     expect(markup).not.toContain('NaN')
     expect(markup).toContain('Context usage unavailable')
-    // #975: with no conversation in scope the Model section reads not-yet-known and renders no row;
-    // the effort labels (still client-owned until #976) are unchanged.
+    // #975: with no conversation in scope the Model section reads not-yet-known and renders no row.
     expect(markup).toContain(MODELS_UNKNOWN)
     expect(markup).not.toContain('run-config__model-row')
-    expect(markup).toContain('>low<')
+    // #976: and the Effort section matches no published row, so it offers NO segment and shows the
+    // session's effort value — '' on the opening frame — as text. A five-segment strip here would be
+    // the hardcoded vocabulary surviving.
+    expect(markup).not.toContain('run-config__effort-segment')
+    expect(markup).toContain('class="run-config__effort-current"></p>')
     // #560: the fourth store read is wired and still needs no bridge mock — under server render zustand
     // reads getInitialState() (announced: null), so the container renders the not-yet-known state.
     expect(markup).toContain('Running model not yet known')

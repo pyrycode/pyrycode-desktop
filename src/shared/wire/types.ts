@@ -1468,12 +1468,13 @@ export interface WireModelOption {
  * the same `initialize` control reply `slash_command_list` comes from: this one inventories the
  * IDENTITIES claude will run as, that one the VERBS the working directory will accept.
  *
- * **Wire vocabulary only.** Nothing decodes, narrows, stores or renders this yet. The run-configuration
- * sheet still guesses — a hardcoded `MODEL_CATALOG` array and a hardcoded `EFFORT_LEVELS` constant in
- * `RunConfigSections.tsx` — and replacing those guesses with this frame is the slice family below
- * this one. Upstream's producer landed ahead of all of them (pyrycode#1848 maps it, #1849 emits it,
- * #1845 proves it end to end), so like `slash_command_list` and unlike `question_shown` this shape
- * arrives to traffic that already exists.
+ * **Decoded, held and rendered.** #972 narrows it fail-closed, #973 carries it as a typed daemon event,
+ * #974 holds it per conversation, and the run-configuration sheet builds both its model rows (#975) and
+ * its effort segments (#976) from these rows — the hardcoded `MODEL_CATALOG` array and `EFFORT_LEVELS`
+ * constant that stood in `RunConfigSections.tsx` are gone, and the sheet no longer guesses. Upstream's
+ * producer landed ahead of all of them (pyrycode#1848 maps it, #1849 emits it, #1845 proves it end to
+ * end), so like `slash_command_list` and unlike `question_shown` this shape arrived to traffic that
+ * already existed.
  *
  * `models` IS A PLAIN ARRAY AND NEVER `WireModelOption[] | null`: the daemon's `MarshalJSON`
  * normalises a nil slice to `[]`, and `omitempty` is deliberately out because eliding the key would

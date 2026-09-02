@@ -322,3 +322,8 @@ before logging so a malformed frame leaves no record; deliberately no `count`, t
 the store and the run-configuration rows that replace `RunConfigSections.tsx`'s hardcoded
 `MODEL_CATALOG`/`EFFORT_LEVELS` are the slices below this one in the family, unbuilt as of this ticket.
 Architect self-review PASS.
+[#973](https://github.com/pyrycode/pyrycode-desktop/issues/973) has since claimed this arm — a
+`case 'model-list':` in `daemonConnection.ts`'s inbound switch emits the decoded value onward as the
+`modelList` `DaemonEvent` arm, a fresh named-field literal built at the emit rather than a spread of
+this decode's payload. See [Daemon event channel — the sealed
+union](daemon-event-channel-sealed-union.md).

@@ -93,10 +93,10 @@ shape.
 
 Requests the session settings on three occasions — every time the Run configuration sheet opens,
 every rising edge to `connected`, and every running → not-running turn transition (#810) — and
-holds the arriving `model` / `effort` / `yolo` (plus the two usage figures, #192) in a read-only
-store until the next one arrives. Deliberately **not** a [session store](session-store.md) facet: a
-settings arrival never touches connection/messages state and vice versa, so it re-renders only
-components selecting this slice.
+holds the arriving `model` / `effort` / `yolo` / `permissionMode` (#1020, see § Permission mode
+below) plus the two usage figures (#192) in a read-only store until the next one arrives.
+Deliberately **not** a [session store](session-store.md) facet: a settings arrival never touches
+connection/messages state and vice versa, so it re-renders only components selecting this slice.
 
 ## How it works
 
@@ -105,6 +105,7 @@ components selecting this slice.
 ```ts
 export interface RunConfigSnapshot {
   model: string; effort: string; yolo: boolean
+  permissionMode: string                     // #1020 — '' means "no session was resolved"
   usedTokens: number; windowTokens: number   // #192 — windowTokens === 0 means "usage unavailable"
 }
 export interface RunConfigState { snapshot: RunConfigSnapshot | null }  // null = not yet loaded
@@ -132,6 +133,37 @@ yet) — not `undefined` — which lets [#192](../codebase/192.md)'s container n
 (`windowTokens: 0`) collapse into the *same* branch as a real unavailable snapshot, one guard instead
 of two.
 
+`permissionMode` (#1020) follows the identical verbatim-hold rule — see § Permission mode below for
+what the value means and why it is never derived from `yolo`.
+
+### Permission mode (#1020)
+
+`permissionMode` is the session's permission mode as the daemon reports it, one of claude's **six**
+modes on a resolved session (`default`, `acceptEdits`, `plan`, `auto`, `dontAsk`,
+`bypassPermissions`). `''` is its own real reading, held verbatim like every other field on this
+snapshot — **no session was resolved** — and it arrives on the same frame as `sessionId: ''` (§ The data path
+below); the two are read as a pair, and `''` is never coerced to a mode name or to `null`.
+
+It is **never derived from `yolo` and never derives it**: `yolo` is a boolean and there are six
+modes, so on its own it can only separate `bypassPermissions` from the other five — the reason this
+field exists at all. The two always agree on a resolved session (the daemon stores them so they
+cannot disagree), but this store treats them as two independent fields, not a computed pair.
+
+**No client-side allowlist.** The decode narrows only the field's *type* (`requireString`, not
+`requireNonEmptyString` — `''` is a value, not an absence to reject); the six names above are never
+checked against the wire value anywhere on this chain. This is deliberate: the read half carries six
+modes while the write half's `set_session_settings` (`validPermissionMode`, [#1021 — run
+configuration write store](run-settings-write-store.md)) accepts a closed **five**, excluding
+`bypassPermissions`. Narrowing the read side to those five would be wrong.
+
+**No consumer yet.** This ticket is wire-to-store plumbing only — the Run configuration sheet keeps
+its exact current shape, with no new section, copy or display for the mode. #682 (the footer
+permission-mode menu) is the first thing that renders it, and inherits the trust-tier constraint the
+IPC arm's comment (`src/shared/ipc/events.ts`) states: `permissionMode` is daemon-asserted text
+across the main→renderer boundary, so it is a *report*, never a control input — plain text only,
+never markup, an attribute, a URL, a filename, a cache key or a lookup path, and it reaches no log
+sink on either side of the bridge.
+
 ### The data path (`src/renderer/src/screens/conversation/runConfigSnapshot.ts`)
 
 Framework-free, effects injected (the `composerSend.ts` / `logDataDownload.ts` idiom), so the whole
@@ -139,10 +171,11 @@ path unit-tests with plain spies — no React, no store, no Electron:
 
 ```ts
 toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | null
-// runConfigReceived → {model, effort, yolo, usedTokens, windowTokens} verbatim (explicit copy, not a
-// spread — keeps the store shape immune to DaemonEvent gaining an unrelated field later; the two
-// usage figures map the wire snake_case used_tokens/window_tokens to the store's camelCase); every
-// other event → null.
+// runConfigReceived → {model, effort, yolo, permissionMode, usedTokens, windowTokens} verbatim
+// (explicit copy, not a spread — keeps the store shape immune to DaemonEvent gaining an unrelated
+// field later; the two usage figures map the wire snake_case used_tokens/window_tokens to the
+// store's camelCase — permissionMode is already camelCase on the event, #1020, and copies straight
+// across unconditionally, '' included); every other event → null.
 
 toSnapshotSessionId(event: DaemonEvent): string | null
 // runConfigReceived → event.sessionId; every other event → null. '' is a real daemon value ("no
@@ -282,7 +315,7 @@ turnState{id, idle}                → trigger: delete(id) — true (→ request
 
 sheet opens → <RunConfigData/> mounts → requestRunConfigSnapshot(sendCommand)   [one per open, unchanged]
 
-daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,used_tokens,window_tokens}
+daemon → session_settings → runConfigReceived{sessionId,model,effort,yolo,permissionMode,used_tokens,window_tokens}
   → the one app-level listener → toRunConfigSnapshot → setSnapshot(s)  AND  toSnapshotSessionId → setSessionId(id)
   → runConfigStore                                          [most recent snapshot wins]
   → sessionIdStore                                          [id held verbatim, including '']
@@ -361,6 +394,14 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
 - **`sessionId: ''` is a real value, not an absence.** It means "the daemon has no session to
   address"; the write-side gate (`isAddressableSessionId`, in `runSettingsControls`) is what turns it
   into an inert sheet — this store and its data path hold it verbatim.
+- **`permissionMode: ''` is the identical reading, on the same frame.** It means "no session was
+  resolved" and is never coerced, never checked against the six mode names, and never derived from or
+  used to derive `yolo`. See § Permission mode above.
+- **Coupled to a daemon carrying pyrycode#1687.** `permission_mode` has no `omitempty` on the wire, so
+  it is required here too — a frame missing it throws `WireDecodeError` and the whole reply is
+  rejected, taking the sheet and all three footer controls inert with nothing surfaced anywhere. This
+  is the accepted consequence of a required-field mirror, not a bug in this store; the real-daemon gate
+  (`e2e/real-daemon-session-settings.spec.ts`) is what proves the deployed daemon carries the field.
 
 ## Related
 
@@ -435,3 +476,11 @@ See [#560 codebase notes](../codebase/560.md) for the original three-state rende
   payload (optional from #945, required since #946) and its `isRequestSessionSettingsPayload` guard.
 - [Daemon connection](daemon-connection.md) — hosts `requestSessionSettings(conversationId?)`, the
   connection method this store's data path calls into.
+- **#1020** — added `permissionMode` end to end from `SessionSettingsPayload.permission_mode`
+  (pyrycode#1687) through to this store's snapshot; no consumer yet. See § Permission mode above.
+- [Run configuration write store](run-settings-write-store.md) — #1021 is the write half's mirror:
+  `set_session_settings` accepts a closed five of modes, `bypassPermissions` excluded, the deliberate
+  asymmetry § Permission mode above names.
+- [Model-list wire types](model-list-wire-types.md) — `WireModelOption.supports_auto_mode`, whose
+  docblock names the same `set_session_settings.permission_mode` field this store's read half mirrors
+  (corrected by #1020 to stop saying `set_permission_mode`).

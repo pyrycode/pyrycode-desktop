@@ -150,3 +150,18 @@ All vitest (node environment). No renderer change, so no static-render spec and 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-03
+
+## Revisions
+
+### 2026-09-03 — implementation
+
+**Open Question 1 resolved: `message.too_long` has no upstream message to mirror.** `CodeMessageTooLong` is declared in pyrycode's `internal/protocol/codes.go` but has **no emit site anywhere in the Go tree** — the constant exists, nothing sends it. So there is no static transport message for the fake to be faithful to. `ATTACHMENT_REJECTS` in `fakeDaemon.ts` therefore carries a **fake-owned** static string for that one entry, labelled as such in its docblock, static and path-free like the five it does mirror. Nothing about the mapping changes: `narrowDaemonErrorOutcome` keys on the code wherever it originates.
+
+**Open Question 2 resolved: `'unclassified'` kept.** No conflicting house convention surfaced; the name reads correctly for both of its causes.
+
+**Design correction: "payload absent" is unreachable through the codec, and the plan's testing strategy overstated it.** The plan listed an absent payload among the catch-all inputs. In fact `decodeEnvelope` requires the `payload` **key** to be present and throws `WireDecodeError` when it is missing — before the `error` arm is ever reached, and identically for all ~28 frame types. So the shipped behaviour splits what the plan (and AC2's "payload is absent") treated as one case:
+
+- **`payload: null`** — the reachable "absent value" shape, and what a peer omitting the field actually produces once it survives envelope decoding — lands on `'unclassified'` as a terminal `daemon-error`, exactly as the AC requires. Covered.
+- **An envelope carrying no `payload` key at all** is a malformed **envelope**, not a malformed payload, and is rejected upstream by `decodeEnvelope`. This is pre-existing behaviour that predates this slice by many tickets. Admitting a key-less frame would mean weakening the envelope contract for every arm in the module — far outside this slice, and a change that should be argued on its own ticket if anyone ever wants it.
+
+A test now records that split explicitly (`rejects an envelope with NO payload key in decodeEnvelope, upstream of this arm (pre-existing)`), so the boundary is documented rather than looking like a hole in the narrower. `narrowDaemonErrorOutcome` still handles `undefined` correctly for a direct caller; it is simply not reachable over the wire.

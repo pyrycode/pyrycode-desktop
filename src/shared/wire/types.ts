@@ -2116,6 +2116,33 @@ export interface BackfillSincePayload {
   max_messages: number
 }
 
+/**
+ * A terminal refusal, correlated to the request it answers by `Envelope.in_reply_to`.
+ *
+ * MODELLED SINCE #116, READ SINCE #965 — and only ONE of its four fields is read, `code`, by
+ * `narrowDaemonErrorOutcome` in the main-process decoder. What the other three do is stated here so a
+ * later reader does not mistake "modelled" for "available".
+ *
+ * The argument is on CONTRACT ground, not on a measurement. Neighbouring payload interfaces in this
+ * file carry long security sections that reason from measurements taken on their own frames — a byte
+ * observed in a real value, a survey of who authors a string. None of those transfer to this type, and
+ * transcribing one would ship a claim nothing here has established.
+ *
+ * - **`code` is untrusted daemon-supplied text**, so per CLAUDE.md it may never become a lookup path, a
+ *   filename or a cache key. The decoder therefore COMPARES it against client-owned literals and drops
+ *   it, converting it to a client-owned outcome at that boundary; the raw string goes no further and is
+ *   never logged. An unrecognised code lands on a distinct catch-all rather than passing through.
+ * - **`message` is not surfaced at any code.** The daemon promises specific messages are static — the
+ *   attachment `storage_failed` message names no path and no filesystem error — but that is the
+ *   daemon's promise about its own behaviour, not a property a client can rely on for a value an
+ *   untrusted peer chooses.
+ * - **`retryable` is not read.** It is a per-code constant in the daemon's own reject table, so it
+ *   carries nothing a client-owned outcome does not already encode, and it is a value an untrusted
+ *   daemon picks. Retryability is derived from the outcome, never taken from the wire.
+ * - **`retry_after_s` is absent on the attachment upload leg entirely.** That leg's emitter marshals a
+ *   closed `{Code, Message, Retryable}` literal and the field is `*int,omitempty`, so no reject carries
+ *   it. A client cannot learn a backoff duration from the wire there; the delay is client-owned policy.
+ */
 export interface ErrorPayload {
   code: string
   message: string

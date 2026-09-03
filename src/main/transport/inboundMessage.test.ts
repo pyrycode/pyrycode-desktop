@@ -838,15 +838,17 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
     })
   })
 
-  it('narrows a daemon error into a content-free { kind: daemon-error }', () => {
-    // The ErrorPayload fields are present on the wire but must NOT be surfaced.
+  it('narrows a daemon error into a { kind: daemon-error } carrying ONLY a client-owned outcome', () => {
+    // The ErrorPayload fields are present on the wire but must NOT be surfaced (#965 scoped the
+    // content-free rule; `code` is read as a comparand only, and this fixture's code is outside the
+    // six this client classifies, so it lands on the catch-all).
     const bytes = encodeEnvelope({
       id: 1,
       type: 'error',
       ts: FIXED_TS,
       payload: { code: 'server.binary_offline', message: 'secret daemon detail', retryable: true }
     })
-    expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error' })
+    expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error', outcome: 'unclassified' })
   })
 
   it('carries the Envelope in_reply_to onto the daemon-error kind as inReplyTo (#269 correlation id)', () => {
@@ -858,7 +860,11 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
       in_reply_to: 7,
       payload: { code: 'protocol.malformed', message: 'secret daemon detail', retryable: false }
     })
-    expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error', inReplyTo: 7 })
+    expect(parseInboundMessage(bytes)).toEqual({
+      kind: 'daemon-error',
+      inReplyTo: 7,
+      outcome: 'unclassified'
+    })
   })
 
   it('leaves inReplyTo undefined when a daemon error omits in_reply_to (correlation fails closed downstream)', () => {
@@ -869,7 +875,7 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
       payload: { code: 'session.not_found', message: 'secret daemon detail', retryable: false }
     })
     const result = parseInboundMessage(bytes)
-    expect(result).toEqual({ kind: 'daemon-error' })
+    expect(result).toEqual({ kind: 'daemon-error', outcome: 'unclassified' })
     // Explicit: the carrier is present-but-undefined, so daemonConnection's lookup short-circuits.
     expect(result?.kind === 'daemon-error' && result.inReplyTo).toBeUndefined()
   })
@@ -880,6 +886,142 @@ describe('parseInboundMessage — debug-bundle recognition (#116, additive)', ()
       kind: 'chunk',
       messages: [MSG_A]
     })
+  })
+})
+
+describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => {
+  // Builds a reject the way the daemon does, plus a `retry_after_s` NO real attachment reject sends
+  // (attachmentReplyError marshals a closed {Code, Message, Retryable}). The spurious field is here so
+  // the exact-toEqual assertions below prove the boundary drops what it does not read, not merely what
+  // the daemon happens to omit.
+  const SECRET_MSG = 'secret-daemon-error-detail'
+  const encodeReject = (code: unknown, inReplyTo?: number): Uint8Array =>
+    encodeEnvelope({
+      id: 1,
+      type: 'error',
+      ts: FIXED_TS,
+      ...(inReplyTo === undefined ? {} : { in_reply_to: inReplyTo }),
+      payload: { code, message: SECRET_MSG, retryable: true, retry_after_s: 30 }
+    })
+
+  // The upload leg's six reject codes, each paired with the client-owned outcome it must become.
+  // Verified against pyrycode `internal/protocol/codes.go` + the `internal/relay/v2session_attachment.go`
+  // emit table on 2026-09-03. `attachment.not_found` / `attachment.stream_aborted` are deliberately
+  // absent — both exist upstream but belong to the RETRIEVAL direction (#687), not this leg.
+  const LEG: ReadonlyArray<readonly [string, string]> = [
+    ['attachment.invalid_chunk', 'attachment-invalid-chunk'],
+    ['attachment.integrity_failed', 'attachment-integrity-failed'],
+    ['attachment.too_large', 'attachment-too-large'],
+    ['attachment.too_many_uploads', 'attachment-too-many-uploads'],
+    ['attachment.storage_failed', 'attachment-storage-failed'],
+    ['message.too_long', 'message-too-long']
+  ]
+
+  it.each(LEG)('narrows the reject code %s onto its own client-owned outcome', (code, outcome) => {
+    // Exact toEqual, never toMatchObject: the exactness IS the no-leak assertion (AC3). A decoder that
+    // passed `code`, `message`, `retryable` or `retry_after_s` through reddens here rather than being
+    // tolerated by a subset match.
+    expect(parseInboundMessage(encodeReject(code))).toEqual({ kind: 'daemon-error', outcome })
+  })
+
+  it('gives the six reject codes six DISTINCT outcomes', () => {
+    // Asserted as a set size rather than as a list of expected literals: a list would only restate the
+    // mapping `it.each` above already pins, while the cardinality is the property that actually matters
+    // — a mapping that collapsed two codes onto one outcome would pass every individual case above.
+    const outcomes = LEG.map(([code]) => {
+      const result = parseInboundMessage(encodeReject(code))
+      return result?.kind === 'daemon-error' ? result.outcome : 'NOT-A-DAEMON-ERROR'
+    })
+    expect(new Set(outcomes).size).toBe(LEG.length)
+  })
+
+  it('lands an unrecognised code on the one catch-all outcome', () => {
+    for (const code of ['server.binary_offline', 'attachment.not_found', 'attachment.stream_aborted']) {
+      expect(parseInboundMessage(encodeReject(code))).toEqual({
+        kind: 'daemon-error',
+        outcome: 'unclassified'
+      })
+    }
+  })
+
+  it('lands an absent / non-object / code-less payload on the catch-all — never a throw, never null', () => {
+    // The sharpest property in the slice. daemonConnection wraps parseInboundMessage in a bare
+    // `catch { return }`, so a THROW here would silently kill all four behaviours the daemon-error case
+    // drives (#269 settings rejection, #396 folder rejection, #116 reassembler.fail, #248 modal FIFO) —
+    // handing a hostile daemon a one-frame kill switch for them. An `error` frame is terminal because it
+    // ARRIVED, not because its payload parsed.
+    const mangled: unknown[] = [null, 'nope', 42, ['code'], {}, { code: 7 }, { code: null }]
+    for (const payload of mangled) {
+      const bytes = encodeEnvelope({ id: 1, type: 'error', ts: FIXED_TS, payload })
+      expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error', outcome: 'unclassified' })
+    }
+  })
+
+  it('rejects an envelope with NO payload key in decodeEnvelope, upstream of this arm (pre-existing)', () => {
+    // The one "absent payload" shape that does NOT reach the catch-all, recorded so a reader does not
+    // mistake it for a hole in the arm above. A missing `payload` KEY is a malformed ENVELOPE, not a
+    // malformed payload: decodeEnvelope has rejected it for every frame type since the codec existed,
+    // and it never reaches the `error` arm. `payload: null` — the reachable "absent value" shape — does
+    // land on the catch-all and is covered above. Widening the envelope contract to admit a key-less
+    // frame would change all ~28 arms and is not this slice's business.
+    // Built as raw wire bytes, not via encodeEnvelope: the builder's own type REQUIRES `payload`, so a
+    // key-less frame is not something this client could produce — only something a peer could send.
+    const bytes = new TextEncoder().encode(JSON.stringify({ id: 1, type: 'error', ts: FIXED_TS }))
+    expect(() => parseInboundMessage(bytes)).toThrow(WireDecodeError)
+  })
+
+  it('still carries in_reply_to on a mangled payload, so the four correlations keep firing', () => {
+    const bytes = encodeEnvelope({
+      id: 1,
+      type: 'error',
+      ts: FIXED_TS,
+      in_reply_to: 7,
+      payload: 'not an object at all'
+    })
+    expect(parseInboundMessage(bytes)).toEqual({
+      kind: 'daemon-error',
+      inReplyTo: 7,
+      outcome: 'unclassified'
+    })
+  })
+
+  it('carries in_reply_to alongside a classified outcome', () => {
+    expect(parseInboundMessage(encodeReject('attachment.too_large', 41))).toEqual({
+      kind: 'daemon-error',
+      inReplyTo: 41,
+      outcome: 'attachment-too-large'
+    })
+  })
+
+  it('narrows a __proto__-carrying payload to the catch-all and alters no prototype', () => {
+    // JSON.parse makes `__proto__` an ordinary OWN data property, so `payload.code` finds nothing and
+    // Object.prototype is untouched — assignment, which this narrower never performs, is the only real
+    // hazard. Read back an unrelated object rather than inspecting the payload: the property that
+    // matters is that nothing global moved.
+    const bytes = encodeEnvelope({
+      id: 1,
+      type: 'error',
+      ts: FIXED_TS,
+      payload: { __proto__: { code: 'attachment.too_large' } }
+    })
+    expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error', outcome: 'unclassified' })
+    expect(({} as Record<string, unknown>).code).toBeUndefined()
+  })
+
+  it('keeps the diagnostic record content-free: no wire code, no message (AC3)', () => {
+    // The log's own guard. ADR 0007's allowlist is enforced over FIELD NAMES, not values, so a
+    // `code: payload.code` would typecheck cleanly and ship daemon-controlled text into a JSON-lines log
+    // an operator can send off-box in a debug bundle. `code` is the field this slice newly reads, so it
+    // is the field newly worth pinning — a deterministic guard for a rule the prose states.
+    const { log, lines } = captureLog()
+    const WIRE_CODE = 'attachment.storage_failed'
+
+    parseInboundMessage(encodeReject(WIRE_CODE), log)
+
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]).code).toBe('error')
+    expect(lines[0]).not.toContain(WIRE_CODE)
+    expect(lines[0]).not.toContain(SECRET_MSG)
   })
 })
 

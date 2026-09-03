@@ -226,10 +226,12 @@ Architect self-review verdict **PASS**, no MUST FIX. Full review in
 - **No digest re-verification at save time**, deliberately: #995 verified the digest before the bytes
   were stored, and re-checking here would require the expected digest to cross the bridge — an
   untrusted value deciding whether a file is presented as good.
-- **Extension spoofing / macOS quarantine is out of scope**, assigned to #867. `copyFile` does not set
+- **Extension spoofing / macOS quarantine is out of scope for this save leg.** `copyFile` does not set
   `com.apple.quarantine`, and the daemon chooses the extension. It doesn't bite here because AC 4
   *reveals* the file and never opens it — the user performs the same double-click they would for any
-  received file. #867 is the ticket that hands a path to `shell.openPath`.
+  received file. [Attachment open](attachment-open.md) (#867, landed) is the ticket that hands a path
+  to `shell.openPath`, and closes the question by deriving its own suffix from validated bytes rather
+  than from this feature's extension-chosen-by-the-daemon name.
 
 ## Testing
 
@@ -258,7 +260,9 @@ slice has no renderer surface, so no Playwright coverage is owed.
   disk-write budget is ever specified for the app as a whole.
 - **The Downloads-folder-absent / source-absent conflation** (§ error mapping) is accepted, not fixed.
 - **No digest re-verification** at save time (§ Security).
-- **Extension spoofing / Gatekeeper quarantine** is #867's to close, not this ticket's.
+- **Extension spoofing / Gatekeeper quarantine** for the *open* path is closed by
+  [attachment open](attachment-open.md) (#867, landed), not this ticket's; this ticket's own leg only
+  reveals, never opens.
 
 ## Related
 
@@ -278,5 +282,5 @@ slice has no renderer surface, so no Playwright coverage is owed.
 - [#815](https://github.com/pyrycode/pyrycode-desktop/issues/815) /
   [#816](https://github.com/pyrycode/pyrycode-desktop/issues/816) — the file row and its click
   behaviour, the still-unwired consumers of this channel.
-- [#867](https://github.com/pyrycode/pyrycode-desktop/issues/867) — open in the OS image viewer, the
-  ticket that owns the extension-spoofing / quarantine question this one declines.
+- [Attachment open](attachment-open.md) — #867, landed: open in the OS image viewer, the feature that
+  closes the extension-spoofing / quarantine question this one declines.

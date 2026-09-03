@@ -657,7 +657,28 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `contextBridge` structured-clone hop is documented as unobservable from this repo's test tiers;
   #868 (thumbnail) is the first end-to-end proof. Third reader of the composition root's one
   `attachmentDir` join — no new `app.getPath` call. Architect self-review PASS, no MUST FIX. Renderer
-  wiring (#868 thumbnail, #867 OS-viewer open) not started.
+  wiring (#868 thumbnail) not started; #867 (OS-viewer open) has since landed.
+- [Attachment open](features/attachment-open.md) — hands an attachment already on this machine to the
+  OS's default image-viewer handler (#867, split from #691), closing the extension question
+  [attachment path resolution](features/attachment-path-resolution.md) left open: the stored file is
+  extension-less on purpose (a model-chosen extension could open by *executing*), so
+  `src/main/imageSignature.ts` decides a suffix from the file's own leading 12 bytes against a closed
+  four-member raster set (PNG/JPEG/GIF/WebP, SVG deliberately excluded — no byte signature, default
+  handler is routinely a script-executing browser) and never from the wire's `mime_type` or a file
+  name. The security property is a consequence of the return type, not of care: even a fully wrong
+  match can only mis-pick between the four raster suffixes. The suffixed path handed to `shell.openPath`
+  is a **copy** into a new sibling directory (`attachment-views`), not a hard link and not a suffixed
+  name inside `attachmentDir` itself — a link would let a viewer that saves in place write straight
+  through the shared inode into the stored original, and `storeAttachment`'s temp-file-plus-rename
+  would leave an earlier link pointing at a stale inode anyway; `COPYFILE_EXCL` makes a repeat open
+  reuse the derived file (`EEXIST`) rather than accumulate one per open. `shell.openPath` does not
+  throw — it resolves with the OS error message, which carries the path — so the composition-root seam
+  is narrowed to `Promise<boolean>`, and the driver that builds reasons and log records never holds
+  the string at all. No concurrency cap is owed (only a 12-byte prefix ever enters this process, unlike
+  `attachmentBytes`'s whole-file read). Four failure literals split on what a consumer can do next:
+  `refused` (permanent) / `unavailable` (fetch and retry) / `unsupported-type` (permanent, distinct
+  from `refused` — offer the save leg instead) / `open-failed` (the only one a plain retry can fix).
+  Architect self-review PASS, no MUST FIX. Renderer wiring (#869, the thumbnail click) not started.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

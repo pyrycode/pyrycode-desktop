@@ -3,9 +3,9 @@
 The fourth attachment channel pair, and the first one that is not content-free: the window names an
 attachment already on this machine by identifier, and the background process answers exactly one
 terminal — the file's bytes, or a client-owned failure literal. Nothing renders here. The thumbnail
-that consumes these bytes is [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) and the
-click that opens a file in the OS viewer is
-[#867](https://github.com/pyrycode/pyrycode-desktop/issues/867), each its own ticket.
+that consumes these bytes is [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) and
+[attachment open](attachment-open.md) (#867, landed) opens a file in the OS viewer over its own
+channel, each its own ticket.
 
 Introduced in [#866](https://github.com/pyrycode/pyrycode-desktop/issues/866), split from #691. The
 second consumer of [attachment retrieval](attachment-retrieval.md)'s directory to land, after
@@ -303,5 +303,6 @@ interaction that would need `e2e/` arrives with #868.
   blocking.
 - [#868](https://github.com/pyrycode/pyrycode-desktop/issues/868) — the thumbnail, the first renderer
   consumer of this channel and the first end-to-end proof of the `contextBridge` hop; not started.
-- [#867](https://github.com/pyrycode/pyrycode-desktop/issues/867) — open in the OS image viewer, the
-  other remaining consumer of [attachment retrieval](attachment-retrieval.md)'s directory; not started.
+- [Attachment open](attachment-open.md) — #867, landed: the other consumer of
+  [attachment retrieval](attachment-retrieval.md)'s directory, opening a file in the OS image viewer
+  over its own channel rather than this one.

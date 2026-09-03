@@ -313,6 +313,7 @@ describe('translateQuestionEvent — every other arm returns null (the inverse f
         model: 'claude-opus-5',
         effort: 'high',
         yolo: false,
+        permissionMode: 'default',
         used_tokens: 1200,
         window_tokens: 200000
       },

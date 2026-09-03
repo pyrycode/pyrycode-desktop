@@ -120,6 +120,7 @@ describe('createRunConfigRefreshTrigger', () => {
         model: '',
         effort: '',
         yolo: false,
+        permissionMode: 'default',
         used_tokens: 0,
         window_tokens: 200000
       }

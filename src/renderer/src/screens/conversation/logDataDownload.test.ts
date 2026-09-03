@@ -75,6 +75,7 @@ describe('toDownloadAction', () => {
         model: 'Opus 4.7',
         effort: 'high',
         yolo: false,
+        permissionMode: 'default',
         used_tokens: 45000,
         window_tokens: 200000
       }

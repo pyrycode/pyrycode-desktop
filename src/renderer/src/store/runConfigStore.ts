@@ -23,11 +23,19 @@ import { useStore } from 'zustand'
  *  `usedTokens` / `windowTokens` are the session's context-window usage figures (#192), held for the
  *  Context window gauge. Both required (parallel to model/effort/yolo — held verbatim, never coerced):
  *  the "usage unavailable" state is `windowTokens === 0` (the daemon's foreground / no-transcript
- *  signal), NOT `undefined`. The gauge never divides when `windowTokens === 0`. */
+ *  signal), NOT `undefined`. The gauge never divides when `windowTokens === 0`.
+ *
+ *  `permissionMode` (#1020) is the session's permission mode, one of claude's six on a resolved
+ *  session. It takes the same verbatim hold as the fields above, and `''` is its own real reading —
+ *  NO SESSION WAS RESOLVED, the one zero here that names no posture — arriving on the same frame as
+ *  the empty session id the session-id store holds. It is NOT derived from `yolo` and does not derive
+ *  it: `yolo` is a boolean against six modes, so it can only separate `bypassPermissions` from the
+ *  rest. Nothing renders it yet; #682 is the first consumer. */
 export interface RunConfigSnapshot {
   model: string
   effort: string
   yolo: boolean
+  permissionMode: string
   usedTokens: number
   windowTokens: number
 }

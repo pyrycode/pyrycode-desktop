@@ -28,6 +28,7 @@ describe('toRunConfigSnapshot', () => {
       model: '',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 45000,
       window_tokens: 200000
     }
@@ -35,6 +36,7 @@ describe('toRunConfigSnapshot', () => {
       model: '',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       usedTokens: 45000,
       windowTokens: 200000
     })
@@ -47,6 +49,7 @@ describe('toRunConfigSnapshot', () => {
       model: 'claude-x',
       effort: 'high',
       yolo: true,
+      permissionMode: 'bypassPermissions',
       used_tokens: 45000,
       window_tokens: 200000
     }
@@ -54,9 +57,50 @@ describe('toRunConfigSnapshot', () => {
       model: 'claude-x',
       effort: 'high',
       yolo: true,
+      permissionMode: 'bypassPermissions',
       usedTokens: 45000,
       windowTokens: 200000
     })
+  })
+
+  it('carries permissionMode verbatim for each of the six modes, and for one outside them (#1020)', () => {
+    // No mapping to or from `yolo`, and no client-side allowlist: the read half carries six modes
+    // where the write half accepts five (#1021), so the mapper copies whatever arrived. The seventh
+    // case is a value the daemon should never send — it still passes through, because deciding what
+    // to DISPLAY for an unknown mode belongs to #682, not to this mapper.
+    const modes = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions', 'nonsense']
+    for (const mode of modes) {
+      const event: DaemonEvent = {
+        type: 'runConfigReceived',
+        sessionId: 'sess-a',
+        model: 'claude-x',
+        effort: 'high',
+        // Deliberately `false` beside `bypassPermissions` in one iteration: the mapper must not
+        // reconcile the two, even though a real daemon keeps them in agreement.
+        yolo: false,
+        permissionMode: mode,
+        used_tokens: 45000,
+        window_tokens: 200000
+      }
+      expect(toRunConfigSnapshot(event)?.permissionMode).toBe(mode)
+    }
+  })
+
+  it('carries permissionMode: "" (no session resolved) through, never coerced (#1020)', () => {
+    // The all-zero reply's reading. '' is held as '' — not mapped to 'default', not to null, and not
+    // inferred from `yolo: false`. It is the same verbatim-hold the empty session_id already gets.
+    const event: DaemonEvent = {
+      type: 'runConfigReceived',
+      sessionId: '',
+      model: '',
+      effort: '',
+      yolo: false,
+      permissionMode: '',
+      used_tokens: 0,
+      window_tokens: 0
+    }
+    expect(toRunConfigSnapshot(event)).toHaveProperty('permissionMode', '')
+    expect(toSnapshotSessionId(event)).toBe('')
   })
 
   it('carries window_tokens: 0 (usage unavailable) through as windowTokens: 0, not coerced', () => {
@@ -66,6 +110,7 @@ describe('toRunConfigSnapshot', () => {
       model: '',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 0,
       window_tokens: 0
     }
@@ -73,6 +118,7 @@ describe('toRunConfigSnapshot', () => {
       model: '',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       usedTokens: 0,
       windowTokens: 0
     })
@@ -143,6 +189,7 @@ describe('toSnapshotSessionId', () => {
       model: 'opus',
       effort: 'high',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 0,
       window_tokens: 200000
     }
@@ -159,6 +206,7 @@ describe('toSnapshotSessionId', () => {
       model: '',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 0,
       window_tokens: 200000
     }
@@ -214,6 +262,7 @@ describe('subscribeRunConfig', () => {
       model: '',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 45000,
       window_tokens: 200000
     })
@@ -222,6 +271,7 @@ describe('subscribeRunConfig', () => {
       model: '',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       usedTokens: 45000,
       windowTokens: 200000
     })
@@ -247,6 +297,7 @@ describe('subscribeRunConfig', () => {
       model: 'a',
       effort: 'low',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 10000,
       window_tokens: 200000
     })
@@ -256,6 +307,7 @@ describe('subscribeRunConfig', () => {
       model: 'b',
       effort: 'high',
       yolo: true,
+      permissionMode: 'bypassPermissions',
       used_tokens: 20000,
       window_tokens: 200000
     })
@@ -263,6 +315,7 @@ describe('subscribeRunConfig', () => {
       model: 'a',
       effort: 'low',
       yolo: false,
+      permissionMode: 'default',
       usedTokens: 10000,
       windowTokens: 200000
     })
@@ -270,6 +323,7 @@ describe('subscribeRunConfig', () => {
       model: 'b',
       effort: 'high',
       yolo: true,
+      permissionMode: 'bypassPermissions',
       usedTokens: 20000,
       windowTokens: 200000
     })
@@ -297,6 +351,7 @@ describe('subscribeRunConfig', () => {
       model: 'opus',
       effort: 'high',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 100,
       window_tokens: 200000
     })
@@ -318,6 +373,7 @@ describe('subscribeRunConfig', () => {
       model: '',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 0,
       window_tokens: 200000
     })

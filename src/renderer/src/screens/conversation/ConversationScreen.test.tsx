@@ -3850,7 +3850,14 @@ describe('ConversationScreen — store binding', () => {
     const initial = runConfigStore.getInitialState()
     const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
       ...initial,
-      snapshot: { model: '', effort: '', yolo: false, usedTokens: 168000, windowTokens: 200000 }
+      snapshot: {
+        model: '',
+        effort: '',
+        yolo: false,
+        permissionMode: 'default',
+        usedTokens: 168000,
+        windowTokens: 200000
+      }
     })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
@@ -3880,6 +3887,7 @@ describe('ConversationScreen — store binding', () => {
         model: 'seeded-session-model',
         effort: '',
         yolo: false,
+        permissionMode: 'default',
         usedTokens: 168000,
         windowTokens: 200000
       }
@@ -3919,6 +3927,7 @@ describe('ConversationScreen — store binding', () => {
         model: 'seeded-session-model',
         effort: 'seeded-session-effort',
         yolo: false,
+        permissionMode: 'default',
         usedTokens: 168000,
         windowTokens: 200000
       }

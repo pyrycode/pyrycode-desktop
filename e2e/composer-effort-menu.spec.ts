@@ -84,6 +84,9 @@ const BASELINE_RUN_CONFIG: SessionSettingsPayload = {
   model: GRADED.value,
   effort: BASELINE_EFFORT,
   yolo: false,
+  // Required since #1020 — see the note on run-config-settings.spec.ts's baseline: a missing key is
+  // decode-rejected at runtime and reads as the controls never mounting.
+  permission_mode: 'default',
   used_tokens: 50_000,
   window_tokens: 200_000
 }

@@ -895,20 +895,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           case 'session-settings':
             // The run-configuration data path (#491). A fresh literal with named fields, never a
             // spread of inbound.sessionSettings — so a future decoder that grew a field cannot
-            // smuggle it across. snake→camel for the id only (`sessionId`), matching the
-            // sessionTransition arm; the five value fields keep their wire names, so the event
-            // reads the way the daemon's reply does.
+            // smuggle it across. snake→camel for the id (`sessionId`, matching the sessionTransition
+            // arm) and for `permissionMode` (#1020); the other four value fields keep their wire
+            // names, so the event reads the way the daemon's reply does.
             //
             // `session_id: ''` crosses VERBATIM. It is the daemon saying "I have no session to
             // address", which the sheet's gate must be able to see; coercing it to null here would
             // make it indistinguishable from "no reply yet" and re-open the inert-sheet defect one
-            // layer down.
+            // layer down. `permission_mode: ''` is the SAME reading arriving on the same frame — no
+            // session was resolved — and crosses verbatim for the same reason. The two are read as a
+            // pair; neither is inferred from the other, and neither is inferred from `yolo`.
             emitDaemonEvent(sink, {
               type: 'runConfigReceived',
               sessionId: inbound.sessionSettings.session_id,
               model: inbound.sessionSettings.model,
               effort: inbound.sessionSettings.effort,
               yolo: inbound.sessionSettings.yolo,
+              permissionMode: inbound.sessionSettings.permission_mode,
               used_tokens: inbound.sessionSettings.used_tokens,
               window_tokens: inbound.sessionSettings.window_tokens
             })

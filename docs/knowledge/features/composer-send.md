@@ -88,28 +88,29 @@ A **distinct name** from `messageReceived` documents intent (a local echo, not a
 
 ### 4. Connection-status gate — `composerAvailability` ([#31](../codebase/31.md))
 
-The send control is gated on the live connection status: while the session is not `connected`, sending is disabled and a lightweight inline caption says *why*, instead of silently swallowing a keystroke that goes nowhere. This is a **UX affordance, not a safety net** — the deterministic no-throw safety on a disconnected send already lives in [#65](../codebase/65.md)'s `daemonConnection.send()` and #66's guarded `sendCommand`; no second guard is added.
+The send control is gated on the live connection status: while the session is not `connected`, sending is disabled, instead of silently swallowing a keystroke that goes nowhere. This is a **UX affordance, not a safety net** — the deterministic no-throw safety on a disconnected send already lives in [#65](../codebase/65.md)'s `daemonConnection.send()` and #66's guarded `sendCommand`; no second guard is added.
 
 The decision lives in `composerSend.ts` as a pure, React-free predicate — a *total* mapping over the store's `ConnectionStatus` (from [session store](session-store.md)):
 
 ```ts
 export interface ComposerAvailability {
-  canSend: boolean      // true only when status.type === 'connected'
-  hint: string | null   // short "why unavailable" caption; null iff canSend
+  canSend: boolean   // true only when status.type === 'connected'
 }
 export function composerAvailability(status: ConnectionStatus): ComposerAvailability
 ```
 
-| `status.type` | `canSend` | `hint` |
-|---|---|---|
-| `connected` | `true` | `null` |
-| `connecting` | `false` | `'Connecting…'` |
-| `disconnected` | `false` | `'Not connected'` |
-| `error` | `false` | `'Connection error'` |
+| `status.type` | `canSend` |
+|---|---|
+| `connected` | `true` |
+| `connecting` | `false` |
+| `disconnected` | `false` |
+| `error` | `false` |
 
-Both facts derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error. The `error` hint is a short generic label and deliberately does **not** surface `status.error.message` — that `ConnectionError.message` is [the connection banner's surface](conversation-shell-chrome.md#connection-banner-279) (#279), built beside this gate.
+Through [#968](../codebase/968.md), `ComposerAvailability` also carried `hint: string | null` — a short "why unavailable" caption (`Connecting…` / `Not connected` / `Connection error`), rendered directly above the message box as `<p className="composer__hint" role="status">`. #968 retired the caption and the field: the connection state is said by [the banner](conversation-shell-chrome.md#connection-banner-279) (#279) in every non-connected arm and by [the status row's chip or button](conversation-shell-composer.md#composer-error-chip-797) (#797/#963) in the `error` arm, so the caption was a third read in `error` and a second read in `connecting`/`disconnected` — the banner is what survives in every arm. `ComposerAvailability` stays a one-field record rather than collapsing to a bare boolean: the call site already destructures from it, and the ruling was "drop the caption," not "redesign the gate." The function now reads `status.type` and nothing else, so there is no string on this path to leak — the docblock paragraph that used to reserve `ConnectionError.message` for the banner's exclusive use went with the field it was reserving.
 
-In the container, `Composer` selects `status`, derives `{ canSend, hint }`, and:
+Both facts (`canSend` and, before #968, `hint`) derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error — unchanged by #968.
+
+In the container, `Composer` selects `status`, derives `{ canSend }`, and:
 
 ### 5. Re-pair gate — `shouldOfferRepair` ([#167](../codebase/167.md))
 
@@ -141,9 +142,10 @@ re-dials it), so it is out of scope for this predicate by construction.
 
 - **Guards `handleSubmit`** with `if (!canSend) return` at the top — the authoritative gate, blocking the **Enter** path (`handleKeyDown → handleSubmit`) as well as the button. `submitMessage` is never reached while not connected, so no `sendCommand` and no optimistic `dispatch` fire; the input is **not** cleared.
 - **Natively disables** the send `<button>` with `disabled={!canSend}` (a disabled button fires no `onClick` — the visible affordance, platform-blocked in addition to the handler guard).
-- **Renders the hint** above the input/button row as `<p className="composer__hint" role="status">` — a polite live region, so a screen reader announces the status change without stealing focus. On connect, `hint` is `null`, the `<p>` unmounts, and the button re-enables with no reload.
 
 The `<textarea>` stays **enabled** while not connected — the user may draft while `connecting`; only the send control is gated. Selecting `status` re-renders `Composer` when it changes, so the re-enable is reactive; the thread (which selects only `selectMessages`) doesn't re-render on status change.
+
+Through [#968](../codebase/968.md), a third bullet rendered the hint above the input/button row as `<p className="composer__hint" role="status">` — a polite live region so a screen reader announced the status change without stealing focus. That element and its rule (`conversation.css`'s `.composer__hint`) are retired; the announcement isn't lost, since [the connection banner](conversation-shell-chrome.md#connection-banner-279) (#279) is the polite live region for the same transition in every non-connected arm and was already written to avoid double-announcing with the caption. Deleting the caption *is* the 8px between the status row and the message box: `.composer`'s `padding-top` (`--space-2`) was always the caption's own inset, `ComposerStatusArea` renders unconditionally as `.composer`'s sibling, and `.composer__row` is now `.composer`'s first child — so that gap is identical in all four connection states with no new CSS rule.
 
 ### 6. Connection banner gate — `shouldShowBanner` / `CONNECTION_BANNER_COPY` ([#279](../codebase/279.md))
 
@@ -163,11 +165,12 @@ Unlike `composerAvailability`, this is not an exhaustive per-arm switch: every n
 'connected'` is the honest shape — and its fail-mode is correct, since a hypothetical future 5th
 `ConnectionStatus` arm defaults to *showing* the not-connected banner rather than silently hiding it.
 
-`CONNECTION_BANNER_COPY` ships alongside it — a single client-owned string constant, lexically distinct
-from all three `composerAvailability` hints, so the banner and the composer's terse gate never read as
-the same string stacked twice even though both remain visible while disconnected. One constant, not a
-per-arm map: the composer already carries the per-arm nuance, so a second three-way split would
-duplicate it.
+`CONNECTION_BANNER_COPY` ships alongside it — a single client-owned string constant. Through [#968](../codebase/968.md)
+it was lexically distinct from all three `composerAvailability` hints; those retired with the caption, and
+it is now argued distinct from the status row's two remaining strings instead (`COMPOSER_ERROR_CHIP_COPY`
+§8, `COMPOSER_REPAIR_BUTTON_COPY` §9), so the banner and the row directly above the message box never read
+as the same string stacked twice. One constant, not a per-arm map: every non-connected arm is a state
+where pyry is unreachable, so one sentence covers all three honestly.
 
 ### 7. Keystroke-intent gate — `shouldSubmitOnKeyDown` ([#512](../codebase/512.md))
 
@@ -192,9 +195,11 @@ The predicate deliberately does **not** absorb the `canSend` gate (§4) — that
 
 ### 8. Error chip copy — `composerSend.ts` (#797)
 
-A fifth and sixth string this module owns about the single `ConnectionStatus` fact, but unlike §4–§7
-these are plain constants, not predicates — no `shouldShowErrorChip` was added beside them. The gate is
-already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer.md#composer-error-chip-797)
+Two of the three strings this module now owns about the single `ConnectionStatus` fact (with
+`CONNECTION_BANNER_COPY` §6 and `COMPOSER_REPAIR_BUTTON_COPY` §9 — [#968](../codebase/968.md) retired the
+three `composerAvailability` captions that used to sit beside them, so the set shrank from five to three),
+but unlike §4–§7 these are plain constants, not predicates — no `shouldShowErrorChip` was added beside
+them. The gate is already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer.md#composer-error-chip-797)
 belongs to (`status.type === 'error'`), so a named predicate would only restate that in an export and a
 test matrix.
 
@@ -204,11 +209,11 @@ export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
 ```
 
 Both carry `CONNECTION_BANNER_COPY`'s three-part contract: a client-owned constant, lexically distinct
-from the banner copy and the three `composerAvailability` hints (`COMPOSER_ERROR_CHIP_COPY` leads with
-"Host", sharing no leading word with any of them), and zero daemon-supplied substring — structural here,
-not conventional, since the chip view narrows on `status.type` and never destructures `status.error`.
-Apostrophe-free like every string in this module (`renderToStaticMarkup` escapes `'` → `&#x27;`, so a
-`toContain` only matches verbatim without one).
+from the banner copy (`COMPOSER_ERROR_CHIP_COPY` leads with "Host", sharing no leading word with `Cannot
+reach pyrybox…`; its distinctness from the button that replaces it in the same slot is argued in §9's own
+docblock), and zero daemon-supplied substring — structural here, not conventional, since the chip view
+narrows on `status.type` and never destructures `status.error`. Apostrophe-free like every string in this
+module (`renderToStaticMarkup` escapes `'` → `&#x27;`, so a `toContain` only matches verbatim without one).
 
 `COMPOSER_ERROR_CHIP_PREFIX_COPY`'s **trailing space is load-bearing** — it is the separator between the
 hidden prefix and the visible copy when a screen reader concatenates them into `Error: Host connection
@@ -221,9 +226,10 @@ comparison between all four reviewable in one place.
 
 ### 9. Actionable-error button copy — `COMPOSER_REPAIR_BUTTON_COPY` ([#963](https://github.com/pyrycode/pyrycode-desktop/issues/963))
 
-The fifth string in the lexical-distinctness family `COMPOSER_ERROR_CHIP_COPY`'s docstring argues for
-(the three `composerAvailability` hints, `CONNECTION_BANNER_COPY`, and now this one) — the label of the
-button that takes the chip's slot whenever `shouldOfferRepair` (§5) is true:
+The third string in the lexical-distinctness family `COMPOSER_ERROR_CHIP_COPY`'s docstring argues for
+(`CONNECTION_BANNER_COPY` and this one — [#968](../codebase/968.md) retired the three `composerAvailability`
+hints that used to share this set) — the label of the button that takes the chip's slot whenever
+`shouldOfferRepair` (§5) is true:
 
 ```ts
 export const COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'
@@ -232,9 +238,8 @@ export const COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'
 The design's pattern is "Type of error - Action", and both halves are load-bearing: the type is what
 lets this occupant drop the chip's visually-hidden `Error: ` prefix (the label already says it's an
 error), and the action is what makes the control read as a button rather than a status. It leads with
-"Pairing", sharing no leading word with `Host connection down!` / `Cannot reach pyrybox…` / `Connecting…`
-/ `Not connected` / `Connection error`. Apostrophe-free, ASCII hyphen-minus separator, same reason as its
-siblings (`renderToStaticMarkup` escapes `'` → `&#x27;`).
+"Pairing", sharing no leading word with `Host connection down!` or `Cannot reach pyrybox…`. Apostrophe-free,
+ASCII hyphen-minus separator, same reason as its siblings (`renderToStaticMarkup` escapes `'` → `&#x27;`).
 
 **Unlike every string above it, this one is also the accessible name** — the button carries no
 `aria-label`, so the visible text is the whole of what a screen reader announces. And unlike the chip's
@@ -263,7 +268,7 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 
 ## Edge cases and limitations
 
-- **Not connected** ([#31](../codebase/31.md)) — while `selectStatus` is not `connected`, the send button is `disabled`, the `handleSubmit` early-return inerts the Enter path, and a `role="status"` caption names why (`Connecting…` / `Not connected` / `Connection error`). No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. The `error` hint never surfaces `ConnectionError.message` — that string stays server-side-only; the same non-connected state also shows the prominent [connection banner](conversation-shell-chrome.md#connection-banner-279) (#279), which renders its own client-owned copy, not the composer's hint text.
+- **Not connected** ([#31](../codebase/31.md); the caption retired by [#968](../codebase/968.md)) — while `selectStatus` is not `connected`, the send button is `disabled` and the `handleSubmit` early-return inerts the Enter path. No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. `composerAvailability` never touches `status.error`, so no daemon-supplied string reaches this gate at all; the same non-connected state shows the prominent [connection banner](conversation-shell-chrome.md#connection-banner-279) (#279), which is now the sole announcement of the transition, and in the `error` arm the status row directly above the message box carries [the chip or the re-pair button](conversation-shell-composer.md#composer-error-chip-797) (#797/#963).
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
 - **Send-bridge failure** — `try/catch` swallows it (`console.error`); the process does not crash and the optimistic echo still appends (AC4). There is deliberately **no** send-failure UI (no banner, retry, or echo rollback) — the store has no per-message delivery state this milestone.
 - **Daemon re-echoes the sent message** — the same-`message_id` copy is dropped by `appendUnique`; the thread shows one bubble (AC3).
@@ -279,7 +284,8 @@ daemon later echoes same message_id ──▶ messageReceived ──▶ appendUn
 - [Pairing input screen](pairing-input-screen.md) / [#55](../codebase/55.md) — the pure-logic / thin-container split (`pairingState.ts`) `composerSend.ts` mirrors.
 - [ADR 0006 — ephemeral screen-local state](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md) · [ADR 0004 — renderer session store / wire types](../decisions/0004-renderer-session-store-reducer-wire-types.md)
 - [#66 codebase notes](../codebase/66.md) — implementation summary, patterns, lessons.
-- [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control and inline "why" hint.
+- [#31 codebase notes](../codebase/31.md) — the connection-status gate on this composer: `composerAvailability` + the disabled control. The inline "why" caption it originally shipped with was retired by [#968](../codebase/968.md).
+- [#968 codebase notes](../codebase/968.md) — drops the `composer__hint` caption and the `hint` field: the connection state is said once, by the banner (#279) and, in the `error` arm, by the status row (#797/#963).
 - [#167 codebase notes](../codebase/167.md) — the `shouldOfferRepair` predicate beside `composerAvailability`, and the original `Re-pair` affordance it gated (retired as a separate surface by #963, see below).
 - [Conversation shell § Actionable-error button](conversation-shell-composer.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963) / #963 — `shouldOfferRepair`'s current surface: a button in the composer status row's error slot, using `COMPOSER_REPAIR_BUTTON_COPY` (§9 above), replacing #167's block beneath the composer.
 - [#279 codebase notes](../codebase/279.md) — the `shouldShowBanner`/`CONNECTION_BANNER_COPY` pair beside `composerAvailability`/`shouldOfferRepair`, and the [connection banner](conversation-shell-chrome.md#connection-banner-279) it gates.

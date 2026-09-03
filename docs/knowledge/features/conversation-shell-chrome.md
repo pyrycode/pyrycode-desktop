@@ -150,9 +150,11 @@ the full original design, patterns, and code-review record.
 
 A third, independent read of the same `ConnectionStatus` slice `composerAvailability` and
 `shouldOfferRepair` already read (see [Composer send](composer-send.md)) — prominent and
-disconnected-only, distinct from both the composer's terse inline gate and the separate, always-on #149
+disconnected-only, distinct from both `composerAvailability`'s send gate and the separate, always-on #149
 two-dot Relay/Pyrycode indicator (not built here). Closes the gap where the thread gave no prominent
-disconnected signal, only the composer's muted caption.
+disconnected signal. Through [#968](../codebase/968.md), the composer also carried its own muted caption
+above the message box for the same fact; that caption is retired and this banner is now the sole
+announcement of a non-connected state outside the `error` arm's status-row occupant (#797/#963).
 
 Split from #148 alongside #276/#277/#278; no Figma frame exists (the mobile file draws only the
 connected thread), so the copy and accent are design-doc-sourced defaults, mirroring
@@ -169,10 +171,11 @@ split exactly, before that control was retired as a separate surface by #963:
   `ConnectionStatus` arm defaults to *showing* the banner rather than silently hiding it.
 - **`CONNECTION_BANNER_COPY`** — also in `composerSend.ts`: a single client-owned string constant
   (`'Cannot reach pyrybox — your messages will not send until the connection is back.'`), lexically
-  distinct from the three `composerAvailability` hints (`Connecting…` / `Not connected` / `Connection
-  error`) so the prominent banner and the terse composer gate never read as the same string stacked
-  twice. One constant, not a per-arm map — a second three-way copy split would be the duplication this
-  ticket's AC5 warns against; the composer already carries the per-arm nuance.
+  distinct from the status row's remaining strings (`COMPOSER_ERROR_CHIP_COPY`, `COMPOSER_REPAIR_BUTTON_COPY`
+  — [#968](../codebase/968.md) retired the three `composerAvailability` hints this was originally argued
+  distinct from) so the prominent banner and the row directly above the message box never read as the
+  same string stacked twice. One constant, not a per-arm map — every non-connected arm is a state where
+  pyry is unreachable, so one sentence covers all three honestly.
 - **`ConnectionBanner({ status })`** — exported pure view in `ConversationScreen.tsx`. Returns `null`
   unless `shouldShowBanner(status)`, else a single `role="status"` `<p className="conversation__banner">`
   holding only `CONNECTION_BANNER_COPY` — nothing derived from `status`, so no daemon-supplied string
@@ -188,9 +191,10 @@ split exactly, before that control was retired as a separate surface by #963:
 Mounted between `<UnpairControl />` and `<Timeline />` — below the header row, above the message list,
 "the top of the thread." Styled `.conversation__banner` (`conversation.css`), token-only, following the
 `.modal-rejection` (#249) error-accent idiom: `--color-error` left border over
-`--color-surface-container-high`, sized to body-medium — a step up in prominence from
-`.composer__hint`'s muted body-small caption — `flex: 0 0 auto` so it pushes the thread down rather than
-overlaying it, never growing or shrinking.
+`--color-surface-container-high`, sized to body-medium — deliberately a step up from a muted body-small
+caption (the distinction was originally drawn against `.composer__hint`, retired by
+[#968](../codebase/968.md)) — `flex: 0 0 auto` so it pushes the thread down rather than overlaying it,
+never growing or shrinking.
 
 Not security-sensitive: a pure renderer read of already-store-held status, no transport/crypto/socket
 code touched. See [#279 codebase notes](../codebase/279.md) for the full design, the code-review record,

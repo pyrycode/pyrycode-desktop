@@ -38,10 +38,10 @@ Each step names the feature it leans on. See the [pairing input screen](pairing-
 
 ## 3. Observe `connected` (AC1, end) — the UI observable
 
-The load-bearing "connection reached `connected`" signal is in the composer, **not** in app logs. The send button is gated on the live connection status ([#31](https://github.com/pyrycode/pyrycode-desktop/issues/31)); it flips the moment `status` reaches `connected` (composer-send.md:77-107):
+The load-bearing "connection reached `connected`" signal is in the composer, **not** in app logs. The send button is gated on the live connection status ([#31](https://github.com/pyrycode/pyrycode-desktop/issues/31)); it flips the moment `status` reaches `connected` ([composer send § 4](composer-send.md#4-connection-status-gate--composeravailability-31)):
 
-- **Before the handshake completes:** the send button is **disabled** with an inline `Connecting…` caption (a `role="status"` live region). This is the *expected* pre-handshake state — benign, not a failure.
-- **On `connected`:** the caption unmounts and the send button **enables** with no caption.
+- **Before the handshake completes:** the send button is **disabled**. This is the *expected* pre-handshake state — benign, not a failure. (Through [#968](https://github.com/pyrycode/pyrycode-desktop/issues/968) this state also rendered an inline `Connecting…` caption, a `role="status"` live region; that caption is retired, so the disabled button is the only local observable — the [connection banner](conversation-shell-chrome.md#connection-banner-279) at the top of the thread carries the announcement instead.)
+- **On `connected`:** the send button **enables**.
 
 Watch the **UI** (the composer enabling) and the **pyrybox daemon logs**, not the desktop app. The desktop transport is **log-free by construction** ([#62](https://github.com/pyrycode/pyrycode-desktop/issues/62)) — no `console.*` around the handshake, so a stray log can never leak the token, keys, or transcript. There deliberately are no verbose desktop transport logs to read.
 

@@ -61,18 +61,28 @@ treatment (`message-row--user` / `bubble--user`) but is tagged `data-thread-role
 distinct from a delivered row's `data-thread-role="user"`. Reusing `.bubble--user` with no CSS of its
 own means the row inherited [#969](conversation-shell-message-bubble.md#what-stays-untouched)'s desktop
 restyle for free; the ticket deliberately withheld the meta row it added there — a queued message has
-no timestamp and nothing sent yet to copy. `QueuedBacklogControl`, the in-file
-container, binds a module-scope-hoisted `selectBacklogFor(MILESTONE_CONVERSATION_ID)` (the same
-milestone constant the composer sends under — this screen has no conversation id in nav scope, and
-the spec explicitly ruled out threading one through for this slice).
+no timestamp and nothing sent yet to copy. `items` comes from `ConversationScreen`'s own
+`selectBacklogFor(openConversationId ?? '')` read (a `useMemo`-stable selector keyed on the active
+conversation's id, `openConversationId` from `activeConversationStore` — #448 rekeyed this off the
+original module-scope `MILESTONE_CONVERSATION_ID` constant the composer used to send under).
+[#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) hoisted the read out of a
+dedicated `QueuedBacklogControl` container and into the screen itself, deleting the container: the
+region's appearance and growth are now both a render of `ConversationScreen`, which is what lets
+[the thread scroll pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600)'s
+dep-free re-assert cover a `queue_state` push instead of missing it (that control held its own
+queue-store subscription, so a push used to re-render only the region, shrinking the thread's
+viewport with no re-pin). Nothing about the render itself changed — `openConversationId ?? ''`
+selects the same backlog `QueuedBacklogControl` did, and the `''` sentinel still resolves to the
+store's shared `EMPTY_BACKLOG` with no conversation open, never another conversation's rows.
 
 [#296](../codebase/296.md) added a **drop / cancel affordance** to each row: an icon-only button, a
 leading sibling of the bubble (the row is right-aligned, so leading sits it at the inner edge),
 carrying a client-owned `aria-label="Drop queued message"` and an inline `aria-hidden` SVG glyph.
 `onDrop` is a **required** injected-effect prop on `QueuedBacklog` (the `PermissionModal` "a view
-that cannot answer is a bug" rule) — the container binds it to the pure `dropQueuedMessage` helper
-(`dropQueuedMessage.ts`), supplying `MILESTONE_CONVERSATION_ID` and dereferencing
-`window.pyry.sendCommand` only inside the click closure. Activating it dispatches
+that cannot answer is a bug" rule) — `ConversationScreen` binds it inline to the pure
+`dropQueuedMessage` helper (`dropQueuedMessage.ts`), supplying `openConversationId` and
+dereferencing `window.pyry.sendCommand` only inside the click closure, never at render (what keeps
+the empty-backlog container smoke render bridge-free). Activating it dispatches
 `dequeueMessageCommand` (see [Dequeue message envelope](dequeue-message-envelope.md)) and nothing
 else — **no optimistic removal**: the row disappears only when the daemon's next `queue_state`
 snapshot replaces the backlog and this same store subscription re-renders. The button exists only

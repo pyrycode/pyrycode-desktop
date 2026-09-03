@@ -54,9 +54,11 @@ class and copy**, not a shared "empty" element and not `null`: unlike `Workspace
 not-loaded branch (which renders `null`, since that sheet has other content), this branch *is* the
 whole panel body, so a `null` render would read as broken.
 
-**The container** (`BackgroundTaskPanel`) clones `QueuedBacklogControl`'s conversation-id idiom:
-`activeConversation?.id ?? null` derived inline at the `ConversationScreen` mount site (no second
-subscription), a `useMemo`-stable `selectRosterFor(conversationId ?? '')` selector, and
+**The container** (`BackgroundTaskPanel`) clones the conversation-id idiom `ConversationScreen`'s own
+queued-backlog read carries (since [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009)
+retired its `QueuedBacklogControl` container): `activeConversation?.id ?? null` derived inline at the
+`ConversationScreen` mount site (no second subscription), a `useMemo`-stable
+`selectRosterFor(conversationId ?? '')` selector, and
 `useBackgroundTaskRosterStore(selectRoster)`. The `''` sentinel matches no store key, so "no active
 conversation" reads as `null` — the correct "never observed" reading — for free. An Escape `keydown`
 effect closes the panel; open/closed state is a fourth screen-local `useState` boolean in

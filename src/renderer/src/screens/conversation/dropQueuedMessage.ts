@@ -1,7 +1,8 @@
 // The drop-queued-message effect — framework-free and React-free, co-located with the screen and
 // mirroring composerSend.ts / modalResolution.ts: the single effect (the guarded outbound command) is
 // injected, so the helper is a pure, deterministic function tested with a plain spy (no React, no store,
-// no Electron). The QueuedBacklogControl container is thin glue over this.
+// no Electron). Its caller is the `onDrop` closure `ConversationScreen` binds onto `QueuedBacklog` — thin
+// glue over this, and since #1009 written inline at that mount rather than in a container of its own.
 //
 // This is a strict subset of cancelPrompt: the same guarded send, but NO local dispatch (AC3: no
 // optimistic removal — the row disappears only when the daemon's next queue_state snapshot replaces the

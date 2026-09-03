@@ -177,8 +177,9 @@ onAnswer={() =>
 }
 ```
 
-`window.pyry` is dereferenced only inside the click closure, the `QueuedBacklogControl`/
-`Composer.handleSubmit` discipline — never during render, so the container's smoke render still touches no
+`window.pyry` is dereferenced only inside the click closure, the queued backlog's own drop-closure
+(`ConversationScreen`'s `onDrop` bind, since [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009))
+/ `Composer.handleSubmit` discipline — never during render, so the container's smoke render still touches no
 bridge.
 
 ## CSS — the one unavailable state this panel draws

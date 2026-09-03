@@ -202,6 +202,37 @@ export function ConversationScreen({
   //   localSendPending — #650: the locally-opened working-indicator window — the one renderer-sourced
   //                      scalar of the five, opened by the operator's own send.
   const { items, phase, stalled, apiRetry, compacting, localSendPending } = thread
+  // #1009: the open conversation's queued backlog, read HERE rather than inside the region's own control.
+  // The region mounts between the thread and the composer, so its appearance and its growth both shrink
+  // `.conversation__thread`'s viewport — and the pin's re-assert below is a dep-free layout effect that runs on
+  // THIS component's renders. Read one level down (the shape this was until #1009), a `queue_state` push
+  // re-rendered that leaf alone, the viewport shrank with no re-assert, and a thread resting at the bottom was
+  // left short of it until something unrelated re-rendered this screen — 132px with a two-item backlog,
+  // measured on the failing e2e before the fix (#967 measured 116px on the same setup before #969 redrew the
+  // bubble; the magnitude is the region's height, so it tracks whatever a queued row costs).
+  //
+  // The two neighbouring store-bound leaves are documented as deliberately NOT hoisted (ComposerSlot's
+  // question batch, ComposerErrorSlotControl's connection status) and this read is not a reversal of either.
+  // Both of those arguments are about traffic this screen has no use for — a keystroke in the question panel,
+  // a connection-status flap — where waking the timeline buys nothing. A queue snapshot is the opposite on all
+  // three axes: it is operator-paced (a message enqueued behind a busy turn, or dropped), the screen NEEDS the
+  // render because the event changes the height of a region this screen lays out around a pin it owns, and it
+  // is free for every other conversation — selectBacklogFor hands back the same array reference (or the shared
+  // EMPTY_BACKLOG) when another conversation's snapshot lands, so `Object.is` short-circuits and nothing here
+  // re-renders. The useMemo-stable selector per id is the timeline read's own idiom, for its reason: a fresh
+  // closure per render would churn the subscription.
+  //
+  // `?? ''` and NOT selectOpenTimelineFor's branch-to-a-null-selector treatment, which is the opposite ruling
+  // one read above. That branch exists because `''` is an ordinary key in the timeline holder, so the sentinel
+  // could render another conversation's thread as this one's. The queue store is written only by queueBridge
+  // from a decoded conversation_id, and selectBacklogFor falls back to the shared EMPTY_BACKLOG for a key it
+  // does not hold, so the sentinel selects nothing and reads as an empty backlog — which is the correct render
+  // with no conversation open. Carried verbatim from the retired control (BackgroundTaskPanel's read too).
+  const selectOpenBacklog = useMemo(
+    () => selectBacklogFor(openConversationId ?? ''),
+    [openConversationId]
+  )
+  const queuedBacklog = useQueueStore(selectOpenBacklog)
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. #962 retired the StatusRow trigger that used to sit
@@ -281,8 +312,27 @@ export function ConversationScreen({
           four-way order the one slot forces. */}
       {/* #294: the held queued backlog — the not-yet-run tail below the delivered thread and the
           working indicator, above the status area and composer (it sat above the run-config row too
-          until #962 retired it). Renders nothing when empty. */}
-      <QueuedBacklogControl />
+          until #962 retired it). Renders nothing when empty.
+          #1009 retired its store-bound container and mounts the pure view straight from this screen's own
+          backlog read above (the WorkspaceChip / Timeline / ThinkingIndicator shape), because that read is
+          what makes the region's mount and growth a render of THIS component and therefore a re-assert of
+          the pin. Nothing else moved: the container's only remaining input was the active conversation's id,
+          which this screen already reads for the timeline, the chip, the composer slot and three sheets, so
+          keeping it would have been a second subscription to the same slice behind a name that no longer
+          described it. `items` is passed straight through — no field of any item is read here, and the
+          `queued_msg_id` the drop sends back is the row's own.
+          window.pyry.sendCommand stays dereferenced INSIDE the click closure (interaction time, never
+          render), which is what keeps a container smoke render bridge-free; the null-id guard is
+          belt-and-braces, since a populated row implies an active id (the daemon queues under real ids). */}
+      <QueuedBacklog
+        items={queuedBacklog}
+        onDrop={(queuedMsgId) => {
+          if (openConversationId === null) return
+          dropQueuedMessage(openConversationId, queuedMsgId, {
+            sendCommand: window.pyry.sendCommand
+          })
+        }}
+      />
       {/* #962: the region between the queued backlog and the status area is EMPTY, and that emptiness is
           the design (Figma 102:4 stacks the message area straight onto the input area). The run-config
           row (#177) and the background-task trigger (#581) that used to mount here are both retired —
@@ -476,11 +526,34 @@ function useThreadScrollPin(): ThreadPin {
   const following = useRef(true)
 
   // NO dependency array — this runs after every render of the screen, and that is what makes the chrome
-  // case work rather than being a missing optimization. The working, stall, retry and compaction
-  // indicators, the queued backlog, the interrupt control and the status row mount off four different store
-  // slices; enumerating them in a dependency array would be exactly the fragile coupling to avoid, and it
-  // would rot silently the moment an eighth affordance lands. Every one of those mounts IS a re-render
-  // here, so "after every render" covers an items change and a chrome change under one rule.
+  // case work rather than being a missing optimization. Enumerating what changes the region's height in a
+  // dependency array would be exactly the fragile coupling to avoid, and it would rot silently the moment the
+  // next affordance lands there. "After every render" covers an items change and a chrome change under one
+  // rule — but only for chrome that renders WITH this screen, which is a per-surface fact rather than a
+  // property of the region. #1009 corrected this paragraph, which used to claim all of it did: the inventory
+  // of the strip between the thread and the composer, as this file stands, is
+  //
+  //   - the queued backlog (.conversation__queued) — SCREEN RENDER. `queuedBacklog` is read in the container
+  //     above, so a queue_state that mounts or GROWS the region re-renders this screen and this effect
+  //     re-asserts. That read exists for this effect; before #1009 the region owned its own queue
+  //     subscription and mounted without one, leaving a bottom-resting thread 132px short (measured).
+  //   - the status row and its label (ComposerStatusArea / ThinkingIndicator) — SCREEN RENDER, and moot:
+  //     every fact it shows is derived from the `thread` slice the container destructures, and since #796 the
+  //     row is fixed-height and mounted at all times, so it swaps a label inside an already-present element
+  //     and moves no geometry at all.
+  //   - the row's trailing slot (ComposerErrorSlotControl) — ITS OWN LEAF ONLY. It reads sessionStore itself,
+  //     deliberately (a status read hoisted into the screen would re-render the timeline on every connection
+  //     flap), and #963's actionable button grows the row by ~8px. That shrink gets no re-assert.
+  //   - the composer slot's question panel (ComposerSlot → QuestionPanelSlot) — ITS OWN LEAF ONLY. It reads
+  //     the question-batch store itself, deliberately (so a batch, and every keystroke in the panel, never
+  //     wakes the timeline), and the panel takes the slot the covered composer vacates, so its height is not
+  //     the composer's. That shrink gets no re-assert either.
+  //
+  // The last two are a known LATENCY gap, not a broken pin: their shrink fires no scroll event (see below), so
+  // the flag stays correct and the next screen render re-pins. Neither is measured or under test. Closing
+  // either means the same choice #1009 faced — hoist the read, or observe the container's size directly with a
+  // ResizeObserver, which covers every occupant at once. A dependency array is not on that list: no array can
+  // reach a leaf that re-renders alone.
   //
   // Two properties make the dep-free form safe. It is IDEMPOTENT: it writes only while following, and
   // assigning scrollTop a value it already holds is a no-op that fires no scroll event, so there is no
@@ -1935,40 +2008,6 @@ export function QueuedBacklog({
         </div>
       ))}
     </div>
-  )
-}
-
-// The store-bound container for the queued backlog (#294, re-keyed by #448). Reads the ACTIVE
-// conversation's backlog — the id the composer now sends under — via a useMemo-stable selector per id.
-// selectBacklogFor returns the same array reference (or the stable EMPTY_BACKLOG) for a given id, so a
-// snapshot for a DIFFERENT conversation is Object.is-stable here → no re-render churn (AC3
-// free-of-noise). With no active conversation the sentinel '' matches nothing and yields the stable
-// empty backlog. A pure store read — no window.pyry, no IPC, no effects (AC5).
-//
-// #296: binds onDrop to the pure dropQueuedMessage helper, supplying the active conversation id (the
-// conversation-id wall — the row has none). A populated row implies an active id (the daemon queues
-// under real ids only), so the null case cannot reach onDrop; the guard is belt-and-braces.
-// window.pyry.sendCommand is dereferenced ONLY inside the click closure (interaction time, never
-// render — the Composer.handleSubmit / PermissionModal discipline), so the empty-backlog container
-// smoke test stays bridge-free. No optimistic mutation: the helper only sends (AC3); the dropped row
-// leaves on the next queue_state snapshot via this subscription.
-function QueuedBacklogControl(): JSX.Element | null {
-  const activeConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
-  const selectActiveBacklog = useMemo(
-    () => selectBacklogFor(activeConversationId ?? ''),
-    [activeConversationId]
-  )
-  const items = useQueueStore(selectActiveBacklog)
-  return (
-    <QueuedBacklog
-      items={items}
-      onDrop={(queuedMsgId) => {
-        if (activeConversationId === null) return
-        dropQueuedMessage(activeConversationId, queuedMsgId, {
-          sendCommand: window.pyry.sendCommand
-        })
-      }}
-    />
   )
 }
 

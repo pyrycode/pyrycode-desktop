@@ -158,11 +158,19 @@ relay (re)handshake → daemonConnection.ts emits connected DaemonEvent, before 
   arrive back-to-back for different conversations (#878/#879).
 - Import surface for #294 (shipped): `import { useQueueStore, selectBacklogFor } from
   '../../store/queueStore'`, consumed in `ConversationScreen.tsx`. #294 did **not** source "which
-  conversation is open" from nav/route state — this store deliberately does not own that concern,
-  and the architecture spec explicitly ruled out adding nav plumbing for this slice. Instead #294
-  binds `selectBacklogFor` to `MILESTONE_CONVERSATION_ID` (from `composerSend.ts`, the same id the
-  composer sends under) at module scope, once, for the single-active-conversation milestone; a
-  future conversation-selection ticket is expected to replace this with a real nav-sourced id.
+  conversation is open" from nav/route state at first — this store deliberately does not own that
+  concern, and the architecture spec explicitly ruled out adding nav plumbing for this slice. #294
+  shipped binding `selectBacklogFor` to `MILESTONE_CONVERSATION_ID` (from `composerSend.ts`, the
+  same id the composer sent under) at module scope, once, for the single-active-conversation
+  milestone; #448 replaced that with a real nav-sourced id, rekeying the selector onto
+  `activeConversationStore`'s open conversation id as the milestone predicted. The reader itself
+  then moved once more: #294/#448 read it inside a dedicated `QueuedBacklogControl` container with
+  its own subscription, and [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009)
+  deleted that container and hoisted the read into `ConversationScreen` itself (`useMemo`-stable
+  `selectBacklogFor(openConversationId ?? '')`) — the region's mount and growth needed to be a
+  render of the screen, not of an independent leaf, for the thread scroll pin's re-assert to see
+  them. See [Conversation shell § Thread scroll
+  pin](conversation-shell.md#thread-scroll-pin-601-built-on-the-dormant-isatbottom-helper-from-600).
 - [#197](../codebase/197.md) (shipped, reconcile-on-connect) does **not** use `selectBacklogs` as
   #293 anticipated — it clears the whole map wholesale via `resetBacklogs` instead of iterating it,
   so `selectBacklogs` shipped with no production caller (see Edge cases, below).

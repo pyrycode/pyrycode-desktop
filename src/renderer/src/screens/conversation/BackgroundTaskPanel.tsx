@@ -327,7 +327,8 @@ export function BackgroundTaskPanelView({
 //
 // `conversationId` rather than the whole ConversationCreatedPayload: the id is all this needs. The `''`
 // sentinel for no active conversation matches no key, so `selectRosterFor` returns null = "never observed",
-// which is the correct reading and needs no extra branch (the QueuedBacklogControl idiom).
+// which is the correct reading and needs no extra branch (the idiom `ConversationScreen`'s own queued-backlog
+// read carries, since #1009 retired the control this used to name).
 function BackgroundTaskPanel({
   conversationId,
   onClose
@@ -335,7 +336,7 @@ function BackgroundTaskPanel({
   conversationId: string | null
   onClose: () => void
 }): JSX.Element {
-  // A useMemo-stable selector per id (QueuedBacklogControl:993-996) so a fresh closure per render does not
+  // A useMemo-stable selector per id (`ConversationScreen`'s `selectOpenBacklog`) so a fresh closure per render does not
   // churn the subscription. The selector returns the HELD ENTRY ITSELF, never a fresh object, so a write for
   // a DIFFERENT conversation leaves this entry Object.is-identical → no re-render. Nothing here wraps,
   // copies, or derives from the result, which is what keeps that true.

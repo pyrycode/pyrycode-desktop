@@ -2381,7 +2381,7 @@ describe('openToolName — which tool the running turn currently has open (#649)
 // directly with injected values, no store. The gate is deliberately BROADER than ThinkingIndicator's
 // (`phase === 'thinking'` only): a turn is "running" in BOTH thinking and responding, so the stop variant
 // shows in either. #678 folded the affordance into the composer's send button, so the store-bound glue is
-// Composer itself (untested, the QueuedBacklogControl posture); the activation→command proof lives in
+// Composer itself (untested, the queued backlog's own drop-closure posture); the activation→command proof lives in
 // sendInterrupt.test.ts (the `node` env fires no clicks).
 describe('isTurnRunning — the stop-variant gate (broader than the thinking indicator)', () => {
   it('is running while thinking (AC1)', () => {
@@ -2509,8 +2509,10 @@ describe('ComposerSendButton — the composer send/stop control (#678)', () => {
 
 // #294: the held queued backlog. QueuedBacklog is the pure, exported view (the ThinkingIndicator
 // pattern) — server-render it with an injected QueuedItem[] to prove the empty→null posture and the
-// populated rows without touching the queue store. The store-bound QueuedBacklogControl reads
-// selectBacklogFor(the active conversation id, #448); its populated branch is NOT server-render-reachable
+// populated rows without touching the queue store. Its items come from ConversationScreen's own
+// selectBacklogFor read (the active conversation's id, #448; hoisted out of the retired container by #1009 so
+// a queue_state re-renders the screen and re-asserts the scroll pin); that populated branch is NOT
+// server-render-reachable
 // (zustand v5's useStore reads getInitialState() = empty backlog), so the populated assertions live
 // here, exactly like Timeline / ThinkingIndicator; the empty container smoke lives in the block below.
 describe('QueuedBacklog — the held queued backlog (#294)', () => {
@@ -3744,7 +3746,7 @@ describe('ConversationScreen — store binding', () => {
   // initial store (zustand v5 reads getInitialState() under server render), so no container render can
   // reach a folded state at all.
 
-  // #294: the queued-backlog control mounts against the empty queue store (getInitialState backlogs:
+  // #294: the screen's queued-backlog read mounts against the empty queue store (getInitialState backlogs:
   // empty Map → selectBacklogFor returns EMPTY_BACKLOG), so QueuedBacklog returns null and no queued
   // region renders (AC4). This also keeps the #179 AC4 split-brain guard green — the region class is
   // `conversation__queued`, never the `conversation__thread` substring, and it emits no data-thread-role

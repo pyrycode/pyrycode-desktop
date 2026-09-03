@@ -83,6 +83,10 @@ const BASELINE_RUN_CONFIG: SessionSettingsPayload = {
   model: 'opus[1m]',
   effort: 'low',
   yolo: false,
+  // Required since #1020: a seeded frame missing it is decode-REJECTED at runtime, and because these
+  // specs sit outside tsconfig.node.json that miss shows up as the sheet and the footer controls
+  // rendering nothing at all — like a mount bug rather than a fixture gap.
+  permission_mode: 'default',
   used_tokens: 50_000,
   window_tokens: 200_000
 }

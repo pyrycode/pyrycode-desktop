@@ -17,7 +17,7 @@ import type { DaemonEvent } from '@shared/ipc/events'
 import type { RunConfigSnapshot } from '../../store/runConfigStore'
 
 /**
- * The toDownloadAction analogue: map a `runConfigReceived` event to the five display fields, and
+ * The toDownloadAction analogue: map a `runConfigReceived` event to the six display fields, and
  * every other DaemonEvent member to `null` (the filter). Pure, so the "ignores unrelated events"
  * behavior is unit-testable without React. A `default: null` — not an assertNever — because ignoring
  * the rest is the intended, permanent behavior here.
@@ -27,6 +27,11 @@ import type { RunConfigSnapshot } from '../../store/runConfigStore'
  * and the `windowTokens: 0` "usage unavailable" signal flow through verbatim — no coercion, no
  * validation, no dropped event. The two usage figures map the wire snake_case
  * (`used_tokens` / `window_tokens`) to the store's camelCase.
+ *
+ * `permissionMode` (#1020) is already camelCase on the event and copies straight across, on the same
+ * unconditional terms: `''` ("no session was resolved") flows through as `''`, and the mode is never
+ * mapped to or from `yolo` nor checked against an allowlist — the read half deliberately carries a
+ * mode the write half refuses (#1021).
  */
 export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | null {
   switch (event.type) {
@@ -35,6 +40,7 @@ export function toRunConfigSnapshot(event: DaemonEvent): RunConfigSnapshot | nul
         model: event.model,
         effort: event.effort,
         yolo: event.yolo,
+        permissionMode: event.permissionMode,
         usedTokens: event.used_tokens,
         windowTokens: event.window_tokens
       }

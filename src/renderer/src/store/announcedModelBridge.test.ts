@@ -83,6 +83,7 @@ describe('translateModelAnnounced', () => {
         model: 'some-override',
         effort: '',
         yolo: false,
+        permissionMode: 'default',
         used_tokens: 0,
         window_tokens: 0
       },
@@ -242,6 +243,7 @@ describe('subscribeAnnouncedModel', () => {
       model: 'some-override',
       effort: '',
       yolo: false,
+      permissionMode: 'default',
       used_tokens: 0,
       window_tokens: 0
     })

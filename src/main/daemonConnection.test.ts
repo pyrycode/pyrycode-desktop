@@ -5781,6 +5781,10 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     model: 'claude-opus-4-8',
     effort: 'high',
     yolo: true,
+    // Agrees with `yolo: true` above, because the daemon stores the pair so they cannot disagree
+    // (#1020). It is also the one mode the WRITE half refuses (#1021), which is why it is the
+    // baseline here: a decoder narrowed to the write half's five would redden on this fixture.
+    permission_mode: 'bypassPermissions',
     used_tokens: 12480,
     window_tokens: 200000
   }
@@ -5824,7 +5828,7 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     expect(request?.payload).toEqual({ conversation_id: 'conv-42' })
   })
 
-  it('decodes an inbound session_settings into runConfigReceived with all six fields', async () => {
+  it('decodes an inbound session_settings into runConfigReceived with all seven fields', async () => {
     const { sink, drivers } = await connected()
 
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG) })
@@ -5836,10 +5840,55 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
         model: 'claude-opus-4-8',
         effort: 'high',
         yolo: true,
+        permissionMode: 'bypassPermissions',
         used_tokens: 12480,
         window_tokens: 200000
       }
     ])
+  })
+
+  it('carries permission_mode across as camelCase permissionMode, and no snake key (#1020)', async () => {
+    // The arm is camelCase by convention (`sessionId`, and the assistantDelta neighbour's "wire is
+    // snake, IPC is camel"); `used_tokens` / `window_tokens` are the two legacy exceptions on it and
+    // are not a precedent to extend. Asserting the ABSENCE of the snake key is what proves the emit is
+    // a named copy rather than a spread of the decoded payload — a spread would carry both spellings.
+    const { sink, drivers } = await connected()
+
+    drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG) })
+
+    const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
+    expect(event).toHaveProperty('permissionMode', 'bypassPermissions')
+    expect(event).not.toHaveProperty('permission_mode')
+  })
+
+  it('carries an empty permission_mode through as "" (no session resolved), never coerced (#1020)', async () => {
+    // The all-zero reply. '' is the one zero on this payload that names no real posture, and it
+    // arrives beside `session_id: ''` — both cross verbatim, so a reader can see the pair. Coercing
+    // it to a mode name or to null here would invent a posture the daemon never reported.
+    const { sink, drivers } = await connected()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, session_id: '', permission_mode: '' })
+    })
+
+    const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
+    expect(event).toHaveProperty('permissionMode', '')
+    expect(event).toHaveProperty('sessionId', '')
+  })
+
+  it('emits nothing when permission_mode is absent — the old-daemon shape (#1020)', async () => {
+    // The accepted coupling, pinned: a daemon predating pyrycode#1687 omits the key, the required
+    // decode rejects the frame whole, and NO partial event crosses. This is what makes the sheet and
+    // the three footer controls go inert against an old daemon, which the real-daemon gate detects.
+    const { sink, drivers } = await connected()
+
+    drivers[0].emit({
+      type: 'message',
+      plaintext: sessionSettingsPlaintext({ ...RUN_CONFIG, permission_mode: undefined })
+    })
+
+    expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([])
   })
 
   it('carries an empty session_id through as "" (the cannot-address signal), never coerced', async () => {

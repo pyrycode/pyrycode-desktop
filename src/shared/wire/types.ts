@@ -351,8 +351,11 @@ export interface RequestSessionSettingsPayload {
 /**
  * Inbound `session_settings` reply (daemon → client). Mirrors the daemon's
  * internal/protocol/settings.go SessionSettingsPayload field-for-field, wire order
- * `session_id, model, effort, yolo, used_tokens, window_tokens` — all always present (no
- * `omitempty`), so every zero value is a real answer rather than an absence.
+ * `session_id, model, effort, yolo, permission_mode, used_tokens, window_tokens` — all always
+ * present (no `omitempty`), so every zero value is a real answer rather than an absence.
+ * `permission_mode` (pyrycode#1687) sits BETWEEN `yolo` and `used_tokens`, not at the end; requiring
+ * it couples this client to a daemon carrying that change, which #1020's real-daemon gate is what
+ * proves.
  *
  * The answer to a `request_session_settings` naming one conversation (RequestSessionSettingsPayload
  * above), and the run-configuration sheet's source of truth (#491). A request that names a
@@ -380,6 +383,25 @@ export interface SessionSettingsPayload {
   effort: string
   /** Permissions posture; `false` = permissions enforced. */
   yolo: boolean
+  /**
+   * The session's permission mode (pyrycode#1687, picked up by #1020). On a RESOLVED session it names
+   * one of claude's SIX modes — `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`,
+   * `bypassPermissions` — normalised by the daemon at every construction site.
+   *
+   * `''` means NO SESSION WAS RESOLVED. It is the one zero on this payload that does not name a real
+   * posture, and it occurs only in the all-zero reply, beside `session_id: ''`. Read the pair
+   * together: `''` is never a mode, and never coerced to one or to `null`.
+   *
+   * It always AGREES with `yolo`, because the daemon stores them so they cannot disagree — a session
+   * in bypass reports `bypassPermissions` and `yolo: true`. Neither is derived from the other here:
+   * `yolo` is a boolean and there are six modes, so it can only separate `bypassPermissions` from
+   * everything else, which is the whole reason this field exists.
+   *
+   * The read half carries SIX; the write half's `validPermissionMode` accepts a closed FIVE with
+   * `bypassPermissions` excluded (#1021). That asymmetry is deliberate upstream — so this side must
+   * not narrow to five, and no client-side allowlist of mode names belongs anywhere on this chain.
+   */
+  permission_mode: string
   /** Current context size on the latest usage-bearing transcript entry; NOT a running total. */
   used_tokens: number
   /** Context-window size (200000 today); `0` = usage seam unwired — do NOT render a percentage. */
@@ -1399,9 +1421,12 @@ export interface QuestionRefusedPayload {
  * the never-a-lookup-path clause below, not a separate rule.
  *
  * `supports_auto_mode` is whether claude accepts `auto` permission mode for this model. claude refuses
- * per model, so a client greys the option out when this is `false` (#682). It collides with nothing in
- * the daemon's own vocabulary — `set_permission_mode` carries default / acceptEdits /
- * bypassPermissions / plan, and `auto` is claude's mode name. Absent in claude's reply decodes to
+ * per model, so a client greys the option out when this is `false` (#682). It names the SAME `auto`
+ * the daemon's own vocabulary carries — the field is `set_session_settings.permission_mode`, whose
+ * write half accepts a closed five of default / acceptEdits / plan / auto / dontAsk, and whose read
+ * half (`SessionSettingsPayload.permission_mode`, #1020) additionally reports `bypassPermissions`.
+ * This flag says whether the model accepts that mode, not whether the mode exists. Absent in claude's
+ * reply decodes to
  * `false`, which is the CORRECT reading rather than a missing one, so `false` is a value.
  *
  * `effort_levels` are the reasoning-effort levels this model supports. IT IS A PLAIN ARRAY AND NEVER

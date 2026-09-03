@@ -372,3 +372,34 @@ Split depth is not the operative rule here (the floor is), but for the record #1
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-03
+
+## Revisions
+
+### 2026-09-03 — Open questions resolved in Phase B; design unchanged
+
+Both open questions closed without altering the committed design. No contract, signature or field
+placement departed from the Design section above.
+
+1. **The `session_settings` decode arm was already content-free.** The new AC4 pin's *success* half
+   passed on its first run, before any production change — the arm narrows first and emits only
+   `event` / `code` / `bytes` / `hash`. So the correct behaviour was inherited, and the pin's value is
+   that it now holds that behaviour in place rather than resting on a code read. The pin's *reject*
+   half was genuinely red until `permission_mode` became required, which is the half that proves a
+   malformed value cannot route into the log through an error path. No production change was needed
+   for either, so the "if it does not, the production change is in scope" branch did not fire.
+2. **Nothing consumes `RunConfigSnapshot` structurally.** The typecheck surfaced only
+   literal-construction sites — no `Pick`, `Omit`, index signature or mapped type that a seventh field
+   would silently widen. `selectEffectiveSettings`' explicit three-key `Pick` was unaffected, as
+   predicted.
+
+**One measurement correction to the size section.** It estimated the cascade at "roughly forty
+one-line edits". The compiler flagged **26** literals, plus 5 untyped expectation literals it cannot
+see (`toEqual` / `toHaveBeenCalledWith` objects in `runConfigSnapshot.test.ts`) and the 3 e2e
+baselines — 34 sites. Still well over the 10-call-site boundary, so the stated overage and the floor
+argument that resolves it are unchanged; only the count is sharpened.
+
+**The untyped-expectation class is worth naming**, because it is a second invisible-to-typecheck trap
+beside the e2e one the ticket flagged. Adding a required field to a snapshot makes a bare `toEqual`
+expectation *stale*, not ill-typed: tsc checks the typed input literal and says nothing about the
+untyped object on the assertion side, so those four specs stayed red after the typecheck was clean.
+The signal is a green typecheck with red tests in the same file.

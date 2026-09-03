@@ -68,12 +68,13 @@ function encodeSessionSettings(payload: unknown, inReplyTo = 812): Uint8Array {
   })
 }
 
-/** A fully-populated, well-formed session_settings payload (#491). */
+/** A fully-populated, well-formed session_settings payload (#491, seventh field #1020). */
 const RUN_CONFIG = {
   session_id: 'sess-a',
   model: 'claude-opus-4-8',
   effort: 'high',
   yolo: false,
+  permission_mode: 'acceptEdits',
   used_tokens: 12480,
   window_tokens: 200000
 }
@@ -6775,6 +6776,41 @@ describe('parseInboundMessage — content-free diagnostic log (#130)', () => {
     expect(lines).toHaveLength(0)
   })
 
+  it('logs a session_settings content-free, never the permission_mode (#1020)', () => {
+    // AC4, success half. No field of this payload reaches a log line: the arm emits the byte length
+    // and a one-way hash only. The mode is asserted with a sentinel that cannot collide with a real
+    // mode name, so a leak through ANY field of the record fails this rather than reading as a mode.
+    const { log, lines } = captureLog()
+    const SECRET_MODE = 'secret-permission-mode-value'
+    const plaintext = encodeSessionSettings({ ...RUN_CONFIG, permission_mode: SECRET_MODE })
+
+    parseInboundMessage(plaintext, log)
+
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0])
+    expect(record.event).toBe('inbound-decoded')
+    expect(record.code).toBe('session_settings')
+    expect(record.bytes).toBe(plaintext.length)
+    expect(record.hash).toMatch(HEX64)
+    // The exact content-free field set — no decoded field of the payload reaches the log.
+    expect(Object.keys(record).sort()).toEqual(['bytes', 'code', 'event', 'hash', 'seq', 'ts'])
+    expect(lines[0]).not.toContain(SECRET_MODE)
+    expect(lines[0]).not.toContain(RUN_CONFIG.session_id)
+    expect(lines[0]).not.toContain(RUN_CONFIG.model)
+  })
+
+  it('does NOT log on a malformed session_settings permission_mode throw path (#1020)', () => {
+    // AC4, reject half. The arm narrows BEFORE logging, so a rejected frame leaves no record at all —
+    // closing the route by which a hostile daemon could land a value in the diagnostic log through an
+    // error path rather than the success path.
+    const { log, lines } = captureLog()
+    const SECRET_MODE = 'secret-rejected-mode-value'
+    expect(() =>
+      parseInboundMessage(encodeSessionSettings({ ...RUN_CONFIG, permission_mode: { evil: SECRET_MODE } }), log)
+    ).toThrow(WireDecodeError)
+    expect(lines).toHaveLength(0)
+  })
+
   it('logs a modeled error as inbound-decoded(error), never the ErrorPayload text (#116)', () => {
     const { log, lines } = captureLog()
     const SECRET_ERR = 'secret-daemon-error-detail'
@@ -7160,7 +7196,7 @@ describe('parseInboundMessage — secret-safety / log-free', () => {
 })
 
 describe('parseInboundMessage — session_settings recognition (#491)', () => {
-  it('narrows a full session_settings into { kind: session-settings } with all six fields', () => {
+  it('narrows a full session_settings into { kind: session-settings } with all seven fields', () => {
     expect(parseInboundMessage(encodeSessionSettings(RUN_CONFIG))).toEqual({
       kind: 'session-settings',
       sessionSettings: RUN_CONFIG,
@@ -7186,6 +7222,7 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
       model: '',
       effort: '',
       yolo: false,
+      permission_mode: '',
       used_tokens: 0,
       window_tokens: 0
     }
@@ -7196,7 +7233,44 @@ describe('parseInboundMessage — session_settings recognition (#491)', () => {
     })
   })
 
-  it('drops unknown server keys, keeping only the six known fields (forward-compat)', () => {
+  it('decodes an empty permission_mode as "" beside an empty session_id, never as a mode (#1020)', () => {
+    // The all-zero reply: `permission_mode: ''` is the one zero on this payload that does NOT name a
+    // real posture — it means no session was resolved, and it occurs only beside `session_id: ''`.
+    // The pair is asserted together deliberately, because that is how a reader must interpret it: ''
+    // is never coerced to a mode name, never to null, and never inferred from `yolo`.
+    const noSession = { ...RUN_CONFIG, session_id: '', permission_mode: '', yolo: false }
+    const decoded = parseInboundMessage(encodeSessionSettings(noSession))
+    expect(decoded).toEqual({ kind: 'session-settings', sessionSettings: noSession, inReplyTo: 812 })
+  })
+
+  it('carries each of claude’s six modes verbatim, bypassPermissions included (#1020)', () => {
+    // The read half names six; the WRITE half's validPermissionMode is a closed FIVE with
+    // bypassPermissions excluded (#1021). That asymmetry is deliberate upstream, so the decoder must
+    // not narrow to five. No client-side allowlist exists here, which this loop pins by carrying the
+    // one mode the write half refuses.
+    for (const mode of ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions']) {
+      const payload = { ...RUN_CONFIG, permission_mode: mode }
+      expect(parseInboundMessage(encodeSessionSettings(payload))).toEqual({
+        kind: 'session-settings',
+        sessionSettings: payload,
+        inReplyTo: 812
+      })
+    }
+  })
+
+  it('carries a mode outside the six verbatim — no client-side allowlist (#1020)', () => {
+    // A value the daemon should never send still decodes and is held as-is. Narrowing here would be a
+    // client-side allowlist, which AC2 forbids: the daemon normalises at every construction site, and
+    // the display-side treatment of an unknown mode belongs to #682, not to the decoder.
+    const payload = { ...RUN_CONFIG, permission_mode: 'not-a-real-mode' }
+    expect(parseInboundMessage(encodeSessionSettings(payload))).toEqual({
+      kind: 'session-settings',
+      sessionSettings: payload,
+      inReplyTo: 812
+    })
+  })
+
+  it('drops unknown server keys, keeping only the seven known fields (forward-compat)', () => {
     const withExtras = { ...RUN_CONFIG, conversation_id: 'conv-1', extra: 'ignore-me' }
     expect(parseInboundMessage(encodeSessionSettings(withExtras))).toEqual({
       kind: 'session-settings',
@@ -7221,9 +7295,26 @@ describe('parseInboundMessage — session_settings fail-closed (#491)', () => {
 
   it('throws when yolo is missing or non-boolean', () => {
     const bad: unknown[] = [
-      { session_id: 's', model: 'm', effort: 'e', used_tokens: 0, window_tokens: 0 },
+      { session_id: 's', model: 'm', effort: 'e', permission_mode: 'default', used_tokens: 0, window_tokens: 0 },
       { ...RUN_CONFIG, yolo: 'true' },
       { ...RUN_CONFIG, yolo: 1 }
+    ]
+    for (const payload of bad) {
+      expect(() => parseInboundMessage(encodeSessionSettings(payload))).toThrow(WireDecodeError)
+    }
+  })
+
+  it('throws when permission_mode is missing or non-string (#1020)', () => {
+    // Required, mirroring the daemon's no-`omitempty` field: the key is always on the wire, so an
+    // absent one is a malformed frame rather than a defaultable zero. requireString checks the TYPE,
+    // not truthiness — which is why `''` decodes above and only these reject. It THROWS rather than
+    // returning null: null is the other, different fail signal, reserved for an unclaimed frame type.
+    const bad: unknown[] = [
+      { session_id: 's', model: 'm', effort: 'e', yolo: false, used_tokens: 0, window_tokens: 0 },
+      { ...RUN_CONFIG, permission_mode: undefined },
+      { ...RUN_CONFIG, permission_mode: null },
+      { ...RUN_CONFIG, permission_mode: 42 },
+      { ...RUN_CONFIG, permission_mode: true }
     ]
     for (const payload of bad) {
       expect(() => parseInboundMessage(encodeSessionSettings(payload))).toThrow(WireDecodeError)

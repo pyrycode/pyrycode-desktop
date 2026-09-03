@@ -24,6 +24,7 @@ describe('runConfigStore', () => {
       model: 'claude-x',
       effort: 'high',
       yolo: true,
+      permissionMode: 'bypassPermissions',
       usedTokens: 146000,
       windowTokens: 200000
     }
@@ -33,26 +34,74 @@ describe('runConfigStore', () => {
 
   it('holds the two usage figures verbatim — not coerced (AC3, #192 fields)', () => {
     const store = createRunConfigStore()
-    store
-      .getState()
-      .setSnapshot({ model: '', effort: '', yolo: false, usedTokens: 146000, windowTokens: 200000 })
+    store.getState().setSnapshot({
+      model: '',
+      effort: '',
+      yolo: false,
+      permissionMode: 'default',
+      usedTokens: 146000,
+      windowTokens: 200000
+    })
     const held = selectSnapshot(store.getState())
     expect(held?.usedTokens).toBe(146000)
     expect(held?.windowTokens).toBe(200000)
   })
 
+  it('holds the permission mode verbatim — not coerced, not derived from yolo (#1020)', () => {
+    const store = createRunConfigStore()
+    // `bypassPermissions` beside `yolo: false` is a pair a real daemon never sends — asserted here
+    // precisely because the store must not reconcile them. It records what it was handed.
+    store.getState().setSnapshot({
+      model: '',
+      effort: '',
+      yolo: false,
+      permissionMode: 'bypassPermissions',
+      usedTokens: 0,
+      windowTokens: 0
+    })
+    expect(selectSnapshot(store.getState())?.permissionMode).toBe('bypassPermissions')
+  })
+
+  it('holds permissionMode: "" (no session resolved) verbatim — not a mode, not null (#1020)', () => {
+    const store = createRunConfigStore()
+    // The all-zero reply's reading. `snapshot: null` is the distinct "nothing loaded" state, so a
+    // held `''` must stay a real snapshot carrying a real `''` rather than collapsing into either.
+    store.getState().setSnapshot({
+      model: '',
+      effort: '',
+      yolo: false,
+      permissionMode: '',
+      usedTokens: 0,
+      windowTokens: 0
+    })
+    const held = selectSnapshot(store.getState())
+    expect(held).not.toBeNull()
+    expect(held?.permissionMode).toBe('')
+  })
+
   it('a later setSnapshot replaces the held value — most recent snapshot wins (AC4)', () => {
     const store = createRunConfigStore()
-    store
-      .getState()
-      .setSnapshot({ model: 'a', effort: 'low', yolo: false, usedTokens: 10000, windowTokens: 200000 })
-    store
-      .getState()
-      .setSnapshot({ model: 'b', effort: 'high', yolo: true, usedTokens: 20000, windowTokens: 200000 })
+    store.getState().setSnapshot({
+      model: 'a',
+      effort: 'low',
+      yolo: false,
+      permissionMode: 'default',
+      usedTokens: 10000,
+      windowTokens: 200000
+    })
+    store.getState().setSnapshot({
+      model: 'b',
+      effort: 'high',
+      yolo: true,
+      permissionMode: 'bypassPermissions',
+      usedTokens: 20000,
+      windowTokens: 200000
+    })
     expect(selectSnapshot(store.getState())).toEqual({
       model: 'b',
       effort: 'high',
       yolo: true,
+      permissionMode: 'bypassPermissions',
       usedTokens: 20000,
       windowTokens: 200000
     })
@@ -60,16 +109,31 @@ describe('runConfigStore', () => {
 
   it('holds empty model, empty effort, yolo:false, and windowTokens:0 verbatim — not null, not coerced (AC5)', () => {
     const store = createRunConfigStore()
-    store.getState().setSnapshot({ model: '', effort: '', yolo: false, usedTokens: 0, windowTokens: 0 })
+    const zeros = {
+      model: '',
+      effort: '',
+      yolo: false,
+      permissionMode: '',
+      usedTokens: 0,
+      windowTokens: 0
+    }
+    store.getState().setSnapshot(zeros)
     const held = selectSnapshot(store.getState())
     expect(held).not.toBeNull()
-    expect(held).toEqual({ model: '', effort: '', yolo: false, usedTokens: 0, windowTokens: 0 })
+    expect(held).toEqual(zeros)
   })
 
   it('keeps two stores independent', () => {
     const a = createRunConfigStore()
     const b = createRunConfigStore()
-    a.getState().setSnapshot({ model: 'a', effort: 'low', yolo: false, usedTokens: 0, windowTokens: 0 })
+    a.getState().setSnapshot({
+      model: 'a',
+      effort: 'low',
+      yolo: false,
+      permissionMode: 'default',
+      usedTokens: 0,
+      windowTokens: 0
+    })
     expect(selectSnapshot(a.getState())).not.toBeNull()
     expect(selectSnapshot(b.getState())).toBeNull()
   })
@@ -79,6 +143,7 @@ describe('runConfigStore', () => {
       model: 'm',
       effort: 'e',
       yolo: true,
+      permissionMode: 'bypassPermissions',
       usedTokens: 5000,
       windowTokens: 100000
     }
@@ -93,7 +158,14 @@ describe('runConfigStore', () => {
   it('keeps the setSnapshot reference stable across updates', () => {
     const store = createRunConfigStore()
     const before = store.getState().setSnapshot
-    store.getState().setSnapshot({ model: 'a', effort: 'low', yolo: false, usedTokens: 0, windowTokens: 0 })
+    store.getState().setSnapshot({
+      model: 'a',
+      effort: 'low',
+      yolo: false,
+      permissionMode: 'default',
+      usedTokens: 0,
+      windowTokens: 0
+    })
     expect(store.getState().setSnapshot).toBe(before)
   })
 })

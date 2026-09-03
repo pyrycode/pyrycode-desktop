@@ -845,9 +845,16 @@ function parseDebugBundleDonePayload(payload: unknown): { total: number } {
  * address", `model`/`effort: ''` mean "inherited daemon default", `yolo: false` means permissions
  * enforced, and `window_tokens: 0` means the usage reader is unwired. Defaulting any of them would
  * make "the daemon said zero" indistinguishable from "the daemon did not say", which is the exact
- * ambiguity that let the inert-sheet defect hide. Returns only the six known fields; unknown
+ * ambiguity that let the inert-sheet defect hide. Returns only the seven known fields; unknown
  * server-added keys are tolerated (forward-compat) but not copied through. Its messages name the
  * failure category only — no field value is interpolated.
+ *
+ * `permission_mode` (#1020) is read with requireString and NOT requireNonEmptyString, deliberately:
+ * `''` is a VALUE here ("no session was resolved", the reading that arrives beside `session_id: ''`),
+ * and requireNonEmptyString is the sibling that exists to refuse exactly that. requireString checks
+ * the TYPE, not truthiness, so only a missing key or a non-string rejects. No allowlist: the value is
+ * never checked against claude's six mode names, because the read half deliberately carries one mode
+ * the write half refuses (#1021) and the daemon already normalises at every construction site.
  */
 function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   if (!isRecord(payload)) {
@@ -857,9 +864,10 @@ function parseSessionSettingsPayload(payload: unknown): SessionSettingsPayload {
   const model = requireString(payload, 'model')
   const effort = requireString(payload, 'effort')
   const yolo = requireBoolean(payload, 'yolo')
+  const permission_mode = requireString(payload, 'permission_mode')
   const used_tokens = requireNumber(payload, 'used_tokens')
   const window_tokens = requireNumber(payload, 'window_tokens')
-  return { session_id, model, effort, yolo, used_tokens, window_tokens }
+  return { session_id, model, effort, yolo, permission_mode, used_tokens, window_tokens }
 }
 
 /**

@@ -96,12 +96,28 @@ export type DaemonEvent =
   // coerced to null; the sheet's gate treats it as not-addressable. A session id is a routing id,
   // not a secret (the conversation_id / sessionTransition convention), and no token, key, raw
   // frame, or rendered screen `text` can ride this arm.
+  //
+  // `permissionMode` (#1020) is the session's permission mode off the same reply — camelCase per this
+  // arm's convention (`sessionId`, and the "wire is snake, IPC is camel" rule the assistantDelta arm
+  // below states); `used_tokens` / `window_tokens` are the two LEGACY exceptions here and are not a
+  // precedent to extend. `''` means NO SESSION WAS RESOLVED and crosses verbatim beside
+  // `sessionId: ''` — the pair is read together, and neither is inferred from `yolo`, which can only
+  // separate `bypassPermissions` from the other five modes.
+  //
+  // SECURITY: it is daemon-asserted text held with NO client-side allowlist, deliberately — the read
+  // half carries six modes while the write half accepts five (#1021), so narrowing here would be
+  // wrong. It is therefore a REPORT, NEVER A CONTROL INPUT: no security-relevant behaviour may branch
+  // on it. Like `model` on the announced-model arm below, its render surface (#682) must treat it as
+  // PLAIN TEXT ONLY — never HTML (no innerHTML / dangerouslySetInnerHTML), never into an attribute or
+  // a URL, and never a filename, a cache key or a lookup path. It reaches no log sink: the decode arm
+  // logs byte length and a one-way hash only, and emitDaemonEvent is log-free by construction.
   | {
       type: 'runConfigReceived'
       sessionId: string
       model: string
       effort: string
       yolo: boolean
+      permissionMode: string
       used_tokens: number
       window_tokens: number
     }

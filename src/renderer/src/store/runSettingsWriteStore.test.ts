@@ -19,6 +19,7 @@ const snap: RunConfigSnapshot = {
   model: 'sonnet',
   effort: 'low',
   yolo: false,
+  permissionMode: 'default',
   usedTokens: 0,
   windowTokens: 0
 }

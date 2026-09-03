@@ -215,21 +215,28 @@ Log-data download — each section is a follow-up ticket (#181 — since split i
 \#72) that owns both its header and its content. This ticket ships only the chrome: the trigger and
 the empty, dismissible sheet.
 
-`StatusRow` is a full-width icon-only `<button aria-label="Run configuration" aria-haspopup="dialog">`
-between `MessageThread` and `Composer` (Figma node `16-57`), with a top border separating it from
-the thread. Its left summary region (`model · effort · context%`) was originally intentionally empty —
-that live text is the collapsed mirror of the sheet's read sections, owned by #188/#182, not this shell.
-[#330](../codebase/330.md) turned `.status-row__summary` into a flex row and mounted the two-dot
-connection indicator as its first child (see [Two-dot Relay/Pyrycode connection-status
-indicator](conversation-shell-chrome.md#two-dot-relaypyrycode-connection-status-indicator-330) below); the `model · effort ·
-context%` text itself is still unbuilt and, per #330's design, lands as a **sibling** beside the dots,
-not a replacement of them.
-Clicking it calls `onExpand`, which flips `sheetOpen` (a single `useState(false)` in
-`ConversationScreen` — the "trivial single-value local UI state" case carved out by
-[ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md), not its `useReducer`
-phase-machine case). It resets to closed on remount for free — a guarantee [#670](../codebase/670.md)
-had to restore explicitly via `ConversationScreen`'s `key` once a sidebar-driven conversation switch
-could otherwise leave the route on `thread` with no remount at all; see [the paired shell's `paneKey`
+`StatusRow` was originally a full-width icon-only `<button aria-label="Run configuration"
+aria-haspopup="dialog">` between `MessageThread` and `Composer` (Figma node `16-57`), with a top border
+separating it from the thread. Its left summary region (`model · effort · context%`) was intentionally
+empty at shell-landing time — that live text was meant as the collapsed mirror of the sheet's read
+sections, owned by #188/#182 — and [#330](../codebase/330.md) turned `.status-row__summary` into a flex
+row and mounted the two-dot connection indicator as its first child instead; the `model · effort ·
+context%` text itself was never built.
+
+**[#962](https://github.com/pyrycode/pyrycode-desktop/issues/962) retired `StatusRow` outright** — the
+desktop design (Figma `102:4`) draws nothing in the region between the thread and the composer, and by
+then the row's three jobs had all been re-homed elsewhere (permission mode and model/effort to the
+input footer, #682/#683; the context gauge to the footer's reading, #811; the connection dots to the
+sidebar host row, #672/#718). The trigger is now the `Run configuration` item in the thread's overflow
+menu — see [Run-configuration row and background-task trigger
+retired](conversation-shell-chrome.md#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962).
+Clicking it calls `onRunConfiguration`, which flips `sheetOpen` — the same `useState(false)` in
+`ConversationScreen` that `StatusRow`'s `onExpand` used to flip (the "trivial single-value local UI state"
+case carved out by [ADR 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md), not its
+`useReducer` phase-machine case), untouched by the retirement. It resets to closed on remount for free —
+a guarantee [#670](../codebase/670.md) had to restore explicitly via `ConversationScreen`'s `key` once a
+sidebar-driven conversation switch could otherwise leave the route on `thread` with no remount at all;
+see [the paired shell's `paneKey`
 fix](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix).
 
 `StatusSheet` (Figma node `20-100`) renders as the screen's last child when `sheetOpen` is true:
@@ -260,7 +267,9 @@ Not wired yet at shell-landing time: no live summary text in `StatusRow`, no foc
 open-close (accepted for a shell with a single focusable control; worth adding once more than one
 section is interactive — see [#177 codebase notes](../codebase/177.md) for the full code-review
 record). `StatusRow`'s summary slot gained its first content in [#330](../codebase/330.md) — the
-two-dot connection indicator, not the run-config text this paragraph originally meant. The sheet
+two-dot connection indicator, not the run-config text this paragraph originally meant — and both `StatusRow`
+and that indicator were retired by #962 (above); the trigger and the focus-trap gap moved with it onto
+`ThreadOverflowMenu`'s `Run configuration` item, which has no focus trap either. The sheet
 body itself gained its first section in [#72](#log-data-section-72) below; all
 four read-only sections (Model/Effort/YOLO, #188, and Context window, #192) have since landed. See
 [#177 codebase notes](../codebase/177.md) for the shell's full design and lessons learned.

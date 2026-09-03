@@ -258,12 +258,17 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
     page.locator('.run-config__effort-segment', { hasText: new RegExp(`^${level}$`) })
   const yoloSwitch = page.getByRole('switch', { name: 'Auto-accept tool calls' })
 
-  // AC1 — open the sheet from the collapsed status row (mounts RunConfigData → request_session_settings, and
-  // RunConfigSections). Then assert operability + baseline (auto-waits over the async session-id + snapshot
-  // arrival + re-render): the model rows are operable buttons (role="button" is present ONLY when a session
-  // id gates the handler on), the baseline model/effort/yolo are selected, and the switch is operable
-  // (no aria-readonly).
-  await page.getByRole('button', { name: 'Run configuration' }).click()
+  // AC1 — open the sheet from the thread's overflow menu (mounts RunConfigData → request_session_settings,
+  // and RunConfigSections). Then assert operability + baseline (auto-waits over the async session-id +
+  // snapshot arrival + re-render): the model rows are operable buttons (role="button" is present ONLY when
+  // a session id gates the handler on), the baseline model/effort/yolo are selected, and the switch is
+  // operable (no aria-readonly).
+  //
+  // #962 retired the collapsed status row this used to click, so the open is now the two-step overflow
+  // path (the conversation-create-rename.spec.ts idiom). The trigger is present because launchPairedApp
+  // reaches the thread through the paired shell, which is what wires `onBack` and mounts the menu.
+  await page.locator('.conversation__overflow-trigger').click()
+  await page.getByRole('menuitem', { name: 'Run configuration' }).click()
 
   // #975 AC5, end to end and in the only order that proves it: BEFORE the frame arrives the section
   // says the list is not yet known and renders NO row. That is the not-yet-known reading, and a sheet

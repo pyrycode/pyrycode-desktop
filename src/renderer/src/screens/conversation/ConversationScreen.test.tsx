@@ -38,7 +38,6 @@ import {
   requestDeleteConversation,
   relayLeg,
   daemonLeg,
-  ConnectionStatusIndicator,
   selectOpenTimelineFor
 } from './ConversationScreen'
 // #780's AC5 asserts one chrome from both sides, so the message-side renderer is imported here too.
@@ -2615,13 +2614,17 @@ describe('ContextUsageReading — the composer footer’s context percentage (#8
   })
 })
 
-// #330: the two-dot Relay/Pyrycode connection-status indicator. relayLeg / daemonLeg are the exported
+// #330: the two-dot Relay/Pyrycode connection-status mappings. relayLeg / daemonLeg are the exported
 // pure leg-mapping predicates (the isTurnRunning shape) — call them directly with each store value to
-// prove the full leg → category → label matrix with no store, no render. ConnectionStatusIndicator is
-// the exported pure view (the ConnectionBanner pattern) — server-render it with injected ConnectionLeg
-// props to prove category → dot class, label legibility (AC2), and independent legs (AC4). The
-// store-bound ConnectionStatusIndicatorControl is untested glue (the QueuedBacklogControl posture); its
-// initial two-Offline render is proven in the ConversationScreen container block below.
+// prove the full leg → category → label matrix with no store, no render.
+//
+// #962 retired the VIEW half of #330 with the status row that hosted it, so the two describes below are
+// what is left of this ticket in this file: the `ConnectionStatusIndicator` matrix describe and the
+// container's at-rest two-dot assertion both went with the component. Neither mapping moved and no
+// coverage of them is lost. The category → dot-class rendering is still proven at the unit tier on the
+// sidebar's surviving view — `ChannelList.test.tsx`'s four `DOT_*_MARKER` constants pin exactly the four
+// modifier classes these mappings emit — and the four classes' shipped COLOURS, which no node-environment
+// render can see, are read back from the stylesheet in `e2e/connection-dot-colours.spec.ts`.
 describe('relayLeg — the relay-link leg mapping (#330)', () => {
   it('connected → up / "Relay Connected"', () => {
     expect(relayLeg('connected')).toEqual({ category: 'up', label: 'Relay Connected' })
@@ -2679,79 +2682,6 @@ describe('daemonLeg — the daemon-session leg mapping (#330)', () => {
     expect(
       daemonLeg({ type: 'error', error: { code: 'x', message: 'DAEMON_SECRET', retryable: false } })
     ).toEqual({ category: 'down', label: 'Pyrycode Offline' })
-  })
-})
-
-describe('ConnectionStatusIndicator — the two-dot pure view (#330)', () => {
-  it('maps each category to its dot modifier class (up, in-progress, down, unknown)', () => {
-    const up = renderToStaticMarkup(
-      <ConnectionStatusIndicator
-        relay={{ category: 'up', label: 'Relay Connected' }}
-        daemon={{ category: 'in-progress', label: 'Pyrycode Connecting' }}
-      />
-    )
-    // up → the success/green dot; in-progress → the warning/amber dot (the AC3 daemon-connecting story).
-    expect(up).toContain('conn-dot--up')
-    expect(up).toContain('conn-dot--in-progress')
-
-    const down = renderToStaticMarkup(
-      <ConnectionStatusIndicator
-        relay={{ category: 'down', label: 'Relay Offline' }}
-        daemon={{ category: 'down', label: 'Pyrycode Offline' }}
-      />
-    )
-    expect(down).toContain('conn-dot--down')
-
-    // #719's fourth category — the neutral not-yet-known dot, and its label rendering so the state reads
-    // without colour (AC2's legibility rule applies to it like the other three).
-    const unknown = renderToStaticMarkup(
-      <ConnectionStatusIndicator
-        relay={{ category: 'unknown', label: 'Relay Unknown' }}
-        daemon={{ category: 'down', label: 'Pyrycode Offline' }}
-      />
-    )
-    expect(unknown).toContain('conn-dot--unknown')
-    expect(unknown).toContain('Relay Unknown')
-  })
-
-  // AC2: status is legible without colour — each leg's label text renders alongside its dot.
-  it("renders each leg's label text so status reads without colour (AC2)", () => {
-    const markup = renderToStaticMarkup(
-      <ConnectionStatusIndicator
-        relay={{ category: 'up', label: 'Relay Reachable' }}
-        daemon={{ category: 'down', label: 'Pyrycode Offline' }}
-      />
-    )
-    expect(markup).toContain('Relay Reachable')
-    expect(markup).toContain('Pyrycode Offline')
-  })
-
-  // AC4: the two legs render independently — neither leg's category forces the other's. relay=up +
-  // daemon=down coexist (the intended relay-up-daemon-handshaking / stale-relay-after-fatal render).
-  it('renders independent legs — relay up and daemon down coexist (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ConnectionStatusIndicator
-        relay={{ category: 'up', label: 'Relay Reachable' }}
-        daemon={{ category: 'down', label: 'Pyrycode Offline' }}
-      />
-    )
-    expect(markup).toContain('conn-dot--up')
-    expect(markup).toContain('conn-dot--down')
-  })
-
-  // The dots are decorative (colour is redundant with the label, AC2) and the wrapper is a STATIC
-  // labelled group, not a live region — the banner (#279) already announces disconnects, so a second
-  // live region here would double-announce.
-  it('marks the dots aria-hidden and the wrapper as a labelled group', () => {
-    const markup = renderToStaticMarkup(
-      <ConnectionStatusIndicator
-        relay={{ category: 'up', label: 'Relay Connected' }}
-        daemon={{ category: 'up', label: 'Pyrycode Connected' }}
-      />
-    )
-    expect(markup).toContain('role="group"')
-    expect(markup).toContain('aria-label="Connection status"')
-    expect(markup).toContain('aria-hidden="true"')
   })
 })
 
@@ -2838,34 +2768,66 @@ describe('WorkspaceChip — the pre-first-message workspace pill (#278)', () => 
 // interaction shell (open/close toggle, Escape / outside-click dismiss, focus-return) lives in the
 // in-file ThreadOverflowMenu container: it is untested reviewed glue, exactly like Composer.handleKeyDown
 // and UnpairControl's phase transitions — the `node` env fires no clicks and runs no effects.
-describe('ThreadOverflowMenuView — the thread overflow menu (#276)', () => {
+describe('ThreadOverflowMenuView — the thread overflow menu (#276, #962)', () => {
   const noop = (): void => {}
+  const openMenu = (): string =>
+    renderToStaticMarkup(
+      <ThreadOverflowMenuView
+        open={true}
+        onToggle={noop}
+        onSelectChannelInfo={noop}
+        onSelectRunConfiguration={noop}
+        onSelectBackgroundTasks={noop}
+      />
+    )
 
   it('renders a collapsed icon-only trigger advertising a menu popup, no surface (AC1/AC2)', () => {
     const markup = renderToStaticMarkup(
-      <ThreadOverflowMenuView open={false} onToggle={noop} onSelect={noop} />
+      <ThreadOverflowMenuView
+        open={false}
+        onToggle={noop}
+        onSelectChannelInfo={noop}
+        onSelectRunConfiguration={noop}
+        onSelectBackgroundTasks={noop}
+      />
     )
     // The icon-only trigger: a client-owned accessible name, the haspopup=menu affordance, and the
     // collapsed state (React stringifies aria booleans under renderToStaticMarkup → "false").
     expect(markup).toContain('aria-label="More actions"')
     expect(markup).toContain('aria-haspopup="menu"')
     expect(markup).toContain('aria-expanded="false"')
-    // Closed: the menu surface is not rendered.
+    // Closed: the menu surface is not rendered, and none of the three items' copy is on screen.
     expect(markup).not.toContain('role="menu"')
     expect(markup).not.toContain('Channel info')
+    expect(markup).not.toContain('Run configuration')
+    expect(markup).not.toContain('Background tasks')
   })
 
-  it('exposes a role=menu surface with a single Channel info item when open (AC2/AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ThreadOverflowMenuView open={true} onToggle={noop} onSelect={noop} />
-    )
+  // #962 AC2. This describe is the ONLY surface that can see the shipped copy and the shipped order:
+  // the container is in-file, the screen gates the menu on `onBack`, and the `node` env fires no
+  // clicks — so a bare `<ConversationScreen />` can never open the menu. The two new labels are also
+  // the accessible names four e2e opens locate by, which is why they are literals in the view rather
+  // than data the container injects: a typo has to redden a unit assertion, not just time out a drive.
+  it('exposes three menuitems — Channel info, Run configuration, Background tasks (AC2)', () => {
+    const markup = openMenu()
     // The trigger now advertises the expanded state…
     expect(markup).toContain('aria-expanded="true"')
-    // …and the menu surface exposes role=menu with a menuitem carrying the (apostrophe-free) copy that
-    // #155 wires to open the Channel Info sheet (Figma 20-48).
+    // …and the menu surface exposes role=menu with one menuitem per action. A menuitem's accessible
+    // name is its CONTENT, so the two retired triggers' aria-labels land here as text, not attributes.
     expect(markup).toContain('role="menu"')
-    expect(markup).toContain('role="menuitem"')
     expect(markup).toContain('Channel info')
+    expect(markup).toContain('Run configuration')
+    expect(markup).toContain('Background tasks')
+    // Exactly three: a fourth item, or an item that lost its role, fails here.
+    expect(markup.split('role="menuitem"').length - 1).toBe(3)
+  })
+
+  // AC2's ordering, stated as document order. Channel info keeps the first slot it has held since
+  // #276; the two new items follow it in the order the ticket fixes.
+  it('orders the items Channel info, then Run configuration, then Background tasks (AC2)', () => {
+    const markup = openMenu()
+    expect(markup.indexOf('Channel info')).toBeLessThan(markup.indexOf('Run configuration'))
+    expect(markup.indexOf('Run configuration')).toBeLessThan(markup.indexOf('Background tasks'))
   })
 })
 
@@ -3501,53 +3463,24 @@ describe('ConversationScreen — store binding', () => {
     expect(markup.indexOf('conversation__banner')).toBeLessThan(markup.indexOf('conversation__empty'))
   })
 
-  // #177: the status row between the thread and the composer is the trigger that opens the Run
-  // configuration sheet. The row always renders, so its accessible name is reachable under server
-  // render; the sheet is closed initially, so its close control is absent. The open toggle is
-  // trivial useState glue, asserted through the pure StatusSheet surface above, not a click harness.
-  it('renders the status-row trigger that opens the Run configuration sheet', () => {
+  // #962 AC1: the region between the thread and the composer is EMPTY. The desktop drawing (102:4)
+  // stacks the message area straight onto the input area, so the mobile run-configuration row (#177)
+  // and the background-task trigger (#581) are both gone; their overlays are reached from the overflow
+  // menu instead, and the sheet's own controls now live in the input footer (#682/#683/#811).
+  //
+  // Keyed on the CLASS and ATTRIBUTE forms, never on the bare label strings: `Run configuration` and
+  // `Background tasks` are legitimately present elsewhere in this file (the menu describe's items,
+  // StatusSheet's title), so a bare-string negative would be both wrong here and self-defeating there.
+  // The row also took the two-dot indicator with it — the sidebar host row has carried the connection
+  // dots since #718, and the four colour bindings moved to channels.css rather than dying with it.
+  it('renders nothing between the thread and the composer — no status row, no task trigger (AC1)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('aria-label="Run configuration"')
-  })
-
-  it('does not render the sheet while closed (its close control is absent)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    // `Run configuration` is also the trigger's aria-label, so key "sheet closed" on the close
-    // control's accessible name, which exists only inside the sheet.
-    expect(markup).not.toContain('aria-label="Close"')
-  })
-
-  it('shows no live model · effort · context summary in the collapsed status row (#181/#182 own it)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).not.toContain('Opus 4.7')
-    expect(markup).not.toContain('% used')
-    expect(markup).not.toContain('high')
-  })
-
-  // #330: the two-dot connection indicator mounts inside the status-row summary slot (beside — not
-  // replacing — #181/#182's future run-config summary text). Under server render the initial store state
-  // is relay = null (→ "Relay Unknown" since #719 — not yet known rather than known-offline) and daemon =
-  // disconnected (→ "Pyrycode Offline", untouched by #719, which is AC3's cross-check at container level),
-  // proving the container reads both stores with NO false green at rest (#330 AC3).
-  it('renders the two-dot connection indicator (relay unknown, daemon offline) in the status-row summary (#330, #719)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('status-row__connection')
-    expect(markup).toContain('Relay Unknown')
-    expect(markup).toContain('Pyrycode Offline')
-    // The assertion that proves the container actually renders #719's new category at rest.
-    expect(markup).toContain('conn-dot--unknown')
-    // Never up/green before a connection exists.
-    expect(markup).not.toContain('conn-dot--up')
-  })
-
-  // #581: the background-task panel's trigger sits beside the status row, between the thread and the
-  // composer. It renders UNCONDITIONALLY — not gated on tasks existing — so both non-populated readings
-  // stay reachable through the UI; that also makes its accessible name a plain markup assertion on the
-  // default screen render. It is icon-only, so aria-label supplies the name (the StatusRow pattern).
-  it('renders the background-task panel trigger with an accessible name (#581 AC2)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('aria-label="Background tasks"')
-    expect(markup).toContain('background-task-trigger')
+    expect(markup).not.toContain('status-row')
+    expect(markup).not.toContain('background-task-trigger')
+    expect(markup).not.toContain('aria-label="Run configuration"')
+    expect(markup).not.toContain('aria-label="Background tasks"')
+    // The indicator went with the row; nothing on this screen paints a connection dot any more.
+    expect(markup).not.toContain('conn-dot')
   })
 
   // #581: the panel is closed at first paint, so no task list renders on the conversation surface. This
@@ -3592,9 +3525,11 @@ describe('ConversationScreen — store binding', () => {
   it('renders no overflow menu for a bare ConversationScreen (onBack absent — unchanged, AC1)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     expect(markup).not.toContain('conversation__overflow')
-    // StatusRow keeps its own aria-haspopup="dialog"; only the menu popup must be absent. #680 mounted
-    // the footer's Actions trigger, which legitimately advertises aria-haspopup="menu" — so the bare
-    // absence check this line used to make is no longer the right proxy. Pinned as a COUNT instead, and
+    // Only the thread's menu popup must be absent here. #680 mounted the footer's Actions trigger, which
+    // legitimately advertises aria-haspopup="menu" — so the bare absence check this line used to make is
+    // no longer the right proxy. (StatusRow used to carry the region's only aria-haspopup="dialog" and
+    // was the other half of this note; #962 retired it, which changes nothing about the count below —
+    // it was never one of the menu popups.) Pinned as a COUNT instead, and
     // pinned to the composer's trigger: a second menu popup appearing in the bare tree still fails here,
     // which is the guard #276 wanted.
     expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)

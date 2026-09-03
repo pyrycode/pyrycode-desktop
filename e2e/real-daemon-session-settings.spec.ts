@@ -82,12 +82,13 @@ test('real daemon persists a session-settings write and returns it on a fresh re
   // readable side by side; unlike the retired model rows it is unique, so it needs no narrowing.
   //
   // Opening is a HELPER rather than an inlined click because this spec opens the sheet TWICE and the
-  // second open is load-bearing (see the read below), so both must go through one definition. #962 is
-  // in flight and retires the collapsed status row this clicks, replacing it with a two-step overflow
-  // path; routing both opens through one body is what makes that a two-line swap here rather than a
-  // conflict at each call site.
+  // second open is load-bearing (see the read below), so both must go through one definition. #962
+  // retired the collapsed status row this used to click, so opening is now the two-step overflow path
+  // (the conversation-create-rename.spec.ts idiom); routing both opens through one body is what made
+  // that a two-line swap here rather than a conflict at each call site.
   const openRunConfiguration = async (): Promise<void> => {
-    await page.getByRole('button', { name: 'Run configuration' }).click()
+    await page.locator('.conversation__overflow-trigger').click()
+    await page.getByRole('menuitem', { name: 'Run configuration' }).click()
   }
   const yoloSwitch = page.getByRole('switch', { name: 'Auto-accept tool calls' })
 

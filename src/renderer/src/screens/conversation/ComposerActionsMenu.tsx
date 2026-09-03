@@ -1,4 +1,11 @@
+import { useMemo } from 'react'
 import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './ComposerOptionsPanel'
+import { markUnavailableActions } from './composerActionAvailability'
+import {
+  useSlashCommandListStore,
+  selectSlashCommandListFor,
+  type SlashCommandListEntry
+} from '../../store/slashCommandListStore'
 
 // #680: the composer footer's Actions menu — the FIRST live host of the shared options panel, which
 // #838 (surface), #839 (placement) and #840 (opening, keyboard, dismissal) all shipped dormant. It owns
@@ -28,8 +35,10 @@ import { ComposerOptionsMenu, type ComposerOptionsPanelOption } from './Composer
 // This needs NO daemon change and NO wire change: claude intercepts a message whose text begins with a
 // slash and runs it as a command rather than passing it to the model (measured 2026-08-21 against claude
 // 2.1.220). An absent `/knowledge-capture` comes back as a synthetic "Unknown command" assistant reply at
-// zero turns and zero cost — a correct, visible, harmless outcome that this ticket deliberately does not
-// detect or guard. Greying one out is #681, which needs a daemon change first.
+// zero turns and zero cost — a correct, visible, harmless outcome that #680 deliberately did not detect
+// or guard. #681 now greys such an entry out from the daemon's published `slash_command_list`; the array
+// below is still the CLIENT'S OWN and is never mutated or rebuilt from that list — the marking is derived
+// per render by `markUnavailableActions`.
 export const COMPOSER_ACTIONS: readonly ComposerOptionsPanelOption[] = [
   { id: '/clear', label: 'Reset session' },
   { id: '/compact', label: 'Compact session' },
@@ -54,24 +63,35 @@ const CHEVRON_PATH =
   'M3.59822 0.146303C3.82044 -0.0482491 4.18133 -0.0482491 4.40356 0.146303L7.81689 3.13463C8.03911 3.32918 8.03911 3.64514 7.81689 3.83969C7.59467 4.03424 7.23378 4.03424 7.01156 3.83969L4 1.20311L0.988445 3.83813C0.766222 4.03268 0.405333 4.03268 0.183111 3.83813C-0.0391111 3.64358 -0.0391111 3.32763 0.183111 3.13307L3.59644 0.144747L3.59822 0.146303Z'
 
 /**
- * The Actions trigger and its menu. One required effect prop — the "a view that cannot answer is a bug"
- * rule (ConversationScreen.tsx:2033) — and no store read, no `window.pyry` and no state of its own.
+ * The Actions trigger and its menu — the PURE VIEW half since #681, props in and markup out, with no
+ * store read, no `window.pyry` and no state of its own, so it server-renders directly under the repo's
+ * `node` vitest environment. Every prop is required, the "a view that cannot answer is a bug" rule
+ * (ConversationScreen.tsx:2033), and `menu` states the unknown reading as `null` rather than by omission.
  *
- * It holds NO `canSend` prop on purpose: AC4's gate is the container's single `sendText`, and a second
- * copy of that gate here is a second copy that can drift. The trigger is never disabled, including while
- * disconnected — AC4 asks that picking send nothing, not that the menu be unopenable, and the state is
- * already said elsewhere: #279's banner at the top of the thread in every non-connected arm, and #797's
- * chip or #963's button in the status row directly above the composer. (Until #968 the composer's own
- * `Not connected` caption said it one row up; that caption is retired, the other two surfaces are not.)
+ * It holds NO `canSend` prop on purpose: #680's AC4 gate is the container's single `sendText`, and a
+ * second copy of that gate here is a second copy that can drift. The trigger is never disabled, including
+ * while disconnected — that AC asks that picking send nothing, not that the menu be unopenable, and the
+ * state is already said elsewhere: #279's banner at the top of the thread in every non-connected arm, and
+ * #797's chip or #963's button in the status row directly above the composer. (Until #968 the composer's
+ * own `Not connected` caption said it one row up; that caption is retired, the other two surfaces are
+ * not.)
+ *
+ * #681's gate is a DIFFERENT axis and is deliberately not fused with that one: connection state decides
+ * whether anything can be sent at all, the published list decides which of these three verbs this
+ * workspace knows. The whole decision is `markUnavailableActions`, computed here in the render body from
+ * the live entry — nothing is cached, memoised or carried across conversations, because a marking that
+ * outlived `clearAllSlashCommandLists` would re-hydrate one workspace's verdict into the next pairing.
  */
-export function ComposerActionsMenu({
+export function ComposerActionsMenuView({
+  menu,
   onCommand
 }: {
+  menu: SlashCommandListEntry | null
   onCommand: (command: string) => void
 }): JSX.Element {
   return (
     <ComposerOptionsMenu
-      options={COMPOSER_ACTIONS}
+      options={markUnavailableActions(COMPOSER_ACTIONS, menu)}
       // A list of actions, not a choice: no row wears aria-current. The panel already handles this
       // through the same branch a non-matching id takes (ComposerOptionsPanel.tsx:32-35).
       currentId={null}
@@ -102,4 +122,34 @@ export function ComposerActionsMenu({
       triggerClassName="composer__footer-button composer__actions"
     />
   )
+}
+
+/**
+ * The store-bound container (#681) — the `ComposerModelMenu` / `ComposerEffortMenu` shape on the same
+ * footer row, in a leaf so a published menu arriving re-renders this control rather than the textarea and
+ * the send button beside it.
+ *
+ * `conversationId` arrives as a PROP rather than as a second store read, the settled house idiom: the
+ * composer already subscribes to `activeConversationId`, so the prop costs no subscription.
+ *
+ * A useMemo-stable selector per id — a fresh closure each render would churn the subscription. A null
+ * conversation selects nothing THROUGH THE SAME PATH, with no invented key and no second branch
+ * downstream, and `null` is a stable reference. The selector is narrow-slice by construction: a frame for
+ * a DIFFERENT conversation produces a new map whose `get(id)` returns the same entry object, so `Object.is`
+ * holds and this component does not re-render.
+ */
+export function ComposerActionsMenu({
+  conversationId,
+  onCommand
+}: {
+  conversationId: string | null
+  onCommand: (command: string) => void
+}): JSX.Element {
+  const selectMenu = useMemo(
+    () => (conversationId === null ? () => null : selectSlashCommandListFor(conversationId)),
+    [conversationId]
+  )
+  const menu = useSlashCommandListStore(selectMenu)
+
+  return <ComposerActionsMenuView menu={menu} onCommand={onCommand} />
 }

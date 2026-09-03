@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  ComposerActionsMenu,
+  ComposerActionsMenuView,
   COMPOSER_ACTIONS,
   COMPOSER_ACTIONS_LABEL
 } from './ComposerActionsMenu'
-import { ComposerOptionsPanel } from './ComposerOptionsPanel'
+import { ComposerOptionsPanel, COMPOSER_OPTIONS_UNAVAILABLE_NOTE } from './ComposerOptionsPanel'
+import { markUnavailableActions } from './composerActionAvailability'
+import type { SlashCommandListEntry } from '../../store/slashCommandListStore'
+import type { WireSlashCommand } from '@shared/wire/types'
 
 // #680: two halves, both reachable under this repo's `node` vitest environment. The MAPPING half is
 // plain data — `COMPOSER_ACTIONS` is an array a spec executes directly, which is the whole reason the
@@ -72,9 +75,9 @@ describe('COMPOSER_ACTIONS', () => {
   })
 })
 
-describe('ComposerActionsMenu', () => {
+describe('ComposerActionsMenuView', () => {
   it('renders the footer trigger inside a composer-options anchor, closed (AC1)', () => {
-    const markup = renderToStaticMarkup(<ComposerActionsMenu onCommand={noop} />)
+    const markup = renderToStaticMarkup(<ComposerActionsMenuView menu={null} onCommand={noop} />)
     expect(markup).toContain('class="composer-options-anchor"')
     expect(markup).toContain(TRIGGER_CLASS_RUN)
     expect(markup).toContain('aria-haspopup="menu"')
@@ -88,7 +91,7 @@ describe('ComposerActionsMenu', () => {
   // LOAD-BEARING e2e LOCATOR that may not be reworded without updating e2e/composer-actions.spec.ts
   // (the SEND_LABEL / INTERRUPT_LABEL warning, ConversationScreen.tsx:2042-2050).
   it('names the trigger with the client-owned Actions label', () => {
-    const markup = renderToStaticMarkup(<ComposerActionsMenu onCommand={noop} />)
+    const markup = renderToStaticMarkup(<ComposerActionsMenuView menu={null} onCommand={noop} />)
     expect(COMPOSER_ACTIONS_LABEL).toBe('Actions')
     expect(triggerInner(markup)).toContain(COMPOSER_ACTIONS_LABEL)
   })
@@ -97,7 +100,7 @@ describe('ComposerActionsMenu', () => {
   // button's accessible name is computed from its contents — which makes the chevron's aria-hidden
   // load-bearing: an exposed <svg> could perturb the exact string the e2e locator matches.
   it('hides the chevron from the accessible name (protects the e2e locator)', () => {
-    const inner = triggerInner(renderToStaticMarkup(<ComposerActionsMenu onCommand={noop} />))
+    const inner = triggerInner(renderToStaticMarkup(<ComposerActionsMenuView menu={null} onCommand={noop} />))
     expect(inner).toContain('composer__actions-icon')
     expect(inner).toContain('aria-hidden="true"')
     // Strip the glyph and nothing but the label is left to be announced.
@@ -123,5 +126,84 @@ describe('ComposerActionsMenu', () => {
     }
     expect(countOf(markup, 'aria-current')).toBe(0)
     expect(markup).not.toContain('composer-options__item--current')
+  })
+})
+
+// #681 — the affordance, end to end from a store entry to markup. The DECISION's own cases are data and
+// live in composerActionAvailability.test.ts; what is proved here is that the decision reaches a pixel and
+// that an available row is untouched by it. Interaction (picking sends nothing) is structurally out of
+// reach in this tier and is e2e/composer-actions-unavailable.spec.ts's.
+function command(overrides: Partial<WireSlashCommand> & { name: string }): WireSlashCommand {
+  return { argument_hint: '', description: '', aliases: [], truncated_fields: null, ...overrides }
+}
+
+/** A COMPLETE published menu carrying `clear` and `compact` and not `knowledge-capture` — the shape a
+ *  workspace without the vault's capture command publishes. */
+const WITHOUT_KNOWLEDGE_CAPTURE: SlashCommandListEntry = {
+  commands: [command({ name: 'clear' }), command({ name: 'compact' })],
+  droppedCommands: 0
+}
+
+/** The panel as the Actions menu renders it for a given published menu. */
+function panelMarkup(menu: SlashCommandListEntry | null): string {
+  return renderToStaticMarkup(
+    <ComposerOptionsPanel
+      options={markUnavailableActions(COMPOSER_ACTIONS, menu)}
+      currentId={null}
+      onSelect={noop}
+      ariaLabel={COMPOSER_ACTIONS_LABEL}
+      focusedIndex={0}
+    />
+  )
+}
+
+describe('the unavailable row (#681)', () => {
+  it('greys the one entry a complete list does not publish (AC1, AC4)', () => {
+    const markup = panelMarkup(WITHOUT_KNOWLEDGE_CAPTURE)
+
+    // Still three rows — greying is not hiding. The row keeps role="menuitem" and its place in the
+    // roving tabindex; only its activation is gated.
+    expect(rowCount(markup)).toBe(3)
+    expect(countOf(markup, 'aria-disabled="true"')).toBe(1)
+    // The WHOLE class run, so a modifier worn without its base would fail here.
+    expect(
+      countOf(markup, 'class="composer-options__item composer-options__item--unavailable"')
+    ).toBe(1)
+    // AC4: announced with a reason, on the greyed row and nowhere else.
+    expect(countOf(markup, COMPOSER_OPTIONS_UNAVAILABLE_NOTE)).toBe(1)
+    expect(markup).toContain(
+      `>Knowledge capture<span class="composer-options__unavailable-note">${COMPOSER_OPTIONS_UNAVAILABLE_NOTE}</span>`
+    )
+  })
+
+  // AC2 at the markup boundary. `null` is the state a slow daemon, a dropped frame or a daemon older than
+  // the forwarding change leaves the app in, and it must render exactly what #680 shipped.
+  it('renders every row untouched while availability is unknown (AC2, AC5)', () => {
+    const markup = panelMarkup(null)
+
+    expect(markup).toBe(panelMarkup({ commands: [], droppedCommands: 4 }))
+    expect(rowCount(markup)).toBe(3)
+    expect(markup).not.toContain('aria-disabled')
+    expect(markup).not.toContain('--unavailable')
+    expect(markup).not.toContain(COMPOSER_OPTIONS_UNAVAILABLE_NOTE)
+    // AC5's guard from this side: the available row's attribute run is byte-for-byte what it was.
+    expect(countOf(markup, 'class="composer-options__item">')).toBe(3)
+  })
+
+  // The available rows in a MIXED panel are byte-identical to the ones in an all-available panel — the
+  // property AC5 asks of the four other consumers, asserted where a regression would actually land.
+  it('leaves an available row byte-identical beside a greyed one (AC5)', () => {
+    const markup = panelMarkup(WITHOUT_KNOWLEDGE_CAPTURE)
+
+    expect(countOf(markup, 'class="composer-options__item">')).toBe(2)
+    expect(markup).toContain('>Reset session</button>')
+    expect(markup).toContain('>Compact session</button>')
+  })
+
+  // NO WORKSPACE-AUTHORED STRING REACHES THE EXPLANATION (AC4). Pinned as a literal because the constant
+  // is the whole guarantee: a future edit that interpolated a published `name` into it would put
+  // untrusted text into the row's accessible name, and this is the assertion that would fail.
+  it('explains with a client-owned constant', () => {
+    expect(COMPOSER_OPTIONS_UNAVAILABLE_NOTE).toBe('(unavailable in this workspace)')
   })
 })

@@ -42,9 +42,58 @@ import { composerOptionsMaxWidthPx, composerOptionsShiftPx } from './composerOpt
 // the whole of it. A menu adding a second visible field inherits this paragraph rather than rediscovering
 // it — and #940 is also the precedent for NOT adding one: it carries a command description it deliberately
 // never passes here, so the string reaches no DOM sink at all (the product decision on #934).
+// #681 ADDED `unavailable`, and it is OPTIONAL for one reason: the four other consumers pass nothing, so
+// their rendered markup does not move by a byte. That is what makes this an addition rather than a
+// migration — seven spec files match `class="composer-options__item"` and
+// `class="composer-options__item composer-options__item--current"` as whole attribute runs, and both stay
+// exactly those strings when the field is absent.
+//
+// A field on the ROW rather than a fifth top-level prop (a parallel id list or set): it is per-row
+// information, so a second array would be a second thing to keep index-aligned with `options`, and
+// `ComposerOptionsMenu` already holds `options`, so its activation gate needs no new prop threading
+// either. This is the authorization ComposerActionsMenu.tsx:6-9 asks for, raised and granted on #681.
+//
+// IT MARKS, IT DOES NOT DECIDE. Whether an entry is unavailable is the consumer's question — #681 answers
+// it in composerActionAvailability.ts from the published slash-command list — exactly as `currentId`'s
+// MEANING is the consumer's while its MARKING is this file's. The bare panel below is a pure view and
+// therefore does not gate activation; the single gate lives in `ComposerOptionsMenu.select`, which both
+// the click and the Enter path already funnel through. No shipped consumer of the bare panel passes this
+// field, so no path is left ungated.
 export interface ComposerOptionsPanelOption {
   id: string
   label: string
+  unavailable?: boolean
+}
+
+/**
+ * The client-owned explanation an unavailable row adds to its accessible name (#681 AC4), so the row is
+ * announced with a REASON rather than merely as dimmed.
+ *
+ * IT IS HIDDEN TEXT AND NOT AN `aria-label`, and that is a security choice rather than a stylistic one.
+ * An aria-label is an ATTRIBUTE — a sink CLAUDE.md's daemon-text ruling forbids outright — and this row's
+ * `label` is WORKSPACE-AUTHORED for the type-ahead consumer, so composing label-plus-suffix into an
+ * attribute would put untrusted text exactly where it may not go. A hidden text child keeps every
+ * untrusted string in the one JSX text position it already occupies, and keeps this addition
+ * client-owned: NO WORKSPACE STRING MAY EVER REACH THIS CONSTANT.
+ *
+ * Like SEND_LABEL / COMPOSER_ACTIONS_LABEL, it is a LOAD-BEARING LOCATOR once a spec matches it —
+ * e2e/composer-actions-unavailable.spec.ts reads it as part of the row's accessible name, so rewording it
+ * here without updating that spec breaks it, which is the point.
+ */
+export const COMPOSER_OPTIONS_UNAVAILABLE_NOTE = '(unavailable in this workspace)'
+
+/**
+ * The row's class run, assembled so the two SHIPPED runs are reproduced byte for byte: an ordinary row is
+ * `composer-options__item` and a current row is that plus ` composer-options__item--current`, in that
+ * order, with #681's modifier appended AFTER both. The base class stays on every row — a modifier worn
+ * without its base is the vacuity conversation.css legislates against.
+ */
+function rowClassName(isCurrent: boolean, isUnavailable: boolean): string {
+  let className = 'composer-options__item'
+  if (isCurrent) className += ' composer-options__item--current'
+  if (isUnavailable) className += ' composer-options__item--unavailable'
+
+  return className
 }
 
 // Every prop is REQUIRED — the "a view that cannot answer is a bug" rule (ConversationScreen.tsx:2033).
@@ -91,6 +140,10 @@ export function ComposerOptionsPanel({
     <div ref={panelRef} className="composer-options" role="menu" aria-label={ariaLabel}>
       {options.map((option, index) => {
         const isCurrent = option.id === currentId
+        // `=== true` rather than a bare truthiness read: the field is optional, so `undefined` is the
+        // ordinary case and the explicit comparison is what keeps every one of the three renderings below
+        // ABSENT for it — the whole of AC5.
+        const isUnavailable = option.unavailable === true
         return (
           <button
             key={option.id}
@@ -109,24 +162,39 @@ export function ComposerOptionsPanel({
             // The base class STAYS on the current row — a modifier worn without its base is the vacuity
             // conversation.css:779-781 legislates against, and the row's whole treatment beyond the fill
             // hangs off the base.
-            className={
-              isCurrent
-                ? 'composer-options__item composer-options__item--current'
-                : 'composer-options__item'
-            }
+            className={rowClassName(isCurrent, isUnavailable)}
             // aria-current rather than branching the ROLE to menuitemradio: it is a global ARIA attribute
             // meaning exactly "the current item within a set", and branching the role on `currentId` would
             // make one panel two different widgets — which #694 (a type-ahead, not a menu) would then have
             // to fight. undefined omits the attribute entirely rather than emitting aria-current="false".
             aria-current={isCurrent ? 'true' : undefined}
+            // #681, and it sits AFTER aria-current for the reason the tabIndex note above gives from the
+            // other side: nothing may be inserted between className and aria-current. `undefined` omits
+            // the attribute entirely rather than emitting aria-disabled="false", so an ordinary row's
+            // attribute run is untouched.
+            //
+            // ARIA rather than the HTML `disabled` attribute, deliberately: the container drives a roving
+            // tabindex and moves real DOM focus onto the focused row, and a disabled <button> is not
+            // focusable — arrow navigation would appear stuck on the greyed row while the focus call
+            // silently no-opped. Keeping the row focusable and gating ACTIVATION instead also leaves
+            // composerOptionsKeyboard.ts, shared by every consumer, untouched.
+            aria-disabled={isUnavailable ? 'true' : undefined}
             onClick={() => onSelect(option.id)}
           >
             {/* An ordinary React text child: auto-escaped, no dangerouslySetInnerHTML, and never an
                 attribute or URL sink. #940 feeds it workspace-authored command names and argument hints,
-                so it is load-bearing per CLAUDE.md's daemon-text ruling — and it stays ONE child, which is
-                what keeps the row's `white-space: nowrap` a complete answer to a name carrying the one
-                measured sub-0x20 byte. */}
+                so it is load-bearing per CLAUDE.md's daemon-text ruling — and on an available row it stays
+                ONE child, which is what keeps the row's `white-space: nowrap` a complete answer to a name
+                carrying the one measured sub-0x20 byte. */}
             {option.label}
+            {/* #681's AC4. It renders ONLY on an unavailable row, so an available row is byte-for-byte
+                what it was — and the note is visually hidden and out of flow, so it costs the row no
+                width and cannot reach the panel's max-content measurement. */}
+            {isUnavailable && (
+              <span className="composer-options__unavailable-note">
+                {COMPOSER_OPTIONS_UNAVAILABLE_NOTE}
+              </span>
+            )}
           </button>
         )
       })}
@@ -325,7 +393,21 @@ export function ComposerOptionsMenu({
     setOpen(false)
     triggerRef.current?.focus()
   }
+  // #681 — THE ONE ACTIVATION GATE, and it is one because both paths already funnel through select():
+  // the panel's onClick calls the `onSelect` prop, which IS this function, and handleKeyDown's `pick` arm
+  // calls it directly. So AC1's "by click or by Enter on the focused row" is a single early return with
+  // no second copy to drift.
+  //
+  // An unavailable pick leaves the panel OPEN with focus where it was — what a disabled menu item does,
+  // and the honest report that nothing happened. Closing would read as a successful pick.
+  //
+  // `some` over the options rather than a Set or a lookup object: the ids are client-owned here, but the
+  // panel's own contract lets a consumer pass daemon text as an id, and an object keyed by one would be a
+  // prototype-pollution sink. Bounded by an option list nobody scrolls past.
+  const isUnavailable = (id: string): boolean =>
+    options.some((option) => option.id === id && option.unavailable === true)
   const select = (id: string): void => {
+    if (isUnavailable(id)) return
     setOpen(false)
     onSelect(id)
     triggerRef.current?.focus()

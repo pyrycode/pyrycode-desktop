@@ -14,8 +14,10 @@ this store's `selectSlashCommandListFor` with
 [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939)'s pure
 `slashCommandTypeAheadRows`, joined as `entry?.commands ?? null` so the store's `null`-vs-`[]`
 distinction survives into the decision layer.
-[#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) (the Actions-menu grey-out) is
-still unbuilt and remains this store's other queued reader.
+[#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) is this store's second reader — the
+Actions-menu grey-out, gating rather than rendering: it greys out a fixed entry the published list
+doesn't carry instead of drawing the list itself. See [Conversation shell — actions menu §
+grey-out](conversation-shell-actions-menu-and-reader-cutover.md#grey-out-for-an-absent-command-681).
 [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the store's
 pairing-scoped clear — see § The pairing-scoped clear below.
 
@@ -182,8 +184,8 @@ selectSlashCommandListFor(openId) / useSlashCommandListStore
 ## Configuration and usage
 
 - `useSlashCommandListStore`/`selectSlashCommandListFor` is read by #940's
-  `useSlashCommandTypeAhead` (`ComposerSlashCommandTypeAhead.tsx`), a `useMemo`-stable selector
-  keyed per conversation id. #681 (Actions-menu grey-out) remains an unbuilt second reader.
+  `useSlashCommandTypeAhead` (`ComposerSlashCommandTypeAhead.tsx`) and by #681's
+  `ComposerActionsMenu` container, both a `useMemo`-stable selector keyed per conversation id.
 - Mounted app-level in `src/renderer/src/App.tsx`, after `<RunConfigLiveData />`.
 - `commands` is a **display** array — its shape is not an invitation to iterate it as a work list
   something acts on. Nothing in this store or its bridge iterates it.
@@ -221,7 +223,9 @@ selectSlashCommandListFor(openId) / useSlashCommandListStore
   `dangerouslySetInnerHTML` forbidden, never an attribute, a URL, a filename, a cache key or a
   lookup path) is inherited here and discharged by #940's render slice — which, per #934's product
   decision, renders `name` and `argument_hint` only; `description` reaches no DOM sink at all.
-- **The list is rendered, by #940 alone so far.** #681 (Actions-menu grey-out) is still queued.
+- **The list is rendered, by #940 alone.** #681 reads the same entries to decide, per render, whether
+  each of the Actions menu's three fixed commands is present — it never renders a row from `commands`,
+  so the list's *rendered* surface is still #940's alone.
 
 ## Related
 
@@ -232,6 +236,9 @@ selectSlashCommandListFor(openId) / useSlashCommandListStore
   — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939)'s pure `slashCommandTypeAheadRows`/
   `completeSlashCommand`, and [#940's mount](conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--mount-940)
   that feeds them from this store's `selectSlashCommandListFor`.
+- [Conversation shell — actions menu § grey-out](conversation-shell-actions-menu-and-reader-cutover.md#grey-out-for-an-absent-command-681)
+  — [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681)'s `composerActionAvailability.ts`,
+  this store's second reader, which inverts the type-ahead's cut-`name` asymmetry on purpose.
 - [Daemon event channel — the sealed union](daemon-event-channel-sealed-union.md) — #937's
   `slashCommandList` `DaemonEvent` arm and the four permanent bridge no-ops this store's bridge sits
   alongside as a fifth observer.

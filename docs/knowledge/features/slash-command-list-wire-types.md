@@ -4,12 +4,15 @@ The wire vocabulary for the workspace's slash-command menu: one `EnvelopeType` m
 interfaces mirroring the daemon's published `slash_command_list` contract field for field.
 
 Introduced in [#935](https://github.com/pyrycode/pyrycode-desktop/issues/935), declaration only at
-that point — nothing decodes, narrows, stores or renders it yet. Split from #694. Two consumers are
+that point — nothing decodes, narrows, stores or renders it yet. Split from #694. Two consumers were
 blocked on the type rather than on the producer: [#936](https://github.com/pyrycode/pyrycode-desktop/issues/936),
-the decode slice directly below it in this family, and [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681),
-which matches the Actions menu's entries against names **and aliases** — the desktop Actions menu's
-own `reset` entry is an alias of `clear`, not a command name, so a name-only match greys out a command
-that works. SSOT is `pyrycode/pyrycode` `docs/protocol-mobile.md` § `slash_command_list` (type declared
+the decode slice directly below it in this family, and [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681)
+(landed), which matches the Actions menu's entries against names **and aliases**. **An earlier version
+of this paragraph claimed the desktop Actions menu's own `reset` entry was an alias of `clear` — #681
+corrected that:** the shipped entry's `id` is `/clear`, the command name itself, and `Reset session` is
+only its client-owned display label, which never participates in matching. Alias matching is still
+required (for a published row that names a command only by an alias other than one of the three fixed
+ids), just not for that reason. SSOT is `pyrycode/pyrycode` `docs/protocol-mobile.md` § `slash_command_list` (type declared
 by pyrycode#1726, shape by #1727, fixtures and section by #1718) / `internal/protocol/interactive.go`.
 The producer exists now too: #2001 maps the frame, #2002 bounds it, #2003 emits it on the live
 interactive lane, #2004–#2007 retain it and reconcile it on connect, and #2008/#2009 prove both
@@ -68,8 +71,8 @@ capability and is not a nonce.
 **Named `WireSlashCommand`, not `SlashCommand`, deliberately.** Two reasons, both in the type's doc
 comment so the prefix does not read as an accident. First, `Wire` is this cluster's prefix for a
 nested row whose bare name is generic enough to be wanted again downstream (`WireQuestion`,
-`WireQuestionOption`, `WireModalOption`) — both #936 and #681 will want their own domain notion of a
-slash command. Second, [question-shown wire types](question-shown-wire-types.md)'s
+`WireQuestionOption`, `WireModalOption`) — both #936's decode and #681's availability decision want
+their own domain notion of a slash command. Second, [question-shown wire types](question-shown-wire-types.md)'s
 `QuestionShownPayload` doc comment, and the identical line in that doc, both name `SlashCommand` as
 the **daemon's** Go type ("this family ships no `truncated_fields`, unlike `SlashCommand` and
 `ModelOption`"); leaving that bare name unclaimed on this side keeps both references pointing where
@@ -88,8 +91,10 @@ zero carry `[]` — so an absent-aliases row and an empty-aliases row arrive as 
 **A cut `aliases` is unknowable from `aliases` alone — the one place that collapse costs a reader.**
 Because absent and empty are the same `[]`, a `truncated_fields` naming `aliases` is the *only* signal
 separating "cut to nothing" from "none", and it must be read as **unknown**, never as *no aliases*.
-Reading it as "none" greys out a working command: the Actions menu's own `reset` entry is an alias of
-`clear`, not a command name (#681). **That rule is only sound on a validated frame** — reached through
+Reading it as "none" would grey out a working command that a published row names only by an alias — #681
+is where this reading rule is load-bearing: `slashCommandMenuProvesAbsence` treats any row naming
+`aliases` in `truncated_fields` as proof the list is incomplete, greying out nothing rather than trusting
+a possibly-cut alias list. **That rule is only sound on a validated frame** — reached through
 a bare `as SlashCommandListPayload` cast, a frame whose `truncated_fields` key is absent decodes to
 `undefined`, and `row.truncated_fields?.includes('aliases')` is then falsy for exactly the reason
 `null` is, silently inverting the rule. Nullable is not optional; #936's narrower is the only
@@ -164,7 +169,9 @@ Decodes, crosses IPC, and is still unclaimed by any renderer consumer:
   sealed union](daemon-event-channel-sealed-union.md) for the arm's full field-by-field rationale.
 - **#954** (landed) holds the list per conversation in a dedicated keyed store — see
   [Slash-command-list store](slash-command-list-store.md). Ships dormant: nothing renders the list
-  yet. **#681** will match the Actions menu's entries against both `name` and `aliases`.
+  yet. **#681** (landed) matches the Actions menu's entries against both `name` and `aliases`, from
+  this same store — see [Conversation shell — actions menu §
+  grey-out](conversation-shell-actions-menu-and-reader-cutover.md#grey-out-for-an-absent-command-681).
 - **#939** (landed) is the first code anywhere to actually read a `WireSlashCommand` row rather than
   carry or hold one: `slashCommandTypeAheadRows`/`completeSlashCommand`, a pure decision pair — see
   [Slash command type-ahead](conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--decision-layer-939)
@@ -180,9 +187,8 @@ Decodes, crosses IPC, and is still unclaimed by any renderer consumer:
 - Unlike `question_shown`'s producer, this frame's arrives to traffic that already exists: #2001–#2007
   landed upstream ahead of both desktop consumers, so #936 and #681 were blocked on the type only, not
   on a daemon dependency. #936 has since landed the decode, #937 the IPC carry, #954 the
-  per-conversation store, and #940 the type-ahead mount — see [Slash-command-list
-  store](slash-command-list-store.md) — so #681 (the Actions-menu alias match) is the one reader still
-  unblocked-but-unbuilt.
+  per-conversation store, #940 the type-ahead mount, and #681 the Actions-menu alias match — see
+  [Slash-command-list store](slash-command-list-store.md).
 - `Envelope.type` is `EnvelopeType | string` (open) and no exhaustive switch exists over it today, so
   this widening is non-breaking. The `EnvelopeType` membership test in `types.test.ts` is what would
   otherwise miss a dropped member — without it, a decode/re-encode round-trip passes silently on an
@@ -233,8 +239,8 @@ radius.
   the IPC carry of this decode.
 - [Slash-command-list store](slash-command-list-store.md) —
   [#954](https://github.com/pyrycode/pyrycode-desktop/issues/954)'s per-conversation store and bridge that
-  catches the arm above; read by #940's mount, with
-  [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681) (Actions-menu alias match) still queued.
+  catches the arm above; read by #940's mount and, since
+  [#681](https://github.com/pyrycode/pyrycode-desktop/issues/681), by the Actions menu's alias match.
 - [Slash command type-ahead](conversation-shell-composer-options-slash-type-ahead.md#slash-command-type-ahead--decision-layer-939)
   — [#939](https://github.com/pyrycode/pyrycode-desktop/issues/939)'s pure opening/filtering/completion
   decisions over this row type, and

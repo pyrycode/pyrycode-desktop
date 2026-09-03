@@ -11,6 +11,11 @@ import { PAIRING_STATUS_CHANNEL, type PairingStatus } from '../shared/ipc/pairin
 import { UNPAIR_CHANNEL, type UnpairResult } from '../shared/ipc/unpair'
 import { SERVER_INFO_CHANNEL, type ServerInfo } from '../shared/ipc/serverInfo'
 import { HOST_LABEL_CHANNEL, type HostLabelResult } from '../shared/ipc/hostLabel'
+import {
+  ATTACHMENT_UPLOAD_CHANNEL,
+  ATTACHMENT_UPLOAD_EVENT_CHANNEL,
+  type AttachmentUploadEvent
+} from '../shared/ipc/attachmentUpload'
 
 // The bridge surface exposed to the renderer window. Typed events from the transport in
 // the background process arrive via onDaemonEvent; typed user commands go out via
@@ -123,6 +128,37 @@ const api = {
     const handler = (_event: IpcRendererEvent, event: DaemonEvent): void => listener(event)
     ipcRenderer.on(DAEMON_EVENT_CHANNEL, handler)
     return () => ipcRenderer.removeListener(DAEMON_EVENT_CHANNEL, handler)
+  },
+
+  /**
+   * Ask the background process to let the user attach a file (#862). Fire-and-forget (no reply); the
+   * outcome arrives later on the push channel below, because the flow reports MORE THAN ONE message
+   * per intent once #864 adds progress.
+   *
+   * CALLED WITH NO ARGUMENT, and that is the point rather than an omission: this window names an
+   * INTENT, never a file. Nothing crosses, so no renderer-supplied string can reach a host path, a
+   * declared filename, or the wire — the picker, the path and the bytes all stay in the background
+   * process. ATTACHMENT_UPLOAD_CHANNEL is fixed here so the renderer cannot address arbitrary IPC
+   * channels, and ipcRenderer never crosses the bridge. No caller is wired yet — the button is #863.
+   */
+  requestAttachmentUpload: (): void => {
+    ipcRenderer.send(ATTACHMENT_UPLOAD_CHANNEL)
+  },
+
+  /**
+   * Subscribe to attachment-upload outcomes from the background process (#862); returns an
+   * unsubscribe handle the renderer must call on teardown so listeners don't accumulate across
+   * remounts. The onDaemonEvent shape — the raw IpcRendererEvent (exposing .sender/.ports) is
+   * stripped before the listener runs, and removeListener uses the exact handler registered.
+   *
+   * A cancelled picker delivers NOTHING, so a listener must not assume one event per intent. The
+   * event carries no path and no file byte by construction (see AttachmentUploadEvent). No consumer
+   * is wired yet — the rendering is #863.
+   */
+  onAttachmentUploadEvent: (listener: (event: AttachmentUploadEvent) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, event: AttachmentUploadEvent): void => listener(event)
+    ipcRenderer.on(ATTACHMENT_UPLOAD_EVENT_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(ATTACHMENT_UPLOAD_EVENT_CHANNEL, handler)
   }
 }
 

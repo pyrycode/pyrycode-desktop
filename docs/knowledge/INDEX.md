@@ -486,10 +486,29 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   memory profile was this ticket's call to make and was declined — the saving is only the base64, and the
   client-side size bound lands with #862. Ships with **no IPC, no daemon event, and no renderer change** —
   the outcome is a value returned to the caller; surfacing it to the window is
-  [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862)'s (not started). Architect self-review
+  [Attachment upload](features/attachment-upload.md) (#862, landed). Architect self-review
   PASS, four SHOULD FIX items addressed in prose (buggy-caller duplicate-id scan order, the absent
   per-transfer deadline, the first-async-method never-rejects guarantee, and `attachment_id` staying out of
   the diagnostic log even though it isn't a capability).
+- [Attachment upload (pick, guard, drive, report)](features/attachment-upload.md) — the caller #861 was
+  missing (#862, split from #685): an intent from the window (no argument — the renderer names an
+  intent, never a file) opens the system file picker at the `src/main/index.ts` composition-root edge,
+  and Electron-free `src/main/attachmentUpload.ts` guards the choice on an **open handle**
+  (`isFile()` before the length — a size-only check lets `open()`'s symlink-following wave `/dev/zero`
+  through to an unbounded read; found by the security review's first pass, not by a test), reads it,
+  declares a UTF-8-byte-trimmed `filename` and a table-derived `mime_type`, mints a `randomUUID`
+  `attachment_id`, and drives [attachment transfer](features/attachment-transfer.md)'s
+  `uploadAttachment`. The outcome — `refused`/`failed`/`completed`, exactly one or none — is pushed back
+  on a **dedicated channel pair** (`src/shared/ipc/attachmentUpload.ts`) rather than a new `DaemonEvent`
+  member, because it must carry #864's future in-flight progress before the terminal, which a compile-
+  forced `assertNever` fan-out across four renderer bridges can't express cheaply. The push closes
+  `event.sender` per-request rather than routing through `live.sink` (which silently re-supplies
+  `DAEMON_EVENT_CHANNEL` regardless of the channel argument it's given), sidestepping #519's
+  stale-window-reference problem entirely. A `pickerOpen` flag bounds the dialog to one at a time without
+  bounding concurrent transfers. Neither `uploadAttachmentFile` nor `uploadAttachmentBytes` ever rejects.
+  Architect self-review: first pass FAILED on the size-only guard, PASSED after the `isFile()` revision.
+  Nothing renders — the button and the outcome's appearance are #863 (not started); #864 (progress) and
+  #890/#891 (drop/paste, second entries into this same flow) are also not started.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Notification, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, session, shell } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { hostname } from 'os'
@@ -29,6 +29,11 @@ import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
 import { onCommand } from './receiveCommand'
 import { onDiagnostic } from './receiveDiagnostic'
+import { uploadAttachmentFile } from './attachmentUpload'
+import {
+  ATTACHMENT_UPLOAD_CHANNEL,
+  ATTACHMENT_UPLOAD_EVENT_CHANNEL
+} from '../shared/ipc/attachmentUpload'
 
 // The relay socket, the Noise_IK handshake, the frame codec, and event parsing
 // all live in this background process. See docs/knowledge/decisions/0001. The
@@ -495,6 +500,58 @@ app.whenReady().then(() => {
   // is simply a logged line. `will-quit` removes the exact listener, symmetric with unregisterCommands.
   const unregisterDiagnostics = onDiagnostic(ipcMain, diagnosticLog)
   app.on('will-quit', () => unregisterDiagnostics())
+
+  // The attach flow's composition-root edge (#862) — the ONE Electron touch the feature needs, and
+  // the reason it is here rather than in attachmentUpload.ts, which stays Electron-free and
+  // unit-testable on either side of this seam.
+  //
+  // Registered on its OWN channel pair, not on the command/daemon-event channels: the outcome must
+  // carry more than one message per intent (#864 adds progress before the terminal), which an invoke
+  // reply cannot express, and a new DaemonEvent member would be a compile-forced edit in four
+  // renderer bridges that each end their switch in assertNever.
+  //
+  // The listener reads NEITHER IPC argument. The renderer names an intent and nothing else, so there
+  // is no untrusted request field to validate and no renderer-supplied string can reach a path, a
+  // declared filename, or the wire (#890 will widen this and owes a request guard when it does).
+  //
+  // `event.sender` — the window that asked — is closed into `emit`, so the answer goes back to the
+  // asker rather than to a process-lifetime reference that #519 would have to keep current. The
+  // isDestroyed() guard is emitDaemonEvent's (#518): a window closed mid-upload drops the outcome
+  // instead of throwing, the same loss the daemon-event channel already takes in that gap. It cannot
+  // route through `live.sink`, whose send re-supplies DAEMON_EVENT_CHANNEL and ignores the channel
+  // it is given.
+  //
+  // One picker at a time (debugBundleDownload's single-in-flight posture), scoped to the DIALOG and
+  // cleared as soon as it settles — so a double-clicked button cannot stack pickers, while a second
+  // file may still be picked while the first uploads (two concurrent transfers, distinct ids).
+  //
+  // The bare `void` is safe because uploadAttachmentFile never rejects — a property of that module
+  // and of connection.uploadAttachment, not of a `.catch()` anyone must remember (AC4).
+  let pickerOpen = false
+  const attachmentUploadListener = (event: Electron.IpcMainEvent): void => {
+    if (pickerOpen) return
+    pickerOpen = true
+    const sender = event.sender
+    void dialog
+      .showOpenDialog({ properties: ['openFile'] })
+      .then((choice) => {
+        // Cancelling is a TOTAL no-op: nothing read, nothing sent, no outcome reported (AC1).
+        if (choice.canceled || choice.filePaths.length === 0) return
+        void uploadAttachmentFile(choice.filePaths[0], {
+          upload: (input) => connection.uploadAttachment(input),
+          emit: (uploadEvent) => {
+            if (sender.isDestroyed()) return
+            sender.send(ATTACHMENT_UPLOAD_EVENT_CHANNEL, uploadEvent)
+          },
+          diagnosticLog
+        })
+      })
+      .finally(() => {
+        pickerOpen = false
+      })
+  }
+  ipcMain.on(ATTACHMENT_UPLOAD_CHANNEL, attachmentUploadListener)
+  app.on('will-quit', () => ipcMain.removeListener(ATTACHMENT_UPLOAD_CHANNEL, attachmentUploadListener))
 
   // macOS reopens the app from the dock without relaunching the process, so the replacement window
   // goes through openWindow() (#519) rather than a bare createWindow() whose result was discarded.

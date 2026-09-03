@@ -380,3 +380,83 @@ comments first** — they currently hand the next consumer a recipe for the wiri
 built, in a shape review would reject a second time. (**Update:** #940 did open this file next, for the
 width bound rather than #682/#683, and left this correction for whichever of those lands first — its own
 addition, `composerOptionsMaxWidthPx`, does not touch these four comments.)
+
+## Unavailable rows (#681)
+
+`ComposerOptionsPanelOption` grows one **optional** field, `unavailable?: boolean`, its first addition
+since #838 shipped the two-field shape — the authorization `ComposerActionsMenu.tsx` had stood asking for
+since #680, raised and granted on #681. Optional is what keeps this an addition rather than a migration:
+the four other consumers (permission mode, model, effort, the slash-command type-ahead) pass nothing, so
+`isUnavailable` is `false` for every option they render and the three markup changes below are each
+absent — the ordinary-row runs stay the exact strings seven spec files already match
+(`class="composer-options__item"` and `class="composer-options__item composer-options__item--current"`).
+A field on the *row* rather than a fifth top-level prop (a parallel id list or set), for the reason
+`currentId` already gives: it's per-row information, and `ComposerOptionsMenu` already holds `options`, so
+its activation gate (below) needs no new prop threading either.
+
+The row gains, all three gated on `option.unavailable === true` (an explicit comparison, not a bare
+truthiness read — `undefined` is the ordinary case for an optional field):
+
+- `composer-options__item--unavailable` appended to the class run **after** `--current` —
+  `rowClassName(isCurrent, isUnavailable)` replaces the inline ternary, but the two shipped strings it
+  produces for `isUnavailable === false` are unchanged.
+- `aria-disabled="true"`, placed **after** `aria-current` — nothing may be inserted between `className`
+  and `aria-current`, the load-bearing order this file already states above. `undefined` otherwise, so
+  React omits the attribute rather than emitting `aria-disabled="false"`.
+- A visually-hidden `<span className="composer-options__unavailable-note">` rendering
+  `COMPOSER_OPTIONS_UNAVAILABLE_NOTE` (`'(unavailable in this workspace)'`, an exported module constant),
+  appended to the row's accessible name so assistive technology announces a *reason* rather than only
+  "dimmed." It is hidden **text**, never an `aria-label` — an `aria-label` is an attribute sink, which
+  CLAUDE.md's daemon-text ruling forbids, and this row's `label` is workspace-authored for the type-ahead
+  consumer, so composing label-plus-suffix into an attribute would put untrusted text exactly where it may
+  not go. The constant is a load-bearing e2e locator (`e2e/composer-actions-unavailable.spec.ts` matches
+  it) in the `SEND_LABEL`/`COMPOSER_ACTIONS_LABEL` family, and it is client-owned by construction: no
+  workspace string may ever reach it. The CSS is the `.composer-status__error-prefix` recipe verbatim
+  (`clip-path: inset(50%)`, not the legacy `clip: rect()`) — this is that recipe's third consumer, still
+  kept a BEM element (`.composer-options__unavailable-note`) rather than promoted to a shared utility,
+  since promoting it would mean editing two unrelated rules and their JSX for a refactor this ticket did
+  not need.
+
+**The gate lives in `ComposerOptionsMenu.select`, not in the view.** The bare `ComposerOptionsPanel` stays
+a pure view and does not gate activation — whether an entry is unavailable is the consumer's question
+(#681 answers it in the Actions menu's `composerActionAvailability.ts`, from the published slash-command
+list; see [Conversation shell — actions menu](conversation-shell-actions-menu-and-reader-cutover.md#actions-menu-680)),
+exactly as `currentId`'s *meaning* is the consumer's while its *marking* is this file's. `select(id)` is
+where the click path (the panel's `onClick`) and the Enter path (`handleKeyDown`'s `pick` arm) already
+funnel into one place, so the one-line early return — `if (isUnavailable(id)) return` — closes both at
+once with nothing to drift. `isUnavailable` is a linear `options.some(...)` scan, deliberately not a `Set`
+or a lookup object keyed by id: the panel's own contract lets a consumer pass daemon text as an id, and an
+object keyed by one would be a prototype-pollution sink. An unavailable pick leaves the panel **open**
+with focus where it was — what a disabled menu item does, and the only report that reads as "nothing
+happened" rather than a successful pick. No shipped consumer of the bare panel passes `unavailable`, so no
+activation path is left ungated.
+
+**Why ARIA and not the HTML `disabled` attribute**, restated from the design: the container drives a
+roving tabindex and moves real DOM focus onto the focused row, and a `disabled` button is not focusable —
+arrow navigation would appear stuck on the greyed row and the focus call would silently no-op. Keeping the
+row focusable and gating activation instead is also what leaves `composerOptionsKeyboard.ts`, shared by
+every consumer, untouched. The `:focus-visible` outline is deliberately **not** suppressed on an
+unavailable row — the row stays focusable by design, so hiding where focus sits would be the actual
+accessibility regression.
+
+**CSS** (`conversation.css`, appended): `.composer-options__item--unavailable` sets
+`color: var(--color-on-surface-variant)` and `cursor: not-allowed` — the `.composer__send:disabled` /
+`.workspace-picker__row:disabled` convention, never a raw opacity literal, chosen because the Figma node
+(`121:3879`) carries no disabled variant to port (five identical `Option button` instances and nothing
+else). It sets no `background`, so it composes with `--current` rather than fighting it — both are
+specificity (0,2,0) on disjoint properties. The shipped hover rule gained
+`:not(.composer-options__item--unavailable)`, the `.composer__send:hover:not(:disabled)` idiom, raising it
+to (0,3,0) — which *strengthens* the "do not reorder these two rules" comment above rather than
+contradicting it: hover still beats `--current`, now by specificity as well as by source order, while a
+row that cannot be picked no longer advertises a hover affordance.
+
+**Testing.** `ComposerOptionsPanel.test.tsx` adds one case proving AC5 directly: a mixed
+available/unavailable/current list renders the available rows' class and ARIA runs byte-identical to
+today's, alongside the existing whole-attribute-run assertions that are the actual regression detector.
+`composerActionAvailability.test.ts` and `ComposerActionsMenu.test.tsx` carry the decision-layer and
+mapping proof — see [Conversation shell — actions menu § grey-out](conversation-shell-actions-menu-and-reader-cutover.md#actions-menu-680)
+for that half, since the decision itself is not this file's.
+
+Code review (self-review, since #681 was builder-reviewed) PASS, one SHOULD FIX recorded for a future
+pass: state the "hidden text, never an attribute" constraint directly in this file's own comment where the
+four other consumers read it, rather than only in the ticket record — not yet applied.

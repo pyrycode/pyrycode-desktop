@@ -729,8 +729,10 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   `commands: []` is a positive statement claude offered nothing, `aliases: []` is a **collapse** of
   claude's absent and empty cases into one wire value (0 of the capture's 51 entries send `[]`, 42 omit
   the key, 9 send a non-empty one) — so a `truncated_fields` naming `aliases` is the *only* signal
-  separating "cut to nothing" from "none", and reading a collapsed `[]` as "no aliases" greys out a
-  working command in #681's Actions menu (`reset` is an alias of `clear`, not a name). `dropped_commands`
+  separating "cut to nothing" from "none", and reading a collapsed `[]` as "no aliases" would grey out a
+  working command matched only by an alias in #681's Actions menu — landed #681 corrects an earlier
+  claim here that the menu's own `reset` entry was such an alias: the shipped entry's id is `/clear`, the
+  command name itself, and `Reset session` is only its display label. `dropped_commands`
   IS counted and carried (`commands.length + dropped_commands` is the menu's true size) — the published
   upstream section still says the opposite twice and is stale as of `0fe3c642` (2026-09-02); the open
   correction is pyrycode#2010. Trust tier: the four string fields are workspace-authored (a lower tier
@@ -745,8 +747,8 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   clause's sharper reason on this path). **#936 has since landed** the fail-closed decode into
   [inbound message decode](features/inbound-message-decode.md)'s `slash-command-list` arm; **#937**
   landed the IPC carry into `DaemonEvent`; **#954** landed the per-conversation store (see below).
-  #681 (Actions-menu alias match) is still blocked; **#939** (below) landed the type-ahead's decision
-  logic as the first reader, and **#940** (below) landed the mount.
+  **#939** (below) landed the type-ahead's decision logic as the first reader, **#940** (below) landed
+  the mount, and **#681** (below) landed the Actions-menu alias match as the store's second reader.
 - [Model-list wire types](features/model-list-wire-types.md) — the wire vocabulary for the daemon's
   model inventory (#971), `model_list`'s sibling above: a new `model_list` `EnvelopeType` member,
   placed immediately before `slash_command_list`, plus two interfaces (`ModelListPayload` →
@@ -852,9 +854,13 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   re-fetch one with. [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) landed the
   pairing-scoped clear, `clearAllSlashCommandLists`, in `clearPairingScopedState`'s dep set, following
   the #588 → #593 precedent. Shipped dormant, then read for the first time by #940 (below), the
-  type-ahead's mount; #681 (Actions-menu grey-out) remains its other queued reader — #939 (above)
-  landed the type-ahead's decisions as a pure function taking the row list as a parameter, so it does
-  not read this store either. Builder self-review PASS.
+  type-ahead's mount — #939 (above) landed the type-ahead's decisions as a pure function taking the
+  row list as a parameter, so it does not read this store either. Builder self-review PASS. **#681
+  has since landed the store's second reader**: `composerActionAvailability.ts` greys out an
+  Actions-menu entry the published list doesn't carry, gating rather than rendering — it inverts
+  the type-ahead's cut-`name` asymmetry on purpose, since here a cut `name` or `aliases` must also
+  leave every entry available (see [Conversation shell — actions
+  menu](features/conversation-shell-actions-menu-and-reader-cutover.md#grey-out-for-an-absent-command-681)).
 - [Question resolution envelope](features/question-resolution-envelope.md) — the **outbound** half of
   the question vertical, mirroring [modal resolution envelope](features/modal-resolution-envelope.md)
   seam for seam (#235 is this one's twin): `EnvelopeType` gains `'question_answer'`/`'question_refused'`

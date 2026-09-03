@@ -365,6 +365,42 @@ Per the ticket: if this run overruns the budget, that is the first real data poi
    the tie-break has no evidence behind it beyond "a re-attempted call is the more urgent read". One line
    in one function if that turns out wrong.
 
+## Revisions
+
+### 2026-09-03 — three departures from the plan above, found in Phase B
+
+1. **The `ThreadStatus` literal count is 30, not 32.** The ticket's figure came from
+   `grep -c 'compacting:'` on the test file, which counts two prose lines that mention the field name
+   inside `describe` comments. `tsc` named 30 literals and no more. Nothing about the sizing argument
+   changes — 30 is still three times the 10-call-site boundary, and the floor rule is why it does not
+   split — but the number in § Size is the grep's, and this is the compiler's.
+
+2. **`thread-scroll-pin.spec.ts`'s fourth criterion needed a two-step shape, not a re-point.** The plan
+   said the criterion moves onto the queued backlog. It does, but a one-for-one swap fails, and the
+   failure is informative: `useThreadScrollPin`'s re-assert is a dep-free layout effect that runs on
+   **screen** renders, and `QueuedBacklogControl` holds its own queue-store subscription — so a
+   `queue_state` push re-renders that control alone and the pin never runs. Measured: the thread rests
+   116px off the bottom. The criterion is now shrink (queue push), then a following screen render (the
+   stall push) that must still re-pin. That is the claim the criterion's own comment always stated — the
+   tracked flag survives a shrink because no scroll event fires — and separating the two steps makes it
+   *sharper* than the shipped version, which conflated them: the stall block arrived through the timeline
+   store, so its shrink and its re-render landed in the same tick and could never distinguish "the flag
+   survived" from "this render re-asserted". A production glue that re-measured at arrival time instead
+   of tracking a flag fails the two-step sequence and passed the one-step one.
+
+3. **That shrink-without-re-pin is a pre-existing bug, filed as #1009, not fixed here.** It is out of this
+   ticket's scope under the scope-discipline rule: the fix is a production change to a file this diff does
+   not otherwise touch. `useThreadScrollPin`'s docblock also names the queued backlog in its list of
+   "mounts that ARE a re-render here", which is the one item on that list with a subscription of its own,
+   so the inventory is stale where the reasoning is sound. Both go in #1009. The spec asserts only the
+   two-step claim and carries a comment pointing at the ticket; nothing is skipped and nothing is red.
+
+One other thing worth recording, since it changed an assertion rather than a design: after the stall
+self-clears, the working label comes back **tool-named** (`Running read_file…`), because the spec's
+`tool_use` push is never resolved and #649's derivation still answers. The assertion says so rather than
+steering around it — the stall outranking that same open tool while it lasts, then yielding to it, is
+this ticket's precedence visible end to end on one element.
+
 ## Security review
 
 **Verdict:** PASS

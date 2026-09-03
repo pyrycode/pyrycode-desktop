@@ -125,12 +125,20 @@ test('reliability affordances: stall push, debug-bundle download', async ({
   })
 
   // AC1 — STALL (server push). Push an unsolicited `stall` onto the live session; the transport decodes
-  // it to a stallDetected event, the reducer flips `stalled` true → StallIndicator renders. Main
-  // thread (no sheet). Nothing in this spec emits timeline turn-activity, and debug_bundle_* are not
-  // timeline events, so the indicator persists through the later step.
+  // it to a stallDetected event, the reducer flips `stalled` true → the composer status row's label reads
+  // the stall copy. Main thread (no sheet). Nothing in this spec emits timeline turn-activity, and
+  // debug_bundle_* are not timeline events, so the status persists through the later step.
+  //
+  // #967 re-pointed this off `.conversation__stall` / `.bubble--stall`: the stall no longer has a bubble
+  // of its own in the message region, it is one of the four states the row's single label carries.
+  // EXACT text, not a substring — the row's label element is shared by all four states now, so
+  // `toBeVisible` on it would pass on a row showing "Thinking…" and prove nothing. The launch is idle
+  // with no folded status live, so nothing else can be occupying the slot when this resolves.
   daemon.pushFrame(stallFrame(SEEDED_ROW.id))
-  await expect(page.locator('.conversation__stall')).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(page.locator('.bubble--stall')).toContainText(STALL_COPY)
+  const statusLabel = page.locator('.conversation__thinking')
+  await expect(statusLabel).toHaveText(STALL_COPY, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  // The stall keeps reading as a problem: it is the one state that takes the error-colour modifier.
+  await expect(statusLabel).toHaveClass(/composer-status__label--stalled/)
 
   // AC2 — DEBUG-BUNDLE download (chunked reply stream). Open the Run-configuration sheet from the thread
   // overflow menu (the "Download" button lives inside it), click it, and let the CHUNK_COUNT chunk frames

@@ -11,9 +11,10 @@ nothing asked the host for anything until this landed.
 Introduced in [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996), split from #687. Ships
 **unwired on the renderer side**, deliberately, the upload leg's own shape: [attachment save](attachment-save.md)
 ([#814](https://github.com/pyrycode/pyrycode-desktop/issues/814), landed — save into Downloads),
-[#866](https://github.com/pyrycode/pyrycode-desktop/issues/866) (deliver bytes to the window) and
-[#867](https://github.com/pyrycode/pyrycode-desktop/issues/867) (open in the OS viewer) are the
-consumers; the latter two are still blocked on this.
+[attachment bytes](attachment-bytes.md)
+([#866](https://github.com/pyrycode/pyrycode-desktop/issues/866), landed — deliver bytes to the window)
+and [#867](https://github.com/pyrycode/pyrycode-desktop/issues/867) (open in the OS viewer) are the
+consumers; the last is still blocked on this.
 
 ## Correlation is two different keys, and that's the design
 
@@ -102,7 +103,8 @@ can reach the envelope even when the ask carries extra ones (`createConversation
 `requestAttachment(request)` sends on the fixed request channel; `onAttachmentRetrievalEvent(listener)`
 subscribes on the fixed event channel and returns an unsubscribe handle — `requestAttachmentUpload` /
 `onAttachmentUploadEvent`'s shape verbatim, including stripping the raw `IpcRendererEvent` before the
-listener runs. **No caller is wired** — the consumers are #814/#866/#867.
+listener runs. **No caller is wired** — the consumers are [attachment save](attachment-save.md) (#814)
+and [attachment bytes](attachment-bytes.md) (#866), both landed, and #867, not started.
 
 ### 3. Correlation and timeout — `src/main/daemonConnection.ts`
 
@@ -354,5 +356,7 @@ queue rather than taking a single tick.
   the security review and the two implementation-time Revisions this doc summarizes.
 - [Attachment save](attachment-save.md) — #814, landed: the first consumer, copying a retrieved file
   out to Downloads.
-- [#866](https://github.com/pyrycode/pyrycode-desktop/issues/866) / [#867](https://github.com/pyrycode/pyrycode-desktop/issues/867) —
-  the two remaining consumers, each blocked on this; not started.
+- [Attachment bytes](attachment-bytes.md) — #866, landed: the second consumer, delivering the bytes
+  to the window for display.
+- [#867](https://github.com/pyrycode/pyrycode-desktop/issues/867) — the remaining consumer, blocked on
+  this; not started.

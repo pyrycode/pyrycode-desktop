@@ -88,6 +88,27 @@ spec skips cleanly against a daemon built before pyrycode#2020 (which added the 
 string) rather than failing when the surface wait below deadlines with nothing to show for it. See
 § Capability-gated skip below.
 
+[#929](https://github.com/pyrycode/pyrycode-desktop/issues/929), the fifth sibling, is
+`e2e/real-claude-question-cancel.spec.ts` — the refusal twin of #928's answer arm on the same question
+vertical, whose fake-tier twin is `e2e/question-cancel-refuses.spec.ts` (#921, see
+[question-panel-cancel-refusal.md](question-panel-cancel-refusal.md)). It clones #928's fixture trio
+(`skipPermissions:false`, `interactiveRunner:'stream-json'`, `allowRemotePermissions:true`) and its
+`claudeModel`/`requiredCapabilities` declarations byte for byte — the second consumer of both, after
+\#928 — but diverges on the one axis its own AC needs: the trigger gates a real file-write on the
+answer, naming a per-run unique bare base name with no directory, so refusing the batch has a real
+absence to prove rather than #928's deliberately tool-less prompt. The proof is not the panel's
+optimistic clear (#921 already proves that on the fake tier and this spec explicitly must not
+re-assert it) but a **recursive** post-quiesce walk of `daemon.workdir` for that base name, asserted
+empty — and made non-vacuous by an allow arm that answers "allow" to any permission dialog raised
+*after* the refusal, so a claude that guessed an answer and pressed on genuinely could have produced
+the artefact. `questionResolverV2.admit` gates a refusal on the same pyrycode#702 per-device opt-in
+that gates an answer, defaulting to deny, so `allowRemotePermissions` is load-bearing here exactly as
+it is for #928. The daemon-side twin, pyrycode#1995, measured a live claude stopping cleanly after a
+refusal — no further modal, no re-ask, nothing written — which is why both containment arms (allow,
+re-ask) are expected never to fire on a passing run without that being dead code; a green run with
+zero modals allowed is a structural gap in what the model has been observed to do, not evidence the
+arms are unreachable.
+
 ## How it works
 
 ### Gated out of the default run
@@ -132,11 +153,12 @@ correct outcome, not a hard failure:
 [#933](https://github.com/pyrycode/pyrycode-desktop/issues/933) added a fourth, opt-in skip gate: a
 `real-*` spec can declare `test.use({ requiredCapabilities: [...] })` to skip — never fail — against
 a daemon whose `hello_ack` doesn't advertise a capability the spec needs. A spec that declares nothing
-(every spec but `real-claude-question-answer.spec.ts`) dials no probe and is gated exactly by the
-three checks above, byte for byte. Declaring one turns a stale daemon from a routed-to-a-builder test
-*failure* into a routed-to-the-operator environment *skip* — the same class as a missing credential —
-which matters because the dispatcher's real-claude gate can't tell "the code is wrong" from "the
-daemon predates this feature" any other way.
+(every spec but `real-claude-question-answer.spec.ts` and `real-claude-question-cancel.spec.ts`, both
+declaring `question`) dials no probe and is gated exactly by the three checks above, byte for byte.
+Declaring one turns a stale daemon from a routed-to-a-builder test *failure* into a
+routed-to-the-operator environment *skip* — the same class as a missing credential — which matters
+because the dispatcher's real-claude gate can't tell "the code is wrong" from "the daemon predates
+this feature" any other way.
 
 The check necessarily runs **after** `waitForDaemonReady`, the one exception to this file's "skip
 before creating any resource" rule: reading what the daemon supports needs the daemon already
@@ -220,9 +242,10 @@ validated UUID. Field-for-field port of `pyrycode#854`'s `seedBootstrapRegistry`
 -- --model haiku --dangerously-skip-permissions
 ```
 
-The `--model` value is a single-consumer `claudeModel` fixture option (#928; default `'haiku'`,
-preserved byte-for-byte for every spec that doesn't override it). `real-claude-question-answer.spec.ts`
-is the one consumer that overrides it, to `claude-sonnet-5` — see the sibling entry above.
+The `--model` value is a `claudeModel` fixture option (#928; default `'haiku'`, preserved byte-for-byte
+for every spec that doesn't override it). `real-claude-question-answer.spec.ts` (#928) and
+`real-claude-question-cancel.spec.ts` (#929) are its two consumers, both overriding it to
+`claude-sonnet-5` — see the sibling entries above.
 
 env: `PYRY_ALLOW_INSECURE_RELAY=1` (lets the daemon dial a loopback `ws://` relay) and
 `PYRY_MOBILE_V2=1` (enables the v2 mobile leg + structured reply stream — without it no
@@ -355,4 +378,10 @@ overrides the resolved `pyry` binary when it isn't on `PATH` (e.g. a sibling-rep
   dev flags this scenario consumes without relaxing.
 - [#933](https://github.com/pyrycode/pyrycode-desktop/issues/933) — added the capability-gated skip
   (`e2e/fixtures/daemonCapabilityGate.ts`) described above; `real-claude-question-answer.spec.ts`
-  is its first consumer, declaring `question`.
+  (#928) and `real-claude-question-cancel.spec.ts` (#929) are its two consumers, both declaring
+  `question`.
+- [#929](https://github.com/pyrycode/pyrycode-desktop/issues/929) — the fifth tier sibling
+  (`real-claude-question-cancel.spec.ts`); the refusal twin of #928's answer arm, contrasted with the
+  fake-stack twin #921 ([question-panel-cancel-refusal.md](question-panel-cancel-refusal.md)). Proves a
+  live claude honours a Cancel refusal by leaving no artefact for the gated work, via a recursive
+  post-quiesce workdir walk made non-vacuous by an allow arm on any post-refusal permission modal.

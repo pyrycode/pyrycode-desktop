@@ -120,6 +120,17 @@ daemon's own `question_dismissed` for that id → nothing further changes. The l
 captured frame in practice, but the spec asserts under auto-waiting rather than a fixed order, since the
 frame crosses IPC → main → Noise → the loopback forwarder while the clear is synchronous.
 
+This spec proves the click and the outbound frame against a scripted `daemon.pushFrame` — it cannot show
+what a *real* claude does with the refusal. #929 closed that gap:
+[real-claude-liveness-e2e.md](real-claude-liveness-e2e.md)'s fifth tier sibling,
+`e2e/real-claude-question-cancel.spec.ts`, drives the same panel's Cancel against a real `pyry` + real
+`claude`, with no outbound-frame capture available (the daemon is a separate process behind the
+content-blind relay). Its proof is structural rather than textual: pyrycode#1990 resolves a refusal as a
+deny carrying a fixed instruction to stop and wait, so the spec gates a real file-write on the batch's
+answer and asserts, after the turn quiesces, that a **recursive** walk of the daemon's workdir finds no
+trace of it — non-vacuous only because a permission modal raised *after* the refusal is still answered
+allow, so a claude that pressed on anyway genuinely could have produced the artefact.
+
 **Security review: PASS** (builder self-review). The single new trust-boundary crossing is renderer → main
 via `sendCommand`, already guarded by `isRefuseQuestionsPayload` (#920) with main-side fresh-literal
 construction, so a smuggled `answer_token` cannot reach the wire even from a compromised renderer; nothing

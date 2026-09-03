@@ -982,17 +982,20 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
       payload: { code, message: SECRET_MSG, retryable: true, retry_after_s: 30 }
     })
 
-  // The upload leg's six reject codes, each paired with the client-owned outcome it must become.
-  // Verified against pyrycode `internal/protocol/codes.go` + the `internal/relay/v2session_attachment.go`
-  // emit table on 2026-09-03. `attachment.not_found` / `attachment.stream_aborted` are deliberately
-  // absent — both exist upstream but belong to the RETRIEVAL direction (#687), not this leg.
+  // Every classified reject code, each paired with the client-owned outcome it must become. Verified
+  // against pyrycode `internal/protocol/codes.go` on 2026-09-03. The first six are the UPLOAD leg's
+  // (emit table in `internal/relay/v2session_attachment.go`); the last two are the RETRIEVAL leg's,
+  // which #999 added once that leg existed upstream (`internal/relay/v2session_attachment_request.go`).
+  // Listed in the type's own member order so the two lists diff against each other by eye.
   const LEG: ReadonlyArray<readonly [string, string]> = [
     ['attachment.invalid_chunk', 'attachment-invalid-chunk'],
     ['attachment.integrity_failed', 'attachment-integrity-failed'],
     ['attachment.too_large', 'attachment-too-large'],
     ['attachment.too_many_uploads', 'attachment-too-many-uploads'],
     ['attachment.storage_failed', 'attachment-storage-failed'],
-    ['message.too_long', 'message-too-long']
+    ['message.too_long', 'message-too-long'],
+    ['attachment.not_found', 'attachment-not-found'],
+    ['attachment.stream_aborted', 'attachment-stream-aborted']
   ]
 
   it.each(LEG)('narrows the reject code %s onto its own client-owned outcome', (code, outcome) => {
@@ -1002,7 +1005,7 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
     expect(parseInboundMessage(encodeReject(code))).toEqual({ kind: 'daemon-error', outcome })
   })
 
-  it('gives the six reject codes six DISTINCT outcomes', () => {
+  it('gives the eight reject codes eight DISTINCT outcomes', () => {
     // Asserted as a set size rather than as a list of expected literals: a list would only restate the
     // mapping `it.each` above already pins, while the cardinality is the property that actually matters
     // — a mapping that collapsed two codes onto one outcome would pass every individual case above.
@@ -1014,12 +1017,51 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
   })
 
   it('lands an unrecognised code on the one catch-all outcome', () => {
-    for (const code of ['server.binary_offline', 'attachment.not_found', 'attachment.stream_aborted']) {
+    // Real upstream codes from `internal/protocol/codes.go` that sit OUTSIDE the classified eight, so
+    // this keeps proving that a neighbouring code the daemon genuinely sends does not accidentally
+    // classify. It held `attachment.not_found` / `attachment.stream_aborted` until #999 moved both into
+    // LEG — the RED that slice inverted.
+    for (const code of ['server.binary_offline', 'session.not_found', 'protocol.malformed']) {
       expect(parseInboundMessage(encodeReject(code))).toEqual({
         kind: 'daemon-error',
         outcome: 'unclassified'
       })
     }
+  })
+
+  it('compares the code as an EXACT literal — a near miss never classifies', () => {
+    // The negative half of AC1, which the cases above only sample: no code outside the eight reaches a
+    // classified outcome. Each of these differs from a real classified code by one edit, so a `switch`
+    // quietly relaxed into a prefix test, a case-insensitive compare, a trim or a separator-normalising
+    // lookup would classify at least one of them.
+    const nearMisses = [
+      'attachment.not_found ',
+      ' attachment.not_found',
+      'Attachment.Not_Found',
+      'ATTACHMENT.STREAM_ABORTED',
+      'attachment.notfound',
+      'attachment.stream_aborted.extra',
+      'attachment.',
+      'attachment_not_found'
+    ]
+    for (const code of nearMisses) {
+      expect(parseInboundMessage(encodeReject(code))).toEqual({
+        kind: 'daemon-error',
+        outcome: 'unclassified'
+      })
+    }
+  })
+
+  it('ignores the wire retryable flag — retryability is documented, never read (AC2)', () => {
+    // encodeReject hardcodes `retryable: true`, which for attachment.not_found CONTRADICTS the daemon's
+    // published `no` (`rejectAttachmentNotFound`'s flag is literally `false`). That disagreement is what
+    // makes this assertable at all — it is the first code in the set where the fixture and the real
+    // reject table differ. Narrowing to the not-retryable outcome anyway, with no flag on the result,
+    // proves the classifier neither reads the wire's claim nor computes retryability from the code name.
+    expect(parseInboundMessage(encodeReject('attachment.not_found'))).toEqual({
+      kind: 'daemon-error',
+      outcome: 'attachment-not-found'
+    })
   })
 
   it('lands an absent / non-object / code-less payload on the catch-all — never a throw, never null', () => {

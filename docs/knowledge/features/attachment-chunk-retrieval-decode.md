@@ -253,7 +253,9 @@ than new code, all owned by the not-yet-built reassembler rather than this decod
   twenty-fifth additive kind, reusing `requireNonEmptyString` (#964) and `base64StdDecode` (wire codec)
   rather than adding a new field narrower.
 - [Daemon error outcome](daemon-error-outcome.md) — the sibling failure path on this leg: an
-  `attachment.not_found` reject instead of a chunk stream, decoded by a still-later slice.
+  `attachment.not_found` or `attachment.stream_aborted` reject instead of a chunk stream, classified by
+  [#999](https://github.com/pyrycode/pyrycode-desktop/issues/999); nothing consumes either outcome until
+  #995.
 - [Wire codec](wire-codec.md) — `base64StdDecode` (strict re-encoding check), `decodeEnvelope`'s
   `in_reply_to` handling, `MAX_PLAINTEXT_BYTES`.
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md)

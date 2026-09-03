@@ -13,7 +13,9 @@ declared by pyrycode#2052, answered by #2054, both landed 2026-09-03. The inboun
 answering `attachment_chunk` frames is
 [#998](https://github.com/pyrycode/pyrycode-desktop/issues/998), split from #994 in turn — see
 [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md). The `attachment.not_found`
-reject still has no decode of its own as of #998.
+and `attachment.stream_aborted` rejects are classified by
+[#999](https://github.com/pyrycode/pyrycode-desktop/issues/999) — see
+[Daemon error outcome](daemon-error-outcome.md) — though nothing consumes either outcome until #995.
 
 ## What it does
 

@@ -39,7 +39,7 @@ the first settle, so "exactly one terminal" is a property of construction, not o
 
 ```ts
 export type AttachmentTransferFailure =
-  | DaemonErrorOutcome        // the seven daemon-mapped verdicts (#965)
+  | DaemonErrorOutcome        // every daemon-mapped verdict, both legs (#965, widened #999)
   | 'not-connected'           // no live session when the upload was requested
   | 'connection-lost'         // the session went away mid-transfer
   | 'send-failed'             // this client could not put a chunk on the wire
@@ -137,7 +137,11 @@ would land if a future ticket needs it.
   `reassembler?.fail` and the modal FIFO shift, on the same argument its two siblings already carry: an
   envelope id is minted once, so at most one of the three correlation stores can hold it. The outcome
   carried is the client-owned `DaemonErrorOutcome` #965 already mapped off the daemon's `code` string —
-  nothing here re-parses it.
+  nothing here re-parses it. Since #999 widened that type to the retrieval leg's two codes as well, this
+  arm can in principle receive one of them from a hostile daemon (a forged `error` frame whose
+  `in_reply_to` correlates to a pending upload chunk); from a conforming daemon only the six upload-leg
+  values ever reach here, because a retrieval reject correlates to a `request_attachment` id, never a
+  chunk's — see [Daemon error outcome](daemon-error-outcome.md#security-review).
 - **Teardown net — `failAttachmentTransfers()`**, `failBundleStream`'s twin: snapshots and clears the set
   **before** failing each entry `'connection-lost'` (release-then-fail, so the module holds no reference to
   an abandoned transfer). Called at all four `failBundleStream` sites — `relay-link-down`, `terminal`,
@@ -172,7 +176,7 @@ Connection teardown (relay-link-down / terminal / error / dial()) → failAttach
 |---|---|---|
 | No live session at request time | `uploadAttachment` guard | `not-connected` |
 | `WireEncodeError` on an over-cap envelope, or a driver throw | `sendChunk` throws → caught by the loop | `send-failed` — the caught object is dropped, never inspected (it could echo the envelope's base64) |
-| Daemon reject correlated to a sent chunk | `daemon-error` arm → `transferForEnvelope` | the decoded `DaemonErrorOutcome` (seven values, [#965](daemon-error-outcome.md)) |
+| Daemon reject correlated to a sent chunk | `daemon-error` arm → `transferForEnvelope` | the decoded `DaemonErrorOutcome` — six values reachable from a conforming daemon on this leg ([#965](daemon-error-outcome.md)); the type also carries the retrieval leg's two ([#999](daemon-error-outcome.md)), not reachable here except from a hostile daemon |
 | Socket drop / relay close / driver error / re-dial mid-transfer | `failAttachmentTransfers()` | `connection-lost` |
 | Daemon success naming this transfer | `attachment-stored` arm | `{ ok: true }` |
 
@@ -261,8 +265,10 @@ and the gap is deterministic. The wiring layer asserts only the terminal.
 - [Attachment-stored wire types](attachment-stored-wire-types.md) — the positive-terminal decode (#964)
   this drives on, including the `attachment_id`-not-envelope-id correlation argument this feature's design
   is built from.
-- [Daemon error outcome](daemon-error-outcome.md) — the reject-code decode (#965) whose seven-member
-  `DaemonErrorOutcome` union this feature widens into its own `AttachmentTransferFailure`.
+- [Daemon error outcome](daemon-error-outcome.md) — the reject-code decode (#965, extended to the
+  retrieval leg by #999) whose `DaemonErrorOutcome` union this feature widens whole into its own
+  `AttachmentTransferFailure`, on purpose: narrowing it back down here would reintroduce a runtime branch
+  for a frame the wire cannot produce on this leg.
 - [Debug-bundle reassembly](debug-bundle-reassembly.md) — the settle-once / connection-teardown-net
   structural precedent (`bundleReassembler.ts`, `failBundleStream`) this feature's `attachmentTransfer.ts`
   and `failAttachmentTransfers` mirror.

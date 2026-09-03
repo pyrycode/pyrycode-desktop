@@ -276,5 +276,6 @@ and the gap is deterministic. The wiring layer asserts only the terminal.
 - `docs/specs/architecture/861-attachment-send-driver.md` — the full architecture spec, including the
   security review this doc summarizes and the three open questions (all resolved as designed — see the
   spec's § Revisions).
-- [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862) — the intended caller: picks the file,
-  guards its size, mints `attachment_id`, and reports the outcome to the window. Not started.
+- [Attachment upload (pick, guard, drive, report)](attachment-upload.md) — [#862](https://github.com/pyrycode/pyrycode-desktop/issues/862),
+  the caller: picks the file, guards its size, mints `attachment_id`, and reports the outcome to the
+  window on its own dedicated channel.

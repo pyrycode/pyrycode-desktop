@@ -154,10 +154,12 @@ claims the arm is a later ticket.
 
 ## Edge cases and limitations
 
-- **No consumer.** The switch arm decodes and returns; `daemonConnection.ts` has no `case
-  'attachment-chunk':` yet, so a well-formed frame is decoded and then simply unmatched — the same
+- **No consumer wired into a live session.** `daemonConnection.ts` still has no `case
+  'attachment-chunk':`, so a well-formed frame is decoded and then simply unmatched — the same
   dormancy `attachment_stored`/`slash_command_list`/`model_list` shipped through before their
-  consumers landed.
+  consumers landed. [`RetrievedAttachmentChunk`](attachment-reassembly-and-store.md) does have its
+  first type-level consumer now — the reassembler built in #995 takes exactly this type as `chunk()`'s
+  parameter — but nothing in `daemonConnection.ts` calls it yet; #996 is the wiring.
 - **Reordering is not an error at this boundary.** The arm is stateless and per-frame; chunks are
   index-addressed by contract, so out-of-order arrival is ordinary traffic. Drop and stall are the
   reassembler's timeout to own, not this arm's.
@@ -247,7 +249,12 @@ than new code, all owned by the not-yet-built reassembler rather than this decod
   its no-`inReplyTo` decision is **not** precedent here — see § How it works for why the reasoning
   inverts.
 - [Attachment transfer](attachment-transfer.md) — the upload leg's send driver (#861); the retrieval
-  leg's own driver/reassembler, once built, is this decode's first consumer.
+  leg's structural mirror.
+- [Attachment reassembly and store](attachment-reassembly-and-store.md) — this decode's first
+  consumer (#995): `RetrievedAttachmentChunk` is the exact input to `createAttachmentReassembler`'s
+  `chunk()`, and the per-frame checks this arm already enforces are deliberately not re-run there.
+  Ships unwired; [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996) is the driver that
+  claims the `'attachment-chunk'` arm in `daemonConnection.ts`.
 - [Inbound message decode](inbound-message-decode.md) / [internals](inbound-message-decode-internals.md) /
   [extension history](inbound-message-decode-history.md) — the boundary this arm extends: the
   twenty-fifth additive kind, reusing `requireNonEmptyString` (#964) and `base64StdDecode` (wire codec)

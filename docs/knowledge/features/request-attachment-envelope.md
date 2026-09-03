@@ -15,7 +15,9 @@ answering `attachment_chunk` frames is
 [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md). The `attachment.not_found`
 and `attachment.stream_aborted` rejects are classified by
 [#999](https://github.com/pyrycode/pyrycode-desktop/issues/999) — see
-[Daemon error outcome](daemon-error-outcome.md) — though nothing consumes either outcome until #995.
+[Daemon error outcome](daemon-error-outcome.md) — and [#995](attachment-reassembly-and-store.md) built
+the reassembler that will act on them, though no driver in `daemonConnection.ts` reads either outcome
+on this leg yet (#996).
 
 ## What it does
 

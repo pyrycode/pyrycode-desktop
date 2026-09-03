@@ -59,6 +59,7 @@ import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
 import { runUnpair } from './unpairAction'
 import { dropQueuedMessage } from './dropQueuedMessage'
+import { copyMessageText } from './copyMessageText'
 import { sendInterrupt } from './sendInterrupt'
 import { RunConfigData } from './RunConfigData'
 import { RunConfigSections } from './RunConfigSections'
@@ -593,6 +594,61 @@ export function Timeline({
   )
 }
 
+// #969: the accessible name on the meta row's copy control — a CLIENT-OWNED constant, beside
+// DROP_QUEUED_LABEL's precedent below. Never interpolated with the message text: `Copy: ${text}` would
+// put relay-peer-authored text into an ATTRIBUTE, which CLAUDE.md's 2026-08-20 ruling forbids outright,
+// and "the control has an accessible name" is exactly the requirement that invites it.
+const COPY_MESSAGE_LABEL = 'Copy message'
+
+// #969: the meta row at the foot of a text message bubble (Figma `Meta row` 132:4446 assistant /
+// 132:4435 user) — a body-small timestamp and the copy control, in --color-inverse-primary. Rendered as
+// the bubble's LAST child in both TimelineRow message arms and nowhere else: not on the tool rows
+// (which are not bubbles), not on the queued row (nothing sent yet to copy, and no time), and not on
+// the unmounted MessageBubble residue, whose exact-markup tests pin the message text as its sole child.
+//
+// APPENDED, NEVER PREPENDED. interactiveRoundtrip.test.tsx pins the byte string
+// `data-thread-role="assistant"><div class="bubble__markdown"><p>`, so the markdown container must stay
+// the bubble's opening child; and #691/#686's attachment slots will insert themselves above this row
+// simply by being written before it. Last-child is the shape, not a preference.
+//
+// The timestamp slot renders EMPTY until #970 fills it. An empty inline element generates no line box,
+// which is why .bubble__meta carries a min-height rather than taking its 16px from the text — see
+// conversation.css.
+//
+// NO INJECTED EFFECT, unlike QueuedBacklog's required `onDrop`. That injection exists because a queued
+// row cannot see the conversation id its send needs; a copy needs the row's own text and nothing else,
+// so the handler is a closure over that one value calling the module helper directly. Timeline's prop
+// surface is unchanged, which is what keeps the ~30 existing `<Timeline` render sites untouched. The
+// promise is explicitly voided — never floating — and copyMessageText handles its own rejection.
+function BubbleMeta({ text, side }: { text: string; side: 'user' | 'daemon' }): JSX.Element {
+  return (
+    <div className={side === 'user' ? 'bubble__meta bubble__meta--user' : 'bubble__meta'}>
+      <span className="bubble__meta-time" />
+      <button
+        type="button"
+        className="bubble__copy"
+        aria-label={COPY_MESSAGE_LABEL}
+        onClick={() => void copyMessageText(text)}
+      >
+        {/* The Font Awesome `copy-solid-full` export, the family the composer's own glyphs come from.
+            Inline SVG with fill: currentColor so it inherits the row's colour (the .queued-row__drop-icon
+            idiom), and aria-hidden because the button's label carries the meaning. The drawing's
+            clipPath is a full-bleed 11x12 rect — a no-op — and is dropped rather than transcribed. */}
+        <svg
+          className="bubble__copy-icon"
+          viewBox="0 0 11 12"
+          width="11"
+          height="12"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M4.71429 0C3.84754 0 3.14286 0.672656 3.14286 1.5V7.5C3.14286 8.32734 3.84754 9 4.71429 9H9.42857C10.2953 9 11 8.32734 11 7.5V2.79844C11 2.39062 10.8257 1.99922 10.5163 1.71562L9.09955 0.417188C8.80737 0.15 8.41696 0 8.01183 0H4.71429ZM1.57143 3C0.704688 3 0 3.67266 0 4.5V10.5C0 11.3273 0.704688 12 1.57143 12H6.28571C7.15246 12 7.85714 11.3273 7.85714 10.5V10.125H6.28571V10.5H1.57143V4.5H1.96429V3H1.57143Z" />
+        </svg>
+      </button>
+    </div>
+  )
+}
+
 // One timeline row, discriminated on `kind`. No `default` / `assertNever`: the switch is exhaustive
 // over the six kinds (only turnBoundary null), so a future seventh ThreadItem kind makes it
 // non-exhaustive → a compile-time "not all code paths return" error that forces a render decision —
@@ -652,6 +708,12 @@ function TimelineRow({
                 <AssistantMarkdown text={item.text} />
               </div>
             )}
+            {/* #969: appended AFTER the fork, so it is the bubble's last child on BOTH branches. The
+                in-progress tail gets it too — excluding it would reflow the bubble the moment the turn
+                settles, and a partial reply is as copyable as a finished one. #607's pre-wrap reaches
+                this subtree on that branch and is inert there: the JSX transform emits no whitespace
+                text nodes between elements on separate lines. */}
+            <BubbleMeta text={item.text} side="daemon" />
           </div>
         </div>
       )
@@ -697,6 +759,9 @@ function TimelineRow({
         <div className="message-row message-row--user">
           <div className="bubble bubble--user" data-thread-role="user">
             {item.text}
+            {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
+                132:4435). The copy source is the echo the composer wrote — the text as sent. */}
+            <BubbleMeta text={item.text} side="user" />
           </div>
         </div>
       )

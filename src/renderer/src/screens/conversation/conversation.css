@@ -283,28 +283,138 @@
   justify-content: flex-start;
 }
 
-/* max-width (not a fixed width) so bubbles reflow as the window resizes. */
+/* #969 — the desktop drawing's `Message` component (Figma 132:4477 assistant / 132:4508 user),
+   replacing the mobile thread's bubble (16-22 / 16-23) this wore until now. ONE SHAPE FOR BOTH SIDES:
+   6px on all four corners, so the two side modifiers below no longer carry a radius at all and the
+   mirrored clipped corner is gone. Padding is the drawing's 16/20 (--space-4 / --space-5), not the
+   mobile 12/14 — and NOT by repurposing --space-bubble-x, which reads 14 and has two other consumers
+   (.tool-row__result / .tool-row__input-value and .unrecognized-row__raw); changing its value would
+   restyle rows this ticket is explicitly not touching.
+
+   max-width (not a fixed width) so bubbles reflow as the window resizes. The drawing gives one width at
+   one window size — 680px inside the 780px column at 1280px — which min(680px, 75%) already yields
+   there, so the shipped rule stands rather than being replaced by the drawn constant.
+
+   NOT A FLEX COLUMN, though the drawing's `Message` is one with a 12px gap. The in-progress assistant
+   branch renders its text and the streaming cursor <span> as SIBLING direct children of this box
+   (ConversationScreen's assistantText arm), and a flex column would make each its own flex item and
+   drop the cursor onto its own line. The drawing's rhythm is instead a margin-top on .bubble__meta
+   below, which is the only new sibling this ticket adds and so the only place the rhythm has to appear.
+
+   TYPE IS title-small EMPHASIZED (14/20/0.1 at weight 600), the step the drawing sets on every message
+   node — added to tokens.css by this ticket, since the theme carried no title-small family at any
+   weight. The size is unchanged from the body-medium it replaces; the weight and tracking are not. If
+   the thread reads too heavy in use, the fix is a Figma-side change and a one-line restyle here. */
 .bubble {
   max-width: min(680px, 75%);
-  padding: var(--space-3) var(--space-bubble-x);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-xs);
   word-break: break-word;
-  font-size: var(--text-body-medium-size);
-  line-height: var(--text-body-medium-line);
-  letter-spacing: var(--text-body-medium-tracking);
-  font-weight: var(--text-body-medium-weight);
+  font-size: var(--text-title-small-size);
+  line-height: var(--text-title-small-line);
+  letter-spacing: var(--text-title-small-tracking);
+  font-weight: var(--text-title-small-weight-emphasized);
 }
 
-/* Border-radius order is TL TR BR BL. */
+/* The two side treatments, now fill + text role only — the radius moved to .bubble above. Placement
+   still comes from .message-row--user / .message-row--daemon, untouched. */
 .bubble--user {
-  background: var(--color-primary-container);
+  background: var(--color-on-primary);
   color: var(--color-on-primary-container);
-  border-radius: var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
 }
 
 .bubble--daemon {
-  background: var(--color-surface-container-high);
-  color: var(--color-on-surface);
-  border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-xs);
+  background: var(--color-on-primary-fixed);
+  color: var(--color-on-secondary-container);
+}
+
+/* #969 — the meta row at the foot of a text message bubble (Figma `Meta row` 132:4446 assistant /
+   132:4435 user): the timestamp #970 fills, then the copy control, 8px apart on a 16px line. Its colour
+   is --color-inverse-primary, read from the Figma VARIABLE on both nodes — the export prints #9dcbfc
+   there, which is the light-scheme transposition tokens.css:25-33 warns about and NOT what the design
+   says. The glyph inherits this colour through fill: currentColor rather than restating it.
+
+   THE min-height IS LOAD-BEARING, not a belt on the line-height above it. The timestamp slot renders
+   empty until #970, an empty inline element generates no line box, and without this the row would
+   collapse to the glyph's 12px and take the drawn 4px of breathing room with it. The token is the
+   body-small LINE HEIGHT because that is precisely why the row is 16px tall — --space-4 reads 16 by
+   coincidence and would couple the row to the spacing scale it has nothing else to do with.
+
+   MARGIN-TOP, NOT A PARENT GAP, per .bubble's own comment above. It sits between two siblings so it
+   neither collapses through the bubble's padding box nor escapes it, and .bubble__markdown > * (which
+   zeroes margin-block) cannot reach this row — that selector takes the markdown container's children,
+   and this is .bubble's child, a level up.
+
+   align-items: center where the drawing has items-start plus a 1px top pad on its `Copy` frame.
+   Centring is this file's vocabulary for the same intent, lands the 12px glyph within 1px of the drawn
+   position, and is the only value compatible with the enlarged hit area below — items-start would let
+   the control's taller box grow the row.
+
+   ACCEPTED CONSEQUENCE, recorded rather than fixed: --color-inverse-primary measures 2.67:1 on the
+   assistant fill and 2.04:1 on the user fill, against the 4.5:1 WCAG AA wants for 12px text and the 3:1
+   it wants for an icon control. Both message texts are fine (13.3:1 and 10.1:1) — it is only this row.
+   Substituting a colour here would put the app and the Figma out of step, which is the exact failure
+   this whole redraw is unwinding; the fix is a Figma-side change on 132:4446 / 132:4435 and a one-token
+   edit afterwards. The hover state below incidentally clears both thresholds. */
+.bubble__meta {
+  margin-top: var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--text-body-small-line);
+  color: var(--color-inverse-primary);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight);
+}
+
+/* The drawing's `justify-end` on the user variant's row (132:4435); the assistant variant carries none,
+   so the base rule's flex-start default is already right there. */
+.bubble__meta--user {
+  justify-content: flex-end;
+}
+
+/* #969 — the copy control. THE HIT AREA IS BIGGER THAN THE GLYPH WITHOUT BEING BIGGER THAN THE ROW:
+   11x12 is far under the app's 48px target convention, but growing the button would grow the 16px row
+   the drawing specifies. padding + an equal negative margin gives a 27x28 border box (what the pointer
+   and the focus ring get) inside an 11x12 margin box (what the layout gets), so the row's height and
+   the glyph's drawn position are both exactly as drawn. That is the M3 icon button's container trick,
+   expressed through the spacing scale so no pixel literal appears. The negative margin reaches 8px left
+   into the row's own 8px gap, so it stops at the timestamp rather than overlapping it.
+
+   THE DRAWING HAS NO HOVER, FOCUS OR PRESSED STATE, so both take this file's existing answer
+   (.queued-row__drop / .composer__send). Hover BRIGHTENS the glyph rather than lifting a surface under
+   it: --color-surface-container-high, the surface .queued-row__drop lifts to, is a neutral grey that
+   would read as a foreign patch on either navy fill, while --color-primary is the same tonal ramp as
+   the resting --color-inverse-primary one step lighter. No pressed state and no post-copy confirmation
+   — the drawing shows neither, and the AC does not ask for one. */
+.bubble__copy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  margin: calc(var(--space-2) * -1);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.bubble__copy:hover {
+  color: var(--color-primary);
+}
+
+.bubble__copy:focus-visible {
+  outline: 1px solid var(--color-outline);
+}
+
+/* The glyph's size comes from the svg's own width/height attributes (the .queued-row__drop-icon /
+   .composer__send-icon idiom); `block` stops the inline baseline gap. */
+.bubble__copy-icon {
+  display: block;
 }
 
 /* #607 — the IN-PROGRESS assistant tail's whitespace treatment. .bubble declares no white-space, so the
@@ -333,9 +443,12 @@
 }
 
 /* #609 — the settled reply's markdown container (Figma 16:43): a flex column with an 8px gap between
-   blocks. Figma's fill, 14/12 padding and 20/20/20/6 radius are already .bubble + .bubble--daemon, and
-   its items-start + w-full children are exactly flex's default `stretch`, so the column and its gap are
-   the only visual properties this adds. #608's AssistantMarkdown emits no wrapper of its own, so without
+   blocks. The bubble's own fill, padding and radius are already .bubble + .bubble--daemon — #969
+   redrew all three from the desktop `Message` (20/16 padding, 6px on all four corners, the
+   --color-on-primary-fixed fill), and none of that reaches this container — and its items-start +
+   w-full children are exactly flex's default `stretch`, so the column and its gap are the only visual
+   properties this adds. #969 appends .bubble__meta as a SIBLING of this container inside the bubble, so
+   this box is unchanged by it: the meta row's own rhythm is its margin-top, never this gap. #608's AssistantMarkdown emits no wrapper of its own, so without
    this element the blocks would be direct children of .bubble with nothing to hang the gap on.
 
    The gap alone is NOT enough. index.css resets only `body`, so every UA block margin is live and would
@@ -429,7 +542,7 @@
 /* #629 — a list's and a blockquote's indent, and the block rhythm one level inside either. These are the
    last two constructs in here still laid out by the UA stylesheet: ul/ol carry padding-inline-start: 40px,
    and <blockquote> carries margin-inline: 40px — indentation is its ONLY visual signal, and on both sides.
-   Inside a bubble capped at min(680px, 75%) and already padded 14px each side (:295), 40px per side is a
+   Inside a bubble capped at min(680px, 75%) and already padded 20px each side (#969's `.bubble`), 40px per side is a
    large bite out of the measure. The two share one rule block because they share one leftover: :361 is a
    DIRECT-CHILD selector, so every block one level down — a <p> in a blockquote, a <p> in a loose <li>, a
    list in a blockquote, a blockquote in a blockquote — still carries its UA margin-block. :350-353 hands
@@ -442,8 +555,9 @@
    step at which a bullet and a one-digit ordered marker sit fully inside that box — both measure exactly
    16px, so anything narrower puts the commonest marker of all outside it. Wider buys headroom that is not
    needed, because the overhang lands in padding that already exists: `10.` needs 28px and overhangs 12px
-   into .bubble's own 14px, and the bubble's fill paints its padding box, so the marker lands ON the bubble;
-   `100.` needs 40px and overhangs 24px into that 14 plus .conversation__thread's 16 (:240) = 30px. That 30
+   into .bubble's own 20px (#969 — 14px when this was written), and the bubble's fill paints its padding
+   box, so the marker lands ON the bubble;
+   `100.` needs 40px and overhangs 24px into that 20 plus .conversation__thread's 16 (:240) = 36px. That 36
    is a HARD edge rather than a scrollbar — the thread declares overflow-y: auto, so its other axis computes
    to `auto`, a scroll container clips at its PADDING box, and left-side overflow in LTR is unreachable by
    scrolling. Indent also COMPOUNDS with depth and lists are where depth actually lives: at --space-6 a

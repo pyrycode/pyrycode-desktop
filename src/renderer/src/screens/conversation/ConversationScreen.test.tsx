@@ -1429,6 +1429,152 @@ describe('Timeline — the streamed assistant text', () => {
   })
 })
 
+// #969: the meta row at the foot of every text message bubble (Figma `Meta row` 132:4446 assistant /
+// 132:4435 user) — a timestamp slot #970 fills, and the copy control this ticket ships. This tier owns
+// the markup facts: WHICH rows carry the row, WHERE in the bubble it sits, and what the control is as
+// an element. What the browser does with the geometry — the 6px corners, the 16/20 padding, the row's
+// two alignments — is layout, unobservable under `environment: 'node'` with no DOM and no stylesheet;
+// that half is e2e/message-copy.spec.ts, which also owns the click and the clipboard round-trip.
+describe('Timeline — the message bubble meta row and its copy control (#969)', () => {
+  const META = 'bubble__meta'
+  const COPY = 'bubble__copy'
+  // The client-owned accessible name. Written here as the literal the component's module-local constant
+  // holds (the DROP_QUEUED_LABEL idiom — neither is exported), so a silent rename fails this tier.
+  const COPY_LABEL = 'Copy message'
+
+  const settled = (text: string): ThreadItem[] => [
+    { kind: 'assistantText', turnId: 't1', text },
+    { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
+  ]
+
+  it('ends the settled assistant bubble, the in-progress tail and the user bubble in a meta row', () => {
+    // All three are text MESSAGE bubbles, which is the set AC2 names. The in-progress tail is included
+    // deliberately: excluding it would reflow the bubble the moment a turn settles, and a partial reply
+    // is as copyable as a finished one.
+    const cases = [
+      renderToStaticMarkup(<Timeline items={settled('a settled reply')} />),
+      renderToStaticMarkup(<Timeline items={[{ kind: 'assistantText', turnId: 't1', text: 'growing' }]} />),
+      renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'typed by the operator' }]} />)
+    ]
+    for (const markup of cases) {
+      expect(markup.match(new RegExp(META, 'g'))?.length ?? 0).toBeGreaterThan(0)
+      expect(markup).toContain(COPY)
+    }
+  })
+
+  it('appends the row at the FOOT — after the markdown container, and after the streaming cursor', () => {
+    // The append-never-prepend constraint, which interactiveRoundtrip.test.tsx pins from the other side
+    // (its byte string asserts the markdown container opens the bubble). Ordering assertions rather than
+    // a byte string, because what matters is the row's position relative to the content, not the exact
+    // bytes between them.
+    const settledMarkup = renderToStaticMarkup(<Timeline items={settled('the reply body')} />)
+    expect(settledMarkup.indexOf(META)).toBeGreaterThan(settledMarkup.indexOf(CONTAINER))
+    expect(settledMarkup.indexOf(META)).toBeGreaterThan(settledMarkup.indexOf('the reply body'))
+
+    const streaming = renderToStaticMarkup(
+      <Timeline items={[{ kind: 'assistantText', turnId: 't1', text: 'still growing' }]} />
+    )
+    expect(streaming.indexOf(META)).toBeGreaterThan(streaming.indexOf(CURSOR))
+
+    const user = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'user says' }]} />)
+    expect(user.indexOf(META)).toBeGreaterThan(user.indexOf('user says'))
+  })
+
+  it('right-aligns the user row with its own modifier and leaves the assistant row unmodified', () => {
+    const user = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'mine' }]} />)
+    expect(user).toContain(`${META} ${META}--user`)
+
+    const assistant = renderToStaticMarkup(<Timeline items={settled('theirs')} />)
+    expect(assistant).toContain(META)
+    expect(assistant).not.toContain(`${META}--user`)
+  })
+
+  it('gives the copy control a real button with an accessible name, and no second focusable element', () => {
+    const markup = renderToStaticMarkup(<Timeline items={settled('copy me')} />)
+    // A real <button type="button"> IS the keyboard path (AC3): natively focusable, activated by Enter
+    // and Space, no tabindex or key handler of our own to get wrong.
+    expect(markup).toContain(`<button type="button" class="${COPY}" aria-label="${COPY_LABEL}"`)
+    // Exactly one interactive element in the bubble — the control this ticket adds and nothing else.
+    expect(markup.match(/<button/g)?.length ?? 0).toBe(1)
+    expect(markup).not.toContain('tabindex')
+  })
+
+  it('keeps the message text out of the accessible name — the label is a client-owned constant', () => {
+    // The trap "the control has an accessible name" invites: `aria-label={`Copy: ${text}`}` would put
+    // relay-peer-authored text into an ATTRIBUTE, which CLAUDE.md's 2026-08-20 ruling forbids outright.
+    // A distinctive fixture so the assertion cannot pass by coincidence.
+    const markup = renderToStaticMarkup(<Timeline items={settled('zzqq-daemon-authored-zzqq')} />)
+    expect(markup).toContain('zzqq-daemon-authored-zzqq')
+    expect(markup).not.toContain('aria-label="zzqq')
+    expect(markup).toContain(`aria-label="${COPY_LABEL}"`)
+  })
+
+  it('draws the glyph decoratively — one inline svg, hidden from the accessibility tree', () => {
+    const markup = renderToStaticMarkup(<Timeline items={settled('glyph check')} />)
+    // The Figma export's clipPath is a full-bleed 11x12 rect and is dropped as the no-op it is: the
+    // glyph ships as a bare svg with a single path, this repo's icon convention.
+    expect(markup).toContain('viewBox="0 0 11 12"')
+    expect(markup).toContain('aria-hidden="true"')
+    expect(markup.match(/<path/g)?.length ?? 0).toBe(1)
+    expect(markup).not.toContain('clipPath')
+  })
+
+  it('draws NO meta row on the queued row — it has no time and nothing sent yet to copy', () => {
+    const markup = renderToStaticMarkup(
+      <QueuedBacklog
+        items={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-07-12T00:00:00Z' }]}
+        onDrop={() => {}}
+      />
+    )
+    // It DOES take the new geometry — same .bubble and .bubble--user, restyled by CSS alone.
+    expect(markup).toContain('bubble bubble--user')
+    expect(markup).not.toContain(META)
+    expect(markup).not.toContain(COPY)
+  })
+
+  it('draws NO meta row on the unmounted MessageBubble residue, whose markup stays byte-identical', () => {
+    // #179 unmounted this path; it is still exported and still unit-tested above, where its assertions
+    // pin the message text as the bubble's SOLE child as a byte string. It inherits the CSS restyle and
+    // nothing else, so those assertions stay green untouched — this case is what makes that structural.
+    const markup = renderToStaticMarkup(
+      <MessageThread messages={[{ id: 'm1', type: 'daemon', text: 'residue' }]} />
+    )
+    expect(markup).toContain('data-message-role="daemon">residue</div>')
+    expect(markup).not.toContain(META)
+    expect(markup).not.toContain(COPY)
+  })
+
+  it('leaves every load-bearing locator byte-stable across the restyle (AC5)', () => {
+    // The classes and attributes the unit specs and the e2e tier locate rows by. A restyle that renamed
+    // one would break specs this ticket never opened, so they are asserted together, in one place.
+    const markup = renderToStaticMarkup(
+      <Timeline
+        items={[
+          { kind: 'userText', text: 'ask' },
+          ...settled('answer')
+        ]}
+      />
+    )
+    for (const locator of [
+      'message-row',
+      'message-row--user',
+      'message-row--daemon',
+      'bubble',
+      'bubble--user',
+      'bubble--daemon',
+      'bubble__markdown',
+      'data-thread-role="user"',
+      'data-thread-role="assistant"'
+    ]) {
+      expect(markup).toContain(locator)
+    }
+    const streaming = renderToStaticMarkup(
+      <Timeline items={[{ kind: 'assistantText', turnId: 't1', text: 'tail' }]} />
+    )
+    expect(streaming).toContain('bubble--assistant-text')
+  })
+})
+
 // #286/#690: the session-boundary delimiter row, redrawn as the desktop inline separator (Figma node
 // 119-3843): rule / centred label / rule on one line, with no relative time and so no `now` prop.
 // The label's per-reason copy is asserted exactly in sessionBoundaryViewModel.test.ts; here we prove

@@ -17,7 +17,7 @@ placeholder rather than anything #580 would have to unwind.
 
 ```
 .conversation
-├── BackgroundTaskTrigger              .background-task-trigger (StatusRow sibling, always rendered)
+├── ThreadOverflowMenu > menuitem "Background tasks"    (trigger since #962 — see below)
 └── BackgroundTaskPanel (if panelOpen)
     └── BackgroundTaskPanelView
         ├── .status-sheet-overlay__scrim        (onClick → onClose)
@@ -63,13 +63,21 @@ effect closes the panel; open/closed state is a fourth screen-local `useState` b
 `ConversationScreen` (the `pickerOpen`/`channelInfoOpen`/`sheetOpen` twin, [ADR
 0006](../decisions/0006-ephemeral-screen-state-usereducer-not-store.md)).
 
-**Trigger.** An icon-only `.background-task-trigger` button (`aria-label="Background tasks"`,
+**Trigger.** Originally an icon-only `.background-task-trigger` button (`aria-label="Background tasks"`,
 `aria-haspopup="dialog"`), mounted unconditionally as a `StatusRow` sibling — not gated on tasks
-existing, since gating would make both non-populated readings unreachable through the UI. Chosen over
-the overflow menu (hardcoded to one item; routing through it means generalising the menu) and
-`WorkspaceChip`'s "Change" button (self-gates to `null` once the thread has a message — exactly when
-background tasks exist). Carries no task-count badge; a badge would need its own roster subscription,
-left to #580.
+existing, since gating would make both non-populated readings unreachable through the UI. Chosen at the
+time over the overflow menu, which was then hardcoded to one item, and `WorkspaceChip`'s "Change" button
+(self-gates to `null` once the thread has a message — exactly when background tasks exist).
+
+**Retired by #962**, along with `StatusRow` itself: the desktop design draws no home for either
+control in the region between the thread and the composer, so both `.background-task-trigger` and
+`BACKGROUND_TASK_TRIGGER_LABEL` are deleted. The trigger is now the `Background tasks` item in
+`ThreadOverflowMenu`, wired to the same `setPanelOpen(true)` the deleted button called — the panel and
+its `useState` cell are untouched, only the affordance moved. This closes the reason the menu was
+originally passed over (it now generalises to three items instead of one) — see
+[Run-configuration row and background-task trigger retired](conversation-shell-chrome.md#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
+for the menu's design. Still carries no task-count badge; a badge would need its own roster
+subscription, left to #580, which also owns the panel's final trigger and may re-point this one again.
 
 **SECURITY.** For `taskType: local_bash`, `description` is the literal shell command claude ran —
 untrusted, model-influenced text the daemon bounds but does not sanitize. Rendered as auto-escaped

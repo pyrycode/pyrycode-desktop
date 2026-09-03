@@ -48,8 +48,9 @@ A **screen-snapshot request + display** landed in [#324](../codebase/324.md) and
 deleted upstream (pyrycode#1348), leaving the button enabled and silently inert. See
 [Screen-snapshot action & display](conversation-shell-conversation-and-modals.md#screen-snapshot-action--display-324-removed-618) below.
 
-An **openable background-task panel** landed in [#581](../codebase/581.md): a `StatusRow`-sibling
-trigger between the thread and the composer opens an overlay listing the tasks
+An **openable background-task panel** landed in [#581](../codebase/581.md): a trigger — originally a
+`StatusRow`-sibling between the thread and the composer, retired to a `Background tasks` overflow-menu
+item by [#962](https://github.com/pyrycode/pyrycode-desktop/issues/962) — opens an overlay listing the tasks
 [`backgroundTaskRosterStore`](background-task-roster-store.md) (#573/#576/#577) holds alive for the
 open conversation — work that outlives a turn, which the chat's turn-shaped rendering has no way to
 express, without adding a single row to the timeline. The store's three `selectRosterFor` readings

@@ -90,6 +90,19 @@ splitting one sheet's control across two files for zero behavioral gain would ha
 precedent the seam was named after. No caller ever passed `onChannelInfo` (`PairedShell`, `App.tsx`, and
 every test constructed props without it), so the removal is a pure simplification, not a breaking change.
 
+**The menu that hosts this item grew from one item to three in
+[#962](https://github.com/pyrycode/pyrycode-desktop/issues/962).** `Channel info` was `ThreadOverflowMenu`'s
+only item until #962 retired the run-configuration row (#177) and the background-task trigger (#581),
+both of which had no drawn home in the desktop design, and gave each a menuitem here instead —
+`Run configuration` and `Background tasks`, added after `Channel info` in that order. `onChannelInfo`
+went from #276's optional prop to one of three **required** action props on `ThreadOverflowMenu`, and
+`ThreadOverflowMenuView`'s single literal `<button role="menuitem">Channel info</button>` became a map
+over three `{ label, onSelect }` entries kept as literals inside the view — this item's copy and position
+are unchanged, but it is no longer the only thing the view renders. See [Run-configuration row and
+background-task trigger
+retired](conversation-shell-chrome.md#run-configuration-row-and-background-task-trigger-retired-overflow-menu-grows-to-three-items-962)
+for the other two items' own design.
+
 **`conversation === null` renders gracefully, not a crash.** [`activeConversationStore`](conversation-shell-workspace-and-run-config.md#workspace-chip-278)
 is written on exactly one path — the FAB create-nav callback — so a thread opened from the channel list
 never populates it (the app's single-active-conversation interim). The sheet still opens: chrome + a

@@ -51,6 +51,7 @@ import {
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { ComposerActionsMenu } from './ComposerActionsMenu'
+import { ComposerModelMenu } from './ComposerModelMenu'
 import { useSlashCommandTypeAhead } from './ComposerSlashCommandTypeAhead'
 import { contextUsagePercent } from './contextUsage'
 import { useRunConfigStore, selectSnapshot } from '../../store/runConfigStore'
@@ -2615,9 +2616,12 @@ function Composer({
       {/* #940: this row is the type-ahead's ANCHOR — its left edge is the message box's, and the panel
           positions against it (`position: relative` in conversation.css) and inherits the clamp's
           --composer-options-shift from it. It deliberately does NOT wear `.composer-options-anchor`,
-          even though that block was written for this consumer: e2e/composer-options-clamp.spec.ts
-          locates that class and relies on Playwright strict mode finding exactly one in the app, and the
-          class carries nothing this row does not already have or declare for itself. */}
+          even though that block was written for this consumer: the class carries only position: relative
+          and display: flex, both of which this row already declares for itself, so wearing it would add
+          nothing. (Until #988 this comment gave a second reason — that e2e/composer-options-clamp.spec.ts
+          locates that class bare and relies on exactly one existing in the app. That reason is SPENT: the
+          footer's model menu renders a second anchor whenever a model list has arrived, and that spec now
+          scopes its locator to the Actions trigger. The decision above stands on its own.) */}
       <div className="composer__row" ref={typeAhead.anchorRef}>
         {/* The textarea stays enabled while not connected — the user may draft; only the send
             control is gated (AC1). The ref is the type-ahead's: a row picked with the MOUSE moves focus
@@ -2660,17 +2664,24 @@ function Composer({
           stylesheet, which is what stops the message box moving when the reading comes and goes (AC4).
 
           Still NO wrapper element for the group Figma's `Info and buttons` sub-frame draws: #682
-          permission mode, #683 model and effort and #685 attach are blocked on daemon work that does not
-          exist, and emitting an empty wrapper (or a spacer, or a disabled control) for them is precisely
-          the placeholder #811 forbade. #682/#683 prepend siblings here; #685 right-aligns with
-          margin-left: auto.
+          permission mode and #685 attach remain blocked on daemon work that does not exist, and emitting
+          an empty wrapper (or a spacer, or a disabled control) for them is precisely the placeholder #811
+          forbade. #682 inserts itself between the two menus below when it lands; #685 right-aligns with
+          margin-left: auto. The model half of that sentence stopped being true when #974 landed the
+          daemon's published list.
 
           #680: Actions is the row's FIRST item (Figma 115:3677 at x=0), ahead of the reading. It takes
           `sendText`, so a picked command travels the identical path a typed one does — the same gate, the
           same submitMessage call, the same optimistic echo and the same scroll follow (AC3, AC4). No
-          `canSend` prop goes down with it: the gate stays in one place. */}
+          `canSend` prop goes down with it: the gate stays in one place.
+
+          #988: the model menu (Figma 115:3683), immediately right of Actions and NOT at the design's x=135
+          — #682's button is sequenced behind it, and a spacer held open for a control that does not exist
+          is the same placeholder. It takes `conversationId` and reads its own four store slices, so a
+          snapshot tick re-renders this leaf rather than the textarea beside it. */}
       <div className="composer__footer">
         <ComposerActionsMenu onCommand={sendText} />
+        <ComposerModelMenu conversationId={activeConversationId} />
         <ContextUsageControl />
       </div>
     </div>

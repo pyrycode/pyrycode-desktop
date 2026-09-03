@@ -107,6 +107,12 @@ function threadBubbleCount(markup: string): number {
   return markup.match(/data-thread-role="assistant"/g)?.length ?? 0
 }
 
+// The Actions trigger's rendered `class` attribute, as one whole run. #988 lifted the shared
+// footer-button treatment out of .composer__actions, so the trigger wears a two-class mix; three
+// assertions in the footer block below pin that exact run, and one constant is what keeps them from
+// drifting apart one at a time.
+const ACTIONS_TRIGGER_CLASS_RUN = 'class="composer__footer-button composer__actions"'
+
 const CURSOR = 'bubble__cursor'
 
 // #609: the settled reply's markdown container. Its presence is the markup-level signal that a bubble
@@ -3799,7 +3805,7 @@ describe('ConversationScreen — store binding', () => {
   it('mounts the Actions trigger in the footer row, closed and enabled while disconnected (AC1, AC4)', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
     const footerAt = markup.indexOf('class="composer__footer"')
-    const triggerAt = markup.indexOf('class="composer__actions"')
+    const triggerAt = markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)
     expect(footerAt).toBeGreaterThanOrEqual(0)
     expect(triggerAt).toBeGreaterThan(footerAt)
     expect(markup).toContain(COMPOSER_ACTIONS_LABEL)
@@ -3807,7 +3813,16 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).toContain('aria-expanded="false"')
     expect(markup).not.toContain('composer-options__item')
     // Enabled: the trigger's own tag carries no `disabled`, unlike the send control one row up.
-    const triggerTag = markup.match(/<button[^>]*class="composer__actions"[^>]*>/)?.[0] ?? ''
+    //
+    // THE NON-EMPTY ASSERTION IS LOAD-BEARING, and #988 is why it is here. This extractor used to end in
+    // `?? ''`, so when the class run changed under it (the shared-treatment lift) the match returned
+    // nothing, `expect('').not.toContain('disabled')` held, and the guard would have disappeared with no
+    // red anywhere in the suite. A whole-attribute-run match must prove it matched before it asserts an
+    // absence.
+    const triggerTag = markup.match(
+      new RegExp(`<button[^>]*${ACTIONS_TRIGGER_CLASS_RUN}[^>]*>`)
+    )?.[0]
+    expect(triggerTag).toBeDefined()
     expect(triggerTag).not.toContain('disabled')
   })
 
@@ -3844,6 +3859,45 @@ describe('ConversationScreen — store binding', () => {
       expect(markup.indexOf('composer__context')).toBeGreaterThan(
         markup.indexOf('class="composer__footer"')
       )
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // #988: the model menu's mount site — the only proof the control is wired into the row, since every
+  // assertion in ComposerModelMenu.test.tsx passes on an UNMOUNTED component.
+  //
+  // The same getInitialState SPY as the reading above, and for the same reason: zustand v5 reads
+  // getInitialState() under renderToStaticMarkup. With no model list published (the model-list store's
+  // initial state is an empty map) the control renders AC4's inert label, which is exactly what makes
+  // this a mount proof — the label is the seeded snapshot's own model value, so it can only appear if the
+  // container actually read the snapshot.
+  it('mounts the model control in the footer row, between Actions and the reading (AC1, AC4)', () => {
+    const initial = runConfigStore.getInitialState()
+    const spy = vi.spyOn(runConfigStore, 'getInitialState').mockReturnValue({
+      ...initial,
+      snapshot: {
+        model: 'seeded-session-model',
+        effort: '',
+        yolo: false,
+        usedTokens: 168000,
+        windowTokens: 200000
+      }
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      const triggerAt = markup.indexOf(ACTIONS_TRIGGER_CLASS_RUN)
+      const modelAt = markup.indexOf('composer__model-label')
+      expect(triggerAt).toBeGreaterThan(-1)
+      // The design's item order: Actions, then the model control, then the reading.
+      expect(modelAt).toBeGreaterThan(triggerAt)
+      expect(markup.indexOf('composer__context')).toBeGreaterThan(modelAt)
+      // The verbatim fallback, through the mounted container: nothing is published, so the label is the
+      // session's own model value.
+      expect(markup).toContain('>seeded-session-model<')
+      // AC4's inert arm: no second popup announcement and no second anchor in the row.
+      expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
+      expect(markup.split('class="composer-options-anchor"').length - 1).toBe(1)
     } finally {
       spy.mockRestore()
     }
@@ -4022,8 +4076,11 @@ describe('ConversationScreen — store binding', () => {
     // it was never one of the menu popups.) Pinned as a COUNT instead, and
     // pinned to the composer's trigger: a second menu popup appearing in the bare tree still fails here,
     // which is the guard #276 wanted.
+    // (The count stays 1 with #988's model menu mounted: the bare tree has no run-config snapshot, so the
+    // effective model is '' and that control renders nothing at all.)
     expect(markup.split('aria-haspopup="menu"').length - 1).toBe(1)
-    expect(markup).toContain('class="composer__actions" aria-haspopup="menu"')
+    // Adjacency-sensitive on purpose: it pins the class run immediately followed by aria-haspopup.
+    expect(markup).toContain(`${ACTIONS_TRIGGER_CLASS_RUN} aria-haspopup="menu"`)
   })
 })
 

@@ -994,16 +994,20 @@ describe('parseInboundMessage — daemon-error outcome narrowing (#965)', () => 
   })
 
   it('narrows a __proto__-carrying payload to the catch-all and alters no prototype', () => {
-    // JSON.parse makes `__proto__` an ordinary OWN data property, so `payload.code` finds nothing and
-    // Object.prototype is untouched — assignment, which this narrower never performs, is the only real
-    // hazard. Read back an unrelated object rather than inspecting the payload: the property that
-    // matters is that nothing global moved.
-    const bytes = encodeEnvelope({
-      id: 1,
-      type: 'error',
-      ts: FIXED_TS,
-      payload: { __proto__: { code: 'attachment.too_large' } }
-    })
+    // Built through JSON.parse, like the reserved-key tests further down this file: an object LITERAL's
+    // `__proto__` sets the prototype and creates NO own property, so encodeEnvelope's JSON.stringify
+    // would emit `"payload":{}` and this fixture would silently decay into a duplicate of the `{}` case
+    // above — coverage in name only. JSON.parse makes it an ordinary OWN data property, which is what a
+    // peer actually puts on the wire: `payload.code` then finds nothing, and Object.prototype is
+    // untouched because assignment — which this narrower never performs — is the only real hazard.
+    // Read back an unrelated object rather than inspecting the payload: the property that matters is
+    // that nothing global moved.
+    const payload = JSON.parse('{"__proto__":{"code":"attachment.too_large"}}')
+    const bytes = encodeEnvelope({ id: 1, type: 'error', ts: FIXED_TS, payload })
+    // The fixture proves itself, so a future rewrite into literal form reddens here instead of passing
+    // against an empty payload.
+    expect(new TextDecoder().decode(bytes)).toContain('"__proto__"')
+
     expect(parseInboundMessage(bytes)).toEqual({ kind: 'daemon-error', outcome: 'unclassified' })
     expect(({} as Record<string, unknown>).code).toBeUndefined()
   })

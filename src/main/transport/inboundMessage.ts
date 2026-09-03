@@ -90,6 +90,55 @@ function hashPlaintext(plaintext: Uint8Array): string {
 }
 
 /**
+ * WHICH WAY a daemon `error` frame failed, as a CLIENT-OWNED value (#965). Every inhabitant is a
+ * literal written in this file, so the type itself is the trust signal: a value of this type provably
+ * holds no daemon text. That is the whole point — `ErrorPayload.code` is untrusted text from an
+ * internet-exposed boundary, and CLAUDE.md forbids it becoming a lookup path, a filename or a cache
+ * key, so it is compared against these constants and dropped, never carried.
+ *
+ * The six classified members are the attachment UPLOAD leg's reject codes. `attachment.not_found` and
+ * `attachment.stream_aborted` exist upstream but are deliberately absent: both belong to the RETRIEVAL
+ * direction (#687) — one answers a fetch that resolved to nothing, the other abandons a download
+ * mid-stream — and modelling them here would assert a contract this leg does not have.
+ *
+ * RETRYABILITY IS DOCUMENTED HERE, NOT COMPUTED HERE, and no isRetryable helper ships with it. The
+ * daemon never sends `retry_after_s` on this leg (`attachmentReplyError` marshals a closed
+ * `{Code, Message, Retryable}` literal and the field is `*int,omitempty`), so a client cannot learn a
+ * backoff duration from the wire and "after a backoff" is a CLIENT-OWNED POLICY. Policy belongs to the
+ * consumer that acts on it (#861), not to a decode boundary whose job is to say which failure this was.
+ * The flags below are the daemon's own reject table (`false, false, false, true, true`), read off
+ * `internal/relay/v2session_attachment.go` rather than inferred from the code names.
+ */
+export type DaemonErrorOutcome =
+  /** Framing claims are inconsistent — duplicate index, index out of range, `total_chunks` disagreeing
+   *  across chunks. NOT retryable: the receiver discards the whole in-flight stream, so the repair is to
+   *  re-chunk. */
+  | 'attachment-invalid-chunk'
+  /** Assembled bytes or length disagree with the declared `sha256` / `size`. NOT retryable: the repair
+   *  is to re-derive the metadata from the file, never to retry the same bytes against the same claims. */
+  | 'attachment-integrity-failed'
+  /** The WHOLE transfer exceeds the receiver's per-upload byte bound — permanent for that file, and the
+   *  bound is receiver-configured and unpublished, so a client learns it only by being rejected. NOT
+   *  retryable. Distinct from `message-too-long`, which is one oversized envelope. */
+  | 'attachment-too-large'
+  /** The receiver's concurrency bound is hit. Retryable after a backoff, but it clears only when OTHER
+   *  uploads finish — nothing this client does to this transfer advances it. */
+  | 'attachment-too-many-uploads'
+  /** The host write failed. Retryable after a backoff, though the condition may not clear at all. The
+   *  daemon's message for it is static — never a path, never the filesystem error — but that is the
+   *  daemon's promise about its own behaviour, not a property this client relies on: no message crosses. */
+  | 'attachment-storage-failed'
+  /** ONE envelope was oversized — a producer bug on THIS side, not a verdict on the transfer's size, and
+   *  raised by the transport rather than the attachment path. NOT retryable: resending the same envelope
+   *  reproduces it. */
+  | 'message-too-long'
+  /** Everything else, and it covers two causes on purpose: a code outside the six above (including a
+   *  future one this client predates), and a payload that carried no readable `code` at all — absent,
+   *  non-object, or `code` missing / not a string. Both mean the same thing to a consumer, "this client
+   *  declined to classify the failure", and neither is a reason to drop a terminal frame. */
+  | 'unclassified'
+
+/**
  * Which modeled app-message the envelope carried. NOT a wire type and NOT a DaemonEvent — the
  * transport layer stays IPC-free. An internal transport result the consumer (#62) maps onto the
  * daemon-event channel.
@@ -104,7 +153,8 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * optional numeric `inReplyTo` — the `Envelope.in_reply_to` routing id already surfaced by
  * decodeEnvelope (#269), propagated (not re-decoded, no ErrorPayload re-parsed for it) so the consumer
  * can correlate the error back to a pending `set_session_settings` request and surface a rejection;
- * `undefined` when the frame omits it (correlation fails closed). Still surfaces NO error content.
+ * `undefined` when the frame omits it (correlation fails closed). Still surfaces NO daemon-supplied
+ * error content.
  *
  * The two interactive-stream kinds (#199) carry the decoded AssistantDeltaPayload / TurnEndPayload.
  * Unlike `snapshot`, the assistant delta `text` IS the render payload — the consumer carries it onward
@@ -315,55 +365,6 @@ function hashPlaintext(plaintext: Uint8Array): string {
  * ticket. Nothing consumes this arm yet: the send driver is #861, and daemonConnection's inbound switch
  * has no catch-all, so it stops here until claimed.
  */
-/**
- * WHICH WAY a daemon `error` frame failed, as a CLIENT-OWNED value (#965). Every inhabitant is a
- * literal written in this file, so the type itself is the trust signal: a value of this type provably
- * holds no daemon text. That is the whole point — `ErrorPayload.code` is untrusted text from an
- * internet-exposed boundary, and CLAUDE.md forbids it becoming a lookup path, a filename or a cache
- * key, so it is compared against these constants and dropped, never carried.
- *
- * The six classified members are the attachment UPLOAD leg's reject codes. `attachment.not_found` and
- * `attachment.stream_aborted` exist upstream but are deliberately absent: both belong to the RETRIEVAL
- * direction (#687) — one answers a fetch that resolved to nothing, the other abandons a download
- * mid-stream — and modelling them here would assert a contract this leg does not have.
- *
- * RETRYABILITY IS DOCUMENTED HERE, NOT COMPUTED HERE, and no isRetryable helper ships with it. The
- * daemon never sends `retry_after_s` on this leg (`attachmentReplyError` marshals a closed
- * `{Code, Message, Retryable}` literal and the field is `*int,omitempty`), so a client cannot learn a
- * backoff duration from the wire and "after a backoff" is a CLIENT-OWNED POLICY. Policy belongs to the
- * consumer that acts on it (#861), not to a decode boundary whose job is to say which failure this was.
- * The flags below are the daemon's own reject table (`false, false, false, true, true`), read off
- * `internal/relay/v2session_attachment.go` rather than inferred from the code names.
- */
-export type DaemonErrorOutcome =
-  /** Framing claims are inconsistent — duplicate index, index out of range, `total_chunks` disagreeing
-   *  across chunks. NOT retryable: the receiver discards the whole in-flight stream, so the repair is to
-   *  re-chunk. */
-  | 'attachment-invalid-chunk'
-  /** Assembled bytes or length disagree with the declared `sha256` / `size`. NOT retryable: the repair
-   *  is to re-derive the metadata from the file, never to retry the same bytes against the same claims. */
-  | 'attachment-integrity-failed'
-  /** The WHOLE transfer exceeds the receiver's per-upload byte bound — permanent for that file, and the
-   *  bound is receiver-configured and unpublished, so a client learns it only by being rejected. NOT
-   *  retryable. Distinct from `message-too-long`, which is one oversized envelope. */
-  | 'attachment-too-large'
-  /** The receiver's concurrency bound is hit. Retryable after a backoff, but it clears only when OTHER
-   *  uploads finish — nothing this client does to this transfer advances it. */
-  | 'attachment-too-many-uploads'
-  /** The host write failed. Retryable after a backoff, though the condition may not clear at all. The
-   *  daemon's message for it is static — never a path, never the filesystem error — but that is the
-   *  daemon's promise about its own behaviour, not a property this client relies on: no message crosses. */
-  | 'attachment-storage-failed'
-  /** ONE envelope was oversized — a producer bug on THIS side, not a verdict on the transfer's size, and
-   *  raised by the transport rather than the attachment path. NOT retryable: resending the same envelope
-   *  reproduces it. */
-  | 'message-too-long'
-  /** Everything else, and it covers two causes on purpose: a code outside the six above (including a
-   *  future one this client predates), and a payload that carried no readable `code` at all — absent,
-   *  non-object, or `code` missing / not a string. Both mean the same thing to a consumer, "this client
-   *  declined to classify the failure", and neither is a reason to drop a terminal frame. */
-  | 'unclassified'
-
 export type InboundDaemonMessage =
   | { kind: 'message'; message: MessagePayload }
   | { kind: 'chunk'; messages: MessagePayload[] }

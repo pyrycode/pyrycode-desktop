@@ -98,13 +98,18 @@ describe('QuestionPanelView', () => {
     expect(count(markup, /<button type="button"/g)).toBe(2)
     expect(markup).not.toContain('disabled')
     // #921 — THE ASSERTION IS THE NEGATIVE, and it is the only visual claim this slice owes: Cancel gained
-    // a handler and the design read (347:6657) confirms its treatment is unchanged, so the rendered button
-    // must be byte-identical to #906's. A static server render never emits `onClick`, so this cannot prove
-    // the wiring — that is e2e/question-cancel-refuses.spec.ts's — but it DOES prove nothing leaked into an
-    // attribute, which is the failure this panel guards against everywhere else (the batch id is a
-    // one-time nonce and this file still never reads it at all).
+    // a handler and the design read (347:6657) confirms its treatment is unchanged. A static server render
+    // never emits `onClick`, so this cannot prove the wiring — that is e2e/question-cancel-refuses.spec.ts's
+    // — but it DOES prove nothing leaked into an attribute, which is the failure this panel guards against
+    // everywhere else (the batch id is a one-time nonce and this file still never reads it at all).
+    //
+    // #963 added `button-small` ahead of the panel class, and the exact-string form is what caught it. The
+    // treatment did not change: that ticket lifted these three buttons' shared declarations out of
+    // conversation.css into the .button-small base they now wear, so the CLASS LIST grew by one and the
+    // resolved style did not. The assertion keeps its exact-string shape — it is the shape that makes an
+    // added attribute a failure — with the class list updated to what the element wears now.
     expect(markup).toContain(
-      `<button type="button" class="question-panel__cancel">${QUESTION_CANCEL_COPY}</button>`
+      `<button type="button" class="button-small question-panel__cancel">${QUESTION_CANCEL_COPY}</button>`
     )
   })
 

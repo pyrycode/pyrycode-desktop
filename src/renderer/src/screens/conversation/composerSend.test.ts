@@ -7,7 +7,8 @@ import {
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
-  COMPOSER_ERROR_CHIP_PREFIX_COPY
+  COMPOSER_ERROR_CHIP_PREFIX_COPY,
+  COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 import type { ThreadEvent } from '../../store/threadTimeline'
@@ -386,5 +387,47 @@ describe('the composer error chip copy (#797)', () => {
   it('keeps the prefix separated from the copy by its trailing space', () => {
     expect(COMPOSER_ERROR_CHIP_PREFIX_COPY).toMatch(/ $/)
     expect(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim()).not.toBe('')
+  })
+})
+
+// #963: the actionable-error button's label — the FIFTH string this module owns about the one
+// ConnectionStatus fact, and the first that is also an ACCESSIBLE NAME (the button has no aria-label, so
+// the visible text is the whole name). The chip describe above pins the same three-part contract for its
+// two strings; this one adds the button's own reason for the apostrophe rule and the distinctness set
+// grows to include the chip copy the button REPLACES in its slot.
+describe('the actionable-error button copy (#963)', () => {
+  it('is apostrophe-free, so a server-rendered toContain matches it verbatim', () => {
+    expect(COMPOSER_REPAIR_BUTTON_COPY).not.toContain("'")
+  })
+
+  // Pinned against the actual constants and composerAvailability outputs — never against hardcoded
+  // copies of them — so a future tweak to any of the four cannot silently collide with this label. The
+  // chip copy is in the set even though the two never render together: they occupy the SAME slot, so a
+  // reader who sees one and then the other must not read them as the same string.
+  it('is lexically distinct from the chip copy, the banner copy and the three composer hints', () => {
+    const others = [
+      COMPOSER_ERROR_CHIP_COPY,
+      CONNECTION_BANNER_COPY,
+      composerAvailability({ type: 'connecting' }).hint,
+      composerAvailability({ type: 'disconnected' }).hint,
+      composerAvailability({
+        type: 'error',
+        error: { code: 'x', message: 'm', retryable: false }
+      }).hint
+    ].filter((copy): copy is string => copy !== null)
+    for (const other of others) {
+      expect(other).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
+      expect(COMPOSER_REPAIR_BUTTON_COPY).not.toContain(other)
+    }
+  })
+
+  // The design's label pattern is "Type of error - Action", and both halves are load-bearing: the type
+  // is what makes the button self-describing to a screen reader without the chip's hidden `Error: `
+  // prefix (AC4), and the action is what makes it a button rather than a status. A trim to just the
+  // action would pass every other assertion here.
+  it('names the error type ahead of the action, so the accessible name says both', () => {
+    const [type, action] = COMPOSER_REPAIR_BUTTON_COPY.split(' - ')
+    expect(type).toBe('Pairing error')
+    expect(action).toBe('Re-pair')
   })
 })

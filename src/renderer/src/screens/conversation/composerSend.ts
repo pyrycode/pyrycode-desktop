@@ -254,3 +254,31 @@ export const COMPOSER_ERROR_CHIP_COPY = 'Host connection down!'
  * announcement. composerSend.test.ts pins it. Client-owned and apostrophe-free like its sibling above.
  */
 export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
+
+/**
+ * The actionable-error button's label (#963) — the button that takes the chip's slot whenever
+ * `shouldOfferRepair` is true, and the FIFTH string this module owns about the single `ConnectionStatus`
+ * fact. It lives here for COMPOSER_ERROR_CHIP_COPY's stated reason, which transfers verbatim: the lexical
+ * distinctness these five owe each other is only reviewable if they sit together.
+ *
+ * The design's label pattern is "Type of error - Action", and both halves are load-bearing. The type is
+ * what lets this occupant drop the chip's visually-hidden `Error: ` prefix — that prefix exists because
+ * "Host connection down!" does not say it is an error, and "Pairing error" does. The action is what makes
+ * the control read as a button rather than as a status. Since the button carries no `aria-label`, this
+ * string is also the accessible name, which is the first time one of these five is both.
+ *
+ * It carries CONNECTION_BANNER_COPY's three-part contract: (a) one client-owned constant, (b) lexically
+ * distinct from the four strings above — it leads with "Pairing" and shares no leading word with
+ * `Host connection down!` / `Cannot reach pyrybox…` / `Connecting…` / `Not connected` /
+ * `Connection error` — and (c) zero daemon-supplied substring. (c) needs stating more carefully here than
+ * for the chip: ComposerErrorChip narrows on `status.type` and never touches the error arm at all, while
+ * this button's gate (`shouldOfferRepair`) READS `status.error.retryable` and `.code`. Those reads decide
+ * a boolean and reach no markup — ConversationScreen's ComposerErrorSlot binds no local to `status.error`
+ * — and ConversationScreen.test.tsx pins that with sentinel values on the button's own arm.
+ *
+ * Apostrophe-free by design (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson),
+ * and the separator is an ASCII hyphen-minus for the same reason, so a server-rendered `toContain`
+ * matches it verbatim. PO/design may tune the wording; the contract is load-bearing, the exact words are
+ * not.
+ */
+export const COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'

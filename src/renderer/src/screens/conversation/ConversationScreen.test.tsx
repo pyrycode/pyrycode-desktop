@@ -25,7 +25,7 @@ import {
   shouldShowThinking,
   QueuedBacklog,
   StatusSheet,
-  RepairPrompt,
+  ComposerErrorSlot,
   ConnectionBanner,
   ComposerErrorChip,
   ContextUsageReading,
@@ -48,7 +48,8 @@ import {
   composerAvailability,
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
-  COMPOSER_ERROR_CHIP_PREFIX_COPY
+  COMPOSER_ERROR_CHIP_PREFIX_COPY,
+  COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import type { Message } from './messageViewModel'
 import type { ThreadItem, ToolResult } from '../../store/threadTimeline'
@@ -2359,25 +2360,42 @@ describe('StatusSheet — the Run configuration host modal', () => {
   })
 })
 
-// #167: the proactive re-pair affordance. RepairPrompt is the pure, exported view (the MessageThread
-// pattern) — server-render it directly with an arbitrary `status` prop to prove the present/absent
-// matrix (AC1) without touching the store. The store-bound RepairControl container's populated branch
-// is NOT server-render-reachable (zustand v5's useStore reads getInitialState() = disconnected under
-// server render), which is exactly why visibility is a prop-driven pure view rather than store-read.
-describe('RepairPrompt — the proactive re-pair affordance', () => {
-  it('renders a Re-pair button for a terminal, non-retryable error status (AC1 present)', () => {
+// #963: the status row's right-hand slot, now a THREE-way choice — the actionable-error button, the
+// #797 chip, or nothing — where #167 had a separate block beneath the composer. ComposerErrorSlot is the
+// pure, exported view (the RepairPrompt pattern it replaces, and the ComposerErrorChip pattern it
+// delegates to): server-render it directly with an injected `status` to prove the whole matrix, which no
+// store-bound container test can do (zustand v5's useStore reads getInitialState() = disconnected under
+// server render, so only one arm is reachable there).
+//
+// Every error-arm assertion here is written in BOTH directions — the expected occupant present AND the
+// other absent — because AC1's contract is one occupant per slot, and a one-directional assertion would
+// pass on a slot that rendered both.
+describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
+  const ack = {
+    protocol_version: '1',
+    server_id: 's',
+    conn_id: 'c',
+    capabilities: []
+  }
+
+  it('renders the actionable button and NOT the chip for a terminal, non-retryable error (AC1)', () => {
     const markup = renderToStaticMarkup(
-      <RepairPrompt
+      <ComposerErrorSlot
         status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
         onRepair={() => {}}
       />
     )
-    expect(markup).toContain('>Re-pair</button>')
+    expect(markup).toContain(`>${COMPOSER_REPAIR_BUTTON_COPY}</button>`)
+    expect(markup).not.toContain('composer-status__error')
+    expect(markup).not.toContain(COMPOSER_ERROR_CHIP_COPY)
   })
 
-  it('renders nothing for a retryable daemon error (AC1/AC4 absent)', () => {
+  // #167's AC4, preserved verbatim through the swap: a RETRYABLE daemon error is a transient
+  // daemon-side condition, not a broken pairing, so it gets the plain chip and is never offered a
+  // re-pair. shouldOfferRepair's `!retryable` gate is what makes this arm fall through to the chip.
+  it('renders the chip and NOT the button for a retryable daemon error (AC1, #167 AC4)', () => {
     const markup = renderToStaticMarkup(
-      <RepairPrompt
+      <ComposerErrorSlot
         status={{
           type: 'error',
           error: { code: 'server.binary_offline', message: 'offline', retryable: true }
@@ -2385,14 +2403,102 @@ describe('RepairPrompt — the proactive re-pair affordance', () => {
         onRepair={() => {}}
       />
     )
-    expect(markup).toBe('')
+    expect(markup).toContain('composer-status__error')
+    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
+    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
   })
 
-  it('renders nothing for a non-error status (AC1 absent)', () => {
+  // #167's AC5, likewise preserved: the self-inflicted UNPAIR_FAILED_ERROR that runUnpair dispatches
+  // when the clear itself fails. Without shouldOfferRepair's `code !== 'unpair'` gate a failed re-pair
+  // would immediately re-offer itself — a tight loop of a broken capability — so this arm must show the
+  // chip even though it is terminal and non-retryable.
+  it('renders the chip and NOT the button after a failed unpair (AC1, #167 AC5)', () => {
     const markup = renderToStaticMarkup(
-      <RepairPrompt status={{ type: 'disconnected' }} onRepair={() => {}} />
+      <ComposerErrorSlot
+        status={{
+          type: 'error',
+          error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
+        }}
+        onRepair={() => {}}
+      />
     )
-    expect(markup).toBe('')
+    expect(markup).toContain('composer-status__error')
+    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
+  })
+
+  // AC1's empty half, in the STRICT exact-empty form the ComposerErrorChip describe below uses: that is
+  // what proves "the slot is empty, not an empty element", which a not.toContain would pass on a
+  // rendered-but-empty wrapper.
+  it('renders nothing at all while disconnected — not an empty element (AC1)', () => {
+    expect(
+      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'disconnected' }} onRepair={() => {}} />)
+    ).toBe('')
+  })
+
+  it('renders nothing at all while connecting — not an empty element (AC1)', () => {
+    expect(
+      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'connecting' }} onRepair={() => {}} />)
+    ).toBe('')
+  })
+
+  it('renders nothing at all while connected — not an empty element (AC1)', () => {
+    expect(
+      renderToStaticMarkup(<ComposerErrorSlot status={{ type: 'connected', ack }} onRepair={() => {}} />)
+    ).toBe('')
+  })
+
+  // AC4, and the one assertion this view needs that the chip's own describe cannot supply. Unlike
+  // ComposerErrorChip — which narrows on `status.type` and never touches the error arm at all — this
+  // view calls shouldOfferRepair, which READS `status.error.retryable` and `.code`. Those two reads are
+  // one line away from a value a future edit could render, so the guarantee is pinned rather than
+  // argued: on the arm that reads them, neither sentinel reaches the markup.
+  it('never renders ConnectionError.message or .code on the button arm (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerErrorSlot
+        status={{
+          type: 'error',
+          error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
+        }}
+        onRepair={() => {}}
+      />
+    )
+    expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
+    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
+    expect(markup).not.toContain('DAEMON_SECRET_CODE')
+  })
+
+  // AC4's accessible-name half: the visible text IS the name, so there is no aria-label to drift from
+  // it and no hidden prefix — the label says "Pairing error" itself, which is exactly why the chip's
+  // visually-hidden `Error: ` run is not carried over to this occupant.
+  it('takes its accessible name from the visible text — no aria-label, no hidden prefix (AC4)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerErrorSlot
+        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+        onRepair={() => {}}
+      />
+    )
+    expect(markup).not.toContain('aria-label')
+    expect(markup).not.toContain('composer-status__error-prefix')
+    expect(markup).not.toContain(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim())
+  })
+
+  // The button wears the shared small-button base class plus its Error variant — the treatment the
+  // question panel's three buttons wear too. A static render is the only place the class pair is
+  // observable, and the variant is what carries the fill, so a base class alone would ship an unstyled
+  // transparent button that every other assertion here would still pass.
+  it('wears the shared small-button base class and its error variant (AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ComposerErrorSlot
+        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
+        onRepair={() => {}}
+      />
+    )
+    expect(markup).toContain('button-small')
+    expect(markup).toContain('button-small--error')
+    // A real <button>, not a div wearing a click handler — the accessible name, the focus ring AC3
+    // requires and keyboard activation all come from the element, not from the class.
+    expect(markup).toContain('<button')
+    expect(markup).toContain('type="button"')
   })
 })
 
@@ -3245,15 +3351,25 @@ describe('ConversationScreen — store binding', () => {
   //
   // A getInitialState SPY, not setState. This file's standing note applies here — zustand v5's useStore
   // reads getInitialState() under renderToStaticMarkup, never getState() — so the block's beforeEach
-  // cannot stage a non-initial arm, and this branch would otherwise be as unreachable as RepairControl's
-  // (the spec assumed the beforeEach was enough; it is not, measured 2026-08-27). Spying the store's
-  // initial snapshot is the narrowest seam that reaches it: one store, one render, no production code
-  // touched, restored immediately since this config sets no restoreMocks.
-  it('mounts the error chip in the status row once the session is in the error arm (AC1)', () => {
+  // cannot stage a non-initial arm, and this branch would otherwise be unreachable (the spec assumed the
+  // beforeEach was enough; it is not, measured 2026-08-27). Spying the store's initial snapshot is the
+  // narrowest seam that reaches it: one store, one render, no production code touched, restored
+  // immediately since this config sets no restoreMocks.
+  //
+  // #963 REPOINTED THE STAGED STATUS, and the test would otherwise have gone red rather than vacuous. It
+  // staged `code: 'transport', retryable: false` — which is precisely the arm shouldOfferRepair admits, so
+  // the slot now fills it with the actionable button and the chip is correctly absent. The chip's own
+  // mounted arm is a RETRYABLE daemon error (#167's AC4: transient, not a broken pairing), so that is what
+  // this stages now. The claim is unchanged — the `trailing` prop reaches the row with the chip in it —
+  // and the button's mounted arm is proven by its own test below.
+  it('mounts the error chip in the status row once the session is in a retryable error arm (AC1)', () => {
     const initial = sessionStore.getInitialState()
     const spy = vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
       ...initial,
-      status: { type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }
+      status: {
+        type: 'error',
+        error: { code: 'server.binary_offline', message: 'offline', retryable: true }
+      }
     })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
@@ -3263,6 +3379,38 @@ describe('ConversationScreen — store binding', () => {
       expect(markup.indexOf('composer-status__error')).toBeGreaterThan(
         markup.indexOf('class="composer-status"')
       )
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // #963: the actionable button's PRESENT arm through the mounted container — the only test that proves
+  // the slot control reached the row's `trailing` prop with a working `onRepair`, and the only one that
+  // can prove `.composer__repair` is gone from the tree in the very state that used to render it.
+  //
+  // The same getInitialState SPY as the chip test above, and for the same reason: zustand v5's useStore
+  // reads getInitialState() under renderToStaticMarkup, never getState(), so the block's beforeEach
+  // cannot stage this arm. The status here differs from the chip test's only in being one shouldOfferRepair
+  // admits — terminal, non-retryable, and not the self-inflicted 'unpair' code — which is what flips the
+  // slot's occupant.
+  it('mounts the actionable button in the status row once the pairing is terminally dead (AC1, AC2)', () => {
+    const initial = sessionStore.getInitialState()
+    const spy = vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
+      ...initial,
+      status: { type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }
+    })
+    try {
+      const markup = renderToStaticMarkup(<ConversationScreen />)
+      expect(markup).toContain(COMPOSER_REPAIR_BUTTON_COPY)
+      // In the ROW, not loose in the region: the button trails .composer-status in the shipped tree.
+      expect(markup.indexOf(COMPOSER_REPAIR_BUTTON_COPY)).toBeGreaterThan(
+        markup.indexOf('class="composer-status"')
+      )
+      // One occupant per slot, asserted through the mount and not only in the pure view (AC1).
+      expect(markup).not.toContain('composer-status__error')
+      expect(markup).not.toContain(COMPOSER_ERROR_CHIP_COPY)
+      // AC2: the retired block is absent in the exact state that used to render it.
+      expect(markup).not.toContain('composer__repair')
     } finally {
       spy.mockRestore()
     }
@@ -3415,13 +3563,17 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).toContain('>Unpair</button>')
   })
 
-  // #167: the proactive re-pair affordance is absent in the disconnected initial state (the only state
-  // server-render sees). RepairControl mounts safely against the empty store — shouldOfferRepair is
-  // false, so RepairPrompt returns null. The populated true-branch is proven in the RepairPrompt
-  // pure-view describe above, not here (the zustand server-snapshot gotcha noted below).
-  it('does not render the re-pair affordance while disconnected (RepairControl mounts, shows nothing)', () => {
+  // #963: the re-pair affordance is absent in the disconnected initial state — shouldOfferRepair is
+  // false, so the slot renders nothing. The populated branch is proven in the ComposerErrorSlot
+  // pure-view describe above and, through the mount, in the spied container test earlier in this block.
+  //
+  // The second assertion is AC2's other half and it is the one that can only be made HERE: #167's
+  // `.composer__repair` block beneath the composer is gone from the tree, not merely emptied. A pure
+  // view cannot prove the absence of a sibling it never rendered.
+  it('does not render the re-pair affordance or its retired block while disconnected', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).not.toContain('>Re-pair</button>')
+    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
+    expect(markup).not.toContain('composer__repair')
   })
 
   // #31: while not connected the send control is disabled and the composer shows an inline

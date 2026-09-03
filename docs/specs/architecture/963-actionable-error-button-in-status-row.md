@@ -383,5 +383,59 @@ Fakes over mocks throughout: no new mock, no new fake. The one `vi.spyOn` is on 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-09-03
+
+## Revisions
+
+### 2026-09-03 — implementation
+
+**One of #797's two container assertions did NOT survive, contrary to the ticket's note and this plan's
+Testing strategy.** The ticket states "the chip tests stay true: the `ComposerErrorChip` describe and the
+two container assertions on `composer-status__error`", and the plan repeated it. The pure-view describe
+and the *disconnected* container assertion did survive untouched. The chip's *error-arm* container test
+did not, and it went red rather than vacuous: it staged `code: 'transport', retryable: false`, which is
+exactly the status `shouldOfferRepair` admits, so the slot correctly filled with the button and the chip
+was correctly absent. Repointed onto a retryable daemon error (`server.binary_offline`), which is an arm
+the chip still owns (#167's AC4) and which keeps the test's actual claim — the `trailing` prop reaches
+the row with the chip in it — intact. This is #796's own "test-file vacuity repoint" hazard, one degree
+better: the exact-status form made it fail loudly instead of passing against a state nothing can produce.
+
+**A fifth production file: `QuestionPanel.tsx`.** The plan's CSS section prescribed a `.button-small`
+base class the question panel's three buttons "wear", which means their `className` attributes, not only
+the stylesheet — so the panel's view is edited too (three class attributes) and `QuestionPanel.test.tsx`'s
+exact-string assertion on the Cancel button's markup moves with it. That assertion is #921's structural
+"nothing leaked into an attribute" guard; it keeps its exact-string shape with the class list updated,
+because the exactness is the point. Five production files against the boundary's five: still inside it,
+and named here because the plan's own file list said four.
+
+**Open question 1 is answered, and the ticket's premise was wrong in both magnitude and cause.** The
+ticket accepts "the message box moves 8px on that transition". Measured in the fake tier, the message box
+moves 20px *upward*, and none of it is the row's growth: the same status change mounts #279's connection
+banner above the thread and the composer's own `Connection error` hint inside `.composer`. The row's own
+8px is absorbed by `.conversation__thread` (`flex: 1 1 auto; min-height: 0`) as the plan predicted. No
+assertion was added for it — an assertion on the box's absolute position would pin the banner's and the
+hint's geometry under a name claiming to be about this row. The e2e reads all three geometry facts
+relative to the row for the same reason, and the spec records this.
+
+**Open question 2 is answered by measurement, not by the 2px reasoning.** Re-measured the way #797 did
+(this row's markup, both stylesheets, headless Chromium at the 800px minimum window width, 640px pane, a
+3000-char tool name): the row stays 640×32, the button is unshrunk at **167.88px** — not the ~157 this
+plan guessed from the Figma frame, the standing Roboto→system-ui substitution — the activity group
+absorbs the entire squeeze at 448.13px and the label at 426.13px, and both `.conversation` and
+`document.body` report a `scrollWidth` equal to their `clientWidth`. The chain still terminates in the
+label. The real numbers are in `.button-small`'s comment.
+
+**AC3's focus-ring clause is asserted in e2e after a keypress.** Chromium only paints the ring for
+keyboard-driven focus, so a bare programmatic `focus()` proves nothing; the spec presses a key first,
+which makes the subsequent focus count as keyboard intent, then reads `outline-style`/`outline-width`.
+Confirmed to pass deterministically. No focus rule was added to the stylesheet — the Figma component set
+draws Default and Hover only, so the UA ring is the treatment and the requirement is that nothing
+suppresses it.
+
+**Four prose citations in `ConversationScreen.tsx` were repointed**, not left dangling: `ConnectionBanner`,
+`ConnectionBannerControl` and `ThreadOverflowMenu`'s containers each cited `RepairPrompt` or
+`RepairControl` as the precedent for a pattern, and this ticket deleted both symbols out of that same
+file. They now name `ComposerErrorSlot`/`ComposerErrorSlotControl`, which carry the same properties.
+Citations of the retired names in files this ticket does not touch (`PermissionModal.tsx`,
+`CreateFolderDialog.tsx`) were left alone as out of scope.
 </content>
 </invoke>

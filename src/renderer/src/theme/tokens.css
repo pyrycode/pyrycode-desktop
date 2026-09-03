@@ -65,7 +65,19 @@
                                        --color-error as its text role. Read from the Figma VARIABLE
                                        (get_variable_defs on that node), never from its generated
                                        fallback #ffdad6, which is the LIGHT scheme's container; desktop
-                                       is dark-only (ADR 0003). One consumer today, per the note above. */
+                                       is dark-only (ADR 0003). TWO consumers since #963 — the chip's
+                                       fill and the actionable-error button's HOVER fill, which is why
+                                       that button's own default fill needed a token of its own below. */
+  --color-on-error: #690005; /* M3 Schemes/On Error of the default (dark) scheme — the actionable-error
+                                button's resting fill (#963, Figma node 354:7088), carrying --color-error
+                                as its text role. Read from the Figma VARIABLE (get_variable_defs on that
+                                node, 2026-09-03), never from its generated fallback `white`, which is the
+                                LIGHT scheme's On Error; the trap above, one token over, and a starker one
+                                — white would render a white button where the design draws near-black red.
+                                A dark tone (M3 error tone 20) despite the "on-" prefix, because in the
+                                dark scheme the On roles are the dark half of their pair; do not "correct"
+                                it towards a light value on the strength of the name. One consumer today,
+                                per the note at the head of this block. */
   --color-warning: #ffca45; /* Amber for the in-progress connection category (#330). M3 has no warning
                                role and the design system has no such variable (the two-dot line
                                post-dates the 2026-05-08 file lock — a code-era addition, like the dots

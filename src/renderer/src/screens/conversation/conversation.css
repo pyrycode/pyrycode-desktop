@@ -111,16 +111,6 @@
   color: var(--color-on-surface);
 }
 
-/* The proactive re-pair affordance (#167). Surfaces beneath the composer only in a terminal,
-   non-retryable connection error, extending the composer's inline error hint with an escape hatch back
-   to pairing. Reuses the .conversation__unpair de-emphasized text-button treatment for the button
-   itself; this wrapper only positions it — left-aligned under the composer hint (matching the hint's
-   --space-4 inset), never growing or shrinking. */
-.composer__repair {
-  flex: 0 0 auto;
-  padding: 0 var(--space-4) var(--space-2);
-}
-
 /* #279 — the prominent, disconnected-only connection banner across the top of the thread (below the
    header row, above the message list). Distinct from the muted inline .composer__hint gate: it reads
    as a prominent band, not a caption. Follows the .modal-rejection (#249) error-accent idiom — a
@@ -791,24 +781,41 @@
    indicator's text is no longer a bubble floating in the loose region between the thread and the
    composer, it is the left half of this fixed-height row.
 
-   The height is the whole point (AC2). flex: 0 0 auto so it never claims a competing flex region beside
-   the timeline, and NO vertical padding, so 24px is the exact box under this repo's absent global
-   box-sizing reset. It is reserved whether or not there is a label inside, which is what stops the
-   composer moving under the operator's cursor each time the indicator comes and goes.
+   The RESERVED height is the point (AC2). flex: 0 0 auto so it never claims a competing flex region
+   beside the timeline, and NO vertical padding, so the declared minimum is the exact box under this
+   repo's absent global box-sizing reset. It is reserved whether or not there is a label inside, which is
+   what stops the composer moving under the operator's cursor each time the indicator comes and goes —
+   that anti-jitter reason is #796's and survives #963's min-height intact.
 
-   height: 24px as a literal rather than var(--space-6) (also 24px): a component's own height is
-   structural geometry, not spacing — the .conn-dot / .run-config__context-bar precedent in this file.
+   min-height, NOT height, since #963 (Figma 347:5408, 780x32). The slot's two occupants are different
+   heights — #797's chip is 24, the actionable-error button is 32 (16px line plus 8px twice) — so the row
+   is sized BY ITS CONTENT and the button is what makes it 32 when it is there. No --tall modifier: the
+   button being in the slot IS the state, and a modifier would be a second source of truth for a fact the
+   box model already holds. The 24px floor still does all of #796's work when the slot is empty or holds
+   the chip.
+
+   24px as a literal rather than var(--space-6) (also 24px): a component's own height is structural
+   geometry, not spacing — the .conn-dot / .run-config__context-bar precedent in this file.
+
+   align-items: flex-end IS THE DESIGN'S items-end, and it is the half a min-height edit alone would miss.
+   At a fixed 24 the row's old `center` was invisible; at 32 it would centre the 24-tall status group and
+   drop the label 4px — exactly the movement the design chose items-end to avoid. End-aligned, the group
+   stays flush with the bottom edge and only the button's own box grows upward, so the label sits the same
+   distance above the row's bottom edge at both heights. THAT IS WHY .composer-status__activity BELOW HAD
+   TO GAIN A HEIGHT OF ITS OWN: through #796 the group had none, and centring its ~16px content in a 24px
+   row reproduced the Figma group's 24px box for free (the trade this paragraph used to record). Under
+   flex-end that equivalence breaks and the label would sit flush against the row's floor, dropping 4px in
+   the chip and empty cases — a regression in the two states this ticket does not touch. The group's own
+   min-height: 24px is what restores it.
 
    Horizontal padding --space-3 matches .composer's, so the icon aligns with the composer's left edge —
-   the load-bearing alignment. justify-content: space-between leaves the right-hand slot for #797's error
-   chip (Figma 112:3529, itself 24 tall, so appending it grows nothing). The Figma's status group carries
-   its own py-[4px] around a 16px line; centring a 16px line in a 24px row is the same geometry, one
-   declaration instead of two. */
+   the load-bearing alignment. justify-content: space-between right-aligns whichever occupant the slot
+   holds with no spacer. */
 .composer-status {
   flex: 0 0 auto;
-  height: 24px;
+  min-height: 24px;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   padding: 0 var(--space-3);
 }
@@ -820,11 +827,20 @@
    .status-row's own comment below.
 
    flex: 1 1 auto + min-width: 0 are LOAD-BEARING, and not for the reason the retired .bubble--tool-label
-   recorded: see the truncation chain on --tool below. */
+   recorded: see the truncation chain on --tool below.
+
+   min-height: 24px is the Figma group's OWN height (112:3530), added by #963 and load-bearing from the
+   moment the row above end-aligned. Through #796 the group had no height and the row's align-items:
+   center produced this same 24px box for free; under flex-end it would collapse to its ~16px content and
+   sit flush against the row's floor, dropping the label 4px in the chip and empty cases. With it, the
+   16px line is centred in a 24px box whose bottom edge is the row's, which is identical geometry whether
+   the row is 24 or 32 — the "the label does not move" half of #963's AC3. No vertical padding here
+   either, so under content-box the box is exactly 24. */
 .composer-status__activity {
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 24px;
   align-items: center;
   gap: var(--space-2);
   color: var(--color-primary);
@@ -934,8 +950,11 @@
    155px against the Figma frame's 148 is the standing Roboto→system-ui substitution (tokens.css:48-49),
    not a spacing drift: padding, radius, size, line and tracking all measure the node's values exactly.
 
-   white-space: nowrap is likewise REQUIRED: the row sets a hard height, so a wrapped chip would overflow
-   it rather than grow it. It is also what the Figma node declares.
+   white-space: nowrap is likewise REQUIRED, and #963 inverted the reason without touching the effect:
+   through that ticket the row set a hard height, so a wrapped chip would have OVERFLOWED it; the row is
+   min-height now, so a wrapped chip would GROW it instead — a two-line chip pushing the row to 40 and
+   moving the composer, which is the same AC3 failure from the other side. It is also what the Figma node
+   declares.
 
    position: relative is the containing block for the absolutely-positioned prefix below, so the hidden
    text cannot escape into some ancestor's coordinate space. Colour is the error PAIR by token name —
@@ -972,6 +991,84 @@
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* #963 — the design's `Button small` (component set 347:6645), extracted as a shared treatment on its
+   SECOND consumer. The question panel's three action buttons shipped these exact declarations as one
+   three-selector rule; this ticket's actionable-error button wants every one of them, so the common half
+   lifts out and each consumer keeps only its fill. That is this stylesheet's own stated trigger, at
+   .composer__actions: "One consumer is not a pattern" — the second is when to lift, not before.
+
+   A BLOCK, not an element of either consumer's block, and named after the design's own component rather
+   than after a screen region: it is worn by elements of .question-panel and of .composer-status, so any
+   owner-prefixed name would lie about one of them. Worn as a two-class mix (`class="button-small
+   button-small--error"`, `class="button-small question-panel__cancel"`), which is the same ordinary BEM
+   this file already ships one row up on `class="conversation__thinking composer-status__label"`.
+
+   PADDING IS NOT IN HERE, deliberately. The outlined panel variants need 7px against the filled ones' 8px
+   to compensate for their 1px border under this repo's absent global box-sizing reset — see
+   .question-panel__cancel's own comment. Sharing a padding would silently break that compensation.
+
+   A <button> needs the font reset because the UA stylesheet gives form controls their own font. Every
+   label wearing this is a client-owned constant, so white-space: nowrap cannot be blown out by daemon
+   text (.composer__context's ruling).
+
+   flex: 0 0 auto is REQUIRED, not decorative, wherever this sits in a flex row, and it is what keeps
+   #797's truncation chain pointing the same way with the wider occupant up: .composer-status__activity is
+   flex: 1 1 auto; min-width: 0, so without this an oversized daemon tool name would squeeze the BUTTON
+   instead of ellipsizing the label — inverting the chain and remotely triggerable by a hostile or merely
+   buggy daemon. RE-MEASURED with the button up, the way #797 re-measured with the chip up and NOT carried
+   over from its numbers: this row's markup, these two stylesheets, headless Chromium at the 800px minimum
+   window width, 640px conversation pane, a 3000-char tool name. The row stays 640x32; the button is
+   unshrunk at its full 167.88px content width; the activity group absorbs the entire squeeze at 448.13px,
+   which is exactly the 640 less --space-3 twice and the button, and the label inside it 426.13px, exactly
+   that less the 14px mark and the --space-2 gap; and .conversation and document.body both report a
+   scrollWidth equal to their client width. No horizontal overflow, and the row's height is the button's
+   either way. 167.88 against the Figma frame's 157 is the standing Roboto→system-ui substitution
+   (tokens.css), the same drift the chip measured at 155 against its node's 148 — padding, radius, size,
+   line and tracking all measure the node's values exactly.
+
+   NO `outline: none`, on the same grounds the panel rule states: a focus ring here is load-bearing (#963
+   AC3 names it), and the UA's is the only treatment the design gives us — the Figma component set draws
+   Default and Hover and no focus state, so inventing one would be a client decision this ticket has no
+   mandate for. */
+.button-small {
+  flex: 0 0 auto;
+  border-radius: var(--radius-xs);
+  font-family: inherit;
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+  letter-spacing: var(--text-body-small-tracking);
+  font-weight: var(--text-body-small-weight-emphasized);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* The design's `Type=Error` variant (347:6645's `State=Default, Type=Error`, node 354:7088), filling the
+   status row's right-hand slot whenever the error is one the operator can act on. Filled, so 8px vertical
+   against the outlined panel variants' 7px, and no border — .question-panel__continue's geometry exactly,
+   which is why that button and this one are the same height.
+
+   NO height DECLARATION, and unlike the chip beside it the box is 32, not 24: 16px of line plus 8px twice
+   under this repo's content-box default. That 32 IS what makes .composer-status resolve to 32 when this
+   occupies the slot — the row declares only a min-height, so the button's own box is the row's height.
+   Adding a height here alongside the padding would render a 48px button, the chip's trap one variant up.
+
+   Colour is the error TRIPLE by token name — never the export's fallbacks, which are the light scheme in
+   all three positions and starkest here: `white` where the variable is #690005, i.e. a white button where
+   the design draws near-black red (the standing rule in .composer-status__error and .status-row, and
+   tokens.css's own warning on --color-on-error). Resting fill Schemes/On Error, text Schemes/Error, and
+   the hover swaps ONLY the fill to Schemes/Error Container, which is the chip's fill and therefore
+   already a token. Read from the Figma variables on 354:7088 and 354:7090, not from the generated code. */
+.button-small--error {
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  background: var(--color-on-error);
+  color: var(--color-error);
+}
+
+.button-small--error:hover {
+  background: var(--color-error-container);
 }
 
 /* #317 — the stall-indicator wrapper. The .conversation__thinking shape (flex: 0 0 auto so it never
@@ -4031,24 +4128,16 @@
   gap: var(--space-4);
 }
 
-/* The three buttons share everything but their fill. A <button> needs an explicit type reset because the
-   UA stylesheet gives form controls their own font, and the row's labels are M3 body/small at the
-   emphasized weight. The labels are client-owned constants, so white-space: nowrap cannot be blown out by
-   daemon text (.composer__context's ruling). No `outline: none` — with the composer covered, these and
-   #907's Other field are the only focusable controls on the panel, so their focus ring is load-bearing. */
-.question-panel__cancel,
-.question-panel__previous,
-.question-panel__continue {
-  flex: 0 0 auto;
-  border-radius: var(--radius-xs);
-  font-family: inherit;
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight-emphasized);
-  white-space: nowrap;
-  cursor: pointer;
-}
+/* The three buttons share everything but their fill, and since #963 that shared half is .button-small
+   (defined beside the composer status row above, at its second consumer) — the three elements WEAR it
+   alongside their own class rather than repeating its nine declarations here. The reset, the M3
+   body/small emphasized type, the corner, the nowrap and the flex: 0 0 auto all live there, with the
+   reasoning that used to sit in this comment. Its rules apply unchanged to these three: notably no
+   `outline: none`, which matters here because with the composer covered these and #907's Other field are
+   the only focusable controls on the panel.
+
+   What stays below is exactly what varies: the two fills, and the padding, which cannot be shared because
+   the outlined pair's 7px is a border-box compensation the filled variant must not inherit. */
 
 /* Outlined: 7px vertical padding plus the 1px border is the design's own border-box compensation against
    the filled button's 8px and no border, so all three come out the same height under this repo's absent

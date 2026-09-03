@@ -270,24 +270,14 @@ export function ConversationScreen({
         onChange={() => setPickerOpen(true)}
       />
       <Timeline items={items} scrollPin={scrollPin} />
-      {/* #493: the api-error retry status — mounted first of the three remaining indicators, before the
-          stall indicator. It no longer sits directly after its supersede peer: #796 moved the working
-          indicator's text down into the status row above the composer, and left these three where they
-          are. The supersede RULE is untouched by that move — it lives in workingIndicatorState, not in
-          DOM adjacency. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge (turn
-          activity leaves it showing — the deliberate inverse of the stall indicator). Renders nothing at
-          rest. It may still co-render with the stall indicator: AC5 scopes mutual exclusion to thinking. */}
-      <ApiRetryIndicator retry={apiRetry} />
-      {/* #496: the auto-compaction status — mounted beside its fellow thinking-superseder, still above the
-          stall indicator. Shows on a rising edge and clears ONLY on the daemon's explicit falling edge
-          (turn activity leaves it showing — the deliberate inverse of the stall indicator). Renders
-          nothing at rest, and adds no timeline row while live: it is transient chrome (AC5). It may still
-          co-render with the retry and stall statuses: AC4 scopes mutual exclusion to thinking. */}
-      <CompactingIndicator isCompacting={compacting} />
-      {/* #317: the stalled-turn problem-state indicator — a sibling of the thinking indicator in the
-          message-list region. Shows on a daemon stall onset and self-clears (in the reducer) on the next
-          turn activity. Renders nothing at rest. */}
-      <StallIndicator isStalled={stalled} />
+      {/* #967: the region between Timeline and the queued backlog is EMPTY, and that emptiness is the
+          design. #493's api-retry, #496's compaction and #317's stall statuses each mounted their own
+          null-at-rest bubble block here until this ticket folded all three into the status row's single
+          label below — the design draws one row with one label and nothing else in this region. Their
+          precedence against the working label was never DOM adjacency (it lived in workingIndicatorState,
+          which is why #796 could move that label away without touching it), so the fold moved the three
+          labels and left the rule where it always was — now widened there from a two-way supersede to the
+          four-way order the one slot forces. */}
       {/* #294: the held queued backlog — the not-yet-run tail below the delivered thread and the
           working indicator, above the status area and composer (it sat above the run-config row too
           until #962 retired it). Renders nothing when empty. */}
@@ -299,23 +289,29 @@ export function ConversationScreen({
           sidebar host row (#672/#718), and neither overlay ever had a drawn home here. */}
       {/* #796: the desktop layout's status area (Figma 111:3525) — a fixed-height row directly above the
           message box, so there is one line telling the operator what is happening and it never moves the
-          composer under their cursor. It hosts the working indicator's text and nothing else this slice:
-          #493's, #496's and #317's indicators keep their own mount sites above, and their precedence rule
-          is not reopened here.
-          The two derivations below move VERBATIM off the retired mount — no new subscription, no new store
-          read, nothing new across IPC; both come from `thread` fields already destructured above.
-          #648: the label gate tracks the WHOLE running turn (thinking or responding), so a turn spent
-          mostly in tool calls no longer reads as a frozen screen; the label tracks the phase. #493/#496
-          still narrow it — a live api-retry, or a live compaction, supersedes the LABEL in either phase.
+          composer under their cursor. It hosted the working indicator's text and nothing else that slice;
+          #967 REOPENED exactly the precedence rule that sentence deferred, and the row's label now carries
+          all four thread-status facts — #493's retry, #496's compaction, #317's stall and the working
+          label — in the order workingIndicatorState derives. The three loose blocks above are gone.
+          The derivations below move VERBATIM off the retired mount — no new subscription, no new store
+          read, nothing new across IPC; every one comes from `thread` fields already destructured above,
+          which is why folding three surfaces into one costs no store change at all.
+          #648: the working label tracks the WHOLE running turn (thinking or responding), so a turn spent
+          mostly in tool calls no longer reads as a frozen screen. #493/#496 still supersede it — and
+          since #967 they supersede it BY NAME, taking the slot with their own copy instead of blanking it.
           #649: and the label NAMES the open tool, derived from the same `items` array Timeline is mapping
-          above (no second subscription). Two derivations, two props: the closed client-owned label choice,
-          and the one daemon string.
+          above (no second subscription). The name is scoped to the working label alone — the three
+          superseding states outrank it (#967).
           #650: the window opens the moment the composer accepts the submit rather than a network
           round-trip later, closing the blank window in FRONT of a turn as #648 closed the one behind it.
           The icon's gate is deliberately the RAW phase reading (`isTurnRunning`, the same predicate the
-          send button's stop variant uses) and is NOT narrowed by those supersede rules — so during a
-          retry or a compaction the icon keeps turning beside no text, which is a legal render the row's
-          held height makes look intentional rather than broken.
+          send button's stop variant uses) and is NOT narrowed by the supersede rules. Through #963 that
+          made a turning icon beside no text a legal render; #967 closed that state as a side effect of the
+          fold, since a running turn now always has a label. The reverse still happens by design: a stall
+          or a held retry at `idle` shows its label beside a still icon.
+          `stalled` and a second read of `apiRetry` are #967's only additions to this mount — the record
+          gains the field the order needs, and the label takes the retry counter's two integers the way it
+          already takes the one daemon tool name.
           #797: the row's right-hand slot, reserved empty by #796, now carries the connection-error chip.
           It arrives as its own store-bound control rather than a status read hoisted into this screen —
           ConversationScreen does not subscribe to sessionStore, and a read here would re-render the whole
@@ -328,8 +324,12 @@ export function ConversationScreen({
         trailing={<ComposerErrorSlotControl onUnpaired={onUnpaired} />}
       >
         <ThinkingIndicator
-          state={workingIndicatorStateWithLocalSend({ phase, apiRetry, compacting }, localSendPending)}
+          state={workingIndicatorStateWithLocalSend(
+            { phase, apiRetry, compacting, stalled },
+            localSendPending
+          )}
           toolName={openToolName(items)}
+          retry={apiRetry}
         />
       </ComposerStatusArea>
       {/* #602: sending is the one act that overrides the conditional pin, so the Composer reports "a
@@ -1335,14 +1335,95 @@ export function toolWorkingCopy(name: string): string {
   return `Running ${name}…`
 }
 
-// #648: which of the two client-owned labels the indicator shows. A two-member union rather than a
-// boolean, because a boolean cannot carry two labels; deliberately NOT `TurnPhase`, which would hand the
-// view the store type and make `'idle'` representable-but-illegal inside the shown branch.
+// #493: the api-retry copy — a module-level, client-owned constant (the STALL_COPY / 'Thinking…' idiom).
+// Conveys BOTH facts AC1 asks for: claude hit an API error, and it is retrying. Apostrophe-free
+// (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson) and using the U+2026 ellipsis
+// character (matching 'Thinking…' / STALL_COPY). Never a daemon string — the arm carries no string field,
+// so the plain-text-never-HTML guarantee holds by construction. Exported so the tests assert against the
+// constant rather than a duplicated literal.
 //
-// #649: deliberately NOT widened to a third member carrying the tool name. Folding the daemon string in
-// here would dissolve the client-owned half into the same type as the daemon half, which is exactly the
+// #967 MOVED it here, beside its four siblings, when the row's one label slot took over the three loose
+// statuses. The VALUE is unchanged. Its old home was directly above ApiRetryIndicator, which is gone.
+export const API_RETRY_COPY = 'API error — retrying…'
+
+// #496: the compaction copy — a module-level, client-owned constant (the API_RETRY_COPY / STALL_COPY /
+// 'Thinking…' idiom). Names the work AND its object, so a silent screen reads as claude rewriting its own
+// context rather than a wedged session (the premise of #496) — and reads as progress, never as an error.
+// Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson) and using the
+// U+2026 ellipsis character (matching 'Thinking…' / STALL_COPY / API_RETRY_COPY). Never a daemon string —
+// the arm carries no string field, so the plain-text-never-HTML guarantee holds by construction. Exported
+// so the tests assert against the constant rather than a duplicated literal.
+//
+// #967 moved it here for the same reason as its retry peer above.
+export const COMPACTING_COPY = 'Compacting the conversation…'
+
+// #317: the stall-indicator copy — a module-level, client-owned constant (the EMPTY_THREAD_COPY /
+// 'Thinking…' idiom). Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop
+// lesson) and using the U+2026 ellipsis character (matching 'Thinking…'). Never a daemon string — the
+// stall frame carries no daemon content, so the plain-text-never-HTML guarantee holds by construction.
+//
+// #967 moved it here and EXPORTED it. It was the one module-private label of the five, which forced three
+// separate test files to assert its literal instead of the constant; grouped and exported, the five labels
+// the row's single slot can carry are one reviewable cluster — which is the reason composerSend.ts's own
+// chip copy gives for living where it does.
+export const STALL_COPY = 'The turn seems to have stalled…'
+
+// #648: which client-owned label the indicator shows. A union rather than a boolean, because a boolean
+// cannot carry two labels; deliberately NOT `TurnPhase`, which would hand the view the store type and make
+// `'idle'` representable-but-illegal inside the shown branch.
+//
+// #649: deliberately NOT widened to a member carrying the tool name. Folding the daemon string in here
+// would dissolve the client-owned half into the same type as the daemon half, which is exactly the
 // distinction that ticket asks to preserve; the name rides a second, separately-named prop instead.
-export type WorkingIndicatorState = 'thinking' | 'working'
+//
+// #967 widens it from two members to five, and that is a different act from the one #649 refused: every
+// added member is another CLIENT-OWNED literal, so the label CHOICE stays a closed set of this file's own
+// constants. The row's one label slot now carries all four thread-status facts, in the order
+// `workingIndicatorState` below derives — retry, compacting, stalled, then the working label. The daemon's
+// two contributions still ride their own separately-typed props on the view (`toolName`, `retry`).
+export type WorkingIndicatorState = 'thinking' | 'working' | 'retrying' | 'compacting' | 'stalled'
+
+// #967: the label for each of the five states — a total switch with NO default, so a sixth member is a
+// `tsc` error here rather than a silently unlabelled row. Every arm returns a client-owned constant; only
+// the retry arm interpolates anything, and what it interpolates is two integers (below).
+function statusRowCopy(state: WorkingIndicatorState, retry: ApiRetryStatus | null): string {
+  switch (state) {
+    case 'retrying':
+      return apiRetryLabel(retry)
+    case 'compacting':
+      return COMPACTING_COPY
+    case 'stalled':
+      return STALL_COPY
+    case 'thinking':
+      return THINKING_COPY
+    case 'working':
+      return WORKING_COPY
+  }
+}
+
+// #967: the retry label with #493's attempt counter folded into it. The counter shows iff `total > 0`,
+// which covers AC3's unknown-count case (`0/0` → omitted entirely, no "0/0" in the markup) and
+// additionally suppresses a meaningless denominator on an undocumented `N/0`. Two client-formatted
+// integers interpolated as digits — NEVER `current / total`, which is NaN at 0/0. This is one comparison,
+// not a validator: the transport type-checks but deliberately does not range-check an inbound wire integer
+// (ADR 0002 drift), and inventing a bound here would be unprecedented scope. `{ current: 0, total: 10 }`
+// is not the unknown sentinel — it renders as 0/10.
+//
+// ONE TEXT RUN, not constant-plus-span as #493's bubble rendered it. That is load-bearing rather than
+// tidy: the row's label ellipsizes as one unit (see ThinkingIndicator's own comment and
+// .composer-status__label--tool), and two runs would render two ellipses on overflow. `.api-retry__counter`
+// went with the rest of that bubble's CSS, so the counter carries no distinct weight any more — the
+// emphasis it had inside a bubble has no analogue in a one-line row of body-small.
+//
+// `retry === null` is a DEGRADE, not a defence: the container derives `'retrying'` from `apiRetry !== null`
+// and hands this the same record, so it is unreachable from there — but the prop's type admits it and the
+// bare copy is the honest answer. Both fields are guaranteed numbers, not daemon strings:
+// parseApiRetryPayload narrows them with requireNumber and throws WireDecodeError otherwise, which is what
+// bounds this interpolation's length (a JS number stringifies to at most 24 characters).
+function apiRetryLabel(retry: ApiRetryStatus | null): string {
+  if (retry === null || retry.total <= 0) return API_RETRY_COPY
+  return `${API_RETRY_COPY} attempt ${retry.current}/${retry.total}`
+}
 
 // #215: the working indicator — Timeline's twin over the coarse `phase` scalar rather than the
 // items list. The daemon opens a turn with `turn_state{thinking}` before any assistant_delta
@@ -1377,14 +1458,19 @@ export type WorkingIndicatorState = 'thinking' | 'working'
 // `toolName` is REQUIRED, not optional: an optional prop would let the container silently omit it, and
 // nothing in this repo could catch that — every container test renders the idle store (zustand v5 reads
 // getInitialState() under server render), so `tsc` is the only available detector and the type must be the
-// one that fails.
+// one that fails. #967's `retry` prop is required on that same reasoning, and is the second and last of
+// the daemon's contributions to this label: two integers and no string field, so the type-level "this prop
+// structurally cannot carry a daemon string" guarantee #493's own view had is preserved verbatim.
 //
-// Precedence: the `state === null` guard runs FIRST, so #493's and #496's supersede rules are reached
-// before any tool label can render — a live api-retry or compaction still hides the indicator entirely in
-// either phase, and an open tool cannot resurrect it. `toolName` then wins over the phase-derived copy,
-// which makes `{ state: 'thinking', toolName: 'Bash' }` well-defined rather than illegal; it should not
-// arise (the daemon flips to `responding` on the first tool step), so it is a defined edge, not a
-// defended one.
+// PRECEDENCE, REVERSED BY #967 for the tool name. Until this ticket the `state === null` guard was what
+// enforced #493's and #496's supersede rules, and the tool name then won over the phase-derived copy —
+// safe only because a live retry or compaction made `state` null and this function returned before
+// reaching the label. Now that all four thread-status facts share one slot, `state === 'retrying'` with a
+// tool still open is REACHABLE, and the old order would render the tool name where the row must say
+// API_RETRY_COPY. So the name is scoped to the working/thinking state alone (AC1) and the three
+// superseding states outrank it. `{ state: 'thinking', toolName: 'Bash' }` stays well-defined rather than
+// illegal — it should not arise, since the daemon flips to `responding` on the first tool step, so it is a
+// defined edge, not a defended one.
 //
 // null → null (zero layout footprint, AC3 — exactly like Timeline returning null on an empty list). What
 // changes is only where that footprint sits: #796 IS the deferred desktop-design pass this comment used
@@ -1409,28 +1495,44 @@ export type WorkingIndicatorState = 'thinking' | 'working'
 // and never into a log. The `text-overflow: ellipsis` below is the specific temptation to add a title
 // tooltip; the shipped treatment deliberately had none and neither does this.
 //
-// The label is a SINGLE text child, not constant-plus-span like ApiRetryIndicator below. That is
-// load-bearing for the bound: one text run ellipsizes as one unit, so on overflow the client `…` is
-// truncated away and replaced by the ellipsis the truncation itself draws. Splitting the name into its own
-// span would render `Running some-long-na…  …` — two ellipses — and buys nothing, since the name needs no
-// distinct type or colour here (there is no Figma node for this state; the indicator is one muted run).
+// The label is a SINGLE text child in EVERY state, never constant-plus-span. That is load-bearing for the
+// bound: one text run ellipsizes as one unit, so on overflow the client `…` is truncated away and replaced
+// by the ellipsis the truncation itself draws. Splitting the name into its own span would render
+// `Running some-long-na…  …` — two ellipses — and buys nothing, since the name needs no distinct type or
+// colour here. #967 is what makes this a rule about every state rather than about the tool name: #493's
+// retry bubble DID render constant-plus-span (`.api-retry__counter`), and folding it into this one slot is
+// exactly why the counter is interpolated into the string instead (see apiRetryLabel above).
+//
+// The stall takes ONE extra modifier and nothing else (#967). It is the only state that departs from the
+// row's --color-primary, because the bubble it had wore the error role (#317 AC4) and it is still the one
+// state that reports a problem rather than progress; retry and compaction keep the primary, the only
+// colour the design draws. Colour-only is also why no state can move the row (AC4): the modifier changes
+// no type, no box and no line-height, so all five labels occupy the same geometry.
 export function ThinkingIndicator({
   state,
-  toolName
+  toolName,
+  retry
 }: {
   state: WorkingIndicatorState | null
   toolName: string | null
+  retry: ApiRetryStatus | null
 }): JSX.Element | null {
   if (state === null) return null
-  // One element, two varying pieces — the toolCall row's `rowClass` idiom above (:545), which likewise
-  // varies only a className and keeps a single return. Writing the tool case as its own early return would
-  // duplicate the markup, and a drifted copy is exactly what makes the two unnamed labels stop being
-  // byte-identical to each other.
+  // The tool name belongs to the working/thinking state alone (#967, AC1). ONE const drives both the label
+  // and the modifier below, so "the name is state 4's" lives in one expression rather than in two
+  // conditions that have to agree — and it narrows `toolName` in place, so neither a `!` nor a cast is
+  // needed to hand it to toolWorkingCopy.
+  const toolLabel =
+    (state === 'thinking' || state === 'working') && toolName !== null ? toolWorkingCopy(toolName) : null
+  // One element, three varying pieces — the toolCall row's `rowClass` idiom above, which likewise varies
+  // only a className and keeps a single return. Writing any case as its own early return would duplicate
+  // the markup, and a drifted copy is exactly what makes the five labels stop being byte-identical to each
+  // other. The two modifiers are mutually exclusive by construction: `toolLabel` is null in every
+  // superseding state, so a stalled row can never also be a tool-named one.
   const labelClass = `conversation__thinking composer-status__label${
-    toolName !== null ? ' composer-status__label--tool' : ''
-  }`
-  const label =
-    toolName !== null ? toolWorkingCopy(toolName) : state === 'thinking' ? THINKING_COPY : WORKING_COPY
+    toolLabel !== null ? ' composer-status__label--tool' : ''
+  }${state === 'stalled' ? ' composer-status__label--stalled' : ''}`
+  const label = toolLabel ?? statusRowCopy(state, retry)
   return <span className={labelClass}>{label}</span>
 }
 
@@ -1474,9 +1576,15 @@ export function ThinkingIndicator({
 // reduced-motion guard (AC4) rides on the same class in conversation.css and is only observable in the
 // Playwright fake tier, where e2e/composer-status-reduced-motion.spec.ts covers it.
 //
-// The two gates are deliberately INDEPENDENT: `isRunning` is the raw phase reading, while the label above
-// is still superseded by a live api-retry or compaction (#493/#496). So a turning icon beside no text is
-// a legal, expected render — and AC2's held height is what makes it read as intentional.
+// The two gates are still deliberately INDEPENDENT: `isRunning` is the raw phase reading, while the label
+// above is derived through `workingIndicatorState`'s four-way order. Through #963 that independence made a
+// turning icon beside no text a legal, expected render, since a live api-retry or compaction blanked the
+// label (#493/#496). #967 CLOSES that state — not by coupling the gates, but as a consequence of the fold:
+// the icon turns on `isTurnRunning(phase)`, and whenever that holds the label is non-null (retrying,
+// compacting, stalled, or thinking/working), so the icon can no longer turn beside nothing. The paragraph
+// stays rather than being deleted because closing that render is a result worth recording. The CONVERSE is
+// still reachable and still intended: a stall or a held retry at `idle` shows its label beside a still
+// icon — which is exactly the ungated behaviour #967's AC2 preserves.
 export function ComposerStatusArea({
   isRunning,
   children,
@@ -1506,66 +1614,47 @@ export function ComposerStatusArea({
   )
 }
 
-// #317: the stall-indicator copy — a module-level, client-owned constant (the EMPTY_THREAD_COPY /
-// 'Thinking…' idiom). Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop
-// lesson) and using the U+2026 ellipsis character (matching 'Thinking…'). Never a daemon string — the
-// stall frame carries no daemon content, so the plain-text-never-HTML guarantee holds by construction.
-const STALL_COPY = 'The turn seems to have stalled…'
-
-// #317: the stall indicator — ThinkingIndicator's twin over the coarse `stalled` scalar. The daemon
-// emits a one-shot `stall` onset when claude goes quiet mid-turn (or the screen parser degrades) with no
-// "cleared" frame, so the reducer self-clears the flag on the next turn activity; this view just renders
-// the current boolean. Pure props-in/markup-out and exported so tests server-render an injected boolean
-// with no store.
-//
-// Takes `isStalled: boolean`, NOT the store type — the boolean makes AC4 ("no daemon-supplied string is
-// rendered") a type-level guarantee: the view structurally cannot receive, hence cannot render, a daemon
-// string. A plain boolean guard, no switch / assertNever (there is no union to discriminate).
-//
-// isStalled false → null (zero layout footprint — the ThinkingIndicator / Timeline null-on-empty
-// posture). isStalled true → the client-owned copy in a wrapper + bubble carrying stall-distinct classes
-// (see conversation.css): it reuses the daemon bubble's fill/radius but diverges to the error role so it
-// reads as a PROBLEM state, visually distinct from the muted .bubble--thinking (AC4).
-export function StallIndicator({ isStalled }: { isStalled: boolean }): JSX.Element | null {
-  if (!isStalled) return null
-  return (
-    <div className="conversation__stall">
-      <div className="bubble bubble--daemon bubble--stall">{STALL_COPY}</div>
-    </div>
-  )
-}
-
-// #493: the api-retry copy — a module-level, client-owned constant (the STALL_COPY / 'Thinking…' idiom).
-// Conveys BOTH facts AC1 asks for: claude hit an API error, and it is retrying. Apostrophe-free
-// (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson) and using the U+2026 ellipsis
-// character (matching 'Thinking…' / STALL_COPY). Never a daemon string — the arm carries no string field,
-// so the plain-text-never-HTML guarantee holds by construction. Exported so the tests assert against the
-// constant rather than a duplicated literal.
-export const API_RETRY_COPY = 'API error — retrying…'
-
 // #493: the coarse thread-chrome scalars the indicator-precedence rule reads. A record, not a positional
 // scalar (the one place this departs from `isTurnRunning`): a record grows by one field where a positional
 // signature would break every call site. #496 took exactly that route — one field here, one clause below,
 // no parallel rule and no second gate — so a third superseding status extends it the same way.
+//
+// #967 IS that third status, and it takes the field #650 declined to take. `stalled` is REQUIRED, not
+// optional: an optional field is precisely the silent-omission hole `toolName`'s own comment refuses, and
+// the type is the only detector this repo has here, since every container test renders the initial store.
+// The cascade that costs — every `ThreadStatus` literal in the test file gains one token — is the price of
+// having a detector at all, and `tsc` names every site.
 export interface ThreadStatus {
   phase: TurnPhase
   apiRetry: ApiRetryStatus | null
   compacting: boolean
+  stalled: boolean
 }
 
-// #493: whether the generic thinking indicator shows — thinking, and nothing supersedes it (AC5). This
-// closes the mutual-exclusion question #317 deferred: a stall and thinking are compatible facts ("working"
-// and "may be stuck") and still co-render, but retrying against an API error is NOT compatible — claude is
-// not making progress on the request, it is re-attempting a failed call, so the retry status replaces the
-// thinking indicator rather than sitting beside it. Narrowing the gate (rather than deriving a
-// mutually-exclusive status union in the container) keeps both views pure and independently
-// unit-testable — the isTurnRunning precedent of extracting the named predicate. Presence supersedes, not
-// the counter: an unknown-count retry (`{ current: 0, total: 0 }`) hides thinking exactly like a known one.
+// #493: whether the generic thinking indicator shows — thinking, and nothing supersedes it (AC5).
+// Retrying against an API error is NOT compatible with "thinking" — claude is not making progress on the
+// request, it is re-attempting a failed call, so the retry status replaces the thinking indicator rather
+// than sitting beside it. Narrowing the gate (rather than deriving a mutually-exclusive status union in
+// the container) keeps both views pure and independently unit-testable — the isTurnRunning precedent of
+// extracting the named predicate. Presence supersedes, not the counter: an unknown-count retry
+// (`{ current: 0, total: 0 }`) hides thinking exactly like a known one.
 //
 // #496: the second superseder — a live compaction hides thinking too. Claude is not thinking about the
 // user's request while compacting, it is rewriting its own context, so "thinking" would be a false
-// reading of a silent screen (the premise of #496). The exclusion is scoped to the thinking indicator
-// ONLY: compaction, retry, and stall may all co-render, since they are independent daemon facts.
+// reading of a silent screen (the premise of #496).
+//
+// #967 MADE THE CO-RENDER SENTENCES FALSE, and they are gone rather than qualified. This docblock used to
+// say twice that the statuses co-render — that a stall and thinking are compatible facts ("working" and
+// "may be stuck") which still show side by side, and that compaction, retry and stall may all co-render
+// since they are independent daemon facts. All of that was true while each status owned its own surface.
+// The row's label slot holds ONE string, so the four facts now have a precedence instead of a layout, and
+// the function that picks between them is `workingIndicatorState` below. What this predicate answers after
+// the fold is the narrower question its name always asked: whether the WORKING label is what the slot
+// shows. Its two supersede clauses are kept textually untouched, and they are now dominated by that
+// function's earlier returns — they stay because they are #493's and #496's standing regression evidence,
+// and because this predicate is exported and tested in its own right. It deliberately gains NO `stalled`
+// clause: one order lives in one function, and a second copy of the stall rule here is exactly the drift
+// #650's comment below exists to prevent.
 //
 // #648: the phase clause BROADENS from `phase === 'thinking'` to the whole running turn, closing the
 // divergence isTurnRunning's own comment below flags. The daemon emits `turn_state{thinking}` only while
@@ -1581,22 +1670,58 @@ export function shouldShowThinking(status: ThreadStatus): boolean {
 }
 
 // #648: the label discriminant, composed ON the gate above rather than duplicating it — it delegates the
-// whole show/hide decision and adds only the choice between the two client-owned labels. Keeping the gate
-// and the discriminant as one function pair (rather than folding both into a single union-returning
-// predicate) leaves #493's and #496's nine supersede assertions standing verbatim as AC4's regression
-// evidence. `'idle'` is unreachable in the second branch because the gate already excluded it, so there is
-// no third case and no assertNever.
+// show/hide decision for the working label and adds only the choice between the two client-owned labels.
+// Keeping the gate and the discriminant as one function pair (rather than folding both into a single
+// union-returning predicate) leaves #493's and #496's nine supersede assertions standing verbatim as AC4's
+// regression evidence. `'idle'` is unreachable in the last branch because the gate already excluded it, so
+// there is no further case and no assertNever.
+//
+// #967: THIS IS THE ONE PLACE THE ROW'S FOUR-WAY ORDER LIVES. The row's label slot holds one string, so
+// the four thread-status facts need a precedence rather than four surfaces, and this is it:
+//
+//   1. retry      — a live rising/falling-edge signal; claude is re-attempting a failed call.
+//   2. compacting — the same kind of signal. The two never overlap in practice; retry wins if they do.
+//   3. stalled    — a one-shot onset with no clearing frame, cleared only by the next turn activity, so
+//                   the two freshest live signals outrank it. It DOES outrank the working label: a stall
+//                   and thinking are compatible facts, and while one slot can no longer show both, the
+//                   stall is the more useful of the two while it lasts.
+//   4. thinking / working — what the design draws, tool-named where a tool is open.
+//
+// THE FIRST THREE ARE READ BEFORE THE GATE, AND THAT ORDERING IS THE WHOLE POINT (AC2). All three shipped
+// views rendered off their own scalar alone, with no phase in their props at all; `shouldShowThinking`
+// requires `isTurnRunning`, so folding them in BEHIND it would silently narrow three shipped behaviours to
+// the running turn. That is not a judgement call — `thread-scroll-pin.spec.ts` pushes its stall onto a turn
+// the primer has already returned to `idle` and asserts the label renders. Only the working label is gated
+// on a running turn.
+//
+// The two supersede clauses inside the gate are now dominated by the first two returns here, and are left
+// standing deliberately: see the gate's own docblock above for why. Presence supersedes, not the counter —
+// an unknown-count retry (`{ current: 0, total: 0 }`) picks `'retrying'` exactly like a known one, and the
+// counter's absence is then apiRetryLabel's business, not this function's.
 export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
+  if (status.apiRetry !== null) return 'retrying'
+  if (status.compacting) return 'compacting'
+  if (status.stalled) return 'stalled'
   if (!shouldShowThinking(status)) return null
   return status.phase === 'thinking' ? 'thinking' : 'working'
 }
 
 // #650: the locally-opened window — the indicator now opens the moment the composer accepts a submit,
 // rather than waiting a network round-trip for the daemon's first `turn_state`. Composed ON the pair above
-// rather than added as a fourth `ThreadStatus` field: a fourth field would break 19 status literals in the
-// test file as pure retyping with not one expectation changed, and those literals are exactly the standing
-// regression evidence that #493's and #496's supersede rules survived #648. This is #648's own recorded
-// lesson applied a second time — compose on a proven gate, do not retype its assertions.
+// rather than added as a fourth `ThreadStatus` field.
+//
+// THAT PARAGRAPH USED TO ARGUE AGAINST TAKING THE FIELD AT ALL, and #967 took one — so it is rewritten
+// here rather than left to contradict the code above it. #650's reasoning was that a fourth field would
+// break 19 status literals in the test file as pure retyping with not one expectation changed, and that
+// those literals are the standing regression evidence for #493's and #496's supersede rules. Both halves
+// were true, and neither carries to a status in the MIDDLE of the order. The difference is the precedence
+// position: this window is a LOWER-priority fallback, so it composes on top of a proven gate without
+// restating anything. A stall sits below retry and compaction and above the working label, so a wrapper
+// would have had to re-read `apiRetry` and `compacting` itself to choose between `'retrying'`,
+// `'compacting'` and `'stalled'` — putting the supersede facts in two places, which is the drift this
+// comment exists to prevent. So #967 took the field, paid the retype (32 literals by then), and kept one
+// record, one function, one order. What survives here unchanged is the shape below: this wrapper still
+// adds only its own lower-priority window and still restates nothing.
 //
 // Three statements, no new branch logic, and the third is the load-bearing one:
 //  1. The daemon's answer WINS — a non-null result is returned unchanged, so every daemon-opened case is
@@ -1605,9 +1730,12 @@ export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorSta
 //     the composer refuses dispatches no `userText`, so the flag never opens and no code runs at all).
 //  3. Otherwise ASK THE SAME GATE what it would say for a turn that has just begun, by re-calling it with
 //     one field substituted. Three properties fall out of writing it as a re-call rather than a fresh
-//     expression: (a) #493's and #496's supersede clauses are INHERITED, not restated — a live retry or
-//     compaction still returns null because the same two clauses evaluate, so there is no second place the
-//     rule lives and it cannot drift; (b) the label is `'thinking'`, which is both honest (the operator has
+//     expression: (a) #493's and #496's supersede facts are INHERITED, not restated, so there is no second
+//     place the rule lives and it cannot drift — through #963 that read "a live retry or compaction still
+//     returns null because the same two clauses evaluate", and after #967's fold the inheritance is
+//     stronger rather than weaker: a live retry or compaction is answered by statement 1 above, since
+//     `workingIndicatorState` now returns that status's own LABEL instead of null, so statement 3 never
+//     sees one at all; (b) the label is `'thinking'`, which is both honest (the operator has
 //     pressed Enter and nothing has been produced — precisely what the daemon's own `thinking` phase means)
 //     and FLICKER-FREE, since the daemon's first `turn_state{thinking}` then changes nothing at the seam
 //     this ticket exists to smooth, where `'working'` would have flipped Working → Thinking → Working;
@@ -1659,76 +1787,6 @@ export function openToolName(items: readonly ThreadItem[]): string | null {
     if (item.kind === 'toolCall' && item.result === null) return item.name
   }
   return null
-}
-
-// #493: the api-retry indicator — the StallIndicator twin over the `apiRetry` status record. The daemon
-// re-fires the rising edge as the attempt count climbs and sends an explicit falling edge when the retry
-// ends, so (unlike the stall) the reducer never self-clears it; this view just renders the held status.
-// Pure props-in/markup-out and exported so tests server-render an injected status with no store.
-//
-// Takes `ApiRetryStatus | null` — two numbers, NO string field. That preserves the ThinkingIndicator /
-// StallIndicator type-level guarantee for AC1 ("no daemon-supplied string is ever rendered") in the only
-// way open to a view that must show daemon-derived digits: it structurally cannot receive a daemon string.
-// Do NOT widen the prop to the ThreadEvent or to a preformatted string.
-//
-// null → null (zero layout footprint — the ThinkingIndicator / StallIndicator posture). Present → the
-// client-owned copy in a wrapper + bubble carrying retry-distinct classes (see conversation.css): the
-// daemon bubble's fill/radius diverged to the error role so it reads as a DEGRADING session, distinct from
-// both the muted .bubble--thinking and the accent-barred .bubble--stall (AC1).
-export function ApiRetryIndicator({ retry }: { retry: ApiRetryStatus | null }): JSX.Element | null {
-  if (!retry) return null
-  // The counter shows iff `total > 0`. That covers AC3's unknown-count case (`0/0` → omitted entirely, no
-  // "0/0" in the markup) and additionally suppresses a meaningless denominator on an undocumented `N/0`.
-  // Two client-formatted integers interpolated as digits — NEVER `current / total`, which is NaN at 0/0.
-  // This is one comparison, not a validator: the transport type-checks but deliberately does not
-  // range-check an inbound wire integer (ADR 0002 drift), and inventing a bound here would be
-  // unprecedented scope. `{ current: 0, total: 10 }` is not the unknown sentinel — it renders as 0/10.
-  const showCounter = retry.total > 0
-  return (
-    <div className="conversation__api-retry">
-      <div className="bubble bubble--daemon bubble--api-retry">
-        {API_RETRY_COPY}
-        {showCounter && (
-          <span className="api-retry__counter">{` attempt ${retry.current}/${retry.total}`}</span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// #496: the compaction copy — a module-level, client-owned constant (the API_RETRY_COPY / STALL_COPY /
-// 'Thinking…' idiom). Names the work AND its object, so a silent screen reads as claude rewriting its own
-// context rather than a wedged session (the premise of #496) — and reads as progress, never as an error.
-// Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson) and using the
-// U+2026 ellipsis character (matching 'Thinking…' / STALL_COPY / API_RETRY_COPY). Never a daemon string —
-// the arm carries no string field, so the plain-text-never-HTML guarantee holds by construction. Exported
-// so the tests assert against the constant rather than a duplicated literal.
-export const COMPACTING_COPY = 'Compacting the conversation…'
-
-// #496: the compaction indicator — the StallIndicator twin over the `compacting` scalar. The daemon sends
-// an explicit falling edge when compaction ends, so (unlike the stall) the reducer never self-clears it and
-// turn activity leaves it showing; this view just renders the current boolean. Pure props-in/markup-out and
-// exported so tests server-render an injected boolean with no store.
-//
-// Takes `isCompacting: boolean`, NOT the store type — the boolean makes AC1 ("no daemon-supplied string is
-// ever rendered") a type-level guarantee: the view structurally cannot receive, hence cannot render, a
-// daemon string. ApiRetryIndicator needed a record only because it renders daemon-derived digits; the wire
-// carries no compaction progress, so there is nothing numeric here and none may be invented (banner-only).
-// A plain boolean guard, no switch / assertNever (there is no union to discriminate).
-//
-// false → null (zero layout footprint — the StallIndicator / ThinkingIndicator posture, and AC5: while
-// live it adds no timeline row, and once cleared it leaves nothing behind). true → the client-owned copy in
-// a wrapper + bubble carrying compaction-distinct classes (see conversation.css): the daemon bubble's
-// fill/radius with .bubble--thinking's muted text — compaction IS a working state — plus a primary-role
-// accent bar for distinctness. Deliberately NOT the error role both problem states use: compaction is
-// claude working normally, and painting routine housekeeping as a failure would be a design bug.
-export function CompactingIndicator({ isCompacting }: { isCompacting: boolean }): JSX.Element | null {
-  if (!isCompacting) return null
-  return (
-    <div className="conversation__compacting">
-      <div className="bubble bubble--daemon bubble--compacting">{COMPACTING_COPY}</div>
-    </div>
-  )
 }
 
 // #307: whether a turn is currently running. This is the one subtle thing in the ticket: the gate is

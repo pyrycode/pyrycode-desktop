@@ -26,11 +26,9 @@ The sheet's first section, **Log data** (a Download button for the debug bundle)
 
 A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `Timeline` view mounted beside `MessageThread`, rendering [thread-timeline store](conversation-timeline-store.md) items (the streamed assistant text, with a streaming cursor on the in-progress bubble) in a Strangler-Fig coexistence with the coarse thread above it. Inert (empty, zero footprint) in production until #179 flipped the `interactive` capability. See [Structured-stream timeline render](conversation-shell-turn-status.md#structured-stream-timeline-render-203) below.
 
-`Timeline`'s structural twin over the store's coarse `phase` scalar landed in [#215](../codebase/215.md): a "Thinking…" affordance mounted right after `Timeline`, covering the pre-text window the daemon opens with `turn_state{thinking}` before any assistant delta — otherwise the thread shows nothing and a slow turn looks stalled. Also inert until #179 (below). See [Thinking indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650) below.
+`Timeline`'s structural twin over the store's coarse `phase` scalar landed in [#215](../codebase/215.md): a "Thinking…" affordance mounted right after `Timeline`, covering the pre-text window the daemon opens with `turn_state{thinking}` before any assistant delta — otherwise the thread shows nothing and a slow turn looks stalled. Also inert until #179 (below). See [Thinking indicator](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967) below.
 
-`ThinkingIndicator`'s own twin, over a second store scalar, landed in [#317](../codebase/317.md): a `StallIndicator` mounted as its sibling, showing a problem-state affordance when the daemon's onset-only `stall` signal (#315) fires and self-clearing on the next turn activity (client-derived in the reducer — there is no daemon "cleared" frame). See [Stall indicator](conversation-shell-turn-status.md#stall-indicator-317) below.
-
-A **second** supersede peer for `ThinkingIndicator` landed in [#496](../codebase/496.md): a `CompactingIndicator` showing "Compacting the conversation…" while the daemon's `compacting` signal (#495) is live, mounted right after `ApiRetryIndicator` and, like it, occluding the thinking indicator rather than co-rendering beside it. See [Compacting indicator](conversation-shell-turn-status.md#compacting-indicator-496) below.
+`ThinkingIndicator`'s own twin, over a second store scalar, landed in [#317](../codebase/317.md): a `StallIndicator` mounted as its sibling, showing a problem-state affordance when the daemon's onset-only `stall` signal (#315) fires and self-clearing on the next turn activity (client-derived in the reducer — there is no daemon "cleared" frame). A first supersede peer, `ApiRetryIndicator`, landed in [#493](../codebase/493.md) over the daemon's `api_retry` signal (#492); a **second**, `CompactingIndicator`, landed in [#496](../codebase/496.md) over `compacting` (#495), mounted right after `ApiRetryIndicator` and, like it, occluding the thinking indicator rather than co-rendering beside it. All three retired in [#967](https://github.com/pyrycode/pyrycode-desktop/issues/967), which folded their copy into `ThinkingIndicator`'s own widened label instead of three separate mounts. See [Thinking / working indicator § Retired by #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967) below.
 
 **The cutover landed in [#179](../codebase/179.md):** the client hello now advertises `interactive`, the coarse `message` fan-out stops daemon-side, the composer's optimistic echo routes into the timeline as a `userText` item, and the coarse `MessageThread` mount is retired. `Timeline` is now the conversation's **single** thread surface — every "inert until #179" render slice below (the structured-stream thread, the thinking indicator, the tool-call rows, the permission modal) is now live. See [The interactive flip + thread cutover](conversation-shell-conversation-and-modals.md#the-interactive-flip--thread-cutover-179) below.
 
@@ -115,18 +113,44 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
   container's own scroll events and re-asserted in a dependency-free layout effect, decides — never a
   measurement taken after the new content is already in the layout. `Timeline` gained one optional
   `scrollPin` prop bundling the ref and the scroll handler so the ~30 pre-existing render sites needed no
-  edits. Every chrome sibling below the thread (`__stall`/`__api-retry`/`__compacting`/`__queued`/
-  `__interrupt`) can mount or unmount with no risk of un-pinning a thread the operator never scrolled — a
-  chrome mount only shrinks the thread's viewport, which cannot fire a scroll event. **`.conversation__thinking`
-  left this list in [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796):** its markup now lives
-  inside the composer status row, a fixed-height element that is mounted at all times, so
-  `turn_state{thinking}` no longer shrinks anything — it only swaps a label inside an already-present row.
+  edits. Every chrome sibling below the thread that can still mount or unmount there (`__queued`/
+  `__interrupt`) does so with no risk of un-pinning a thread the operator never scrolled — a chrome mount
+  only shrinks the thread's viewport, which cannot fire a scroll event. (Through #967 that list also
+  included `__stall`/`__api-retry`/`__compacting`; all three retired along with the views that mounted
+  them — see below.) **`.conversation__thinking` left this list in
+  [#796](https://github.com/pyrycode/pyrycode-desktop/issues/796):** its markup now lives inside the
+  composer status row, a fixed-height element that is mounted at all times, so `turn_state{thinking}` no
+  longer shrinks anything — it only swaps a label inside an already-present row.
   `thread-scroll-pin.spec.ts`'s fourth criterion existed specifically to prove a chrome mount shrinks the
   thread without un-pinning it; left pointed at the working indicator it would have kept passing against a
   viewport that had stopped moving, silently testing nothing. #796 repointed it onto the stall indicator
-  (`.conversation__stall`), which kept its own bubble treatment and still shrinks the region — the daemon's
-  `stall` frame drives it, with `conversationActivityBridge.ts`'s unconditional stall-clear-on-any-turn-state
-  independently confirmed to make the subsequent `toHaveCount(0)` assertion correct rather than incidental.
+  (`.conversation__stall`), which kept its own bubble treatment and still shrank the region at the time —
+  the daemon's `stall` frame drove it, with `conversationActivityBridge.ts`'s unconditional
+  stall-clear-on-any-turn-state independently confirmed to make the subsequent `toHaveCount(0)` assertion
+  correct rather than incidental.
+
+  **[#967](https://github.com/pyrycode/pyrycode-desktop/issues/967) folded the stall block into the
+  composer status row too** (see [Conversation shell — turn status § Retired by
+  #967](conversation-shell-turn-status.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967)),
+  which took the criterion's subject away a second time — the same swap #796 made, for the same reason,
+  now needed again. The criterion moved onto the [queued
+  backlog](conversation-shell-conversation-and-modals.md#queued-backlog--drop-affordance-294-drop-since-296)
+  (`.conversation__queued`), a region of dimmed rows large enough to shrink the viewport by tens of pixels
+  (116px measured with a two-item backlog) — deliberately not #963's 8px row-growth, which needs a
+  terminal connection error the spec has no reason to stage. **This repoint needed a two-step shape, not a
+  one-for-one swap**, and the failure that forced it is informative: `useThreadScrollPin`'s re-assert is a
+  dep-free layout effect that runs on **screen** renders, and `QueuedBacklogControl` holds its own
+  queue-store subscription, so a `queue_state` push re-renders that control alone and the pin never runs —
+  the thread rests 116px off the bottom with no re-pin. The criterion is now shrink (a `queue_state` push),
+  then a *following* screen render (the stall push, now landing on the row's shared label) that must still
+  re-pin; the old one-step version conflated the two because the stall block used to arrive through the
+  timeline store, so its shrink and its re-render landed in the same tick and could never distinguish "the
+  flag survived" from "this render re-asserted". That gap — a queued-backlog mount can leave a pinned
+  thread short of the bottom until the next unrelated render — is a **pre-existing bug**, filed as
+  [#1009](https://github.com/pyrycode/pyrycode-desktop/issues/1009) rather than fixed in #967 (out of that
+  ticket's scope: the fix is a production change to `useThreadScrollPin`, a file #967 does not otherwise
+  touch). The spec asserts only the two-step claim and comments the gap rather than asserting over it.
+
   `overflow-anchor` stays unset (closed as indifferent, confirmed on an observed
   e2e run, not just reasoning). **Send-forces-pin** ([#602](../codebase/602.md)) rides this exact
   mechanism with no second one: `useThreadScrollPin` now also returns `followBottom`, a single
@@ -158,7 +182,7 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
 - [Screen snapshot fetch](screen-snapshot-fetch.md) — the original transport data path (#180, extended #191) `<RunConfigData/>` consumed via `snapshotReceived` until #491/#500 moved it onto [Run configuration store](run-config-store.md)'s `runConfigReceived`; also hosted the `requestSnapshot` command (removed #620), the `screenSnapshotReceived` event #324's now-removed control used to send and render (#316, #324, removed #618), and both events removed outright by [#621](../codebase/621.md)
 - [Screen-snapshot store](screen-snapshot-store.md) — the dedicated store (#323), reader-less since [#618](../codebase/618.md) removed `ScreenSnapshotControl`, its former sole consumer (#324), then deleted outright by [#619](../codebase/619.md)
 - [Relay-link store](relay-link-store.md) — the dedicated store (#329) `<ConnectionStatusIndicatorControl/>` reads via `selectRelayLinkStatus`, its first real consumer; combined at render time with [session store](session-store.md)'s `ConnectionStatus` (#330)
-- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the flat store and model this screen read through [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758): `<Timeline/>` via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx` (still mounted, still dual-writing); `<ThinkingIndicator/>` via `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` writes to this store's `dispatch` as the `userText` producer (unchanged — still the flat store, see below), and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` via `selectStalled` (#317, transport #315); `<ApiRetryIndicator/>` via `selectApiRetry`, and the exported `shouldShowThinking` predicate reading it alongside `selectPhase` to narrow `<ThinkingIndicator/>`'s gate (#493, transport #492); `<CompactingIndicator/>` via `selectCompacting`, and `shouldShowThinking` gaining a second clause reading it to narrow `<ThinkingIndicator/>`'s gate again (#496, transport #495)
+- [Conversation timeline store](conversation-timeline-store.md) / [Thread timeline (conversation model)](thread-timeline.md) — the flat store and model this screen read through [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758): `<Timeline/>` via `selectItems` (#203); the `useTimelineBridge()` twin of `useDaemonEventBridge()` mounted in `App.tsx` (still mounted, still dual-writing); `<ThinkingIndicator/>` via `selectPhase` (#215); the `toolCall` items `TimelineRow`'s pending chip renders (#218, transport #217) and now resolves in place once `result` fills (#230, transport #229); `Composer` writes to this store's `dispatch` as the `userText` producer (unchanged — still the flat store, see below), and `TimelineRow`'s `case 'userText'` draws the echo (#179) — the vertical's last piece; the fifth `ThreadItem` kind, `sessionBoundary`, is translated by the bridge and drawn by `TimelineRow`'s new case (#286, transport #285); `<StallIndicator/>` via `selectStalled` (#317, transport #315); `<ApiRetryIndicator/>` via `selectApiRetry`, and the exported `shouldShowThinking` predicate reading it alongside `selectPhase` to narrow `<ThinkingIndicator/>`'s gate (#493, transport #492); `<CompactingIndicator/>` via `selectCompacting`, and `shouldShowThinking` gaining a second clause reading it to narrow `<ThinkingIndicator/>`'s gate again (#496, transport #495) — **all three views retired in [#967](https://github.com/pyrycode/pyrycode-desktop/issues/967)**, which folds their selectors' values into `<ThinkingIndicator/>`'s own widened `state`/`retry` props instead of three separate mounts; `selectStalled`/`selectApiRetry`/`selectCompacting` themselves are unchanged, only their reader consolidated
 - [Conversation timeline holder](conversation-timeline-holder.md) — as of [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758), the store all six reads above and (until [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678) retired `InterruptControl`) its `phase` actually come from: one subscription to `selectTimelineFor(openConversationId)` on this screen, keyed by `activeConversationStore`'s open id. The flat store above stays mounted and dual-written (the bridge fan-out, `Composer`'s echo) but is read only by nothing in this screen any more. See [The open-conversation reader cutover](conversation-shell-actions-menu-and-reader-cutover.md#the-open-conversation-reader-cutover-758) above.
 - [Interrupt envelope](interrupt-envelope.md) — since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), the stop-a-running-turn affordance this screen renders is a variant of `Composer`'s own send button (`ComposerSendButton`), not a standalone control; the `phase` prop plumbed through this screen feeds it directly.
 - [Modal store + bridge](modal-store-bridge.md) — the store `<PermissionModal/>` reads via `selectOutstanding` (#224) and now also `dispatch` (#237); the `useModalBridge()` third independent subscriber mounted in `App.tsx` beside `useDaemonEventBridge()`/`useTimelineBridge()`, live since [#179](../codebase/179.md) flipped `interactive` (dormant #223–#178)

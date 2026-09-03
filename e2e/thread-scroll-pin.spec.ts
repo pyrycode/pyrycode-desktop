@@ -4,6 +4,8 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { AT_BOTTOM_TOLERANCE_PX } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 import type {
   AssistantDeltaPayload,
+  QueuedItem,
+  QueueStatePayload,
   SendMessagePayload,
   SessionTransitionPayload,
   StallPayload,
@@ -35,10 +37,10 @@ import type {
 //
 // EVERY PUSHED FRAME IS ONE A REAL DAEMON PRODUCES (run-config-settings.spec.ts's standing rule: a
 // fake-tier spec may not supply an input production does not produce). A daemon emits `tool_use` mid-turn,
-// `session_transition` on a `/clear`, and `turn_state{thinking}` when a turn starts. None is a manufactured
-// precondition — each is simply a different timeline or chrome mutation, which is the dimension this spec
-// varies. The pin mechanism reads neither `kind` nor `items`, so what a row *renders* is a dimension it
-// provably never looks at.
+// `session_transition` on a `/clear`, `queue_state` when a message is enqueued behind a busy turn, and
+// `turn_state{thinking}` when a turn starts. None is a manufactured precondition — each is simply a
+// different timeline or chrome mutation, which is the dimension this spec varies. The pin mechanism reads
+// neither `kind` nor `items`, so what a row *renders* is a dimension it provably never looks at.
 //
 // SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM geometry, text and counts
 // only; the reply texts, conversation_id, turn ids, tool ids and session ids are non-secret display &
@@ -102,6 +104,11 @@ const turnEndFrame = (turn: number): Uint8Array =>
     } satisfies TurnEndPayload
   })
 
+/** The tool this spec's pending call names. Held as a constant because #649's status label reads it: the
+ *  call is pushed with no matching `tool_result`, so it stays open for the rest of the run and the working
+ *  label names it wherever that label shows. */
+const TOOL_NAME = 'read_file'
+
 /** A pending tool call -> a `toolCall` item, rendered as `.tool-row` (a chip, not a bubble). */
 const toolUseFrame = (): Uint8Array =>
   encodeEnvelope({
@@ -112,7 +119,7 @@ const toolUseFrame = (): Uint8Array =>
       conversation_id: SEEDED_ROW.id,
       turn_id: 'turn-tool',
       tool_use_id: 'tool-use-1',
-      name: 'read_file',
+      name: TOOL_NAME,
       input_summary: 'src/main/index.ts'
     } satisfies ToolUsePayload
   })
@@ -134,16 +141,20 @@ const sessionTransitionFrame = (): Uint8Array =>
     } satisfies SessionTransitionPayload
   })
 
-/** The coarse turn-phase scalar. `thinking` mounts the working indicator's label (and the interrupt
- *  control); `idle` closes both, and since #650 it is also what closes the window the composer's own accept
- *  opens locally, which is why the primer's reply stream ends with one.
+/** The coarse turn-phase scalar. `thinking` puts the working label in the status row (and arms the send
+ *  button's stop variant); `idle` closes both, and since #650 it is also what closes the window the
+ *  composer's own accept opens locally, which is why the primer's reply stream ends with one.
  *
  *  #796 NARROWED what this frame does to the LAYOUT. The working indicator's text is no longer a bubble in
- *  the loose region between the thread and the composer — it is the label inside a fixed-height status row
- *  that is mounted at all times, precisely so the composer stops moving when the text comes and goes. So
- *  this frame no longer shrinks the thread's viewport, and it is no longer what the fourth criterion turns
- *  on; `stallFrame` below is. It stays for the mount assertion and to leave the turn running for the
- *  userText step after it. */
+ *  the loose region between the thread and the composer — it is the label inside a status row that is
+ *  mounted at all times, precisely so the composer stops moving when the text comes and goes. So this
+ *  frame does not shrink the thread's viewport and is not what the fourth criterion turns on.
+ *
+ *  #967 took the SUCCESSOR subject away too: the stall block that inherited that job has folded into the
+ *  same row, so `queueStateFrame` below is the criterion's subject now. What this frame proves here is
+ *  the stall's self-clear — pushed after a stall, it is the turn activity that retracts it, and since both
+ *  states render the SAME label element the assertions discriminate on the label's TEXT. It also leaves
+ *  the turn running for the userText step after it. */
 const turnStateFrame = (state: WireTurnState): Uint8Array =>
   encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
@@ -153,10 +164,11 @@ const turnStateFrame = (state: WireTurnState): Uint8Array =>
   })
 
 /** The stall onset (#315/#317) — a server push a real daemon emits when claude goes quiet mid-turn, the
- *  stall-bundle.spec.ts:60 builder's shape. It mounts `.conversation__stall`, one of the three indicators
- *  #796 left in the loose region with their bubble treatment intact, so it is what still SHRINKS the
- *  thread's viewport by tens of pixels — the fourth criterion's actual subject. conversation_id is set for
- *  realism; the timeline bridge drops it (#732), so it does not gate rendering. */
+ *  stall-bundle.spec.ts builder's shape. Since #967 it puts STALL_COPY in the status row's label rather
+ *  than mounting a bubble of its own, so it shrinks nothing; what it still proves here is the onset →
+ *  self-clear pair, and that the stall shows with the phase already back at `idle` (the folded statuses
+ *  are not gated on a running turn). conversation_id is set for realism; the timeline bridge drops it
+ *  (#732), so it does not gate rendering. */
 const stallFrame = (): Uint8Array =>
   encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
@@ -164,6 +176,37 @@ const stallFrame = (): Uint8Array =>
     ts: FIXED_TS,
     payload: { conversation_id: SEEDED_ROW.id } satisfies StallPayload
   })
+
+/** A replacement-truth queue snapshot (#293/#294) — the whole current backlog, not a delta. Taken verbatim
+ *  from queued-backlog-interrupt.spec.ts's own builder. #967 made this the fourth criterion's subject: the
+ *  backlog is a region of dimmed rows that mounts between the thread and the composer, so it shrinks the
+ *  thread's viewport by tens of pixels, which is the magnitude that criterion needs. */
+const queueStateFrame = (items: readonly QueuedItem[]): Uint8Array =>
+  encodeEnvelope({
+    id: REPLY_ENVELOPE_ID,
+    type: 'queue_state',
+    ts: FIXED_TS,
+    payload: { conversation_id: SEEDED_ROW.id, queued: [...items] } satisfies QueueStatePayload
+  })
+
+/** Two queued messages, so the region is unambiguously tens of pixels tall rather than one row's worth.
+ *  Their text is display-only here — this spec asserts geometry, not queue contents. */
+const QUEUED_BACKLOG: readonly QueuedItem[] = [
+  { queued_msg_id: 1, text: 'First queued task', ts: FIXED_TS },
+  { queued_msg_id: 2, text: 'Second queued task', ts: FIXED_TS }
+]
+
+/** The two status-row labels this spec discriminates between, held as local literals rather than imported
+ *  from the renderer screen (the stall-bundle.spec.ts convention — importing that module would pull React
+ *  into the Playwright node context). Both are client-owned constants there; if either value drifts, its
+ *  own unit test pins it and this spec fails loudly rather than silently passing.
+ *
+ *  The working label is the TOOL-NAMED one (#649), not `Thinking…`: `toolUseFrame` above leaves a call open
+ *  with no `tool_result`, so `openToolName` still answers by the time the stall clears. That is production
+ *  behaviour rather than an accident of this spec, and asserting the label it actually renders is what
+ *  keeps the assertion exact. */
+const STALL_COPY = 'The turn seems to have stalled…'
+const WORKING_COPY_WITH_TOOL = `Running ${TOOL_NAME}…`
 
 /**
  * One buildReplyFrames dispatching on the decoded inbound type. `send_message` -> the ordered overflow
@@ -195,8 +238,11 @@ const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
         // `turn_end` is NOT that signal (it appends a boundary and leaves `phase` alone; the pairing
         // threadTimeline.ts documents on its `turnEnd` arm). #650 then made it LOAD-BEARING: the composer's
         // accept now opens the working indicator locally, so without this frame the primer would leave
-        // `.conversation__thinking` mounted for the rest of the run and the fourth criterion below would
-        // measure an element that was already on screen. `primeOverflowingThread` gates on it.
+        // `.conversation__thinking` mounted for the rest of the run and the stall step below could not tell
+        // an arriving label from one already on screen. `primeOverflowingThread` gates on it.
+        //
+        // #967 also made it the setup for AC2's own claim: with the phase back at `idle`, the stall pushed
+        // later still shows, which is the "the folded statuses are not gated on a running turn" behaviour.
         turnStateFrame('idle')
       ]
     }
@@ -242,10 +288,15 @@ async function primeOverflowingThread(page: Page): Promise<void> {
   // #650: the primer's turn has fully ENDED — the stream's trailing `turn_state{idle}` closed the working
   // indicator that the composer's accept opened locally. This is a NON-VACUITY gate of the same kind as the
   // overflow check below, and it is here in the shared primer for the same reason: so no test can run a
-  // chrome-mount assertion before it. Without it the fourth criterion's `turn_state{thinking}` would find
-  // `.conversation__thinking` already mounted and produce byte-identical markup — its `toBeVisible` would
-  // pass against an element that never mounted, over a viewport that never shrank. It is also the settle
-  // gate for the last frame in the stream, so the metrics below are read against a final layout.
+  // chrome-mount assertion before it. Without it the label element would already be on screen and the
+  // stall step below would be asserting against a row it never changed.
+  //
+  // #967 SHARPENED why this matters and did not remove the need for it. The label element is now shared by
+  // all four thread statuses, so `toBeVisible` on it can no longer distinguish "the stall mounted this"
+  // from "something else already had it" — which is why the assertions below discriminate on the label's
+  // TEXT. A zero-count gate here is the other half of that: the row's label starts genuinely absent.
+  // It is also the settle gate for the last frame in the stream, so the metrics below are read against a
+  // final layout.
   await expect(page.locator('.conversation__thinking')).toHaveCount(0, { timeout: STREAM_TIMEOUT_MS })
 
   const { scrollHeight, clientHeight } = await readThreadMetrics(page)
@@ -307,26 +358,68 @@ test('an arriving item of every kind leaves a bottom-resting thread at the botto
   // the tracked flag is untouched by construction, and the re-assert returns the view to the new bottom.
   // A raw re-measurement at arrival time would instead read "not at bottom" and silently un-pin here.
   //
-  // #796 MOVED THIS ONTO THE STALL INDICATOR, and that swap is the whole point of the criterion rather
-  // than a cosmetic one. The working indicator used to be this region's shrinking chrome; #796 made its
-  // text the label of a status row that holds a fixed height at all times, so `turn_state{thinking}` now
-  // mounts a label INSIDE an already-present row and shrinks nothing. Left pointing there, this criterion
-  // would still pass — against a viewport that never moved, testing nothing. The stall indicator kept its
-  // bubble treatment and its null-at-rest posture in that ticket, so it is what still shrinks the region.
+  // #796 MOVED THIS ONTO THE STALL INDICATOR and #967 MOVED IT AGAIN, onto the queued backlog. The swap
+  // is the whole point of the criterion rather than a cosmetic one, and it has now happened twice for the
+  // same reason. The working indicator used to be this region's shrinking chrome; #796 made its text the
+  // label of a status row mounted at all times, so `turn_state{thinking}` mounts a label INSIDE an
+  // already-present row and shrinks nothing. The stall block inherited the job because it kept its bubble
+  // and its null-at-rest posture — and #967 folded that block into the same row, so it shrinks nothing
+  // either. Left pointing at either, this criterion would still pass, against a viewport that never
+  // moved, testing nothing.
+  //
+  // THE QUEUED BACKLOG (#294) is the subject now: a `queue_state` push mounts a region of dimmed rows
+  // between the thread and the composer, so the shrink is tens of pixels — 116px measured here, the
+  // magnitude this criterion's reasoning above depends on. Deliberately NOT #963's row growth, the other
+  // candidate: that is 8px, and driving it needs a terminal connection error this spec has no reason to
+  // stage.
+  //
+  // THE SHRINK AND THE RE-ASSERT ARE NOW TWO STEPS, and separating them is what makes this criterion
+  // sharper than the version it replaces rather than merely re-pointed. `QueuedBacklogControl` holds its
+  // own queue-store subscription, so a `queue_state` push re-renders THAT control and not this screen —
+  // the pin's dep-free layout effect runs on screen renders, so it has not run when the region appears.
+  // (Measured while writing this: the thread rests 116px off the bottom in the gap, which is a shipped
+  // gap in the pin — filed as #1009 and deliberately NOT asserted here. The old stall-block subject hid
+  // this by arriving through the timeline store, which re-rendered the screen in the same tick as the
+  // shrink — so it could never distinguish "the flag survived" from "this render re-asserted".)
+  //
+  // So the claim under test is the one the paragraph above states: the shrink fires NO scroll event, so
+  // the tracked flag is untouched, and the next screen render therefore still re-pins. A production glue
+  // that re-measured at arrival time instead of tracking a flag would read "not at bottom" during the gap
+  // and skip that re-pin — which is exactly the failure this criterion exists to catch, and it fails this
+  // two-step sequence.
+  daemon.pushFrame(queueStateFrame(QUEUED_BACKLOG))
+  await expect(page.locator('.conversation__queued .message-row--user')).toHaveCount(
+    QUEUED_BACKLOG.length,
+    { timeout: STREAM_TIMEOUT_MS }
+  )
+
+  // The stall onset — the screen render that follows the shrink, and the criterion's second step. It
+  // mutates only the status row's label text (since #967 it mounts nothing of its own), so it moves no
+  // geometry: whatever the pin does here, it does on the flag alone.
+  //
+  // It is also the e2e proof of two things #967 changed and one it preserved: the stall reaches the status
+  // row's label, it reaches it with the phase already back at `idle` (the folded statuses are not gated on
+  // a running turn), and `.conversation__thinking` is still the label's identity hook.
+  //
+  // EXACT TEXT, not `toBeVisible`. All four thread statuses render this one element now, so a visibility
+  // assertion reads the element's current state rather than which frame put the stall in it — the very
+  // vacuity the primer's zero-count gate exists to prevent, one state later.
+  const statusLabel = page.locator('.conversation__thinking')
   daemon.pushFrame(stallFrame())
-  await expect(page.locator('.conversation__stall')).toBeVisible({ timeout: STREAM_TIMEOUT_MS })
+  await expect(statusLabel).toHaveText(STALL_COPY, { timeout: STREAM_TIMEOUT_MS })
   await expectPinnedToBottom(page)
 
-  // The working indicator's label still MOUNTS on this frame rather than being found already there — the
-  // primer's zero-count gate is what makes that true, and it is not optional (#650). The wait cannot tell
-  // the two apart on its own: `toBeVisible` reads the element's current state, not which frame put it on
-  // screen. It no longer moves the viewport (above), so no pin assertion hangs off it; it is here because
-  // the userText step below needs the turn left RUNNING, and because it is the e2e regression proof that
-  // #796 kept `.conversation__thinking` as the working indicator's identity hook when the bubble went away.
-  // Turn activity also self-clears the stall flag, so the indicator above retracts on this same frame.
+  // Turn activity self-clears the stall (#317's reducer), and the working label takes the slot back. Both
+  // halves are one text assertion on one element: the stall copy is GONE and the working label is there,
+  // which is a claim neither a count nor a visibility check on this element could still make. The frame is
+  // also what the userText step below needs, since it leaves the turn RUNNING.
+  //
+  // The working label arrives TOOL-NAMED — the `tool_use` pushed at the top of this test is still open, so
+  // #649's derivation names it. It is asserted as what it is rather than steered around: the stall
+  // outranking that same open tool while it lasts, and yielding to it after, is #967's precedence visible
+  // end to end on one element.
   daemon.pushFrame(turnStateFrame('thinking'))
-  await expect(page.locator('.conversation__thinking')).toBeVisible({ timeout: STREAM_TIMEOUT_MS })
-  await expect(page.locator('.conversation__stall')).toHaveCount(0)
+  await expect(statusLabel).toHaveText(WORKING_COPY_WITH_TOOL, { timeout: STREAM_TIMEOUT_MS })
 
   // `userText` — the only kind that reaches the store through the local optimistic dispatch instead of an
   // inbound frame. The fake answers this send with no frames, so the echo is the whole mutation.

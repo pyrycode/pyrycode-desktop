@@ -448,11 +448,15 @@
    three-deep list would sit 72px in. One step for the whole reply, too — the blockquote's 4px bar plus
    --space-3 is also 16px, and it is the same step the thread insets its bubbles by.
 
-   THE BLOCKQUOTE TRADES ITS 40px FOR A LEADING BAR, the idiom this file already carries four times
-   (.conversation__banner, .bubble--stall, .bubble--compacting, .modal-rejection — each a 4px border-left in
-   a role colour). Neutral, never --color-error or --color-primary: those two ARE the status vocabulary
-   those four own, so a blockquote wearing one would read as a stall or a compaction to someone scanning the
-   same thread. Between the two neutral border roles the choice is not taste: against the daemon bubble's
+   THE BLOCKQUOTE TRADES ITS 40px FOR A LEADING BAR, the idiom this file carries twice besides this one
+   (.conversation__banner, .modal-rejection — each a 4px border-left in a role colour). It counted four
+   until #967: .bubble--stall and .bubble--compacting were two of them, and both retired when the row's
+   single label absorbed the three loose statuses. Neutral, never --color-error or --color-primary: those
+   two ARE the status vocabulary the remaining bars own, so a blockquote wearing one would read as a
+   connection problem or a rejection to someone scanning the same thread — and the stall reading that
+   clause used to name is now carried by .composer-status__label--stalled's colour one region down, which
+   makes the collision no less real. Between the two neutral border roles the choice is not taste: against
+   the daemon bubble's
    --color-surface-container-high fill, --color-outline is a 4.6:1 luminance contrast and
    --color-outline-variant is 1.5:1. A bar that is the blockquote's only signal besides indentation is a
    meaningful non-text graphic, and 3:1 is the floor it has to clear. (The variant reads fine on .code-block
@@ -776,10 +780,13 @@
   }
 }
 
-/* #796 — the status area above the composer (Figma node 111:3525, 780x24). Replaces #215's
-   .conversation__thinking wrapper, #215's .bubble--thinking and #649's .bubble--tool-label: the working
-   indicator's text is no longer a bubble floating in the loose region between the thread and the
-   composer, it is the left half of this fixed-height row.
+/* #796 — the status area above the composer (Figma node 111:3525, 780x24). It replaces every status
+   surface that used to float in the loose region between the thread and the composer: #215's
+   .conversation__thinking wrapper, #215's .bubble--thinking and #649's .bubble--tool-label went with the
+   working indicator's own move, and #967 folded in the other three — #317's .conversation__stall /
+   .bubble--stall, #493's .conversation__api-retry / .bubble--api-retry / .api-retry__counter and #496's
+   .conversation__compacting / .bubble--compacting. All four thread-status facts are now one label in this
+   row's left half, so the region above it draws nothing at all.
 
    The RESERVED height is the point (AC2). flex: 0 0 auto so it never claims a competing flex region
    beside the timeline, and NO vertical padding, so the declared minimum is the exact box under this
@@ -926,6 +933,30 @@
   white-space: nowrap;
 }
 
+/* #967's stalled variant — the ONE state that departs from the row's --color-primary. The stall wore the
+   error role as a bubble (#317 AC4) because it is the one status that reports a problem rather than
+   progress, and folding it into this row keeps that reading; the retry and compaction states take the
+   slot with the row's own primary, the only colour the design draws (Figma 111:3523). The stall's error
+   colour is drawn nowhere in Figma — it is this ticket's own call, flagged for the operator rather than
+   invented silently.
+
+   COLOUR AND NOTHING ELSE, which is what makes "the label's state cannot move the row" (AC4) true by
+   construction rather than by measurement: no type, no box, no line-height, so all five labels occupy
+   identical geometry at both of the row's shipped heights. --color-error is the only error-role token on
+   desktop, and it is the token NAME — no literal, no new token.
+
+   The 4px leading accent bar the bubble also carried is deliberately NOT brought across. It was a BUBBLE
+   idiom (see the blockquote comment above, which counts the same construct); a bar on a bare text run
+   inside a flex row would sit against the icon's gap with no fill behind it to bound, and the row draws
+   no such rule anywhere. Colour alone carries the distinction here, where the bubble needed both.
+
+   No --tool-style truncation on this modifier: STALL_COPY is a client-owned constant of fixed length, so
+   there is nothing unbounded to clamp. The chain that terminates in the label is the daemon tool name's
+   (above), and it still does. */
+.composer-status__label--stalled {
+  color: var(--color-error);
+}
+
 /* #797 — the connection-error chip, the row's right-hand slot the block above reserved (Figma 112:3529).
    A content-sized pill: the Figma's own 148px is 132px of text plus its two 8px insets, not a fixed
    width, so nothing here sets one.
@@ -1069,83 +1100,6 @@
 
 .button-small--error:hover {
   background: var(--color-error-container);
-}
-
-/* #317 — the stall-indicator wrapper. The .conversation__thinking shape (flex: 0 0 auto so it never
-   claims a competing flex region beside the timeline; the thread's --space-4 inset keeps the bubble
-   left-aligned and thread-consistent), since the stall indicator sits in the same message-list region.
-   No Figma node (the mobile file draws only the connected thread — the documented #148 gap); a dedicated
-   stall visual is a Figma-side follow-up. */
-.conversation__stall {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: flex-start;
-  padding: var(--space-2) var(--space-4);
-}
-
-/* The stall affordance reuses the daemon bubble's fill / radius / measure (via .bubble--daemon) but
-   diverges to the error role so it reads as a PROBLEM state, not normal progress — distinct from the
-   muted .bubble--thinking (AC4). The rejection-line --color-error text plus a leading --color-error
-   accent bar (the connection-banner precedent); --color-error is the only error role token on desktop.
-   Token names only — no color literal, no new theme token. */
-.bubble--stall {
-  color: var(--color-error);
-  border-left: 4px solid var(--color-error);
-}
-
-/* #493 — the api-retry-indicator wrapper. The .conversation__stall shape verbatim (flex: 0 0 auto so it
-   never claims a competing flex region beside the timeline; the thread's --space-4 inset keeps the bubble
-   left-aligned and thread-consistent), since the retry status sits in the same message-list region. No
-   Figma node (the mobile file draws only the connected thread — the documented #148 gap); a dedicated
-   degraded-state visual is a Figma-side follow-up. */
-.conversation__api-retry {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: flex-start;
-  padding: var(--space-2) var(--space-4);
-}
-
-/* The retry affordance reuses the daemon bubble's fill / radius / measure (via .bubble--daemon) but
-   diverges to the error role so it reads as a DEGRADING session, not normal progress — distinct from the
-   muted .bubble--thinking (AC1). Deliberately NO left accent bar: that is .bubble--stall's distinguishing
-   mark, so omitting it keeps the two problem states visually separable while both stay distinct from the
-   thinking treatment. --color-error is the only error role token on desktop. Token names only — no color
-   literal, no new theme token. */
-.bubble--api-retry {
-  color: var(--color-error);
-}
-
-/* The attempt counter — emphasis within the bubble's inherited error color and body-medium type, so the
-   "how far into the retry budget" digits read as the load-bearing part of the status. Within-token: a
-   weight token, no color literal and no type-scale override. */
-.api-retry__counter {
-  font-weight: var(--text-title-medium-weight);
-}
-
-/* #496 — the compaction-indicator wrapper. The .conversation__api-retry shape verbatim (flex: 0 0 auto so
-   it never claims a competing flex region beside the timeline; the thread's --space-4 inset keeps the
-   bubble left-aligned and thread-consistent), since the compaction status sits in the same message-list
-   region. No Figma node (the mobile file draws only the connected thread — the documented #148 gap); a
-   dedicated transient-status visual is a Figma-side follow-up. */
-.conversation__compacting {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: flex-start;
-  padding: var(--space-2) var(--space-4);
-}
-
-/* The compaction affordance reuses the daemon bubble's fill / radius / measure (via .bubble--daemon) and
-   deliberately does NOT reach for the error role that .bubble--stall and .bubble--api-retry both use:
-   compaction is claude working normally, so painting routine housekeeping as a failure would be a design
-   bug. It takes .bubble--thinking's muted text (a working state, not a problem state) plus .bubble--stall's
-   leading accent bar with the role swapped to --color-primary, which is where distinctness from the
-   bare-muted thinking treatment comes from (AC1). That yields a fully separable four-way matrix — thinking:
-   muted/no bar, stall: error/error bar, api-retry: error/no bar, compaction: muted/primary bar. Placed
-   after .bubble--daemon in source order (equal specificity, so source order decides). Token names only —
-   no color literal, no new theme token. */
-.bubble--compacting {
-  color: var(--color-on-surface-variant);
-  border-left: 4px solid var(--color-primary);
 }
 
 /* #294 — the held queued backlog region: the messages queued while the daemon is busy, rendered as

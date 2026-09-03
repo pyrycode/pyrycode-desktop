@@ -12,11 +12,9 @@ import {
   workingIndicatorStateWithLocalSend,
   openToolName,
   toolWorkingCopy,
-  StallIndicator,
-  ApiRetryIndicator,
   API_RETRY_COPY,
-  CompactingIndicator,
   COMPACTING_COPY,
+  STALL_COPY,
   UNRECOGNIZED_COPY,
   UNRECOGNIZED_TRUNCATED_COPY,
   unrecognizedSiteLabel,
@@ -1323,33 +1321,28 @@ describe('Timeline — the streamed assistant text', () => {
     expect(renderToStaticMarkup(<Timeline items={items} />)).toContain(`>${text}<span`)
   })
 
-  it('leaves the user bubble and the four daemon-bubble affordances outside the rule (AC4, AC5)', () => {
+  // #967 REWROTE this case rather than retiring it. #609 asserted the rule against the user bubble and the
+  // four daemon-bubble affordances of the day; three of those four are gone — their statuses are labels in
+  // the composer status row now, on no bubble at all — so the case keeps the two subjects that still
+  // reuse the daemon bubble's fill and measure, and the assertion is the same claim over a smaller set.
+  // The two assertions that rested on the retry counter having its OWN SPAN went with the span: the
+  // counter is interpolated into the label's single text run now (see apiRetryLabel), which is exactly
+  // what removes the whitespace question they were checking.
+  it('leaves the user bubble and the status-row label outside the rule (AC4, AC5)', () => {
     const MODIFIER = 'bubble--assistant-text'
     const userMarkup = renderToStaticMarkup(
       <Timeline items={[{ kind: 'userText', text: 'typed by the operator' }]} />
     )
     expect(userMarkup).toContain('bubble bubble--user')
     expect(userMarkup).not.toContain(MODIFIER)
-    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)).not.toContain(
-      MODIFIER
+    const labelMarkup = renderToStaticMarkup(
+      <ThinkingIndicator state="thinking" toolName={null} retry={null} />
     )
-    expect(renderToStaticMarkup(<StallIndicator isStalled={true} />)).not.toContain(MODIFIER)
-    expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(MODIFIER)
-    const retryMarkup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 3, total: 10 }} />)
-    expect(retryMarkup).not.toContain(MODIFIER)
-    // #609 (AC5): the markdown container is the assistant bubble's alone. Neither the user bubble nor any
-    // of the four chrome affordances that reuse the daemon bubble's fill and measure gains it.
+    expect(labelMarkup).not.toContain(MODIFIER)
+    // #609 (AC5): the markdown container is the assistant bubble's alone. Neither the user bubble nor the
+    // status label gains it.
     expect(userMarkup).not.toContain(CONTAINER)
-    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)).not.toContain(
-      CONTAINER
-    )
-    expect(renderToStaticMarkup(<StallIndicator isStalled={true} />)).not.toContain(CONTAINER)
-    expect(renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)).not.toContain(CONTAINER)
-    expect(retryMarkup).not.toContain(CONTAINER)
-    // AC4's one spot where a preserved space could have become visible: the counter's separator is a
-    // single space inside its own span, so it reads the same under either whitespace treatment.
-    expect(retryMarkup).toContain(`${API_RETRY_COPY}<span`)
-    expect(retryMarkup).toContain('> attempt 3/10<')
+    expect(labelMarkup).not.toContain(CONTAINER)
   })
 
   // #609: the settled reply renders through #608's AssistantMarkdown; the still-growing tail does not.
@@ -1516,13 +1509,27 @@ describe('Timeline — the session-boundary delimiter (#286, redrawn #690)', () 
 // text child exactly like the tool row's own `name` two rows above. What survives is the narrower half:
 // the fixed copy around the name stays client-owned. `toolName={null}` on the pre-existing cases below is
 // a mechanical prop addition — their assertions are #648's regression evidence and stand verbatim.
-describe('ThinkingIndicator — the running-turn working affordance (#215, #648, #649)', () => {
-  it('is inert when no turn is running — renders nothing (zero layout footprint, AC3)', () => {
-    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName={null} />)).toBe('')
+//
+// #967: this view is now the row's label for ALL FOUR thread-status facts, so the three retired
+// `describe` blocks (StallIndicator / ApiRetryIndicator / CompactingIndicator) fold their assertions into
+// the cases below rather than being dropped — each folded status is proven on this element, with this
+// element's base class, which is simultaneously the proof that nothing mounts for it anywhere else.
+// `retry={null}` on the pre-existing cases is the same kind of mechanical prop addition `toolName` was;
+// their assertions still stand verbatim. Two things a cold read gets wrong here: the tool name is now
+// SCOPED to the working/thinking state (the three superseding states outrank it, which reverses #649's
+// order and has its own case below), and `state === null` no longer means "a retry or compaction
+// superseded the label" — those arrive as states of their own — it means there is nothing to say.
+describe('ThinkingIndicator — the row label for all four thread statuses (#215, #648, #649, #967)', () => {
+  it('is inert when there is nothing to say — renders nothing (zero layout footprint, AC3)', () => {
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName={null} retry={null} />)).toBe(
+      ''
+    )
   })
 
   it('shows the daemon-styled Thinking affordance while thinking', () => {
-    const markup = renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="thinking" toolName={null} retry={null} />
+    )
     // The stable test seam (the bubble__cursor role) — #796 RETAINED `conversation__thinking` when the
     // bubble treatment became the status row's label, precisely so this assertion and the two e2e
     // turn-liveness locators keep pointing at the same identity.
@@ -1530,8 +1537,8 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
     // The WHOLE class attribute, not a bare toContain of the presentation class. Unlike #649's
     // deliberately non-prefixed `bubble--tool-label`, BEM's `composer-status__label--tool` DOES contain
     // `composer-status__label` as a substring, so a substring assertion would pass on markup that
-    // dropped the base class and kept only the modifier — the exact vacuity conversation.css:779-781
-    // was written to avoid. Pinning the attribute also pins that the tool modifier is absent here.
+    // dropped the base class and kept only the modifier — the exact vacuity .composer-status's own
+    // comment was written to avoid. Pinning the attribute also pins that BOTH modifiers are absent here.
     expect(markup).toContain('class="conversation__thinking composer-status__label"')
     // The client-owned static label — the ellipsis glyph … (U+2026), no apostrophe to survive escaping.
     expect(markup).toContain(THINKING_COPY)
@@ -1541,7 +1548,9 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
   })
 
   it('shows the generic working affordance on the same surface while running but not thinking (#648, AC1)', () => {
-    const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} />)
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="working" toolName={null} retry={null} />
+    )
     // The same element and the same class attribute — one surface, two labels, no CSS change (AC1's
     // "the indicator is visible", not "a second indicator appears").
     expect(markup).toContain('conversation__thinking')
@@ -1551,21 +1560,26 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
     expect(markup).not.toContain(THINKING_COPY)
   })
 
-  it('carries two client-owned labels, lexically distinct from each other and their siblings (AC2, AC5)', () => {
-    // Reachable without rendering (AC5) — both exported, following API_RETRY_COPY / COMPACTING_COPY.
-    expect(WORKING_COPY).not.toBe(THINKING_COPY)
-    // Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson).
-    expect(WORKING_COPY).not.toContain("'")
-    expect(THINKING_COPY).not.toContain("'")
-    expect(WORKING_COPY).not.toBe(API_RETRY_COPY)
-    expect(WORKING_COPY).not.toBe(COMPACTING_COPY)
-    // STALL_COPY is module-private (#317) — asserted against its literal, as the CompactingIndicator
-    // describe does.
-    expect(WORKING_COPY).not.toBe('The turn seems to have stalled…')
+  it('carries five client-owned labels, lexically distinct from each other (AC2, AC5, #967)', () => {
+    // Reachable without rendering (AC5) — all five exported since #967 moved STALL_COPY up beside its
+    // siblings and exported it, so no test asserts a duplicated literal any more.
+    const copies = [THINKING_COPY, WORKING_COPY, API_RETRY_COPY, COMPACTING_COPY, STALL_COPY]
+    // A SET-SIZE check rather than ten pairwise not.toBe assertions: it proves the same distinctness and
+    // stays correct when a sixth label lands, where an enumerated list silently stops covering the new one.
+    expect(new Set(copies).size).toBe(copies.length)
+    for (const copy of copies) {
+      // Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson).
+      expect(copy).not.toContain("'")
+      // The U+2026 ellipsis character, never three dots — the shipped convention across all five.
+      expect(copy).toContain('…')
+      expect(copy).not.toContain('...')
+    }
   })
 
   it('names the open tool on the same surface, replacing the generic copy (#649, AC1)', () => {
-    const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName="Bash" />)
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="working" toolName="Bash" retry={null} />
+    )
     // The same element and the same base classes plus ONE modifier — one surface, now three labels
     // (AC1 is "the indicator names the tool", not "a second indicator appears").
     expect(markup).toContain('conversation__thinking')
@@ -1586,26 +1600,33 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
   it('keeps the tool label off the two unnamed states — the modifier is the tool branch alone (AC3)', () => {
     // The #648 labels must render byte-identical markup, so their assertions above stay AC3's
     // regression evidence rather than being retyped against a moved target.
-    expect(renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} />)).not.toContain(
-      'composer-status__label--tool'
-    )
-    expect(renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} />)).not.toContain(
-      'composer-status__label--tool'
-    )
+    expect(
+      renderToStaticMarkup(<ThinkingIndicator state="working" toolName={null} retry={null} />)
+    ).not.toContain('composer-status__label--tool')
+    expect(
+      renderToStaticMarkup(<ThinkingIndicator state="thinking" toolName={null} retry={null} />)
+    ).not.toContain('composer-status__label--tool')
   })
 
-  it('is still superseded with a tool open — the null state wins over the name (#649, AC3)', () => {
-    // The `state === null` guard runs FIRST, so #493's live api-retry and #496's live compaction still
-    // hide the indicator entirely in either phase; an open tool cannot resurrect it.
-    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName="Bash" />)).toBe('')
+  it('renders nothing at all with a tool open but no state — the null guard still runs first (#649, AC3)', () => {
+    // The `state === null` guard is still the first thing this view does, so an open tool cannot
+    // resurrect a label the container decided not to show. What reaches this case CHANGED with #967: it
+    // used to be a live api-retry or compaction (which blanked the state), and those now arrive as
+    // states of their own. What is left is the honest empty case — an idle turn with no folded status
+    // and no local send — where a stale unresolved toolCall can still be sitting in `items`.
+    expect(renderToStaticMarkup(<ThinkingIndicator state={null} toolName="Bash" retry={null} />)).toBe(
+      ''
+    )
   })
 
   it('renders a hostile tool name as inert escaped text, never as markup (#649, AC4)', () => {
     const hostile = '<img src=x onerror="alert(1)">'
-    const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName={hostile} />)
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="working" toolName={hostile} retry={null} />
+    )
     // Attribute-shaped guards, not a bare not.toContain: a `not.toContain('src=')` would pass
     // vacuously. The name reaches the DOM only as an auto-escaped React text child (the tool row's own
-    // posture at ConversationScreen.tsx:551) — no dangerouslySetInnerHTML, no HTML sink.
+    // posture on `item.name`) — no dangerouslySetInnerHTML, no HTML sink.
     expect(markup).toContain('Running &lt;img')
     expect(markup).not.toContain('<img')
     // No live event-handler attribute escaped out of the name. Matching on the QUOTE is what makes this
@@ -1613,6 +1634,116 @@ describe('ThinkingIndicator — the running-turn working affordance (#215, #648,
     // fail on correct output — it is the unescaped `="` that only an HTML sink could produce.
     expect(markup).not.toMatch(/\son[a-z]+="/i)
     expect(markup).not.toContain('alert(1)"')
+  })
+
+  // #967: the three folded statuses. Each renders on the SAME element and the same base class as the
+  // working label — that is the whole point of the fold, so each of these assertions is also the proof
+  // that nothing else mounts anywhere for these states. The retry counter's cases move here verbatim from
+  // the retired ApiRetryIndicator describe, with one change that is the ticket: the digits are part of the
+  // label's single text run instead of a `.api-retry__counter` span.
+  it('shows the retry label with the attempt counter in ONE text run (#967, AC1, AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="retrying" toolName={null} retry={{ current: 3, total: 10 }} />
+    )
+    expect(markup).toContain('class="conversation__thinking composer-status__label"')
+    // ONE run, asserted as one: the copy, the separator space and the digits are a single text child
+    // closing the element. A constant-plus-span rendering could not satisfy this, which is what keeps
+    // the truncation bound honest (one run ellipsizes once — see .composer-status__label--tool).
+    expect(markup).toContain(`>${API_RETRY_COPY} attempt 3/10</span>`)
+    // The retired span's class is gone from the markup, not merely unstyled.
+    expect(markup).not.toContain('api-retry__counter')
+    // Client-formatted digits, never a daemon string and never a computed fraction.
+    expect(markup).not.toContain('NaN')
+  })
+
+  it('renders a known zero attempt verbatim — 0/10 is not the unknown sentinel (#967, AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="retrying" toolName={null} retry={{ current: 0, total: 10 }} />
+    )
+    expect(markup).toContain(`>${API_RETRY_COPY} attempt 0/10</span>`)
+  })
+
+  it('omits the counter entirely when the count is unknown — never renders 0/0 (#967, AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="retrying" toolName={null} retry={{ current: 0, total: 0 }} />
+    )
+    // Still a visible retry status…
+    expect(markup).toContain(API_RETRY_COPY)
+    // …with no counter at all. Both halves: the word the counter opens with is what a partial render
+    // would leak, and `0/0` is what a missing guard would print.
+    expect(markup).not.toContain('attempt')
+    expect(markup).not.toContain('0/0')
+    // Never a computed fraction — 0/0 is NaN.
+    expect(markup).not.toContain('NaN')
+  })
+
+  it('degrades to the bare retry copy when the counter record is absent (#967)', () => {
+    // Unreachable from the container, which derives `'retrying'` from `apiRetry !== null` and hands this
+    // the same record — but the prop type admits it, and the bare copy is the honest answer. A degrade,
+    // not a defence.
+    expect(
+      renderToStaticMarkup(<ThinkingIndicator state="retrying" toolName={null} retry={null} />)
+    ).toContain(`>${API_RETRY_COPY}</span>`)
+  })
+
+  it('shows the compaction label on the same surface, in the rows own colour (#967, AC1)', () => {
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="compacting" toolName={null} retry={null} />
+    )
+    expect(markup).toContain(`>${COMPACTING_COPY}</span>`)
+    // No modifier at all: compaction is claude working normally, so it keeps --color-primary — painting
+    // routine housekeeping as a failure would be a design bug (#496's own reasoning, carried).
+    expect(markup).toContain('class="conversation__thinking composer-status__label"')
+  })
+
+  it('shows the stall label with the error-colour modifier and nothing else (#967, AC3)', () => {
+    const markup = renderToStaticMarkup(
+      <ThinkingIndicator state="stalled" toolName={null} retry={null} />
+    )
+    expect(markup).toContain(`>${STALL_COPY}</span>`)
+    // The WHOLE class attribute: the stall takes exactly one modifier, and the tool modifier is not it.
+    // A substring assertion would pass on markup that had dropped the base class (the BEM vacuity
+    // .composer-status's comment legislates against).
+    expect(markup).toContain(
+      'class="conversation__thinking composer-status__label composer-status__label--stalled"'
+    )
+  })
+
+  it('keeps the stalled modifier off the other four states — it is the stall alone (#967, AC3)', () => {
+    for (const state of ['thinking', 'working', 'retrying', 'compacting'] as const) {
+      const markup = renderToStaticMarkup(
+        <ThinkingIndicator state={state} toolName={null} retry={{ current: 1, total: 2 }} />
+      )
+      // Positive half first, so this cannot pass vacuously against markup with no label in it.
+      expect(markup).toContain('composer-status__label')
+      expect(markup).not.toContain('composer-status__label--stalled')
+    }
+  })
+
+  it('outranks an open tool name in all three superseding states (#967, AC1)', () => {
+    // The precedence #967 REVERSED. Through #963 the tool name won over the state, which was safe only
+    // because a live retry or compaction blanked the state and this view returned before the label. With
+    // all four facts in one slot, `state === 'retrying'` with a tool still open is reachable, and the old
+    // order would have rendered the tool name where the row must say API_RETRY_COPY.
+    const expected = {
+      retrying: `${API_RETRY_COPY} attempt 3/10`,
+      compacting: COMPACTING_COPY,
+      stalled: STALL_COPY
+    } as const
+    for (const [state, copy] of Object.entries(expected)) {
+      const markup = renderToStaticMarkup(
+        <ThinkingIndicator
+          state={state as 'retrying' | 'compacting' | 'stalled'}
+          toolName="Bash"
+          retry={{ current: 3, total: 10 }}
+        />
+      )
+      expect(markup).toContain(`>${copy}</span>`)
+      // Not the tool name, and not the tool modifier either — the name belongs to state 4 alone, so
+      // neither the copy nor the one-line bound it carries may appear here.
+      expect(markup).not.toContain('Bash')
+      expect(markup).not.toContain('composer-status__label--tool')
+    }
   })
 })
 
@@ -1726,121 +1857,6 @@ describe('toolWorkingCopy — the client-owned label around the daemon tool name
   })
 })
 
-// #317: the stall indicator bound to the coarse `stalled` scalar. StallIndicator is the ThinkingIndicator
-// twin over a boolean rather than a ThreadItem[] — pure (isStalled in, markup out) — so a server-rendered
-// string proves both the present affordance (stalled) and the zero-footprint absent case. Boolean input,
-// not the store type: the view structurally cannot render a daemon-supplied string (AC4 — the stall frame
-// carries no daemon content). Injected boolean: no store, no IPC — the container's shown branch is
-// unreachable under server render (zustand v5 reads getInitialState() → stalled: false), so the "showing"
-// assertion lives here, exactly like Timeline's / ThinkingIndicator's populated assertions.
-describe('StallIndicator — the stalled-turn problem-state affordance (#317)', () => {
-  it('is inert when not stalled — renders nothing (zero layout footprint)', () => {
-    expect(renderToStaticMarkup(<StallIndicator isStalled={false} />)).toBe('')
-  })
-
-  it('shows a stall-distinct affordance while stalled, never the thinking treatment (AC4)', () => {
-    const markup = renderToStaticMarkup(<StallIndicator isStalled={true} />)
-    // The stall-distinct wrapper + bubble classes (the problem-state treatment, built from --color-error).
-    expect(markup).toContain('conversation__stall')
-    expect(markup).toContain('bubble--stall')
-    // The client-owned copy — apostrophe-free, U+2026 ellipsis (survives renderToStaticMarkup escaping),
-    // never a daemon string.
-    expect(markup).toContain('The turn seems to have stalled…')
-    // Visually distinct from the working indicator (AC4) — a problem state, not normal progress.
-    // #796 REPOINTED this from the retired `bubble--thinking`: once no component can emit that string
-    // the assertion passes against nothing and silently stops testing anything. `composer-status__label`
-    // is where the working indicator's treatment lives now, so this is the same claim, still falsifiable.
-    expect(markup).not.toContain('composer-status__label')
-  })
-})
-
-// #493: the api-retry indicator bound to the `apiRetry` status record. ApiRetryIndicator is the
-// StallIndicator twin over `ApiRetryStatus | null` rather than a boolean — pure (status in, markup out).
-// The prop carries two numbers and no string field, so the view structurally cannot receive, hence
-// cannot render, a daemon-supplied string (AC1). Injected props: no store, no IPC — the container's
-// showing branch is unreachable under server render (zustand v5 reads getInitialState() → apiRetry:
-// null), so the "showing" assertions live here.
-describe('ApiRetryIndicator — the api-error retry affordance (#493)', () => {
-  it('is inert with no live retry — renders nothing (zero layout footprint)', () => {
-    expect(renderToStaticMarkup(<ApiRetryIndicator retry={null} />)).toBe('')
-  })
-
-  it('shows a retry-distinct affordance with the attempt counter as digits (AC1, AC2)', () => {
-    const markup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 3, total: 10 }} />)
-    // The retry-distinct wrapper + bubble classes (the problem-state treatment, built from --color-error).
-    expect(markup).toContain('conversation__api-retry')
-    expect(markup).toContain('bubble--api-retry')
-    // The client-owned copy — apostrophe-free, U+2026 ellipsis (survives renderToStaticMarkup escaping),
-    // never a daemon string. Conveys both the API error and the retrying.
-    expect(markup).toContain(API_RETRY_COPY)
-    expect(API_RETRY_COPY).not.toContain("'")
-    // Client-formatted digits, never a daemon string and never a computed fraction.
-    expect(markup).toContain('3')
-    expect(markup).toContain('10')
-    expect(markup).toContain('api-retry__counter')
-    // Visually distinct from BOTH the working treatment and the stall treatment (AC1). #796 repointed
-    // the first off the retired `bubble--thinking` — see the StallIndicator describe above.
-    expect(markup).not.toContain('composer-status__label')
-    expect(markup).not.toContain('bubble--stall')
-  })
-
-  it('renders a known zero attempt verbatim — 0/10 is not the unknown sentinel', () => {
-    const markup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 0, total: 10 }} />)
-    expect(markup).toContain('api-retry__counter')
-    expect(markup).toContain('0/10')
-  })
-
-  it('omits the counter entirely when the count is unknown — never renders 0/0 (AC3)', () => {
-    const markup = renderToStaticMarkup(<ApiRetryIndicator retry={{ current: 0, total: 0 }} />)
-    // Still a visible retry status…
-    expect(markup).toContain('conversation__api-retry')
-    expect(markup).toContain(API_RETRY_COPY)
-    // …with no counter at all.
-    expect(markup).not.toContain('api-retry__counter')
-    expect(markup).not.toContain('0/0')
-    // Never a computed fraction — 0/0 is NaN.
-    expect(markup).not.toContain('NaN')
-  })
-})
-
-// #496: the compaction indicator bound to the `compacting` scalar. CompactingIndicator is the
-// StallIndicator twin — pure (isCompacting in, markup out) over a plain boolean, NOT the store type, so
-// the view structurally cannot receive, hence cannot render, a daemon-supplied string (AC1 — #742
-// widened the arm with a `conversationId` the bridge omits when it rebuilds the `ThreadEvent`). Injected
-// boolean: no store, no IPC — the container's showing branch is unreachable under server render (zustand
-// v5 reads getInitialState() → compacting: false), so the "showing" assertions live here.
-describe('CompactingIndicator — the auto-compaction affordance (#496)', () => {
-  it('is inert with no compaction in flight — renders nothing (zero layout footprint)', () => {
-    expect(renderToStaticMarkup(<CompactingIndicator isCompacting={false} />)).toBe('')
-  })
-
-  it('shows a compaction-distinct affordance while compacting (AC1)', () => {
-    const markup = renderToStaticMarkup(<CompactingIndicator isCompacting={true} />)
-    // The compaction-distinct wrapper + bubble classes (the working-state treatment: muted text plus a
-    // primary-role accent bar, never the error role the two problem states use).
-    expect(markup).toContain('conversation__compacting')
-    expect(markup).toContain('bubble--compacting')
-    // The client-owned copy — never a daemon string.
-    expect(markup).toContain(COMPACTING_COPY)
-    // Visually distinct from all three sibling indicators (AC1). #796 repointed the first off the
-    // retired `bubble--thinking` — see the StallIndicator describe above.
-    expect(markup).not.toContain('composer-status__label')
-    expect(markup).not.toContain('bubble--stall')
-    expect(markup).not.toContain('bubble--api-retry')
-  })
-
-  it('carries client-owned copy that is textually distinct from its sibling indicators (AC1)', () => {
-    // Apostrophe-free (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson).
-    expect(COMPACTING_COPY).not.toContain("'")
-    expect(COMPACTING_COPY).not.toBe('Thinking…')
-    // STALL_COPY is module-private (#317) — asserted against its literal, as the StallIndicator describe does.
-    expect(COMPACTING_COPY).not.toBe('The turn seems to have stalled…')
-    expect(COMPACTING_COPY).not.toBe(API_RETRY_COPY)
-    // Reads as work on the conversation itself, so a silent screen is legible as progress.
-    expect(COMPACTING_COPY.toLowerCase()).toContain('compacting')
-  })
-})
-
 // #493: the indicator-precedence predicate. The thinking gate NARROWS rather than the container deriving
 // a mutually-exclusive status union, so both indicator views stay pure and unchanged in their own props
 // (the isTurnRunning precedent of extracting the named gate). #496 extends `ThreadStatus` with one field
@@ -1850,67 +1866,79 @@ describe('CompactingIndicator — the auto-compaction affordance (#496)', () => 
 // holds for the whole running turn. Both supersede clauses are textually untouched, and every assertion
 // below except the running-turn one stands verbatim from #493/#496 — they are the regression evidence
 // that broadening the phase clause did not weaken the supersede rules (AC4).
-describe('shouldShowThinking — the running-turn gate with the retry- and compaction-supersede rules (#493, #496, #648)', () => {
+// #967: the title used to name "the retry- and compaction-supersede rules", and the rules are still here
+// — what changed is that this predicate is no longer the last word on them. It answers whether the WORKING
+// label is what the row's one slot shows; the four-way order between the slot's occupants lives in
+// `workingIndicatorState` below. Every assertion in this block stands verbatim from #493/#496/#648 apart
+// from the one mechanical `stalled: false` token per literal, which is the point: they are the standing
+// evidence that folding three statuses into one slot did not weaken either supersede rule.
+describe('shouldShowThinking — the running-turn gate for the working label (#493, #496, #648, #967)', () => {
   it('shows the thinking indicator while thinking with nothing superseding it (AC4)', () => {
-    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: false })).toBe(true)
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false })).toBe(true)
   })
 
   it('hides the thinking indicator while a retry is in flight — the supersede rule (#493)', () => {
     expect(
-      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: false })
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false })
     ).toBe(false)
   })
 
   it('hides it for a retry with an unknown count too — presence supersedes, not the counter (#493)', () => {
     expect(
-      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 0, total: 0 }, compacting: false })
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false })
     ).toBe(false)
   })
 
   it('hides the thinking indicator while compacting — the second supersede rule (AC4)', () => {
-    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: true })).toBe(false)
+    expect(shouldShowThinking({ phase: 'thinking', apiRetry: null, compacting: true, stalled: false })).toBe(false)
   })
 
   it('hides it while both compacting and retrying (AC4)', () => {
     expect(
-      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: true })
+      shouldShowThinking({ phase: 'thinking', apiRetry: { current: 3, total: 10 }, compacting: true, stalled: false })
     ).toBe(false)
   })
 
   it('never shows thinking outside the thinking phase, compacting or not (AC4)', () => {
-    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: true })).toBe(false)
-    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: true })).toBe(false)
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: true, stalled: false })).toBe(false)
+    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: true, stalled: false })).toBe(false)
   })
 
   it('holds the indicator across the whole running turn when nothing is in flight (#648, AC1)', () => {
     // #648 reverses the phase clause: the pre-#648 gate was exactly `phase === 'thinking'`, which let the
     // indicator vanish for the tool-heavy bulk of a turn. It is now `isTurnRunning(phase)`, so `responding`
     // shows. `idle` still hides — the gate never widens past a running turn.
-    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false })).toBe(false)
-    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: false })).toBe(true)
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false, stalled: false })).toBe(false)
+    expect(shouldShowThinking({ phase: 'responding', apiRetry: null, compacting: false, stalled: false })).toBe(true)
   })
 
   it('shows in both running phases and hides at idle — the isTurnRunning tie (#648, AC1, AC3)', () => {
     // The gate now REUSES isTurnRunning rather than re-deriving the phase test, so the tie is asserted
     // here rather than merely inherited: a future edit to either side that breaks agreement fails this.
     for (const phase of ['thinking', 'responding'] as const) {
-      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false })).toBe(
+      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false, stalled: false })).toBe(
         isTurnRunning(phase)
       )
-      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false })).toBe(true)
+      expect(shouldShowThinking({ phase, apiRetry: null, compacting: false, stalled: false })).toBe(true)
     }
-    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false })).toBe(
+    expect(shouldShowThinking({ phase: 'idle', apiRetry: null, compacting: false, stalled: false })).toBe(
       isTurnRunning('idle')
     )
   })
 })
 
-// #648: the label discriminant, composed ON the gate above rather than duplicating it. Three outcomes —
-// null (nothing shows), 'thinking' and 'working' — so the two client-owned labels are chosen in one
-// place and the view receives a value it cannot confuse with a daemon string. Pure calls, no rendering.
-describe('workingIndicatorState — which client-owned label the running turn shows (#648)', () => {
+// #648: the label discriminant, composed ON the gate above rather than duplicating it. So the
+// client-owned labels are chosen in one place and the view receives a value it cannot confuse with a
+// daemon string. Pure calls, no rendering.
+//
+// #967: SIX outcomes now — null plus the five states — because the row's one label slot took over #493's
+// retry, #496's compaction and #317's stall, and this is the single place their order lives. Three things
+// the block below pins: the order itself, that the first three states are NOT gated on a running turn
+// (AC2 — they are read before the gate, and folding them behind it would have silently narrowed three
+// shipped behaviours), and that the gate still governs the working label alone.
+describe('workingIndicatorState — which label the rows one slot shows (#648, #967)', () => {
   it('picks the thinking label during the thinking slice (AC2)', () => {
-    expect(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false })).toBe(
+    expect(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false })).toBe(
       'thinking'
     )
   })
@@ -1919,55 +1947,113 @@ describe('workingIndicatorState — which client-owned label the running turn sh
     // The phase that LASTS: the daemon flips to `responding` on the first reply token or tool step and
     // sends no further turn_state until the turn ends, so this covers the tool-heavy silent stretch that
     // used to show nothing at all.
-    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: false })).toBe(
+    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: false, stalled: false })).toBe(
       'working'
     )
   })
 
   it('picks nothing at idle — no wrapper, no empty chrome (AC3)', () => {
-    expect(workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: false })).toBeNull()
+    expect(workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: false, stalled: false })).toBeNull()
   })
 
-  it('is superseded by a live retry in the newly covered phase too (AC4)', () => {
+  // #967 CHANGED THESE THREE ANSWERS, and the change is the ticket rather than a regression: the working
+  // label is still superseded in the newly covered phase, but the superseding status now takes the slot
+  // with its OWN copy instead of blanking it. #493's and #496's supersede rules themselves are asserted
+  // unchanged on `shouldShowThinking` above, which is why they were kept there.
+  it('is superseded by a live retry in the newly covered phase too (AC4, #967)', () => {
     expect(
-      workingIndicatorState({ phase: 'responding', apiRetry: { current: 3, total: 10 }, compacting: false })
-    ).toBeNull()
+      workingIndicatorState({ phase: 'responding', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false })
+    ).toBe('retrying')
   })
 
   it('is superseded by an unknown-count retry too — presence supersedes, not the counter (AC4)', () => {
     expect(
-      workingIndicatorState({ phase: 'responding', apiRetry: { current: 0, total: 0 }, compacting: false })
-    ).toBeNull()
+      workingIndicatorState({ phase: 'responding', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false })
+    ).toBe('retrying')
   })
 
-  it('is superseded by a live compaction in the newly covered phase too (AC4)', () => {
-    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: true })).toBeNull()
+  it('is superseded by a live compaction in the newly covered phase too (AC4, #967)', () => {
+    expect(workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: true, stalled: false })).toBe(
+      'compacting'
+    )
   })
 
-  it('agrees with the gate on every phase — it delegates, it is not a parallel rule (AC4)', () => {
+  it('agrees with the gate wherever nothing supersedes — it delegates, it is not a parallel rule (AC4)', () => {
+    // Scoped to the all-clear status since #967: with a folded status live this function answers from its
+    // own order before the gate is consulted at all (AC2 — those three are not turn-gated), so the
+    // agreement it still owes the gate is exactly over the working label's own inputs.
     for (const phase of ['thinking', 'responding', 'idle'] as const) {
-      const status = { phase, apiRetry: null, compacting: false }
+      const status = { phase, apiRetry: null, compacting: false, stalled: false }
       expect(workingIndicatorState(status) !== null).toBe(shouldShowThinking(status))
     }
+  })
+
+  // #967: the four-way order. The first three states are NOT gated on a running turn — that is AC2, and
+  // it is why they are read BEFORE `shouldShowThinking` rather than inside it.
+  it('picks the retry state first, ahead of every other fact (#967, AC1)', () => {
+    expect(
+      workingIndicatorState({
+        phase: 'responding',
+        apiRetry: { current: 3, total: 10 },
+        compacting: true,
+        stalled: true
+      })
+    ).toBe('retrying')
+  })
+
+  it('picks compacting second, ahead of a stall and the working label (#967, AC1)', () => {
+    expect(
+      workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: true, stalled: true })
+    ).toBe('compacting')
+  })
+
+  it('picks the stall third, ahead of the working label (#967, AC1)', () => {
+    expect(
+      workingIndicatorState({ phase: 'responding', apiRetry: null, compacting: false, stalled: true })
+    ).toBe('stalled')
+  })
+
+  it('shows all three folded states with no turn running (#967, AC2)', () => {
+    // The regression this pins: folding the three in BEHIND `shouldShowThinking` would narrow three
+    // shipped behaviours to the running turn. `thread-scroll-pin.spec.ts` drives exactly this case —
+    // it pushes a stall onto a turn the primer already returned to `idle`.
+    expect(
+      workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: false, stalled: true })
+    ).toBe('stalled')
+    expect(
+      workingIndicatorState({
+        phase: 'idle',
+        apiRetry: { current: 3, total: 10 },
+        compacting: false,
+        stalled: false
+      })
+    ).toBe('retrying')
+    expect(
+      workingIndicatorState({ phase: 'idle', apiRetry: null, compacting: true, stalled: false })
+    ).toBe('compacting')
   })
 })
 
 // #650: the window the operator opens by pressing Enter, composed ON `workingIndicatorState` above rather
-// than added as a fourth `ThreadStatus` field. That choice is what leaves every status literal in the two
-// blocks above standing verbatim — they remain the regression evidence that #493's and #496's supersede
-// rules survived. It also means the supersede rules are INHERITED here rather than restated: the third
-// branch re-calls the same gate with one field substituted, so there is no second place the rule lives.
-// Pure calls, no rendering.
+// than added as a fourth `ThreadStatus` field. The supersede rules are INHERITED here rather than
+// restated: the third branch re-calls the same gate with one field substituted, so there is no second
+// place the rule lives. Pure calls, no rendering.
+//
+// #967 DID take a fourth field, and #650's "that choice is what leaves every status literal standing
+// verbatim" no longer holds — every literal in these three blocks gained one `stalled` token. The
+// composition itself was right and survives untouched: a LOWER-priority fallback composes on a proven
+// gate, while a stall sits in the MIDDLE of the order and could not be expressed that way without
+// re-reading the two supersede facts here. See workingIndicatorStateWithLocalSend's own comment.
 describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650)', () => {
   it('opens the window at idle while a local send is pending, labelled thinking (AC1)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false }, true)
     ).toBe('thinking')
   })
 
   it('opens nothing at idle with no local send pending — todays behaviour, unchanged (AC1)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, false)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false }, false)
     ).toBeNull()
   })
 
@@ -1976,7 +2062,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // returned byte-identical, so no daemon-opened case changed behaviour at all.
     for (const phase of ['thinking', 'responding', 'idle'] as const) {
       for (const pending of [true, false]) {
-        const status = { phase, apiRetry: null, compacting: false }
+        const status = { phase, apiRetry: null, compacting: false, stalled: false }
         const daemon = workingIndicatorState(status)
         if (daemon !== null) {
           expect(workingIndicatorStateWithLocalSend(status, pending)).toBe(daemon)
@@ -1988,43 +2074,62 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
   it('keeps the daemon label for a send issued mid-turn — responding stays working (AC1)', () => {
     expect(
       workingIndicatorStateWithLocalSend(
-        { phase: 'responding', apiRetry: null, compacting: false },
+        { phase: 'responding', apiRetry: null, compacting: false, stalled: false },
         true
       )
     ).toBe('working')
   })
 
-  it('inherits the retry supersede rule — a live retry hides a locally-opened window too', () => {
+  // #967: these four still prove INHERITANCE — the whole point of writing the third branch as a re-call
+  // — and the inheritance got stronger rather than weaker. Through #963 a live retry or compaction made
+  // this return null because the same two gate clauses evaluated inside the re-call. Now
+  // `workingIndicatorState` answers those two facts with their own LABEL from its first branch, so
+  // statement 1 ("the daemon's answer wins") returns it and the re-call is never reached. Either way the
+  // supersede rule lives in exactly one place, which is what these assert. AC2 is also visible here: the
+  // status shows at `phase: 'idle'`, with no daemon turn running at all.
+  it('inherits the retry supersede rule — a live retry outranks a locally-opened window (#967)', () => {
     expect(
       workingIndicatorStateWithLocalSend(
-        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: false },
+        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: false, stalled: false },
         true
       )
-    ).toBeNull()
+    ).toBe('retrying')
   })
 
   it('inherits it for an unknown-count retry too — presence supersedes, not the counter', () => {
     expect(
       workingIndicatorStateWithLocalSend(
-        { phase: 'idle', apiRetry: { current: 0, total: 0 }, compacting: false },
+        { phase: 'idle', apiRetry: { current: 0, total: 0 }, compacting: false, stalled: false },
         true
       )
-    ).toBeNull()
+    ).toBe('retrying')
   })
 
-  it('inherits the compaction supersede rule too', () => {
+  it('inherits the compaction supersede rule too (#967)', () => {
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true }, true)
-    ).toBeNull()
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: true, stalled: false }, true)
+    ).toBe('compacting')
   })
 
-  it('is superseded while both compacting and retrying', () => {
+  it('is superseded while both compacting and retrying — retry wins the tie (#967)', () => {
     expect(
       workingIndicatorStateWithLocalSend(
-        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: true },
+        { phase: 'idle', apiRetry: { current: 3, total: 10 }, compacting: true, stalled: false },
         true
       )
-    ).toBeNull()
+    ).toBe('retrying')
+  })
+
+  it('lets a stall outrank a locally-opened window too, with no turn running (#967, AC2)', () => {
+    // The middle of the order, and the case a wrapper composed on the gate could not have expressed
+    // without re-reading `apiRetry` and `compacting` itself — the reason #967 took the fourth field.
+    expect(
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true }, true)
+    ).toBe('stalled')
+    // And with no local send pending either: the three folded statuses were never gated on a send.
+    expect(
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: true }, false)
+    ).toBe('stalled')
   })
 
   it('hands over to the daemon with no label flicker at the seam (AC2)', () => {
@@ -2032,8 +2137,8 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // daemon takes over is invisible. `working` would have flipped Working → Thinking → Working at the
     // one seam this ticket exists to smooth.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, true)
-    ).toBe(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false }))
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false }, true)
+    ).toBe(workingIndicatorState({ phase: 'thinking', apiRetry: null, compacting: false, stalled: false }))
   })
 
   it('opens the window WITHOUT arming the stop variant (AC4)', () => {
@@ -2046,7 +2151,7 @@ describe('workingIndicatorStateWithLocalSend — the locally-opened window (#650
     // `phase` alone, isTurnRunning admits only a TurnPhase, and ComposerSendButton takes
     // `isRunning: boolean` — the new scalar has no path into any of the three.
     expect(
-      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false }, true)
+      workingIndicatorStateWithLocalSend({ phase: 'idle', apiRetry: null, compacting: false, stalled: false }, true)
     ).not.toBeNull()
     expect(isTurnRunning('idle')).toBe(false)
   })
@@ -3498,32 +3603,16 @@ describe('ConversationScreen — store binding', () => {
     }
   })
 
-  // #317: the stall indicator mounts against the initial timeline store (getInitialState stalled:
-  // false), so isStalled is false and StallIndicator returns nothing — the inert render slice, layout
-  // unchanged until a stall onset (the ThinkingIndicator-smoke analog). The showing path is proven on
-  // the pure StallIndicator describe above.
-  it('mounts the initial timeline with no stall indicator (the inert render slice)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).not.toContain('conversation__stall')
-  })
-
-  // #493: the api-retry indicator mounts against the initial timeline store (getInitialState apiRetry:
-  // null), so ApiRetryIndicator returns nothing — the inert render slice (the StallIndicator-smoke
-  // analog). The showing path is proven on the pure ApiRetryIndicator describe above.
-  it('mounts the initial timeline with no api-retry indicator (the inert render slice)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).not.toContain('conversation__api-retry')
-    expect(markup).not.toContain(API_RETRY_COPY)
-  })
-
-  // #496: the compaction indicator mounts against the initial timeline store (getInitialState compacting:
-  // false), so CompactingIndicator returns nothing — the inert render slice (the ApiRetryIndicator-smoke
-  // analog). The showing path is proven on the pure CompactingIndicator describe above.
-  it('mounts the initial timeline with no compaction indicator (the inert render slice)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).not.toContain('conversation__compacting')
-    expect(markup).not.toContain(COMPACTING_COPY)
-  })
+  // #967: the three inert-render smoke tests that stood here — one each for #317's stall, #493's retry
+  // and #496's compaction block — are GONE, and their coverage is subsumed rather than dropped. All three
+  // asserted that a status renders nothing against the initial timeline store; the three regions they
+  // named no longer exist, and the row's own smoke test at the top of this block already asserts no
+  // `conversation__thinking` and no `composer-status__label` against that same store, which is the same
+  // "nothing renders at rest" claim for all four states at once. Re-pointing them at the label would have
+  // produced three byte-identical copies of that one assertion. The four showing paths are proven on the
+  // pure ThinkingIndicator describe above, where they always were — every container test renders the
+  // initial store (zustand v5 reads getInitialState() under server render), so no container render can
+  // reach a folded state at all.
 
   // #294: the queued-backlog control mounts against the empty queue store (getInitialState backlogs:
   // empty Map → selectBacklogFor returns EMPTY_BACKLOG), so QueuedBacklog returns null and no queued

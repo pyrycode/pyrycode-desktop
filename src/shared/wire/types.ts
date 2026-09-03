@@ -2051,11 +2051,17 @@ export interface AttachmentChunkPayload {
   index: number
   /** How many chunks the attachment splits into, >= 1, identical on every chunk. */
   total_chunks: number
-  /** The client's own name for the file: a display string and a sanitiser input, NEVER a path;
+  /** INBOUND, the client's own name for the file. OUTBOUND, the SANITISED single path component the
+   *  daemon stored the bytes under — `Intake.Receive` keeps only the bytes, so the client's own string
+   *  is never echoed back. Either way a display string and a sanitiser input, NEVER a path;
    *  <= ATTACHMENT_FILENAME_MAX_BYTES. Often private in itself — never log it. */
   filename: string
-  /** The client's DECLARED media type — a hint, not a verified property of the bytes;
-   *  <= ATTACHMENT_MIME_TYPE_MAX_BYTES. */
+  /** INBOUND, the client's DECLARED media type. OUTBOUND, one the daemon SNIFFS FROM THE STORED BYTES
+   *  — the declared type is discarded outright at admission, so there is nothing to echo, and a file
+   *  whose name and declared type disagree with its content is described by its content. Either way a
+   *  hint, not a verified property of the bytes: a SNIFFED `text/html` is exactly as dangerous to
+   *  render as a declared one, because both are computed from bytes an attacker chose. Never dispatch
+   *  on it in a way that grants the content privileges; <= ATTACHMENT_MIME_TYPE_MAX_BYTES. */
   mime_type: string
   /** Declared byte length of the WHOLE file — not of this chunk. */
   size: number

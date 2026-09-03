@@ -10,8 +10,10 @@ Introduced in [#993](https://github.com/pyrycode/pyrycode-desktop/issues/993), s
 is `pyrycode/pyrycode` `internal/protocol/attachments.go` (`RequestAttachmentPayload`) and
 `codes.go` (`TypeRequestAttachment`), plus `docs/protocol-mobile.md` § The `attachment_id` shape —
 declared by pyrycode#2052, answered by #2054, both landed 2026-09-03. The inbound decode of the
-answering `attachment_chunk` frames — and of the `attachment.not_found` reject — is
-[#994](https://github.com/pyrycode/pyrycode-desktop/issues/994)'s, not this slice's.
+answering `attachment_chunk` frames is
+[#998](https://github.com/pyrycode/pyrycode-desktop/issues/998), split from #994 in turn — see
+[Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md). The `attachment.not_found`
+reject still has no decode of its own as of #998.
 
 ## What it does
 
@@ -113,8 +115,8 @@ table is a later slice.
 ## Edge cases and limitations
 
 - **No inbound decode of anything in this slice.** The `attachment_chunk` frames this request
-  provokes, and the `attachment.not_found` reject, are #994's — this slice only produces bytes and
-  reads nothing back.
+  provokes are [#998](attachment-chunk-retrieval-decode.md)'s; the `attachment.not_found` reject still
+  has no decode as of that ticket. This slice only produces bytes and reads nothing back.
 - **A source-purity test can match its own disclaimer.** Carried forward from
   [attachment-chunk-envelope.md](attachment-chunk-envelope.md#edge-cases-and-limitations): a test
   that greps a module's source for the literal `'console.'` to prove it never logs will also match
@@ -162,6 +164,9 @@ chunks are #994's threat model, not this pure builder's.
 - [Attachment chunk envelope](attachment-chunk-envelope.md) — the frame this request provokes in
   reply, and the builder-shape template `buildRequestAttachment` follows (`{id, ts, payload}` in,
   `encodeEnvelope` out).
+- [Attachment-chunk retrieval decode](attachment-chunk-retrieval-decode.md) — the inbound decode of
+  those replies (#998): the required `inReplyTo` correlation this frame's `id` surfaces against, pinned
+  by the same `id: 91` / `in_reply_to: 91` fixture pair this doc's own tests already assert.
 - [Attachment-stored wire types](attachment-stored-wire-types.md) — the terminal on the *upload*
   leg; shares the "documented, not validated" UUIDv4 posture and the correlate-via-`attachment_id`
   discipline this slice's payload doc block also states.

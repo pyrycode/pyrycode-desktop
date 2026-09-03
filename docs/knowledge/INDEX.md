@@ -522,7 +522,31 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   this repo's wire layer, matching both sibling payload types. The builder takes a whole typed
   payload rather than two discrete id args specifically so it can never mint the zero-value pair
   (`filepath.Join(dir, "", "")` is `dir` daemon-side) the way `buildRequestSessionSettings`'s `?? ''`
-  would. The inbound decode of the chunks and reject this provokes is #994's.
+  would. The inbound decode of the chunks this provokes is [#998](features/attachment-chunk-retrieval-decode.md);
+  the `attachment.not_found` reject still has no decode of its own.
+- [Attachment-chunk retrieval decode](features/attachment-chunk-retrieval-decode.md) — the **inbound
+  half of the retrieval leg** (#998, split from #994, itself split from #687): `attachment_chunk`
+  claims its second direction — `parseAttachmentChunkPayload` narrows the daemon's answer to
+  `request_attachment` into `RetrievedAttachmentChunk` (`AttachmentChunkPayload` minus `data`, plus
+  `data: Uint8Array` decoded via the wire codec's strict `base64StdDecode`), scaling
+  `parseAttachmentStoredPayload`'s shape (#964) to eight fields with no new field narrower. The file's
+  first **required** `inReplyTo` on a kind whose three prior `in_reply_to`-surfacing siblings
+  (`daemon-error`/`session-settings`/`session-settings-updated`) all type it optional — a retrieval
+  chunk cannot legitimately arrive unsolicited, so one without a correlation is malformed, not an
+  uncorrelated variant, and the check runs *before* the base64 decode so an uncorrelatable frame is
+  rejected before that work is spent. Deliberately **not** precedent from `attachment-stored`'s
+  no-`inReplyTo` decision (#964) — the two arms sit adjacent in the switch and argue opposite
+  directions for the same envelope field, each docblock naming the other. Also corrects two field docs
+  on `AttachmentChunkPayload` itself: `filename`/`mime_type` were documented as the uploading client's
+  own strings, true inbound and false on this newly-decoded retrieval direction — the daemon stores
+  under a sanitised filename and sniffs the media type from the stored bytes instead. A **provenance**
+  correction only, not a trust one: every client obligation (sanitise before render, never resolve
+  into a path, never a privileged dispatch on `mime_type`) survives verbatim, since a sniffed
+  `text/html` is exactly as dangerous to render as a declared one. Logging is stricter than upstream
+  permits — none of the id, index or total are logged, where upstream's own doc allows all three.
+  Ships dormant and unclaimed: `daemonConnection.ts`'s inbound switch has no case for
+  `'attachment-chunk'` yet — the reassembler that concatenates chunks into a file is the first
+  intended consumer, not yet started. Architect self-review PASS.
 - [Question-shown wire types](features/question-shown-wire-types.md) — the wire vocabulary for
   claude's clarifying-question batch (#883): a new `question_shown` `EnvelopeType` member plus three
   interfaces (`QuestionShownPayload` → `WireQuestion[]` → `WireQuestionOption[]`), mirroring the

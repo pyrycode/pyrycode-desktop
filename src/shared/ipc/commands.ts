@@ -549,11 +549,24 @@ function isCreateWorkspaceFolderPayload(value: unknown): value is CreateWorkspac
 /** The untrusted renderer→main boundary guard for the setSessionSettings payload (#263) — the reason
  *  the command half is security-sensitive. Validates SHAPE, mirroring isCreateConversationPayload's
  *  per-field type checks but for OPTIONAL-ABSENT rather than nullable-present fields: `session_id` must
- *  be present-and-string; each of `model` / `effort` / `yolo`, WHEN PRESENT (`in` check), must be the
- *  right type (`string` / `string` / `boolean`) — a present zero value (`''` / `false`) passes, an
- *  ABSENT optional is accepted ("leave unchanged"). The omitempty presence contract itself lives in the
- *  main-side builder, not here; this guard only bounds the shape. Structural minimum — a smuggled extra
- *  field is not rejected here (the builder's fresh literal bounds the wire to the four modeled keys).
+ *  be present-and-string; each of `model` / `effort` / `yolo` / `permission_mode`, WHEN PRESENT (`in`
+ *  check), must be the right type (`string` / `string` / `boolean` / `string`) — a present zero value
+ *  (`''` / `false`) passes, an ABSENT optional is accepted ("leave unchanged"). The omitempty presence
+ *  contract itself lives in the main-side builder, not here; this guard only bounds the shape. Structural
+ *  minimum — a smuggled extra field is not rejected here (the builder's fresh literal bounds the wire to
+ *  the five modeled keys).
+ *
+ *  `permission_mode` (#1021) is a TYPE check, deliberately NOT closed-set membership — the opposite call
+ *  from isNotifyPayload below, and the difference is which side owns the policy. The daemon's
+ *  `validPermissionMode` is the authority and a client-side allowlist would drift from it on the next
+ *  upstream mode; more to the point it would defend nothing, since a renderer able to smuggle a bad mode
+ *  (which the daemon simply refuses) can instead send `yolo: true`, the STRICTLY STRONGER capability this
+ *  same guard already admits. `isNotifyPayload`'s closed set exists because a bad value there reaches an
+ *  OS notification with no server-side check behind it; here the daemon is that check.
+ *
+ *  Likewise NOT rejected: a payload carrying both `permission_mode` and `yolo`. The daemon refuses that
+ *  frame unconditionally as malformed, the intended path cannot build one (`buildSettingsPayload` emits a
+ *  single key), and re-implementing a cross-field daemon rule in a structural guard is how the two drift.
  *  Pure; never throws. */
 function isSetSessionSettingsPayload(value: unknown): value is SetSessionSettingsPayload {
   if (typeof value !== 'object' || value === null) return false
@@ -561,6 +574,7 @@ function isSetSessionSettingsPayload(value: unknown): value is SetSessionSetting
   if ('model' in value && typeof value.model !== 'string') return false
   if ('effort' in value && typeof value.effort !== 'string') return false
   if ('yolo' in value && typeof value.yolo !== 'boolean') return false
+  if ('permission_mode' in value && typeof value.permission_mode !== 'string') return false
   return true
 }
 

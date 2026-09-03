@@ -112,11 +112,13 @@
 }
 
 /* #279 — the prominent, disconnected-only connection banner across the top of the thread (below the
-   header row, above the message list). Distinct from the muted inline .composer__hint gate: it reads
-   as a prominent band, not a caption. Follows the .modal-rejection (#249) error-accent idiom — a
-   surface-container-high fill with a leading --color-error accent border (the only error role token on
-   desktop; no new theme tokens) — but sized up to body-medium on-surface text, a step above the hint's
-   body-small muted variant. flex: 0 0 auto so it pushes the thread down rather than overlaying it (the
+   header row, above the message list). It reads as a prominent band, not a caption — the distinction it
+   was originally drawn against was the muted inline .composer__hint gate, which #968 retired, leaving
+   this band as the only place the connection state is said in the connecting and disconnected arms.
+   Follows the .modal-rejection (#249) error-accent idiom — a surface-container-high fill with a leading
+   --color-error accent border (the only error role token on desktop; no new theme tokens) — with
+   body-medium on-surface text, deliberately a step up from a muted body-small caption.
+   flex: 0 0 auto so it pushes the thread down rather than overlaying it (the
    header/composer convention, never growing or shrinking). --space-4 horizontal padding aligns it with
    the thread. margin: 0 resets the <p> default. No Figma node (the mobile file draws only the connected
    thread); sourced from the locked mobile design doc "Connection state banner (top, only when not
@@ -1642,8 +1644,14 @@
   opacity: 0.6;
 }
 
-/* Pinned composer — never grows or shrinks. A vertical stack so the status hint (#31) can sit
-   above the input/button row without disturbing that row's flex layout. */
+/* Pinned composer — never grows or shrinks. A vertical stack holding the message box row and the input
+   footer beneath it (#811), each with its own flex layout. #968 retired the first child, the #31 status
+   caption that used to sit above the row; the column shape is what the footer needs on its own.
+
+   padding-top is --space-2 = the design's 8px between the status row's bottom edge and the message box's
+   top edge. .composer-status is a sibling in the .conversation column (which declares no gap) and renders
+   unconditionally, so that 8px is the whole distance and it is identical in all four connection states —
+   nothing between the two rows is conditional on `status`. */
 .composer {
   flex: 0 0 auto;
   display: flex;
@@ -1751,21 +1759,10 @@
   opacity: 0.41;
 }
 
-/* Muted caption naming why the send control is unavailable while not connected (#31). Left padding
-   aligns it with the input's text start. */
-.composer__hint {
-  margin: 0;
-  padding: 0 var(--space-4);
-  color: var(--color-on-surface-variant);
-  font-size: var(--text-body-small-size);
-  line-height: var(--text-body-small-line);
-  letter-spacing: var(--text-body-small-tracking);
-  font-weight: var(--text-body-small-weight);
-}
-
-/* #811 — the input footer row (Figma node 110:3494, 780x20), the composer's third sub-row, beneath the
-   message box. Four more tickets fill it (#680 Actions, #682 permission mode, #683 model and effort,
-   #685 attach); today it carries the context reading alone and NOTHING stands in for the rest.
+/* #811 — the input footer row (Figma node 110:3494, 780x20), the composer's second sub-row, beneath the
+   message box (#968 retired .composer__hint, which used to be the first). Four more tickets fill it
+   (#680 Actions, #682 permission mode, #683 model and effort, #685 attach); today it carries the context
+   reading alone and NOTHING stands in for the rest.
 
    The height is the whole point (AC4). flex: 0 0 auto so it never claims a competing flex region, and
    NO vertical padding, so 20px is the exact box under this repo's absent global box-sizing reset — the
@@ -1778,13 +1775,14 @@
 
    Horizontal padding --space-4, NOT .composer-status's --space-3. The two rows are deliberately inset
    differently in the design: this row's content starts at x=16, exactly where the message box's own text
-   starts, so it aligns with the INPUT'S TEXT (the .composer__hint treatment above) rather than with the
-   composer's box edge (which is what .composer-status aligns to, its own node starting at x=0). Do not
-   "fix" one to match the other.
+   starts, so it aligns with the INPUT'S TEXT rather than with the composer's box edge (which is what
+   .composer-status aligns to, its own node starting at x=0). Do not "fix" one to match the other.
 
    margin-top: --space-1 completes the design's 8px gap between the message box and this row: .composer
-   is a column with gap: var(--space-1), so 4 + 4 = 8. A margin rather than widening the column's gap,
-   because that gap also separates .composer__hint from .composer__row and that spacing is settled.
+   is a column with gap: var(--space-1), so 4 + 4 = 8. The split is kept as it stands. It was a margin
+   rather than a wider column gap because that gap also had to separate .composer__hint from
+   .composer__row; #968 retired the caption, so the column now has only these two children and the pair
+   could fold into one 8px gap — but folding it would move a settled spacing for no behavioural gain.
 
    align-items: center puts the 16px line 2/2 in the 20px row. The Figma's own inset is asymmetric
    (pt-[4px], nothing below); centring is 2px off that and one declaration instead of two — the same

@@ -59,8 +59,10 @@ const CHEVRON_PATH =
  *
  * It holds NO `canSend` prop on purpose: AC4's gate is the container's single `sendText`, and a second
  * copy of that gate here is a second copy that can drift. The trigger is never disabled, including while
- * disconnected — AC4 asks that picking send nothing, not that the menu be unopenable, and the composer
- * already shows its `Not connected` hint one row up.
+ * disconnected — AC4 asks that picking send nothing, not that the menu be unopenable, and the state is
+ * already said elsewhere: #279's banner at the top of the thread in every non-connected arm, and #797's
+ * chip or #963's button in the status row directly above the composer. (Until #968 the composer's own
+ * `Not connected` caption said it one row up; that caption is retired, the other two surfaces are not.)
  */
 export function ComposerActionsMenu({
   onCommand

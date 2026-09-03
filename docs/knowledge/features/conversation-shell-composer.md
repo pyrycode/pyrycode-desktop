@@ -139,7 +139,7 @@ still correct and still load-bearing. Left as prose upkeep rather than a gate. S
 Fills the composer status row's `trailing` slot (Figma error frame `112:3529`) with a red pill reading
 `COMPOSER_ERROR_CHIP_COPY` (`'Host connection down!'`, [composer send § 8](composer-send.md#8-error-chip-copy-composersendts-797)),
 shown in the `error` connection arm and in no other — the **fourth** read of `sessionStore`'s
-`ConnectionStatus`, beside `composerAvailability`'s terse hint, `shouldOfferRepair`'s re-pair gate, and
+`ConnectionStatus`, beside `composerAvailability`'s send gate, `shouldOfferRepair`'s re-pair gate, and
 `shouldShowBanner`'s prominent band (all in [composer send](composer-send.md)).
 
 `ComposerErrorChip({ status })` is the pure, exported view (the `ConnectionBanner` pattern):
@@ -291,13 +291,15 @@ suggested — the standing Roboto→system-ui substitution, the same drift #797'
 against its own 148px node); the activity group absorbs the whole squeeze at 448.13px and the label inside
 it at 426.13px; neither `.conversation` nor `document.body` overflows. Separately, the ticket's own
 premise that "the message box moves 8px on this transition" turned out wrong in both size and cause:
-measured in `e2e/unpair-repair.spec.ts`, the box moves 20px **upward**, and none of it is the row's own
-8px — the same status change also mounts [the connection banner](conversation-shell-chrome.md#connection-banner-279)
-above the thread and the composer's own `Connection error` hint, and the row's 8px alone is absorbed by
-`.conversation__thread`'s `flex: 1 1 auto; min-height: 0`. No e2e assertion pins the box's absolute
-position for exactly that reason — it would be pinning the banner's and the hint's geometry under a name
-that claims to be about this row; the row's own two facts (height, and the status group's offset from the
-row's bottom edge) are what `e2e/unpair-repair.spec.ts` asserts instead, both relative to the row.
+measured in `e2e/unpair-repair.spec.ts` at the time, the box moved 20px **upward**, and none of it was the
+row's own 8px — the same status change also mounted [the connection banner](conversation-shell-chrome.md#connection-banner-279)
+above the thread and, through [#968](../codebase/968.md), the composer's own `Connection error` caption,
+and the row's 8px alone was absorbed by `.conversation__thread`'s `flex: 1 1 auto; min-height: 0`. #968
+retired that caption — the banner is now the only other mover on this transition, and the stale 20px
+figure was deliberately not re-measured, since no e2e assertion pins the box's absolute position: doing so
+would be pinning the banner's geometry under a name that claims to be about this row; the row's own two
+facts (height, and the status group's offset from the row's bottom edge) are what
+`e2e/unpair-repair.spec.ts` asserts instead, both relative to the row.
 
 **Testing.** `ConversationScreen.test.tsx` replaces the `RepairPrompt` describe with a `ComposerErrorSlot`
 describe covering all three arms in both directions (occupant present *and* the other occupant's markup
@@ -472,16 +474,17 @@ the first of the blocked four to land** — it needed no daemon work at all, onl
 
 ```
 Composer
-├── .composer__hint             (unchanged, #31)
 ├── .composer__row              (unchanged — textarea + ComposerSendButton)
-└── .composer__footer           (third child, #811)
+└── .composer__footer           (second child, #811; was the third until #968 retired __hint above)
     ├── ComposerActionsMenu     leading item — opens the shared options panel with sendText (#680)
     └── ContextUsageControl     null until a real snapshot has loaded, then <ContextUsageReading/>
 ```
 
-Inline BEM children of `.composer`, not a component of their own — consistent with `.composer__hint`/
-`.composer__row` already being inline JSX rather than extracted, and it keeps the ticket's exported
-surface to two symbols.
+Through [#968](../codebase/968.md), `.composer`'s first child was `.composer__hint` (#31's not-connected
+caption); it is retired, and `.composer__row` is now `.composer`'s first child.
+
+Inline BEM children of `.composer`, not a component of their own — consistent with `.composer__row`
+already being inline JSX rather than extracted, and it keeps the ticket's exported surface to two symbols.
 
 **`contextUsagePercent(usedTokens, windowTokens): number | null`** — new file,
 `src/renderer/src/screens/conversation/contextUsage.ts`, React-free and dependency-free (the
@@ -519,8 +522,8 @@ surfaces. Reads [Run configuration store](run-config-store.md)'s app-lifetime `R
 guarantee ([Composer status row](#composer-status-row-796) above): a null reading cannot move
 `.composer__row` because the row's box exists whether or not it holds a child. No vertical padding
 (no global box-sizing reset), `align-items: center`, `padding: 0 var(--space-4)` — aligned with the
-input's *text* start (`.composer__hint`'s treatment), deliberately not with `.composer-status`'s
-box-edge alignment; the two rows are inset differently by design. `gap: var(--space-5)` is declared now
+input's *text* start, deliberately not with `.composer-status`'s box-edge alignment; the two rows are
+inset differently by design. `gap: var(--space-5)` is declared now
 (the design's measured 20px item rhythm), inert with one child at #811 but live between the Actions
 trigger and the context reading since #680; #682/#683 inherit the same row spacing instead of each
 re-deriving it.

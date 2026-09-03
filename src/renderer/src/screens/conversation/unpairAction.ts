@@ -20,9 +20,10 @@ export interface UnpairDeps {
 
 /**
  * AC5's synthesized failure, reusing the existing ConnectionError shape so the composer's error
- * affordance surfaces it verbatim. `composerAvailability` maps ANY `error` status to the generic
- * 'Connection error' hint + disabled send — it does not read `.message` — so `message` populates the
- * store shape for a future banner only. `code: 'unpair'` distinguishes the source in diagnostics.
+ * affordance surfaces it verbatim. `composerAvailability` maps ANY `error` status to a disabled send and
+ * nothing else — it does not read `.message`, and since #968 it returns no string at all — so `message`
+ * populates the store shape for a future banner only. `code: 'unpair'` distinguishes the source in
+ * diagnostics.
  */
 const UNPAIR_FAILED_ERROR: ConnectionError = {
   code: 'unpair',

@@ -205,9 +205,13 @@ describe('shouldSubmitOnKeyDown', () => {
 })
 
 // composerAvailability is the pure gate (#31): a total mapping over ConnectionStatus's four arms
-// governing whether the composer's send control accepts input, and — when it doesn't — a short
-// caption saying why. React-free, so the send/no-send decision (AC1) and the "why" copy (AC2) are
-// unit-testable without a DOM, the same reason submitMessage is pure.
+// governing whether the composer's send control accepts input. React-free, so the send/no-send decision
+// (AC1) is unit-testable without a DOM, the same reason submitMessage is pure.
+//
+// #968 retired the "why" caption it used to return beside `canSend`. Every arm below asserts with an
+// EXACT toEqual rather than reading `.canSend` off the result: exactness is what proves the record holds
+// canSend alone in that arm, and it is the assertion that would redden if a future ticket re-introduced a
+// copy field. Never relax one of these to toMatchObject.
 describe('composerAvailability', () => {
   const ack: HelloAckPayload = {
     protocol_version: '1',
@@ -216,44 +220,29 @@ describe('composerAvailability', () => {
     capabilities: []
   }
 
-  it('connected → can send, no hint', () => {
-    expect(composerAvailability({ type: 'connected', ack })).toEqual({ canSend: true, hint: null })
+  it('connected → can send', () => {
+    expect(composerAvailability({ type: 'connected', ack })).toEqual({ canSend: true })
   })
 
-  it('connecting → cannot send, with a non-empty hint', () => {
-    const { canSend, hint } = composerAvailability({ type: 'connecting' })
-    expect(canSend).toBe(false)
-    expect(hint).toBeTruthy()
+  it('connecting → cannot send', () => {
+    expect(composerAvailability({ type: 'connecting' })).toEqual({ canSend: false })
   })
 
-  it('disconnected → cannot send, with a non-empty hint', () => {
-    const { canSend, hint } = composerAvailability({ type: 'disconnected' })
-    expect(canSend).toBe(false)
-    expect(hint).toBeTruthy()
+  it('disconnected → cannot send', () => {
+    expect(composerAvailability({ type: 'disconnected' })).toEqual({ canSend: false })
   })
 
-  it('error → cannot send, with a hint that does NOT leak ConnectionError.message', () => {
-    const { canSend, hint } = composerAvailability({
-      type: 'error',
-      error: { code: 'transport', message: 'BANNER-ONLY-TEXT', retryable: true }
-    })
-    expect(canSend).toBe(false)
-    expect(hint).toBeTruthy()
-    // ConnectionError.message is the connection banner's surface, explicitly out of scope for #31.
-    // The composer hint is a short generic label and must not surface the banner's text.
-    expect(hint).not.toContain('BANNER-ONLY-TEXT')
-  })
-
-  it('the three not-connected arms yield distinct hints tied to their status (AC2)', () => {
-    const hints = [
-      composerAvailability({ type: 'connecting' }).hint,
-      composerAvailability({ type: 'disconnected' }).hint,
+  // The sentinel outlives the caption it was written for. ConnectionError.message is the connection
+  // banner's surface, and this arm is the only one that could ever have carried it into the composer;
+  // asserting the WHOLE returned record against { canSend: false } proves structurally that nothing
+  // daemon-supplied leaves this function, not merely that one field was sanitised.
+  it('error → cannot send, returning nothing derived from ConnectionError.message', () => {
+    expect(
       composerAvailability({
         type: 'error',
-        error: { code: 'transport', message: 'x', retryable: false }
-      }).hint
-    ]
-    expect(new Set(hints).size).toBe(3)
+        error: { code: 'transport', message: 'BANNER-ONLY-TEXT', retryable: true }
+      })
+    ).toEqual({ canSend: false })
   })
 })
 
@@ -294,7 +283,7 @@ describe('shouldOfferRepair', () => {
   })
 
   // AC4: a retryable daemon wire-error (server.binary_offline, rate_limited) is a transient daemon-side
-  // condition, not a broken pairing — the composer keeps its plain error hint, no re-pair prompt.
+  // condition, not a broken pairing — the status row keeps #797's plain error chip, no re-pair button.
   it('false for a retryable daemon error (server.binary_offline)', () => {
     expect(
       shouldOfferRepair({
@@ -351,30 +340,24 @@ describe('shouldShowBanner', () => {
   })
 })
 
-// #797: the error chip's two client-owned strings — the FOURTH and fifth strings this module owns about
-// the one ConnectionStatus fact. Their three-part contract is CONNECTION_BANNER_COPY's, and the pieces
-// that can break silently are pinned here: the apostrophe-free rule (renderToStaticMarkup escapes `'` →
-// `&#x27;`, so an apostrophe makes every toContain on these constants fail without a copy change being
-// suspected), the lexical distinctness from the four strings already on screen for this fact, and the
-// prefix's trailing space, which is what separates the two runs when a screen reader concatenates them.
+// #797: the error chip's two client-owned strings — the chip copy is one of the three this module owns
+// about the one ConnectionStatus fact (#968 retired the three composerAvailability captions), and the
+// prefix rides with it. Their three-part contract is CONNECTION_BANNER_COPY's, and the pieces that can
+// break silently are pinned here: the apostrophe-free rule (renderToStaticMarkup escapes `'` → `&#x27;`,
+// so an apostrophe makes every toContain on these constants fail without a copy change being suspected),
+// the lexical distinctness from the banner and the re-pair button, and the prefix's trailing space,
+// which is what separates the two runs when a screen reader concatenates them.
 describe('the composer error chip copy (#797)', () => {
   it('is apostrophe-free, so a server-rendered toContain matches it verbatim', () => {
     expect(COMPOSER_ERROR_CHIP_COPY).not.toContain("'")
     expect(COMPOSER_ERROR_CHIP_PREFIX_COPY).not.toContain("'")
   })
 
-  // Pinned against the actual composerAvailability outputs and the banner constant — not hardcoded
-  // strings — so a future tweak to any of them cannot silently collide with the chip.
-  it('is lexically distinct from the banner copy and the three composer hints', () => {
-    const others = [
-      CONNECTION_BANNER_COPY,
-      composerAvailability({ type: 'connecting' }).hint,
-      composerAvailability({ type: 'disconnected' }).hint,
-      composerAvailability({
-        type: 'error',
-        error: { code: 'x', message: 'm', retryable: false }
-      }).hint
-    ].filter((copy): copy is string => copy !== null)
+  // Pinned against the actual banner constant — not a hardcoded copy of it — so a future tweak to either
+  // cannot silently collide. The set held the three composer captions too until #968 retired them; the
+  // button that shares this chip's slot is compared in its own describe below.
+  it('is lexically distinct from the banner copy', () => {
+    const others = [CONNECTION_BANNER_COPY]
     expect(others).not.toContain(COMPOSER_ERROR_CHIP_COPY)
     for (const other of others) {
       expect(other).not.toContain(COMPOSER_ERROR_CHIP_COPY)
@@ -400,21 +383,12 @@ describe('the actionable-error button copy (#963)', () => {
     expect(COMPOSER_REPAIR_BUTTON_COPY).not.toContain("'")
   })
 
-  // Pinned against the actual constants and composerAvailability outputs — never against hardcoded
-  // copies of them — so a future tweak to any of the four cannot silently collide with this label. The
-  // chip copy is in the set even though the two never render together: they occupy the SAME slot, so a
-  // reader who sees one and then the other must not read them as the same string.
-  it('is lexically distinct from the chip copy, the banner copy and the three composer hints', () => {
-    const others = [
-      COMPOSER_ERROR_CHIP_COPY,
-      CONNECTION_BANNER_COPY,
-      composerAvailability({ type: 'connecting' }).hint,
-      composerAvailability({ type: 'disconnected' }).hint,
-      composerAvailability({
-        type: 'error',
-        error: { code: 'x', message: 'm', retryable: false }
-      }).hint
-    ].filter((copy): copy is string => copy !== null)
+  // Pinned against the actual constants — never against hardcoded copies of them — so a future tweak to
+  // either cannot silently collide with this label. The set held the three composer captions until #968
+  // retired them. The chip copy stays in it even though the two never render together: they occupy the
+  // SAME slot, so a reader who sees one and then the other must not read them as the same string.
+  it('is lexically distinct from the chip copy and the banner copy', () => {
+    const others = [COMPOSER_ERROR_CHIP_COPY, CONNECTION_BANNER_COPY]
     for (const other of others) {
       expect(other).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
       expect(COMPOSER_REPAIR_BUTTON_COPY).not.toContain(other)

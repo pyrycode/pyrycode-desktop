@@ -126,12 +126,12 @@ export function shouldSubmitOnKeyDown(event: ComposerKeyEvent): boolean {
 }
 
 /**
- * Whether the composer may send, and — when it may not — a short caption naming why (#31). Both
- * facts derive from the single `ConnectionStatus` read, so there is one source of truth.
+ * Whether the composer may send (#31). #968 retired the "why" caption that used to travel beside it, so
+ * this is a one-field record: the call site already destructures from it, and collapsing it to a bare
+ * boolean would rewrite that site for no behavioural gain.
  */
 export interface ComposerAvailability {
   canSend: boolean // true only when the session is connected
-  hint: string | null // short "why unavailable" caption; null iff canSend
 }
 
 /** Compile-time exhaustiveness guard: a new ConnectionStatus arm without a case is a type error. */
@@ -141,25 +141,26 @@ function assertNever(status: never): never {
 
 /**
  * Total mapping over ConnectionStatus's four arms. Pure — no store, no React, no I/O — so the
- * send/no-send decision (AC1) and the "why" copy (AC2) are unit-testable without a DOM, the same
- * reason submitMessage is pure. This is a UX affordance, not a safety net: the deterministic
- * no-throw safety on a disconnected send already lives in #65's daemonConnection.send() and #66's
- * guarded sendCommand — this only governs what the composer shows.
+ * send/no-send decision (AC1) is unit-testable without a DOM, the same reason submitMessage is pure.
+ * This is a UX affordance, not a safety net: the deterministic no-throw safety on a disconnected send
+ * already lives in #65's daemonConnection.send() and #66's guarded sendCommand — this only governs what
+ * the composer shows.
  *
- * The `error` hint is a short generic label; it deliberately does NOT surface
- * `status.error.message`. That ConnectionError.message is the connection banner's surface, out of
- * scope for #31 — leaking it here would duplicate the banner's job.
+ * Since #968 it reads `status.type` and nothing else: the three captions it used to return are gone with
+ * the element that rendered them, so no string leaves this function and `status.error` is never touched.
+ * The exhaustive switch stays — a total mapping is still what this is, and a future fifth arm must be a
+ * compile error here rather than a silently-sendable state.
  */
 export function composerAvailability(status: ConnectionStatus): ComposerAvailability {
   switch (status.type) {
     case 'connected':
-      return { canSend: true, hint: null }
+      return { canSend: true }
     case 'connecting':
-      return { canSend: false, hint: 'Connecting…' }
+      return { canSend: false }
     case 'disconnected':
-      return { canSend: false, hint: 'Not connected' }
+      return { canSend: false }
     case 'error':
-      return { canSend: false, hint: 'Connection error' }
+      return { canSend: false }
     default:
       return assertNever(status)
   }
@@ -191,15 +192,16 @@ export function shouldOfferRepair(status: ConnectionStatus): boolean {
  * The connection banner's copy (#279) — a single, exported, module-level client-owned string. This is
  * the banner's ENTIRE text; it is never derived from `status`, so AC3 ("no daemon-supplied string is
  * rendered as the banner text") is a structural guarantee, not a convention (the EMPTY_THREAD_COPY /
- * ThinkingIndicator label idiom). It is deliberately lexically distinct from all three
- * `composerAvailability` hints (`Connecting…` / `Not connected` / `Connection error`) — it leads with
- * "Cannot reach" and shares no leading words — so the prominent banner and the terse composer gate
- * never read as the same string stacked twice (AC5). A single constant, not a per-arm map: every
- * non-connected arm is a state where pyry is unreachable, so one sentence covers all three honestly (no
- * "restored"/"lost" temporal claim); a second three-way copy split would be the duplication AC5 warns
- * against — the composer already carries the per-arm nuance. It is a client-owned constant, so PO/design
- * may tune the wording; the load-bearing contract is (a) one client-owned constant, (b) lexically
- * distinct from the three composer hints, (c) zero daemon-supplied substring. Apostrophe-free by design
+ * ThinkingIndicator label idiom). It is deliberately lexically distinct from the status row's two strings
+ * (`Host connection down!` #797, `Pairing error - Re-pair` #963) — it leads with "Cannot reach" and
+ * shares no leading words — so the prominent banner and the row directly above the message box never read
+ * as the same string stacked twice (AC5). Until #968 that set also held the three composer captions; they
+ * are retired, and this banner is now the ONLY thing said in the `connecting` and `disconnected` arms.
+ * A single constant, not a per-arm map: every non-connected arm is a state where pyry is unreachable, so
+ * one sentence covers all three honestly (no "restored"/"lost" temporal claim), and a three-way copy split
+ * would be three ways to say one fact. It is a client-owned constant, so PO/design may tune the wording;
+ * the load-bearing contract is (a) one client-owned constant, (b) lexically distinct from the status row's
+ * strings, (c) zero daemon-supplied substring. Apostrophe-free by design
  * — the EMPTY_THREAD_COPY / `Thinking…` convention — so a server-rendered `toContain` assertion matches
  * it verbatim (renderToStaticMarkup escapes `'` → `&#x27;`).
  */
@@ -208,8 +210,8 @@ export const CONNECTION_BANNER_COPY =
 
 /**
  * Whether the prominent, disconnected-only connection banner should show (#279) — the third,
- * independent read of the single `ConnectionStatus` slice, beside `composerAvailability` (the terse
- * inline composer gate) and `shouldOfferRepair` (the terminal-error escape hatch). True for every
+ * independent read of the single `ConnectionStatus` slice, beside `composerAvailability` (the composer's
+ * send gate) and `shouldOfferRepair` (the terminal-error escape hatch). True for every
  * non-connected arm (`disconnected` | `connecting` | `error`), false only when `connected` (AC1/AC2).
  *
  * Expressed as `!== 'connected'` rather than an exhaustive switch/assertNever (composerAvailability's
@@ -224,19 +226,20 @@ export function shouldShowBanner(status: ConnectionStatus): boolean {
 }
 
 /**
- * The composer status row's error-chip copy (#797) — the chip's ENTIRE visible text, and the fourth
- * string this module owns about the single `ConnectionStatus` fact. It lives here, beside
- * CONNECTION_BANNER_COPY and the three `composerAvailability` hints, rather than as a module-level
- * constant in ConversationScreen.tsx (where THINKING_COPY / STALL_COPY live), precisely so the lexical
- * distinctness those four owe each other is reviewable in one place.
+ * The composer status row's error-chip copy (#797) — the chip's ENTIRE visible text, and one of the three
+ * strings this module owns about the single `ConnectionStatus` fact (this, CONNECTION_BANNER_COPY and
+ * COMPOSER_REPAIR_BUTTON_COPY; #968 retired the three `composerAvailability` captions that used to sit
+ * beside them). It lives here rather than as a module-level constant in ConversationScreen.tsx (where
+ * THINKING_COPY / STALL_COPY live), precisely so the lexical distinctness those three owe each other is
+ * reviewable in one place.
  *
  * It carries CONNECTION_BANNER_COPY's three-part contract verbatim: (a) one client-owned constant,
- * (b) lexically distinct from the banner copy and the three composer hints — it leads with "Host" and
- * shares no leading word with `Cannot reach pyrybox…` / `Connecting…` / `Not connected` /
- * `Connection error` — and (c) zero daemon-supplied substring. (c) is structural rather than
- * conventional here too: ComposerErrorChip narrows on `status.type` and never destructures
- * `status.error`, so no ConnectionError field has a rendering path to escape, length-bound or
- * newline-strip. Apostrophe-free by design (renderToStaticMarkup escapes `'` → `&#x27;`, the standing
+ * (b) lexically distinct from the banner copy — it leads with "Host" and shares no leading word with
+ * `Cannot reach pyrybox…`; its distinctness from the button that replaces it in the same slot is argued
+ * in COMPOSER_REPAIR_BUTTON_COPY's own docblock below — and (c) zero daemon-supplied substring. (c) is
+ * structural rather than conventional here too: ComposerErrorChip narrows on `status.type` and never
+ * destructures `status.error`, so no ConnectionError field has a rendering path to escape, length-bound
+ * or newline-strip. Apostrophe-free by design (renderToStaticMarkup escapes `'` → `&#x27;`, the standing
  * desktop lesson), so a server-rendered `toContain` matches it verbatim. PO/design may tune the wording
  * — the contract is load-bearing, the exact words are not; the exclamation mark is the mock's.
  */
@@ -257,20 +260,21 @@ export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
 
 /**
  * The actionable-error button's label (#963) — the button that takes the chip's slot whenever
- * `shouldOfferRepair` is true, and the FIFTH string this module owns about the single `ConnectionStatus`
- * fact. It lives here for COMPOSER_ERROR_CHIP_COPY's stated reason, which transfers verbatim: the lexical
- * distinctness these five owe each other is only reviewable if they sit together.
+ * `shouldOfferRepair` is true, and the third of the strings this module owns about the single
+ * `ConnectionStatus` fact. It lives here for COMPOSER_ERROR_CHIP_COPY's stated reason, which transfers
+ * verbatim: the lexical distinctness these three owe each other is only reviewable if they sit together.
  *
  * The design's label pattern is "Type of error - Action", and both halves are load-bearing. The type is
  * what lets this occupant drop the chip's visually-hidden `Error: ` prefix — that prefix exists because
  * "Host connection down!" does not say it is an error, and "Pairing error" does. The action is what makes
  * the control read as a button rather than as a status. Since the button carries no `aria-label`, this
- * string is also the accessible name, which is the first time one of these five is both.
+ * string is also the accessible name, which is the first time one of these three is both.
  *
  * It carries CONNECTION_BANNER_COPY's three-part contract: (a) one client-owned constant, (b) lexically
- * distinct from the four strings above — it leads with "Pairing" and shares no leading word with
- * `Host connection down!` / `Cannot reach pyrybox…` / `Connecting…` / `Not connected` /
- * `Connection error` — and (c) zero daemon-supplied substring. (c) needs stating more carefully here than
+ * distinct from the two strings above — it leads with "Pairing" and shares no leading word with
+ * `Host connection down!` or `Cannot reach pyrybox…` — and (c) zero daemon-supplied substring. The chip
+ * copy is in that set even though the two never render together: they occupy the SAME slot, so a reader
+ * who sees one and then the other must not read them as one string. (c) needs stating more carefully here than
  * for the chip: ComposerErrorChip narrows on `status.type` and never touches the error arm at all, while
  * this button's gate (`shouldOfferRepair`) READS `status.error.retryable` and `.code`. Those reads decide
  * a boolean and reach no markup — ConversationScreen's ComposerErrorSlot binds no local to `status.error`
